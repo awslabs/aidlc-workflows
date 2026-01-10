@@ -102,6 +102,52 @@ AI-DLC follows a structured three-phase approach that adapts to your project's c
 - **Risk-Based**: Complex changes get comprehensive treatment, simple changes stay efficient
 - **Question-Driven**: Structured multiple-choice questions in files, not chat
 - **Always in Control**: Review execution plans and approve each phase
+- **Multi-User Parallel Development**: Multiple developers can work on different units simultaneously with automatic branch management and audit isolation
+
+## Project Configuration
+
+### AGENTS.md (Optional)
+
+Customize multi-user behavior and folder structure by creating an `AGENTS.md` file in your project root:
+
+```bash
+cp $AIDLC_WORKFLOWS/AGENTS.md.example ./AGENTS.md
+```
+
+This file allows you to configure:
+- Generated code folder structure per unit
+- Audit file locations
+- Branch naming conventions
+- Custom paths for your project
+
+See [AGENTS.md.example](AGENTS.md.example) for details.
+
+## Multi-User Parallel Development
+
+AI-DLC includes built-in team collaboration with automatic workflow management:
+
+- 🔀 **Automatic Branch Creation**: Each developer works in isolated branches
+- 📝 **User-Scoped Audits**: No audit file conflicts between team members
+- 🎯 **Unit Assignment Tracking**: Clear visibility of who's working on what
+- 🔄 **Dependency-Aware Consolidation**: Automatic merging in correct order
+- 📊 **Consolidated Views**: Project-wide visibility with automatic indexing
+
+**Quick Start**:
+```bash
+# Lead completes inception
+kiro-cli chat "Create microservices architecture"
+# → Choose "Enable team collaboration"
+
+# Team members claim units
+kiro-cli chat "claim unit user-service"
+
+# Integrator consolidates
+kiro-cli chat "consolidate units"
+```
+
+Multi-user functionality is automatically available when using AI-DLC - no additional setup required.
+
+**Learn More**: See [Quick Reference](QUICK-REFERENCE.md) for commands and workflows
 
 ## Prerequisites
 

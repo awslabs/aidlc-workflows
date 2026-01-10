@@ -1,0 +1,30 @@
+# AGENTS.md - Project Configuration
+
+Copy to project root as `AGENTS.md` to customize multi-user behavior.
+
+## Folder Structure
+
+### Generated Code
+```
+[unit-name]/
+├── src/              # Source code (language-specific structure)
+├── tests/            # Tests
+└── docs/             # Documentation
+```
+
+### Audits
+```
+aidlc-docs/audits/[unit-name]/[developer]/
+```
+
+### Branches
+```
+feature/[unit-name]-[developer]
+```
+
+## Custom Paths (Optional)
+
+Override defaults by specifying:
+- `code_root`: Base path for generated code (default: `[unit-name]/`)
+- `audit_root`: Base path for audits (default: `aidlc-docs/audits/`)
+- `branch_prefix`: Branch naming prefix (default: `feature/`)

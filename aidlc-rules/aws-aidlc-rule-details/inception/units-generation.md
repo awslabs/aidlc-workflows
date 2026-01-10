@@ -181,3 +181,73 @@ If the analysis in step 7 reveals ANY ambiguous answers, you MUST:
   - `unit-of-work-dependency.md` with dependency matrix
   - `unit-of-work-story-map.md` with story mappings
 - Units verified and ready for per-unit design stages
+
+## Step 20: Setup Multi-User Parallel Development
+
+**MANDATORY**: After user approval, execute multi-user setup:
+
+### Load Multi-User Workflow Rules
+
+Load `common/multi-user-parallel.md` and `common/multi-user-commands.md` for detailed steps.
+
+### Execute Setup
+
+1. **Create Unit Assignments Manifest**:
+   - Generate `aidlc-docs/construction/unit-assignments.md`
+   - Include all units from unit-of-work.md
+   - Add dependency information from unit-of-work-dependency.md
+   - Set all units to "Not Started" status
+   - Include instructions for claiming units
+
+2. **Commit Inception Artifacts**:
+   ```bash
+   git add aidlc-docs/inception/
+   git add aidlc-docs/construction/unit-assignments.md
+   git commit -m "AI-DLC: Inception phase complete - ${NUM_UNITS} units ready for parallel development"
+   git push origin main
+   ```
+
+3. **Present Unit Claiming Options**:
+   ```
+   🎯 Ready for Parallel Development
+   
+   ${NUM_UNITS} units are ready. Multiple developers can now work in parallel.
+   
+   **Your Options**:
+   
+   A) **Claim a unit now** (you will work on it immediately)
+      Available units:
+      ${UNIT_LIST_WITH_NUMBERS}
+   
+   B) **Enable team collaboration** (setup complete, others can claim units)
+      Share this command with your team:
+      kiro-cli chat "claim unit <unit-name>"
+   
+   C) **Continue solo** (work on all units yourself in sequence)
+      I'll guide you through each unit in dependency order.
+   ```
+
+4. **Wait for User Choice**:
+   - If A: Execute unit claiming workflow (see multi-user-commands.md)
+   - If B: Present team collaboration instructions and exit
+   - If C: Continue to CONSTRUCTION PHASE with first unit
+
+### Team Collaboration Instructions (Option B)
+
+Present this message and exit:
+
+```
+✅ Multi-User Setup Complete!
+
+Your team can now work on units in parallel:
+
+**Team Members**: Use this command to claim a unit:
+kiro-cli chat "claim unit <unit-name>"
+
+**Available Units**: See aidlc-docs/construction/unit-assignments.md
+
+**Integrator**: When units are complete, use:
+kiro-cli chat "consolidate units"
+
+**Status Tracking**: Check unit-assignments.md for current status
+```
