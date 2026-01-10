@@ -4,6 +4,25 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 
 ## Quick Start
 
+### Option 1: CLI Tool (Recommended)
+
+Install the AI-DLC CLI tool globally:
+
+```bash
+npm install -g aidlc
+```
+
+Then initialize AI-DLC in your project:
+
+```bash
+cd your-project
+aidlc init
+```
+
+The CLI tool will automatically set up the appropriate rules for your platform (Kiro CLI, Amazon Q Developer, or both).
+
+### Option 2: Manual Setup
+
 Set up the AI-DLC rules/steering files as part of your [supported platform](#prerequisites).
 
 Clone this repo:
@@ -65,6 +84,27 @@ If you do not see the `aws-aidlc-rules` rules loaded, please check the directory
 ![AI-DLC Rules in Kiro CLI](./assets/images/kiro-cli-aidlc-rules-loaded.png?raw=true "AI-DLC Rules in Kiro CLI")
 
 ### Usage
+
+#### CLI Tool Usage
+
+1. **Check installation status:**
+   ```bash
+   aidlc status
+   ```
+
+2. **Validate configuration:**
+   ```bash
+   aidlc validate
+   ```
+
+3. **Start development:**
+   - Open your AI assistant (Kiro CLI or Amazon Q Developer)
+   - Begin any request with: `"Using AI-DLC, ..."`
+   - Follow the structured workflow
+
+For detailed CLI documentation, see [CLI Guide](README-CLI.md).
+
+#### Manual Usage
 
 1. Start any software development project by stating your intent starting with the phrase "Using AI-DLC, ..." in the chat. 
 2. AI-DLC workflow automatically activates and guides you from there.

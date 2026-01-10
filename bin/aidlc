@@ -1,0 +1,16 @@
+#!/usr/bin/env node
+
+const path = require('path');
+const { spawn } = require('child_process');
+
+// 获取实际的入口文件路径
+const entryPoint = path.join(__dirname, '..', 'dist', 'index.js');
+
+// 启动主程序
+const child = spawn('node', [entryPoint, ...process.argv.slice(2)], {
+  stdio: 'inherit'
+});
+
+child.on('exit', (code) => {
+  process.exit(code);
+});
