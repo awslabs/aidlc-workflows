@@ -111,6 +111,20 @@ Have one of our supported platforms/tools for Assisted AI Coding installed:
 - [Amazon Q Developer IDE plugin](https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/q-in-IDE.html)
 - [Kiro IDE](https://kiro.dev/) (coming soon)
 
+## Tenets
+
+These are our core principles to guide our decision making.
+
+- **No duplication**. The source of truth lives in one place. If we add support for new tools or formats that require specific files, we generate them from the source rather than maintaining separate copies.
+
+- **No CLI**. AI-DLC is a methodology, not a tool. We don't ship CLIs or require users to install anything. The methodology works with whatever tooling the user already has.
+
+- **Reproducible**. Rules should be clear enough that different models produce similar outcomes. We know models behave differently, but the methodology should minimize variance through explicit guidance.
+
+- **Agnostic**. The methodology works with any IDE, agent, or model. We don't tie ourselves to specific tools or vendors.
+
+- **Human in the Loop**. Critical decisions require explicit user confirmation. The agent proposes, the human approves.
+
 ## Security
 
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
