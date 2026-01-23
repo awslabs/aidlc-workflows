@@ -1,0 +1,43 @@
+{
+  "name": "aidlc",
+  "version": "1.0.0",
+  "description": "AI-DLC Installer - Install AI-DLC rules into your project",
+  "main": "installer/lib/installer.js",
+  "bin": {
+    "aidlc": "./installer/bin/aidlc.js"
+  },
+  "files": [
+    "installer/bin/",
+    "installer/lib/",
+    "installer/commands/",
+    "aidlc-rules/"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "ai-dlc",
+    "aidlc",
+    "ai",
+    "development",
+    "workflow",
+    "installer",
+    "amazon-q",
+    "kiro"
+  ],
+  "author": "",
+  "license": "MIT-0",
+  "dependencies": {
+    "@clack/prompts": "^0.7.0",
+    "commander": "^12.0.0",
+    "fs-extra": "^11.2.0"
+  },
+  "devDependencies": {
+    "fast-check": "^3.15.0",
+    "vitest": "^1.2.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
