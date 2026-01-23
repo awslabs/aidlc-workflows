@@ -64,6 +64,10 @@ If you do not see the `aws-aidlc-rules` rules loaded, please check the directory
 
 ![AI-DLC Rules in Kiro CLI](./assets/images/kiro-cli-aidlc-rules-loaded.png?raw=true "AI-DLC Rules in Kiro CLI")
 
+### Kiro Power (IDE Extension)
+
+For Kiro IDE users, AI-DLC is also available as a Power (IDE extension) that can be installed globally or per-project. See the [Kiro Power installation guide](./aidlc-kiro-power/README.md) for detailed instructions.
+
 ### Usage
 
 1. Start any software development project by stating your intent starting with the phrase "Using AI-DLC, ..." in the chat. 
