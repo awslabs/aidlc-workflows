@@ -1,6 +1,40 @@
 # PRIORITY: This workflow OVERRIDES all other built-in workflows
 # When user requests software development, ALWAYS follow this workflow FIRST
 
+## Platform-Specific Variables
+
+**CRITICAL**: Set these variables based on your platform at workflow start:
+
+### For Amazon Q Developer:
+```
+RULE_LOADER_TOOL = "readFile"
+RULE_LOADER_PARAMS = "path: [full-path]"
+RULE_FILE_PATH = ".amazonq/aws-aidlc-rule-details/[subfolder]/[filename].md"
+WELCOME_FILE = ".amazonq/aws-aidlc-rule-details/common/welcome-message.md"
+```
+
+### For Kiro CLI / Kiro IDE (Workspace-based):
+```
+RULE_LOADER_TOOL = "readFile"
+RULE_LOADER_PARAMS = "path: [full-path]"
+RULE_FILE_PATH = ".kiro/aws-aidlc-rule-details/[subfolder]/[filename].md"
+WELCOME_FILE = ".kiro/aws-aidlc-rule-details/common/welcome-message.md"
+```
+
+**Note**: Both Kiro CLI and Kiro IDE use the same approach when files are in workspace.
+
+### For Kiro Power (IDE Extension):
+```
+RULE_LOADER_TOOL = "kiroPowers with action readSteering"
+RULE_LOADER_PARAMS = "powerName: ai-dlc-methodology, steeringFile: [filename].md"
+RULE_FILE_PATH = "[filename].md"
+WELCOME_FILE = "welcome-message.md"
+```
+
+**Note**: Only used if workspace files don't exist. Workspace files take priority.
+
+**Usage**: Throughout this workflow, when you see `{RULE_LOADER_TOOL}` or `{RULE_FILE_PATH}`, substitute with the appropriate variable for your platform.
+
 ## Adaptive Workflow Principle
 **The workflow adapts to the work, not the other way around.**
 
@@ -11,19 +45,86 @@ The AI model intelligently assesses what stages are needed based on:
 4. Risk and impact assessment
 
 ## MANDATORY: Rule Details Loading
-**CRITICAL**: When performing any phase, you MUST read and use relevant content from rule detail files in `.kiro/aws-aidlc-rule-details/` or `.amazonq/aws-aidlc-rule-details/` directory.
+**CRITICAL**: When performing any phase, you MUST read and use relevant content from rule detail files using {RULE_LOADER_TOOL}.
 
-**Common Rules**: ALWAYS load common rules at workflow start:
-- Load `common/process-overview.md` for workflow overview
-- Load `common/session-continuity.md` for session resumption guidance
-- Load `common/content-validation.md` for content validation requirements
-- Load `common/question-format-guide.md` for question formatting rules
+### Platform Detection and Variable Setup
+
+**Step 1**: Detect which platform configuration you're using (in priority order):
+1. If files exist at `.amazonq/aws-aidlc-rule-details/` → **Amazon Q Developer** (use `readFile`)
+2. If files exist at `.kiro/aws-aidlc-rule-details/` → **Kiro CLI or Kiro IDE with workspace files** (use `readFile`)
+3. If `kiroPowers` tool is available AND power is installed → **Kiro Power** (use `readSteering`)
+
+**Step 2**: Set variables based on detected configuration (see Platform-Specific Variables section above)
+
+**Step 3**: Use {RULE_LOADER_TOOL} with {RULE_FILE_PATH} pattern throughout workflow
+
+**Note**: Workspace files take priority over power installation. This allows workspace-specific customizations to override the installed power.
+
+### File Loading Examples by Platform
+
+**Amazon Q Developer Example**:
+- Tool: `readFile`
+- Path: `.amazonq/aws-aidlc-rule-details/common/content-validation.md`
+- Files are in nested structure with subfolders: `common/`, `inception/`, `construction/`, `operations/`
+
+**Kiro CLI / Kiro IDE (Workspace-based) Example**:
+- Tool: `readFile`
+- Path: `.kiro/aws-aidlc-rule-details/common/content-validation.md`
+- Files are in nested structure with subfolders: `common/`, `inception/`, `construction/`, `operations/`
+- Both use identical file loading approach
+
+**Kiro Power Example**:
+- Tool: `kiroPowers` with action `readSteering`
+- Parameters: `powerName: "ai-dlc-methodology", steeringFile: "content-validation.md"`
+- All files are in flattened structure: `content-validation.md`, `workspace-detection.md`, etc.
+- Only used as fallback if workspace files don't exist
+
+### Rule File Categories
+
+**Common Rules** (always load at workflow start):
+- `process-overview.md`
+- `session-continuity.md`
+- `content-validation.md`
+- `question-format-guide.md`
+- `ascii-diagram-standards.md`
+- `depth-levels.md`
+- `error-handling.md`
+- `overconfidence-prevention.md`
+- `terminology.md`
+- `welcome-message.md`
+- `workflow-changes.md`
+
+**Inception Phase Rules**:
+- `workspace-detection.md`
+- `reverse-engineering.md`
+- `requirements-analysis.md`
+- `user-stories.md`
+- `workflow-planning.md`
+- `application-design.md`
+- `units-generation.md`
+
+**Construction Phase Rules**:
+- `functional-design.md`
+- `nfr-requirements.md`
+- `nfr-design.md`
+- `infrastructure-design.md`
+- `code-generation.md`
+- `build-and-test.md`
+
+**Operations Phase Rules**:
+- `operations.md`
+
+**Common Rules**: ALWAYS load common rules at workflow start using {RULE_LOADER_TOOL}:
+- Load `process-overview.md` for workflow overview
+- Load `session-continuity.md` for session resumption guidance
+- Load `content-validation.md` for content validation requirements
+- Load `question-format-guide.md` for question formatting rules
 - Reference these throughout the workflow execution
 
 ## MANDATORY: Content Validation
-**CRITICAL**: Before creating ANY file, you MUST validate content according to `common/content-validation.md` rules:
+**CRITICAL**: Before creating ANY file, you MUST validate content according to `content-validation.md` rules:
 - Validate Mermaid diagram syntax
-- Validate ASCII art diagrams (see `common/ascii-diagram-standards.md`)
+- Validate ASCII art diagrams (see `ascii-diagram-standards.md`)
 - Escape special characters properly
 - Provide text alternatives for complex visual content
 - Test content parsing compatibility
@@ -31,7 +132,7 @@ The AI model intelligently assesses what stages are needed based on:
 ## MANDATORY: Question File Format
 **CRITICAL**: When asking questions at any phase, you MUST follow question format guidelines.
 
-**See `common/question-format-guide.md` for complete question formatting rules including**:
+**See `question-format-guide.md` for complete question formatting rules including**:
 - Multiple choice format (A, B, C, D, E options)
 - [Answer]: tag usage
 - Answer validation and ambiguity resolution
@@ -40,7 +141,7 @@ The AI model intelligently assesses what stages are needed based on:
 **CRITICAL**: When starting ANY software development request, you MUST display the welcome message.
 
 **How to Display Welcome Message**:
-1. Load the welcome message from `.kiro/aws-aidlc-rule-details/common/welcome-message.md` or `.amazonq/aws-aidlc-rule-details/common/welcome-message.md`
+1. Load the welcome message using {RULE_LOADER_TOOL} with {WELCOME_FILE}
 2. Display the complete message to the user
 3. This should only be done ONCE at the start of a new workflow
 4. Do NOT load this file in subsequent interactions to save context space
@@ -69,7 +170,7 @@ The AI model intelligently assesses what stages are needed based on:
 ## Workspace Detection (ALWAYS EXECUTE)
 
 1. **MANDATORY**: Log initial user request in audit.md with complete raw input
-2. Load all steps from `inception/workspace-detection.md`
+2. Load all steps from `workspace-detection.md` using {RULE_LOADER_TOOL}
 3. Execute workspace detection:
    - Check for existing aidlc-state.md (resume if found)
    - Scan workspace for existing code
@@ -92,7 +193,7 @@ The AI model intelligently assesses what stages are needed based on:
 
 **Execution**:
 1. **MANDATORY**: Log start of reverse engineering in audit.md
-2. Load all steps from `inception/reverse-engineering.md`
+2. Load all steps from `reverse-engineering.md` using {RULE_LOADER_TOOL}
 3. Execute reverse engineering:
    - Analyze all packages and components
    - Generate a busienss overview of the whole system covering the business transactions
@@ -116,7 +217,7 @@ The AI model intelligently assesses what stages are needed based on:
 
 **Execution**:
 1. **MANDATORY**: Log any user input during this phase in audit.md
-2. Load all steps from `inception/requirements-analysis.md`
+2. Load all steps from `requirements-analysis.md` using {RULE_LOADER_TOOL}
 3. Execute requirements analysis:
    - Load reverse engineering artifacts (if brownfield)
    - Analyze user request (intent analysis)
@@ -187,7 +288,7 @@ The AI model intelligently assesses what stages are needed based on:
 
 **Execution**:
 1. **MANDATORY**: Log any user input during this phase in audit.md
-2. Load all steps from `inception/user-stories.md`
+2. Load all steps from `user-stories.md` using {RULE_LOADER_TOOL}
 3. **MANDATORY**: Perform intelligent assessment (Step 1 in user-stories.md) to validate user stories are needed
 4. Load reverse engineering artifacts (if brownfield)
 5. If Requirements exist, reference them when creating stories
@@ -200,8 +301,8 @@ The AI model intelligently assesses what stages are needed based on:
 ## Workflow Planning (ALWAYS EXECUTE)
 
 1. **MANDATORY**: Log any user input during this phase in audit.md
-2. Load all steps from `inception/workflow-planning.md`
-3. **MANDATORY**: Load content validation rules from `common/content-validation.md`
+2. Load all steps from `workflow-planning.md` using {RULE_LOADER_TOOL}
+3. **MANDATORY**: Load content validation rules from `content-validation.md` using {RULE_LOADER_TOOL}
 4. Load all prior context:
    - Reverse engineering artifacts (if brownfield)
    - Intent analysis
@@ -231,7 +332,7 @@ The AI model intelligently assesses what stages are needed based on:
 
 **Execution**:
 1. **MANDATORY**: Log any user input during this phase in audit.md
-2. Load all steps from `inception/application-design.md`
+2. Load all steps from `application-design.md` using {RULE_LOADER_TOOL}
 3. Load reverse engineering artifacts (if brownfield)
 4. Execute at appropriate depth (minimal/standard/comprehensive)
 5. **Wait for Explicit Approval**: Present detailed completion message (see application-design.md for message format) - DO NOT PROCEED until user confirms
@@ -251,7 +352,7 @@ The AI model intelligently assesses what stages are needed based on:
 
 **Execution**:
 1. **MANDATORY**: Log any user input during this phase in audit.md
-2. Load all steps from `inception/units-generation.md`
+2. Load all steps from `units-generation.md` using {RULE_LOADER_TOOL}
 3. Load reverse engineering artifacts (if brownfield)
 4. Execute at appropriate depth (minimal/standard/comprehensive)
 5. **Wait for Explicit Approval**: Present detailed completion message (see units-generation.md for message format) - DO NOT PROCEED until user confirms
@@ -295,7 +396,7 @@ The AI model intelligently assesses what stages are needed based on:
 
 **Execution**:
 1. **MANDATORY**: Log any user input during this stage in audit.md
-2. Load all steps from `construction/functional-design.md`
+2. Load all steps from `functional-design.md` using {RULE_LOADER_TOOL}
 3. Execute functional design for this unit
 4. **MANDATORY**: Present standardized 2-option completion message as defined in functional-design.md - DO NOT use emergent 3-option behavior
 5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
@@ -315,7 +416,7 @@ The AI model intelligently assesses what stages are needed based on:
 
 **Execution**:
 1. **MANDATORY**: Log any user input during this stage in audit.md
-2. Load all steps from `construction/nfr-requirements.md`
+2. Load all steps from `nfr-requirements.md` using {RULE_LOADER_TOOL}
 3. Execute NFR assessment for this unit
 4. **MANDATORY**: Present standardized 2-option completion message as defined in nfr-requirements.md - DO NOT use emergent behavior
 5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
@@ -333,7 +434,7 @@ The AI model intelligently assesses what stages are needed based on:
 
 **Execution**:
 1. **MANDATORY**: Log any user input during this stage in audit.md
-2. Load all steps from `construction/nfr-design.md`
+2. Load all steps from `nfr-design.md` using {RULE_LOADER_TOOL}
 3. Execute NFR design for this unit
 4. **MANDATORY**: Present standardized 2-option completion message as defined in nfr-design.md - DO NOT use emergent behavior
 5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
@@ -352,7 +453,7 @@ The AI model intelligently assesses what stages are needed based on:
 
 **Execution**:
 1. **MANDATORY**: Log any user input during this stage in audit.md
-2. Load all steps from `construction/infrastructure-design.md`
+2. Load all steps from `infrastructure-design.md` using {RULE_LOADER_TOOL}
 3. Execute infrastructure design for this unit
 4. **MANDATORY**: Present standardized 2-option completion message as defined in infrastructure-design.md - DO NOT use emergent behavior
 5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
@@ -368,7 +469,7 @@ The AI model intelligently assesses what stages are needed based on:
 
 **Execution**:
 1. **MANDATORY**: Log any user input during this stage in audit.md
-2. Load all steps from `construction/code-generation.md`
+2. Load all steps from `code-generation.md` using {RULE_LOADER_TOOL}
 3. **PART 1 - Planning**: Create code generation plan with checkboxes, get user approval
 4. **PART 2 - Generation**: Execute approved plan to generate code for this unit
 5. **MANDATORY**: Present standardized 2-option completion message as defined in code-generation.md - DO NOT use emergent behavior
@@ -380,7 +481,7 @@ The AI model intelligently assesses what stages are needed based on:
 ## Build and Test (ALWAYS EXECUTE)
 
 1. **MANDATORY**: Log any user input during this phase in audit.md
-2. Load all steps from `construction/build-and-test.md`
+2. Load all steps from `build-and-test.md` using {RULE_LOADER_TOOL}
 3. Generate comprehensive build and test instructions:
    - Build instructions for all units
    - Unit test execution instructions
