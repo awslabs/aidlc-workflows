@@ -16,7 +16,7 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 
 AI-DLC uses [Kiro Steering Files](https://kiro.dev/docs/cli/steering/) within your project workspace. Copy the rules into your project's `.kiro` folder:
 
-1. Create the directories `.kiro/steering` and `.kiro/aws-aidlc-rule-details` in your project root.
+1. Create the directory `.kiro/steering` in your project root.
 2. Copy `aws-aidlc-rules/` into `.kiro/steering/`.
 3. Copy `aws-aidlc-rule-details/` into `.kiro/`.
 
@@ -38,7 +38,7 @@ Your project should look like:
 
 To verify the rules are loaded:
 
-- **Kiro IDE**: Open the steering files panel and confirm entries for `.kiro/steering/aws-aidlc-rules`.
+- **Kiro IDE**: Open the steering files panel and confirm a Workspace entry for `core-workflow`.
 - **Kiro CLI**: Run `kiro-cli`, then `/context show`, and confirm entries for `.kiro/steering/aws-aidlc-rules`.
 
 ![AI-DLC Rules in Kiro CLI](./assets/images/kiro-cli-aidlc-rules-loaded.png?raw=true "AI-DLC Rules in Kiro CLI")
