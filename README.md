@@ -22,6 +22,8 @@ AI-DLC uses [Kiro Steering Files](https://kiro.dev/docs/cli/steering/) within yo
 2. Copy `aws-aidlc-rules/` into `.kiro/steering/`.
 3. Copy `aws-aidlc-rule-details/` into `.kiro/`.
 
+The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+
 On macOS/Linux:
 ```bash
 mkdir -p .kiro/steering
@@ -69,6 +71,8 @@ AI-DLC uses [Amazon Q Rules](https://docs.aws.amazon.com/amazonq/latest/qdevelop
 1. Create the directories `.amazonq/rules` and `.amazonq/aws-aidlc-rule-details` in your project root.
 2. Copy `aws-aidlc-rules/` into `.amazonq/rules/`.
 3. Copy `aws-aidlc-rule-details/` into `.amazonq/`.
+
+The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
 
 On macOS/Linux:
 ```bash
