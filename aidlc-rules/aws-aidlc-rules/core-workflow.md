@@ -452,7 +452,9 @@ The Operations stage will eventually include:
 - **CRITICAL**: ALWAYS append changes to EDIT audit.md file, NEVER use tools and commands that completely overwrite its contents
 - **CRITICAL**: Using file writing tools and commands that overwrite contents of the entire audit.md and cause duplication
 - When adding an entry to audit.md:
-  1. Run `date +"%Y-%m-%dT%H:%M:%S%z"` to get the current timestamp
+  1. Run a system command to get the current timestamp:
+     - **macOS/Linux**: `date +"%Y-%m-%dT%H:%M:%S%z"`
+     - **Windows (PowerShell)**: `Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"`
   2. Use the output exactly as the **Timestamp** value
   Do not use placeholder (e.g., T00:00:00Z), estimated, or fabricated times.
 - Include stage context for each entry
