@@ -455,6 +455,7 @@ The Operations stage will eventually include:
   1. Run a system command to get the current timestamp:
      - **macOS/Linux**: `date +"%Y-%m-%dT%H:%M:%S%z"`
      - **Windows (PowerShell)**: `Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz"`
+     - **Windows (CMD)**: `echo %date:~10,4%-%date:~4,2%-%date:~7,2%T%time:~0,2%:%time:~3,2%:%time:~6,2%%time:~9,2%`
   2. Use the output exactly as the **Timestamp** value
   Do not use placeholder (e.g., T00:00:00Z), estimated, or fabricated times.
 - Include stage context for each entry
