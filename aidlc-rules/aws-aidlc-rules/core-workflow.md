@@ -20,6 +20,7 @@ This directory is used consistently across all platforms (Cline, Kiro CLI, Amazo
 - Load `common/session-continuity.md` for session resumption guidance
 - Load `common/content-validation.md` for content validation requirements
 - Load `common/question-format-guide.md` for question formatting rules
+- Load `common/self-validation.md` for self-validation checks
 - Reference these throughout the workflow execution
 
 ## MANDATORY: Content Validation
