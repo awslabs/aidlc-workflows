@@ -18,6 +18,11 @@ Perform self-validation checks:
 
 ### 1. Always-Execute Stage Validation
 
+**APPLY THIS CHECK**:
+- **WHEN**: At end of each phase (INCEPTION, CONSTRUCTION, OPERATIONS)
+- **WHERE**: Before phase completion message
+- **HOW**: Review aidlc-state.md and verify all always-execute stages completed
+
 **CRITICAL**: Verify these stages ALWAYS executed (unless resuming from checkpoint):
 
 #### INCEPTION Phase - Always Execute:
@@ -46,6 +51,11 @@ IF any always-execute stage was skipped:
 ---
 
 ### 2. Conditional Stage Execution Validation
+
+**APPLY THIS CHECK**:
+- **WHEN**: After each conditional stage completes OR is skipped
+- **WHERE**: Before presenting stage completion message
+- **HOW**: Verify execution/skip decision matches criteria from core-workflow.md
 
 **CRITICAL**: Verify conditional stages executed ONLY when criteria were met:
 
@@ -283,6 +293,11 @@ IF validation fails:
 
 ### 3. Depth Level Validation
 
+**APPLY THIS CHECK**:
+- **WHEN**: After Requirements Analysis stage completes
+- **WHERE**: Before presenting Requirements Analysis completion message
+- **HOW**: Verify depth level (minimal/standard/comprehensive) matches request complexity
+
 **Requirements Analysis** has adaptive depth (minimal/standard/comprehensive):
 
 **Validation Check**:
@@ -300,6 +315,11 @@ IF depth doesn't match complexity:
 ---
 
 ### 4. State Tracking Validation
+
+**APPLY THIS CHECK**:
+- **WHEN**: After EVERY stage completion or skip
+- **WHERE**: Before presenting stage completion message
+- **HOW**: Verify aidlc-state.md updated with stage status, timestamp, and reason (if skipped)
 
 **CRITICAL**: Verify aidlc-state.md is properly maintained:
 
@@ -330,6 +350,11 @@ IF state tracking incomplete:
 
 ### 5. Audit Trail Validation
 
+**APPLY THIS CHECK**:
+- **WHEN**: After EVERY user interaction (input, approval, question)
+- **WHERE**: Immediately after logging interaction
+- **HOW**: Verify audit.md contains complete raw input with ISO 8601 timestamp
+
 **CRITICAL**: Verify audit.md captures complete interaction history:
 
 **Validation Check**:
@@ -355,6 +380,11 @@ IF audit trail incomplete:
 
 ### 6. User Interaction Validation
 
+**APPLY THIS CHECK**:
+- **WHEN**: After each stage completion that requires approval
+- **WHERE**: Before proceeding to next stage
+- **HOW**: Verify approval was requested, received, and logged
+
 **CRITICAL**: Verify proper user interaction patterns:
 
 #### Approval Validation
@@ -370,34 +400,14 @@ IF approval skipped:
   - Identify: Which stage violated approval requirement
 ```
 
-#### Question Format Validation
-```
-For all questions asked:
-- [ ] Questions use [Answer]: tag format
-- [ ] Multiple choice options provided (A, B, C, D, E)
-- [ ] Option E (Other) available when appropriate
-- [ ] Questions embedded in plan files (not in chat)
-
-IF question format incorrect:
-  - Log error: "Questions not in correct format"
-  - Reference: common/question-format-guide.md
-```
-
-#### Answer Analysis Validation
-```
-For all user answers:
-- [ ] Answers analyzed for ambiguity (Step 9 in stage rules)
-- [ ] Follow-up questions asked for vague responses
-- [ ] No proceeding until ambiguities resolved
-
-IF ambiguous answers not addressed:
-  - Log error: "Proceeded with ambiguous user answers"
-  - List: Which answers were ambiguous and not clarified
-```
-
 ---
 
 ### 7. Content Validation Compliance
+
+**APPLY THIS CHECK**:
+- **WHEN**: Before creating ANY file with diagrams or complex content
+- **WHERE**: During file creation process
+- **HOW**: Verify content-validation.md rules followed (Mermaid syntax, ASCII standards, escaping)
 
 **CRITICAL**: Verify content validation rules followed:
 
@@ -418,6 +428,11 @@ IF content validation skipped:
 
 ### 8. Plan Checkbox Validation
 
+**APPLY THIS CHECK**:
+- **WHEN**: After completing ANY step in a plan file
+- **WHERE**: In the SAME interaction where work is completed
+- **HOW**: Verify checkbox marked [x] immediately after step completion
+
 **CRITICAL**: Verify plan checkboxes updated immediately:
 
 **Validation Check**:
@@ -436,6 +451,11 @@ IF checkboxes not updated in same interaction:
 ---
 
 ### 9. Two-Part Stage Validation
+
+**APPLY THIS CHECK**:
+- **WHEN**: After User Stories or Code Generation stage completes
+- **WHERE**: Before presenting stage completion message
+- **HOW**: Verify Part 1 (Planning) completed with approval, then Part 2 (Generation) executed approved plan
 
 **CRITICAL**: Verify two-part stages executed correctly:
 

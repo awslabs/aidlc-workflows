@@ -23,6 +23,14 @@ This directory is used consistently across all platforms (Cline, Kiro CLI, Amazo
 - Load `common/self-validation.md` for self-validation checks
 - Reference these throughout the workflow execution
 
+**MANDATORY SELF-VALIDATION CHECKPOINTS**:
+Self-validation checks from `common/self-validation.md` MUST be performed automatically at:
+1. **After each stage completion** - Before presenting completion message
+2. **Before proceeding to next stage** - After user approval
+3. **At phase boundaries** - When transitioning between INCEPTION, CONSTRUCTION, OPERATIONS
+
+**CRITICAL**: Self-validation is AUTOMATIC and MANDATORY - not optional or user-requested.
+
 ## MANDATORY: Content Validation
 **CRITICAL**: Before creating ANY file, you MUST validate content according to `common/content-validation.md` rules:
 - Validate Mermaid diagram syntax
@@ -80,8 +88,9 @@ This directory is used consistently across all platforms (Cline, Kiro CLI, Amazo
    - Check for existing reverse engineering artifacts
 4. Determine next phase: Reverse Engineering (if brownfield and no artifacts) OR Requirements Analysis
 5. **MANDATORY**: Log findings in audit.md
-6. Present completion message to user (see workspace-detection.md for message formats)
-7. Automatically proceed to next phase
+6. 🔍 **VALIDATION CHECKPOINT**: Run self-validation checks (Category 1: Always-Execute, Category 4: State Tracking)
+7. Present completion message to user (see workspace-detection.md for message formats)
+8. Automatically proceed to next phase
 
 ## Reverse Engineering (CONDITIONAL - Brownfield Only)
 
@@ -107,8 +116,10 @@ This directory is used consistently across all platforms (Cline, Kiro CLI, Amazo
    - Generate technology stack documentation
    - Generate dependencies documentation
 
-4. **Wait for Explicit Approval**: Present detailed completion message (see reverse-engineering.md for message format) - DO NOT PROCEED until user confirms
-5. **MANDATORY**: Log user's response in audit.md with complete raw input
+4. 🔍 **VALIDATION CHECKPOINT**: Run self-validation checks (Category 2: Conditional Stage, Category 4: State Tracking)
+5. **Wait for Explicit Approval**: Present detailed completion message (see reverse-engineering.md for message format) - DO NOT PROCEED until user confirms
+6. 🔍 **VALIDATION CHECKPOINT**: Verify approval logged in audit.md (Category 5: Audit Trail, Category 6: User Interaction)
+7. **MANDATORY**: Log user's response in audit.md with complete raw input
 
 ## Requirements Analysis (ALWAYS EXECUTE - Adaptive Depth)
 
@@ -432,7 +443,34 @@ The Operations stage will eventually include:
   - **CRITICAL**: Log every interaction, not just approvals
 - **Quality Focus**: Complex changes get full treatment, simple changes stay efficient
 - **Content Validation**: Always validate content before file creation per content-validation.md rules
+- **Self-Validation**: Automatically validate workflow execution at checkpoints (see below)
 - **NO EMERGENT BEHAVIOR**: Construction phases MUST use standardized 2-option completion messages as defined in their respective rule files. DO NOT create 3-option menus or other emergent navigation patterns.
+
+## CRITICAL: Self-Validation Enforcement
+
+**MANDATORY**: At EVERY validation checkpoint marked with 🔍, the AI MUST:
+
+1. **STOP** current execution
+2. **LOAD** the relevant self-validation checks from `common/self-validation.md`
+3. **EXECUTE** all applicable validation checks
+4. **LOG** validation results in audit.md
+5. **REPORT** validation status (pass/fail)
+6. **BLOCK** progression if validation fails
+7. **ONLY PROCEED** if validation passes
+
+**NO EXCEPTIONS**:
+- Cannot skip validation "to save time"
+- Cannot assume validation passes
+- Cannot proceed without explicit validation execution
+- Cannot defer validation to later
+
+**VALIDATION FAILURE = WORKFLOW STOPS**
+
+If validation fails:
+- Log failure in audit.md with timestamp
+- Report specific validation errors to user
+- BLOCK progression to next stage
+- Fix issues before continuing
 
 ## MANDATORY: Plan-Level Checkbox Enforcement
 
