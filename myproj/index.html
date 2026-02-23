@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dupa</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #1a1a2e;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    h1 {
+      color: #e0e0e0;
+      font-size: 3rem;
+      letter-spacing: 0.4em;
+      margin-bottom: 80px;
+      text-transform: uppercase;
+      text-shadow: 0 0 30px rgba(100, 149, 237, 0.7);
+    }
+
+    .scene {
+      perspective: 600px;
+      width: 150px;
+      height: 150px;
+    }
+
+    .cube {
+      width: 150px;
+      height: 150px;
+      position: relative;
+      transform-style: preserve-3d;
+      animation: rotateCube 8s infinite linear;
+    }
+
+    @keyframes rotateCube {
+      0%   { transform: rotateX(0deg)   rotateY(0deg); }
+      100% { transform: rotateX(360deg) rotateY(360deg); }
+    }
+
+    .face {
+      position: absolute;
+      width: 150px;
+      height: 150px;
+      border: 2px solid rgba(255, 255, 255, 0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.85);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      opacity: 0.88;
+    }
+
+    .front  { background: rgba(99,  102, 241, 0.75); transform: rotateY(  0deg) translateZ(75px); }
+    .back   { background: rgba(236,  72, 153, 0.75); transform: rotateY(180deg) translateZ(75px); }
+    .left   { background: rgba( 16, 185, 129, 0.75); transform: rotateY(-90deg) translateZ(75px); }
+    .right  { background: rgba(245, 158,  11, 0.75); transform: rotateY( 90deg) translateZ(75px); }
+    .top    { background: rgba( 59, 130, 246, 0.75); transform: rotateX( 90deg) translateZ(75px); }
+    .bottom { background: rgba(239,  68,  68, 0.75); transform: rotateX(-90deg) translateZ(75px); }
+  </style>
+</head>
+<body>
+
+  <h1>Dupa</h1>
+
+  <div class="scene">
+    <div class="cube">
+      <div class="face front">Front</div>
+      <div class="face back">Back</div>
+      <div class="face left">Left</div>
+      <div class="face right">Right</div>
+      <div class="face top">Top</div>
+      <div class="face bottom">Bottom</div>
+    </div>
+  </div>
+
+</body>
+</html>
