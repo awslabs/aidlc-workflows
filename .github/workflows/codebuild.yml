@@ -70,16 +70,33 @@ jobs:
               install:
                 commands:
                   - echo "install ${TEST_ONE}" | tee --append ./codebuild.out
+                  - dnf install -y lshw || echo "dnf install failed"
               pre_build:
                 commands:
                   - echo "pre_build ${TEST_ONE}" | tee --append ./codebuild.out
+                  - echo "=== OS ==="
+                  - cat /etc/os-release
+                  - echo "=== Kernel ==="
+                  - uname -a
+                  - echo "=== CPU ==="
+                  - lscpu
+                  - echo "=== Memory ==="
+                  - free -h
+                  - echo "=== Kisk ==="
+                  - df -h
+                  - echo "=== Block Devices ==="
+                  - lsblk
+                  - echo "=== Hardward Summary ==="
+                  - lshw -short || echo "lshw failed"
               build:
                 commands:
                   - echo "build ${TEST_ONE}" | tee --append ./codebuild.out
+                  - ls -alR
               post_build:
                 commands:
                   - echo "post_build ${TEST_ONE}" | tee --append ./codebuild.out
                   - echo "Build completed with status $CODEBUILD_BUILD_SUCCEEDING"
+                  - cat ./codebuild.out
             artifacts:
               files:
                 - '**/codebuild.out'
