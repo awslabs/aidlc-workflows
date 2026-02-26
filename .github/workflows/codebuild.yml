@@ -3,6 +3,10 @@ name: CodeBuild
 on:
   workflow_dispatch: {}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   actions: none
   attestations: none
