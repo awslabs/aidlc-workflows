@@ -43,8 +43,8 @@ jobs:
         id: cache-check
         uses: actions/cache/restore@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.3
         with:
-          path: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}.zip
-          key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}.zip
+          path: .
+          key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}
           lookup-only: true
 
       - name: Configure AWS credentials
@@ -116,11 +116,13 @@ jobs:
             --ids "${{ steps.codebuild.outputs.aws-build-id }}" \
             --query 'builds[0].artifacts.location' \
             --output text)
-          aws s3 cp "s3://${ARTIFACT_LOCATION#arn:aws:s3:::}" . --recursive
+          aws s3 cp "s3://${ARTIFACT_LOCATION#arn:aws:s3:::}" ./${{ env.CODEBUILD_PROJECT_NAME }}.zip
 
       - name: List CodeBuild artifacts
         if: steps.cache-check.outputs.cache-hit != 'true'
-        run: ls -alR
+        run: |
+          ls -alR
+          unzip -l ${{ env.CODEBUILD_PROJECT_NAME }}.zip
 
       - name: Clean old report caches
         if: steps.cache-check.outputs.cache-hit != 'true'
@@ -136,5 +138,5 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         uses: actions/cache/save@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.3
         with:
-          path: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}.zip
-          key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}.zip
+          path: ${{ env.CODEBUILD_PROJECT_NAME }}.zip
+          key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}
