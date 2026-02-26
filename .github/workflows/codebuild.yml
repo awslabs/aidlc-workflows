@@ -39,9 +39,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check report cache
+      - name: List caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list -R "${{ github.repository }}" --key "${{ env.CODEBUILD_PROJECT_NAME }}-" --order asc
+
+      - name: Check cache
         id: cache-check
-        uses: actions/cache/restore@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.3
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: .
           key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}
@@ -136,7 +142,7 @@ jobs:
 
       - name: Save report to cache
         if: steps.cache-check.outputs.cache-hit != 'true'
-        uses: actions/cache/save@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.3
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: ${{ env.CODEBUILD_PROJECT_NAME }}.zip
           key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}
