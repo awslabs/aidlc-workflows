@@ -3,10 +3,6 @@ name: CodeBuild
 on:
   workflow_dispatch: {}
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
   actions: none
   attestations: none
@@ -29,33 +25,23 @@ jobs:
     environment: codebuild
 
     permissions:
-      actions: write
+      actions: read
       contents: read
       id-token: write # Required for OIDC token request to AWS STS
 
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check report cache
-        id: cache-check
-        uses: actions/cache/restore@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.3
-        with:
-          path: report-${{ github.ref_name }}-${{ github.sha }}.zip
-          key: report-${{ github.ref_name }}-${{ github.sha }}.zip
-          lookup-only: true
-
       - name: Configure AWS credentials
-        if: steps.cache-check.outputs.cache-hit != 'true'
-        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
+        uses: aws-actions/configure-aws-credentials@e3ef6f550da368605b4c77eccc1b4b21662498dd # v4.1.0
         with:
           role-to-assume: ${{ secrets.AWS_CODEBUILD_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-          role-duration-seconds: 7200
-          role-session-name: GitHubActions${{ github.run_id }}
-          mask-aws-account-id: true
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
 
       - name: Run CodeBuild
-        if: steps.cache-check.outputs.cache-hit != 'true'
         id: codebuild
         uses: aws-actions/aws-codebuild-run-build@d8279f349f3b1b84e834c30e47c20dcb8888b7e5 # v1.0.18
         with:
@@ -70,68 +56,21 @@ jobs:
               install:
                 commands:
                   - echo "install ${TEST_ONE}" | tee --append ./codebuild.out
-                  - dnf install -y lshw || echo "dnf install failed"
               pre_build:
                 commands:
                   - echo "pre_build ${TEST_ONE}" | tee --append ./codebuild.out
-                  - echo "=== OS ==="
-                  - cat /etc/os-release
-                  - echo "=== Kernel ==="
-                  - uname -a
-                  - echo "=== CPU ==="
-                  - lscpu
-                  - echo "=== Memory ==="
-                  - free -h
-                  - echo "=== Kisk ==="
-                  - df -h
-                  - echo "=== Block Devices ==="
-                  - lsblk
-                  - echo "=== Hardward Summary ==="
-                  - lshw -short || echo "lshw failed"
               build:
                 commands:
                   - echo "build ${TEST_ONE}" | tee --append ./codebuild.out
-                  - ls -alR
               post_build:
                 commands:
                   - echo "post_build ${TEST_ONE}" | tee --append ./codebuild.out
                   - echo "Build completed with status $CODEBUILD_BUILD_SUCCEEDING"
-                  - cat ./codebuild.out
             artifacts:
               files:
                 - '**/codebuild.out'
               discard-paths: yes
 
       - name: Build ID
-        if: always() && steps.cache-check.outputs.cache-hit != 'true'
+        if: always()
         run: echo "CodeBuild Build ID ${{ steps.codebuild.outputs.aws-build-id }}"
-
-      - name: Download CodeBuild artifact
-        if: steps.cache-check.outputs.cache-hit != 'true'
-        run: |
-          ARTIFACT_LOCATION=$(aws codebuild batch-get-builds \
-            --ids "${{ steps.codebuild.outputs.aws-build-id }}" \
-            --query 'builds[0].artifacts.location' \
-            --output text)
-          aws s3 cp "s3://${ARTIFACT_LOCATION#arn:aws:s3:::}" . --recursive
-
-      - name: Zip report
-        if: steps.cache-check.outputs.cache-hit != 'true'
-        run: zip "report-${{ github.ref_name }}-${{ github.sha }}.zip" codebuild.out
-
-      - name: Clean old report caches
-        if: steps.cache-check.outputs.cache-hit != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh actions-cache list --key "report-${{ github.ref_name }}-" --order asc \
-            | tail -n +2 \
-            | cut -f1 \
-            | xargs -I {} gh actions-cache delete "{}" --confirm || true
-
-      - name: Save report to cache
-        if: steps.cache-check.outputs.cache-hit != 'true'
-        uses: actions/cache/save@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.3
-        with:
-          path: report-${{ github.ref_name }}-${{ github.sha }}.zip
-          key: report-${{ github.ref_name }}-${{ github.sha }}.zip
