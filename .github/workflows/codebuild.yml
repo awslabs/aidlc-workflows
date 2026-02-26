@@ -129,10 +129,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh actions-cache list --key "${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-" --order asc \
-            | tail -n +2 \
+          gh cache list --key "${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-" --order asc \
+            | tail -n 2 \
             | cut -f1 \
-            | xargs -I {} gh actions-cache delete "{}" --confirm || true
+            | xargs -I {} gh cache delete "{}" || true
 
       - name: Save report to cache
         if: steps.cache-check.outputs.cache-hit != 'true'
