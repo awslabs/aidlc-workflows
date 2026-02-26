@@ -7,6 +7,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CODEBUILD_PROJECT_NAME: ${{ vars.CODEBUILD_PROJECT_NAME || 'codebuild-project' }}
+
 permissions:
   actions: none
   attestations: none
@@ -40,8 +43,8 @@ jobs:
         id: cache-check
         uses: actions/cache/restore@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.3
         with:
-          path: report-${{ github.ref_name }}-${{ github.sha }}.zip
-          key: report-${{ github.ref_name }}-${{ github.sha }}.zip
+          path: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}.zip
+          key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}.zip
           lookup-only: true
 
       - name: Configure AWS credentials
@@ -59,7 +62,7 @@ jobs:
         id: codebuild
         uses: aws-actions/aws-codebuild-run-build@d8279f349f3b1b84e834c30e47c20dcb8888b7e5 # v1.0.18
         with:
-          project-name: ${{ vars.CODEBUILD_PROJECT_NAME || 'codebuild-project' }}
+          project-name: ${{ env.CODEBUILD_PROJECT_NAME }}
           source-version-override: ${{ github.sha }}
           buildspec-override: |
             version: 0.2
@@ -115,16 +118,16 @@ jobs:
             --output text)
           aws s3 cp "s3://${ARTIFACT_LOCATION#arn:aws:s3:::}" . --recursive
 
-      - name: Zip report
+      - name: List CodeBuild artifacts
         if: steps.cache-check.outputs.cache-hit != 'true'
-        run: zip "report-${{ github.ref_name }}-${{ github.sha }}.zip" codebuild.out
+        run: ls -alR
 
       - name: Clean old report caches
         if: steps.cache-check.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh actions-cache list --key "report-${{ github.ref_name }}-" --order asc \
+          gh actions-cache list --key "${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-" --order asc \
             | tail -n +2 \
             | cut -f1 \
             | xargs -I {} gh actions-cache delete "{}" --confirm || true
@@ -133,5 +136,5 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         uses: actions/cache/save@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.3
         with:
-          path: report-${{ github.ref_name }}-${{ github.sha }}.zip
-          key: report-${{ github.ref_name }}-${{ github.sha }}.zip
+          path: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}.zip
+          key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}.zip
