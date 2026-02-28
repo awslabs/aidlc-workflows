@@ -42,11 +42,7 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 
 ### Kiro
 
-AI-DLC uses [Kiro Steering Files](https://kiro.dev/docs/cli/steering/) within your project workspace. Copy the rules into your project's `.kiro` folder:
-
-1. Create the directories `.kiro/steering` and `.kiro/aws-aidlc-rule-details` in your project root.
-2. Copy `aws-aidlc-rules/` into `.kiro/steering/`.
-3. Copy `aws-aidlc-rule-details/` into `.kiro/`.
+AI-DLC uses [Kiro Steering Files](https://kiro.dev/docs/cli/steering/) within your project workspace.  
 
 The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
 
@@ -94,11 +90,7 @@ Run `kiro-cli`, then `/context show`, and confirm entries for `.kiro/steering/aw
 
 ### Amazon Q Developer IDE Plugin/Extension
 
-AI-DLC uses [Amazon Q Rules](https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/context-project-rules.html) within your project workspace. Copy the rules into your project's `.amazonq` folder:
-
-1. Create the directories `.amazonq/rules` and `.amazonq/aws-aidlc-rule-details` in your project root.
-2. Copy `aws-aidlc-rules/` into `.amazonq/rules/`.
-3. Copy `aws-aidlc-rule-details/` into `.amazonq/`.
+AI-DLC uses [Amazon Q Rules](https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/context-project-rules.html) within your project workspace. 
 
 The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
 
