@@ -45,6 +45,7 @@ This stage generates code for each unit of work through two integrated parts:
   - Database Migration Scripts (if data models exist)
   - Documentation Generation (API docs, README updates)
   - Deployment Artifacts Generation
+  - Version and Release Updates (bump version in build files such as pom.xml/package.json, changelog, helm charts, and any other files referencing the application version — search the workspace for all occurrences of the current version string to ensure none are missed)  
 - [ ] Number each step sequentially
 - [ ] Include story mapping references
 - [ ] Add checkboxes [ ] for each step
