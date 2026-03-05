@@ -79,7 +79,7 @@ We use Kiro IDE in Vibe mode to run the AI-DLC workflow. This ensures that AI-DL
 
 <img src="./assets/images/kiro-sdd-nudge.png" alt="Staying in Kiro Vibe mode" width="500" height="175">
 
-#### Verify Kiro CLI
+#### Verify in Kiro CLI
 Run `kiro-cli`, then `/context show`, and confirm entries for `.kiro/steering/aws-aidlc-rules`.
 
 <img src="./assets/images/kiro-cli-aidlc-rules-loaded.png?raw=true" alt="AI-DLC Rules in Kiro CLI" width="700" height="660">
