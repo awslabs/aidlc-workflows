@@ -1,0 +1,47 @@
+name: Feature Request
+description: Suggest a small enhancement or improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Suggest an enhancement or improvement. For larger, design-level proposals, please use the [RFC template](https://github.com/awslabs/aidlc-workflows/issues/new?template=rfc.yml) instead.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of the feature or improvement you'd like.
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: What problem does this solve or what workflow does it improve?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: What area of AI-DLC does this relate to?
+      options:
+        - Inception phase rules
+        - Construction phase rules
+        - Operations phase rules
+        - New extension (e.g., compliance, security)
+        - Platform support
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other context, examples, or references that help explain the request.

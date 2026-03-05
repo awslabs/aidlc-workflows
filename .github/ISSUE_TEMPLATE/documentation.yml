@@ -1,0 +1,46 @@
+name: Documentation Problem
+description: Report incorrect, unclear, or missing documentation
+title: "[Docs]: "
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Help us improve the documentation. Please describe the problem you found or what is missing.
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Type of Documentation Problem
+      options:
+        - Incorrect or outdated information
+        - Unclear or confusing explanation
+        - Missing documentation
+        - Broken link
+        - Typo or formatting issue
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: location
+    attributes:
+      label: Location
+      description: Where is the problem? Provide a file path, URL, or section name.
+      placeholder: e.g., README.md, "Platform-Specific Setup" section
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe what is wrong or missing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested Fix
+      description: If you have a suggestion for how to fix the documentation, describe it here.

@@ -1,0 +1,108 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill out the sections below so we can reproduce and fix the issue.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of the bug.
+      placeholder: Describe what went wrong.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Set up ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: AI-DLC Version
+      description: Which version of AI-DLC are you using? Or the git commit hash if running from source.
+      placeholder: e.g., 0.1.5 or abc1234
+    validations:
+      required: true
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: AI-DLC Phase
+      description: Which workflow phase were you in when the bug occurred?
+      options:
+        - Inception (requirements, user stories, application design)
+        - Construction (component design, code generation, testing)
+        - Operations (deployment, monitoring)
+        - Not phase-specific
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform / IDE
+      description: Which platform or IDE are you using AI-DLC with?
+      multiple: true
+      options:
+        - Kiro IDE
+        - Kiro CLI
+        - Amazon Q Developer IDE Plugin
+        - Cursor IDE
+        - Cline
+        - Claude Code
+        - GitHub Copilot
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: AI Model
+      description: Which AI model were you using?
+      placeholder: e.g., Claude Sonnet 4, GPT-4o, Amazon Nova
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Any other relevant environment details (OS, IDE version, etc.).
+      placeholder: |
+        - OS: macOS 15.x
+        - IDE: VS Code 1.x
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Add any other context, screenshots, or log output about the problem here.
