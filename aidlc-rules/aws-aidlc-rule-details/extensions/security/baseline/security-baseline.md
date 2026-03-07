@@ -297,6 +297,54 @@ X) Other (please describe after [Answer]: tag below)
 
 ---
 
+## Rule SECURITY-16: File Upload Validation
+
+**Rule**: Every application that accepts file uploads MUST validate files before processing:
+- **File type validation**: Validate file type by content (magic numbers), not just file extension — reject unexpected types
+- **File size limits**: Enforce maximum file size limits appropriate to the use case — prevent resource exhaustion
+- **Filename sanitization**: Strip or reject dangerous characters from filenames — prevent path traversal and injection
+- **Malware scanning**: Large or public-facing applications SHOULD integrate malware/virus scanning on uploaded files
+- **Storage location**: Uploaded files MUST be stored outside the web root or with proper access controls
+- **Content validation**: If processing file content (CSV, XML, JSON), validate structure and sanitize data before use
+
+**Verification**:
+- File upload endpoints validate file type by content, not just extension
+- Maximum file size limits are configured and enforced
+- Filenames are sanitized (no `../`, special characters, or command injection patterns)
+- Uploaded files are stored in a dedicated directory with restricted permissions
+- File content is validated before processing (if applicable)
+
+---
+
+## Rule SECURITY-17: AI-Generated Code Security Review
+
+**Rule**: All AI-generated code MUST undergo security review before deployment:
+- **Static analysis**: Run SAST (Static Application Security Testing) tools on generated code before build
+- **Dependency scanning**: Scan all dependencies added by AI for known vulnerabilities
+- **Manual review required**: Authentication, authorization, payment, and data access logic MUST be manually reviewed
+- **Credential scanning**: Scan generated code for accidentally embedded secrets, keys, or credentials
+- **No auto-deployment**: AI-generated code MUST NOT be automatically deployed without human approval
+- **Test coverage**: Generated code MUST include security-focused test cases (input validation, auth checks, error handling)
+- **Rollback plan**: Document rollback procedure before deploying AI-generated changes
+
+**Verification**:
+- Build and test phase includes SAST scan step with documented results
+- Dependency vulnerability scan is performed and results documented
+- Security-critical code sections are flagged for manual review
+- Credential scanning is performed (no secrets in source code)
+- Deployment requires explicit human approval (not automated)
+- Security test cases are included in test suite
+- Rollback procedure is documented in build-and-test/
+
+**Build and Test Integration**:
+This rule is enforced during the Build and Test phase:
+1. SAST scan results documented in `build-and-test/security-review.md`
+2. High/Critical findings are blocking — must be resolved before proceeding
+3. Medium findings require documented risk acceptance or remediation plan
+4. All findings tracked with rule reference (SECURITY-17)
+
+---
+
 ## Enforcement Integration
 
 These rules are cross-cutting constraints that apply to every AI-DLC stage. At each stage:
@@ -316,6 +364,9 @@ For human reviewers, the following maps SECURITY rules to OWASP Top 10 (2025) ca
 | SECURITY-08 | A01:2025 – Broken Access Control |
 | SECURITY-09 | A02:2025 – Security Misconfiguration |
 | SECURITY-10 | A03:2025 – Software Supply Chain Failures |
+| SECURITY-17 | A03:2025 – Software Supply Chain Failures (AI-Generated Code) |
+| SECURITY-05 | A04:2025 – Injection |
+| SECURITY-16 | A04:2025 – Injection (File Upload Attacks) |
 | SECURITY-11 | A06:2025 – Insecure Design |
 | SECURITY-12 | A07:2025 – Authentication Failures |
 | SECURITY-13 | A08:2025 – Software or Data Integrity Failures |
