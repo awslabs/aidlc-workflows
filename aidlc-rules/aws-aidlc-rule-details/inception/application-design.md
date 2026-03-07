@@ -103,6 +103,7 @@ If the analysis in step 8 reveals ANY ambiguous answers, you MUST:
   - Dependency matrix showing relationships
   - Communication patterns between components
   - Data flow diagrams
+- Create `aidlc-docs/inception/application-design/application-design.md` that consolidates the multiple design docs created above in a single doc.
 
 ### 11. Log Approval
 - Log approval prompt with timestamp in `aidlc-docs/audit.md`
