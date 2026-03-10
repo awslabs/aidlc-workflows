@@ -90,6 +90,17 @@ Analyze whatever the user has provided:
 
 **When in doubt, ask questions** - incomplete requirements lead to poor implementations.
 
+### Step 5.1: Extension Applicability Questions
+
+**MANDATORY**: Scan all loaded extension files for an `## Applicability Question` section. For each extension that declares one, include that question in the clarifying questions file created in Step 6. After receiving answers, record each extension's enablement status in `aidlc-docs/aidlc-state.md` under `## Extension Configuration`:
+
+```markdown
+## Extension Configuration
+| Extension | Enabled | Decided At |
+|---|---|---|
+| [Extension Name] | [Yes/No] | Requirements Analysis |
+```
+
 ### Step 6: Generate Clarifying Questions (PROACTIVE APPROACH)
    - **ALWAYS** create `aidlc-docs/inception/requirements/requirement-verification-questions.md` unless requirements are exceptionally clear and complete
    - Ask questions about ANY missing, unclear, or ambiguous areas

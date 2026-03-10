@@ -11,9 +11,12 @@ The AI model intelligently assesses what stages are needed based on:
 4. Risk and impact assessment
 
 ## MANDATORY: Rule Details Loading
-**CRITICAL**: When performing any phase, you MUST read and use relevant content from rule detail files in `.aidlc-rule-details/` directory.
+**CRITICAL**: When performing any phase, you MUST read and use relevant content from rule detail files. Check these paths in order and use the first one that exists:
+- `.aidlc-rule-details/` (Cursor, Cline, Claude Code, GitHub Copilot)
+- `.kiro/aws-aidlc-rule-details/` (Kiro IDE and CLI)
+- `.amazonq/aws-aidlc-rule-details/` (Amazon Q Developer)
 
-This directory is used consistently across all platforms (Cline, Kiro CLI, Amazon Q, Cursor).
+All subsequent rule detail file references (e.g., `common/process-overview.md`, `inception/workspace-detection.md`) are relative to whichever rule details directory was resolved above.
 
 **Common Rules**: ALWAYS load common rules at workflow start:
 - Load `common/process-overview.md` for workflow overview
@@ -30,6 +33,22 @@ Self-validation checks from `common/self-validation.md` MUST be performed automa
 3. **At phase boundaries** - When transitioning between INCEPTION, CONSTRUCTION, OPERATIONS
 
 **CRITICAL**: Self-validation is AUTOMATIC and MANDATORY - not optional or user-requested.
+## MANDATORY: Extensions Loading
+**CRITICAL**: At workflow start, scan the `extensions/` directory recursively for all `.md` files. These are extension rule files that apply as cross-cutting constraints across the entire workflow.
+
+**Loading process**:
+1. List all subdirectories under `extensions/` (e.g., `extensions/security/`, `extensions/compliance/`)
+2. Load every `.md` file found within those subdirectories
+3. Each extension file defines its own verification criteria and enforcement rules as cross-cutting constraints
+
+**Enforcement**:
+- Extension rules are hard constraints, not optional guidance
+- At each stage, the model intelligently evaluates which extension rules are applicable based on the stage's purpose, the artifacts being produced, and the context of the work — enforce only those rules that are relevant
+- Rules that are not applicable to the current stage should be marked as N/A in the compliance summary (this is not a blocking finding)
+- Non-compliance with any applicable enabled extension rule is a **blocking finding** — do NOT present stage completion until resolved
+- When presenting stage completion, include a summary of extension rule compliance (compliant/non-compliant/N/A per rule, with brief rationale for N/A determinations)
+
+**Conditional Enforcement**: Extensions may be conditionally enabled/disabled. See `inception/requirements-analysis.md` for the collection mechanism. Before enforcing any extension at ANY stage, check its `Enabled` status in `aidlc-docs/aidlc-state.md` under `## Extension Configuration`. Skip disabled extensions and log the skip in audit.md. Default to enforced if no configuration exists. Extensions without an `## Applicability Question` are always enforced.
 
 ## MANDATORY: Content Validation
 **CRITICAL**: Before creating ANY file, you MUST validate content according to `common/content-validation.md` rules:
@@ -51,7 +70,7 @@ Self-validation checks from `common/self-validation.md` MUST be performed automa
 **CRITICAL**: When starting ANY software development request, you MUST display the welcome message.
 
 **How to Display Welcome Message**:
-1. Load the welcome message from `.aidlc-rule-details/common/welcome-message.md`
+1. Load the welcome message from `common/welcome-message.md` (in the resolved rule details directory)
 2. Display the complete message to the user
 3. This should only be done ONCE at the start of a new workflow
 4. Do NOT load this file in subsequent interactions to save context space

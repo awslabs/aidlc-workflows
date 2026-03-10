@@ -1,0 +1,151 @@
+name: CodeBuild
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CODEBUILD_PROJECT_NAME: ${{ vars.CODEBUILD_PROJECT_NAME || 'codebuild-project' }}
+
+permissions:
+  actions: none
+  attestations: none
+  checks: none
+  contents: none
+  deployments: none
+  discussions: none
+  id-token: none
+  issues: none
+  models: none
+  packages: none
+  pages: none
+  pull-requests: none
+  repository-projects: none
+  security-events: none
+  statuses: none
+
+jobs:
+  build:
+    environment: codebuild
+
+    permissions:
+      actions: write
+      contents: read
+      id-token: write # Required for OIDC token request to AWS STS
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: List caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list -R "${{ github.repository }}" --key "${{ env.CODEBUILD_PROJECT_NAME }}-" --order asc
+
+      - name: Check cache
+        id: cache-check
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: ${{ env.CODEBUILD_PROJECT_NAME }}.zip
+          key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}
+          lookup-only: true
+
+      - name: Configure AWS credentials
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
+        with:
+          role-to-assume: ${{ secrets.AWS_CODEBUILD_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          role-duration-seconds: 7200
+          role-session-name: GitHubActions${{ github.run_id }}
+          mask-aws-account-id: true
+
+      - name: Run CodeBuild
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        id: codebuild
+        uses: aws-actions/aws-codebuild-run-build@d8279f349f3b1b84e834c30e47c20dcb8888b7e5 # v1.0.18
+        with:
+          project-name: ${{ env.CODEBUILD_PROJECT_NAME }}
+          source-version-override: ${{ github.sha }}
+          buildspec-override: |
+            version: 0.2
+            env:
+              variables:
+                TEST_ONE: "1"
+            phases:
+              install:
+                commands:
+                  - echo "install ${TEST_ONE}" | tee --append ./codebuild.out
+                  - dnf install -y lshw || echo "dnf install failed"
+              pre_build:
+                commands:
+                  - echo "pre_build ${TEST_ONE}" | tee --append ./codebuild.out
+                  - echo "=== OS ==="
+                  - cat /etc/os-release
+                  - echo "=== Kernel ==="
+                  - uname -a
+                  - echo "=== CPU ==="
+                  - lscpu
+                  - echo "=== Memory ==="
+                  - free -h
+                  - echo "=== Kisk ==="
+                  - df -h
+                  - echo "=== Block Devices ==="
+                  - lsblk
+                  - echo "=== Hardward Summary ==="
+                  - lshw -short || echo "lshw failed"
+              build:
+                commands:
+                  - echo "build ${TEST_ONE}" | tee --append ./codebuild.out
+                  - ls -alR
+              post_build:
+                commands:
+                  - echo "post_build ${TEST_ONE}" | tee --append ./codebuild.out
+                  - echo "Build completed with status $CODEBUILD_BUILD_SUCCEEDING"
+                  - cat ./codebuild.out
+            artifacts:
+              files:
+                - '**/codebuild.out'
+              discard-paths: yes
+
+      - name: Build ID
+        if: always() && steps.cache-check.outputs.cache-hit != 'true'
+        run: echo "CodeBuild Build ID ${{ steps.codebuild.outputs.aws-build-id }}"
+
+      - name: Download CodeBuild artifact
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          ARTIFACT_LOCATION=$(aws codebuild batch-get-builds \
+            --ids "${{ steps.codebuild.outputs.aws-build-id }}" \
+            --query 'builds[0].artifacts.location' \
+            --output text)
+          aws s3 cp "s3://${ARTIFACT_LOCATION#arn:aws:s3:::}" ./${{ env.CODEBUILD_PROJECT_NAME }}.zip
+
+      - name: List CodeBuild artifacts
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          ls -alR
+          unzip -l ${{ env.CODEBUILD_PROJECT_NAME }}.zip
+
+      - name: Clean old report caches
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list -R "${{ github.repository }}" --key "${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-" --order asc \
+            | tail -n 3 \
+            | cut -f1 \
+            | xargs -I {} gh cache delete -R "${{ github.repository }}" "{}" || true
+
+      - name: Save report to cache
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: ${{ env.CODEBUILD_PROJECT_NAME }}.zip
+          key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}

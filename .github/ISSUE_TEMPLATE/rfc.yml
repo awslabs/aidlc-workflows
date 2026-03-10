@@ -1,0 +1,51 @@
+name: RFC (Request for Comments)
+description: Propose a significant change or new feature for discussion
+title: "[RFC]: "
+labels: ["rfc"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to propose a significant change or new feature. RFCs are meant to gather feedback before implementation begins.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: A brief one-paragraph summary of the proposal.
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why should this change be made? What problem does it solve or what use case does it enable?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Detailed Proposal
+      description: Describe the proposed change in detail. Include specifics on how it would work.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What other approaches did you consider and why were they not chosen?
+
+  - type: textarea
+    id: drawbacks
+    attributes:
+      label: Drawbacks
+      description: Are there any reasons why this proposal should not be adopted?
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other information, mockups, references, or examples that help explain the proposal.
