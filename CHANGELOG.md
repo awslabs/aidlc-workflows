@@ -1,6 +1,28 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.1.6] - 2026-03-05
+
+
+### Bug Fixes
+
+- codebuild cache and download fix (#93)
+- correct copy-paste error in error-handling.md (#96)
+
+
+### Documentation
+
+- update changelog for v0.1.5
+
+
+### Features
+
+- add CodeBuild workflow (#92)
+
+
+### Miscellaneous
+
+- add templates for github issues (#97)
 ## [0.1.5] - 2026-02-24
 
 
