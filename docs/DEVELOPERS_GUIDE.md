@@ -33,9 +33,9 @@ cat .github/workflows/codebuild.yml \
     | uvx yq -r '.jobs.build.steps[] | select(.id == "codebuild") | .with["buildspec-override"]' \
     > buildspec.yml
 ./codebuild_build.sh \
-  -i "public.ecr.aws/codebuild/amazonlinux-$([ "$(arch)" = "arm64" ] && echo "aarch64" || echo "x86_64")-standard:$([ "$(arch)" = "arm64" ] && echo "3.0" || echo "5.0")" \
+  -i "public.ecr.aws/codebuild/amazonlinux-$([ "$(arch)" = "arm64" -o "$(arch)" = "aarch64" ] && echo "aarch64" || echo "x86_64")-standard:$([ "$(arch)" = "arm64" -o "$(arch)" = "aarch64" ] && echo "3.0" || echo "5.0")" \
   -a "./.codebuild/artifacts/" \
-  -l "public.ecr.aws/codebuild/local-builds:$([ "$(arch)" = "arm64" ] && echo "aarch64" || echo "latest")" \
+  -l "public.ecr.aws/codebuild/local-builds:$([ "$(arch)" = "arm64" -o "$(arch)" = "aarch64" ] && echo "aarch64" || echo "latest")" \
   -c \
   -e "./.env"
 ```
