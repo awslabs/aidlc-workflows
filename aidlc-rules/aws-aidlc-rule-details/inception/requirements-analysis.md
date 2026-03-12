@@ -90,9 +90,12 @@ Analyze whatever the user has provided:
 
 **When in doubt, ask questions** - incomplete requirements lead to poor implementations.
 
-### Step 5.1: Extension Applicability Questions
+### Step 5.1: Extension Opt-In Prompts
 
-**MANDATORY**: Scan all loaded extension files for an `## Applicability Question` section. For each extension that declares one, include that question in the clarifying questions file created in Step 6. After receiving answers, record each extension's enablement status in `aidlc-docs/aidlc-state.md` under `## Extension Configuration`:
+**MANDATORY**: Scan all loaded `*.opt-in.md` files (loaded at workflow start from `extensions/` subdirectories) for an `## Opt-In Prompt` section. For each extension that declares one, include that question in the clarifying questions file created in Step 6.
+
+After receiving answers:
+1. Record each extension's enablement status in `aidlc-docs/aidlc-state.md` under `## Extension Configuration`:
 
 ```markdown
 ## Extension Configuration
@@ -100,6 +103,8 @@ Analyze whatever the user has provided:
 |---|---|---|
 | [Extension Name] | [Yes/No] | Requirements Analysis |
 ```
+
+2. **Deferred Rule Loading**: For each extension the user opted IN, load the full rules file now. The rules file is derived by naming convention: strip `.opt-in.md` from the opt-in filename and append `.md` (e.g., `security-baseline.opt-in.md` → `security-baseline.md`). For extensions the user opted OUT, do NOT load the full rules file.
 
 ### Step 6: Generate Clarifying Questions (PROACTIVE APPROACH)
    - **ALWAYS** create `aidlc-docs/inception/requirements/requirement-verification-questions.md` unless requirements are exceptionally clear and complete

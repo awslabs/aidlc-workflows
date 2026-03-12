@@ -500,7 +500,7 @@ AI-DLC supports an extension system that lets you layer additional rules on top 
 
 Extensions are grouped by category (e.g., `security/`, `scalability/`, `accessibility/`). Each category can contain its own rules and any number of subcategories you define.
 
-Each extension should include an **Applicability Question** — a structured multiple-choice question that AI-DLC automatically presents during the Requirements Analysis phase. This lets the user decide whether to enable or skip that extension for the current project. For example, the built-in security extension includes:
+Each extension should include an **Opt-In Prompt** — a structured multiple-choice question that AI-DLC automatically presents during the Requirements Analysis phase. This lets the user decide whether to enable or skip that extension for the current project. For example, the built-in security extension includes:
 
 ```markdown
 ## Question: Security Extensions
@@ -513,11 +513,11 @@ X) Other (please describe)
 [Answer]:
 ```
 
-When you create your own extensions, include a similar applicability question so users can opt in or out per project.
+When you create your own extensions, include a similar opt-in prompt so users can opt in or out per project.
 
 Here's the general flow once an extension is enabled:
 
-1. During the Inception phase, AI-DLC presents the extension's applicability question.
+1. During the Inception phase, AI-DLC presents the extension's opt-in prompt.
 2. If enabled, the extension's rules are loaded as mandatory, blocking constraints that apply across all AI-DLC phases.
 3. At each stage, the model verifies compliance with all loaded extension rules before allowing the stage to proceed.
 
