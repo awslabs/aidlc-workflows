@@ -55,3 +55,22 @@ cat .github/workflows/codebuild.yml \
 | `-e FILE`    | No       | File containing environment variables (`VAR=VAL` format, one per line)                                                                                                                              |
 | `-m`         | No       | Mount the source directory into the build container directly                                                                                                                                        |
 | `-d`         | No       | Run the build container in Docker privileged mode                                                                                                                                                   |
+
+
+## Running GitHub Actions locally
+
+_NOTE: This uses the [`act`](https://github.com/nektos/act) tool and assumes access to a valid AWS CodeBuild project `codebuild-project` in "us-east-1"_
+
+```shell
+act --platform ubuntu-latest=-self-hosted \
+    --job build \
+    --workflows .github/workflows/codebuild.yml \
+    --env-file .env \
+    --var CODEBUILD_PROJECT_NAME=codebuild-project \
+    --var AWS_REGION=us-east-1 \
+    --var ROLE_DURATION_SECONDS=7200 \
+    --artifact-server-path=$PWD/.codebuild/artifacts \
+    --cache-server-path=$PWD/.codebuild/artifacts \
+    --env ACT_CODEBUILD_DIR=$PWD/.codebuild/downloads \
+    --bind
+```
