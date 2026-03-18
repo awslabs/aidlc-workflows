@@ -107,6 +107,12 @@ jobs:
         run: |
           BRANCH="release/$TAG"
 
+          # Check if branch already exists (local or remote)
+          if git ls-remote --exit-code --heads origin "$BRANCH" &>/dev/null; then
+            echo "::warning::Branch '$BRANCH' already exists. A release PR may already be open — close it and delete the branch to re-run."
+            exit 0
+          fi
+
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
