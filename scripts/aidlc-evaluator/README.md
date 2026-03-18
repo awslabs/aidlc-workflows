@@ -23,8 +23,6 @@ uv sync
 uv run python run.py test
 # Note: On Windows, 7 tests in test_run_command.py are expected to fail
 # because they use Unix shell commands (echo, exit, sleep, etc.) not available on Windows.
-# Build the sandbox docker image
-./docker/sandbox/build.sh
 
 # Build sandbox docker image
 ./docker/sandbox/build.sh
