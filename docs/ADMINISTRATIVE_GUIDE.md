@@ -139,7 +139,7 @@ flowchart LR
 | 3    | Determine version        | Use `inputs.version` (with semver validation) or `git-cliff --bumped-version` for auto-detection; falls back to patch bump from latest tag |
 | 4    | Check tag does not exist | Fail early if the target tag already exists                                                                                                |
 | 5    | Generate changelog       | `orhun/git-cliff-action` with `--tag vX.Y.Z` to generate `CHANGELOG.md`                                                                    |
-| 6    | Create release PR        | Commit, push `release/vX.Y.Z` branch, open PR (with label `release` if it exists in the repo)                                              |
+| 6    | Create release PR        | Check branch doesn't already exist, commit, push `release/vX.Y.Z` branch, open PR (with label `release` if it exists in the repo)          |
 
 **Version detection:** If a version is specified, it must be valid semver (`MAJOR.MINOR.PATCH`); both `v0.2.0` and `0.2.0` are accepted. If no version is specified, `git-cliff --bumped-version` determines the next version from conventional commit prefixes. The `[bump]` config in `cliff.toml` controls the rules (e.g., `feat` → minor bump, breaking change → major bump). If no conventional commits are found, the workflow falls back to a patch bump from the latest tag. If no tags exist at all, it exits cleanly with a warning (no PR is created).
 
