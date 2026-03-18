@@ -70,7 +70,7 @@ jobs:
                 VERSION="${MAJOR}.${MINOR}.${PATCH}"
                 echo "WARNING: No conventional commits detected — falling back to patch bump: $VERSION"
               else
-                echo "WARNING: No conventional commits and no existing tags — nothing to release"
+                echo "::warning::No conventional commits and no existing tags — nothing to release"
                 exit 0
               fi
             fi
