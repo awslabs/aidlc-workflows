@@ -70,24 +70,24 @@ Four workflows form two distinct pipelines:
 ```mermaid
 flowchart TD
     A["workflow_dispatch\n(optional version input)"] --> B["release-pr.yml"]
-    B --> C["Determine version\n(input or git-cliff --bumped-version)"]
-    C --> D["Generate CHANGELOG.md\nwith git-cliff --tag vX.Y.Z"]
+    B --> C["Determine version\n(input or git-cliff)"]
+    C --> D["Generate CHANGELOG.md\nwith git-cliff"]
     D --> E["Open PR: release/vX.Y.Z\nwith updated CHANGELOG"]
 
     E --> F["Human reviews\nand merges PR"]
 
     F --> G["tag-on-merge.yml"]
-    G --> H["Extract version from\nbranch name release/vX.Y.Z"]
+    G --> H["Extract version from\nbranch name"]
     H --> I["Create tag vX.Y.Z\non merge commit SHA"]
 
-    I --> J["Dispatch release.yml\n(--ref vX.Y.Z)"]
-    J --> L["release.yml\n(draft release + rules zip)"]
-    L --> K["Wait for draft release\nthen dispatch codebuild.yml\n(--ref vX.Y.Z)"]
-    K --> M{{"Manual approval\n(codebuild environment)"}}
-    M --> O["Run AWS CodeBuild\n+ upload artifacts to draft"]
+    I --> J["Dispatch release.yml"]
+    J --> K["release.yml\ncreates draft release\nwith rules zip"]
+    K --> L["Dispatch codebuild.yml\nafter draft exists"]
+    L --> M{{"Manual approval\n(codebuild environment)"}}
+    M --> N["Run AWS CodeBuild\nupload artifacts to draft"]
 
-    L --> N["Human reviews\nand publishes draft"]
-    O --> N
+    K --> O["Human reviews\nand publishes draft"]
+    N --> O
 
     P["workflow_dispatch\n(select tag in UI)"] -.->|"manual backup\ntrigger"| M
 ```
