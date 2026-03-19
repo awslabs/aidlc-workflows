@@ -64,7 +64,7 @@ jobs:
             gh api repos/${{ github.repository }}/pulls/$PR_NUMBER
             echo $PR_LABELS
             echo "::endgroup::"
-          elif [ "${{ github.event_name }}" == "pull_request" ]; then
+          elif [ "${{ github.event_name }}" == "pull_request" -o "${{ github.event_name }}" == "pull_request_target" ]; then
             PR_NUMBER="${{ github.event.pull_request.number }}"
             PR_LABELS=$(echo "$PR_LABELS_JSON" | jq -c '.')
           fi
