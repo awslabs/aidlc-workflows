@@ -9,6 +9,7 @@ Security: All command output is scrubbed for credentials before being returned.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
