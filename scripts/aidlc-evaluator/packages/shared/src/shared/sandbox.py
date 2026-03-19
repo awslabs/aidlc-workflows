@@ -189,6 +189,11 @@ def sandbox_run_detached(
         f"--user={os.getuid()}:{os.getgid()}",
         "--workdir=/workspace",
         "-v", f"{workspace.resolve()}:/workspace",
+        # Ensure writable home/cache for the mapped host UID which has
+        # no entry in the container's /etc/passwd.
+        "-e", "HOME=/tmp",
+        "-e", "UV_CACHE_DIR=/tmp/.cache/uv",
+        "-e", "NPM_CONFIG_CACHE=/tmp/.cache/npm",        
     ]
 
     if not network:
