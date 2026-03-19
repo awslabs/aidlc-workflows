@@ -75,8 +75,11 @@ jobs:
           echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
           echo "pr-labels=$PR_LABELS" >> $GITHUB_OUTPUT
   check-merge-status:
+    name: Check Merge Status
     runs-on: ubuntu-latest
     needs: get-pr-info
+    permissions:
+      pull-requests: read
     if: always()
     steps:
       - run: |
@@ -102,7 +105,18 @@ jobs:
             fi
             exit 1
           fi
+          echo "::group::Open Release Pull Requests"
+          OPEN_RELEASES=$(gh pr list --state "open" --repo "${{ github.repository }}" --json "number,headRefName" | \
+              jq '[.[] | select(.headRefName | startswith("release/"))]')
+          echo "::endgroup::"
+          echo $OPEN_RELEASES | jq --exit-status '[.[] | select(.number != '$PR_NUMBER')] | length == 0' && \
+              echo "No other open release pull requests"  || \
+              (echo "::warning::⚠️ Merges are rejected while there are open release pull requests" && exit 1)
+          
+      
+          
   fail-by-label:
+    name: Fail by Label
     runs-on: ubuntu-latest
     needs: get-pr-info
     if: always()
@@ -123,6 +137,7 @@ jobs:
         run: |
           echo "✅ The label \"${{ env.DO_NOT_MERGE_LABEL }}\" is absent"
           exit 0
+          
   validate:
     name: Validate PR title
     runs-on: ubuntu-latest
