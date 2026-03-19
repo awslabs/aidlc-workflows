@@ -226,7 +226,7 @@ class ServerProcess:
                 resp = httpx.get(f"{self.base_url}/health", timeout=2.0)
                 if resp.status_code == 200:
                     return
-            except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException) as e:
+            except (httpx.ConnectError, httpx.ReadError, httpx.RemoteProtocolError, httpx.TimeoutException) as e:
                 last_error = e
             # nosemgrep: arbitrary-sleep - Intentional delay for server startup polling
             time.sleep(0.5)
