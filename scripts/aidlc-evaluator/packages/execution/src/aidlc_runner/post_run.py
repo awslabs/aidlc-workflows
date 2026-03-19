@@ -357,7 +357,7 @@ def run_post_evaluation(
     if use_sandbox and project.project_type in ("python", "python-legacy"):
         install_cmd = "uv sync --all-extras"
     install_result = _run_step(
-        project.install_cmd, project_root, timeout,
+        install_cmd, project_root, timeout,
         use_sandbox=use_sandbox,
         sandbox_image=sandbox_cfg.image,
         sandbox_memory=sandbox_cfg.memory,
