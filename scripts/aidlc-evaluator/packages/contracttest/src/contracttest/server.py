@@ -129,7 +129,14 @@ class ServerProcess:
 
     def _ensure_venv_sandbox(self) -> None:
         """Set up the venv inside a Docker container."""
-        setup_cmd = 'uv venv && uv pip install -e ".[dev]"'
+        # Remove any host-created .venv before sandbox setup.
+        # The host venv contains symlinks to the host Python interpreter
+        # which are broken inside the container.
+        stale_venv = self.project_root / ".venv"
+        if stale_venv.is_dir():
+            shutil.rmtree(stale_venv)
+
+        setup_cmd = "uv sync --all-extras"        
         result = sandbox_run(
             setup_cmd,
             workspace=self.project_root,
