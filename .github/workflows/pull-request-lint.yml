@@ -4,21 +4,125 @@ on:
   pull_request_target:
     branches: [ "main" ]
     types:
+      - edited
       - labeled
       - opened
-      - synchronize
-      - reopened
       - ready_for_review
-      - edited
-  merge_group: {}
+      - reopened
+      - synchronize
+      - unlabeled
+  merge_group:
+    types:
+      - checks_requested
 
-permissions: {}
+permissions:
+  actions: none
+  attestations: none
+  checks: none
+  contents: none
+  deployments: none
+  discussions: none
+  id-token: none
+  issues: none
+  models: none
+  packages: none
+  pages: none
+  pull-requests: none
+  repository-projects: none
+  security-events: none
+  statuses: none
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  DO_NOT_MERGE_LABEL: ${{ vars.DO_NOT_MERGE_LABEL || 'do-not-merge' }}
+  HALT_MERGES: ${{ vars.HALT_MERGES || '0' }}
+
 jobs:
+  get-pr-info:
+    permissions:
+      contents: read
+      pull-requests: read
+      # id-token: write
+    runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.get-pr.outputs.pr-number }}
+      pr_labels: ${{ steps.get-pr.outputs.pr-labels }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_LABELS_JSON: ${{ toJson(github.event.pull_request.labels.*.name) }}
+    steps:
+      - name: Get PR info
+        id: get-pr
+        run: |
+          if [ "${{ github.event_name }}" == "merge_group" ]; then
+            PR_NUMBER=$(echo "${{ github.ref }}" | grep -oP '(?<=/pr-)\d+' || echo "")
+            PR_LABELS=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER | jq -c '[.labels[].name] // []')
+            echo "::group::Getting Information"
+            gh api repos/${{ github.repository }}/pulls/$PR_NUMBER
+            echo $PR_LABELS
+            echo "::endgroup::"
+          elif [ "${{ github.event_name }}" == "pull_request" ]; then
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+            PR_LABELS=$(echo "$PR_LABELS_JSON" | jq -c '.')
+          fi
+          echo "::group::Debug Output Values"
+          echo "PR_NUMBER: $PR_NUMBER"
+          echo "PR_LABELS: $PR_LABELS"
+          echo "::endgroup::"
+          echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "pr-labels=$PR_LABELS" >> $GITHUB_OUTPUT
+  check-merge-status:
+    runs-on: ubuntu-latest
+    needs: get-pr-info
+    if: always()
+    steps:
+      - run: |
+          PR_NUMBER="${{ needs.get-pr-info.outputs.pr_number }}"
+          # Default to 0 (allow all) if not set
+          if [ -z "$HALT_MERGES" ]; then
+            HALT_MERGES=0
+          fi
+          echo "::debug::HALT_MERGES value: $HALT_MERGES"
+          echo "::debug::This PR number: $PR_NUMBER"
+          if [ "$HALT_MERGES" = "0" ]; then
+            echo "✅ All merges are allowed (HALT_MERGES=0)"
+            exit 0
+          elif [ "$HALT_MERGES" = "$PR_NUMBER" ]; then
+            echo "✅ This PR #$PR_NUMBER is explicitly allowed"
+            exit 0
+          else
+            echo "::debug::🛑 Merges are blocked. HALT_MERGES is set to $HALT_MERGES"
+            if [ "$HALT_MERGES" -lt 0 ]; then
+              echo "::error::🛑 All merges are blocked"
+            else
+              echo "::warning::⚠️ Only PR #$HALT_MERGES is allowed to merge"
+            fi
+            exit 1
+          fi
+  fail-by-label:
+    runs-on: ubuntu-latest
+    needs: get-pr-info
+    if: always()
+    steps:
+      - run: |
+          echo "::group::Debug Output Values"
+          echo "PR_LABELS: ${{ needs.get-pr-info.outputs.pr_labels }}"
+          echo "::endgroup::"
+      - name: When PR has the "${{ env.DO_NOT_MERGE_LABEL }}" label
+        id: pr-has-label
+        if: contains(needs.get-pr-info.outputs.pr_labels, env.DO_NOT_MERGE_LABEL)
+        run: |
+          echo "::error::❌ The label \"${{ env.DO_NOT_MERGE_LABEL }}\" is used to prevent merging."
+          exit 1
+      - name: When PR does not have the "${{ env.DO_NOT_MERGE_LABEL }}" label
+        id: pr-missing-label
+        if: ! contains(needs.get-pr-info.outputs.pr_labels, env.DO_NOT_MERGE_LABEL)
+        run: |
+          echo "✅ The label \"${{ env.DO_NOT_MERGE_LABEL }}\" is absent"
+          exit 0
   validate:
     name: Validate PR title
     runs-on: ubuntu-latest
