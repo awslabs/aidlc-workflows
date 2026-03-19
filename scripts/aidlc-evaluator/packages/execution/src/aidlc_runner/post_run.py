@@ -336,6 +336,14 @@ def run_post_evaluation(
 
     project_root = project.project_root
 
+    # Remove any host-created .venv before sandbox steps.
+    # A host venv has symlinks to the host Python interpreter which are
+    # broken inside the container.
+    if use_sandbox:
+        stale_venv = project_root / ".venv"
+        if stale_venv.is_dir():
+            shutil.rmtree(stale_venv)
+
     data: dict[str, Any] = {
         "status": "completed",
         "project_type": project.project_type,
