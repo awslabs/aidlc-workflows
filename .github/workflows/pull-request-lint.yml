@@ -91,6 +91,14 @@ jobs:
           fi
           echo "::debug::HALT_MERGES value: $HALT_MERGES"
           echo "::debug::This PR number: $PR_NUMBER"
+          echo "::group::Open Release Pull Requests"
+          OPEN_RELEASES=$(gh pr list --state "open" --repo "${{ github.repository }}" --json "number,headRefName" | \
+              jq '[.[] | select(.headRefName | startswith("release/"))]')
+          echo $OPEN_RELEASES
+          echo "::endgroup::"
+          echo $OPEN_RELEASES | jq --exit-status '[.[] | select(.number != '$PR_NUMBER')] | length == 0' && \
+              echo "No other open release pull requests"  || \
+              (echo "::warning::⚠️ Merges are rejected while there are open release pull requests" && exit 1)
           if [ "$HALT_MERGES" = "0" ]; then
             echo "✅ All merges are allowed (HALT_MERGES=0)"
             exit 0
@@ -106,13 +114,6 @@ jobs:
             fi
             exit 1
           fi
-          echo "::group::Open Release Pull Requests"
-          OPEN_RELEASES=$(gh pr list --state "open" --repo "${{ github.repository }}" --json "number,headRefName" | \
-              jq '[.[] | select(.headRefName | startswith("release/"))]')
-          echo "::endgroup::"
-          echo $OPEN_RELEASES | jq --exit-status '[.[] | select(.number != '$PR_NUMBER')] | length == 0' && \
-              echo "No other open release pull requests"  || \
-              (echo "::warning::⚠️ Merges are rejected while there are open release pull requests" && exit 1)
 
   fail-by-label:
     name: Fail by Label
