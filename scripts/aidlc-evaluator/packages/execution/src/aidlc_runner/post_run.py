@@ -351,6 +351,11 @@ def run_post_evaluation(
     }
 
     # Install dependencies
+    # In sandbox mode for Python projects, use `uv sync` which
+    # auto-creates a fresh .venv and installs from the lockfile.
+    install_cmd = project.install_cmd
+    if use_sandbox and project.project_type in ("python", "python-legacy"):
+        install_cmd = "uv sync --all-extras"
     install_result = _run_step(
         project.install_cmd, project_root, timeout,
         use_sandbox=use_sandbox,
