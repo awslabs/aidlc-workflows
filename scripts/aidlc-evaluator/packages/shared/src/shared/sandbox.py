@@ -114,7 +114,7 @@ def sandbox_run(
         f"--memory={memory}",
         f"--cpus={cpus}",
         "--cap-drop=ALL",
-        "--user=1000:1000",
+        f"--user={os.getuid()}:{os.getgid()}",
         "--workdir=/workspace",
         "-v", f"{workspace.resolve()}:/workspace",
     ]
