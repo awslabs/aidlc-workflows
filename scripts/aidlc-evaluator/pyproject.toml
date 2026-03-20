@@ -1,0 +1,62 @@
+[project]
+name = "aidlc-evaluation-framework"
+version = "0.1.0"
+description = "Evaluation and reporting framework for AI-DLC workflows"
+requires-python = ">=3.13"
+dependencies = [
+    "pyyaml>=6.0",
+    "boto3>=1.42.47",
+    "aidlc-runner",
+    "aidlc-qualitative",
+    "aidlc-quantitative",
+    "aidlc-contracttest",
+    "aidlc-nonfunctional",
+    "aidlc-reporting",
+    "aidlc-shared",
+]
+
+[tool.uv.workspace]
+members = [
+    "packages/execution",
+    "packages/qualitative",
+    "packages/quantitative",
+    "packages/contracttest",
+    "packages/nonfunctional",
+    "packages/reporting",
+    "packages/shared",
+    "packages/ide-harness",
+    "packages/cli-harness",
+]
+
+[tool.uv.sources]
+aidlc-runner = { workspace = true }
+aidlc-qualitative = { workspace = true }
+aidlc-quantitative = { workspace = true }
+aidlc-contracttest = { workspace = true }
+aidlc-nonfunctional = { workspace = true }
+aidlc-reporting = { workspace = true }
+aidlc-shared = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.3.0",
+    "bandit>=1.7.0",
+    "semgrep>=1.0.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+collect_ignore_glob = ["**/src/**"]
