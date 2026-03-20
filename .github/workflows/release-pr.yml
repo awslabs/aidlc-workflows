@@ -71,7 +71,7 @@ jobs:
                 echo "WARNING: No conventional commits detected — falling back to patch bump: $VERSION"
               else
                 echo "::warning::No conventional commits and no existing tags — nothing to release"
-                exit 0
+                exit 1
               fi
             fi
           fi
@@ -110,7 +110,7 @@ jobs:
           # Check if branch already exists (local or remote)
           if git ls-remote --exit-code --heads origin "$BRANCH" &>/dev/null; then
             echo "::warning::Branch '$BRANCH' already exists. A release PR may already be open — close it and delete the branch to re-run."
-            exit 0
+            exit 1
           fi
 
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
@@ -119,7 +119,7 @@ jobs:
           git add CHANGELOG.md
           if git diff --cached --quiet CHANGELOG.md; then
             echo "No changes to CHANGELOG.md"
-            exit 0
+            exit 1
           fi
 
           git checkout -b "$BRANCH"
@@ -127,16 +127,33 @@ jobs:
           git push origin "$BRANCH"
 
           LABEL_FLAG=""
-          if gh label list --search "release" --json name --jq '.[].name' | grep -qx "release"; then
-            LABEL_FLAG="--label release"
-          fi
+          for LABEL in "release"; do
+            if gh label list --search "$LABEL" --json name --jq '.[].name' | grep -qx "$LABEL"; then
+              LABEL_FLAG="$LABEL_FLAG --label $LABEL"
+            fi
+          done
 
+          # Draft PR because the github-actions[bot] does not trigger a pull_request_target workflow
           gh pr create \
-            --title "release: $TAG" \
+            --title "docs: update changelog for $BRANCH" \
+            --draft \
             --body "$(cat <<EOF
-          ## Release $TAG
+          # Release $TAG
 
-          This PR updates CHANGELOG.md for the $TAG release.
+          > [!WARNING]  
+          > All other pull requests are blocked until this is merged or closed
+          
+          This pull request is for the $TAG release.
+
+          ## Checklist (in order)
+          
+          1. [ ] Mark the pull request "Ready for review" to trigger required workflows
+          2. [ ] Inspect the `CHANGELOG.md` and "Approve" or "Reject" the pending [CodeBuild](https://github.com/awslabs/aidlc-workflows/actions/workflows/codebuild.yml) GitHub Action
+          3. [ ] Determine acceptance of evaluation and trend report
+          4. [ ] Review the pull request and if approved set the "Merge when ready"
+
+          > [!CAUTION]
+          > Simply closing this will block a subsequent $TAG release, so delete the branch or reopen the pull request if necessary
 
           **When merged**, the merge commit will be automatically tagged as \`$TAG\`, which triggers:
           - \`release.yml\` — creates a draft GitHub Release with the rules zip
