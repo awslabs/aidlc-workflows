@@ -381,6 +381,57 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
     └── operations/
 ```
 
+#### Option 3: Agent Skill
+
+Package AI-DLC as an [Agent Skill](https://agentskills.io) for Claude Code. This enables the `/aidlc` slash command and automatic activation on development tasks. Also compatible with other Agent Skills-compliant tools (Cursor, Gemini CLI, OpenCode, etc.).
+
+**Unix/Linux/macOS:**
+```bash
+# Create the skill directory
+mkdir -p ~/.claude/skills/aidlc/references
+
+# Create SKILL.md with frontmatter + core workflow
+cat > ~/.claude/skills/aidlc/SKILL.md << 'EOF'
+---
+name: aidlc
+description: >-
+  AI-DLC (AI-Driven Development Life Cycle) adaptive workflow for software
+  development. Use when building new features, creating applications,
+  refactoring systems, or any software development task that benefits from
+  structured planning, requirements analysis, and phased execution with
+  quality gates.
+---
+
+EOF
+# Append core workflow (replace path references for skill layout)
+sed \
+  's|Check these paths in order and use the first one that exists:|The rule detail files are in the `references/` directory relative to this skill:|
+  /^\- `\.aidlc-rule-details/d
+  /^\- `\.kiro/d
+  /^\- `\.amazonq/d
+  s|All subsequent rule detail file references.*resolved above\.|All rule detail file references (e.g., `common/process-overview.md`, `inception/workspace-detection.md`) are relative to the `references/` directory.|
+  s|`extensions/`|`references/extensions/`|g
+  s|under `extensions/|under `references/extensions/|g' \
+  ~/Downloads/aidlc-rules/aws-aidlc-rules/core-workflow.md >> ~/.claude/skills/aidlc/SKILL.md
+
+# Copy rule details as references
+cp -R ~/Downloads/aidlc-rules/aws-aidlc-rule-details/* ~/.claude/skills/aidlc/references/
+```
+
+**Directory Structure:**
+```
+~/.claude/skills/aidlc/
+├── SKILL.md
+└── references/
+    ├── common/
+    ├── inception/
+    ├── construction/
+    ├── operations/
+    └── extensions/
+```
+
+> **Note:** Use `~/.claude/skills/` for personal skills (available across all projects) or `.claude/skills/` for project-level skills.
+
 ---
 
 ### GitHub Copilot
