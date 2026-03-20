@@ -14,6 +14,7 @@ members = [
     "aidlc-reporting",
     "aidlc-runner",
     "aidlc-shared",
+    "aidlc-trend-reports",
 ]
 
 [[package]]
@@ -63,6 +64,7 @@ dependencies = [
     { name = "aidlc-reporting" },
     { name = "aidlc-runner" },
     { name = "aidlc-shared" },
+    { name = "aidlc-trend-reports" },
     { name = "boto3" },
     { name = "pyyaml" },
 ]
@@ -85,6 +87,7 @@ requires-dist = [
     { name = "aidlc-reporting", editable = "packages/reporting" },
     { name = "aidlc-runner", editable = "packages/execution" },
     { name = "aidlc-shared", editable = "packages/shared" },
+    { name = "aidlc-trend-reports", editable = "packages/trend-reports" },
     { name = "boto3", specifier = ">=1.42.47" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
@@ -206,6 +209,17 @@ requires-dist = [
 name = "aidlc-shared"
 version = "0.1.0"
 source = { editable = "packages/shared" }
+dependencies = [
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pyyaml", specifier = ">=6.0" }]
+
+[[package]]
+name = "aidlc-trend-reports"
+version = "0.1.0"
+source = { editable = "packages/trend-reports" }
 dependencies = [
     { name = "pyyaml" },
 ]
