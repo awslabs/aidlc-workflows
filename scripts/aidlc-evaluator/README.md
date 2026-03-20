@@ -351,6 +351,38 @@ Results are saved to `runs/<scenario>/extension-test/` with a comparison report 
 
 See [Extension Hook Testing Guide](./docs/extension-hook-testing.md) for detailed documentation.
 
+## Trend Reporting
+
+Generate cross-release trend reports that track evaluation metrics over time. Fetches evaluation bundles from GitHub releases and Actions artifacts, then renders HTML, Markdown, and YAML reports.
+
+```bash
+# Generate trend report (requires gh CLI authenticated)
+uv run python run.py trend --baseline test_cases/sci-calc/golden.yaml
+
+# HTML only with verbose output
+uv run python run.py trend --baseline test_cases/sci-calc/golden.yaml --format html -v
+
+# Include local evaluation bundles
+uv run python run.py trend --baseline test_cases/sci-calc/golden.yaml \
+    --local-bundle runs/my-run/report.zip
+
+# Gate mode (exit non-zero on regressions)
+uv run python run.py trend --baseline test_cases/sci-calc/golden.yaml --gate
+```
+
+The HTML executive summary displays six metric cards:
+
+- **Qualitative Score** — semantic quality vs golden baseline (higher is better)
+- **Contract Tests** — API pass rate as passed/total (higher is better)
+- **Unit Tests** — pass rate shown as percentage (higher is better)
+- **Lint Findings** — static analysis issues (lower is better)
+- **Execution Time** — generation duration (lower is better)
+- **Total Tokens** — LLM token consumption (lower is better)
+
+Output is written to a timestamped folder under the output directory (default: `runs/`).
+
+A sample HTML report is available at [`packages/trend-reports/examples/trend-report.html`](./packages/trend-reports/examples/trend-report.html).
+
 ## Running the Execution Component Directly
 
 For full execution-level controls you can run `aidlc-runner` directly:
@@ -385,6 +417,7 @@ Execution-specific toggles:
 │   ├── run_cli_evaluation.py      # CLI adapter evaluation runner
 │   ├── run_ide_evaluation.py      # IDE adapter evaluation runner
 │   ├── run_extension_test.py      # Extension hook testing (opt-in configurations)
+│   ├── run_trend_report.py        # Cross-release trend report generation
 │   └── README.md              # Scripts documentation
 ├── config/
 │   ├── default.yaml           # Default configuration (models, AWS, timeouts, tools)
@@ -399,6 +432,7 @@ Execution-specific toggles:
 │   ├── contracttest/          # API contract testing against OpenAPI specs
 │   ├── nonfunctional/         # NFR evaluation — tokens, timing, consistency
 │   ├── reporting/             # Consolidated report generation (Markdown + HTML)
+│   ├── trend-reports/         # Cross-release trend reporting (HTML, Markdown, YAML)
 │   ├── cli-harness/           # CLI adapter framework (Claude Code, Kiro CLI)
 │   ├── ide-harness/           # IDE adapter framework (Cursor, Cline, Kiro, etc.)
 │   └── shared/                # Common utilities

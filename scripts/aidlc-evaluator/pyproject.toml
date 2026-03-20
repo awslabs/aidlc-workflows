@@ -13,6 +13,7 @@ dependencies = [
     "aidlc-nonfunctional",
     "aidlc-reporting",
     "aidlc-shared",
+    "aidlc-trend-reports",
 ]
 
 [tool.uv.workspace]
@@ -26,6 +27,7 @@ members = [
     "packages/shared",
     "packages/ide-harness",
     "packages/cli-harness",
+    "packages/trend-reports",
 ]
 
 [tool.uv.sources]
@@ -36,6 +38,7 @@ aidlc-contracttest = { workspace = true }
 aidlc-nonfunctional = { workspace = true }
 aidlc-reporting = { workspace = true }
 aidlc-shared = { workspace = true }
+aidlc-trend-reports = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -53,6 +56,10 @@ target-version = "py313"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
 ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"packages/trend-reports/src/trend_reports/render_html.py" = ["E501"]
+"packages/trend-reports/src/trend_reports/render_md.py" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
