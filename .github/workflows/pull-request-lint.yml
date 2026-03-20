@@ -82,6 +82,8 @@ jobs:
     permissions:
       pull-requests: read
     if: always()
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - run: |
           PR_NUMBER="${{ needs.get-pr-info.outputs.pr_number }}"
