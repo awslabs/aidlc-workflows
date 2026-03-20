@@ -252,6 +252,11 @@ def _render_html_section_a(trend: TrendData) -> str:
         if latest.unit_tests.total > 0
         else 0.0
     )
+    bl_unit_pass_rate = (
+        bl.unit_tests_passed / bl.unit_tests_total
+        if bl.unit_tests_total > 0
+        else 0.0
+    )
     test_status = "good" if unit_pass_rate >= 1.0 else ("warn" if unit_pass_rate >= 0.95 else "bad")
     lint_status = "good" if latest.code_quality.lint_findings == 0 else "warn"
 
@@ -287,10 +292,20 @@ def _render_html_section_a(trend: TrendData) -> str:
     # Detail table
     rows = [
         (
-            "Unit tests passed",
-            _bl(bl.unit_tests_passed),
-            str(latest.unit_tests.passed),
-            _fmt_int_delta(latest.unit_tests.passed, bl.unit_tests_passed),
+            "Unit test pass rate",
+            f"{format_pct(bl.unit_tests_passed / bl.unit_tests_total)} ({bl.unit_tests_passed}/{bl.unit_tests_total})"
+            if bl.unit_tests_total
+            else _bl(bl.unit_tests_passed),
+            f"{format_pct(unit_pass_rate)} ({latest.unit_tests.passed}/{latest.unit_tests.total})"
+            if latest.unit_tests.total
+            else "0",
+            "="
+            if bl.unit_tests_total and unit_pass_rate == bl_unit_pass_rate
+            else (
+                f"{(unit_pass_rate - bl_unit_pass_rate) * 100:+.1f}%"
+                if bl.unit_tests_total
+                else "—"
+            ),
         ),
         (
             "Contract tests",
@@ -330,23 +345,28 @@ def _render_html_section_a(trend: TrendData) -> str:
         ),
     ]
 
+    # Metrics where lower values are better — a negative delta is good (green)
+    lower_is_better = {"lint findings", "execution time", "total tokens"}
+
     table_rows = []
     table_styles = []
     for label, golden, latest_val, vs in rows:
         table_rows.append([label, golden, latest_val, vs])
-        # Color the delta column
+        # Color the delta column based on metric direction
         delta_cls = ""
-        if vs.startswith("+") or vs.startswith("-"):
-            delta_cls = "d-pos" if vs.startswith("-") and "findings" in label.lower() else ""
-            if not delta_cls:
-                delta_cls = "d-pos" if vs.startswith("+") else "d-neg"
+        if vs not in ("=", "—") and (vs.startswith("+") or vs.startswith("-") or vs.startswith("−")):
+            is_negative = vs.startswith("-") or vs.startswith("−")
+            if label.lower() in lower_is_better:
+                delta_cls = "d-pos" if is_negative else "d-neg"
+            else:
+                delta_cls = "d-neg" if is_negative else "d-pos"
         table_styles.append(["", "", "", delta_cls])
 
     metric_guide = (
         '<p class="section-desc">High-level snapshot comparing the latest release against the '
         "golden baseline (the reference evaluation used as the quality target).</p>\n"
         "<table>\n<thead>\n<tr>\n  <th>Metric</th>\n  <th>What it measures</th>\n</tr>\n</thead>\n<tbody>\n"
-        "<tr><td><strong>Unit tests passed</strong></td><td>Number of generated unit tests that pass. Higher means broader, more complete test suites.</td></tr>\n"
+        "<tr><td><strong>Unit test pass rate</strong></td><td>Percentage of generated unit tests that pass. Higher means more reliable code generation.</td></tr>\n"
         "<tr><td><strong>Contract tests</strong></td><td>API compliance checks against the OpenAPI spec (passed/total). 88/88 = full compliance.</td></tr>\n"
         "<tr><td><strong>Lint findings</strong></td><td>Static analysis warnings in generated code. Lower is better &mdash; 0 means clean code.</td></tr>\n"
         "<tr><td><strong>Qualitative score</strong></td><td>AI-graded documentation quality on a 0&ndash;1 scale (higher is better).</td></tr>\n"
@@ -386,23 +406,28 @@ def _render_html_section_b(trend: TrendData) -> str:
     parts.append(
         "<p>Unit tests validate individual functions and components in isolation. "
         "The AIDLC rules instruct the AI to generate both source code and test suites.</p>\n"
-        "<p><strong>Passed</strong> = tests that ran and succeeded. "
-        "<strong>Failed</strong> = tests that ran but produced wrong results. "
-        "<strong>Total</strong> = passed + failed + errors + skipped.</p>\n"
-        "<p>All versions currently show 0 failures &mdash; the variance is in how many tests "
-        "the rules produce, which reflects test suite breadth and coverage.</p>\n"
+        "<p><strong>Pass/Total</strong> = tests that passed out of total generated. "
+        "<strong>Rate</strong> = pass percentage (100% = all tests passing). "
+        "<strong>Failures</strong> = tests that ran but produced wrong results.</p>\n"
     )
     parts.append("</div>\n<div>\n")
 
-    max_passed = max((r.unit_tests.passed for r in trend.runs), default=1)
     rows = []
     styles = []
     for r in trend.runs:
-        pct = r.unit_tests.passed / max_passed * 100 if max_passed else 0
-        bar_html = f'<span class="bar" style="width:{pct:.0f}%"></span>'
-        rows.append([r.label, bar_html, str(r.unit_tests.passed), str(r.unit_tests.failed), str(r.unit_tests.total)])
-        styles.append(["", "bar-cell", "", "", ""])
-    parts.append(_html_table(["Version", "", "Passed", "Failed", "Total"], rows, styles))
+        rate = r.unit_tests.passed / r.unit_tests.total if r.unit_tests.total > 0 else 0.0
+        cls = _score_class(rate)
+        fail_cls = "d-neg" if r.unit_tests.failed > 0 else ""
+        rows.append(
+            [
+                r.label,
+                f"{r.unit_tests.passed}/{r.unit_tests.total}",
+                format_pct(rate),
+                str(r.unit_tests.failed),
+            ]
+        )
+        styles.append(["", "", cls, fail_cls])
+    parts.append(_html_table(["Version", "Pass/Total", "Rate", "Failures"], rows, styles))
     parts.append("</div>\n</div>\n")
 
     # B.2 Contract tests
@@ -810,7 +835,9 @@ def _render_html_section_h(trend: TrendData) -> str:
     rows = [
         [
             r.label,
-            str(r.unit_tests.passed),
+            f"{format_pct(r.unit_tests.passed / r.unit_tests.total)} ({r.unit_tests.passed}/{r.unit_tests.total})"
+            if r.unit_tests.total > 0
+            else "0",
             f"{r.contract_tests.passed}/{r.contract_tests.total}",
             f"{r.qualitative.overall_score:.3f}",
             format_number(r.metrics.total_tokens),
