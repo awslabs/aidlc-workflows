@@ -381,6 +381,8 @@ The HTML executive summary displays six metric cards:
 
 Output is written to a timestamped folder under the output directory (default: `runs/`).
 
+A sample HTML report is available at [`packages/trend-reports/examples/trend-report.html`](./packages/trend-reports/examples/trend-report.html).
+
 ## Running the Execution Component Directly
 
 For full execution-level controls you can run `aidlc-runner` directly:
