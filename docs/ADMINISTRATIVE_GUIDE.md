@@ -20,6 +20,7 @@ This guide documents the CI/CD infrastructure, GitHub Workflows, protected envir
   - [Tag Release Workflow](#tag-release-workflow-tag-on-mergeyml)
   - [CodeBuild Workflow](#codebuild-workflow-codebuildyml)
   - [Release Workflow](#release-workflow-releaseyml)
+  - [Pull Request Validation Workflow](#pull-request-validation-workflow-pull-request-lintyml)
 - [Protected Environments](#protected-environments)
 - [Secrets and Variables](#secrets-and-variables)
 - [Permissions Model](#permissions-model)
@@ -43,8 +44,10 @@ awslabs/aidlc-workflows/
 ├── .github/
 │   ├── CODEOWNERS
 │   ├── ISSUE_TEMPLATE/           # Bug, feature, RFC, docs templates
+│   ├── pull_request_template.md  # PR template with contributor statement
 │   └── workflows/
 │       ├── codebuild.yml         # CI via AWS CodeBuild
+│       ├── pull-request-lint.yml # PR validation (title, labels, merge gates)
 │       ├── release.yml           # GitHub Release on tag push
 │       ├── release-pr.yml        # Changelog PR before release
 │       └── tag-on-merge.yml      # Auto-tag on release PR merge
@@ -63,7 +66,7 @@ awslabs/aidlc-workflows/
 
 ## CI/CD Architecture
 
-Four workflows form two distinct pipelines:
+Five workflows form two distinct pipelines plus a pull request validation gate:
 
 ### Pipeline 1: Release (changelog-first)
 
@@ -114,6 +117,21 @@ flowchart LR
     B --> D["Run AWS CodeBuild"]
     D --> E["Upload workflow artifacts"]
 ```
+
+### Pipeline 3: Pull Request Validation
+
+```mermaid
+flowchart TD
+    A["pull_request_target\n(to main)"] --> B["get-pr-info"]
+    C["merge_group\n(checks_requested)"] --> B
+
+    B --> D["check-merge-status\n(HALT_MERGES + open release PRs)"]
+    B --> E["fail-by-label\n(do-not-merge label)"]
+    A --> F["validate\n(conventional commit title)"]
+    A --> G["contributorStatement\n(acknowledgment in PR body)"]
+```
+
+`pull-request-lint.yml` runs on every PR targeting `main` and on merge queue checks. It enforces four gates: conventional commit PR titles, the contributor statement from the PR template, a configurable merge-halt mechanism, and a do-not-merge label check. The workflow uses `pull_request_target` (not `pull_request`) so it runs in the context of the base branch — this is safe because it never checks out PR code.
 
 ---
 
@@ -265,6 +283,64 @@ flowchart LR
 
 ---
 
+### Pull Request Validation Workflow (`pull-request-lint.yml`)
+
+| Property        | Value                                                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------ |
+| **File**        | `.github/workflows/pull-request-lint.yml`                                                        |
+| **Triggers**    | `pull_request_target` to `main` (edited, labeled, opened, ready_for_review, reopened, synchronize, unlabeled); `merge_group` (checks_requested) |
+| **Environment** | _(none)_                                                                                         |
+| **Runner**      | `ubuntu-latest`                                                                                  |
+| **Concurrency** | Groups by `{workflow}-{ref}`, cancels in-progress                                                |
+
+**Purpose:** Validates pull requests before merge. Enforces conventional commit PR titles, the contributor acknowledgment statement, merge-halt controls, and a do-not-merge label gate. Also runs as a merge queue check.
+
+**Why `pull_request_target`:** This trigger runs the workflow in the context of the base branch (not the PR head). This is safe here because no step checks out or executes PR code — the workflow only inspects PR metadata (title, labels, body). Using `pull_request_target` ensures the workflow has access to repository secrets and labels even for PRs from forks.
+
+**Job: `get-pr-info`**
+
+| Step | Name        | Action                                                                                                   |
+| ---- | ----------- | -------------------------------------------------------------------------------------------------------- |
+| 1    | Get PR info | Extract PR number and labels from event context (`pull_request_target`) or by API lookup (`merge_group`) |
+
+Outputs `pr_number` and `pr_labels` for downstream jobs. For `merge_group` events, the PR number is extracted from the ref name and labels are fetched via the GitHub API. For `pull_request_target` events, values come directly from the event payload.
+
+**Job: `check-merge-status` ("Check Merge Status")**
+
+Depends on `get-pr-info`. Runs `if: always()` so it executes even if the upstream job fails.
+
+| Check                | Behavior                                                                      |
+| -------------------- | ----------------------------------------------------------------------------- |
+| Open release PRs     | Blocks merge if other `release/` PRs are open (prevents concurrent releases)  |
+| `HALT_MERGES = 0`    | All merges allowed (default)                                                  |
+| `HALT_MERGES = -N`   | All merges blocked                                                            |
+| `HALT_MERGES = N`    | Only PR #N is allowed to merge                                                |
+
+**Job: `fail-by-label` ("Fail by Label")**
+
+Depends on `get-pr-info`. Runs `if: always()`. Fails the check if the PR has the `do-not-merge` label (configurable via `DO_NOT_MERGE_LABEL` variable).
+
+**Job: `validate` ("Validate PR title")**
+
+Only runs for `pull_request` and `pull_request_target` events (not `merge_group`). Uses `amannn/action-semantic-pull-request` to enforce conventional commit format on PR titles.
+
+Allowed types: `fix`, `feat`, `build`, `chore`, `ci`, `docs`, `style`, `refactor`, `perf`, `test`. Scopes are optional (`requireScope: false`).
+
+**Job: `contributorStatement` ("Require Contributor Statement")**
+
+Only runs for `pull_request` and `pull_request_target` events. Skipped for bot accounts (`dependabot[bot]`, `github-actions[bot]`, `github-actions`, `aidlc-workflows`). Verifies the PR body contains the contributor acknowledgment text from `.github/pull_request_template.md`:
+
+> By submitting this pull request, I confirm that you can use, modify, copy, and redistribute this contribution, under the terms of the project license.
+
+**External actions (SHA-pinned):**
+
+| Action                                  | Version | SHA                                        |
+| --------------------------------------- | ------- | ------------------------------------------ |
+| `amannn/action-semantic-pull-request`   | v6.1.1  | `48f256284bd46cdaab1048c3721360e808335d50` |
+| `actions/github-script`                 | v8.0.0  | `ed597411d8f924073f98dfc5c65a23a2325f34cd` |
+
+---
+
 ## Protected Environments
 
 | Environment | Used By                     | Purpose                                       |
@@ -286,19 +362,21 @@ Environment protection rules (configured in GitHub repository settings) may incl
 | Secret                   | Scope                       | Used By                                             | Purpose                                                                                        |
 | ------------------------ | --------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `AWS_CODEBUILD_ROLE_ARN` | Environment (`codebuild`)   | `codebuild.yml`                                     | IAM Role ARN for OIDC-based AWS STS role assumption                                            |
-| `GITHUB_TOKEN`           | Automatic (GitHub-provided) | `release.yml`, `release-pr.yml`, `tag-on-merge.yml` | Authenticate GitHub API calls (release creation, PR creation, tag creation, workflow dispatch) |
+| `GITHUB_TOKEN`           | Automatic (GitHub-provided) | `release.yml`, `release-pr.yml`, `tag-on-merge.yml`, `pull-request-lint.yml` | Authenticate GitHub API calls (release creation, PR creation, tag creation, workflow dispatch, PR validation) |
 
 The `codebuild.yml` workflow also uses `github.token` (the automatic token, accessed without the `secrets.` prefix) for cache management and release asset uploads.
 
 ### Repository Variables
 
-| Variable                 | Used By         | Default Fallback    | Purpose                          |
-| ------------------------ | --------------- | ------------------- | -------------------------------- |
-| `CODEBUILD_PROJECT_NAME` | `codebuild.yml` | `codebuild-project` | AWS CodeBuild project name       |
-| `AWS_REGION`             | `codebuild.yml` | `us-east-1`         | AWS region for CodeBuild and STS |
-| `ROLE_DURATION_SECONDS`  | `codebuild.yml` | `7200`              | STS session duration (seconds)   |
+| Variable                  | Used By                 | Default Fallback    | Purpose                                                          |
+| ------------------------- | ----------------------- | ------------------- | ---------------------------------------------------------------- |
+| `CODEBUILD_PROJECT_NAME`  | `codebuild.yml`         | `codebuild-project` | AWS CodeBuild project name                                       |
+| `AWS_REGION`              | `codebuild.yml`         | `us-east-1`         | AWS region for CodeBuild and STS                                 |
+| `ROLE_DURATION_SECONDS`   | `codebuild.yml`         | `7200`              | STS session duration (seconds)                                   |
+| `DO_NOT_MERGE_LABEL`      | `pull-request-lint.yml` | `do-not-merge`      | Label name that blocks PR merging                                |
+| `HALT_MERGES`             | `pull-request-lint.yml` | `0`                 | Merge gate: `0` = allow all, `-N` = block all, `N` = only PR #N |
 
-All three variables have sensible defaults via `${{ vars.VAR || 'default' }}` syntax, so the workflow runs even without explicit variable configuration.
+All variables have sensible defaults via `${{ vars.VAR || 'default' }}` syntax, so workflows run even without explicit variable configuration.
 
 ---
 
@@ -306,20 +384,25 @@ All three variables have sensible defaults via `${{ vars.VAR || 'default' }}` sy
 
 ### Workflow-level permissions
 
-| Workflow           | Permissions                               |
-| ------------------ | ----------------------------------------- |
-| `codebuild.yml`    | All 16 scopes explicitly set to `none`    |
-| `release.yml`      | `contents: write`                         |
-| `release-pr.yml`   | `contents: write`, `pull-requests: write` |
-| `tag-on-merge.yml` | `contents: write`, `actions: write`       |
+| Workflow                | Permissions                               |
+| ----------------------- | ----------------------------------------- |
+| `codebuild.yml`         | All 16 scopes explicitly set to `none`    |
+| `pull-request-lint.yml` | All 16 scopes explicitly set to `none`    |
+| `release.yml`           | `contents: write`                         |
+| `release-pr.yml`        | `contents: write`, `pull-requests: write` |
+| `tag-on-merge.yml`      | `contents: write`, `actions: write`       |
 
 ### Job-level permissions (overrides)
 
-| Workflow        | Job     | Permissions                                            | Rationale                                                      |
-| --------------- | ------- | ------------------------------------------------------ | -------------------------------------------------------------- |
-| `codebuild.yml` | `build` | `actions: write`, `contents: write`, `id-token: write` | Cache management, release asset upload, OIDC token for AWS STS |
+| Workflow                | Job                    | Permissions                                            | Rationale                                                      |
+| ----------------------- | ---------------------- | ------------------------------------------------------ | -------------------------------------------------------------- |
+| `codebuild.yml`         | `build`                | `actions: write`, `contents: write`, `id-token: write` | Cache management, release asset upload, OIDC token for AWS STS |
+| `pull-request-lint.yml` | `get-pr-info`          | `contents: read`, `pull-requests: read`                | Read PR metadata and labels via API                            |
+| `pull-request-lint.yml` | `check-merge-status`   | `pull-requests: read`                                  | Read PR state for merge gate checks                            |
+| `pull-request-lint.yml` | `validate`             | `pull-requests: read`                                  | Read PR title for conventional commit validation               |
+| `pull-request-lint.yml` | `contributorStatement` | `pull-requests: read`                                  | Read PR body for contributor acknowledgment                    |
 
-The `codebuild.yml` workflow follows a **deny-all-then-grant** pattern: every permission scope is set to `none` at the workflow level, then only the 3 required scopes are granted at the job level. This is the strictest possible configuration and prevents privilege escalation from compromised steps.
+Both `codebuild.yml` and `pull-request-lint.yml` follow a **deny-all-then-grant** pattern: every permission scope is set to `none` at the workflow level, then only the required scopes are granted at the job level. This is the strictest possible configuration and prevents privilege escalation from compromised steps.
 
 ---
 
@@ -329,9 +412,10 @@ The `codebuild.yml` workflow follows a **deny-all-then-grant** pattern: every pe
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Supply-chain protection** | All external actions pinned to full commit SHAs (not mutable version tags)                                                                                        |
 | **AWS authentication**      | OIDC-based role assumption via `id-token: write` — no static credentials stored                                                                                   |
-| **Least-privilege tokens**  | `codebuild.yml` explicitly denies all 16 permission scopes at workflow level, grants only 3 at job level                                                          |
+| **Least-privilege tokens**  | `codebuild.yml` and `pull-request-lint.yml` explicitly deny all 16 permission scopes at workflow level, grant only required scopes at job level                   |
 | **Environment protection**  | `codebuild` environment gates AWS credential access with potential reviewer/branch rules                                                                          |
-| **Concurrency control**     | `codebuild.yml` cancels in-progress runs for the same branch                                                                                                      |
+| **Concurrency control**     | `codebuild.yml` and `pull-request-lint.yml` cancel in-progress runs for the same branch                                                                          |
+| **Safe PR trigger**         | `pull-request-lint.yml` uses `pull_request_target` but never checks out PR code — only inspects metadata (title, labels, body)                                    |
 | **Injection-safe inputs**   | All user-controlled and event-driven inputs (`inputs.version`, `pull_request.head.ref`) passed via `env:` variables, never directly interpolated in `run:` blocks |
 | **Code ownership**          | `.github/` (including workflows) owned exclusively by `@awslabs/aidlc-admins` via CODEOWNERS                                                                      |
 | **Account masking**         | `mask-aws-account-id: true` in AWS credential configuration                                                                                                       |
@@ -403,11 +487,12 @@ Defined in `cliff.toml` (used by `release-pr.yml`):
 | ---------- | ------------- |
 | `feat`     | Features      |
 | `fix`      | Bug Fixes     |
-| `doc`      | Documentation |
+| `docs`     | Documentation |
 | `perf`     | Performance   |
 | `refactor` | Refactoring   |
 | `style`    | Style         |
 | `test`     | Tests         |
+| `build`    | CI/CD         |
 | `ci`       | CI/CD         |
 | `chore`    | Miscellaneous |
 
