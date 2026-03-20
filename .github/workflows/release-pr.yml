@@ -148,9 +148,9 @@ jobs:
           ## Checklist (in order)
           
           1. [ ] Mark the pull request "Ready for review" to trigger required workflows
-          2. [ ] Inspect the `CHANGELOG.md` and "Approve" or "Reject" the pending [CodeBuild](https://github.com/awslabs/aidlc-workflows/actions/workflows/codebuild.yml) GitHub Action
-          3. [ ] Determine acceptance of evaluation and trend report
-          4. [ ] Review the pull request and if approved set the "Merge when ready"
+          2. [ ] Inspect the CHANGELOG.md and "Approve" or "Reject" the pending [CodeBuild](https://github.com/awslabs/aidlc-workflows/actions/workflows/codebuild.yml) GitHub Action
+          3. [ ] Evaluate the artifacts
+          4. [ ] Review the pull request (if approved set the "Merge when ready")
 
           > [!CAUTION]
           > Simply closing this will block a subsequent $TAG release, so delete the branch or reopen the pull request if necessary
