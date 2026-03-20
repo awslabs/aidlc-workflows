@@ -1,6 +1,32 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.1.7] - 2026-03-20
+
+
+### Bug Fixes
+
+- add required environmental github token (#137)
+
+
+### Documentation
+
+- add developer's guide for running CodeBuild locally (#94)
+
+
+### Features
+
+- add code owners (#112)
+- changelog-first release flow with build artifacts on draft releases (#125)
+- add AIDLC Evaluation & Reporting Framework (#115)
+- update pull request linting conditions (#131)
+- add cross-release trend reporting package (#136)
+
+
+### Miscellaneous
+
+- bump pyjwt in /scripts/aidlc-evaluator (#129)
+- bump pillow in /scripts/aidlc-evaluator (#130)
 ## [0.1.6] - 2026-03-05
 
 
@@ -8,11 +34,6 @@ All notable changes to this project will be documented in this file.
 
 - codebuild cache and download fix (#93)
 - correct copy-paste error in error-handling.md (#96)
-
-
-### Documentation
-
-- update changelog for v0.1.5
 
 
 ### Features
@@ -23,23 +44,12 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - add templates for github issues (#97)
-## [0.1.5] - 2026-02-24
-
-
-### Documentation
-
-- update changelog for v0.1.4 (#88)
 ## [0.1.4] - 2026-02-24
 
 
 ### Bug Fixes
 
 - correct GitHub Copilot instructions and Kiro CLI rule-details path resolution (#82, #84) (#87)
-
-
-### Documentation
-
-- update changelog for v0.1.3 (#77)
 ## [0.1.3] - 2026-02-11
 
 
@@ -62,7 +72,6 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
-- update changelog for v0.1.1
 - update README to direct users to GitHub Releases (#61)
 - add Windows CMD setup instructions and ZIP note (#68)
 
@@ -72,12 +81,6 @@ All notable changes to this project will be documented in this file.
 - add test automation friendly code generation rules
 - add frontend design coverage in Construction phase
 ## [0.1.1] - 2026-01-22
-
-
-### Documentation
-
-- update changelog for v0.0.5
-- update changelog for v0.0.6
 
 
 ### Features
