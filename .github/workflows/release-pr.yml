@@ -141,7 +141,7 @@ jobs:
           # Release $TAG
 
           > [!WARNING]  
-          > All other pull requests are blocked until this is merged or closed
+          > All other pull requests are blocked until merged or closed
           
           This pull request is for the $TAG release.
 
@@ -151,6 +151,13 @@ jobs:
           2. [ ] Inspect the CHANGELOG.md and "Approve" or "Reject" the pending [CodeBuild](https://github.com/awslabs/aidlc-workflows/actions/workflows/codebuild.yml) GitHub Action
           3. [ ] Evaluate the artifacts
           4. [ ] Review the pull request (if approved set the "Merge when ready")
+
+          ## Post Merge
+
+          * [ ] Verify $TAG tag
+          * [ ] Approve "Approve" or "Reject" the pending [CodeBuild](https://github.com/awslabs/aidlc-workflows/actions/workflows/codebuild.yml) GitHub Action
+          * [ ] Review the drafted release artifacts for completion
+          * [ ] Publish the release
 
           > [!CAUTION]
           > Simply closing this will block a subsequent $TAG release, so delete the branch or reopen the pull request if necessary
