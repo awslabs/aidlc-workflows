@@ -7,6 +7,9 @@ This stage generates code for each unit of work through two integrated parts:
 
 **Note**: For brownfield projects, "generate" means modify existing files when appropriate, not create duplicates.
 
+## MANDATORY: Extension Workflow Check
+Before proceeding, check `aidlc-docs/aidlc-state.md` under `## Extension Configuration` for any enabled extensions that replace this workflow. If an extension with Code Generation workflow replacement is enabled (e.g., TDD Code Generation), load and follow that extension's workflow rules instead of this file. The extension file will include a per-unit applicability check — if the extension is skipped for a specific unit, return to this file for that unit.
+
 ## Prerequisites
 - Unit Design Generation must be complete for the unit
 - NFR Implementation (if executed) must be complete for the unit
