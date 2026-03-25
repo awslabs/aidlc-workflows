@@ -478,7 +478,7 @@ During Code Generation, AI-DLC should:
   go through the same review process as production code
 - **Mark deprecated examples** - If a pattern is superseded, rename the directory
   with a "deprecated-" prefix and add a note pointing to the replacement
-```
+````
 
 ---
 
