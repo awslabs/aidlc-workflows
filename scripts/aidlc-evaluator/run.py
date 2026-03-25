@@ -12,6 +12,7 @@ Available modes:
   - compare    Generate cross-model comparison report
   - ext-test   Test extension hooks with different opt-in configurations
   - ext-report Regenerate extension test comparison report
+  - trend      Generate trend report across AIDLC rules releases
   - test       Run unit tests for all packages
 
 Usage:
@@ -35,6 +36,9 @@ Usage:
 
     # Regenerate extension comparison report
     python run.py ext-report --runs-dir runs/sci-calc/extension-test
+
+    # Generate trend report across releases
+    python run.py trend --baseline test_cases/sci-calc/golden.yaml
 
     # Run tests
     python run.py test
@@ -120,6 +124,13 @@ def main() -> None:
         add_help=False,
     )
 
+    # Trend report mode
+    subparsers.add_parser(
+        "trend",
+        help="Generate trend report across AIDLC rules releases",
+        add_help=False,
+    )
+
     # Test mode
     subparsers.add_parser(
         "test",
@@ -143,6 +154,7 @@ def main() -> None:
         "compare": SCRIPTS_DIR / "run_comparison_report.py",
         "ext-test": SCRIPTS_DIR / "run_extension_test.py",
         "ext-report": SCRIPTS_DIR / "regenerate_extension_report.py",
+        "trend": SCRIPTS_DIR / "run_trend_report.py",
         "test": SCRIPTS_DIR / "run_evaluation.py",  # test mode is in run_evaluation.py
     }
 

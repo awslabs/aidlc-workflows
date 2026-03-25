@@ -82,6 +82,8 @@ jobs:
     permissions:
       pull-requests: read
     if: always()
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - run: |
           PR_NUMBER="${{ needs.get-pr-info.outputs.pr_number }}"
@@ -92,6 +94,7 @@ jobs:
           echo "::debug::HALT_MERGES value: $HALT_MERGES"
           echo "::debug::This PR number: $PR_NUMBER"
           echo "::group::Open Release Pull Requests"
+          gh pr list --state "open" --repo "${{ github.repository }}" --json "number,headRefName"
           OPEN_RELEASES=$(gh pr list --state "open" --repo "${{ github.repository }}" --json "number,headRefName" | \
               jq '[.[] | select(.headRefName | startswith("release/"))]')
           echo $OPEN_RELEASES

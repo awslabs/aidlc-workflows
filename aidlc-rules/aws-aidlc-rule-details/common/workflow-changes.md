@@ -85,7 +85,7 @@ Users may request changes to the execution plan or phase execution during the wo
 
 **Handling**:
 1. **Assess Impact**: Identify all stages that depend on the stage to be restarted
-2. **Warn User**: "Restarting Application Design will require redoing: Units Planning, Units Generation, per-unit design (all units), Code Planning, Code Generation. Confirm?"
+2. **Warn User**: "Restarting Application Design will require redoing: Units Planning, Units Generation, per-unit design (all units), Code Generation. Confirm?"
 3. **Get Explicit Confirmation**: User must understand full impact
 4. **If Confirmed**:
    - Archive all affected artifacts

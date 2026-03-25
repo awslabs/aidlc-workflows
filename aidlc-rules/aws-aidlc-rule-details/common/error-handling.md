@@ -130,7 +130,7 @@
 - **Solution**: Clearly mark as **HUMAN TASK**, provide instructions
 - **Wait**: For user confirmation before proceeding
 
-### Code Planning Errors
+### Code Generation Planning Errors
 
 **Error**: Code generation plan is incomplete
 - **Cause**: Missing design artifacts, unclear requirements
