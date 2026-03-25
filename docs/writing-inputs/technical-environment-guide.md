@@ -407,7 +407,7 @@ project-root/
     infrastructure/
       standard-lambda-stack.ts     # Example CDK stack
       README.md
-\`\`\`
+```
 
 #### Structure of Each Example
 Every example should include:
