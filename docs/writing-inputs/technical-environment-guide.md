@@ -453,7 +453,7 @@ Every example should include:
 ## Related Standards
 - [Link to API Design Standards section]
 - [Link to Error Handling pattern]
-\`\`\`
+```
 
 ### How AI-DLC Uses Example Code
 
