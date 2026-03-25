@@ -393,7 +393,7 @@ Provide example or template code for any of the following:
 #### Location
 Store example code in a dedicated directory that AI-DLC and developers can reference:
 
-\`\`\`
+```
 project-root/
   examples/                        # Or "templates/" if preferred
     api-endpoint/
