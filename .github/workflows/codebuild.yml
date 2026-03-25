@@ -51,10 +51,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Kicking step one"
           gh cache list -R "${{ github.repository }}" --key "${{ env.CODEBUILD_PROJECT_NAME }}-" --order asc | cat
-          echo "Hello"
-          which docker
 
       - name: Check cache
         id: cache-check
@@ -65,7 +62,7 @@ jobs:
           lookup-only: true
 
       - name: Configure AWS credentials
-        if: steps.cache-check.outputs.cache-hit != 'true'
+        if: ${{ !env.ACT && steps.cache-check.outputs.cache-hit != 'true' }}
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
         with:
           role-to-assume: ${{ secrets.AWS_CODEBUILD_ROLE_ARN }}
@@ -87,6 +84,8 @@ jobs:
             env:
               variables:
                 GH_TOKEN: ${{ github.token }}
+                GH_REF_NAME: ${{ github.ref_name }}
+                GH_EVENT_NAME: ${{ github.event_name }}
             phases:
               install:
                 commands:
@@ -96,14 +95,14 @@ jobs:
                   - dnf install -y 'dnf-command(config-manager)' gh || echo "dnf install failed"
                   - curl -LsSf https://astral.sh/uv/install.sh | sh || echo "uv failed"
                   - export PATH=$HOME/.local/bin:$PATH
-                  - git config --global --add safe.directory "/codebuild/output/srcDownload/src" # for running AWS CodeBuild locally
+                  - git config --global --add safe.directory "/codebuild/output/srcDownload/src"
               pre_build:
                 commands:
                   - echo "pre_build"
               build:
                 commands:
                   - DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || echo "main")
-                  - CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+                  - CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "${GH_REF_NAME:-}")
                   - CURRENT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
                   - IS_RELEASE=$([[ -n "$CURRENT_TAG" ]] && echo "true" || echo "false")
                   - IS_PRE_RELEASE=$([[ "$CURRENT_BRANCH" == "$DEFAULT_BRANCH" ]] && echo "true" || echo "false")
@@ -123,6 +122,7 @@ jobs:
                     fi
 
                     cd "$EVALUATOR_DIR"
+                    EVALUATOR_DIR="$(pwd -P)"  # resolve symlinks for consistent paths
                     RULES_REF="${CURRENT_TAG:-$CURRENT_BRANCH}"
                     PR_NUMBER=$(gh pr view "$CURRENT_BRANCH" --repo "${GITHUB_REPOSITORY:-awslabs/aidlc-workflows}" --json number --jq '.number' 2>/dev/null || echo "")
                     echo "Rules ref: $RULES_REF"
@@ -134,13 +134,13 @@ jobs:
                     uv sync
                     ./docker/sandbox/build.sh || exit 1
 
-                    # Unit tests (fast validation of framework)
+                    # Unit tests (245 across 7 packages, excludes trend-reports)
                     echo "========================================"
                     echo "  Unit Tests"
                     echo "========================================"
                     uv run python run.py test
 
-                    # Trend reports unit tests
+                    # Trend reports unit tests (138 tests, separate package)
                     echo "========================================"
                     echo "  Trend Reports Unit Tests"
                     echo "========================================"
@@ -153,7 +153,7 @@ jobs:
                     uv run python run.py full --rules-ref "$RULES_REF"
 
                     # Package evaluation results into a zip for the trend report
-                    EVAL_RUN_DIR=$(ls -dt "$EVALUATOR_DIR/runs/"*/ 2>/dev/null | head -1)
+                    EVAL_RUN_DIR=$(ls -dt "$EVALUATOR_DIR/runs/"*/*/ 2>/dev/null | head -1)
                     LOCAL_BUNDLE_ARG=""
                     if [[ -n "$EVAL_RUN_DIR" ]]; then
                       echo "Evaluation run folder: $EVAL_RUN_DIR"
@@ -163,13 +163,13 @@ jobs:
                         sed -i "s|rules_ref:.*|rules_ref: pr-$PR_NUMBER|" "$EVAL_RUN_DIR/run-meta.yaml"
                         echo "Patched run-meta.yaml: rules_ref -> pr-$PR_NUMBER"
                       fi
-
                       BUNDLE_ZIP="/tmp/current-pr-bundle.zip"
                       (cd "$EVAL_RUN_DIR" && zip -j "$BUNDLE_ZIP" \
                         run-meta.yaml run-metrics.yaml test-results.yaml \
                         contract-test-results.yaml quality-report.yaml \
                         qualitative-comparison.yaml 2>/dev/null) && \
                       LOCAL_BUNDLE_ARG="--local-bundle $BUNDLE_ZIP"
+                      cp "$BUNDLE_ZIP" "$CODEBUILD_SRC_DIR/.codebuild/report-bundle.zip"
                     else
                       echo "WARNING: No evaluation run folder found -- trend report will not include current PR"
                     fi
@@ -187,7 +187,7 @@ jobs:
 
                     # Collect artifacts
                     mkdir -p "$CODEBUILD_SRC_DIR/.codebuild/regression-runs"
-                    cp -r "$EVALUATOR_DIR/runs/"* "$CODEBUILD_SRC_DIR/.codebuild/regression-runs/" 2>/dev/null || true
+                    cp -r "$EVALUATOR_DIR/runs/"*/* "$CODEBUILD_SRC_DIR/.codebuild/regression-runs/" 2>/dev/null || true
                     cd "$CODEBUILD_SRC_DIR"
               post_build:
                 commands:
@@ -211,6 +211,12 @@ jobs:
                   name: trend
                   discard-paths: no
                   base-directory: .codebuild/trend-runs
+                report-bundle:
+                  files:
+                    - 'report-bundle.zip'
+                  name: report-bundle
+                  discard-paths: yes
+                  base-directory: .codebuild
 
       - name: Build ID
         if: always() && steps.cache-check.outputs.cache-hit != 'true'
@@ -262,7 +268,7 @@ jobs:
           key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}
 
       - name: Upload CodeBuild primary artifact
-        if: ${{ !env.ACT }} # incompatability with v6 of upload-artifact and act
+        if: ${{ !env.ACT }} # incompatible with act (upload-artifact v6)
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: ${{ env.CODEBUILD_PROJECT_NAME }}.zip
@@ -270,8 +276,8 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Upload Evalution Report
-        if: ${{ !env.ACT }} # incompatability with v6 of upload-artifact and act
+      - name: Upload Evaluation Report
+        if: ${{ !env.ACT }} # incompatible with act (upload-artifact v6)
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: evaluation.zip
@@ -280,12 +286,25 @@ jobs:
           retention-days: 1
 
       - name: Upload Trend Report
-        if: ${{ !env.ACT }} # incompatability with v6 of upload-artifact and act
+        if: ${{ !env.ACT }} # incompatible with act (upload-artifact v6)
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: trend.zip
           path: ${{ github.workspace }}/.codebuild/downloads/trend.zip
           if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload Report Bundle
+        if: ${{ !env.ACT }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: >-
+            ${{ github.event_name == 'pull_request'
+                && format('report-pr-{0}', github.event.pull_request.number)
+                || github.ref == 'refs/heads/main' && 'report-main'
+                || format('report-{0}', github.ref_name) }}
+          path: ${{ github.workspace }}/.codebuild/downloads/report-bundle.zip
+          if-no-files-found: warn
           retention-days: 1
 
       - name: Upload artifacts to release
@@ -301,6 +320,11 @@ jobs:
             "$DOWNLOADS/evaluation.zip"
             "$DOWNLOADS/trend.zip"
           )
+          # Rename report bundle to match trend report fetcher pattern (report*.zip)
+          if [[ -f "$DOWNLOADS/report-bundle.zip" ]]; then
+            cp "$DOWNLOADS/report-bundle.zip" "$DOWNLOADS/report-${TAG}.zip"
+            ARTIFACTS+=("$DOWNLOADS/report-${TAG}.zip")
+          fi
 
           # Wait for release to exist (release.yml typically finishes in ~30s,
           # CodeBuild takes minutes — this is a safety net)
