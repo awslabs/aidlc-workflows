@@ -423,7 +423,7 @@ Every example should include:
 
 #### Example README Template
 
-\`\`\`markdown
+```
 # [Pattern Name] Example
 
 ## What This Demonstrates
