@@ -1,0 +1,172 @@
+# Release PR
+#
+# Creates a PR with an updated CHANGELOG.md for a new release.
+# The changelog is generated from conventional commits using git-cliff.
+#
+# When the PR is merged, tag-on-merge.yml automatically tags the merge commit,
+# which triggers release.yml (draft release) and codebuild.yml (build artifacts).
+#
+# Usage:
+#   1. Run this workflow via workflow_dispatch (optionally specify a version)
+#   2. Review and merge the resulting PR
+#   3. The tag is created automatically — review and publish the draft release
+
+name: Release PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 0.2.0). Leave empty to auto-determine from conventional commits.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-pr:
+    name: Create Release PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        uses: orhun/git-cliff-action@e16f179f0be49ecdfe63753837f20b9531642772 # v4.7.0
+        with:
+          config: cliff.toml
+          args: --version
+        env:
+          OUTPUT: /dev/null
+
+      - name: Determine version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ -n "$INPUT_VERSION" ]]; then
+            # Strip leading v if present for validation
+            VERSION="${INPUT_VERSION#v}"
+            if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "ERROR: Version '$INPUT_VERSION' is not valid semver (expected: MAJOR.MINOR.PATCH, e.g. 0.2.0)"
+              exit 1
+            fi
+          else
+            VERSION=$(git-cliff --bumped-version 2>/dev/null || echo "")
+            if [[ -z "$VERSION" ]]; then
+              # Fall back to patch bump from latest tag
+              LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+              if [[ -n "$LATEST_TAG" ]]; then
+                LATEST="${LATEST_TAG#v}"
+                MAJOR="${LATEST%%.*}"
+                REST="${LATEST#*.}"
+                MINOR="${REST%%.*}"
+                PATCH="${REST#*.}"
+                PATCH=$((PATCH + 1))
+                VERSION="${MAJOR}.${MINOR}.${PATCH}"
+                echo "WARNING: No conventional commits detected — falling back to patch bump: $VERSION"
+              else
+                echo "::error::No conventional commits and no existing tags — nothing to release"
+                exit 1
+              fi
+            fi
+          fi
+          # Strip leading v if present
+          VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Determined version: $VERSION (tag: v$VERSION)"
+
+      - name: Check tag does not exist
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if git rev-parse "refs/tags/$TAG" &>/dev/null; then
+            echo "ERROR: Tag $TAG already exists"
+            exit 1
+          fi
+
+      - name: Generate changelog
+        uses: orhun/git-cliff-action@e16f179f0be49ecdfe63753837f20b9531642772 # v4.7.0
+        with:
+          config: cliff.toml
+          args: --tag ${{ steps.version.outputs.tag }}
+        env:
+          OUTPUT: CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Create release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          BRANCH="release/$TAG"
+
+          # Check if branch already exists (local or remote)
+          if git ls-remote --exit-code --heads origin "$BRANCH" &>/dev/null; then
+            echo "::error::Branch '$BRANCH' already exists. A release PR may already be open — close it and delete the branch to re-run."
+            exit 1
+          fi
+
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          git add CHANGELOG.md
+          if git diff --cached --quiet CHANGELOG.md; then
+            echo "::error::No releasable commits since last tag – CHANGELOG.md is already up to date. Push new conventional commits or adjust the requested version before rerunning this workflow."
+            exit 1
+          fi
+
+          git checkout -b "$BRANCH"
+          git commit -m "docs: update changelog for $TAG"
+          git push origin "$BRANCH"
+
+          label_args=()
+          for LABEL in "release"; do
+            if gh label list --search "$LABEL" --json name --jq '.[].name' | grep -qx "$LABEL"; then
+              label_args+=("--label" "$LABEL")
+            fi
+          done
+
+          # Draft PR because the github-actions[bot] does not trigger a pull_request_target workflow
+          gh pr create \
+            --title "docs: update changelog for $TAG" \
+            --draft \
+            --body "$(cat <<EOF
+          # Release $TAG
+
+          > [!WARNING]  
+          > All other pull requests are blocked until merged or closed
+          
+          This pull request is for the $TAG release.
+
+          ## Checklist (in order)
+          
+          1. [ ] Mark the pull request "Ready for review" to trigger required workflows
+          2. [ ] Inspect the CHANGELOG.md and "Approve" or "Reject" the pending [CodeBuild](https://github.com/awslabs/aidlc-workflows/actions/workflows/codebuild.yml) GitHub Action
+          3. [ ] Evaluate the artifacts
+          4. [ ] Review the pull request (if approved set the "Merge when ready")
+
+          ## Post Merge
+
+          * [ ] Verify $TAG tag
+          * [ ] Approve "Approve" or "Reject" the pending [CodeBuild](https://github.com/awslabs/aidlc-workflows/actions/workflows/codebuild.yml) GitHub Action
+          * [ ] Review the drafted release artifacts for completion
+          * [ ] Publish the release
+
+          > [!CAUTION]
+          > Simply closing this will block a subsequent $TAG release, so delete the branch or reopen the pull request if necessary
+
+          **When merged**, the merge commit will be automatically tagged as \`$TAG\`, which triggers:
+          - \`release.yml\` — creates a draft GitHub Release with the rules zip
+          - \`codebuild.yml\` — runs CodeBuild and attaches build artifacts to the draft
+
+          After both workflows complete, review and publish the draft release.
+          EOF
+          )" \
+            "${label_args[@]}"

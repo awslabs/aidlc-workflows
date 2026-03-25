@@ -1,3 +1,8 @@
 .DS_Store
 .amazonq/**
 .claude/**
+.codebuild/**
+.vscode/**
+.env
+buildspec.yml
+codebuild_build.sh

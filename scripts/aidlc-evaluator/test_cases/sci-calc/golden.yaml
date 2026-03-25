@@ -1,0 +1,49 @@
+run_folder: runs\20260224T214917-d18513a006b44fdf98e54495becbb27a
+promoted_at: '2026-02-24T22:19:08+00:00'
+executor_model: global.anthropic.claude-opus-4-6-v1
+simulator_model: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+execution:
+  wall_clock_ms: 1428774
+  total_tokens: 18394585
+  input_tokens: 18248064
+  output_tokens: 146521
+  handoffs: 3
+  executor:
+    input_tokens: 9247186
+    output_tokens: 77992
+    total_tokens: 9325178
+  simulator:
+    input_tokens: 336997
+    output_tokens: 3057
+    total_tokens: 340054
+context_size:
+  max_tokens: 141361
+  avg_tokens: 54766
+  median_tokens: 47320
+artifacts:
+  source_files: 18
+  test_files: 20
+  total_files: 80
+  lines_of_code: 3290
+  doc_files: 16
+unit_tests:
+  passed: 180
+  failed: 0
+  total: 180
+  pass_pct: 100.0
+  coverage_pct: null
+contract_tests:
+  passed: 88
+  failed: 0
+  total: 88
+code_quality:
+  lint_errors: 0
+  lint_warnings: 0
+  lint_total: 0
+  security_total: 0
+  security_high: 0
+  duplication_blocks: 0
+qualitative:
+  overall_score: 0.8544
+  inception_score: 0.8788
+  construction_score: 0.83

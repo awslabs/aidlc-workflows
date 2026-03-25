@@ -1,0 +1,6 @@
+name: todo-app
+description: "Todo list application — full-stack AIDLC benchmark"
+status: draft
+vision: vision.md
+tech_env: tech-env.md
+tags: [standard, full-stack]

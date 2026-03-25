@@ -1,0 +1,8 @@
+name: sci-calc
+description: "Scientific calculator — standard AIDLC benchmark"
+vision: vision.md
+tech_env: tech-env.md
+openapi: openapi.yaml
+golden_baseline: golden.yaml
+golden_aidlc_docs: golden-aidlc-docs/
+tags: [standard, benchmark]

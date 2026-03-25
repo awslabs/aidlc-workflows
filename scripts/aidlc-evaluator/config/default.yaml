@@ -1,0 +1,43 @@
+# aws:
+#   profile: "default"
+#   region: "us-east-1"
+
+models:
+  executor:
+    provider: "bedrock"
+    model_id: "global.anthropic.claude-opus-4-6-v1"
+  simulator:
+    provider: "bedrock"
+    model_id: "global.anthropic.claude-opus-4-6-v1"
+  scorer:
+    provider: "bedrock"
+    model_id: "global.anthropic.claude-opus-4-6-v1"
+
+aidlc:
+  rules_source: "git"
+  rules_repo: "https://github.com/awslabs/aidlc-workflows"
+  rules_ref: "main"
+  rules_local_path: null
+
+swarm:
+  max_handoffs: 200
+  max_iterations: 200
+  execution_timeout: 14400
+  node_timeout: 3600
+
+runs:
+  output_dir: "./runs"
+
+execution:
+  enabled: true
+  command_timeout: 120
+  post_run_tests: true
+  post_run_timeout: 300
+  sandbox:
+    enabled: true
+    image: aidlc-sandbox:latest
+    memory: 2g
+    cpus: 2
+
+tools:
+  pmd_path: null  # Path to PMD executable; if null, looks for 'pmd' on PATH

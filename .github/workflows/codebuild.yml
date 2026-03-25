@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -36,7 +38,7 @@ jobs:
 
     permissions:
       actions: write
-      contents: read
+      contents: write
       id-token: write # Required for OIDC token request to AWS STS
 
     runs-on: ubuntu-latest
@@ -62,9 +64,10 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_CODEBUILD_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-          role-duration-seconds: 7200
+          role-duration-seconds: ${{ vars.ROLE_DURATION_SECONDS || 7200 }}
           role-session-name: GitHubActions${{ github.run_id }}
           mask-aws-account-id: true
+          retry-max-attempts: 0
 
       - name: Run CodeBuild
         if: steps.cache-check.outputs.cache-hit != 'true'
@@ -77,61 +80,90 @@ jobs:
             version: 0.2
             env:
               variables:
-                TEST_ONE: "1"
+                GH_TOKEN: ${{ github.token }}
             phases:
               install:
                 commands:
-                  - echo "install ${TEST_ONE}" | tee --append ./codebuild.out
-                  - dnf install -y lshw || echo "dnf install failed"
+                  - dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo || echo "dnf config-manager"
+                  - dnf install -y 'dnf-command(config-manager)' gh || echo "dnf install failed"
+                  - curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=$HOME/.local/bin:$PATH || "echo uv failed"
               pre_build:
                 commands:
-                  - echo "pre_build ${TEST_ONE}" | tee --append ./codebuild.out
-                  - echo "=== OS ==="
-                  - cat /etc/os-release
-                  - echo "=== Kernel ==="
-                  - uname -a
-                  - echo "=== CPU ==="
-                  - lscpu
-                  - echo "=== Memory ==="
-                  - free -h
-                  - echo "=== Kisk ==="
-                  - df -h
-                  - echo "=== Block Devices ==="
-                  - lsblk
-                  - echo "=== Hardward Summary ==="
-                  - lshw -short || echo "lshw failed"
+                  - echo "pre_build"
+                  - mkdir -p .codebuild
+                  - touch .codebuild/codebuild.out
+                  - git config --global --add safe.directory "/codebuild/output/srcDownload/src" # for running AWS CodeBuild locally
               build:
                 commands:
-                  - echo "build ${TEST_ONE}" | tee --append ./codebuild.out
-                  - ls -alR
+                  - DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')
+                  - CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+                  - CURRENT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
+                  - IS_RELEASE=$([[ -n "$CURRENT_TAG" ]] && echo "true" || echo "false")
+                  - IS_PRE_RELEASE=$([[ "$CURRENT_BRANCH" == "$DEFAULT_BRANCH" ]] && echo "true" || echo "false")
+                  - IS_PRE_MERGE=$([[ -z "$CURRENT_TAG" && "$CURRENT_BRANCH" != "$DEFAULT_BRANCH" ]] && echo "true" || echo "false")
+                  - if [[ "$IS_RELEASE" == "true" ]]; then echo "This is a release"; fi;
+                  - if [[ "$IS_PRE_RELEASE" == "true" ]]; then echo "This is a pre-release"; fi;
+                  - if [[ "$IS_PRE_MERGE" == "true" ]]; then echo "This is a pre-merge"; fi;
+                  - mkdir -p .codebuild/evaluation
+                  - mkdir -p .codebuild/trend
+                  - mkdir -p .codebuild/missing
+                  - touch .codebuild/evaluation/evaluation_report.html
+                  - touch .codebuild/evaluation/metrics.yml
+                  - touch .codebuild/trend/trend_report.html
               post_build:
                 commands:
-                  - echo "post_build ${TEST_ONE}" | tee --append ./codebuild.out
                   - echo "Build completed with status $CODEBUILD_BUILD_SUCCEEDING"
-                  - cat ./codebuild.out
+                  - cat ./.codebuild/codebuild.out
             artifacts:
               files:
-                - '**/codebuild.out'
-              discard-paths: yes
+                - '**/*'
+              discard-paths: no
+              base-directory: .codebuild
+              secondary-artifacts:
+                evaluation:
+                  files:
+                    - '**/*'
+                  name: evaluation
+                  discard-paths: yes
+                  base-directory: .codebuild/evaluation
+                trend:
+                  files:
+                    - '**/*'
+                  name: trend
+                  discard-paths: yes
+                  base-directory: .codebuild/trend
 
       - name: Build ID
         if: always() && steps.cache-check.outputs.cache-hit != 'true'
         run: echo "CodeBuild Build ID ${{ steps.codebuild.outputs.aws-build-id }}"
 
-      - name: Download CodeBuild artifact
+      - name: Download CodeBuild artifacts
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          ARTIFACT_LOCATION=$(aws codebuild batch-get-builds \
+          DOWNLOADS="${ACT_CODEBUILD_DIR:-${GITHUB_WORKSPACE}/.codebuild/downloads}"
+          mkdir -p "$DOWNLOADS"
+          PRIMARY_ARTIFACT_LOCATION=$(aws codebuild batch-get-builds \
             --ids "${{ steps.codebuild.outputs.aws-build-id }}" \
             --query 'builds[0].artifacts.location' \
             --output text)
-          aws s3 cp "s3://${ARTIFACT_LOCATION#arn:aws:s3:::}" ./${{ env.CODEBUILD_PROJECT_NAME }}.zip
+          aws s3 cp "s3://${PRIMARY_ARTIFACT_LOCATION#arn:aws:s3:::}" "$DOWNLOADS/${{ env.CODEBUILD_PROJECT_NAME }}.zip"
+          SECONDARY_ARTIFACT_LOCATIONS=$(aws codebuild batch-get-builds \
+            --ids "${{ steps.codebuild.outputs.aws-build-id }}" \
+            --query 'builds[0].secondaryArtifacts[*].[artifactIdentifier, location]' \
+            --output json)
+          echo "$SECONDARY_ARTIFACT_LOCATIONS" | jq -r '.[] | @tsv' | while IFS=$'\t' read -r NAME LOCATION; do
+            echo "Downloading secondary artifact: $NAME"
+            aws s3 cp "s3://${LOCATION#arn:aws:s3:::}" "$DOWNLOADS/${NAME}.zip"
+          done
 
       - name: List CodeBuild artifacts
         if: steps.cache-check.outputs.cache-hit != 'true'
         run: |
-          ls -alR
-          unzip -l ${{ env.CODEBUILD_PROJECT_NAME }}.zip
+          DOWNLOADS="${ACT_CODEBUILD_DIR:-${GITHUB_WORKSPACE}/.codebuild/downloads}"
+          ls -alR "$DOWNLOADS"
+          unzip -l "$DOWNLOADS/${{ env.CODEBUILD_PROJECT_NAME }}.zip"
+          unzip -l "$DOWNLOADS/evaluation.zip"
+          unzip -l "$DOWNLOADS/trend.zip"
 
       - name: Clean old report caches
         if: steps.cache-check.outputs.cache-hit != 'true'
@@ -147,5 +179,77 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
-          path: ${{ env.CODEBUILD_PROJECT_NAME }}.zip
+          path: ${{ github.workspace }}/.codebuild/downloads/${{ env.CODEBUILD_PROJECT_NAME }}.zip
           key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}
+
+      - name: Upload CodeBuild primary artifact
+        if: ${{ !env.ACT }} # incompatability with v6 of upload-artifact and act
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ env.CODEBUILD_PROJECT_NAME }}.zip
+          path: ${{ github.workspace }}/.codebuild/downloads/${{ env.CODEBUILD_PROJECT_NAME }}.zip
+          if-no-files-found: error
+
+      - name: Upload CodeBuild secondary artifact - evaluation
+        if: ${{ !env.ACT }} # incompatability with v6 of upload-artifact and act
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: evaluation.zip
+          path: ${{ github.workspace }}/.codebuild/downloads/evaluation.zip
+          if-no-files-found: error
+
+      - name: Upload CodeBuild secondary artifact - trend
+        if: ${{ !env.ACT }} # incompatability with v6 of upload-artifact and act
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: trend.zip
+          path: ${{ github.workspace }}/.codebuild/downloads/trend.zip
+          if-no-files-found: error
+
+      - name: Upload artifacts to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          DOWNLOADS="${GITHUB_WORKSPACE}/.codebuild/downloads"
+          ARTIFACTS=(
+            "$DOWNLOADS/${{ env.CODEBUILD_PROJECT_NAME }}.zip"
+            "$DOWNLOADS/evaluation.zip"
+            "$DOWNLOADS/trend.zip"
+          )
+
+          # Wait for release to exist (release.yml typically finishes in ~30s,
+          # CodeBuild takes minutes — this is a safety net)
+          RELEASE_EXISTS=false
+          for i in $(seq 1 30); do
+            if gh release view "$TAG" --repo "$REPO" --json isDraft,tagName &>/dev/null; then
+              RELEASE_EXISTS=true
+              break
+            fi
+            echo "Waiting for release $TAG (attempt $i/30)..."
+            sleep 10
+          done
+
+          if [[ "$RELEASE_EXISTS" == "true" ]]; then
+            # Release exists (draft or published) — upload/replace artifacts
+            IS_DRAFT=$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft')
+            if [[ "$IS_DRAFT" == "true" ]]; then
+              echo "Draft release $TAG found — uploading artifacts"
+            else
+              echo "Published release $TAG found — attempting to replace artifacts"
+            fi
+            gh release upload "$TAG" "${ARTIFACTS[@]}" --repo "$REPO" --clobber || {
+              echo "WARNING: Failed to upload artifacts to release $TAG (release may be immutable)"
+              echo "Artifacts are still available as workflow artifacts above"
+            }
+          else
+            # No release exists — create a draft with artifacts
+            echo "No release found for $TAG — creating draft release with artifacts"
+            gh release create "$TAG" "${ARTIFACTS[@]}" \
+              --repo "$REPO" \
+              --draft \
+              --title "AI-DLC Workflow ${TAG#v}" \
+              --notes "Build artifacts from CodeBuild. Rules zip pending from release workflow."
+          fi

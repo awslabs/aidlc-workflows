@@ -32,13 +32,15 @@ filter_unconventional = true
 split_commits = false
 
 commit_parsers = [
+  { message = "^docs: update changelog", skip = true },
   { message = "^feat", group = "Features" },
   { message = "^fix", group = "Bug Fixes" },
-  { message = "^doc", group = "Documentation" },
+  { message = "^docs", group = "Documentation" },
   { message = "^perf", group = "Performance" },
   { message = "^refactor", group = "Refactoring" },
   { message = "^style", group = "Style" },
   { message = "^test", group = "Tests" },
+  { message = "^build", group = "CI/CD" },
   { message = "^ci", group = "CI/CD" },
   { message = "^chore", group = "Miscellaneous" },
 ]
@@ -46,3 +48,7 @@ commit_parsers = [
 filter_commits = false
 tag_pattern = "v[0-9].*"
 sort_commits = "oldest"
+
+[bump]
+features_always_bump_minor = true
+breaking_always_bump_major = true
