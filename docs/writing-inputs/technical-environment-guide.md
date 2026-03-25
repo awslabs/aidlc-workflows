@@ -367,7 +367,7 @@ OWASP Top 10 (2021) as the chosen framework.
 
 This section tells AI-DLC and the development team how to provide, use, and maintain example or template code that establishes project conventions.
 
-```markdown
+````markdown
 ## Example and Template Code Guidance
 
 ### Purpose of Example Code
