@@ -201,13 +201,13 @@ jobs:
                   files:
                     - '**/*'
                   name: evaluation
-                  discard-paths: no
+                  discard-paths: yes
                   base-directory: .codebuild/regression-runs
                 trend:
                   files:
                     - '**/*'
                   name: trend
-                  discard-paths: no
+                  discard-paths: yes
                   base-directory: .codebuild/trend-runs
                 report-bundle:
                   files:
