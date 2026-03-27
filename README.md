@@ -497,68 +497,50 @@ Deployment and monitoring (future)
 
 ## Extensions
 
-AI-DLC supports an extension system that lets you layer additional rules on top of the core workflow. Extensions are markdown files organized under `aws-aidlc-rule-details/extensions/` and are automatically loaded and enforced when enabled during the Requirements Analysis phase.
+AI-DLC supports an extension system that lets you layer additional rules on top of the core workflow. Extensions are markdown files organized under `aws-aidlc-rule-details/extensions/` and grouped by category (e.g., `security/`, `testing/`).
 
 ### How Extensions Work
 
-Extensions are grouped by category (e.g., `security/`, `scalability/`, `accessibility/`). Each category can contain its own rules and any number of subcategories you define.
+Each extension consists of two files placed in the same directory:
 
-Each extension should include an **Opt-In Prompt** — a structured multiple-choice question that AI-DLC automatically presents during the Requirements Analysis phase. This lets the user decide whether to enable or skip that extension for the current project. For example, the built-in security extension includes:
+- A **rules file** (e.g., `security-baseline.md`) containing the extension's rules.
+- An **opt-in file** (e.g., `security-baseline.opt-in.md`) containing a structured multiple-choice question presented to the user during Requirements Analysis.
 
-```markdown
-## Question: Security Extensions
-Should security extension rules be enforced for this project?
+At workflow start, AI-DLC scans the `extensions/` directory and loads only `*.opt-in.md` files. During Requirements Analysis, it presents each opt-in prompt to the user. When the user opts in, the corresponding rules file is loaded (derived by naming convention: strip `.opt-in.md`, append `.md`). When the user opts out, the rules file is never loaded. Extensions without a matching `*.opt-in.md` file are always enforced.
 
-A) Yes — enforce all SECURITY rules as blocking constraints
-B) No — skip all SECURITY rules
-X) Other (please describe)
+Once enabled, extension rules are blocking constraints — at each stage, the model verifies compliance before allowing the stage to proceed.
 
-[Answer]:
-```
+### Built-in Extensions
 
-When you create your own extensions, include a similar opt-in prompt so users can opt in or out per project.
-
-Here's the general flow once an extension is enabled:
-
-1. During the Inception phase, AI-DLC presents the extension's opt-in prompt.
-2. If enabled, the extension's rules are loaded as mandatory, blocking constraints that apply across all AI-DLC phases.
-3. At each stage, the model verifies compliance with all loaded extension rules before allowing the stage to proceed.
-
-### Extension Directory Structure
-
-The workflow currently ships with a baseline security extension. 
-
-> [!IMPORTANT]
-> The security extension rules are provided as a directional reference for building effective security rules within AI-DLC workflows. Each organization should build, customize, and thoroughly test their own security rules before deploying in production workflows.
+The `extensions/` directory ships with the following (new extensions may be added over time):
 
 ```
 aws-aidlc-rule-details/
 └── extensions/
-    └── security/                      # Extension category
-        └── baseline/
-        │   └── security-baseline.md   # Baseline security rules
-        ├── compliance/                # Proposed folder hierarchy
-        │   ├── hipaa/                 # HIPAA compliance rules
-        │   ├── pci-dss/               # PCI-DSS compliance rules
-        │   └── soc2/                  # SOC 2 compliance rules
-        └── internal-policies/         # Your organization's custom rules
+    ├── security/                      # Extension category
+    │   └── baseline/
+    │       ├── security-baseline.md          # Baseline security rules
+    │       └── security-baseline.opt-in.md   # Opt-in prompt
+    └── testing/                       # Extension category
+        └── property-based/
+            ├── property-based-testing.md          # Property-based testing rules
+            └── property-based-testing.opt-in.md   # Opt-in prompt
 ```
+
+> [!IMPORTANT]
+> The security extension rules are provided as a directional reference for building effective security rules within AI-DLC workflows. Each organization should build, customize, and thoroughly test their own security rules before deploying in production workflows.
 
 ### Adding Your Own Extensions
 
 You can extend an existing category or create an entirely new one.
 
-To add rules to an existing category (e.g., security):
-
-1. Create a new directory under `extensions/security/` (e.g., `compliance/hipaa/`).
-2. Add one or more markdown files with your rules. Follow the same structure as `security-baseline.md`:
-   - Give each rule a unique ID.
-   - Include an **Applicabality Question** described above
+1. Create a directory under `extensions/` (e.g., `security/compliance/` or `performance/baseline/`).
+2. Add a **rules file** (e.g., `compliance.md`). Follow the same structure as `security-baseline.md`:
+   - Define each rule as a heading in the format `## Rule <PREFIX-NN>: <Title>` where the prefix is a short category identifier and NN is a sequential number (e.g., `COMPLIANCE-01`, `COMPLIANCE-02`). These IDs are referenced in audit logs and compliance summaries, so they must be unique across all loaded extensions.
    - Include a **Rule** section describing the requirement.
    - Include a **Verification** section with concrete checks the model should evaluate.
-3. Rules are blocking by default — if verification criteria are not met, the stage cannot proceed until the finding is resolved.
-
-To create a new extension category, add a new directory under `extensions/` (e.g., `extensions/performance/`) and place your rule markdown files inside it following the same format.
+3. Add a matching **opt-in file** using the naming convention `<name>.opt-in.md` (e.g., `compliance.opt-in.md`). See `security-baseline.opt-in.md` for the expected format. Omitting this file means the extension is always enforced with no user opt-out.
+4. Rules are blocking by default — if verification criteria are not met, the stage cannot proceed until the finding is resolved.
 
 ---
 
