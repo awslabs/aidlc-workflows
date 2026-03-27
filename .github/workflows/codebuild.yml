@@ -108,8 +108,6 @@ jobs:
                   - IS_PRE_RELEASE=$([[ "$CURRENT_BRANCH" == "$DEFAULT_BRANCH" ]] && echo "true" || echo "false")
                   - IS_PRE_MERGE=$([[ -z "$CURRENT_TAG" && "$CURRENT_BRANCH" != "$DEFAULT_BRANCH" ]] && echo "true" || echo "false")
                   - echo "Branch=$CURRENT_BRANCH Tag=$CURRENT_TAG Release=$IS_RELEASE PreRelease=$IS_PRE_RELEASE PreMerge=$IS_PRE_MERGE"
-                  - aws bedrock-runtime invoke-model --model-id 'global.anthropic.claude-opus-4-6-v1' --content-type 'application/json' --accept 'application/json' --body fileb://<(echo '{"anthropic_version":"bedrock-2023-05-31","max_tokens":1024,"messages":[{"role":"user","content":"Hello"}]}') --region 'us-east-1' ./.codebuild/output.json;
-                  - cat ./.codebuild/output.json | jq >> ./.codebuild/codebuild.out
                   - |
                     echo "========================================"
                     echo "  Regression Validation"
