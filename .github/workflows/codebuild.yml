@@ -10,6 +10,7 @@ on:
       - opened
       - reopened
       - synchronize
+      - unlabeled
     paths:
       - 'aidlc-rules/**'
   push:
