@@ -94,6 +94,7 @@ jobs:
       && github.event.pull_request.head.repo.full_name == github.repository
 
     permissions:
+      issues: write
       pull-requests: write
 
     runs-on: ubuntu-latest
@@ -113,7 +114,7 @@ jobs:
             echo "No label-reminder comment found — nothing to clean up"
             exit 0
           fi
-          if gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/comments/$COMMENT_ID" 2>/dev/null; then
+          if gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/comments/$COMMENT_ID"; then
             echo "Removed label-reminder comment ($COMMENT_ID)"
           else
             echo "::warning::Failed to delete label-reminder comment ($COMMENT_ID) — it may have been removed already"
