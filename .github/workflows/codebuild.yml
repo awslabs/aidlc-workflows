@@ -272,7 +272,7 @@ jobs:
           name: ${{ env.CODEBUILD_PROJECT_NAME }}.zip
           path: ${{ github.workspace }}/.codebuild/downloads/${{ env.CODEBUILD_PROJECT_NAME }}.zip
           if-no-files-found: error
-          retention-days: 1
+      
 
       - name: Upload Evaluation Report
         if: ${{ !env.ACT }} # incompatible with act (upload-artifact v6)
@@ -281,7 +281,7 @@ jobs:
           name: evaluation.zip
           path: ${{ github.workspace }}/.codebuild/downloads/evaluation.zip
           if-no-files-found: error
-          retention-days: 1
+          
 
       - name: Upload Trend Report
         if: ${{ !env.ACT }} # incompatible with act (upload-artifact v6)
@@ -290,7 +290,7 @@ jobs:
           name: trend.zip
           path: ${{ github.workspace }}/.codebuild/downloads/trend.zip
           if-no-files-found: error
-          retention-days: 1
+    
 
       - name: Upload Report Bundle
         if: ${{ !env.ACT }}
@@ -303,7 +303,7 @@ jobs:
                 || format('report-{0}', github.ref_name) }}
           path: ${{ github.workspace }}/.codebuild/downloads/report-bundle.zip
           if-no-files-found: warn
-          retention-days: 1
+    
 
       - name: Upload artifacts to release
         if: startsWith(github.ref, 'refs/tags/v')
