@@ -24,6 +24,7 @@ concurrency:
 
 env:
   CODEBUILD_PROJECT_NAME: ${{ vars.CODEBUILD_PROJECT_NAME || 'codebuild-project' }}
+  LABEL_REMINDER_MARKER: codebuild-label-reminder
 
 permissions:
   actions: none
@@ -63,20 +64,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
+          MARKER: ${{ env.LABEL_REMINDER_MARKER }}
         run: |
-          EXISTING=$(gh pr view "$PR_NUMBER" \
-            --repo "$REPO" \
-            --json comments \
-            --jq '.comments[] | select(.body | contains("codebuild-label-reminder")) | .id' \
+          EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" \
             | head -1)
-          BODY="<!-- codebuild-label-reminder -->
+          if [ -n "$EXISTING" ]; then
+            echo "Reminder comment already exists ($EXISTING) — skipping"
+            exit 0
+          fi
+          BODY="<!-- $MARKER -->
           > **Note:** This PR changes \`aidlc-rules/\` but the \`codebuild\` label has not been applied.
           >
           > A maintainer must add the **codebuild** label to trigger the CodeBuild evaluation pipeline.
           > Once labeled, subsequent pushes will re-trigger the build automatically."
-          if [ -z "$EXISTING" ]; then
-            gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$BODY"
-          fi
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$BODY"
 
   label-cleanup:
     if: >-
@@ -94,15 +96,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
+          MARKER: ${{ env.LABEL_REMINDER_MARKER }}
         run: |
           COMMENT_ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
-            --jq '.[] | select(.body | contains("codebuild-label-reminder")) | .id' \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$MARKER\"))) | .id" \
             | head -1)
-          if [ -n "$COMMENT_ID" ]; then
-            gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/comments/$COMMENT_ID"
+          if [ -z "$COMMENT_ID" ]; then
+            echo "No label-reminder comment found — nothing to clean up"
+            exit 0
+          fi
+          if gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/comments/$COMMENT_ID" 2>/dev/null; then
             echo "Removed label-reminder comment ($COMMENT_ID)"
           else
-            echo "No label-reminder comment found — nothing to clean up"
+            echo "::warning::Failed to delete label-reminder comment ($COMMENT_ID) — it may have been removed already"
           fi
 
   build:
