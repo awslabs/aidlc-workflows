@@ -114,7 +114,7 @@ jobs:
             echo "No label-reminder comment found — nothing to clean up"
             exit 0
           fi
-          if gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/comments/$COMMENT_ID"; then
+          if gh api -X DELETE "repos/$REPO/issues/comments/$COMMENT_ID"; then
             echo "Removed label-reminder comment ($COMMENT_ID)"
           else
             echo "::warning::Failed to delete label-reminder comment ($COMMENT_ID) — it may have been removed already"
