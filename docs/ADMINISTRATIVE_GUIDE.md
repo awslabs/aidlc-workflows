@@ -420,6 +420,8 @@ All variables have sensible defaults via `${{ vars.VAR || 'default' }}` syntax, 
 
 | Workflow                | Job                    | Permissions                                            | Rationale                                                      |
 | ----------------------- | ---------------------- | ------------------------------------------------------ | -------------------------------------------------------------- |
+| `codebuild.yml`         | `label-reminder`       | `pull-requests: write`                                 | Post reminder comment when `codebuild` label is missing        |
+| `codebuild.yml`         | `label-cleanup`        | `pull-requests: write`                                 | Delete reminder comment when `codebuild` label is applied      |
 | `codebuild.yml`         | `build`                | `actions: write`, `contents: write`, `id-token: write` | Cache management, release asset upload, OIDC token for AWS STS |
 | `pull-request-lint.yml` | `get-pr-info`          | `contents: read`, `pull-requests: read`                | Read PR metadata and labels via API                            |
 | `pull-request-lint.yml` | `check-merge-status`   | `pull-requests: read`                                  | Read PR state for merge gate checks                            |
@@ -441,7 +443,7 @@ Both `codebuild.yml` and `pull-request-lint.yml` follow a **deny-all-then-grant*
 | **Label-gated CI**          | `codebuild.yml` requires the `codebuild` label on PRs and only triggers for `aidlc-rules/**` changes, preventing unnecessary builds and environment approval prompts |
 | **Concurrency control**     | `codebuild.yml` and `pull-request-lint.yml` cancel in-progress runs for the same branch                                                                          |
 | **Safe PR trigger**         | `pull-request-lint.yml` uses `pull_request_target` but never checks out PR code — only inspects metadata (title, labels, body)                                    |
-| **Injection-safe inputs**   | All user-controlled and event-driven inputs (`inputs.version`, `pull_request.head.ref`) passed via `env:` variables, never directly interpolated in `run:` blocks |
+| **Injection-safe inputs**   | Zero `${{ }}` expression interpolation in `run:` blocks — all dynamic values (`github.ref_name`, `github.repository`, `env.*`, event inputs) passed via step-level `env:` or auto-exported workflow `env:` variables |
 | **Code ownership**          | `.github/` (including workflows) owned exclusively by `@awslabs/aidlc-admins` via CODEOWNERS                                                                      |
 | **Account masking**         | `mask-aws-account-id: true` in AWS credential configuration                                                                                                       |
 
