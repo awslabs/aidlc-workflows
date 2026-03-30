@@ -128,8 +128,9 @@ jobs:
       - name: List caches
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
-          gh cache list -R "${{ github.repository }}" --key "${{ env.CODEBUILD_PROJECT_NAME }}-" --order asc | cat
+          gh cache list -R "$REPO" --key "$CODEBUILD_PROJECT_NAME-" --order asc | cat
 
       - name: Check cache
         id: cache-check
@@ -307,7 +308,7 @@ jobs:
             --ids "${{ steps.codebuild.outputs.aws-build-id }}" \
             --query 'builds[0].artifacts.location' \
             --output text)
-          aws s3 cp "s3://${PRIMARY_ARTIFACT_LOCATION#arn:aws:s3:::}" "$DOWNLOADS/${{ env.CODEBUILD_PROJECT_NAME }}.zip"
+          aws s3 cp "s3://${PRIMARY_ARTIFACT_LOCATION#arn:aws:s3:::}" "$DOWNLOADS/$CODEBUILD_PROJECT_NAME.zip"
           SECONDARY_ARTIFACT_LOCATIONS=$(aws codebuild batch-get-builds \
             --ids "${{ steps.codebuild.outputs.aws-build-id }}" \
             --query 'builds[0].secondaryArtifacts[*].[artifactIdentifier, location]' \
@@ -322,7 +323,7 @@ jobs:
         run: |
           DOWNLOADS="${ACT_CODEBUILD_DIR:-${GITHUB_WORKSPACE}/.codebuild/downloads}"
           ls -alR "$DOWNLOADS"
-          unzip -l "$DOWNLOADS/${{ env.CODEBUILD_PROJECT_NAME }}.zip"
+          unzip -l "$DOWNLOADS/$CODEBUILD_PROJECT_NAME.zip"
           unzip -l "$DOWNLOADS/evaluation.zip"
           unzip -l "$DOWNLOADS/trend.zip"
 
@@ -330,11 +331,13 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          gh cache list -R "${{ github.repository }}" --key "${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-" --order asc \
+          gh cache list -R "$REPO" --key "$CODEBUILD_PROJECT_NAME-$REF_NAME-" --order asc \
             | tail -n 3 \
             | cut -f1 \
-            | xargs -I {} gh cache delete -R "${{ github.repository }}" "{}" || true
+            | xargs -I {} gh cache delete -R "$REPO" "{}" || true
 
       - name: Save report to cache
         if: steps.cache-check.outputs.cache-hit != 'true'
@@ -392,7 +395,7 @@ jobs:
         run: |
           DOWNLOADS="${GITHUB_WORKSPACE}/.codebuild/downloads"
           ARTIFACTS=(
-            "$DOWNLOADS/${{ env.CODEBUILD_PROJECT_NAME }}.zip"
+            "$DOWNLOADS/$CODEBUILD_PROJECT_NAME.zip"
             "$DOWNLOADS/evaluation.zip"
             "$DOWNLOADS/trend.zip"
           )
