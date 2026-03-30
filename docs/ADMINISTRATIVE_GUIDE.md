@@ -117,8 +117,9 @@ flowchart LR
     A["git push main"] --> B{{"Manual approval\n(codebuild environment)"}}
     C["workflow_dispatch\n(no tag input)"] --> B
     D["pull_request\n(aidlc-rules/** changed)"] --> E{"codebuild\nlabel?"}
-    E -->|yes| B
-    E -->|no| F["label-reminder\n(warning + PR comment)"]
+    E -->|yes| F["label-cleanup\n(remove reminder comment)"]
+    F --> B
+    E -->|no| I["label-reminder\n(warning + PR comment)"]
     B --> G["Run AWS CodeBuild"]
     G --> H["Upload workflow artifacts"]
 ```
