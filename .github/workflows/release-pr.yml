@@ -70,7 +70,7 @@ jobs:
                 VERSION="${MAJOR}.${MINOR}.${PATCH}"
                 echo "WARNING: No conventional commits detected — falling back to patch bump: $VERSION"
               else
-                echo "::warning::No conventional commits and no existing tags — nothing to release"
+                echo "::error::No conventional commits and no existing tags — nothing to release"
                 exit 1
               fi
             fi
@@ -109,7 +109,7 @@ jobs:
 
           # Check if branch already exists (local or remote)
           if git ls-remote --exit-code --heads origin "$BRANCH" &>/dev/null; then
-            echo "::warning::Branch '$BRANCH' already exists. A release PR may already be open — close it and delete the branch to re-run."
+            echo "::error::Branch '$BRANCH' already exists. A release PR may already be open — close it and delete the branch to re-run."
             exit 1
           fi
 
@@ -118,7 +118,7 @@ jobs:
 
           git add CHANGELOG.md
           if git diff --cached --quiet CHANGELOG.md; then
-            echo "No changes to CHANGELOG.md"
+            echo "::error::No releasable commits since last tag – CHANGELOG.md is already up to date. Push new conventional commits or adjust the requested version before rerunning this workflow."
             exit 1
           fi
 
@@ -126,16 +126,16 @@ jobs:
           git commit -m "docs: update changelog for $TAG"
           git push origin "$BRANCH"
 
-          LABEL_FLAG=""
+          label_args=()
           for LABEL in "release"; do
             if gh label list --search "$LABEL" --json name --jq '.[].name' | grep -qx "$LABEL"; then
-              LABEL_FLAG="$LABEL_FLAG --label $LABEL"
+              label_args+=("--label" "$LABEL")
             fi
           done
 
           # Draft PR because the github-actions[bot] does not trigger a pull_request_target workflow
           gh pr create \
-            --title "docs: update changelog for $BRANCH" \
+            --title "docs: update changelog for $TAG" \
             --draft \
             --body "$(cat <<EOF
           # Release $TAG
@@ -169,4 +169,4 @@ jobs:
           After both workflows complete, review and publish the draft release.
           EOF
           )" \
-            $LABEL_FLAG
+            "${label_args[@]}"

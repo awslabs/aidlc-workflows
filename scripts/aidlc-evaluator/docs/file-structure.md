@@ -86,11 +86,10 @@ aidlc-regression/
 │       ├── aidlc-docs/               # Generated AIDLC documentation
 │       └── workspace/                # Generated application code
 │
-├── writing-inputs/                    # Guides for writing vision/tech-env docs
-│
 ├── overall_project/                   # Broader project tenets and strategy
 │
 └── docs/                              # Additional documentation
+    └── writing-inputs/                # Guides for writing vision/tech-env docs
 ```
 
 ## Big Rocks → Package Mapping

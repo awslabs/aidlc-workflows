@@ -35,7 +35,11 @@ Check if `aidlc-docs/aidlc-state.md` exists:
 **IF workspace has existing code**:
 - Set flag: `brownfield = true`
 - Check for existing reverse engineering artifacts in `aidlc-docs/inception/reverse-engineering/`
-- **IF reverse engineering artifacts exist**: Load them, skip to Requirements Analysis
+- **IF reverse engineering artifacts exist**:
+    - Check if artifacts are stale (compare artifact timestamps against codebase's last significant modification)
+    - **IF artifacts are current**: Load them, skip to Requirements Analysis
+    - **IF artifacts are stale**: Next phase is Reverse Engineering (rerun to refresh artifacts)
+    - **IF user explicitly requests rerun**: Next phase is Reverse Engineering regardless of staleness
 - **IF no reverse engineering artifacts**: Next phase is Reverse Engineering
 
 ## Step 4: Create Initial State File

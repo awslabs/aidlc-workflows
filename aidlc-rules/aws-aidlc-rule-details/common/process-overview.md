@@ -9,7 +9,7 @@
 
 ## The Three-Phase Lifecycle:
 • **INCEPTION PHASE**: Planning and architecture (Workspace Detection + conditional phases + Workflow Planning)
-• **CONSTRUCTION PHASE**: Design, implementation, build and test (per-unit design + Code Planning/Generation + Build & Test)
+• **CONSTRUCTION PHASE**: Design, implementation, build and test (per-unit design + Code Generation + Build & Test)
 • **OPERATIONS PHASE**: Placeholder for future deployment and monitoring workflows
 
 ## The Adaptive Workflow:

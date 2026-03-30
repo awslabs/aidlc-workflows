@@ -44,7 +44,7 @@ Work in the appropriate package:
 
 Or contribute to other work streams:
 - `test_cases/` - Golden Test Cases (baseline inputs)
-- `writing-inputs/` - Vision and tech-env document guides
+- `docs/writing-inputs/` - Vision and tech-env document guides
 - `.github/workflows/` - GitHub CI/CD Integration & Management
 
 ### 3. Run Tests

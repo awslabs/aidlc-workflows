@@ -38,11 +38,7 @@ Application Design focuses on:
   - [ ] Validate design completeness and consistency
 
 ### 4. Generate Context-Appropriate Questions
-**DIRECTIVE**: Thoroughly analyze the requirements and stories to identify ALL areas where clarification would improve application design quality. Be proactive in asking questions to ensure comprehensive design coverage.
-
-**CRITICAL**: Default to asking questions when there is ANY ambiguity or missing detail that could affect design quality. It's better to ask too many questions than to make incorrect design assumptions.
-
-**MANDATORY**: Evaluate ALL of the following categories by asking targeted questions about each. For each category, determine applicability based on evidence from the requirements and stories -- do not skip categories without explicit justification:
+**DIRECTIVE**: Analyze the requirements and stories to generate questions relevant to THIS specific application design. Use the categories below as guidance. Evaluate each category and, when in doubt about applicability, ask the question rather than skipping it — overconfidence leads to poor outcomes (see overconfidence-prevention.md).
 
 - EMBED questions using [Answer]: tag format
 - Focus on ANY ambiguities, missing information, or areas needing clarification

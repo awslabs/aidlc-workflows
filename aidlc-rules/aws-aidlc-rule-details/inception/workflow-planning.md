@@ -203,7 +203,6 @@ Create Mermaid flowchart showing:
 **Styling rules** (add after flowchart):
 ```
 style WD fill:#4CAF50,stroke:#1B5E20,stroke-width:3px,color:#fff
-style CP fill:#4CAF50,stroke:#1B5E20,stroke-width:3px,color:#fff
 style CG fill:#4CAF50,stroke:#1B5E20,stroke-width:3px,color:#fff
 style BT fill:#4CAF50,stroke:#1B5E20,stroke-width:3px,color:#fff
 style US fill:#BDBDBD,stroke:#424242,stroke-width:2px,stroke-dasharray: 5 5,color:#000
@@ -271,7 +270,7 @@ flowchart TD
         NFRA["NFR Requirements<br/><b>STATUS</b>"]
         NFRD["NFR Design<br/><b>STATUS</b>"]
         ID["Infrastructure Design<br/><b>STATUS</b>"]
-        CG["Code Generation<br/>(Part 1: Planning, Part 2: Generation)<br/><b>EXECUTE</b>"]
+        CG["Code Generation<br/>(Planning + Generation)<br/><b>EXECUTE</b>"]
         BT["Build and Test<br/><b>EXECUTE</b>"]
     end
     
@@ -317,7 +316,7 @@ flowchart TD
 - [ ] Infrastructure Design - [EXECUTE/SKIP]
   - **Rationale**: [Why executing or skipping]
 - [ ] Code Generation - EXECUTE (ALWAYS)
-  - **Rationale**: Implementation planning (Part 1: Code Planning) and code generation (Part 2: Code Generation) needed
+  - **Rationale**: Implementation planning and code generation needed
 - [ ] Build and Test - EXECUTE (ALWAYS)
   - **Rationale**: Build, test, and verification needed
 
@@ -376,7 +375,7 @@ Update `aidlc-docs/aidlc-state.md`:
 - [ ] NFR Requirements - [EXECUTE/SKIP]
 - [ ] NFR Design - [EXECUTE/SKIP]
 - [ ] Infrastructure Design - [EXECUTE/SKIP]
-- [ ] Code Generation - EXECUTE (Part 1: Code Planning, Part 2: Code Generation)
+- [ ] Code Generation - EXECUTE
 - [ ] Build and Test - EXECUTE
 
 ### 🟡 OPERATIONS PHASE
