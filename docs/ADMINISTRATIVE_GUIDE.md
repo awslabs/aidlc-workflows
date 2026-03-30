@@ -118,7 +118,7 @@ flowchart LR
     C["workflow_dispatch\n(no tag input)"] --> B
     D["pull_request\n(aidlc-rules/** changed)"] --> E{"codebuild\nlabel?"}
     E -->|yes| B
-    E -->|no| F["Job skipped"]
+    E -->|no| F["label-reminder\n(warning + PR comment)"]
     B --> G["Run AWS CodeBuild"]
     G --> H["Upload workflow artifacts"]
 ```
@@ -216,6 +216,23 @@ flowchart TD
 **Purpose:** Runs an AWS CodeBuild project, downloads primary and secondary artifacts from S3, caches them in GitHub Actions cache, uploads them as workflow artifacts, and (when triggered from a `v*` tag) attaches them to the GitHub Release.
 
 **PR label gate:** For `pull_request` events, the workflow only fires when files under `aidlc-rules/**` are changed (via `paths` filter) and the `build` job only runs when the `codebuild` label is present on the PR (via `contains(github.event.pull_request.labels.*.name, 'codebuild')`). The trigger includes `types: [opened, synchronize, reopened, labeled]` so that subsequent pushes to a labeled PR re-trigger the build automatically. `push`, `workflow_dispatch`, and tag events bypass the label check entirely.
+
+**Job: `label-reminder`** (PR only, no `codebuild` label)
+
+| Step | Name                             | Action                                                                                     |
+| ---- | -------------------------------- | ------------------------------------------------------------------------------------------ |
+| 1    | Warn about missing codebuild label | Emits a `::warning::` annotation visible in the Actions summary                           |
+| 2    | Comment on PR                    | Posts a one-time PR comment (idempotent — skips if the reminder comment already exists)     |
+
+This job runs only for `pull_request` events where `aidlc-rules/**` changed but the `codebuild` label is absent. It alerts maintainers and reviewers that the evaluation pipeline was not triggered. The comment is posted once per PR using an HTML comment marker (`<!-- codebuild-label-reminder -->`) to avoid duplicates.
+
+**Job: `label-cleanup`** (PR only, `codebuild` label present)
+
+| Step | Name                          | Action                                                                                   |
+| ---- | ----------------------------- | ---------------------------------------------------------------------------------------- |
+| 1    | Remove label reminder comment | Finds and deletes the `label-reminder` PR comment (no-op if it doesn't exist)            |
+
+This job runs when the `codebuild` label is applied, immediately removing the reminder comment without waiting for the `codebuild` environment approval gate.
 
 **Job: `build`**
 

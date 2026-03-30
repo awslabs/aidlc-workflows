@@ -43,6 +43,68 @@ permissions:
   statuses: none
 
 jobs:
+  label-reminder:
+    if: >-
+      github.event_name == 'pull_request'
+      && !contains(github.event.pull_request.labels.*.name, 'codebuild')
+
+    permissions:
+      pull-requests: write
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Warn about missing codebuild label
+        run: |
+          echo "::warning::This PR changes aidlc-rules/ but does not have the 'codebuild' label. Add the label to trigger the CodeBuild evaluation pipeline."
+
+      - name: Comment on PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          EXISTING=$(gh pr view "$PR_NUMBER" \
+            --repo "$REPO" \
+            --json comments \
+            --jq '.comments[] | select(.body | contains("codebuild-label-reminder")) | .id' \
+            | head -1)
+          BODY="<!-- codebuild-label-reminder -->
+          > **Note:** This PR changes \`aidlc-rules/\` but the \`codebuild\` label has not been applied.
+          >
+          > A maintainer must add the **codebuild** label to trigger the CodeBuild evaluation pipeline.
+          > Once labeled, subsequent pushes will re-trigger the build automatically."
+          if [ -z "$EXISTING" ]; then
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$BODY"
+          fi
+
+  label-cleanup:
+    if: >-
+      github.event_name == 'pull_request'
+      && contains(github.event.pull_request.labels.*.name, 'codebuild')
+
+    permissions:
+      pull-requests: write
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Remove label reminder comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          COMMENT_ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq '.[] | select(.body | contains("codebuild-label-reminder")) | .id' \
+            | head -1)
+          if [ -n "$COMMENT_ID" ]; then
+            gh api -X DELETE "repos/$REPO/issues/$PR_NUMBER/comments/$COMMENT_ID"
+            echo "Removed label-reminder comment ($COMMENT_ID)"
+          else
+            echo "No label-reminder comment found — nothing to clean up"
+          fi
+
   build:
     if: >-
       github.event_name != 'pull_request'
