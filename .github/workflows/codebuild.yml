@@ -60,6 +60,7 @@ jobs:
           echo "::warning::This PR changes aidlc-rules/ but does not have the 'codebuild' label. Add the label to trigger the CodeBuild evaluation pipeline."
 
       - name: Comment on PR
+        if: github.event.pull_request.head.repo.full_name == github.repository
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -80,10 +81,16 @@ jobs:
           > Once labeled, subsequent pushes will re-trigger the build automatically."
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$BODY"
 
+      - name: Fork PR notice
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "::notice::Skipping PR comment — fork PRs have a read-only GITHUB_TOKEN. The warning annotation above is still visible to maintainers."
+
   label-cleanup:
     if: >-
       github.event_name == 'pull_request'
       && contains(github.event.pull_request.labels.*.name, 'codebuild')
+      && github.event.pull_request.head.repo.full_name == github.repository
 
     permissions:
       pull-requests: write
