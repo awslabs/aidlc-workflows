@@ -238,7 +238,7 @@ jobs:
                     echo "========================================"
                     uv run python run.py full --rules-ref "$RULES_REF"
 
-                    # Package evaluation results into a zip for the trend report
+                    # Locate the evaluation run directory for trend report input
                     EVAL_RUN_DIR=$(ls -dt "$EVALUATOR_DIR/runs/"*/*/ 2>/dev/null | head -1)
                     LOCAL_BUNDLE_ARG=""
                     if [[ -n "$EVAL_RUN_DIR" ]]; then
@@ -249,13 +249,7 @@ jobs:
                         sed -i "s|rules_ref:.*|rules_ref: pr-$PR_NUMBER|" "$EVAL_RUN_DIR/run-meta.yaml"
                         echo "Patched run-meta.yaml: rules_ref -> pr-$PR_NUMBER"
                       fi
-                      BUNDLE_ZIP="/tmp/current-pr-bundle.zip"
-                      (cd "$EVAL_RUN_DIR" && zip -j "$BUNDLE_ZIP" \
-                        run-meta.yaml run-metrics.yaml test-results.yaml \
-                        contract-test-results.yaml quality-report.yaml \
-                        qualitative-comparison.yaml 2>/dev/null) && \
-                      LOCAL_BUNDLE_ARG="--local-bundle $BUNDLE_ZIP"
-                      cp "$BUNDLE_ZIP" "$CODEBUILD_SRC_DIR/.codebuild/report-bundle.zip"
+                      LOCAL_BUNDLE_ARG="--local-run-dir $EVAL_RUN_DIR"
                     else
                       echo "WARNING: No evaluation run folder found -- trend report will not include current PR"
                     fi
@@ -297,12 +291,6 @@ jobs:
                   name: trend
                   discard-paths: no
                   base-directory: .codebuild/trend-runs
-                report-bundle:
-                  files:
-                    - 'report-bundle.zip'
-                  name: report-bundle
-                  discard-paths: yes
-                  base-directory: .codebuild
 
       - name: Build ID
         if: always() && steps.cache-check.outputs.cache-hit != 'true'
@@ -381,6 +369,32 @@ jobs:
           path: ${{ github.workspace }}/.codebuild/downloads/trend.zip
           if-no-files-found: error
     
+
+      - name: Extract Report Bundle from Evaluation
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          DOWNLOADS="${ACT_CODEBUILD_DIR:-${GITHUB_WORKSPACE}/.codebuild/downloads}"
+          BUNDLE_DIR="$DOWNLOADS/report-bundle-staging"
+          mkdir -p "$BUNDLE_DIR"
+
+          YAML_FILES=(
+            run-meta.yaml
+            run-metrics.yaml
+            test-results.yaml
+            contract-test-results.yaml
+            quality-report.yaml
+            qualitative-comparison.yaml
+          )
+          for f in "${YAML_FILES[@]}"; do
+            unzip -j -o "$DOWNLOADS/evaluation.zip" "*/$f" -d "$BUNDLE_DIR" 2>/dev/null || true
+          done
+
+          if [[ -f "$BUNDLE_DIR/run-meta.yaml" ]]; then
+            (cd "$BUNDLE_DIR" && zip -j "$DOWNLOADS/report-bundle.zip" "${YAML_FILES[@]}" 2>/dev/null) || true
+            echo "Created report-bundle.zip from evaluation.zip contents"
+          else
+            echo "WARNING: run-meta.yaml not found in evaluation.zip — report bundle will be empty"
+          fi
 
       - name: Upload Report Bundle
         if: ${{ !env.ACT }}
