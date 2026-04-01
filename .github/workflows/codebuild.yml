@@ -281,7 +281,16 @@ jobs:
               secondary-artifacts:
                 evaluation:
                   files:
-                    - '**/*'
+                    - '**/contract-test-results.yaml'
+                    - '**/evaluation-config.yaml'
+                    - '**/qualitative-comparison.yaml'
+                    - '**/quality-report.yaml'
+                    - '**/report.yaml'
+                    - '**/report.md'
+                    - '**/report.html'
+                    - '**/run-meta.yaml'
+                    - '**/run-metrics.yaml'
+                    - '**/test-results.yaml'
                   name: evaluation
                   discard-paths: no
                   base-directory: .codebuild/regression-runs
@@ -344,30 +353,31 @@ jobs:
           key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}
 
       - name: Upload CodeBuild primary artifact
-        if: ${{ !env.ACT }} # incompatible with act (upload-artifact v6)
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: ${{ !env.ACT }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ env.CODEBUILD_PROJECT_NAME }}.zip
           path: ${{ github.workspace }}/.codebuild/downloads/${{ env.CODEBUILD_PROJECT_NAME }}.zip
           if-no-files-found: error
-      
+          archive: false
 
       - name: Upload Evaluation Report
-        if: ${{ !env.ACT }} # incompatible with act (upload-artifact v6)
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: ${{ !env.ACT }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: evaluation.zip
           path: ${{ github.workspace }}/.codebuild/downloads/evaluation.zip
           if-no-files-found: error
-          
+          archive: false
 
       - name: Upload Trend Report
-        if: ${{ !env.ACT }} # incompatible with act (upload-artifact v6)
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: ${{ !env.ACT }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: trend.zip
           path: ${{ github.workspace }}/.codebuild/downloads/trend.zip
           if-no-files-found: error
+          archive: false
     
 
       - name: Extract Report Bundle from Evaluation
@@ -398,16 +408,16 @@ jobs:
 
       - name: Upload Report Bundle
         if: ${{ !env.ACT }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: >-
             ${{ github.event_name == 'pull_request'
                 && format('report-pr-{0}', github.event.pull_request.number)
                 || github.ref == 'refs/heads/main' && 'report-main'
-                || format('report-{0}', github.ref_name) }}
+                || format('report-head') }}
           path: ${{ github.workspace }}/.codebuild/downloads/report-bundle.zip
           if-no-files-found: warn
-    
+          archive: false
 
       - name: Upload artifacts to release
         if: startsWith(github.ref, 'refs/tags/v')
