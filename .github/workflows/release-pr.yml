@@ -116,7 +116,8 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          git add CHANGELOG.md
+          echo "$VERSION" > aidlc-rules/VERSION
+          git add CHANGELOG.md aidlc-rules/VERSION
           if git diff --cached --quiet CHANGELOG.md; then
             echo "::error::No releasable commits since last tag – CHANGELOG.md is already up to date. Push new conventional commits or adjust the requested version before rerunning this workflow."
             exit 1
@@ -127,7 +128,7 @@ jobs:
           git push origin "$BRANCH"
 
           label_args=()
-          for LABEL in "release"; do
+          for LABEL in "release" "rules"; do
             if gh label list --search "$LABEL" --json name --jq '.[].name' | grep -qx "$LABEL"; then
               label_args+=("--label" "$LABEL")
             fi
