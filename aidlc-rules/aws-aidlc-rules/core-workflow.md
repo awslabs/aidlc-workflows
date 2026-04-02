@@ -56,7 +56,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - Provide text alternatives for complex visual content
 - Test content parsing compatibility
 
-## MANDATORY: Question File Format
+## MANDATORY: Question Format
 **CRITICAL**: When asking questions at any phase, you MUST follow question format guidelines.
 
 **See `common/question-format-guide.md` for complete question formatting rules including**:

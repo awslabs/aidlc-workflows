@@ -1,13 +1,16 @@
 # Question Format Guide
 
-## MANDATORY: All Questions Must Use This Format
+# MANDATORY: All Questions for Requirements-Gathering or Clarification Must Use This Format
 
-### Rule: Never Ask Questions in Chat
-**CRITICAL**: You must NEVER ask questions directly in the chat. ALL questions must be placed in dedicated question files.
+# Rule: Only Ask Stage Completion Prompts and Approval Requests in Chat
+ONLY stage completion prompts and approval requests MAY be presented inline in chat. Use the prompt format as defined in the respective stage rules.
 
-### Question File Format
+# Rule: Never Ask Requirements-Gathering and Clarification Questions in Chat
+Questions used for requirements-gathering (during requirements analysis stage) or clarification (all stages) MUST be placed in dedicated .md files, following the question file format below.
 
-#### File Naming Convention
+## Question File Format
+
+### File Naming Convention
 - Use descriptive names: `{phase-name}-questions.md`
 - Examples:
   - `classification-questions.md`
@@ -15,7 +18,7 @@
   - `story-planning-questions.md`
   - `design-questions.md`
 
-#### Question Structure
+### Question Structure
 Every question must include meaningful options plus "Other" as the last option:
 
 ```markdown
@@ -88,22 +91,22 @@ D) Multi-factor authentication
 [Answer]: C
 ```
 
-### Reading User Responses
+## Reading User Responses
 After user confirms completion:
 1. Read the question file
 2. Extract answers after [Answer]: tags
 3. Validate all questions are answered
 4. Proceed with analysis based on responses
 
-### Multiple Choice Guidelines
+## Multiple Choice Guidelines
 
-#### Option Count
+### Option Count
 - Minimum: 2 meaningful options + "Other" (A, B, C)
 - Typical: 3-4 meaningful options + "Other" (A, B, C, D, E)
 - Maximum: 5 meaningful options + "Other" (A, B, C, D, E, F)
 - **CRITICAL**: Don't make up options just to fill slots - only include meaningful choices
 
-#### Option Quality
+### Option Quality
 - Make options mutually exclusive
 - Cover the most common scenarios
 - Only include meaningful, realistic options
@@ -111,7 +114,7 @@ After user confirms completion:
 - Be specific and clear
 - **Don't make up options to fill A, B, C, D slots**
 
-#### Good Example:
+### Good Example:
 ```markdown
 ## Question 5
 What database technology will be used?
@@ -125,7 +128,7 @@ E) Other (please describe after [Answer]: tag below)
 [Answer]: 
 ```
 
-#### Bad Example (Avoid):
+### Bad Example (Avoid):
 ```markdown
 ## Question 5
 What database will you use?
@@ -137,24 +140,24 @@ C) Maybe
 [Answer]: 
 ```
 
-### Workflow Integration
+## Workflow Integration
 
-#### Step 1: Create Question File
+### Step 1: Create Question File
 ```markdown
 Create aidlc-docs/{phase-name}-questions.md with all questions
 ```
 
-#### Step 2: Inform User
+### Step 2: Inform User
 ```
 "I've created {phase-name}-questions.md with [X] questions. 
 Please answer each question by filling in the letter choice after the [Answer]: tag. 
 If none of the options match your needs, choose the last option (Other) and describe your preference. Let me know when you're done."
 ```
 
-#### Step 3: Wait for Confirmation
+### Step 3: Wait for Confirmation
 Wait for user to say "done", "completed", "finished", or similar.
 
-#### Step 4: Read and Analyze
+### Step 4: Read and Analyze
 ```
 Read aidlc-docs/{phase-name}-questions.md
 Extract all answers
@@ -162,47 +165,47 @@ Validate completeness
 Proceed with analysis
 ```
 
-### Error Handling
+## Error Handling
 
-#### Missing Answers
+### Missing Answers
 If any [Answer]: tag is empty:
 ```
 "I noticed Question [X] is not answered. Please provide an answer using one of the letter choices 
 for all questions before proceeding."
 ```
 
-#### Invalid Answers
+### Invalid Answers
 If answer is not a valid letter choice:
 ```
 "Question [X] has an invalid answer '[answer]'. 
 Please use only the letter choices provided in the question."
 ```
 
-#### Ambiguous Answers
+### Ambiguous Answers
 If user provides explanation instead of letter:
 ```
 "For Question [X], please provide the letter choice that best matches your answer. 
 If none match, choose 'Other' and add your description after the [Answer]: tag."
 ```
 
-### Contradiction and Ambiguity Detection
+## Contradiction and Ambiguity Detection
 
 **MANDATORY**: After reading user responses, you MUST check for contradictions and ambiguities.
 
-#### Detecting Contradictions
+### Detecting Contradictions
 Look for logically inconsistent answers:
 - Scope mismatch: "Bug fix" but "Entire codebase affected"
 - Risk mismatch: "Low risk" but "Breaking changes"
 - Timeline mismatch: "Quick fix" but "Multiple subsystems"
 - Impact mismatch: "Single component" but "Significant architecture changes"
 
-#### Detecting Ambiguities
+### Detecting Ambiguities
 Look for unclear or borderline responses:
 - Answers that could fit multiple classifications
 - Responses that lack specificity
 - Conflicting indicators across multiple questions
 
-#### Creating Clarification Questions
+### Creating Clarification Questions
 If contradictions or ambiguities detected:
 
 1. **Create clarification file**: `{phase-name}-clarification-questions.md`
@@ -244,7 +247,7 @@ D) [Clear option 4]
 [Answer]: 
 ```
 
-#### Workflow for Clarifications
+### Workflow for Clarifications
 
 1. **Detect**: Analyze all responses for contradictions/ambiguities
 2. **Create**: Generate clarification question file if issues found
@@ -253,7 +256,7 @@ D) [Clear option 4]
 5. **Re-validate**: After clarifications, check again for consistency
 6. **Proceed**: Only move forward when all contradictions are resolved
 
-#### Example User Message
+### Example User Message
 ```
 "I detected 2 contradictions in your responses:
 
@@ -264,7 +267,7 @@ I've created classification-clarification-questions.md with 2 questions to resol
 Please answer these clarifying questions before I can proceed with classification."
 ```
 
-### Best Practices
+## Best Practices
 
 1. **Be Specific**: Questions should be clear and unambiguous
 2. **Be Comprehensive**: Cover all necessary information
@@ -272,9 +275,9 @@ Please answer these clarifying questions before I can proceed with classificatio
 4. **Be Practical**: Options should be realistic and actionable
 5. **Be Consistent**: Use same format throughout all question files
 
-### Phase-Specific Examples
+## Phase-Specific Examples
 
-#### Example with 2 meaningful options:
+### Example with 2 meaningful options:
 ```markdown
 ## Question 1
 Is this a new project or existing codebase?
@@ -286,7 +289,7 @@ C) Other (please describe after [Answer]: tag below)
 [Answer]: 
 ```
 
-#### Example with 3 meaningful options:
+### Example with 3 meaningful options:
 ```markdown
 ## Question 2
 What is the deployment target?
@@ -299,7 +302,7 @@ D) Other (please describe after [Answer]: tag below)
 [Answer]: 
 ```
 
-#### Example with 4 meaningful options:
+### Example with 4 meaningful options:
 ```markdown
 ## Question 3
 What architectural pattern should be used?
@@ -315,8 +318,9 @@ E) Other (please describe after [Answer]: tag below)
 
 ## Summary
 
-**Remember**: 
-- ✅ Always create question files
+**Remember**:
+
+- ✅ Always create dedicated question files for requirements-gathering and clarifications
 - ✅ Always use multiple choice format
 - ✅ **Always include "Other" as the LAST option (MANDATORY)**
 - ✅ Only include meaningful options - don't make up options to fill slots
@@ -325,7 +329,7 @@ E) Other (please describe after [Answer]: tag below)
 - ✅ Always validate responses for contradictions
 - ✅ Always create clarification files if needed
 - ✅ Always resolve contradictions before proceeding
-- ❌ Never ask questions in chat
+- ❌ Never ask requirements-gathering and clarification questions in chat
 - ❌ Never make up options just to have A, B, C, D
 - ❌ Never proceed without answers
 - ❌ Never proceed with unresolved contradictions
