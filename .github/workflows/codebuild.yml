@@ -174,6 +174,7 @@ jobs:
               variables:
                 GH_TOKEN: ${{ github.token }}
                 GH_REF_NAME: ${{ github.ref_name }}
+                GH_HEAD_REF: ${{ github.head_ref }}
                 GH_EVENT_NAME: ${{ github.event_name }}
             phases:
               install:
@@ -191,7 +192,7 @@ jobs:
               build:
                 commands:
                   - DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || echo "main")
-                  - CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "${GH_REF_NAME:-}")
+                  - CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "${GH_HEAD_REF:-${GH_REF_NAME:-}}")
                   - CURRENT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
                   - IS_RELEASE=$([[ -n "$CURRENT_TAG" ]] && echo "true" || echo "false")
                   - IS_PRE_RELEASE=$([[ "$CURRENT_BRANCH" == "$DEFAULT_BRANCH" ]] && echo "true" || echo "false")
