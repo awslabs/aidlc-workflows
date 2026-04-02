@@ -2,9 +2,9 @@
 
 **Purpose**: Technical reference for AI model and developers to understand complete workflow structure.
 
-**Note**: Similar content exists in core-workflow.md (user welcome message) and README.md (documentation). This duplication is INTENTIONAL - each file serves a different purpose:
+**Note**: Similar content exists in welcome-message.md (user welcome message) and README.md (documentation). This duplication is INTENTIONAL - each file serves a different purpose:
 - **This file**: Detailed technical reference with Mermaid diagram for AI model context loading
-- **core-workflow.md**: User-facing welcome message with ASCII diagram
+- **welcome-message.md**: User-facing welcome message with ASCII diagram
 - **README.md**: Human-readable documentation for repository
 
 ## The Three-Phase Lifecycle:

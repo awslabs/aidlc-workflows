@@ -13,7 +13,9 @@ import yaml
 from conftest import make_run
 from trend_reports.collector import (
     classify_run,
+    collect_from_directory,
     collect_from_zip,
+    collect_trend_data,
     compute_deltas,
     extract_zip,
     find_yaml_files,
@@ -469,3 +471,111 @@ class TestCollectFromZip:
         assert run.unit_tests.passed == 0
         assert run.contract_tests.total == 0
         assert run.qualitative.overall_score == 0.0
+
+
+# ---------------------------------------------------------------------------
+# collect_from_directory
+# ---------------------------------------------------------------------------
+
+
+class TestCollectFromDirectory:
+    def test_full_directory(self, tmp_path):
+        run_dir = tmp_path / "run-001"
+        run_dir.mkdir()
+        _write_yaml(run_dir / "run-meta.yaml", {
+            "run_folder": "run-001",
+            "config": {"rules_ref": "v0.1.5"},
+        })
+        _write_yaml(run_dir / "run-metrics.yaml", {
+            "tokens": {"total": {"total_tokens": 9000000}},
+            "timing": {"total_wall_clock_ms": 600000},
+        })
+        _write_yaml(run_dir / "test-results.yaml", {
+            "test": {"parsed_results": {"passed": 175, "failed": 0, "total": 175}},
+        })
+        _write_yaml(run_dir / "contract-test-results.yaml", {
+            "total": 88, "passed": 88, "failed": 0,
+        })
+        _write_yaml(run_dir / "quality-report.yaml", {
+            "lint": {}, "summary": {"lint_total": 0},
+        })
+        _write_yaml(run_dir / "qualitative-comparison.yaml", {
+            "overall_score": 0.898, "phases": [],
+        })
+
+        run = collect_from_directory(run_dir)
+        assert run.label == "v0.1.5"
+        assert run.run_type == RunType.RELEASE
+        assert run.unit_tests.passed == 175
+        assert run.qualitative.overall_score == 0.898
+
+    def test_missing_run_meta_raises(self, tmp_path):
+        run_dir = tmp_path / "run-bad"
+        run_dir.mkdir()
+        _write_yaml(run_dir / "test-results.yaml", {"test": {"parsed_results": {}}})
+        with pytest.raises(CollectorError, match="run-meta.yaml missing"):
+            collect_from_directory(run_dir)
+
+    def test_not_a_directory_raises(self, tmp_path):
+        file_path = tmp_path / "not-a-dir.txt"
+        file_path.write_text("hello")
+        with pytest.raises(CollectorError, match="Not a directory"):
+            collect_from_directory(file_path)
+
+    def test_nonexistent_path_raises(self, tmp_path):
+        with pytest.raises(CollectorError, match="Not a directory"):
+            collect_from_directory(tmp_path / "nonexistent")
+
+    def test_missing_optional_files_use_defaults(self, tmp_path):
+        run_dir = tmp_path / "run-minimal"
+        run_dir.mkdir()
+        _write_yaml(run_dir / "run-meta.yaml", {
+            "run_folder": "run-002",
+            "config": {"rules_ref": "v0.1.0"},
+        })
+        run = collect_from_directory(run_dir)
+        assert run.unit_tests.passed == 0
+        assert run.contract_tests.total == 0
+        assert run.qualitative.overall_score == 0.0
+
+
+# ---------------------------------------------------------------------------
+# collect_trend_data — directory dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestCollectTrendDataDirectoryDispatch:
+    def test_mix_of_zips_and_directories(self, tmp_path):
+        # Create a directory bundle
+        run_dir = tmp_path / "dir-bundle"
+        run_dir.mkdir()
+        _write_yaml(run_dir / "run-meta.yaml", {
+            "run_folder": "run-dir", "config": {"rules_ref": "pr-42"},
+        })
+        _write_yaml(run_dir / "run-metrics.yaml", {"tokens": {"total": {}}, "timing": {}})
+        _write_yaml(run_dir / "test-results.yaml", {"test": {"parsed_results": {}}})
+        _write_yaml(run_dir / "contract-test-results.yaml", {
+            "total": 0, "passed": 0, "failed": 0,
+        })
+        _write_yaml(run_dir / "quality-report.yaml", {"lint": {}, "summary": {}})
+        _write_yaml(run_dir / "qualitative-comparison.yaml", {
+            "overall_score": 0.5, "phases": [],
+        })
+
+        # Create a zip bundle
+        zip_path = _make_report_zip(tmp_path, {
+            "run-meta.yaml": {"run_folder": "run-zip", "config": {"rules_ref": "v0.1.0"}},
+            "run-metrics.yaml": {"tokens": {"total": {}}, "timing": {}},
+            "test-results.yaml": {"test": {"parsed_results": {}}},
+            "contract-test-results.yaml": {"total": 0, "passed": 0, "failed": 0},
+            "quality-report.yaml": {"lint": {}, "summary": {}},
+            "qualitative-comparison.yaml": {"overall_score": 0.6, "phases": []},
+        })
+
+        baseline_path = tmp_path / "golden.yaml"
+        _write_yaml(baseline_path, {})
+
+        trend = collect_trend_data(
+            [zip_path, run_dir], baseline_path, "test/repo", tmp_path / "work",
+        )
+        assert len(trend.runs) == 2

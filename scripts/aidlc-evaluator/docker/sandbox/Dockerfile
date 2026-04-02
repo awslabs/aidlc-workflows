@@ -10,7 +10,7 @@
 
 # checkov:skip=CKV_DOCKER_2:HEALTHCHECK not needed for ephemeral test sandbox
 # nosemgrep: dockerfile-source-not-pinned
-FROM python:3.13-slim AS base
+FROM public.ecr.aws/docker/library/python:3.13-slim AS base
 
 # Install system dependencies and Node.js 22
 # nosemgrep: set-pipefail

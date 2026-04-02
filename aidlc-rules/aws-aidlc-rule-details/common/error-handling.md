@@ -16,12 +16,12 @@
 - Invalid user input that cannot be processed
 - System errors preventing file operations
 
-**High**: Phase cannot complete as planned
+**High**: Stage cannot complete as planned
 - Incomplete answers to required questions
 - Contradictory user responses
-- Missing dependencies from prior phases
+- Missing dependencies from prior stages
 
-**Medium**: Phase can continue with workarounds
+**Medium**: Stage can continue with workarounds
 - Optional artifacts missing
 - Non-critical validation failures
 - Partial completion possible
@@ -31,9 +31,9 @@
 - Optional information missing
 - Non-blocking warnings
 
-## Phase-Specific Error Handling
+## Stage-Specific Error Handling
 
-### Context Assessment Errors
+### Workspace Detection Errors
 
 **Error**: Cannot read workspace files
 - **Cause**: Permission issues, missing directories
@@ -45,12 +45,12 @@
 - **Solution**: Ask user if they want to start fresh or attempt recovery
 - **Recovery**: Create backup, start new state file
 
-**Error**: Cannot determine required phases
+**Error**: Cannot determine required stages
 - **Cause**: Insufficient information from user
 - **Solution**: Ask clarifying questions about intent and scope
 - **Workaround**: Default to comprehensive execution plan
 
-### Requirements Assessment Errors
+### Requirements Analysis Errors
 
 **Error**: User provides contradictory requirements
 - **Cause**: Unclear understanding, changing needs
@@ -67,11 +67,11 @@
 - **Solution**: Highlight unanswered questions, provide examples
 - **Do Not Proceed**: Until all required questions are answered
 
-### Story Development Errors
+### User Stories Errors
 
 **Error**: Cannot map requirements to stories
 - **Cause**: Requirements too vague, missing functional details
-- **Solution**: Return to Requirements Assessment for clarification
+- **Solution**: Return to Requirements Analysis for clarification
 - **Workaround**: Create stories based on available information, mark as incomplete
 
 **Error**: User provides ambiguous story planning answers
@@ -134,7 +134,7 @@
 
 **Error**: Code generation plan is incomplete
 - **Cause**: Missing design artifacts, unclear requirements
-- **Solution**: Return to Design phase to complete artifacts
+- **Solution**: Return to Design stage to complete artifacts
 - **Recovery**: Generate plan with available information, mark gaps
 
 **Error**: Unit dependencies not satisfied
@@ -142,7 +142,7 @@
 - **Solution**: Reorder generation sequence to respect dependencies
 - **Workaround**: Generate with stub dependencies, integrate later
 
-### Code Generation Errors
+### Code Generation Errors (Part 2: Code Generation)
 
 **Error**: Cannot generate code for a step
 - **Cause**: Insufficient design information, unclear requirements
@@ -173,12 +173,12 @@
 
 ## Recovery Procedures
 
-### Partial Phase Completion
+### Partial Stage Completion
 
-**Scenario**: Phase was interrupted mid-execution
+**Scenario**: Stage was interrupted mid-execution
 
 **Recovery Steps**:
-1. Load the phase plan file
+1. Load the stage plan file
 2. Identify last completed step (last [x] checkbox)
 3. Resume from next uncompleted step
 4. Verify all prior steps are actually complete
@@ -190,43 +190,43 @@
 
 **Recovery Steps**:
 1. Create backup: `aidlc-state.md.backup`
-2. Ask user which phase they're actually on
+2. Ask user which stage they're actually on
 3. Regenerate state file from scratch
-4. Mark completed phases based on existing artifacts
-5. Resume from current phase
+4. Mark completed stages based on existing artifacts
+5. Resume from current stage
 
 ### Missing Artifacts
 
-**Scenario**: Required artifacts from prior phase are missing
+**Scenario**: Required artifacts from prior stage are missing
 
 **Recovery Steps**:
 1. Identify which artifacts are missing
 2. Determine if they can be regenerated
-3. If yes: Return to that phase, regenerate artifacts
+3. If yes: Return to that stage, regenerate artifacts
 4. If no: Ask user to provide information manually
 5. Document the gap in `audit.md`
 
-### User Wants to Restart Phase
+### User Wants to Restart Stage
 
-**Scenario**: User is unhappy with phase results and wants to redo
+**Scenario**: User is unhappy with stage results and wants to redo
 
 **Recovery Steps**:
 1. Confirm user wants to restart (data will be lost)
 2. Archive existing artifacts: `{artifact}.backup`
-3. Reset phase status in `aidlc-state.md`
-4. Clear phase checkboxes in plan files
-5. Re-execute phase from beginning
+3. Reset stage status in `aidlc-state.md`
+4. Clear stage checkboxes in plan files
+5. Re-execute stage from beginning
 
-### User Wants to Skip Phase
+### User Wants to Skip Stage
 
-**Scenario**: User wants to skip a phase that was planned
+**Scenario**: User wants to skip a stage that was planned
 
 **Recovery Steps**:
 1. Confirm user understands implications
 2. Document skip reason in `audit.md`
-3. Mark phase as "SKIPPED" in `aidlc-state.md`
-4. Proceed to next phase
-5. Note: May cause issues in later phases if dependencies missing
+3. Mark stage as "SKIPPED" in `aidlc-state.md`
+4. Proceed to next stage
+5. Note: May cause issues in later stages if dependencies missing
 
 ## Escalation Guidelines
 
@@ -247,7 +247,7 @@
 ### When to Suggest Starting Over
 
 **Consider Fresh Start If**:
-- Multiple phases have errors
+- Multiple stages have errors
 - State file is severely corrupted
 - User requirements have changed significantly
 - Architectural decision needs to be reversed
@@ -340,7 +340,7 @@
 ### Error Logging Format
 
 ```markdown
-## Error - [Phase Name]
+## Error - [Stage Name]
 **Timestamp**: [ISO timestamp]
 **Error Type**: [Critical/High/Medium/Low]
 **Description**: [What went wrong]
@@ -354,7 +354,7 @@
 ### Recovery Logging Format
 
 ```markdown
-## Recovery - [Phase Name]
+## Recovery - [Stage Name]
 **Timestamp**: [ISO timestamp]
 **Issue**: [What needed recovery]
 **Recovery Steps**: [What was done]

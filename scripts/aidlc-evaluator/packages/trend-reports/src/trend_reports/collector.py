@@ -1,4 +1,4 @@
-"""Zip extraction, YAML parsing, run classification, and trend assembly."""
+"""Zip/directory extraction, YAML parsing, run classification, and trend assembly."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
-# The YAML files we expect inside every report zip.
+# The YAML files we expect inside every report bundle (zip or directory).
 REQUIRED_YAML = {
     "run-meta": "run-meta.yaml",
     "run-metrics": "run-metrics.yaml",
@@ -306,13 +306,15 @@ def classify_run(rules_ref: str) -> tuple[RunType, str, SemVer | None, int | Non
 # ---------------------------------------------------------------------------
 
 
-def collect_from_zip(zip_path: Path, work_dir: Path) -> RunData:
-    """Extract a zip bundle and parse all YAML files into a RunData."""
-    run_dir = extract_zip(zip_path, work_dir)
+def _collect_from_run_dir(run_dir: Path, source_label: str) -> RunData:
+    """Parse YAML files in *run_dir* into a RunData.
+
+    *source_label* is used in error messages (e.g. the zip path or directory).
+    """
     yaml_files = find_yaml_files(run_dir)
 
     if "run-meta" not in yaml_files:
-        raise CollectorError(f"run-meta.yaml missing from {zip_path} — cannot classify run")
+        raise CollectorError(f"run-meta.yaml missing from {source_label} — cannot classify run")
 
     meta = parse_run_meta(yaml_files["run-meta"])
     run_type, label, semver, pr_number = classify_run(meta.config.rules_ref)
@@ -363,6 +365,23 @@ def collect_from_zip(zip_path: Path, work_dir: Path) -> RunData:
         code_quality=code_quality,
         qualitative=qualitative,
     )
+
+
+def collect_from_zip(zip_path: Path, work_dir: Path) -> RunData:
+    """Extract a zip bundle and parse all YAML files into a RunData."""
+    run_dir = extract_zip(zip_path, work_dir)
+    return _collect_from_run_dir(run_dir, source_label=str(zip_path))
+
+
+def collect_from_directory(dir_path: Path) -> RunData:
+    """Parse all YAML files from a plain directory into a RunData.
+
+    Unlike :func:`collect_from_zip`, no extraction step is needed.
+    The directory must contain the expected YAML files directly.
+    """
+    if not dir_path.is_dir():
+        raise CollectorError(f"Not a directory: {dir_path}")
+    return _collect_from_run_dir(dir_path, source_label=str(dir_path))
 
 
 def load_baseline(golden_path: Path) -> BaselineMetrics:
@@ -443,12 +462,12 @@ def compute_deltas(runs: list[RunData]) -> list[VersionDelta]:
 
 
 def collect_trend_data(
-    zip_paths: list[Path],
+    bundle_paths: list[Path],
     baseline_path: Path,
     repo: str,
     work_dir: Path | None = None,
 ) -> TrendData:
-    """Parse all zip bundles and assemble a TrendData."""
+    """Parse all bundles (zip files or directories) and assemble a TrendData."""
     import tempfile
 
     if work_dir is None:
@@ -457,13 +476,16 @@ def collect_trend_data(
     baseline = load_baseline(baseline_path)
 
     runs: list[RunData] = []
-    for zp in zip_paths:
-        logger.info("Collecting data from %s …", zp.name)
+    for bp in bundle_paths:
+        logger.info("Collecting data from %s …", bp.name)
         try:
-            run = collect_from_zip(zp, work_dir)
+            if bp.is_dir():
+                run = collect_from_directory(bp)
+            else:
+                run = collect_from_zip(bp, work_dir)
             runs.append(run)
         except CollectorError as exc:
-            logger.warning("Skipping %s: %s", zp.name, exc)
+            logger.warning("Skipping %s: %s", bp.name, exc)
 
     if not runs:
         raise CollectorError("No runs could be parsed from the provided bundles.")

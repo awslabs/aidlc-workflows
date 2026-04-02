@@ -2,6 +2,17 @@ name: CodeBuild
 
 on:
   workflow_dispatch: {}
+  pull_request:
+    branches:
+      - main
+    types:
+      - labeled
+      - opened
+      - reopened
+      - synchronize
+      - unlabeled
+    paths:
+      - 'aidlc-rules/**'
   push:
     branches:
       - main
@@ -14,6 +25,7 @@ concurrency:
 
 env:
   CODEBUILD_PROJECT_NAME: ${{ vars.CODEBUILD_PROJECT_NAME || 'codebuild-project' }}
+  LABEL_REMINDER_MARKER: rules-label-reminder
 
 permissions:
   actions: none
@@ -33,7 +45,85 @@ permissions:
   statuses: none
 
 jobs:
+  label-reminder:
+    if: >-
+      github.event_name == 'pull_request'
+      && !contains(github.event.pull_request.labels.*.name, 'rules')
+
+    permissions:
+      pull-requests: write
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Warn about missing rules label
+        run: |
+          echo "::warning::This PR changes aidlc-rules/ but does not have the 'rules' label. Add the label to trigger the CodeBuild evaluation pipeline."
+
+      - name: Comment on PR
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          MARKER: ${{ env.LABEL_REMINDER_MARKER }}
+        run: |
+          EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" \
+            | head -1)
+          if [ -n "$EXISTING" ]; then
+            echo "Reminder comment already exists ($EXISTING) — skipping"
+            exit 0
+          fi
+          BODY="<!-- $MARKER -->
+          > **Note:** This PR changes \`aidlc-rules/\` but the \`rules\` label has not been applied.
+          >
+          > A maintainer must add the **rules** label to trigger the CodeBuild evaluation pipeline.
+          > Once labeled, subsequent pushes will re-trigger the build automatically."
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$BODY"
+
+      - name: Fork PR notice
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "::notice::Skipping PR comment — fork PRs have a read-only GITHUB_TOKEN. The warning annotation above is still visible to maintainers."
+
+  label-cleanup:
+    if: >-
+      github.event_name == 'pull_request'
+      && contains(github.event.pull_request.labels.*.name, 'rules')
+      && github.event.pull_request.head.repo.full_name == github.repository
+
+    permissions:
+      issues: write
+      pull-requests: write
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Remove label reminder comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          MARKER: ${{ env.LABEL_REMINDER_MARKER }}
+        run: |
+          COMMENT_ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$MARKER\"))) | .id" \
+            | head -1)
+          if [ -z "$COMMENT_ID" ]; then
+            echo "No label-reminder comment found — nothing to clean up"
+            exit 0
+          fi
+          if gh api -X DELETE "repos/$REPO/issues/comments/$COMMENT_ID"; then
+            echo "Removed label-reminder comment ($COMMENT_ID)"
+          else
+            echo "::warning::Failed to delete label-reminder comment ($COMMENT_ID) — it may have been removed already"
+          fi
+
   build:
+    if: >-
+      github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'rules')
     environment: codebuild
 
     permissions:
@@ -47,8 +137,9 @@ jobs:
       - name: List caches
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
-          gh cache list -R "${{ github.repository }}" --key "${{ env.CODEBUILD_PROJECT_NAME }}-" --order asc
+          gh cache list -R "$REPO" --key "$CODEBUILD_PROJECT_NAME-" --order asc | cat
 
       - name: Check cache
         id: cache-check
@@ -59,7 +150,7 @@ jobs:
           lookup-only: true
 
       - name: Configure AWS credentials
-        if: steps.cache-check.outputs.cache-hit != 'true'
+        if: ${{ !env.ACT && steps.cache-check.outputs.cache-hit != 'true' }}
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
         with:
           role-to-assume: ${{ secrets.AWS_CODEBUILD_ROLE_ARN }}
@@ -81,35 +172,103 @@ jobs:
             env:
               variables:
                 GH_TOKEN: ${{ github.token }}
+                GH_REF_NAME: ${{ github.ref_name }}
+                GH_EVENT_NAME: ${{ github.event_name }}
             phases:
               install:
                 commands:
+                  - mkdir -p .codebuild
+                  - touch ./.codebuild/codebuild.out
                   - dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo || echo "dnf config-manager"
                   - dnf install -y 'dnf-command(config-manager)' gh || echo "dnf install failed"
-                  - curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=$HOME/.local/bin:$PATH || "echo uv failed"
+                  - curl -LsSf https://astral.sh/uv/install.sh | sh || echo "uv failed"
+                  - export PATH=$HOME/.local/bin:$PATH
+                  - git config --global --add safe.directory "/codebuild/output/srcDownload/src"
               pre_build:
                 commands:
                   - echo "pre_build"
-                  - mkdir -p .codebuild
-                  - touch .codebuild/codebuild.out
-                  - git config --global --add safe.directory "/codebuild/output/srcDownload/src" # for running AWS CodeBuild locally
               build:
                 commands:
-                  - DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name')
-                  - CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+                  - DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name' 2>/dev/null || echo "main")
+                  - CURRENT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "${GH_REF_NAME:-}")
                   - CURRENT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
                   - IS_RELEASE=$([[ -n "$CURRENT_TAG" ]] && echo "true" || echo "false")
                   - IS_PRE_RELEASE=$([[ "$CURRENT_BRANCH" == "$DEFAULT_BRANCH" ]] && echo "true" || echo "false")
                   - IS_PRE_MERGE=$([[ -z "$CURRENT_TAG" && "$CURRENT_BRANCH" != "$DEFAULT_BRANCH" ]] && echo "true" || echo "false")
-                  - if [[ "$IS_RELEASE" == "true" ]]; then echo "This is a release"; fi;
-                  - if [[ "$IS_PRE_RELEASE" == "true" ]]; then echo "This is a pre-release"; fi;
-                  - if [[ "$IS_PRE_MERGE" == "true" ]]; then echo "This is a pre-merge"; fi;
-                  - mkdir -p .codebuild/evaluation
-                  - mkdir -p .codebuild/trend
-                  - mkdir -p .codebuild/missing
-                  - touch .codebuild/evaluation/evaluation_report.html
-                  - touch .codebuild/evaluation/metrics.yml
-                  - touch .codebuild/trend/trend_report.html
+                  - echo "Branch=$CURRENT_BRANCH Tag=$CURRENT_TAG Release=$IS_RELEASE PreRelease=$IS_PRE_RELEASE PreMerge=$IS_PRE_MERGE"
+                  - |
+                    echo "========================================"
+                    echo "  Regression Validation"
+                    echo "========================================"
+
+                    EVALUATOR_DIR="$CODEBUILD_SRC_DIR/scripts/aidlc-evaluator"
+                    if [[ ! -d "$EVALUATOR_DIR" ]]; then
+                      echo "ERROR: Evaluation framework not found at $EVALUATOR_DIR"
+                      exit 1
+                    fi
+
+                    cd "$EVALUATOR_DIR"
+                    EVALUATOR_DIR="$(pwd -P)"  # resolve symlinks for consistent paths
+                    RULES_REF="${CURRENT_TAG:-$CURRENT_BRANCH}"
+                    PR_NUMBER=$(gh pr view "$CURRENT_BRANCH" --repo "${GITHUB_REPOSITORY:-awslabs/aidlc-workflows}" --json number --jq '.number' 2>/dev/null || echo "")
+                    echo "Rules ref: $RULES_REF"
+                    if [[ -n "$PR_NUMBER" ]]; then
+                      echo "PR number: $PR_NUMBER (will label as pr-$PR_NUMBER in trend report)"
+                    fi
+
+                    # Install dependencies
+                    uv sync
+                    ./docker/sandbox/build.sh || exit 1
+
+                    # Unit tests (245 across 7 packages, excludes trend-reports)
+                    echo "========================================"
+                    echo "  Unit Tests"
+                    echo "========================================"
+                    uv run python run.py test
+
+                    # Trend reports unit tests (138 tests, separate package)
+                    echo "========================================"
+                    echo "  Trend Reports Unit Tests"
+                    echo "========================================"
+                    uv run pytest packages/trend-reports/tests/ -v
+
+                    # Full evaluation with the PR's rules
+                    echo "========================================"
+                    echo "  Evaluation (rules-ref=$RULES_REF)"
+                    echo "========================================"
+                    uv run python run.py full --rules-ref "$RULES_REF"
+
+                    # Locate the evaluation run directory for trend report input
+                    EVAL_RUN_DIR=$(ls -dt "$EVALUATOR_DIR/runs/"*/*/ 2>/dev/null | head -1)
+                    LOCAL_BUNDLE_ARG=""
+                    if [[ -n "$EVAL_RUN_DIR" ]]; then
+                      echo "Evaluation run folder: $EVAL_RUN_DIR"
+
+                      # Patch run-meta.yaml with PR label so trend report classifies it as PR
+                      if [[ -n "$PR_NUMBER" && -f "$EVAL_RUN_DIR/run-meta.yaml" ]]; then
+                        sed -i "s|rules_ref:.*|rules_ref: pr-$PR_NUMBER|" "$EVAL_RUN_DIR/run-meta.yaml"
+                        echo "Patched run-meta.yaml: rules_ref -> pr-$PR_NUMBER"
+                      fi
+                      LOCAL_BUNDLE_ARG="--local-run-dir $EVAL_RUN_DIR"
+                    else
+                      echo "WARNING: No evaluation run folder found -- trend report will not include current PR"
+                    fi
+
+                    # Trend report across releases + current PR
+                    echo "========================================"
+                    echo "  Trend Report"
+                    echo "========================================"
+                    uv run python -m trend_reports trend \
+                      --baseline test_cases/sci-calc/golden.yaml \
+                      --format all \
+                      --output-dir "$CODEBUILD_SRC_DIR/.codebuild/trend-runs" \
+                      --gate \
+                      $LOCAL_BUNDLE_ARG
+
+                    # Collect artifacts
+                    mkdir -p "$CODEBUILD_SRC_DIR/.codebuild/regression-runs"
+                    cp -r "$EVALUATOR_DIR/runs/"*/* "$CODEBUILD_SRC_DIR/.codebuild/regression-runs/" 2>/dev/null || true
+                    cd "$CODEBUILD_SRC_DIR"
               post_build:
                 commands:
                   - echo "Build completed with status $CODEBUILD_BUILD_SUCCEEDING"
@@ -117,21 +276,30 @@ jobs:
             artifacts:
               files:
                 - '**/*'
-              discard-paths: no
               base-directory: .codebuild
+              discard-paths: no
               secondary-artifacts:
                 evaluation:
                   files:
-                    - '**/*'
+                    - '**/contract-test-results.yaml'
+                    - '**/evaluation-config.yaml'
+                    - '**/qualitative-comparison.yaml'
+                    - '**/quality-report.yaml'
+                    - '**/report.yaml'
+                    - '**/report.md'
+                    - '**/report.html'
+                    - '**/run-meta.yaml'
+                    - '**/run-metrics.yaml'
+                    - '**/test-results.yaml'
                   name: evaluation
-                  discard-paths: yes
-                  base-directory: .codebuild/evaluation
+                  discard-paths: no
+                  base-directory: .codebuild/regression-runs
                 trend:
                   files:
                     - '**/*'
                   name: trend
-                  discard-paths: yes
-                  base-directory: .codebuild/trend
+                  discard-paths: no
+                  base-directory: .codebuild/trend-runs
 
       - name: Build ID
         if: always() && steps.cache-check.outputs.cache-hit != 'true'
@@ -146,7 +314,7 @@ jobs:
             --ids "${{ steps.codebuild.outputs.aws-build-id }}" \
             --query 'builds[0].artifacts.location' \
             --output text)
-          aws s3 cp "s3://${PRIMARY_ARTIFACT_LOCATION#arn:aws:s3:::}" "$DOWNLOADS/${{ env.CODEBUILD_PROJECT_NAME }}.zip"
+          aws s3 cp "s3://${PRIMARY_ARTIFACT_LOCATION#arn:aws:s3:::}" "$DOWNLOADS/$CODEBUILD_PROJECT_NAME.zip"
           SECONDARY_ARTIFACT_LOCATIONS=$(aws codebuild batch-get-builds \
             --ids "${{ steps.codebuild.outputs.aws-build-id }}" \
             --query 'builds[0].secondaryArtifacts[*].[artifactIdentifier, location]' \
@@ -161,7 +329,7 @@ jobs:
         run: |
           DOWNLOADS="${ACT_CODEBUILD_DIR:-${GITHUB_WORKSPACE}/.codebuild/downloads}"
           ls -alR "$DOWNLOADS"
-          unzip -l "$DOWNLOADS/${{ env.CODEBUILD_PROJECT_NAME }}.zip"
+          unzip -l "$DOWNLOADS/$CODEBUILD_PROJECT_NAME.zip"
           unzip -l "$DOWNLOADS/evaluation.zip"
           unzip -l "$DOWNLOADS/trend.zip"
 
@@ -169,11 +337,13 @@ jobs:
         if: steps.cache-check.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          gh cache list -R "${{ github.repository }}" --key "${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-" --order asc \
+          gh cache list -R "$REPO" --key "$CODEBUILD_PROJECT_NAME-$REF_NAME-" --order asc \
             | tail -n 3 \
             | cut -f1 \
-            | xargs -I {} gh cache delete -R "${{ github.repository }}" "{}" || true
+            | xargs -I {} gh cache delete -R "$REPO" "{}" || true
 
       - name: Save report to cache
         if: steps.cache-check.outputs.cache-hit != 'true'
@@ -183,28 +353,71 @@ jobs:
           key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}
 
       - name: Upload CodeBuild primary artifact
-        if: ${{ !env.ACT }} # incompatability with v6 of upload-artifact and act
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        if: ${{ !env.ACT }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ env.CODEBUILD_PROJECT_NAME }}.zip
           path: ${{ github.workspace }}/.codebuild/downloads/${{ env.CODEBUILD_PROJECT_NAME }}.zip
           if-no-files-found: error
+          archive: false
 
-      - name: Upload CodeBuild secondary artifact - evaluation
-        if: ${{ !env.ACT }} # incompatability with v6 of upload-artifact and act
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      - name: Upload Evaluation Report
+        if: ${{ !env.ACT }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: evaluation.zip
           path: ${{ github.workspace }}/.codebuild/downloads/evaluation.zip
           if-no-files-found: error
+          archive: false
 
-      - name: Upload CodeBuild secondary artifact - trend
-        if: ${{ !env.ACT }} # incompatability with v6 of upload-artifact and act
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      - name: Upload Trend Report
+        if: ${{ !env.ACT }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: trend.zip
           path: ${{ github.workspace }}/.codebuild/downloads/trend.zip
           if-no-files-found: error
+          archive: false
+    
+
+      - name: Extract Report Bundle from Evaluation
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          DOWNLOADS="${ACT_CODEBUILD_DIR:-${GITHUB_WORKSPACE}/.codebuild/downloads}"
+          BUNDLE_DIR="$DOWNLOADS/report-bundle-staging"
+          mkdir -p "$BUNDLE_DIR"
+
+          YAML_FILES=(
+            run-meta.yaml
+            run-metrics.yaml
+            test-results.yaml
+            contract-test-results.yaml
+            quality-report.yaml
+            qualitative-comparison.yaml
+          )
+          for f in "${YAML_FILES[@]}"; do
+            unzip -j -o "$DOWNLOADS/evaluation.zip" "*/$f" -d "$BUNDLE_DIR" 2>/dev/null || true
+          done
+
+          if [[ -f "$BUNDLE_DIR/run-meta.yaml" ]]; then
+            (cd "$BUNDLE_DIR" && zip -j "$DOWNLOADS/report-bundle.zip" "${YAML_FILES[@]}" 2>/dev/null) || true
+            echo "Created report-bundle.zip from evaluation.zip contents"
+          else
+            echo "WARNING: run-meta.yaml not found in evaluation.zip — report bundle will be empty"
+          fi
+
+      - name: Upload Report Bundle
+        if: ${{ !env.ACT }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: >-
+            ${{ github.event_name == 'pull_request'
+                && format('report-pr-{0}', github.event.pull_request.number)
+                || github.ref == 'refs/heads/main' && 'report-main'
+                || format('report-head') }}
+          path: ${{ github.workspace }}/.codebuild/downloads/report-bundle.zip
+          if-no-files-found: warn
+          archive: false
 
       - name: Upload artifacts to release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -215,10 +428,15 @@ jobs:
         run: |
           DOWNLOADS="${GITHUB_WORKSPACE}/.codebuild/downloads"
           ARTIFACTS=(
-            "$DOWNLOADS/${{ env.CODEBUILD_PROJECT_NAME }}.zip"
+            "$DOWNLOADS/$CODEBUILD_PROJECT_NAME.zip"
             "$DOWNLOADS/evaluation.zip"
             "$DOWNLOADS/trend.zip"
           )
+          # Rename report bundle to match trend report fetcher pattern (report*.zip)
+          if [[ -f "$DOWNLOADS/report-bundle.zip" ]]; then
+            cp "$DOWNLOADS/report-bundle.zip" "$DOWNLOADS/report-${TAG}.zip"
+            ARTIFACTS+=("$DOWNLOADS/report-${TAG}.zip")
+          fi
 
           # Wait for release to exist (release.yml typically finishes in ~30s,
           # CodeBuild takes minutes — this is a safety net)

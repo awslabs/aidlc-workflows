@@ -296,7 +296,7 @@ flowchart TD
 ### 🔵 INCEPTION PHASE
 - [x] Workspace Detection (COMPLETED)
 - [x] Reverse Engineering (COMPLETED/SKIPPED)
-- [x] Requirements Elaboration (COMPLETED)
+- [x] Requirements Analysis (COMPLETED)
 - [x] User Stories (COMPLETED/SKIPPED)
 - [x] Execution Plan (IN PROGRESS)
 - [ ] Application Design - [EXECUTE/SKIP]

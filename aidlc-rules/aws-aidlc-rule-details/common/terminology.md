@@ -120,7 +120,7 @@ A reusable building block within a service or module. Components are classes, fu
 ### When to Use Each Term
 
 **Unit of Work**:
-- During Units Planning and Units Generation phases
+- During Units Planning and Units Generation stages
 - When discussing system decomposition
 - In planning documents and discussions
 - Example: "How should we decompose this into units of work?"
