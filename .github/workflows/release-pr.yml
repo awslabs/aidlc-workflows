@@ -148,7 +148,7 @@ jobs:
 
           ## Checklist (in order)
           
-          1. [ ] Mark the pull request "Ready for review" to trigger required workflows
+          1. [ ] Mark the pull request "Ready for review" and label with "codebuild" to trigger required workflows
           2. [ ] Inspect the CHANGELOG.md and "Approve" or "Reject" the pending [CodeBuild](https://github.com/awslabs/aidlc-workflows/actions/workflows/codebuild.yml) GitHub Action
           3. [ ] Evaluate the artifacts
           4. [ ] Review the pull request (if approved set the "Merge when ready")
