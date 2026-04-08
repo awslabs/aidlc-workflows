@@ -154,7 +154,7 @@ flowchart TD
 | **Environment** | _(none)_                                          |
 | **Runner**      | `ubuntu-latest`                                   |
 
-**Purpose:** Generates an updated `CHANGELOG.md` from conventional commits using git-cliff and opens a PR on a `release/vX.Y.Z` branch. This is the first step in the changelog-first release flow.
+**Purpose:** Generates an updated `CHANGELOG.md` from conventional commits using git-cliff, writes the release version to `aidlc-rules/VERSION`, and opens a PR on a `release/vX.Y.Z` branch. This is the first step in the changelog-first release flow. The `aidlc-rules/VERSION` update ensures the PR touches `aidlc-rules/`, which triggers the `codebuild.yml` path filter and the `rules` auto-label.
 
 **Job: `release-pr` ("Create Release PR")**
 
@@ -165,7 +165,7 @@ flowchart TD
 | 3    | Determine version        | Use `inputs.version` (with semver validation) or `git-cliff --bumped-version` for auto-detection; falls back to patch bump from latest tag |
 | 4    | Check tag does not exist | Fail early if the target tag already exists                                                                                                |
 | 5    | Generate changelog       | `orhun/git-cliff-action` with `--tag vX.Y.Z` to generate `CHANGELOG.md`                                                                    |
-| 6    | Create release PR        | Check branch doesn't already exist, commit, push `release/vX.Y.Z` branch, open PR (with label `release` if it exists in the repo)          |
+| 6    | Create release PR        | Write version to `aidlc-rules/VERSION`, check branch doesn't already exist, commit, push `release/vX.Y.Z` branch, open PR (with labels `release` and `rules` if they exist in the repo) |
 
 **Version detection:** If a version is specified, it must be valid semver (`MAJOR.MINOR.PATCH`); both `v0.2.0` and `0.2.0` are accepted. If no version is specified, `git-cliff --bumped-version` determines the next version from conventional commit prefixes. The `[bump]` config in `cliff.toml` controls the rules (e.g., `feat` → minor bump, breaking change → major bump). If no conventional commits are found, the workflow falls back to a patch bump from the latest tag. If no tags exist at all, it exits cleanly with a warning (no PR is created).
 
@@ -491,7 +491,7 @@ Releases follow a **changelog-first** flow: the CHANGELOG is updated *before* th
 1. **Dispatch the Release PR workflow** via the GitHub Actions UI:
    - Navigate to Actions → Release PR → Run workflow
    - Optionally specify a version (e.g., `0.2.0`); leave blank to auto-determine from conventional commits
-   - `release-pr.yml` generates `CHANGELOG.md` and opens a PR on branch `release/v1.2.0` with label `release`
+   - `release-pr.yml` generates `CHANGELOG.md`, writes the version to `aidlc-rules/VERSION`, and opens a PR on branch `release/v1.2.0` with labels `release` and `rules`
 
 2. **Review and merge the release PR:**
    - Verify the changelog content is correct
