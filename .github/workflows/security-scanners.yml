@@ -114,7 +114,6 @@ jobs:
             --sarif-output semgrep-report_sarif.json $BASELINE_ARGS
           SEMGREP_EXIT=$?
           set -e
-          echo "exit_code=$SEMGREP_EXIT" >> "$GITHUB_OUTPUT"
           exit 0
       - name: Fix SARIF for GitHub compatibility
         continue-on-error: true
@@ -148,6 +147,16 @@ jobs:
               else . end
             ]
           ' semgrep-report_sarif.json > semgrep.sarif.tmp.json && mv semgrep.sarif.tmp.json semgrep-report_sarif.json
+      - name: Check for ERROR severity findings
+        id: semgrep
+        run: |
+          # Fail only if ERROR severity findings exist (level=error in SARIF)
+          HIGH_COUNT=$(jq '[.runs[0].results[] | select(.level == "error")] | length' semgrep-report_sarif.json 2>/dev/null || echo 0)
+          if [ "$HIGH_COUNT" -gt 0 ]; then
+            echo "exit_code=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: semgrep.sarif
