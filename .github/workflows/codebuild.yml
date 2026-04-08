@@ -152,6 +152,7 @@ jobs:
           lookup-only: true
 
       - name: Configure AWS credentials
+        # env.ACT is set by the 'act' CLI tool for local testing
         if: ${{ !env.ACT && steps.cache-check.outputs.cache-hit != 'true' }}
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
         with:
@@ -405,6 +406,7 @@ jobs:
           key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}
 
       - name: Upload CodeBuild primary artifact
+        # env.ACT is set by the 'act' CLI tool for local testing
         if: ${{ !env.ACT }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -414,6 +416,7 @@ jobs:
           archive: false
 
       - name: Upload Evaluation Report
+        # env.ACT is set by the 'act' CLI tool for local testing
         if: ${{ !env.ACT }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -423,6 +426,7 @@ jobs:
           archive: false
 
       - name: Upload Trend Report
+        # env.ACT is set by the 'act' CLI tool for local testing
         if: ${{ !env.ACT }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -459,6 +463,7 @@ jobs:
           fi
 
       - name: Upload Report Bundle
+        # env.ACT is set by the 'act' CLI tool for local testing
         if: ${{ !env.ACT }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
