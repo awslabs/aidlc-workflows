@@ -100,7 +100,6 @@ jobs:
           pip install -r requirements.txt
           rm requirements.txt
       - name: Run semgrep
-        id: semgrep
         env:
           BASELINE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: |
