@@ -160,14 +160,14 @@ flowchart TD
 
 **Job: `release-pr` ("Create Release PR")**
 
-| Step | Name                     | Action                                                                                                                                     |
-| ---- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1    | Checkout code            | `actions/checkout` with `fetch-depth: 0` (full history for git-cliff)                                                                      |
-| 2    | Install git-cliff        | `orhun/git-cliff-action` to make the CLI available                                                                                         |
-| 3    | Determine version        | Use `inputs.version` (with semver validation) or `git-cliff --bumped-version` for auto-detection; falls back to patch bump from latest tag |
-| 4    | Check tag does not exist | Fail early if the target tag already exists                                                                                                |
-| 5    | Generate changelog       | `orhun/git-cliff-action` with `--tag vX.Y.Z` to generate `CHANGELOG.md`                                                                    |
-| 6    | Create release PR        | Write version to `aidlc-rules/VERSION`, check branch doesn't already exist, commit, push `release/vX.Y.Z` branch, open PR (with labels `release` and `rules` if they exist in the repo) |
+| Step | Name                     | Action                                                                                                                                                                                    |
+| ---- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | Checkout code            | `actions/checkout` with `fetch-depth: 0` (full history for git-cliff)                                                                                                                     |
+| 2    | Install git-cliff        | `orhun/git-cliff-action` to make the CLI available                                                                                                                                        |
+| 3    | Determine version        | Use `inputs.version` (with semver validation) or `git-cliff --bumped-version` for auto-detection; falls back to patch bump from latest tag                                                |
+| 4    | Check tag does not exist | Fail early if the target tag already exists                                                                                                                                               |
+| 5    | Generate changelog       | `orhun/git-cliff-action` with `--tag vX.Y.Z` to generate `CHANGELOG.md`                                                                                                                   |
+| 6    | Create release PR        | Write version to `aidlc-rules/VERSION`, check branch doesn't already exist, commit, push `release/vX.Y.Z` branch, open PR (with labels `release` and `rules` if they exist in the repo)   |
 
 **Version detection:** If a version is specified, it must be valid semver (`MAJOR.MINOR.PATCH`); both `v0.2.0` and `0.2.0` are accepted. If no version is specified, `git-cliff --bumped-version` determines the next version from conventional commit prefixes. The `[bump]` config in `cliff.toml` controls the rules (e.g., `feat` → minor bump, breaking change → major bump). If no conventional commits are found, the workflow falls back to a patch bump from the latest tag. If no tags exist at all, it exits cleanly with a warning (no PR is created).
 
@@ -224,10 +224,10 @@ flowchart TD
 
 **Job: `label-reminder`** (PR only, no `rules` label)
 
-| Step | Name                             | Action                                                                                     |
-| ---- | -------------------------------- | ------------------------------------------------------------------------------------------ |
-| 1    | Warn about missing rules label   | Emits a `::warning::` annotation visible in the Actions summary                           |
-| 2    | Comment on PR                    | Posts a one-time PR comment (idempotent — skips if the reminder comment already exists)     |
+| Step | Name                             | Action                                                                                       |
+| ---- | -------------------------------- | -------------------------------------------------------------------------------------------- |
+| 1    | Warn about missing rules label   | Emits a `::warning::` annotation visible in the Actions summary                              |
+| 2    | Comment on PR                    | Posts a one-time PR comment (idempotent — skips if the reminder comment already exists)      |
 
 This job runs only for `pull_request` events where `aidlc-rules/**` changed but the `rules` label is absent. It alerts maintainers and reviewers that the evaluation pipeline was not triggered. The comment is posted once per PR using an HTML comment marker (`<!-- rules-label-reminder -->`) to avoid duplicates. In normal operation, the `auto-label` job in `pull-request-lint.yml` applies the `rules` label automatically, so this job serves as a fallback safety net.
 
@@ -360,10 +360,10 @@ Allowed types: `fix`, `feat`, `build`, `chore`, `ci`, `docs`, `style`, `refactor
 
 Only runs for `pull_request_target` events. Uses [`actions/labeler`](https://github.com/actions/labeler) v6.0.1 to automatically apply and remove labels based on changed file paths. Label rules are defined in `.github/labeler.yml`:
 
-| Label           | Path Pattern                                    | Description                                      |
-| --------------- | ----------------------------------------------- | ------------------------------------------------ |
-| `rules`         | `aidlc-rules/**`                                | Triggers CodeBuild evaluation pipeline           |
-| `documentation` | `**/*.md` (excluding `aidlc-rules/**`)          | Non-rules markdown file changes                  |
+| Label           | Path Pattern                                    | Description                                       |
+| --------------- | ----------------------------------------------- | ------------------------------------------------- |
+| `rules`         | `aidlc-rules/**`                                | Triggers CodeBuild evaluation pipeline            |
+| `documentation` | `**/*.md` (excluding `aidlc-rules/**`)          | Non-rules markdown file changes                   |
 | `github`        | `.github/**`                                    | Workflow, template, or config changes             |
 
 With `sync-labels: true`, labels are automatically removed when the matching files are no longer in the PR diff (e.g., after a rebase drops those changes). New label rules can be added by editing `.github/labeler.yml` — no workflow changes required.
@@ -438,16 +438,16 @@ All variables have sensible defaults via `${{ vars.VAR || 'default' }}` syntax, 
 
 ### Job-level permissions (overrides)
 
-| Workflow                | Job                    | Permissions                                            | Rationale                                                      |
-| ----------------------- | ---------------------- | ------------------------------------------------------ | -------------------------------------------------------------- |
-| `codebuild.yml`         | `label-reminder`       | `pull-requests: write`                                 | Post reminder comment when `rules` label is missing            |
-| `codebuild.yml`         | `label-cleanup`        | `pull-requests: write`                                 | Delete reminder comment when `rules` label is applied          |
-| `codebuild.yml`         | `build`                | `actions: write`, `contents: write`, `id-token: write` | Cache management, release asset upload, OIDC token for AWS STS |
+| Workflow                | Job                    | Permissions                                               | Rationale                                                                                                    |
+| ----------------------- | ---------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `codebuild.yml`         | `label-reminder`       | `pull-requests: write`                                    | Post reminder comment when `rules` label is missing                                                          |
+| `codebuild.yml`         | `label-cleanup`        | `pull-requests: write`                                    | Delete reminder comment when `rules` label is applied                                                        |
+| `codebuild.yml`         | `build`                | `actions: write`, `contents: write`, `id-token: write`    | Cache management, release asset upload, OIDC token for AWS STS                                               |
 | `pull-request-lint.yml` | `auto-label`           | `contents: read`, `issues: write`, `pull-requests: write` | Apply/remove labels based on changed file paths; `issues: write` allows creating labels that don't yet exist |
-| `pull-request-lint.yml` | `get-pr-info`          | `contents: read`, `pull-requests: read`                | Read PR metadata and labels via API                            |
-| `pull-request-lint.yml` | `check-merge-status`   | `pull-requests: read`                                  | Read PR state for merge gate checks                            |
-| `pull-request-lint.yml` | `validate`             | `pull-requests: read`                                  | Read PR title for conventional commit validation               |
-| `pull-request-lint.yml` | `contributorStatement` | `pull-requests: read`                                  | Read PR body for contributor acknowledgment                    |
+| `pull-request-lint.yml` | `get-pr-info`          | `contents: read`, `pull-requests: read`                   | Read PR metadata and labels via API                                                                          |
+| `pull-request-lint.yml` | `check-merge-status`   | `pull-requests: read`                                     | Read PR state for merge gate checks                                                                          |
+| `pull-request-lint.yml` | `validate`             | `pull-requests: read`                                     | Read PR title for conventional commit validation                                                             |
+| `pull-request-lint.yml` | `contributorStatement` | `pull-requests: read`                                     | Read PR body for contributor acknowledgment                                                                  |
 
 Both `codebuild.yml` and `pull-request-lint.yml` follow a **deny-all-then-grant** pattern: every permission scope is set to `none` at the workflow level, then only the required scopes are granted at the job level. This is the strictest possible configuration and prevents privilege escalation from compromised steps.
 
