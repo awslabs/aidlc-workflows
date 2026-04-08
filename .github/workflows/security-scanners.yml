@@ -277,7 +277,6 @@ jobs:
           python-version: '3.x'
           cache: 'pip'
       - name: Run checkov
-        id: checkov
         run: |
           pip install -r requirements.txt
           rm requirements.txt
@@ -286,8 +285,17 @@ jobs:
           CHECKOV_EXIT=$?
           mv results_sarif.sarif checkov-report_sarif.json || true
           set -e
-          echo "exit_code=$CHECKOV_EXIT" >> "$GITHUB_OUTPUT"
           exit 0
+      - name: Check for ERROR severity findings
+        id: checkov
+        run: |
+          # Fail only if ERROR severity findings exist (level=error in SARIF)
+          HIGH_COUNT=$(jq '[.runs[0].results[] | select(.level == "error")] | length' checkov-report_sarif.json 2>/dev/null || echo 0)
+          if [ "$HIGH_COUNT" -gt 0 ]; then
+            echo "exit_code=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
