@@ -45,6 +45,7 @@ awslabs/aidlc-workflows/
 ├── .github/
 │   ├── CODEOWNERS
 │   ├── ISSUE_TEMPLATE/           # Bug, feature, RFC, docs templates
+│   ├── labeler.yml               # Auto-label rules (path → label mapping)
 │   ├── pull_request_template.md  # PR template with contributor statement
 │   └── workflows/
 │       ├── codebuild.yml         # CI via AWS CodeBuild
@@ -118,7 +119,7 @@ The release flow is **changelog-first**: the CHANGELOG is updated *before* the t
 flowchart LR
     A["git push main"] --> B{{"Manual approval\n(codebuild environment)"}}
     C["workflow_dispatch\n(no tag input)"] --> B
-    D["pull_request\n(aidlc-rules/** changed)"] --> E{"codebuild\nlabel?"}
+    D["pull_request\n(aidlc-rules/** changed)"] --> E{"rules\nlabel?"}
     E -->|yes| F["label-cleanup\n(remove reminder comment)"]
     F --> B
     E -->|no| I["label-reminder\n(warning + PR comment)"]
@@ -137,9 +138,10 @@ flowchart TD
     B --> E["fail-by-label\n(do-not-merge label)"]
     A --> F["validate\n(conventional commit title)"]
     A --> G["contributorStatement\n(acknowledgment in PR body)"]
+    A --> H["auto-label\n(actions/labeler)"]
 ```
 
-`pull-request-lint.yml` runs on every PR targeting `main` and on merge queue checks. It enforces four gates: conventional commit PR titles, the contributor statement from the PR template, a configurable merge-halt mechanism, and a do-not-merge label check. The workflow uses `pull_request_target` (not `pull_request`) so it runs in the context of the base branch — this is safe because it never checks out PR code.
+`pull-request-lint.yml` runs on every PR targeting `main` and on merge queue checks. It enforces four gates (conventional commit PR titles, the contributor statement from the PR template, a configurable merge-halt mechanism, and a do-not-merge label check) and automatically applies labels based on changed file paths. The workflow uses `pull_request_target` (not `pull_request`) so it runs in the context of the base branch — this is safe because it never checks out PR code and the `auto-label` job uses `actions/labeler` which only reads file paths from the API.
 
 ---
 
@@ -154,7 +156,7 @@ flowchart TD
 | **Environment** | *(none)*                                          |
 | **Runner**      | `ubuntu-latest`                                   |
 
-**Purpose:** Generates an updated `CHANGELOG.md` from conventional commits using git-cliff and opens a PR on a `release/vX.Y.Z` branch. This is the first step in the changelog-first release flow.
+**Purpose:** Generates an updated `CHANGELOG.md` from conventional commits using git-cliff, writes the release version to `aidlc-rules/VERSION`, and opens a PR on a `release/vX.Y.Z` branch. This is the first step in the changelog-first release flow. The `aidlc-rules/VERSION` update ensures the PR touches `aidlc-rules/`, which triggers the `codebuild.yml` path filter and the `rules` auto-label.
 
 **Job: `release-pr` ("Create Release PR")**
 
@@ -165,7 +167,7 @@ flowchart TD
 | 3    | Determine version        | Use `inputs.version` (with semver validation) or `git-cliff --bumped-version` for auto-detection; falls back to patch bump from latest tag |
 | 4    | Check tag does not exist | Fail early if the target tag already exists                                                                                                |
 | 5    | Generate changelog       | `orhun/git-cliff-action` with `--tag vX.Y.Z` to generate `CHANGELOG.md`                                                                    |
-| 6    | Create release PR        | Check branch doesn't already exist, commit, push `release/vX.Y.Z` branch, open PR (with label `release` if it exists in the repo)          |
+| 6    | Create release PR        | Write version to `aidlc-rules/VERSION`, check branch doesn't already exist, commit, push `release/vX.Y.Z` branch, open PR (with labels `release` and `rules` if they exist in the repo) |
 
 **Version detection:** If a version is specified, it must be valid semver (`MAJOR.MINOR.PATCH`); both `v0.2.0` and `0.2.0` are accepted. If no version is specified, `git-cliff --bumped-version` determines the next version from conventional commit prefixes. The `[bump]` config in `cliff.toml` controls the rules (e.g., `feat` → minor bump, breaking change → major bump). If no conventional commits are found, the workflow falls back to a patch bump from the latest tag. If no tags exist at all, it exits cleanly with a warning (no PR is created).
 
@@ -218,24 +220,24 @@ flowchart TD
 
 **Purpose:** Runs an AWS CodeBuild project, downloads primary and secondary artifacts from S3, caches them in GitHub Actions cache, uploads them as workflow artifacts, and (when triggered from a `v*` tag) attaches them to the GitHub Release.
 
-**PR label gate:** For `pull_request` events, the workflow only fires when files under `aidlc-rules/**` are changed (via `paths` filter) and the `build` job only runs when the `codebuild` label is present on the PR (via `contains(github.event.pull_request.labels.*.name, 'codebuild')`). The trigger includes `types: [opened, synchronize, reopened, labeled]` so that subsequent pushes to a labeled PR re-trigger the build automatically. `push`, `workflow_dispatch`, and tag events bypass the label check entirely.
+**PR label gate:** For `pull_request` events, the workflow only fires when files under `aidlc-rules/**` are changed (via `paths` filter) and the `build` job only runs when the `rules` label is present on the PR (via `contains(github.event.pull_request.labels.*.name, 'rules')`). The `rules` label is applied automatically by the `auto-label` job in `pull-request-lint.yml` (see [Pull Request Validation Workflow](#pull-request-validation-workflow-pull-request-lintyml)). The trigger includes `types: [opened, synchronize, reopened, labeled]` so that subsequent pushes to a labeled PR re-trigger the build automatically. `push`, `workflow_dispatch`, and tag events bypass the label check entirely.
 
-**Job: `label-reminder`** (PR only, no `codebuild` label)
+**Job: `label-reminder`** (PR only, no `rules` label)
 
-| Step | Name                               | Action                                                                                     |
-| ---- | ---------------------------------- | ------------------------------------------------------------------------------------------ |
-| 1    | Warn about missing codebuild label | Emits a `::warning::` annotation visible in the Actions summary                            |
-| 2    | Comment on PR                      | Posts a one-time PR comment (idempotent — skips if the reminder comment already exists)    |
+| Step | Name                             | Action                                                                                     |
+| ---- | -------------------------------- | ------------------------------------------------------------------------------------------ |
+| 1    | Warn about missing rules label   | Emits a `::warning::` annotation visible in the Actions summary                           |
+| 2    | Comment on PR                    | Posts a one-time PR comment (idempotent — skips if the reminder comment already exists)     |
 
-This job runs only for `pull_request` events where `aidlc-rules/**` changed but the `codebuild` label is absent. It alerts maintainers and reviewers that the evaluation pipeline was not triggered. The comment is posted once per PR using an HTML comment marker (`<!-- codebuild-label-reminder -->`) to avoid duplicates.
+This job runs only for `pull_request` events where `aidlc-rules/**` changed but the `rules` label is absent. It alerts maintainers and reviewers that the evaluation pipeline was not triggered. The comment is posted once per PR using an HTML comment marker (`<!-- rules-label-reminder -->`) to avoid duplicates. In normal operation, the `auto-label` job in `pull-request-lint.yml` applies the `rules` label automatically, so this job serves as a fallback safety net.
 
-**Job: `label-cleanup`** (PR only, `codebuild` label present)
+**Job: `label-cleanup`** (PR only, `rules` label present)
 
 | Step | Name                          | Action                                                                                   |
 | ---- | ----------------------------- | ---------------------------------------------------------------------------------------- |
 | 1    | Remove label reminder comment | Finds and deletes the `label-reminder` PR comment (no-op if it doesn't exist)            |
 
-This job runs when the `codebuild` label is applied, immediately removing the reminder comment without waiting for the `codebuild` environment approval gate.
+This job runs when the `rules` label is applied, immediately removing the reminder comment without waiting for the `codebuild` environment approval gate.
 
 **Job: `build`**
 
@@ -354,6 +356,18 @@ Only runs for `pull_request` and `pull_request_target` events (not `merge_group`
 
 Allowed types: `fix`, `feat`, `build`, `chore`, `ci`, `docs`, `style`, `refactor`, `perf`, `test`. Scopes are optional (`requireScope: false`).
 
+**Job: `auto-label` ("Auto-label")**
+
+Only runs for `pull_request_target` events. Uses [`actions/labeler`](https://github.com/actions/labeler) v6.0.1 to automatically apply and remove labels based on changed file paths. Label rules are defined in `.github/labeler.yml`:
+
+| Label           | Path Pattern                                    | Description                                      |
+| --------------- | ----------------------------------------------- | ------------------------------------------------ |
+| `rules`         | `aidlc-rules/**`                                | Triggers CodeBuild evaluation pipeline           |
+| `documentation` | `**/*.md` (excluding `aidlc-rules/**`)          | Non-rules markdown file changes                  |
+| `github`        | `.github/**`                                    | Workflow, template, or config changes             |
+
+With `sync-labels: true`, labels are automatically removed when the matching files are no longer in the PR diff (e.g., after a rebase drops those changes). New label rules can be added by editing `.github/labeler.yml` — no workflow changes required.
+
 **Job: `contributorStatement` ("Require Contributor Statement")**
 
 Only runs for `pull_request` and `pull_request_target` events. Skipped for bot accounts (`dependabot[bot]`, `github-actions[bot]`, `github-actions`, `aidlc-workflows`). Verifies the PR body contains the contributor acknowledgment text from `.github/pull_request_template.md`:
@@ -364,6 +378,7 @@ Only runs for `pull_request` and `pull_request_target` events. Skipped for bot a
 
 | Action                                  | Version | SHA                                        |
 | --------------------------------------- | ------- | ------------------------------------------ |
+| `actions/labeler`                       | v6.0.1  | `634933edcd8ababfe52f92936142cc22ac488b1b` |
 | `amannn/action-semantic-pull-request`   | v6.1.1  | `48f256284bd46cdaab1048c3721360e808335d50` |
 | `actions/github-script`                 | v8.0.0  | `ed597411d8f924073f98dfc5c65a23a2325f34cd` |
 
@@ -425,9 +440,10 @@ All variables have sensible defaults via `${{ vars.VAR || 'default' }}` syntax, 
 
 | Workflow                | Job                    | Permissions                                            | Rationale                                                      |
 | ----------------------- | ---------------------- | ------------------------------------------------------ | -------------------------------------------------------------- |
-| `codebuild.yml`         | `label-reminder`       | `pull-requests: write`                                 | Post reminder comment when `codebuild` label is missing        |
-| `codebuild.yml`         | `label-cleanup`        | `pull-requests: write`                                 | Delete reminder comment when `codebuild` label is applied      |
+| `codebuild.yml`         | `label-reminder`       | `pull-requests: write`                                 | Post reminder comment when `rules` label is missing            |
+| `codebuild.yml`         | `label-cleanup`        | `pull-requests: write`                                 | Delete reminder comment when `rules` label is applied          |
 | `codebuild.yml`         | `build`                | `actions: write`, `contents: write`, `id-token: write` | Cache management, release asset upload, OIDC token for AWS STS |
+| `pull-request-lint.yml` | `auto-label`           | `contents: read`, `issues: write`, `pull-requests: write` | Apply/remove labels based on changed file paths; `issues: write` allows creating labels that don't yet exist |
 | `pull-request-lint.yml` | `get-pr-info`          | `contents: read`, `pull-requests: read`                | Read PR metadata and labels via API                            |
 | `pull-request-lint.yml` | `check-merge-status`   | `pull-requests: read`                                  | Read PR state for merge gate checks                            |
 | `pull-request-lint.yml` | `validate`             | `pull-requests: read`                                  | Read PR title for conventional commit validation               |
@@ -479,7 +495,7 @@ Releases follow a **changelog-first** flow: the CHANGELOG is updated *before* th
 1. **Dispatch the Release PR workflow** via the GitHub Actions UI:
    - Navigate to Actions → Release PR → Run workflow
    - Optionally specify a version (e.g., `0.2.0`); leave blank to auto-determine from conventional commits
-   - `release-pr.yml` generates `CHANGELOG.md` and opens a PR on branch `release/v1.2.0` with label `release`
+   - `release-pr.yml` generates `CHANGELOG.md`, writes the version to `aidlc-rules/VERSION`, and opens a PR on branch `release/v1.2.0` with labels `release` and `rules`
 
 2. **Review and merge the release PR:**
    - Verify the changelog content is correct

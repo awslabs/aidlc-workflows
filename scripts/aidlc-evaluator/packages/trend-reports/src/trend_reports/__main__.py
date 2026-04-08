@@ -76,6 +76,12 @@ def main() -> None:
         dest="local_bundles",
         help="Local zip bundle path(s) to include as additional data points",
     )
+    trend_parser.add_argument(
+        "--local-run-dir",
+        nargs="*",
+        dest="local_run_dirs",
+        help="Local run directory path(s) to include as additional data points",
+    )
 
     args = parser.parse_args()
 
@@ -104,6 +110,7 @@ def main() -> None:
             gate=args.gate,
             tags=args.tags,
             local_bundles=args.local_bundles,
+            local_run_dirs=args.local_run_dirs,
         )
         sys.exit(exit_code)
     except TrendReportError as exc:
@@ -122,6 +129,7 @@ def cmd_trend(
     gate: bool,
     tags: list[str] | None,
     local_bundles: list[str] | None = None,
+    local_run_dirs: list[str] | None = None,
 ) -> int:
     """Main orchestration.  Returns 0 on success, 1 on gate failure."""
     from .collector import collect_trend_data
@@ -145,8 +153,8 @@ def cmd_trend(
 
         # 2a. Release bundles (required)
         logger.info("Fetching release bundles from %s …", repo)
-        zip_paths = fetch_release_bundles(repo, tags, work_dir)
-        logger.info("Fetched %d release bundle(s)", len(zip_paths))
+        bundle_paths = fetch_release_bundles(repo, tags, work_dir)
+        logger.info("Fetched %d release bundle(s)", len(bundle_paths))
 
         # 2b. Local bundles (from --local-bundle flag)
         if local_bundles:
@@ -154,21 +162,30 @@ def cmd_trend(
                 bundle_path = Path(bundle_str)
                 if not bundle_path.exists():
                     raise TrendReportError(f"Local bundle not found: {bundle_path}")
-                zip_paths.append(bundle_path)
+                bundle_paths.append(bundle_path)
                 logger.info("Added local bundle: %s", bundle_path)
+
+        # 2b-2. Local run directories (from --local-run-dir flag)
+        if local_run_dirs:
+            for dir_str in local_run_dirs:
+                dir_path = Path(dir_str)
+                if not dir_path.is_dir():
+                    raise TrendReportError(f"Local run directory not found: {dir_path}")
+                bundle_paths.append(dir_path)
+                logger.info("Added local run directory: %s", dir_path)
 
         # 2c. Remote pre-release bundles (from GitHub Actions Artifacts)
         logger.info("Fetching pre-release bundles …")
         prerelease_paths = fetch_prerelease_bundles(repo, cache_prefix, work_dir)
         if prerelease_paths:
             logger.info("Fetched %d pre-release bundle(s)", len(prerelease_paths))
-            zip_paths.extend(prerelease_paths)
+            bundle_paths.extend(prerelease_paths)
         else:
             logger.info("No pre-release bundles found — continuing with releases only")
 
         # 3. Collect and assemble
         logger.info("Parsing bundles …")
-        trend = collect_trend_data(zip_paths, Path(baseline), repo, work_dir)
+        trend = collect_trend_data(bundle_paths, Path(baseline), repo, work_dir)
         logger.info("Assembled trend data for %d runs", len(trend.runs))
 
         # 4. Render into a timestamped subdirectory

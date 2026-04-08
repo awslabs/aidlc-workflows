@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-04-02
+
 ### Bug Fixes
 
 - add required environmental github token (#137)
@@ -13,7 +15,9 @@ All notable changes to this project will be documented in this file.
 - remove retention-days limit from CodeBuild workflow artifacts (#149)
 - skip PR comment steps for fork PRs with read-only GITHUB_TOKEN (#154)
 - correct GitHub API path for deleting label-reminder comment (#157)
-- resolve all markdownlint violations outside aidlc-rules/
+- remove report-bundle CodeBuild secondary artifact and add --local-run-dir support (#162)
+- use PR head branch for rules-ref instead of merge ref (#168)
+- write aidlc-rules/VERSION in release PR to trigger CodeBuild (#169)
 
 ### CI/CD
 
@@ -26,6 +30,15 @@ All notable changes to this project will be documented in this file.
 - add working-with-aidlc interaction guide and writing-inputs documents (#121)
 - comprehensive documentation review and remediation (#113)
 
+- enforce MD060 aligned table style, fix 1645 violations
+
+## [0.1.6] - 2026-03-05
+
+### Bug Fixes
+
+- codebuild cache and download fix (#93)
+- correct copy-paste error in error-handling.md (#96)
+
 ### Features
 
 - add code owners (#112)
@@ -35,6 +48,7 @@ All notable changes to this project will be documented in this file.
 - add cross-release trend reporting package (#136)
 - align CodeBuild workflow with current evaluator CLI and add trend report pipeline  (#147)
 - gate CodeBuild on 'codebuild' label + aidlc-rules paths (#150)
+- auto-label PRs touching aidlc-rules/ with codebuild label (#158)
 
 ### Miscellaneous
 
@@ -43,17 +57,9 @@ All notable changes to this project will be documented in this file.
 - bump requests in /scripts/aidlc-evaluator (#146)
 - bump cryptography in /scripts/aidlc-evaluator (#148)
 - bump pygments in /scripts/aidlc-evaluator (#151)
+- bump aiohttp in /scripts/aidlc-evaluator (#163)
 
-### Style
-
-- enforce MD060 aligned table style, fix 1645 violations
-
-## [0.1.6] - 2026-03-05
-
-### Bug Fixes
-
-- codebuild cache and download fix (#93)
-- correct copy-paste error in error-handling.md (#96)
+## [0.1.5] - 2026-02-24
 
 ### Features
 
@@ -114,5 +120,3 @@ All notable changes to this project will be documented in this file.
 ### Features
 
 - add Kiro CLI support and multi-platform architecture
-
-
