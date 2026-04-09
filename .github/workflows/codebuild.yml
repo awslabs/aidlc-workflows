@@ -28,22 +28,7 @@ env:
   CODEBUILD_PROJECT_NAME: ${{ vars.CODEBUILD_PROJECT_NAME || 'codebuild-project' }}
   LABEL_REMINDER_MARKER: rules-label-reminder
 
-permissions:
-  actions: none
-  attestations: none
-  checks: none
-  contents: none
-  deployments: none
-  discussions: none
-  id-token: none
-  issues: none
-  models: none
-  packages: none
-  pages: none
-  pull-requests: none
-  repository-projects: none
-  security-events: none
-  statuses: none
+permissions: {}
 
 jobs:
   label-reminder:
