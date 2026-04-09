@@ -22,13 +22,16 @@ This guide documents the CI/CD infrastructure, GitHub Workflows, protected envir
   - [CodeBuild Workflow](#codebuild-workflow-codebuildyml)
   - [Release Workflow](#release-workflow-releaseyml)
   - [Pull Request Validation Workflow](#pull-request-validation-workflow-pull-request-lintyml)
+  - [Security Scanners Workflow](#security-scanners-workflow-security-scannersyml)
 - [Protected Environments](#protected-environments)
 - [Secrets and Variables](#secrets-and-variables)
 - [Permissions Model](#permissions-model)
 - [Security Posture](#security-posture)
+  - [Security Finding Requirements](#security-finding-requirements)
 - [Code Ownership](#code-ownership)
 - [Release Process](#release-process)
 - [Changelog Configuration](#changelog-configuration)
+- [Updating Pinned Versions](#updating-pinned-versions)
 
 ---
 
@@ -52,6 +55,7 @@ awslabs/aidlc-workflows/
 │       ├── pull-request-lint.yml # PR validation (title, labels, merge gates)
 │       ├── release.yml           # GitHub Release on tag push
 │       ├── release-pr.yml        # Changelog PR before release
+│       ├── security-scanners.yml # Security scanning suite (6 scanners)
 │       └── tag-on-merge.yml      # Auto-tag on release PR merge
 ├── .claude/
 │   └── settings.json             # Shared Claude Code project settings
@@ -70,7 +74,7 @@ awslabs/aidlc-workflows/
 
 ## CI/CD Architecture
 
-Five workflows form two distinct pipelines plus a pull request validation gate:
+Six workflows form two distinct pipelines, a security scanning suite, plus a pull request validation gate:
 
 ### Pipeline 1: Release (changelog-first)
 
@@ -127,7 +131,33 @@ flowchart LR
     G --> H["Upload workflow artifacts"]
 ```
 
-### Pipeline 3: Pull Request Validation
+### Pipeline 3: Security Scanning
+
+```mermaid
+flowchart TD
+    A["push main"] --> G["security-scanners.yml"]
+    B["pull_request to main"] --> G
+    C["schedule (daily 03:47 UTC)"] --> G
+    D["workflow_dispatch"] --> G
+
+    G --> H["gitleaks\n(secret detection)"]
+    G --> I["semgrep\n(multi-language SAST)"]
+    G --> J["grype\n(dependency SCA)"]
+    G --> K["bandit\n(Python SAST)"]
+    G --> L["checkov\n(IaC scanning)"]
+    G --> M["clamav\n(malware scanning)"]
+
+    H --> N["Upload SARIF\nto Code Scanning"]
+    I --> N
+    J --> N
+    K --> N
+    L --> N
+    M --> O["Upload text log\n(artifact only)"]
+```
+
+All six scanner jobs run in parallel. Each scanner (except ClamAV) produces a SARIF report uploaded to both GitHub Code Scanning (Security tab) and as a downloadable workflow artifact. All scanners use a **deferred-failure pattern**: the scan runs to completion, results are always uploaded, and only then does the job fail if findings exceed the configured threshold. See the [Security Scanners Workflow](#security-scanners-workflow-security-scannersyml) reference for details.
+
+### Pipeline 4: Pull Request Validation
 
 ```mermaid
 flowchart TD
@@ -384,6 +414,50 @@ Only runs for `pull_request` and `pull_request_target` events. Skipped for bot a
 
 ---
 
+### Security Scanners Workflow (`security-scanners.yml`)
+
+| Property        | Value                                                                                          |
+| --------------- | ---------------------------------------------------------------------------------------------- |
+| **File**        | `.github/workflows/security-scanners.yml`                                                      |
+| **Triggers**    | `push` to `main`, `pull_request` to `main`, `schedule` (daily 03:47 UTC), `workflow_dispatch`  |
+| **Environment** | *(none)*                                                                                       |
+| **Runner**      | `ubuntu-latest`                                                                                |
+| **Concurrency** | Groups by `{workflow}-{ref}`, cancels in-progress                                              |
+
+**Purpose:** Runs six independent security scanners in parallel to detect secrets, vulnerabilities, misconfigurations, and malware. All HIGH and CRITICAL findings must be remediated or have a documented risk acceptance before merge (see [Security Finding Requirements](#security-finding-requirements)).
+
+**Permissions model:** Deny-all at workflow level, then each job grants only `actions: read`, `contents: read`, and `security-events: write`.
+
+**Jobs:**
+
+| Job        | Scanner  | What it detects                                     | Fails on                                                     |
+| ---------- | -------- | --------------------------------------------------- | ------------------------------------------------------------ |
+| `gitleaks` | Gitleaks | Secrets in git history                              | Any secret not in `.gitleaks-baseline.json`                  |
+| `semgrep`  | Semgrep  | Security anti-patterns (all languages)              | Any finding (PRs: new findings only via `--baseline-commit`) |
+| `grype`    | Grype    | Known CVEs in dependencies                          | High or critical CVEs (`fail-on-severity: high`)             |
+| `bandit`   | Bandit   | Python security issues                              | Any finding with high confidence                             |
+| `checkov`  | Checkov  | IaC misconfigurations (GitHub Actions, Dockerfiles) | Any check failure (minus skipped checks)                     |
+| `clamav`   | ClamAV   | Malware and viruses                                 | Any detection                                                |
+
+**Deferred-failure pattern:** All scanners capture the exit code without failing the step (`set +e`), upload the SARIF report as an artifact and to GitHub Code Scanning, then fail the job if findings were detected. This ensures results are always preserved regardless of outcome. ClamAV follows the same pattern but uploads a text log instead of SARIF.
+
+**Configuration files:**
+
+| File                      | Purpose                                        |
+| ------------------------- | ---------------------------------------------- |
+| `.bandit`                 | Bandit targets, excludes, confidence level     |
+| `.semgrepignore`          | Semgrep path exclusions                        |
+| `.gitleaks.toml`          | Gitleaks ruleset extension and path allowlist  |
+| `.gitleaks-baseline.json` | Pre-existing known findings (test credentials) |
+| `.grype.yaml`             | Grype severity threshold and CVE ignore list   |
+| `.checkov.yaml`           | Checkov frameworks and skipped checks          |
+
+**Version pinning:** All scanner tool versions and GitHub Actions are pinned to specific versions or commit SHAs in the workflow file to ensure reproducible builds and prevent supply-chain attacks. These pins should be reviewed and updated periodically (at least quarterly). See [Updating Pinned Versions](#updating-pinned-versions) for the update procedure.
+
+For detailed remediation and suppression instructions, see [Developer's Guide — Security Scanners](DEVELOPERS_GUIDE.md#security-scanners).
+
+---
+
 ## Protected Environments
 
 | Environment | Used By                     | Purpose                                       |
@@ -428,13 +502,14 @@ All variables have sensible defaults via `${{ vars.VAR || 'default' }}` syntax, 
 
 ### Workflow-level permissions
 
-| Workflow                | Permissions                               |
-| ----------------------- | ----------------------------------------- |
-| `codebuild.yml`         | All 16 scopes explicitly set to `none`    |
-| `pull-request-lint.yml` | All 16 scopes explicitly set to `none`    |
-| `release.yml`           | `contents: write`                         |
-| `release-pr.yml`        | `contents: write`, `pull-requests: write` |
-| `tag-on-merge.yml`      | `contents: write`, `actions: write`       |
+| Workflow                  | Permissions                               |
+| ------------------------- | ----------------------------------------- |
+| `codebuild.yml`           | All 16 scopes explicitly set to `none`    |
+| `pull-request-lint.yml`   | All 16 scopes explicitly set to `none`    |
+| `release.yml`             | All 16 scopes explicitly set to `none`    |
+| `release-pr.yml`          | All 16 scopes explicitly set to `none`    |
+| `security-scanners.yml`   | All 16 scopes explicitly set to `none`    |
+| `tag-on-merge.yml`        | All 16 scopes explicitly set to `none`    |
 
 ### Job-level permissions (overrides)
 
@@ -448,25 +523,48 @@ All variables have sensible defaults via `${{ vars.VAR || 'default' }}` syntax, 
 | `pull-request-lint.yml` | `check-merge-status`   | `pull-requests: read`                                     | Read PR state for merge gate checks                                                                          |
 | `pull-request-lint.yml` | `validate`             | `pull-requests: read`                                     | Read PR title for conventional commit validation                                                             |
 | `pull-request-lint.yml` | `contributorStatement` | `pull-requests: read`                                     | Read PR body for contributor acknowledgment                                                                  |
+| `release.yml`           | `release`              | `contents: write`                                         | Create draft release and attach zip artifact                                                                 |
+| `release-pr.yml`        | `release-pr`           | `contents: write`, `pull-requests: write`                 | Generate changelog, push branch, open PR                                                                     |
+| `tag-on-merge.yml`      | `tag`                  | `contents: write`, `actions: write`                       | Create tag via API, dispatch release and codebuild workflows                                                 |
 
-Both `codebuild.yml` and `pull-request-lint.yml` follow a **deny-all-then-grant** pattern: every permission scope is set to `none` at the workflow level, then only the required scopes are granted at the job level. This is the strictest possible configuration and prevents privilege escalation from compromised steps.
+All six workflows follow a **deny-all-then-grant** pattern: every permission scope is set to `none` at the workflow level, then only the required scopes are granted at the job level. This is the strictest possible configuration and prevents privilege escalation from compromised steps. `security-scanners.yml` grants each of its six jobs `actions: read`, `contents: read`, and `security-events: write`.
 
 ---
 
 ## Security Posture
 
-| Control                     | Implementation                                                                                                                                                                                                       |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Supply-chain protection** | All external actions pinned to full commit SHAs (not mutable version tags)                                                                                                                                           |
-| **AWS authentication**      | OIDC-based role assumption via `id-token: write` — no static credentials stored                                                                                                                                      |
-| **Least-privilege tokens**  | `codebuild.yml` and `pull-request-lint.yml` explicitly deny all 16 permission scopes at workflow level, grant only required scopes at job level                                                                      |
-| **Environment protection**  | `codebuild` environment gates AWS credential access with potential reviewer/branch rules                                                                                                                             |
-| **Label-gated CI**          | `codebuild.yml` requires the `codebuild` label on PRs and only triggers for `aidlc-rules/**` changes, preventing unnecessary builds and environment approval prompts                                                 |
-| **Concurrency control**     | `codebuild.yml` and `pull-request-lint.yml` cancel in-progress runs for the same branch                                                                                                                              |
-| **Safe PR trigger**         | `pull-request-lint.yml` uses `pull_request_target` but never checks out PR code — only inspects metadata (title, labels, body)                                                                                       |
-| **Injection-safe inputs**   | Zero `${{ }}` expression interpolation in `run:` blocks — all dynamic values (`github.ref_name`, `github.repository`, `env.*`, event inputs) passed via step-level `env:` or auto-exported workflow `env:` variables |
-| **Code ownership**          | `.github/` (including workflows) owned exclusively by `@awslabs/aidlc-admins` via CODEOWNERS                                                                                                                         |
-| **Account masking**         | `mask-aws-account-id: true` in AWS credential configuration                                                                                                                                                          |
+| Control                     | Implementation                                                                                                                                                                                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Supply-chain protection** | All external actions pinned to full commit SHAs (not mutable version tags)                                                                                                                                                                              |
+| **AWS authentication**      | OIDC-based role assumption via `id-token: write` — no static credentials stored                                                                                                                                                                         |
+| **Least-privilege tokens**  | All six workflows explicitly deny all 16 permission scopes at workflow level, grant only required scopes at job level                                                                                                                                   |
+| **Environment protection**  | `codebuild` environment gates AWS credential access with potential reviewer/branch rules                                                                                                                                                                |
+| **Security scanning**       | Six automated scanners (SAST, SCA, secrets, IaC, malware) run on every push to `main`, every PR, and daily. Findings are published to GitHub Code Scanning. All HIGH and CRITICAL findings require remediation or documented risk acceptance            |
+| **Label-gated CI**          | `codebuild.yml` requires the `rules` label on PRs and only triggers for `aidlc-rules/**` changes, preventing unnecessary builds and environment approval prompts. The label is applied automatically by the `auto-label` job in `pull-request-lint.yml` |
+| **Concurrency control**     | `codebuild.yml`, `pull-request-lint.yml`, and `security-scanners.yml` cancel in-progress runs for the same branch                                                                                                                                       |
+| **Safe PR trigger**         | `pull-request-lint.yml` uses `pull_request_target` but never checks out PR code — only inspects metadata (title, labels, body)                                                                                                                          |
+| **Injection-safe inputs**   | Zero `${{ }}` expression interpolation in `run:` blocks — all dynamic values (`github.ref_name`, `github.repository`, `env.*`, event inputs) passed via step-level `env:` or auto-exported workflow `env:` variables                                    |
+| **Code ownership**          | `.github/` (including workflows) owned exclusively by `@awslabs/aidlc-admins` via CODEOWNERS                                                                                                                                                            |
+| **Account masking**         | `mask-aws-account-id: true` in AWS credential configuration                                                                                                                                                                                             |
+
+### Security Finding Requirements
+
+All **HIGH** and **CRITICAL** security findings from any scanner must be either **remediated** or have a **documented risk acceptance** before a PR can be merged to `main`. This applies to:
+
+- **Bandit / Semgrep (SAST):** High-severity code findings must be fixed or suppressed with an inline comment (`# nosec` / `# nosemgrep`) that includes a justification explaining why the finding is acceptable
+- **Grype (SCA):** High and critical CVEs must be resolved by upgrading the affected dependency. If no fix is available, add an entry to `.grype.yaml` `ignore` with the CVE, affected package, and reason for acceptance
+- **Gitleaks (Secrets):** Any detected secret must be rotated immediately. Only synthetic/test credentials may be added to the baseline (`.gitleaks-baseline.json`)
+- **Checkov (IaC):** Failing checks must be fixed or suppressed with an inline `# checkov:skip=` comment with a reason, or added to `.checkov.yaml` `skip-check` with a comment
+- **ClamAV (Malware):** Any detection must be investigated and the file removed. No suppression mechanism exists
+
+**Risk acceptance process:**
+
+1. The developer adds the appropriate suppression (inline comment or config entry) with a clear justification
+2. The suppression is reviewed as part of the normal PR code review process
+3. Reviewers from `@awslabs/aidlc-admins` or `@awslabs/aidlc-maintainers` must approve any risk acceptance
+4. LOW and MEDIUM findings should be addressed when practical but do not block merge
+
+For detailed remediation and suppression instructions per scanner, see [Developer's Guide — Security Scanners](DEVELOPERS_GUIDE.md#security-scanners).
 
 ---
 
@@ -560,3 +658,20 @@ Unconventional commits are filtered out (`filter_unconventional = true`).
 | `breaking_always_bump_major = true` | Breaking changes trigger a major version bump |
 
 These rules are used by `git-cliff --bumped-version` when auto-determining the next version in `release-pr.yml`.
+
+---
+
+## Updating Pinned Versions
+
+All scanner tools, GitHub Actions, and container images in the workflow files are pinned to specific versions or commit SHAs. This prevents supply-chain attacks and ensures reproducible builds, but requires periodic maintenance to stay current with security patches and new features.
+
+Pinned versions should be reviewed and updated **at least quarterly**.
+
+<!-- TODO: Add step-by-step instructions for updating pinned versions, including:
+  - How to check for latest versions of each scanner tool (PyPI, GitHub releases, Docker Hub)
+  - How to look up commit SHAs for GitHub Actions (gh api repos/OWNER/REPO/git/ref/tags/TAG)
+  - How to look up Docker image digests (docker manifest inspect)
+  - How to verify the update works (run the workflow on a feature branch)
+  - How to handle breaking changes in scanner tool upgrades
+  - Consider automating this with Dependabot or Renovate
+-->

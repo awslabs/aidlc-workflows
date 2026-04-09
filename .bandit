@@ -1,0 +1,11 @@
+# Bandit configuration (YAML format, bandit 1.9+)
+# https://bandit.readthedocs.io/en/latest/config.html
+#
+# NOTE: scan targets must be passed via -r on the CLI; the YAML config
+# does not support a "targets" key.  Edit the workflow's bandit command
+# to add new directories.
+
+# Exclude test directories (test code often has intentional patterns
+# that trigger false positives like assert, subprocess in fixtures)
+exclude_dirs:
+  - "*/tests/*"

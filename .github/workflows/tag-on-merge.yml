@@ -17,12 +17,28 @@ on:
     types: [closed]
 
 permissions:
-  contents: write
-  actions: write
+  actions: none
+  attestations: none
+  checks: none
+  contents: none
+  deployments: none
+  discussions: none
+  id-token: none
+  issues: none
+  models: none
+  packages: none
+  pages: none
+  pull-requests: none
+  repository-projects: none
+  security-events: none
+  statuses: none
 
 jobs:
   tag:
     name: Create Release Tag
+    permissions:
+      contents: write
+      actions: write
     if: >-
       github.event.pull_request.merged == true &&
       startsWith(github.event.pull_request.head.ref, 'release/v')
