@@ -73,6 +73,37 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 3. This should only be done ONCE at the start of a new workflow
 4. Do NOT load this file in subsequent interactions to save context space
 
+## MANDATORY: Feature Name Capture and Path Resolution
+
+### Feature Name Capture
+Every AI-DLC workflow MUST be scoped to a named feature. The feature name is captured during Workspace Detection and used as the root folder slug for all documentation.
+
+**For new workflows**:
+- Prompt the user for a short, descriptive feature name (e.g., "User Authentication", "Payment Processing")
+- Sanitize the name into a directory-safe slug: lowercase, alphanumeric and hyphens only, no leading/trailing hyphens, max 50 characters
+- Example: "User Authentication" → `user-authentication`
+
+**For resumed workflows**:
+- Detect the feature name from existing `aidlc-docs/{feature-name}/aidlc-state.md`
+- If multiple feature folders exist under `aidlc-docs/`, present a list for the user to choose which feature to resume
+- If a single feature folder exists, auto-select it and confirm with the user
+
+**Legacy migration**:
+- If a flat `aidlc-docs/aidlc-state.md` is found (no feature subfolder), offer to migrate it into a named feature folder by prompting the user for a feature name, then moving all artifacts under `aidlc-docs/{feature-name}/`
+
+### Global Path Resolution Rule
+**CRITICAL**: Throughout this document and ALL referenced rule detail files, any path beginning with `aidlc-docs/` is implicitly scoped to `aidlc-docs/{feature-name}/`. The `{feature-name}` is captured during Workspace Detection and used consistently for all paths.
+
+This means existing references like `aidlc-docs/inception/requirements/requirements.md` automatically resolve to `aidlc-docs/{feature-name}/inception/requirements/requirements.md` when the feature name is set.
+
+**Examples**:
+- `aidlc-docs/aidlc-state.md` → `aidlc-docs/user-authentication/aidlc-state.md`
+- `aidlc-docs/inception/plans/execution-plan.md` → `aidlc-docs/user-authentication/inception/plans/execution-plan.md`
+- `aidlc-docs/audit.md` → `aidlc-docs/user-authentication/audit.md`
+- `aidlc-docs/construction/{unit-name}/functional-design/` → `aidlc-docs/user-authentication/construction/{unit-name}/functional-design/`
+
+**Note**: Application code location is NOT affected — code always goes in the workspace root, never in `aidlc-docs/`.
+
 # Adaptive Software Development Workflow
 
 ---
@@ -99,7 +130,8 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 1. **MANDATORY**: Log initial user request in audit.md with complete raw input
 2. Load all steps from `inception/workspace-detection.md`
 3. Execute workspace detection:
-   - Check for existing aidlc-state.md (resume if found)
+   - **Capture Feature Name**: Prompt user for feature name (new workflow) or detect from existing feature folders (resume)
+   - Check for existing aidlc-docs/{feature-name}/aidlc-state.md (resume if found)
    - Scan workspace for existing code
    - Determine if brownfield or greenfield
    - Check for existing reverse engineering artifacts
@@ -512,27 +544,30 @@ The Operations stage will eventually include:
 ├── [project-specific structure]    # Varies by project (see code-generation.md)
 │
 ├── aidlc-docs/                     # 📄 DOCUMENTATION ONLY
-│   ├── inception/                  # 🔵 INCEPTION PHASE
-│   │   ├── plans/
-│   │   ├── reverse-engineering/    # Brownfield only
-│   │   ├── requirements/
-│   │   ├── user-stories/
-│   │   └── application-design/
-│   ├── construction/               # 🟢 CONSTRUCTION PHASE
-│   │   ├── plans/
-│   │   ├── {unit-name}/
-│   │   │   ├── functional-design/
-│   │   │   ├── nfr-requirements/
-│   │   │   ├── nfr-design/
-│   │   │   ├── infrastructure-design/
-│   │   │   └── code/               # Markdown summaries only
-│   │   └── build-and-test/
-│   ├── operations/                 # 🟡 OPERATIONS PHASE (placeholder)
-│   ├── aidlc-state.md
-│   └── audit.md
+│   └── {feature-name}/            # 🏷️ FEATURE-SCOPED FOLDER
+│       ├── inception/              # 🔵 INCEPTION PHASE
+│       │   ├── plans/
+│       │   ├── reverse-engineering/    # Brownfield only
+│       │   ├── requirements/
+│       │   ├── user-stories/
+│       │   └── application-design/
+│       ├── construction/           # 🟢 CONSTRUCTION PHASE
+│       │   ├── plans/
+│       │   ├── {unit-name}/
+│       │   │   ├── functional-design/
+│       │   │   ├── nfr-requirements/
+│       │   │   ├── nfr-design/
+│       │   │   ├── infrastructure-design/
+│       │   │   └── code/           # Markdown summaries only
+│       │   └── build-and-test/
+│       ├── operations/             # 🟡 OPERATIONS PHASE (placeholder)
+│       ├── aidlc-state.md
+│       └── audit.md
 ```
 
 **CRITICAL RULE**:
 - Application code: Workspace root (NEVER in aidlc-docs/)
-- Documentation: aidlc-docs/ only
+- Documentation: aidlc-docs/{feature-name}/ only
 - Project structure: See code-generation.md for patterns by project type
+- Feature isolation: Each feature gets its own subfolder under aidlc-docs/
+- All `aidlc-docs/` paths in rule detail files resolve to `aidlc-docs/{feature-name}/` per the Global Path Resolution Rule

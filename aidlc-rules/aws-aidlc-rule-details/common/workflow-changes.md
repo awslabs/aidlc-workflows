@@ -132,16 +132,17 @@ Users may request changes to the execution plan or stage execution during the wo
 **Handling**:
 1. **Complete Current Step**: Finish the current step in progress if possible
 2. **Update Checkboxes**: Mark all completed steps with [x]
-3. **Update State**: Ensure `aidlc-state.md` reflects current status
-4. **Log Pause**: Document pause point in `audit.md`
-5. **Provide Resume Instructions**: "When you return, I'll detect your existing project and offer to continue from: [current stage, current step]"
+3. **Update State**: Ensure `aidlc-docs/{feature-name}/aidlc-state.md` reflects current status
+4. **Log Pause**: Document pause point in `aidlc-docs/{feature-name}/audit.md`
+5. **Provide Resume Instructions**: "When you return, I'll detect your feature folder and offer to continue from: [current stage, current step]"
 
 **On Resume**:
-1. **Detect Existing Project**: Check for `aidlc-state.md`
-2. **Load Context**: Read all artifacts from completed stages
-3. **Show Status**: Display current stage and next step
-4. **Offer Options**: Continue where left off or review previous work
-5. **Log Resume**: Document resume point in `audit.md`
+1. **Detect Existing Features**: Scan `aidlc-docs/` for feature folders containing `aidlc-state.md`
+2. **Select Feature**: If multiple features exist, present list for user to choose; if single feature, auto-select
+3. **Load Context**: Read all artifacts from completed stages under `aidlc-docs/{feature-name}/`
+4. **Show Status**: Display current stage and next step
+5. **Offer Options**: Continue where left off or review previous work
+6. **Log Resume**: Document resume point in `aidlc-docs/{feature-name}/audit.md`
 
 ---
 

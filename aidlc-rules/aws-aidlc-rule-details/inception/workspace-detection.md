@@ -1,14 +1,40 @@
 # Workspace Detection
 
-**Purpose**: Determine workspace state and check for existing AI-DLC projects
+**Purpose**: Determine workspace state, capture feature name, and check for existing AI-DLC projects
 
-## Step 1: Check for Existing AI-DLC Project
+## Step 1: Check for Existing AI-DLC Projects
 
-Check if `aidlc-docs/aidlc-state.md` exists:
-- **If exists**: Resume from last phase (load context from previous phases)
-- **If not exists**: Continue with new project assessment
+Scan `aidlc-docs/` for existing feature folders:
 
-## Step 2: Scan Workspace for Existing Code
+**IF `aidlc-docs/` contains one or more subdirectories with `aidlc-state.md`**:
+- **Single feature folder found**: Auto-select it, confirm with user, resume from last phase
+- **Multiple feature folders found**: Present list of features for user to choose which to resume, or start a new feature
+- **Legacy flat structure** (aidlc-state.md directly in aidlc-docs/ with no feature subfolder): Offer to migrate into a named feature folder
+
+**IF no existing projects found**: Continue with new project assessment (Step 2)
+
+## Step 2: Capture Feature Name (New Workflows)
+
+**MANDATORY for new workflows**: Prompt the user for a short, descriptive feature name.
+
+**Prompt**:
+```markdown
+What is the name of the feature you're working on? This will be used to organize all documentation for this feature.
+
+Example: "User Authentication", "Payment Processing", "Search API"
+```
+
+**Sanitization rules**:
+- Convert to lowercase
+- Replace spaces and special characters with hyphens
+- Remove leading/trailing hyphens
+- Allow only alphanumeric characters and hyphens
+- Maximum 50 characters
+- Example: "User Authentication" → `user-authentication`
+
+**Store the feature name** — all subsequent `aidlc-docs/` paths resolve to `aidlc-docs/{feature-name}/` per the Global Path Resolution Rule in core-workflow.md.
+
+## Step 3: Scan Workspace for Existing Code
 
 **Determine if workspace has existing code:**
 - Scan workspace for source code files (.java, .py, .js, .ts, .jsx, .tsx, .kt, .kts, .scala, .groovy, .go, .rs, .rb, .php, .c, .h, .cpp, .hpp, .cc, .cs, .fs, etc.)
@@ -26,7 +52,7 @@ Check if `aidlc-docs/aidlc-state.md` exists:
 - **Workspace Root**: [Absolute path]
 ```
 
-## Step 3: Determine Next Phase
+## Step 4: Determine Next Phase
 
 **IF workspace is empty (no existing code)**:
 - Set flag: `brownfield = false`
@@ -34,7 +60,7 @@ Check if `aidlc-docs/aidlc-state.md` exists:
 
 **IF workspace has existing code**:
 - Set flag: `brownfield = true`
-- Check for existing reverse engineering artifacts in `aidlc-docs/inception/reverse-engineering/`
+- Check for existing reverse engineering artifacts in `aidlc-docs/{feature-name}/inception/reverse-engineering/`
 - **IF reverse engineering artifacts exist**:
     - Check if artifacts are stale (compare artifact timestamps against codebase's last significant modification)
     - **IF artifacts are current**: Load them, skip to Requirements Analysis
@@ -42,14 +68,15 @@ Check if `aidlc-docs/aidlc-state.md` exists:
     - **IF user explicitly requests rerun**: Next phase is Reverse Engineering regardless of staleness
 - **IF no reverse engineering artifacts**: Next phase is Reverse Engineering
 
-## Step 4: Create Initial State File
+## Step 5: Create Initial State File
 
-Create `aidlc-docs/aidlc-state.md`:
+Create `aidlc-docs/{feature-name}/aidlc-state.md`:
 
 ```markdown
 # AI-DLC State Tracking
 
 ## Project Information
+- **Feature Name**: [{feature-name}]
 - **Project Type**: [Greenfield/Brownfield]
 - **Start Date**: [ISO timestamp]
 - **Current Stage**: INCEPTION - Workspace Detection
@@ -61,20 +88,21 @@ Create `aidlc-docs/aidlc-state.md`:
 
 ## Code Location Rules
 - **Application Code**: Workspace root (NEVER in aidlc-docs/)
-- **Documentation**: aidlc-docs/ only
+- **Documentation**: aidlc-docs/{feature-name}/ only
 - **Structure patterns**: See code-generation.md Critical Rules
 
 ## Stage Progress
 [Will be populated as workflow progresses]
 ```
 
-## Step 5: Present Completion Message
+## Step 6: Present Completion Message
 
 **For Brownfield Projects:**
 ```markdown
 # 🔍 Workspace Detection Complete
 
 Workspace analysis findings:
+• **Feature**: {feature-name}
 • **Project Type**: Brownfield project
 • [AI-generated summary of workspace findings in bullet points]
 • **Next Step**: Proceeding to **Reverse Engineering** to analyze existing codebase...
@@ -85,11 +113,12 @@ Workspace analysis findings:
 # 🔍 Workspace Detection Complete
 
 Workspace analysis findings:
+• **Feature**: {feature-name}
 • **Project Type**: Greenfield project
 • **Next Step**: Proceeding to **Requirements Analysis**...
 ```
 
-## Step 6: Automatically Proceed
+## Step 7: Automatically Proceed
 
 - **No user approval required** - this is informational only
 - Automatically proceed to next phase:

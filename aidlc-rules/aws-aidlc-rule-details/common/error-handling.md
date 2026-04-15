@@ -43,7 +43,12 @@
 **Error**: Existing `aidlc-state.md` is corrupted
 - **Cause**: Manual editing, incomplete previous run
 - **Solution**: Ask user if they want to start fresh or attempt recovery
-- **Recovery**: Create backup, start new state file
+- **Recovery**: Create backup, start new state file under `aidlc-docs/{feature-name}/`
+
+**Error**: Legacy flat structure detected
+- **Cause**: Project created before feature-folder isolation was introduced
+- **Solution**: Prompt user for a feature name and migrate all artifacts from `aidlc-docs/` into `aidlc-docs/{feature-name}/`
+- **Recovery**: Move files, update state file with feature name, continue workflow
 
 **Error**: Cannot determine required stages
 - **Cause**: Insufficient information from user

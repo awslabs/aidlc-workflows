@@ -279,12 +279,12 @@ Create `aidlc-docs/inception/reverse-engineering/reverse-engineering-timestamp.m
 
 ## Step 11: Update State Tracking
 
-Update `aidlc-docs/aidlc-state.md`:
+Update `aidlc-docs/{feature-name}/aidlc-state.md`:
 
 ```markdown
 ## Reverse Engineering Status
 - [x] Reverse Engineering - Completed on [timestamp]
-- **Artifacts Location**: aidlc-docs/inception/reverse-engineering/
+- **Artifacts Location**: aidlc-docs/{feature-name}/inception/reverse-engineering/
 ```
 
 ## Step 12: Present Completion Message to User

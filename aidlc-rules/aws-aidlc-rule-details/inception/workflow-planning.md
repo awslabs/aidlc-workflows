@@ -343,12 +343,13 @@ flowchart TD
 
 ## Step 8: Initialize State Tracking
 
-Update `aidlc-docs/aidlc-state.md`:
+Update `aidlc-docs/{feature-name}/aidlc-state.md`:
 
 ```markdown
 # AI-DLC State Tracking
 
 ## Project Information
+- **Feature Name**: [{feature-name}]
 - **Project Type**: [Greenfield/Brownfield]
 - **Start Date**: [ISO timestamp]
 - **Current Stage**: INCEPTION - Workflow Planning

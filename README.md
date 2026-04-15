@@ -513,7 +513,7 @@ If your agent has no convention for rules files, place both folders at your proj
 4. Carefully review every plan that AI generates. Provide your oversight and validation
 5. Review the execution plan to see which stages will run
 6. Carefully review the artifacts and approve each stage to maintain control
-7. All the artifacts will be generated in the `aidlc-docs/` directory
+7. All the artifacts will be generated in the `aidlc-docs/{feature-name}/` directory
 
 ---
 
