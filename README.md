@@ -588,6 +588,16 @@ aws-aidlc-rule-details/
     │   └── baseline/
     │       ├── security-baseline.md          # Baseline security rules
     │       └── security-baseline.opt-in.md   # Opt-in prompt
+    ├── hcls/                          # Extension category: Healthcare & Life Sciences
+    │   ├── compliance/
+    │   │   ├── hcls-compliance.md             # HIPAA, HITRUST, GxP, FDA 21 CFR Part 11 rules
+    │   │   └── hcls-compliance.opt-in.md      # Opt-in prompt
+    │   ├── data-handling/
+    │   │   ├── hcls-data-handling.md          # PHI encryption, de-identification, data residency rules
+    │   │   └── hcls-data-handling.opt-in.md   # Opt-in prompt
+    │   └── interoperability/
+    │       ├── hcls-interoperability.md       # FHIR R4, SMART on FHIR, US Core, terminology rules
+    │       └── hcls-interoperability.opt-in.md # Opt-in prompt
     └── testing/                       # Extension category
         └── property-based/
             ├── property-based-testing.md          # Property-based testing rules
@@ -596,6 +606,32 @@ aws-aidlc-rule-details/
 
 > [!IMPORTANT]
 > The security extension rules are provided as a directional reference for building effective security rules within AI-DLC workflows. Each organization should build, customize, and thoroughly test their own security rules before deploying in production workflows.
+
+#### HCLS (Healthcare & Life Sciences) Lens
+
+The HCLS lens adds three independently opt-in-able sub-extensions under `extensions/hcls/` for healthcare-specific projects:
+
+| Sub-Extension | Rules | Covers |
+|---|---|---|
+| **Compliance** (`hcls/compliance/`) | HCLS-COMP-01 → 07 | PHI/PII data classification, audit trails for PHI access, BAA-eligible AWS services, minimum necessary access, data retention & disposal, breach notification design, consent management |
+| **Data Handling** (`hcls/data-handling/`) | HCLS-DATA-01 → 05 | PHI encryption standards (AES-256/KMS CMK), de-identification (HIPAA Safe Harbor / Expert Determination), cross-region data residency, backup & recovery for PHI, log sanitization |
+| **Interoperability** (`hcls/interoperability/`) | HCLS-INTOP-01 → 05 | FHIR R4 compliance, SMART on FHIR authorization, US Core / IPS profile validation, terminology binding (ICD-10, SNOMED CT, LOINC, RxNorm), Bulk Data Export |
+
+Each sub-extension supports three enablement levels during opt-in:
+- **Full** — all rules enforced as blocking constraints
+- **Partial** — a subset of critical rules enforced (see each rules file for details)
+- **Off** — rules not loaded
+
+This allows teams to tailor the lens to their project scope. For example, a FHIR API project might enable only Interoperability, while a full EHR build enables all three.
+
+The HCLS lens follows the same "lens" pattern that can be replicated for other industry verticals (e.g., FSI, Manufacturing) — each lens is a set of sub-extensions under its own category directory.
+
+**Example input documents** for an HCLS project are available in `docs/writing-inputs/`:
+- `example-minimal-vision-hcls-fhir-patient-portal.md` — Vision document for a FHIR-based patient portal
+- `example-minimal-tech-env-hcls-fhir-patient-portal.md` — Technical environment for the same project
+
+> [!IMPORTANT]
+> The HCLS extension rules are provided as a directional reference for building healthcare-compliant workflows within AI-DLC. They cover common HIPAA, FHIR, and data handling requirements but are not exhaustive. Each organization should review, customize, and validate these rules against their specific regulatory obligations, legal counsel guidance, and organizational policies before deploying in production workflows.
 
 ### Adding Your Own Extensions
 
