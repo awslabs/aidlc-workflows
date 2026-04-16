@@ -23,12 +23,13 @@ on:
     tags:
       - 'v*'
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   release:
     name: Create Release
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     
     steps:

@@ -25,15 +25,15 @@ When you ask the AI something without guarding your question, it may interpret i
 
 **Basic pattern:**
 
-```
+```text
 Do not update any documents. Help me understand why [this decision] was made.
 ```
 
-```
+```text
 Do not update any documents. For [component name], is it reasonable to use [library or technology] here?
 ```
 
-```
+```text
 Do not change anything. Assess the impact of [proposed change].
 I want to understand the consequences before we decide.
 ```
@@ -120,13 +120,15 @@ If you let context accumulate across multiple gates, the AI starts working from 
 **How to resume after a context reset:**
 
 Option 1 — State file method (recommended):
-```
+
+```text
 Go to aidlc-docs/aidlc-state.md, find the first unchecked item,
 then go to the corresponding plan file and resume from that point.
 ```
 
 Option 2 — Manual handoff:
-```
+
+```text
 I am resuming a previously stopped conversation. Here is the context:
 [paste summary of last output or recent change]
 Please continue with [next action or section X].
@@ -134,7 +136,7 @@ Please continue with [next action or section X].
 
 > **Tip**: Commit and push all current changes to the repository whenever you reset context. It takes seconds and means you always have a clean recovery point.
 
-```
+```text
 Please commit and push all current changes to the repository.
 ```
 
@@ -156,18 +158,18 @@ You can point AIDLC to any existing document — a schema, an architecture diagr
 
 **Basic pattern:**
 
-```
+```text
 Please read [file path or description]. Use it as the basis for [what you want].
 ```
 
-```
+```text
 We have an existing audit table structure. Please add it to the inception documents
 and reference it for this service. When we proceed, expect new requirements and
 stories related to this service.
 ```
 
 > **Advanced tip**: You can load documents at any stage, not just at the start. If a new constraint surfaces during Construction — an updated security policy, a revised data model — load it and ask AIDLC to assess the impact before proceeding.
-
+>
 > **Advanced tip — Enterprise standards as extensions**: If your organization has security, compliance, or API guidelines that should apply to every project, add them as a markdown steering file in `aidlc-rules/extensions/`. AIDLC will automatically load them into every phase without requiring manual injection.
 
 ---
@@ -176,7 +178,7 @@ stories related to this service.
 
 AIDLC will defend its own prior decisions. When you want an unbiased evaluation of an artifact, ask for a critique in a **fresh context** — one where the AI has no memory of why it made those decisions.
 
-```
+```text
 Produce a critique document of [the requirements document / the component design].
 Do this in a new context separate from everything else.
 ```
@@ -189,11 +191,11 @@ This produces more useful, objective feedback than asking for a critique in the 
 
 AIDLC adapts how deeply it executes each stage based on the complexity of your request. You can influence this.
 
-```
+```text
 Keep this at minimal depth — we just need the basic structure documented.
 ```
 
-```
+```text
 This is a production-critical component. Please run at comprehensive depth.
 ```
 
@@ -236,7 +238,7 @@ The prohibited libraries table matters more than a plain list — the reason and
 
 Once your input documents are ready:
 
-```
+```text
 I want to start a new project. Please read [path to vision document] and
 [path to technical environment document], then begin the AIDLC workflow.
 ```
@@ -263,7 +265,7 @@ See the answering tips in [Section 1](#the-question--doc--approval-flow) for the
 
 **Deferring a feature mid-stream:**
 
-```
+```text
 We are going to backlog the [feature name] capability for the current release.
 Please remove it from the component design and flag the related user stories as backlogged.
 ```
@@ -272,7 +274,7 @@ Backlogging (rather than deleting) preserves the work for future iterations with
 
 **Registering an existing data structure:**
 
-```
+```text
 We have an existing [schema/structure name]. Please add it to the inception documents
 and reference it for this service. When we proceed, expect new requirements and
 stories related to this service.
@@ -280,7 +282,7 @@ stories related to this service.
 
 **Making implicit data sources explicit:**
 
-```
+```text
 For the [service name], add the understanding that [new data source] is also a
 data source for this feature, in addition to [existing data source]. Then review
 requirements and user stories to ensure this is captured.
@@ -290,7 +292,7 @@ requirements and user stories to ensure this is captured.
 
 After any meaningful change to a design artifact, ask AIDLC to check whether earlier documents are still consistent:
 
-```
+```text
 Now review the previous steps — user stories and requirements — to ensure
 this change does not require updates to any of those documents.
 ```
@@ -301,7 +303,7 @@ this change does not require updates to any of those documents.
 
 If your team splits up to review different components simultaneously:
 
-```
+```text
 Restrict your edits to the files under your team's control. When all teams are done,
 we will ask the AI to review all changes and confirm there are no conflicts.
 Then we will ask it to review impacts to user stories and requirements.
@@ -309,7 +311,7 @@ Then we will ask it to review impacts to user stories and requirements.
 
 When everyone is done, trigger the conflict check:
 
-```
+```text
 We had [N] independent groups editing component design files. Please review all files
 and report any conflicts or inconsistencies. Do not edit the files — produce a report
 for our review.
@@ -317,12 +319,12 @@ for our review.
 
 Resolve each conflict explicitly by number:
 
-```
+```text
 For conflict #[number] ([conflict description]):
 update [target file] to reflect [your decision].
 ```
 
-```
+```text
 For conflict #[number] ([capability name]):
 this capability is backlogged. Update the documentation to clearly mark it as
 backlogged so code generation does not attempt to implement it.
@@ -332,16 +334,16 @@ backlogged so code generation does not attempt to implement it.
 
 If exploration during design produced files that are no longer needed:
 
-```
+```text
 Move the [file descriptions] to an archive folder — do not delete them.
 Then confirm whether they are required for code generation.
 ```
 
 > **Advanced tip — Component size constraints**: If you want to prevent oversized components that would be too large to implement in a single sprint, set a story-point cap during Application Design: "At the component design phase, inject the following instruction: no single component should have more than [X] aggregate story points. If a component exceeds this limit, break it down into smaller sub-components."
-
+>
 > **Advanced tip — Context resets mid-phase**: If your session gets interrupted, use this to re-establish state:
 >
-> ```
+> ```text
 > Stop. New context. We just completed [description of recent work].
 > Please review [upstream artifacts] to assess any impact of the recent change.
 > [Paste the change description here.]
@@ -370,7 +372,7 @@ Each stage produces a document in `aidlc-docs/construction/{unit-name}/`. Your j
 
 When you're ready to transition to Code Generation, give the AI the structural context it needs up front:
 
-```
+```text
 We have completed component design review. We are ready for code creation.
 Please use the following directory and source code structure:
 [reference an existing service or folder structure].
@@ -384,14 +386,14 @@ Inviting questions before generation starts resolves ambiguities in the plan rat
 
 Be precise — name the element, what is wrong, and what it should be:
 
-```
+```text
 The [endpoint description] should use [correct parameter], not [incorrect parameter].
 Please update the [component name] accordingly.
 ```
 
 **Choosing between AI-presented options:**
 
-```
+```text
 Please implement Option B — [option description] — for [feature name].
 Update all component design documents accordingly.
 ```
@@ -400,7 +402,7 @@ Reference the option by letter *and* description, and explicitly scope the updat
 
 **Overriding a design pattern:**
 
-```
+```text
 We prefer to deviate from [standard pattern] and use [our preferred approach]
 to allow [rationale]. Please update the component design documents accordingly.
 ```
@@ -409,11 +411,11 @@ The rationale matters. AIDLC carries it forward into later stages, which prevent
 
 > **Advanced tip — Impact assessment before committing**: For any significant design change, assess before acting:
 >
-> ```
+> ```text
 > Do not change anything. Assess the impact of [proposed change].
 > [Describe the proposed change in detail.]
 > ```
-
+>
 > **Advanced tip — Inline code documentation**: If you want inline documentation applied consistently to every unit, add it as a standing rule at the start of the Construction phase rather than repeating it per unit: "Add inline code documentation as a standard rule for the construction phase."
 
 ---
@@ -432,14 +434,14 @@ AIDLC creates a numbered, checkbox-tracked plan of every file to be created or m
 
 > **Advanced tip — Internal libraries**: Before approving the plan, inject your internal library requirements into the Q&A file or implementation plan:
 >
-> ```
+> ```text
 > In addition to my answers, you must use the following libraries from our
 > [starter project / building blocks]: [list each library explicitly].
 > Explain why and when each should be used, not just what it is.
 > ```
 >
 > A curated markdown guide to your internal libraries works better than pointing the AI at a repository. Create one and reference it as a code generation input.
-
+>
 > **Advanced tip — UI from Figma designs**: Take a screenshot of your Figma design, pass it to a vision-capable model (e.g. ChatGPT) to generate framework code from the screenshot, then provide that output to AIDLC as the UI implementation input. This produces a concrete, tool-readable specification rather than a raw design-tool export.
 
 **Part 2 — Generation**
@@ -448,13 +450,13 @@ AIDLC executes each step sequentially, checking off each step as it completes. W
 
 Review the generated code before approving. If something isn't right:
 
-```
+```text
 Request Changes: [describe specifically what needs to change]
 ```
 
 > **Advanced tip — Brownfield file modifications**: For existing codebases, AIDLC modifies files in place. If you see `ClassName_modified.java` or `service_new.ts` alongside the original, flag it immediately:
 >
-> ```
+> ```text
 > I see [ClassName_modified.java] alongside [ClassName.java]. Please merge the changes
 > into the original file and delete the duplicate.
 > ```
@@ -469,7 +471,7 @@ After all units are complete, AIDLC generates build and test instructions for al
 
 Don't add test framework or test management system instructions at project start. By the time code generation begins, those details may have been compressed or lost across many intervening stages. Inject them just-in-time:
 
-```
+```text
 At the functional test generation step, inject the following instruction:
 generate functional tests using the [test management system] format described
 in this document: [attach specification]. Use this API endpoint to push the
@@ -480,7 +482,7 @@ This principle applies to any tool-specific instruction: inject it at the phase 
 
 **Scoping unit test coverage:**
 
-```
+```text
 When generating unit tests, exclude third-party external dependencies from
 code coverage calculations. Require a minimum of 80% coverage on internal
 code paths only.
@@ -492,7 +494,7 @@ code paths only.
 
 Changes made during code generation — small design decisions, adjustments discovered while writing code — need to flow back up to the design documents. Do this as a deliberate sweep after code polish is complete, not ad hoc:
 
-```
+```text
 When you have finished polishing the code, review each unit's final design files
 and propagate any changes back up the chain to requirements and user stories.
 Make a plan for how to do this step by step before executing.
@@ -502,7 +504,7 @@ Asking for a plan before execution ensures the sweep is systematic across all un
 
 > **Advanced tip — Extracting reusable specs**: At the end of a completed project, extract the patterns you established into reusable specification documents for future projects:
 >
-> ```
+> ```text
 > Create a set of reusable specification documents from the patterns expressed
 > in this project: one for API design, one for security, one for UI specifications,
 > one for the technology stack, and one for directory structure. Use the completed
@@ -532,14 +534,14 @@ Whether you've spotted a bug, changed your mind about a design decision, or rece
 
 **Step 1 — Describe the issue without touching anything:**
 
-```
+```text
 Do not update any documents yet. I have discovered issue [X].
 Review the design and help me understand where this needs to be addressed.
 ```
 
 **Step 2 — Fix the design document:**
 
-```
+```text
 Please update [specific design document] to reflect [the fix].
 Then check whether any upstream documents — requirements, user stories —
 also need to be updated.
@@ -547,7 +549,7 @@ also need to be updated.
 
 **Step 3 — Regenerate the affected code:**
 
-```
+```text
 The design for [unit name] has been updated. Please re-run code generation
 for the affected files only.
 ```
@@ -562,7 +564,7 @@ This flow takes a few extra minutes compared to directly editing a file. It keep
 
 One-line fixes that bypass the design still create drift. Note the fix in the relevant design document and let AIDLC apply it:
 
-```
+```text
 In [functional-design.md for unit X], update [method or rule] to [the fix].
 Then regenerate [the affected file].
 ```
@@ -575,7 +577,7 @@ Exploration is exactly what "Do not update any documents" is for. Explore freely
 
 Sometimes you have to move fast. If you make a direct edit, log it honestly so the audit trail stays accurate:
 
-```
+```text
 We made a temporary direct edit to [file] to unblock the team.
 The fix was [description]. Please update [design document] to reflect this
 and verify no other documents are inconsistent.
@@ -589,14 +591,14 @@ Two standing instructions you can set at the start of a Construction phase that 
 
 **Back-propagation on every update:**
 
-```
+```text
 Every time you update a document, check whether the change impacts the
 requirements document and user stories, and prompt me if it does.
 ```
 
 **Design-first on every code decision:**
 
-```
+```text
 When you make a design decision during code generation, always make sure
 the documentation reflects this change before proceeding.
 ```
@@ -611,7 +613,7 @@ One practical note: if you ask AIDLC to produce human-facing reports — archite
 
 Use a separate `reports/` folder and, for cleaner output, generate reports in a fresh context with a dedicated report specification file:
 
-```
+```text
 Pause the process. Start a new context. Read [report specification markdown file]
 and produce the report based on the current state of the AIDLC artifacts.
 Save the output to a reports/ folder, not aidlc-docs/.

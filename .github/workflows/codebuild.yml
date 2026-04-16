@@ -21,29 +21,14 @@ on:
       - 'v*'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
   CODEBUILD_PROJECT_NAME: ${{ vars.CODEBUILD_PROJECT_NAME || 'codebuild-project' }}
   LABEL_REMINDER_MARKER: rules-label-reminder
 
-permissions:
-  actions: none
-  attestations: none
-  checks: none
-  contents: none
-  deployments: none
-  discussions: none
-  id-token: none
-  issues: none
-  models: none
-  packages: none
-  pages: none
-  pull-requests: none
-  repository-projects: none
-  security-events: none
-  statuses: none
+permissions: {}
 
 jobs:
   label-reminder:
@@ -122,9 +107,13 @@ jobs:
           fi
 
   build:
+    # Fork PRs are skipped because they cannot access the repository secrets
+    # or OIDC credentials needed for AWS CodeBuild.
     if: >-
-      github.event_name != 'pull_request'
-      || contains(github.event.pull_request.labels.*.name, 'rules')
+      (github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'rules'))
+      && (github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository)
     environment: codebuild
 
     permissions:
@@ -152,6 +141,7 @@ jobs:
           lookup-only: true
 
       - name: Configure AWS credentials
+        # env.ACT is set by the 'act' CLI tool for local testing
         if: ${{ !env.ACT && steps.cache-check.outputs.cache-hit != 'true' }}
         uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
         with:
@@ -405,6 +395,7 @@ jobs:
           key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}
 
       - name: Upload CodeBuild primary artifact
+        # env.ACT is set by the 'act' CLI tool for local testing
         if: ${{ !env.ACT }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -414,6 +405,7 @@ jobs:
           archive: false
 
       - name: Upload Evaluation Report
+        # env.ACT is set by the 'act' CLI tool for local testing
         if: ${{ !env.ACT }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -423,6 +415,7 @@ jobs:
           archive: false
 
       - name: Upload Trend Report
+        # env.ACT is set by the 'act' CLI tool for local testing
         if: ${{ !env.ACT }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -459,6 +452,7 @@ jobs:
           fi
 
       - name: Upload Report Bundle
+        # env.ACT is set by the 'act' CLI tool for local testing
         if: ${{ !env.ACT }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

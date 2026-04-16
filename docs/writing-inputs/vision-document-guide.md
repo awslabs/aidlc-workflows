@@ -258,12 +258,12 @@ These feed directly into the Requirements Analysis clarifying questions.]
 
 ## How This Document Feeds Into AI-DLC
 
-| Vision Document Section | AI-DLC Stage | How It Is Used |
-|------------------------|--------------|----------------|
-| Executive Summary | Workspace Detection | Initial context for project classification |
-| Business Context | Requirements Analysis | Drives clarifying questions and requirements depth |
-| Full Scope Vision | User Stories, Application Design | Informs persona creation, component identification |
-| MVP Scope | Workflow Planning | Determines which stages execute, scope boundaries |
-| Features In/Out of Scope | Code Generation | Defines what gets built in this iteration |
-| Risks and Dependencies | All stages | Informs risk assessment and error handling |
-| Open Questions | Requirements Analysis | Become clarifying questions in the question files |
+| Vision Document Section  | AI-DLC Stage                     | How It Is Used                                     |
+| ------------------------ | -------------------------------- | -------------------------------------------------- |
+| Executive Summary        | Workspace Detection              | Initial context for project classification         |
+| Business Context         | Requirements Analysis            | Drives clarifying questions and requirements depth |
+| Full Scope Vision        | User Stories, Application Design | Informs persona creation, component identification |
+| MVP Scope                | Workflow Planning                | Determines which stages execute, scope boundaries  |
+| Features In/Out of Scope | Code Generation                  | Defines what gets built in this iteration          |
+| Risks and Dependencies   | All stages                       | Informs risk assessment and error handling         |
+| Open Questions           | Requirements Analysis            | Become clarifying questions in the question files  |

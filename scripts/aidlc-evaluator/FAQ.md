@@ -15,34 +15,40 @@ A comprehensive testing and reporting framework that validates changes to the AI
 The framework is organized around six big rocks:
 
 **1. Golden Test Case**
+
 - Curated baseline test cases containing full AIDLC docs and code output
 - Versioned reference inputs that all evaluations run against
 - Ensures consistent, reproducible evaluation across changes
 
 **2. Execution Framework (Jeff)**
+
 - Core orchestration engine that runs golden test cases through each evaluation
 - Manages the pipeline from test case input to structured results output
 - Coordinates across all evaluation dimensions
 
 **3. Semantic Evaluation**
+
 - Uses AI to semantically evaluate outputs at major human review points
 - Scores outputs for correctness, completeness, and appropriateness
 - Validates that AI-generated content meets quality standards
 - All semantic metrics are reported **@k** — each evaluation runs multiple trials to account for non-determinism in AI-based grading (see "What does @k mean?" below)
 
 **4. Code Evaluation**
+
 - **Linting:** Code style correctness
 - **Security:** Semgrep analysis for vulnerabilities
 - **Organization:** Code duplication detection, library usage patterns
 - Produces numeric scores (e.g., "3 high-severity security issues")
 
 **5. NFR Evaluation**
+
 - Token consumption per workflow
 - Execution time measurements
 - Cross-model consistency checks
 - Resource utilization metrics
 
 **6. GitHub CI/CD Integration & Management**
+
 - Automated pipelines triggering evaluations on PRs
 - Human-readable report generation and attachment
 - Versioned report archiving for historical comparison
@@ -74,6 +80,7 @@ Code evaluation and NFR metrics are deterministic and do not require @k.
 ## How do I interpret the reports?
 
 Reports include:
+
 - **Semantic scores @k:** AI-evaluated ratings with pass@k (capability) and pass^k (reliability)
 - **Code scores:** Numeric metrics for linting, security, duplication (deterministic)
 - **NFR metrics:** Token usage, execution time, consistency (deterministic)
@@ -83,6 +90,7 @@ Reports include:
 ## What if my change shows a evaluation?
 
 Evaluations don't automatically block merges—they provide context. Work with maintainers to:
+
 - Understand if the evaluation is acceptable given the benefits
 - Identify ways to mitigate the evaluation
 - Document known trade-offs
@@ -98,6 +106,7 @@ Yes—the framework is designed to run in CI/CD but can also be executed locally
 ## How are reports versioned?
 
 Each test run produces a numbered/named version that includes:
+
 - Timestamp and commit SHA
 - Full test results
 - Comparison to baseline

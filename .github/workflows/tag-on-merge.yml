@@ -16,13 +16,14 @@ on:
   pull_request:
     types: [closed]
 
-permissions:
-  contents: write
-  actions: write
+permissions: {}
 
 jobs:
   tag:
     name: Create Release Tag
+    permissions:
+      contents: write
+      actions: write
     if: >-
       github.event.pull_request.merged == true &&
       startsWith(github.event.pull_request.head.ref, 'release/v')

@@ -8,18 +8,18 @@
 
 ## Existing Stack (must be preserved)
 
-| Layer | Current Technology | Version | Notes |
-|-------|-------------------|---------|-------|
-| Language | TypeScript | 5.x | Strict mode. Do not introduce JavaScript files. |
-| Runtime | Node.js | 20.x LTS | |
-| API framework | Express | 4.x | All existing services use Express. Do not introduce Fastify or Koa. |
-| Database | PostgreSQL | 15 | Via pg and node-postgres. No ORM — raw SQL with typed query helpers. |
-| Infrastructure | AWS ECS Fargate | — | Services deploy as Docker containers. CDK for all infra. |
-| Message bus | Amazon SQS | — | Used by notification-service for async email dispatch. |
-| Auth | AWS Cognito | — | JWT tokens validated at API Gateway. Do not build a new auth layer. |
-| Package manager | npm | 10.x | Do not introduce yarn or pnpm. |
-| Test framework | Jest | 29.x | With ts-jest. All tests in `__tests__/` alongside source. |
-| Linter / formatter | ESLint + Prettier | — | Config files are in the repo root. Do not modify them. |
+| Layer              | Current Technology  | Version   | Notes                                                                |
+| ------------------ | ------------------- | --------- | -------------------------------------------------------------------- |
+| Language           | TypeScript          | 5.x       | Strict mode. Do not introduce JavaScript files.                      |
+| Runtime            | Node.js             | 20.x LTS  |                                                                      |
+| API framework      | Express             | 4.x       | All existing services use Express. Do not introduce Fastify or Koa.  |
+| Database           | PostgreSQL          | 15        | Via pg and node-postgres. No ORM — raw SQL with typed query helpers. |
+| Infrastructure     | AWS ECS Fargate     | —         | Services deploy as Docker containers. CDK for all infra.             |
+| Message bus        | Amazon SQS          | —         | Used by notification-service for async email dispatch.               |
+| Auth               | AWS Cognito         | —         | JWT tokens validated at API Gateway. Do not build a new auth layer.  |
+| Package manager    | npm                 | 10.x      | Do not introduce yarn or pnpm.                                       |
+| Test framework     | Jest                | 29.x      | With ts-jest. All tests in `__tests__/` alongside source.            |
+| Linter / formatter | ESLint + Prettier   | —         | Config files are in the repo root. Do not modify them.               |
 
 ---
 
@@ -44,14 +44,14 @@
 
 ## What to Remove / Not Introduce
 
-| Prohibited | Reason | Use Instead |
-|-----------|--------|-------------|
-| ORMs (TypeORM, Prisma, Sequelize) | Existing codebase uses raw SQL with typed helpers. Introducing an ORM creates inconsistency. | node-postgres with typed query functions, matching existing pattern |
-| Axios | Project uses native fetch (Node 20 built-in). | fetch |
-| Any new CSS framework | Existing frontend uses Tailwind CSS. | Tailwind CSS, existing design system components |
-| New state management library | Existing frontend uses React Context + useReducer. | React Context + useReducer |
-| New test runner (Vitest, Mocha) | Project uses Jest throughout. | Jest |
-| Separate auth service or middleware | Auth is handled at API Gateway via Cognito JWT. | Validate the JWT passed in the Authorization header, same as other services |
+| Prohibited                          | Reason                                                                                       | Use Instead                                                                 |
+| ----------------------------------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| ORMs (TypeORM, Prisma, Sequelize)   | Existing codebase uses raw SQL with typed helpers. Introducing an ORM creates inconsistency. | node-postgres with typed query functions, matching existing pattern         |
+| Axios                               | Project uses native fetch (Node 20 built-in).                                                | fetch                                                                       |
+| Any new CSS framework               | Existing frontend uses Tailwind CSS.                                                         | Tailwind CSS, existing design system components                             |
+| New state management library        | Existing frontend uses React Context + useReducer.                                           | React Context + useReducer                                                  |
+| New test runner (Vitest, Mocha)     | Project uses Jest throughout.                                                                | Jest                                                                        |
+| Separate auth service or middleware | Auth is handled at API Gateway via Cognito JWT.                                              | Validate the JWT passed in the Authorization header, same as other services |
 
 ---
 

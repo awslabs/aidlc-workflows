@@ -17,9 +17,9 @@ This document ensures that code generation, infrastructure design, and NFR decis
 
 A Technical Environment Document can target one of two project contexts:
 
-| Context | Definition | Key Differences |
-|---------|-----------|-----------------|
-| **Greenfield** | No existing code. Building from scratch. | All choices are open. Document defines the starting point. |
+| Context        | Definition                                          | Key Differences                                                                          |
+| -------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| **Greenfield** | No existing code. Building from scratch.            | All choices are open. Document defines the starting point.                               |
 | **Brownfield** | Existing codebase. Adding, modifying, or migrating. | Choices are constrained by what exists. Document defines what to keep, change, or avoid. |
 
 Structure your document for the applicable context. Sections below are marked with **(Greenfield)**, **(Brownfield)**, or **(Both)** to indicate where they apply.
@@ -437,18 +437,18 @@ Every example should include:
 - [Condition 1 - with alternative reference]
 
 ## File Inventory
-| File | Purpose |
-|------|---------|
-| handler.ts | Example implementation |
-| handler.test.ts | Test pattern |
+| File            | Purpose                |
+| --------------- | ---------------------- |
+| handler.ts      | Example implementation |
+| handler.test.ts | Test pattern           |
 
 ## Customization Guide
-| Element | Customize? | Notes |
-|---------|-----------|-------|
-| Error handling structure | No | Must follow project standard |
-| Business logic | Yes | Replace with actual domain logic |
-| Route path | Yes | Follow API naming conventions |
-| Logging calls | No | Keep structured logging format |
+| Element                  | Customize?  | Notes                            |
+| ------------------------ | ----------- | -------------------------------- |
+| Error handling structure | No          | Must follow project standard     |
+| Business logic           | Yes         | Replace with actual domain logic |
+| Route path               | Yes         | Follow API naming conventions    |
+| Logging calls            | No          | Keep structured logging format   |
 
 ## Related Standards
 - [Link to API Design Standards section]
@@ -536,14 +536,14 @@ a summary of the current technical state.]
 
 ## How This Document Feeds Into AI-DLC
 
-| Technical Environment Section | AI-DLC Stage | How It Is Used |
-|------------------------------|--------------|----------------|
-| Project Technical Summary | Workspace Detection | Context for project classification |
-| Programming Languages | Code Generation | Language selection and version constraints |
-| Frameworks and Libraries | Code Generation, NFR Design | Dependency selection and prohibited library checks |
-| Cloud Services Allow/Disallow Lists | Infrastructure Design | Service selection boundaries |
-| Preferred Patterns | Application Design, Functional Design | Architecture and design pattern decisions |
-| Security Requirements | NFR Requirements, NFR Design | Security pattern selection and compliance checks |
-| Testing Requirements | Code Generation, Build and Test | Test strategy, tooling, and coverage targets |
-| Example Code | Code Generation | Pattern reference during code generation |
-| Brownfield Inventory | Reverse Engineering, Workflow Planning | Migration decisions and coexistence rules |
+| Technical Environment Section       | AI-DLC Stage                           | How It Is Used                                     |
+| ----------------------------------- | -------------------------------------- | -------------------------------------------------- |
+| Project Technical Summary           | Workspace Detection                    | Context for project classification                 |
+| Programming Languages               | Code Generation                        | Language selection and version constraints         |
+| Frameworks and Libraries            | Code Generation, NFR Design            | Dependency selection and prohibited library checks |
+| Cloud Services Allow/Disallow Lists | Infrastructure Design                  | Service selection boundaries                       |
+| Preferred Patterns                  | Application Design, Functional Design  | Architecture and design pattern decisions          |
+| Security Requirements               | NFR Requirements, NFR Design           | Security pattern selection and compliance checks   |
+| Testing Requirements                | Code Generation, Build and Test        | Test strategy, tooling, and coverage targets       |
+| Example Code                        | Code Generation                        | Pattern reference during code generation           |
+| Brownfield Inventory                | Reverse Engineering, Workflow Planning | Migration decisions and coexistence rules          |

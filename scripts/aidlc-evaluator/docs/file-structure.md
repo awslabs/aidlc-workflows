@@ -1,6 +1,6 @@
 # AI-DLC Evaluation Framework - File Structure
 
-```
+```text
 aidlc-regression/
 ├── README.md                          # Project overview
 ├── VISION.md                          # Project vision and goals
@@ -94,7 +94,7 @@ aidlc-regression/
 
 ## Big Rocks → Package Mapping
 
-```
+```text
 1. Golden Test Case        → test_cases/
 2. Execution Framework     → aidlc-runner/
 3. Semantic Evaluation     → packages/qualitative/
@@ -105,7 +105,7 @@ aidlc-regression/
 
 ## Package Dependencies
 
-```
+```text
 aidlc-runner (standalone — runs the AIDLC workflow and produces run folders)
 
 qualitative
