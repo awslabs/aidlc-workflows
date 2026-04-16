@@ -92,7 +92,19 @@ Analyze whatever the user has provided:
 
 ### Step 5.1: Extension Opt-In Prompts
 
-**MANDATORY**: Scan all loaded `*.opt-in.md` files (loaded at workflow start from `extensions/` subdirectories) for an `## Opt-In Prompt` section. For each extension that declares one, include that question in the clarifying questions file created in Step 6.
+**MANDATORY**: Present extension opt-in prompts in the clarifying questions file created in Step 6.
+
+**Non-lens extensions** (loaded at workflow start): Scan all loaded `*.opt-in.md` files for an `## Opt-In Prompt` section. For each extension that declares one, include that question in the clarifying questions file.
+
+**Lens-gated extensions** (deferred from workflow start): For each loaded `lens-descriptor.md`:
+1. Analyze the user's vision document, requirements, and initial request against the descriptor's **Detection Signals** section
+2. If one or more **strong signals** are found, OR if multiple **supporting signals** are found together, the lens is relevant:
+   - Include the lens confirmation prompt (from the descriptor's `## Lens Confirmation Prompt` section) in the clarifying questions file
+   - If the user confirms the lens (answers A/Yes), load all `*.opt-in.md` files from the lens's sub-directories and include their opt-in prompts in a follow-up question file (or append to the same file if answers have not yet been collected)
+   - If the user declines the lens (answers B/No), skip all sub-extensions under that lens. Record the lens as disabled in `aidlc-docs/aidlc-state.md`
+3. If no detection signals are found, skip the lens entirely. Do not present the lens confirmation prompt. The lens's sub-extension opt-in prompts are never shown.
+
+This ensures that only industry-relevant extensions are presented to the user. A non-healthcare project will never see HCLS opt-in questions; a non-financial project will never see FSI opt-in questions.
 
 After receiving answers:
 1. Record each extension's enablement status in `aidlc-docs/aidlc-state.md` under `## Extension Configuration`:

@@ -30,14 +30,21 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 
 **Loading process**:
 1. List all subdirectories under `extensions/` (e.g., `extensions/security/`, `extensions/compliance/`)
-2. In each subdirectory, load ONLY `*.opt-in.md` files — these contain the extension's opt-in prompt. The corresponding rules file is derived by convention: strip the `.opt-in.md` suffix and append `.md` (e.g., `security-baseline.opt-in.md` → `security-baseline.md`)
-3. Do NOT load full rule files (e.g., `security-baseline.md`) at this stage
+2. Check for `lens-descriptor.md` files in top-level extension category directories (e.g., `extensions/hcls/lens-descriptor.md`). If found, load only the descriptor (lightweight). Do NOT load the lens's `*.opt-in.md` files yet. These are deferred to Requirements Analysis where the model evaluates whether the lens is relevant based on the project context and the descriptor's detection signals.
+3. For extensions NOT inside a lens directory (i.e., no sibling or parent `lens-descriptor.md`), load `*.opt-in.md` files as usual. The corresponding rules file is derived by convention: strip the `.opt-in.md` suffix and append `.md` (e.g., `security-baseline.opt-in.md` → `security-baseline.md`)
+4. Do NOT load full rule files (e.g., `security-baseline.md`) at this stage
 
 **Deferred Rule Loading**:
 - During Requirements Analysis, opt-in prompts from the loaded `*.opt-in.md` files are presented to the user
 - When the user opts IN for an extension, load the corresponding rules file (derived by naming convention) at that point
 - When the user opts OUT, the full rules file is never loaded — saving context
 - Extensions without a matching `*.opt-in.md` file are always enforced — load their rule files immediately at workflow start
+
+**Lens-Gated Extensions**:
+- Extensions organized under a lens (identified by a `lens-descriptor.md` in their parent directory) are context-gated. During Requirements Analysis, the model analyzes the user's requirements against the lens descriptor's detection signals.
+- If strong signals are detected, the model presents the lens confirmation prompt from the descriptor. If the user confirms, the lens's `*.opt-in.md` files are loaded and its sub-extension opt-in prompts are included in the clarifying questions.
+- If no detection signals are found, the lens is skipped entirely. Its opt-in prompts are never presented, saving context and avoiding irrelevant questions.
+- This mechanism allows multiple industry lenses (HCLS, FSI, Manufacturing, etc.) to coexist under `extensions/` without every project being asked about every industry.
 
 **Enforcement** (applies only to loaded/enabled extensions):
 - Extension rules are hard constraints, not optional guidance

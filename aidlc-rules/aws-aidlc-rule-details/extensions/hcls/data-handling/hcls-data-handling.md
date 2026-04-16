@@ -14,10 +14,10 @@ A **blocking data handling finding** means:
 3. The model MUST present only the "Request Changes" option with a clear explanation of what needs to change
 4. The finding MUST be logged in `aidlc-docs/audit.md` with the HCLS-DATA rule ID, description, and stage context
 
-If a rule is not applicable to the current project context (e.g., HCLS-DATA-02 when no analytics or ML pipelines exist), mark it as **N/A** in the compliance summary — this is not a blocking finding.
+If a rule is not applicable to the current project context (e.g., HCLS-DATA-02 when no analytics or ML pipelines exist), mark it as **N/A** in the compliance summary. This is not a blocking finding.
 
 ### Default Enforcement
-All rules in this document are **blocking** by default. If any rule's verification criteria are not met, it is a blocking data handling finding — follow the blocking finding behavior defined above.
+All rules in this document are **blocking** by default. If any rule's verification criteria are not met, it is a blocking data handling finding. Follow the blocking finding behavior defined above.
 
 ### Partial Enablement
 When the user selects **Partial** enablement during opt-in, only the following rules are enforced:
@@ -32,15 +32,15 @@ All other rules are marked as N/A in compliance summaries.
 
 **Rule**: All PHI data MUST be encrypted using healthcare-grade encryption standards that meet or exceed HIPAA Security Rule requirements (§164.312(a)(2)(iv) and §164.312(e)(1)).
 
-**Requirements — Encryption at Rest**:
+**Requirements (Encryption at Rest)**:
 - PHI at rest MUST be encrypted using AES-256 (or equivalent) via AWS KMS with Customer Managed Keys (CMKs)
 - KMS key policies MUST restrict key usage to authorized services and principals only
 - Key rotation MUST be enabled (annual automatic rotation for KMS CMKs, or more frequent per organizational policy)
-- Envelope encryption MUST be used for large data objects (e.g., S3 objects, database fields) — data encrypted with a data key, data key encrypted with the CMK
+- Envelope encryption MUST be used for large data objects (e.g., S3 objects, database fields): data encrypted with a data key, data key encrypted with the CMK
 - Different PHI data categories SHOULD use separate CMKs to limit blast radius of a key compromise
 
-**Requirements — Encryption in Transit**:
-- All PHI in transit MUST use TLS 1.2 or higher — TLS 1.0 and 1.1 MUST be explicitly disabled
+**Requirements (Encryption in Transit)**:
+- All PHI in transit MUST use TLS 1.2 or higher. TLS 1.0 and 1.1 MUST be explicitly disabled
 - Internal service-to-service communication carrying PHI MUST also be encrypted (mTLS recommended for service mesh architectures)
 - API Gateway and Load Balancer TLS policies MUST enforce minimum TLS 1.2 with strong cipher suites (no RC4, no 3DES, no export ciphers)
 - Certificate management MUST use AWS Certificate Manager (ACM) or equivalent automated certificate lifecycle management
@@ -67,8 +67,8 @@ All other rules are marked as N/A in compliance summaries.
   - **Safe Harbor** (§164.514(b)): Remove all 18 HIPAA identifiers (names, geographic data smaller than state, dates except year, phone/fax numbers, email addresses, SSN, MRN, health plan numbers, account numbers, certificate/license numbers, vehicle identifiers, device identifiers, URLs, IP addresses, biometric identifiers, full-face photos, any other unique identifier)
   - **Expert Determination** (§164.514(a)): A qualified statistical expert certifies that the risk of re-identification is very small
 - The de-identification method used MUST be documented in the design artifacts
-- De-identification MUST be applied as close to the data source as possible — preferably during data extraction, not downstream
-- Re-identification risk MUST be assessed when combining de-identified datasets — quasi-identifiers (age, zip code, gender) can enable re-identification when combined
+- De-identification MUST be applied as close to the data source as possible, preferably during data extraction, not downstream
+- Re-identification risk MUST be assessed when combining de-identified datasets. Quasi-identifiers (age, zip code, gender) can enable re-identification when combined
 - A re-identification key (if maintained) MUST be stored separately from the de-identified data, with access restricted to authorized personnel
 
 **Verification**:
@@ -113,13 +113,13 @@ All other rules are marked as N/A in compliance summaries.
 
 **Requirements**:
 - Backups MUST be encrypted using the same (or equivalent) encryption standards as the primary data (AES-256 with KMS CMKs)
-- Backup frequency MUST meet the Recovery Point Objective (RPO) defined in requirements — document the RPO explicitly
-- Recovery procedures MUST meet the Recovery Time Objective (RTO) defined in requirements — document the RTO explicitly
+- Backup frequency MUST meet the Recovery Point Objective (RPO) defined in requirements. Document the RPO explicitly
+- Recovery procedures MUST meet the Recovery Time Objective (RTO) defined in requirements. Document the RTO explicitly
 - Backup restoration MUST be tested at least annually (design for automated restoration testing where possible)
 - Backups MUST be stored in a separate AWS account or with cross-account access controls to protect against ransomware or account compromise
 - Backup retention MUST align with data retention policies defined in HCLS-COMP-05 (if HCLS Compliance is also enabled) or customer-specified retention periods
 - Point-in-time recovery (PITR) MUST be enabled for databases containing PHI where the service supports it (e.g., RDS, DynamoDB)
-- Backup access MUST be audited — any backup restoration event must be logged
+- Backup access MUST be audited. Any backup restoration event must be logged
 
 **Verification**:
 - RPO and RTO are documented in requirements
@@ -140,11 +140,11 @@ All other rules are marked as N/A in compliance summaries.
 **Rule**: Application logs, debug output, error messages, and monitoring data MUST NOT contain PHI. Logging infrastructure MUST enforce sanitization before write.
 
 **Requirements**:
-- A PHI sanitization layer MUST be implemented in the logging pipeline — this may be a logging middleware, a custom log formatter, or a structured logging configuration that explicitly excludes PHI fields
+- A PHI sanitization layer MUST be implemented in the logging pipeline. This may be a logging middleware, a custom log formatter, or a structured logging configuration that explicitly excludes PHI fields
 - PHI fields identified in HCLS-COMP-01 (data classification) MUST be filtered, masked, or replaced with opaque references (e.g., patient ID → hash or token) before log output
-- Error messages and exception stack traces MUST be reviewed for PHI leakage — caught exceptions involving PHI must sanitize the error context before logging
+- Error messages and exception stack traces MUST be reviewed for PHI leakage. Caught exceptions involving PHI must sanitize the error context before logging
 - Log aggregation services (CloudWatch Logs, OpenSearch, third-party SIEM) MUST NOT receive raw PHI
-- Developers MUST NOT use `console.log`, `print`, or equivalent statements that output PHI during debugging — enforce via linting rules or code review checklists
+- Developers MUST NOT use `console.log`, `print`, or equivalent statements that output PHI during debugging. Enforce via linting rules or code review checklists
 - Monitoring dashboards and alerting systems MUST NOT display PHI in alert messages, metric labels, or dashboard widgets
 
 **Verification**:

@@ -14,10 +14,10 @@ A **blocking interoperability finding** means:
 3. The model MUST present only the "Request Changes" option with a clear explanation of what needs to change
 4. The finding MUST be logged in `aidlc-docs/audit.md` with the HCLS-INTOP rule ID, description, and stage context
 
-If a rule is not applicable to the current project context (e.g., HCLS-INTOP-05 when the system manages fewer than 1000 patient records), mark it as **N/A** in the compliance summary — this is not a blocking finding.
+If a rule is not applicable to the current project context (e.g., HCLS-INTOP-05 when the system manages fewer than 1000 patient records), mark it as **N/A** in the compliance summary. This is not a blocking finding.
 
 ### Default Enforcement
-All rules in this document are **blocking** by default. If any rule's verification criteria are not met, it is a blocking interoperability finding — follow the blocking finding behavior defined above.
+All rules in this document are **blocking** by default. If any rule's verification criteria are not met, it is a blocking interoperability finding. Follow the blocking finding behavior defined above.
 
 ### Partial Enablement
 When the user selects **Partial** enablement during opt-in, only the following rules are enforced:
@@ -34,8 +34,8 @@ All other rules are marked as N/A in compliance summaries.
 
 **Requirements**:
 - API endpoints MUST expose FHIR R4 resources (Patient, Observation, Condition, MedicationRequest, etc.) using standard FHIR RESTful interactions (read, search, create, update, delete)
-- FHIR resources MUST validate against the base FHIR R4 specification — invalid resources MUST be rejected with appropriate OperationOutcome responses
-- Custom data elements MUST use the FHIR extensibility framework (Extension elements with defined StructureDefinitions) — do NOT add non-FHIR fields to standard resources
+- FHIR resources MUST validate against the base FHIR R4 specification. Invalid resources MUST be rejected with appropriate OperationOutcome responses
+- Custom data elements MUST use the FHIR extensibility framework (Extension elements with defined StructureDefinitions). Do NOT add non-FHIR fields to standard resources
 - The FHIR CapabilityStatement resource MUST be served at the `/metadata` endpoint, accurately reflecting the server's supported resources, interactions, and search parameters
 - FHIR search MUST support at minimum the required search parameters defined by the applicable profiles (US Core, IPS, or base FHIR)
 - FHIR Bundle resources MUST be used for batch operations and transaction processing
@@ -63,11 +63,11 @@ All other rules are marked as N/A in compliance summaries.
   - **EHR Launch**: Application launched from within an EHR context (receives launch context parameters)
   - **Standalone Launch**: Application launches independently and requests authorization
 - FHIR access scopes MUST follow the SMART scope syntax:
-  - `patient/{ResourceType}.{read|write|*}` — patient-context scopes
-  - `user/{ResourceType}.{read|write|*}` — user-context scopes
-  - `system/{ResourceType}.{read|write|*}` — system-level (backend service) scopes
+  - `patient/{ResourceType}.{read|write|*}` (patient-context scopes)
+  - `user/{ResourceType}.{read|write|*}` (user-context scopes)
+  - `system/{ResourceType}.{read|write|*}` (system-level / backend service scopes)
 - The `.well-known/smart-configuration` endpoint MUST be served, documenting the authorization endpoints, supported scopes, and capabilities
-- Token introspection or validation MUST occur on every FHIR request — not just at session initiation
+- Token introspection or validation MUST occur on every FHIR request, not just at session initiation
 - Refresh token support MUST be implemented for long-running sessions
 - Backend service authorization (system-to-system) MUST use the SMART Backend Services specification (JWT assertion for client authentication)
 
@@ -93,7 +93,7 @@ All other rules are marked as N/A in compliance summaries.
   - Patient, AllergyIntolerance, Condition, DiagnosticReport, DocumentReference, Encounter, Immunization, MedicationRequest, Observation (vital signs, lab results, social history, smoking status), Procedure, CarePlan, CareTeam, Goal
 - **International/Cross-border**: Resources MUST validate against the [International Patient Summary (IPS)](http://hl7.org/fhir/uv/ips/) profiles
 - **Must Support elements**: All elements marked as `mustSupport` in the applicable profile MUST be populated when data is available and MUST be accepted when received
-- Profile validation MUST be automated — use a FHIR validation library (e.g., HAPI FHIR Validator, Firely .NET SDK, or AWS HealthLake built-in validation) as part of the API pipeline or CI/CD
+- Profile validation MUST be automated. Use a FHIR validation library (e.g., HAPI FHIR Validator, Firely .NET SDK, or AWS HealthLake built-in validation) as part of the API pipeline or CI/CD
 - Non-compliant resources MUST be rejected with OperationOutcome detailing which profile constraints failed
 
 **Verification**:
@@ -125,8 +125,8 @@ All other rules are marked as N/A in compliance summaries.
   - `system`: The canonical URL for the terminology (e.g., `http://snomed.info/sct`, `http://loinc.org`)
   - `code`: The specific code from that system
   - `display`: The human-readable display text
-- ValueSet bindings defined in the applicable profiles (US Core, IPS) MUST be respected — required bindings are blocking, extensible bindings should use the defined ValueSet when a suitable code exists
-- Terminology validation MUST be implemented — codes must be valid within their declared CodeSystem
+- ValueSet bindings defined in the applicable profiles (US Core, IPS) MUST be respected. Required bindings are blocking, extensible bindings should use the defined ValueSet when a suitable code exists
+- Terminology validation MUST be implemented. Codes must be valid within their declared CodeSystem
 - When local/proprietary codes are necessary, they MUST be included as an additional coding alongside the standard terminology code (never as a replacement)
 
 **Verification**:
@@ -147,15 +147,15 @@ All other rules are marked as N/A in compliance summaries.
 **Requirements**:
 - The system MUST implement the [FHIR Bulk Data Access IG](http://hl7.org/fhir/uv/bulkdata/) (v2.0 preferred)
 - Supported export operations:
-  - `GET [fhir-base]/$export` — system-level export (all data)
-  - `GET [fhir-base]/Group/[id]/$export` — group-level export (specific patient cohort)
-  - `GET [fhir-base]/Patient/$export` — all patient data
+  - `GET [fhir-base]/$export`: system-level export (all data)
+  - `GET [fhir-base]/Group/[id]/$export`: group-level export (specific patient cohort)
+  - `GET [fhir-base]/Patient/$export`: all patient data
 - Export format MUST be NDJSON (Newline Delimited JSON) with one FHIR resource per line
 - Export MUST support the `_since` parameter for incremental exports (only resources modified since a given timestamp)
 - Export MUST support the `_type` parameter to filter by resource type
 - Export status MUST be trackable via the async request pattern (202 Accepted → polling URL → completed with download links)
 - Export files MUST be served from a secure, time-limited download URL (pre-signed S3 URL or equivalent)
-- Bulk data export MUST respect the same access controls and consent rules as individual FHIR requests — no bypass of authorization for bulk operations
+- Bulk data export MUST respect the same access controls and consent rules as individual FHIR requests. No bypass of authorization for bulk operations
 - Export operations MUST be logged in the audit trail (if HCLS Compliance is enabled)
 
 **Verification**:
