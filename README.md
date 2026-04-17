@@ -58,6 +58,18 @@ xcopy %USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rules .kiro\steering\aws-aid
 xcopy %USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details .kiro\aws-aidlc-rule-details\ /E /I
 ```
 
+After copying, add the following [YAML frontmatter](https://kiro.dev/docs/steering/#inclusion-modes) to the **top** of `.kiro/steering/aws-aidlc-rules/core-workflow.md`:
+
+```yaml
+---
+inclusion: always
+name: aidlc-core-workflow
+description: AI-DLC adaptive workflow for software development
+---
+```
+
+> **Note:** Without this frontmatter, Kiro treats the file as `auto` inclusion and may not load the AI-DLC workflow unless you explicitly mention it in your prompt. Setting `inclusion: always` ensures the rules are active on every interaction.
+
 Your project should look like:
 ```
 <project-root>/
