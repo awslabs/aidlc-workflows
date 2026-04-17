@@ -1,0 +1,350 @@
+name: Security Scanners
+
+on:
+  schedule:
+    # Daily at 03:47 UTC (random time to avoid GitHub Actions load spikes)
+    - cron: '47 3 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xz
+          sudo mv gitleaks /usr/local/bin/
+          gitleaks --version
+      - name: Run gitleaks (full history)
+        id: gitleaks
+        run: |
+          ARGS=""
+          [ -f .gitleaks.toml ] && ARGS="$ARGS --config=.gitleaks.toml"
+          [ -f .gitleaks-baseline.json ] && ARGS="$ARGS --baseline-path=.gitleaks-baseline.json"
+          set +e
+          gitleaks git $ARGS --report-path=gitleaks-report_sarif.json --report-format=sarif .
+          GITLEAKS_EXIT=$?
+          set -e
+          echo "exit_code=$GITLEAKS_EXIT" >> "$GITHUB_OUTPUT"
+          exit 0
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: gitleaks.sarif
+          path: gitleaks-report_sarif.json
+          if-no-files-found: error
+      - uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4.35.1
+        continue-on-error: true
+        with:
+          sarif_file: gitleaks-report_sarif.json
+      - if: steps.gitleaks.outputs.exit_code != '0'
+        env:
+          SCANNER_EXIT: ${{ steps.gitleaks.outputs.exit_code }}
+        run: |
+          echo "::error::gitleaks found secrets"
+          exit "$SCANNER_EXIT"
+
+  semgrep:
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    runs-on: ubuntu-latest
+    env:
+      SEMGREP_VERSION: "1.157.0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - run: |
+          echo "semgrep==$SEMGREP_VERSION" > requirements.txt
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.x'
+          cache: 'pip'
+      - run: |
+          pip install -r requirements.txt
+          rm requirements.txt
+      - name: Run semgrep
+        env:
+          BASELINE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          BASELINE_ARGS=""
+          if [ -n "$BASELINE_SHA" ]; then
+            BASELINE_ARGS="--baseline-commit $BASELINE_SHA"
+          fi
+          set +e
+          semgrep scan --oss-only --verbose --metrics=off --config=r/all \
+            --max-log-list-entries=0 \
+            --sarif-output semgrep-report_sarif.json $BASELINE_ARGS
+          SEMGREP_EXIT=$?
+          set -e
+          exit 0
+      - name: Fix SARIF for GitHub compatibility
+        continue-on-error: true
+        run: |
+          # Fix 1: Convert text security-severity to numeric (CVSS 0.0-10.0)
+          sed -i \
+            -e 's/"security-severity":"Info"/"security-severity":"0.0"/gI' \
+            -e 's/"security-severity":"Low"/"security-severity":"2.0"/gI' \
+            -e 's/"security-severity":"Medium"/"security-severity":"5.0"/gI' \
+            -e 's/"security-severity":"High"/"security-severity":"7.0"/gI' \
+            -e 's/"security-severity":"Critical"/"security-severity":"9.0"/gI' \
+            semgrep-report_sarif.json
+
+          # Fix 2: Truncate rule IDs exceeding 255 characters
+          jq '
+            (.runs[0].tool.driver.rules // []) as $rules |
+            ([$rules[] | select((.id | length) > 255) |
+              {key: .id, value: (.id[0:247] + "-" + (.id | @base64 | gsub("[+/]"; "_") | .[0:7]))}
+            ] | from_entries) as $id_map |
+            .runs[0].tool.driver.rules = [
+              $rules[] |
+              if (.id | length) > 255 then
+                .id = $id_map[.id] |
+                .name = $id_map[.name] // .name
+              else . end
+            ] |
+            .runs[0].results = [
+              (.runs[0].results // [])[] |
+              if (.ruleId | length) > 255 then
+                .ruleId = $id_map[.ruleId]
+              else . end
+            ]
+          ' semgrep-report_sarif.json > semgrep.sarif.tmp.json && mv semgrep.sarif.tmp.json semgrep-report_sarif.json
+      - name: Check for ERROR severity findings
+        id: semgrep
+        run: |
+          # Fail only if ERROR severity findings exist (level=error in SARIF)
+          HIGH_COUNT=$(jq '[.runs[0].results[] | select(.level == "error")] | length' semgrep-report_sarif.json 2>/dev/null || echo 0)
+          if [ "$HIGH_COUNT" -gt 0 ]; then
+            echo "exit_code=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: semgrep.sarif
+          path: semgrep-report_sarif.json
+          if-no-files-found: error
+      - uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4.35.1
+        continue-on-error: true
+        with:
+          sarif_file: semgrep-report_sarif.json
+      - if: steps.semgrep.outputs.exit_code != '0'
+        env:
+          SCANNER_EXIT: ${{ steps.semgrep.outputs.exit_code }}
+        run: |
+          echo "::error::semgrep found new security issues"
+          exit "$SCANNER_EXIT"
+
+  grype:
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/dee8de483dfba5b4e0bc0aa8e4ab2ce52137e490/install.sh | sh -s -- -b /usr/local/bin v0.110.0
+          grype --version
+      - name: Run grype
+        id: grype
+        run: |
+          set +e
+          grype --config .grype.yaml --output sarif . | tee grype-report_sarif.json
+          GRYPE_EXIT=${PIPESTATUS[0]}
+          set -e
+          echo "exit_code=$GRYPE_EXIT" >> "$GITHUB_OUTPUT"
+          exit 0
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: grype.sarif
+          path: grype-report_sarif.json
+          if-no-files-found: error
+      - uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4.35.1
+        continue-on-error: true
+        with:
+          sarif_file: grype-report_sarif.json
+      - if: steps.grype.outputs.exit_code != '0'
+        env:
+          SCANNER_EXIT: ${{ steps.grype.outputs.exit_code }}
+        run: |
+          echo "::error::grype found vulnerabilities"
+          exit "$SCANNER_EXIT"
+
+  bandit:
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    runs-on: ubuntu-latest
+    env:
+      BANDIT_VERSION: "1.9.4"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: |
+          echo "bandit[sarif]==$BANDIT_VERSION" > requirements.txt
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.x'
+          cache: 'pip'
+      - name: Run bandit
+        id: bandit
+        run: |
+          pip install -r requirements.txt
+          rm requirements.txt
+          set +e
+          bandit -c .bandit -r scripts/aidlc-evaluator -f sarif -o bandit-report_sarif.json
+          BANDIT_EXIT=$?
+          set -e
+          # Fail only if HIGH severity findings exist (level=error in SARIF)
+          HIGH_COUNT=$(jq '[.runs[0].results[] | select(.level == "error")] | length' bandit-report_sarif.json 2>/dev/null || echo 0)
+          if [ "$HIGH_COUNT" -gt 0 ]; then
+            echo "exit_code=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: bandit.sarif
+          path: bandit-report_sarif.json
+          if-no-files-found: error
+      - uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4.35.1
+        continue-on-error: true
+        with:
+          sarif_file: bandit-report_sarif.json
+      - if: steps.bandit.outputs.exit_code != '0'
+        env:
+          SCANNER_EXIT: ${{ steps.bandit.outputs.exit_code }}
+        run: |
+          echo "::error::bandit found security issues"
+          exit "$SCANNER_EXIT"
+
+  checkov:
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    runs-on: ubuntu-latest
+    env:
+      CHECKOV_VERSION: "3.2.513"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: |
+          echo "checkov==$CHECKOV_VERSION" > requirements.txt
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.x'
+          cache: 'pip'
+      - name: Run checkov
+        run: |
+          pip install -r requirements.txt
+          rm requirements.txt
+          set +e
+          checkov -d . --output sarif --output-file-path .
+          CHECKOV_EXIT=$?
+          mv results_sarif.sarif checkov-report_sarif.json || true
+          set -e
+          exit 0
+      - name: Check for ERROR severity findings
+        id: checkov
+        run: |
+          # Fail only if ERROR severity findings exist (level=error in SARIF)
+          HIGH_COUNT=$(jq '[.runs[0].results[] | select(.level == "error")] | length' checkov-report_sarif.json 2>/dev/null || echo 0)
+          if [ "$HIGH_COUNT" -gt 0 ]; then
+            echo "exit_code=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: checkov.sarif
+          path: checkov-report_sarif.json
+          if-no-files-found: error
+      - uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4.35.1
+        continue-on-error: true
+        with:
+          sarif_file: checkov-report_sarif.json
+      - if: steps.checkov.outputs.exit_code != '0'
+        env:
+          SCANNER_EXIT: ${{ steps.checkov.outputs.exit_code }}
+        run: |
+          echo "::error::checkov found IaC issues"
+          exit "$SCANNER_EXIT"
+
+  clamav:
+    permissions:
+      actions: read
+      contents: read
+    runs-on: ubuntu-latest
+    services:
+      clamav:
+        image: clamav/clamav@sha256:bf876a415b7ff77b9305b1de087e6d16833d170931581b01404e8761cb0dc87c
+        ports:
+          - 127.0.0.1:3310:3310
+        options: >-
+          --health-cmd "/usr/local/bin/clamdcheck.sh"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Wait for ClamAV service
+        run: timeout 300 bash -c 'until echo > /dev/tcp/localhost/3310; do sleep 5; done' 2>/dev/null
+      - name: Install clamdscan client
+        run: |
+          sudo apt-get update || true
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get install -y --no-install-recommends clamdscan
+          sudo mkdir -p /etc/clamav
+          cat << EOF | sudo tee /etc/clamav/clamd.conf
+          TCPSocket 3310
+          TCPAddr 127.0.0.1
+          EOF
+          clamdscan --version
+      - name: Run ClamAV scan
+        id: clamav
+        run: |
+          set +e
+          clamdscan --verbose --log=clamdscan.txt --stream --fdpass --multiscan .
+          CLAMAV_EXIT=$?
+          set -e
+          echo "exit_code=$CLAMAV_EXIT" >> "$GITHUB_OUTPUT"
+          exit 0
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: clamdscan.txt
+          path: clamdscan.txt
+          if-no-files-found: error
+      - if: steps.clamav.outputs.exit_code != '0'
+        env:
+          SCANNER_EXIT: ${{ steps.clamav.outputs.exit_code }}
+        run: |
+          echo "::error::clamav detected malware"
+          exit "$SCANNER_EXIT"

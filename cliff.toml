@@ -17,14 +17,21 @@ body = """
 {% for group, commits in commits | group_by(attribute="group") %}
 
 ### {{ group | striptags | trim | upper_first }}
-{% for commit in commits %}
-- {{ commit.message | split(pat="\n") | first | trim }}\
-{% endfor %}
+
+{% for commit in commits %}\
+- {{ commit.message | split(pat="\n") | first | trim }}
+{% endfor %}\
 {% endfor %}
 """
 
 footer = ""
-trim = true
+# trim = false so each body's leading \n creates a blank line separator
+# between concatenated version sections (required for MD022/MD032)
+trim = false
+postprocessors = [
+  # Normalize triple+ blank lines to single blank (MD012/no-multiple-blanks)
+  { pattern = "\n{3,}", replace = "\n\n" },
+]
 
 [git]
 conventional_commits = true
@@ -32,13 +39,15 @@ filter_unconventional = true
 split_commits = false
 
 commit_parsers = [
+  { message = "^docs: update changelog", skip = true },
   { message = "^feat", group = "Features" },
   { message = "^fix", group = "Bug Fixes" },
-  { message = "^doc", group = "Documentation" },
+  { message = "^docs", group = "Documentation" },
   { message = "^perf", group = "Performance" },
   { message = "^refactor", group = "Refactoring" },
   { message = "^style", group = "Style" },
   { message = "^test", group = "Tests" },
+  { message = "^build", group = "CI/CD" },
   { message = "^ci", group = "CI/CD" },
   { message = "^chore", group = "Miscellaneous" },
 ]
@@ -46,3 +55,7 @@ commit_parsers = [
 filter_commits = false
 tag_pattern = "v[0-9].*"
 sort_commits = "oldest"
+
+[bump]
+features_always_bump_minor = true
+breaking_always_bump_major = true

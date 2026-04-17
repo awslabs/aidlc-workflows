@@ -87,7 +87,7 @@ This stage generates code for each unit of work through two integrated parts:
 - [ ] Mark the approval status clearly
 
 ## Step 9: Update Progress
-- [ ] Mark Code Planning complete in `aidlc-state.md`
+- [ ] Mark Code Generation Part 1 (Planning) complete in `aidlc-state.md`
 - [ ] Update the "Current Status" section
 - [ ] Prepare for transition to Code Generation
 

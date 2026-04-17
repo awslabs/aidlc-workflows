@@ -24,40 +24,40 @@ AI-DLC is a structured yet flexible software development process that adapts to 
                          User Request
                               |
                               v
-        ╔═══════════════════════════════════════╗
-        ║     INCEPTION PHASE                   ║
-        ║     Planning & Application Design     ║
-        ╠═══════════════════════════════════════╣
-        ║ • Workspace Detection (ALWAYS)        ║
-        ║ • Reverse Engineering (COND)          ║
-        ║ • Requirements Analysis (ALWAYS)      ║
-        ║ • User Stories (CONDITIONAL)          ║
-        ║ • Workflow Planning (ALWAYS)          ║
-        ║ • Application Design (CONDITIONAL)    ║
-        ║ • Units Generation (CONDITIONAL)      ║
-        ╚═══════════════════════════════════════╝
+        +---------------------------------------+
+        |     INCEPTION PHASE                   |
+        |     Planning & Application Design     |
+        +---------------------------------------+
+        | * Workspace Detection (ALWAYS)        |
+        | * Reverse Engineering (COND)          |
+        | * Requirements Analysis (ALWAYS)      |
+        | * User Stories (CONDITIONAL)          |
+        | * Workflow Planning (ALWAYS)          |
+        | * Application Design (CONDITIONAL)    |
+        | * Units Generation (CONDITIONAL)      |
+        +---------------------------------------+
                               |
                               v
-        ╔═══════════════════════════════════════╗
-        ║     CONSTRUCTION PHASE                ║
-        ║     Design, Implementation & Test     ║
-        ╠═══════════════════════════════════════╣
-        ║ • Per-Unit Loop (for each unit):      ║
-        ║   - Functional Design (COND)          ║
-        ║   - NFR Requirements Assess (COND)    ║
-        ║   - NFR Design (COND)                 ║
-        ║   - Infrastructure Design (COND)      ║
-        ║   - Code Generation (ALWAYS)          ║
-        ║ • Build and Test (ALWAYS)             ║
-        ╚═══════════════════════════════════════╝
+        +---------------------------------------+
+        |     CONSTRUCTION PHASE                |
+        |     Design, Implementation & Test     |
+        +---------------------------------------+
+        | * Per-Unit Loop (for each unit):      |
+        |   - Functional Design (COND)          |
+        |   - NFR Requirements Assess (COND)    |
+        |   - NFR Design (COND)                 |
+        |   - Infrastructure Design (COND)      |
+        |   - Code Generation (ALWAYS)          |
+        | * Build and Test (ALWAYS)             |
+        +---------------------------------------+
                               |
                               v
-        ╔═══════════════════════════════════════╗
-        ║     OPERATIONS PHASE                  ║
-        ║     Placeholder for Future            ║
-        ╠═══════════════════════════════════════╣
-        ║ • Operations (PLACEHOLDER)            ║
-        ╚═══════════════════════════════════════╝
+        +---------------------------------------+
+        |     OPERATIONS PHASE                  |
+        |     Placeholder for Future            |
+        +---------------------------------------+
+        | * Operations (PLACEHOLDER)            |
+        +---------------------------------------+
                               |
                               v
                           Complete

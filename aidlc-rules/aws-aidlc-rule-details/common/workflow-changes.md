@@ -1,37 +1,37 @@
-# Mid-Workflow Changes and Phase Management
+# Mid-Workflow Changes and Stage Management
 
 ## Overview
 
-Users may request changes to the execution plan or phase execution during the workflow. This document provides guidance on handling these requests safely and effectively.
+Users may request changes to the execution plan or stage execution during the workflow. This document provides guidance on handling these requests safely and effectively.
 
 ---
 
 ## Types of Mid-Workflow Changes
 
-### 1. Adding a Skipped Phase
+### 1. Adding a Skipped Stage
 
-**Scenario**: User wants to add a phase that was originally skipped
+**Scenario**: User wants to add a stage that was originally skipped
 
 **Example**: "Actually, I want to add user stories even though we skipped that stage"
 
 **Handling**:
 1. **Confirm Request**: "You want to add User Stories stage. This will create user stories and personas. Confirm?"
-2. **Check Dependencies**: Verify all prerequisite phases are complete
-3. **Update Execution Plan**: Add phase to `execution-plan.md` with rationale
-4. **Update State**: Mark phase as "PENDING" in `aidlc-state.md`
-5. **Execute Phase**: Follow normal phase execution process
+2. **Check Dependencies**: Verify all prerequisite stages are complete
+3. **Update Execution Plan**: Add stage to `execution-plan.md` with rationale
+4. **Update State**: Mark stage as "PENDING" in `aidlc-state.md`
+5. **Execute Stage**: Follow normal stage execution process
 6. **Log Change**: Document in `audit.md` with timestamp and reason
 
 **Considerations**:
-- May need to update later phases that could benefit from new artifacts
+- May need to update later stages that could benefit from new artifacts
 - Existing artifacts may need revision to incorporate new information
 - Timeline will be extended
 
 ---
 
-### 2. Skipping a Planned Phase
+### 2. Skipping a Planned Stage
 
-**Scenario**: User wants to skip a phase that was planned to execute
+**Scenario**: User wants to skip a stage that was planned to execute
 
 **Example**: "Let's skip the NFR Design stage for now"
 
@@ -39,13 +39,13 @@ Users may request changes to the execution plan or phase execution during the wo
 1. **Confirm Request**: "You want to skip NFR Design. This means no NFR patterns or logical components will be incorporated. Confirm?"
 2. **Warn About Impact**: Explain what will be missing and potential consequences
 3. **Get Explicit Confirmation**: User must explicitly confirm understanding of impact
-4. **Update Execution Plan**: Mark phase as "SKIPPED" with reason
-5. **Update State**: Mark phase as "SKIPPED" in `aidlc-state.md`
-6. **Adjust Later Phases**: Note that later phases may need manual setup
+4. **Update Execution Plan**: Mark stage as "SKIPPED" with reason
+5. **Update State**: Mark stage as "SKIPPED" in `aidlc-state.md`
+6. **Adjust Later Stages**: Note that later stages may need manual setup
 7. **Log Change**: Document in `audit.md` with timestamp and reason
 
 **Considerations**:
-- Later phases may fail or require manual intervention
+- Later stages may fail or require manual intervention
 - User accepts responsibility for missing artifacts
 - Can be added back later if needed
 
@@ -85,7 +85,7 @@ Users may request changes to the execution plan or phase execution during the wo
 
 **Handling**:
 1. **Assess Impact**: Identify all stages that depend on the stage to be restarted
-2. **Warn User**: "Restarting Application Design will require redoing: Units Planning, Units Generation, per-unit design (all units), Code Planning, Code Generation. Confirm?"
+2. **Warn User**: "Restarting Application Design will require redoing: Units Planning, Units Generation, per-unit design (all units), Code Generation. Confirm?"
 3. **Get Explicit Confirmation**: User must understand full impact
 4. **If Confirmed**:
    - Archive all affected artifacts
@@ -134,7 +134,7 @@ Users may request changes to the execution plan or phase execution during the wo
 2. **Update Checkboxes**: Mark all completed steps with [x]
 3. **Update State**: Ensure `aidlc-state.md` reflects current status
 4. **Log Pause**: Document pause point in `audit.md`
-5. **Provide Resume Instructions**: "When you return, I'll detect your existing project and offer to continue from: [current phase, current step]"
+5. **Provide Resume Instructions**: "When you return, I'll detect your existing project and offer to continue from: [current stage, current step]"
 
 **On Resume**:
 1. **Detect Existing Project**: Check for `aidlc-state.md`
@@ -229,21 +229,21 @@ Users may request changes to the execution plan or phase execution during the wo
 ```
 User requests change
     |
-    ├─ Is it current phase?
-    |   ├─ Yes: Can modify or restart current phase
+    ├─ Is it current stage?
+    |   ├─ Yes: Can modify or restart current stage
     |   └─ No: Go to next question
     |
-    ├─ Is it a completed phase?
-    |   ├─ Yes: Assess impact on dependent phases
+    ├─ Is it a completed stage?
+    |   ├─ Yes: Assess impact on dependent stages
     |   |   ├─ Low impact: Modify and update dependents
-    |   |   └─ High impact: Recommend restart from that phase
+    |   |   └─ High impact: Recommend restart from that stage
     |   └─ No: Go to next question
     |
-    ├─ Is it adding a skipped phase?
+    ├─ Is it adding a skipped stage?
     |   ├─ Yes: Check prerequisites, add to plan, execute
     |   └─ No: Go to next question
     |
-    ├─ Is it skipping a planned phase?
+    ├─ Is it skipping a planned stage?
     |   ├─ Yes: Warn about impact, get confirmation, skip
     |   └─ No: Go to next question
     |
@@ -259,7 +259,7 @@ User requests change
 ### Change Request Log Format
 
 ```markdown
-## Change Request - [Phase Name]
+## Change Request - [Stage Name]
 **Timestamp**: [ISO timestamp]
 **Request**: [What user wants to change]
 **Current State**: [Where we are in workflow]

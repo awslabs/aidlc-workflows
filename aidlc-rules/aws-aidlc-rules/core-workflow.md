@@ -357,7 +357,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 
 **Skip IF**:
 - No NFR requirements
-- NFR Requirements Assessment was skipped
+- NFR Requirements was skipped
 
 **Execution**:
 1. **MANDATORY**: Log any user input during this stage in audit.md
@@ -478,7 +478,7 @@ The Operations stage will eventually include:
 - **MANDATORY**: Log every approval prompt with timestamp before asking the user
 - **MANDATORY**: Record every user response with timestamp after receiving it
 - **CRITICAL**: ALWAYS append changes to EDIT audit.md file, NEVER use tools and commands that completely overwrite its contents
-- **CRITICAL**: Using file writing tools and commands that overwrite contents of the entire audit.md and cause duplication
+- **CRITICAL**: NEVER use file writing tools and commands that overwrite the entire contents of audit.md, as this causes duplication
 - Use ISO 8601 format for timestamps (YYYY-MM-DDTHH:MM:SSZ)
 - Include stage context for each entry
 

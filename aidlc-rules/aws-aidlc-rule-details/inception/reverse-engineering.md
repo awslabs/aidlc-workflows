@@ -6,7 +6,7 @@
 
 **Skip when**: Greenfield project (no existing code)
 
-**Rerun behavior**: Always rerun when brownfield project detected, even if artifacts exist. This ensures artifacts reflect current code state
+**Rerun behavior**: Rerun is controlled by workspace-detection.md. If existing reverse engineering artifacts are found and are still current, they are loaded and reverse engineering is skipped. If artifacts are stale (older than the codebase's last significant modification) or the user explicitly requests a rerun, reverse engineering executes again to ensure artifacts reflect current code state
 
 ## Step 1: Multi-Package Discovery
 
@@ -43,7 +43,7 @@
 - Linting configurations
 - CI/CD pipelines
 
-## Step 1: Generate Business Overview Documentation
+## Step 2: Generate Business Overview Documentation
 
 Create `aidlc-docs/inception/reverse-engineering/business-overview.md`:
 
@@ -64,7 +64,7 @@ Create `aidlc-docs/inception/reverse-engineering/business-overview.md`:
 - **Responsibilities**: [Key responsibilities]
 ```
 
-## Step 2: Generate Architecture Documentation
+## Step 3: Generate Architecture Documentation
 
 Create `aidlc-docs/inception/reverse-engineering/architecture.md`:
 
@@ -98,7 +98,7 @@ Create `aidlc-docs/inception/reverse-engineering/architecture.md`:
 - **Networking**: [VPC, subnets, security groups]
 ```
 
-## Step 3: Generate Code Structure Documentation
+## Step 4: Generate Code Structure Documentation
 
 Create `aidlc-docs/inception/reverse-engineering/code-structure.md`:
 
@@ -131,7 +131,7 @@ Create `aidlc-docs/inception/reverse-engineering/code-structure.md`:
 - **Purpose**: [Why needed]
 ```
 
-## Step 4: Generate API Documentation
+## Step 5: Generate API Documentation
 
 Create `aidlc-docs/inception/reverse-engineering/api-documentation.md`:
 
@@ -159,7 +159,7 @@ Create `aidlc-docs/inception/reverse-engineering/api-documentation.md`:
 - **Validation**: [Validation rules]
 ```
 
-## Step 5: Generate Component Inventory
+## Step 6: Generate Component Inventory
 
 Create `aidlc-docs/inception/reverse-engineering/component-inventory.md`:
 
@@ -186,7 +186,7 @@ Create `aidlc-docs/inception/reverse-engineering/component-inventory.md`:
 - **Test**: [Number]
 ```
 
-## Step 6: Generate Technology Stack Documentation
+## Step 7: Generate Technology Stack Documentation
 
 Create `aidlc-docs/inception/reverse-engineering/technology-stack.md`:
 
@@ -209,7 +209,7 @@ Create `aidlc-docs/inception/reverse-engineering/technology-stack.md`:
 - [Tool] - [Version] - [Purpose]
 ```
 
-## Step 7: Generate Dependencies Documentation
+## Step 8: Generate Dependencies Documentation
 
 Create `aidlc-docs/inception/reverse-engineering/dependencies.md`:
 
@@ -230,7 +230,7 @@ Create `aidlc-docs/inception/reverse-engineering/dependencies.md`:
 - **License**: [License type]
 ```
 
-## Step 8: Generate Code Quality Assessment
+## Step 9: Generate Code Quality Assessment
 
 Create `aidlc-docs/inception/reverse-engineering/code-quality-assessment.md`:
 
@@ -255,7 +255,7 @@ Create `aidlc-docs/inception/reverse-engineering/code-quality-assessment.md`:
 - **Anti-patterns**: [List with locations]
 ```
 
-## Step 9: Create Timestamp File
+## Step 10: Create Timestamp File
 
 Create `aidlc-docs/inception/reverse-engineering/reverse-engineering-timestamp.md`:
 
@@ -277,7 +277,7 @@ Create `aidlc-docs/inception/reverse-engineering/reverse-engineering-timestamp.m
 - [x] code-quality-assessment.md
 ```
 
-## Step 10: Update State Tracking
+## Step 11: Update State Tracking
 
 Update `aidlc-docs/aidlc-state.md`:
 
@@ -287,7 +287,7 @@ Update `aidlc-docs/aidlc-state.md`:
 - **Artifacts Location**: aidlc-docs/inception/reverse-engineering/
 ```
 
-## Step 11: Present Completion Message to User
+## Step 12: Present Completion Message to User
 
 ```markdown
 # 🔍 Reverse Engineering Complete
@@ -305,7 +305,7 @@ Update `aidlc-docs/aidlc-state.md`:
 > ✅ **Approve & Continue** - Approve analysis and proceed to **Requirements Analysis**
 ```
 
-## Step 12: Wait for User Approval
+## Step 13: Wait for User Approval
 
 - **MANDATORY**: Do not proceed until user explicitly approves
 - **MANDATORY**: Log user's response in audit.md with complete raw input

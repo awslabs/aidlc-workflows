@@ -244,7 +244,7 @@ If the analysis in step 9 reveals ANY ambiguous answers, you MUST:
 - [ ] Save all generated artifacts
 
 ## Step 18: Continue or Complete Generation
-- [ ] If more steps remain, return to Step 14
+- [ ] If more steps remain, return to Step 15
 - [ ] If all steps complete, verify stories are ready for next stage
 - [ ] Ensure all mandatory artifacts are generated
 

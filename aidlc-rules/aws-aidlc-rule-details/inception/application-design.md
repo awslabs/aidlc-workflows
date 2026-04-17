@@ -12,9 +12,9 @@ Application Design focuses on:
 **Note**: Detailed business logic design happens later in Functional Design (per-unit, CONSTRUCTION phase)
 
 ## Prerequisites
-- Context Assessment must be complete
-- Requirements Assessment recommended (provides functional context)
-- Story Development recommended (user stories guide design decisions)
+- Workspace Detection must be complete
+- Requirements Analysis recommended (provides functional context)
+- User Stories recommended (user stories guide design decisions)
 - Execution plan must indicate Application Design stage should execute
 
 ## Step-by-Step Execution
@@ -38,18 +38,19 @@ Application Design focuses on:
   - [ ] Validate design completeness and consistency
 
 ### 4. Generate Context-Appropriate Questions
-**DIRECTIVE**: Analyze the requirements and stories to generate ONLY questions relevant to THIS specific application design. Use the categories below as inspiration, NOT as a mandatory checklist. Skip entire categories if not applicable.
+**DIRECTIVE**: Analyze the requirements and stories to generate questions relevant to THIS specific application design. Use the categories below as guidance. Evaluate each category and, when in doubt about applicability, ask the question rather than skipping it — overconfidence leads to poor outcomes (see overconfidence-prevention.md).
 
 - EMBED questions using [Answer]: tag format
-- Focus on ambiguities and missing information specific to this context
-- Generate questions only where user input is needed for design decisions
+- Focus on ANY ambiguities, missing information, or areas needing clarification
+- Generate questions wherever user input would improve design decisions
+- **When in doubt, ask the question** - overconfidence leads to poor designs
 
-**Example question categories** (adapt as needed):
-- **Component Identification** - Only if component boundaries or organization is unclear
-- **Component Methods** - Only if method signatures need clarification (detailed business rules come later)
-- **Service Layer Design** - Only if service orchestration or boundaries are ambiguous
-- **Component Dependencies** - Only if communication patterns or dependency management is unclear
-- **Design Patterns** - Only if architectural style or pattern choice needs user input
+**Question categories to evaluate** (consider ALL categories):
+- **Component Identification** - Ask about component boundaries, organization, and grouping strategies
+- **Component Methods** - Ask about method signatures, input/output expectations, and interface contracts (detailed business rules come later)
+- **Service Layer Design** - Ask about service orchestration, boundaries, and coordination patterns
+- **Component Dependencies** - Ask about communication patterns, dependency management, and coupling concerns
+- **Design Patterns** - Ask about architectural style preferences, pattern choices, and design constraints
 
 ### 5. Store Application Design Plan
 - Save as `aidlc-docs/inception/plans/application-design-plan.md`

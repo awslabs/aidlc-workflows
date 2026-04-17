@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AIDLC Report — 20260218T125810-b84d042dff254a72b4ffec926fe5ea99</title>
+<link rel='preconnect' href='https://fonts.googleapis.com'>
+<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap' rel='stylesheet'>
+<style>
+:root {
+  --bg: #0f172a; --surface: #1e293b; --surface2: #334155;
+  --text: #e2e8f0; --text2: #94a3b8; --border: #475569;
+  --green: #22c55e; --green-bg: #052e16; --green-border: #166534;
+  --red: #ef4444; --red-bg: #450a0a; --red-border: #991b1b;
+  --yellow: #eab308; --yellow-bg: #422006; --yellow-border: #854d0e;
+  --blue: #3b82f6; --blue-bg: #172554; --blue-border: #1d4ed8;
+  --purple: #a855f7; --accent: #38bdf8;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg); color: var(--text); line-height: 1.6;
+  max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem;
+}
+h1 { font-size: 2rem; font-weight: 700; margin-bottom: .25rem; }
+h2 {
+  font-size: 1.25rem; font-weight: 600; color: var(--accent);
+  margin: 2.5rem 0 1rem; padding-bottom: .5rem; border-bottom: 1px solid var(--border);
+}
+h3 { font-size: 1.05rem; font-weight: 600; margin: 1.5rem 0 .75rem; }
+.subtitle { color: var(--text2); font-size: .9rem; margin-bottom: 2rem; }
+code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: .85em;
+  background: var(--surface2); padding: .15em .4em; border-radius: 4px;
+}
+
+/* ── Cards ── */
+.card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 1.25rem; transition: border-color .2s;
+}
+.card:hover { border-color: var(--accent); }
+.card-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; color: var(--text2); margin-bottom: .5rem; }
+.card-value { font-size: 1.75rem; font-weight: 700; }
+.card-detail { font-size: .8rem; color: var(--text2); margin-top: .25rem; }
+
+/* ── Badges ── */
+.badge {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .25rem .75rem; border-radius: 999px; font-size: .8rem; font-weight: 600;
+}
+.badge-pass { background: var(--green-bg); color: var(--green); border: 1px solid var(--green-border); }
+.badge-fail { background: var(--red-bg); color: var(--red); border: 1px solid var(--red-border); }
+.badge-warn { background: var(--yellow-bg); color: var(--yellow); border: 1px solid var(--yellow-border); }
+.badge-info { background: var(--blue-bg); color: var(--blue); border: 1px solid var(--blue-border); }
+
+/* ── Progress bar ── */
+.progress-wrap { width: 100%; background: var(--surface2); border-radius: 6px; overflow: hidden; height: 10px; }
+.progress-bar { height: 100%; border-radius: 6px; transition: width .4s ease; }
+.progress-green { background: linear-gradient(90deg, #16a34a, #22c55e); }
+.progress-yellow { background: linear-gradient(90deg, #ca8a04, #eab308); }
+.progress-red { background: linear-gradient(90deg, #dc2626, #ef4444); }
+
+/* ── Tables ── */
+table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; font-size: .875rem; }
+th { text-align: left; padding: .6rem .75rem; background: var(--surface); color: var(--text2);
+     font-weight: 600; font-size: .75rem; text-transform: uppercase; letter-spacing: .05em;
+     border-bottom: 2px solid var(--border); }
+td { padding: .55rem .75rem; border-bottom: 1px solid var(--surface2); }
+tr:hover td { background: var(--surface); }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.pass-icon::before { content: '\2714'; color: var(--green); margin-right: .3rem; }
+.fail-icon::before { content: '\2718'; color: var(--red); margin-right: .3rem; }
+
+/* ── Accordion ── */
+details { margin: .5rem 0; }
+details summary {
+  cursor: pointer; padding: .5rem .75rem; background: var(--surface);
+  border-radius: 8px; font-size: .85rem; color: var(--text2);
+  transition: background .2s;
+}
+details summary:hover { background: var(--surface2); }
+details[open] summary { border-radius: 8px 8px 0 0; }
+details .detail-body { background: var(--surface); padding: .75rem; border-radius: 0 0 8px 8px;
+  font-size: .82rem; line-height: 1.65; color: var(--text2); }
+
+/* ── Score ring ── */
+.score-ring { display: inline-flex; align-items: center; gap: .75rem; }
+.ring-container { position: relative; width: 80px; height: 80px; }
+.ring-container svg { transform: rotate(-90deg); }
+.ring-container circle { fill: none; stroke-width: 6; }
+.ring-bg { stroke: var(--surface2); }
+.ring-fg { stroke-linecap: round; transition: stroke-dashoffset .6s ease; }
+.ring-label {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 1.1rem; font-weight: 700;
+}
+
+/* ── Phase bar chart ── */
+.phase-bars { display: flex; gap: 2rem; margin: 1rem 0; }
+.phase-bar-group { flex: 1; }
+.phase-bar-title { font-size: .8rem; font-weight: 600; margin-bottom: .5rem; text-transform: capitalize; }
+.bar-row { display: flex; align-items: center; gap: .5rem; margin: .35rem 0; }
+.bar-row-label { width: 80px; font-size: .75rem; color: var(--text2); text-align: right; }
+.bar-track { flex: 1; height: 8px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 4px; }
+.bar-val { width: 35px; font-size: .75rem; font-weight: 600; }
+
+.footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border);
+  color: var(--text2); font-size: .75rem; text-align: center; }
+
+/* ── Comparison ── */
+.cmp-summary { display: flex; gap: 1.5rem; margin-bottom: 1.5rem; }
+.cmp-stat { text-align: center; }
+.cmp-stat-val { font-size: 1.75rem; font-weight: 700; }
+.cmp-stat-label { font-size: .75rem; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; }
+.delta-improved { color: var(--green); }
+.delta-regressed { color: var(--red); }
+.delta-unchanged { color: var(--text2); }
+.delta-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: .4rem; vertical-align: middle; }
+.dot-improved { background: var(--green); }
+.dot-regressed { background: var(--red); }
+.dot-unchanged { background: var(--text2); }
+</style>
+</head><body>
+<h1>AIDLC Evaluation Report</h1>
+<div class="subtitle"><code>20260218T125810-b84d042dff254a72b4ffec926fe5ea99</code> &middot; 2026-02-18T13:45:16+00:00</div>
+<div class="card-grid">
+<div class="card"><div class="card-label">Unit Tests</div>
+<div class="card-value"><span class="badge badge-pass">192/192</span></div>
+<div class="card-detail">Coverage: 91.3%</div>
+</div>
+<div class="card"><div class="card-label">Contract Tests</div>
+<div class="card-value"><span class="badge badge-pass">88/88</span></div>
+<div class="card-detail">API endpoints validated</div>
+</div>
+<div class="card"><div class="card-label">Code Quality</div>
+<div class="card-value"><span class="badge badge-warn">18 findings</span></div>
+<div class="card-detail">5 errors, 13 warnings</div>
+</div>
+<div class="card"><div class="card-label">Qualitative Score</div>
+<div class="card-value" style="display:flex;align-items:center;gap:.75rem">
+<div class="ring-container" style="width:64px;height:64px">
+  <svg width="64" height="64" viewBox="0 0 64 64">
+    <circle class="ring-bg" cx="32" cy="32" r="29.0"/>
+    <circle class="ring-fg" cx="32" cy="32" r="29.0"
+      stroke="var(--green)" stroke-dasharray="182.2" stroke-dashoffset="19.9"/>
+  </svg>
+  <div class="ring-label" style="color:var(--green)">89%</div>
+</div>
+</div></div>
+<div class="card"><div class="card-label">Execution Time</div>
+<div class="card-value">24.1m</div>
+<div class="card-detail">3 handoffs</div>
+</div>
+<div class="card"><div class="card-label">Total Tokens</div>
+<div class="card-value">9.8M</div>
+<div class="card-detail">in: 9.7M / out: 140K</div>
+</div>
+</div>
+<h2>Run Overview</h2>
+<table>
+<tr><td><strong>Status</strong></td><td><code>Status.COMPLETED</code></td></tr>
+<tr><td><strong>Executor</strong></td><td><code>global.anthropic.claude-opus-4-6-v1</code></td></tr>
+<tr><td><strong>Simulator</strong></td><td><code>us.anthropic.claude-sonnet-4-5-20250929-v1:0</code></td></tr>
+<tr><td><strong>Region</strong></td><td><code>us-west-2</code></td></tr>
+<tr><td><strong>Handoffs</strong></td><td>3 (executor &rarr; simulator &rarr; executor)</td></tr>
+</table>
+<h2>Handoff Timeline</h2>
+<div style="display:flex;gap:2px;height:32px;border-radius:8px;overflow:hidden;margin-bottom:1rem">
+<div style="width:67.5%;background:var(--blue);display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:600;min-width:30px" title="executor #1: 16.3m">E1</div>
+<div style="width:4.7%;background:var(--purple);display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:600;min-width:30px" title="simulator #2: 1.1m">S2</div>
+<div style="width:27.8%;background:var(--blue);display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:600;min-width:30px" title="executor #3: 6.7m">E3</div>
+</div>
+<table><tr><th>#</th><th>Agent</th><th>Duration</th><th>% of Total</th></tr>
+<tr><td class="num">1</td><td>executor</td><td>16.3m</td><td class="num">67.5%</td></tr>
+<tr><td class="num">2</td><td>simulator</td><td>1.1m</td><td class="num">4.7%</td></tr>
+<tr><td class="num">3</td><td>executor</td><td>6.7m</td><td class="num">27.8%</td></tr>
+</table>
+<h2>Token Usage</h2>
+<table><tr><th>Agent</th><th class='num'>Input</th><th class='num'>Output</th><th class='num'>Total</th></tr>
+<tr><td>Executor</td><td class='num'>5.7M</td><td class='num'>77K</td><td class='num'>5.7M</td></tr>
+<tr><td>Simulator</td><td class='num'>180K</td><td class='num'>2K</td><td class='num'>182K</td></tr>
+<tr><td><strong>Total</strong></td><td class='num'>9.7M</td><td class='num'>140K</td><td class='num'>9.8M</td></tr>
+</table>
+<h2>Unit Tests</h2>
+<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem">
+<span class="badge badge-pass">192/192 passed</span>
+<span class="badge badge-pass">91.3% coverage</span>
+</div>
+<div class="progress-wrap"><div class="progress-bar progress-green" style="width:100.0%"></div></div>
+<h2>Contract Tests</h2>
+<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem">
+<span class="badge badge-pass">88/88 passed</span>
+</div>
+<div class="progress-wrap"><div class="progress-bar progress-green" style="width:100.0%"></div></div>
+<h3>Health <span class="badge badge-pass">1/1</span></h3>
+<table><tr><th></th><th>Test</th><th>Method</th><th>Path</th><th class='num'>Status</th><th class='num'>Latency</th></tr>
+<tr><td class="pass-icon"></td><td>health check</td><td>GET</td><td><code>/health</code></td><td class="num">200</td><td class="num">14ms</td></tr>
+</table>
+<h3>Arithmetic <span class="badge badge-pass">15/15</span></h3>
+<table><tr><th></th><th>Test</th><th>Method</th><th>Path</th><th class='num'>Status</th><th class='num'>Latency</th></tr>
+<tr><td class="pass-icon"></td><td>add positive integers</td><td>POST</td><td><code>/api/v1/arithmetic/add</code></td><td class="num">200</td><td class="num">4ms</td></tr>
+<tr><td class="pass-icon"></td><td>add negative numbers</td><td>POST</td><td><code>/api/v1/arithmetic/add</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>add floats</td><td>POST</td><td><code>/api/v1/arithmetic/add</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>add missing field â†’ 422</td><td>POST</td><td><code>/api/v1/arithmetic/add</code></td><td class="num">422</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>subtract</td><td>POST</td><td><code>/api/v1/arithmetic/subtract</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>multiply</td><td>POST</td><td><code>/api/v1/arithmetic/multiply</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>multiply by zero</td><td>POST</td><td><code>/api/v1/arithmetic/multiply</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>divide</td><td>POST</td><td><code>/api/v1/arithmetic/divide</code></td><td class="num">200</td><td class="num">3ms</td></tr>
+<tr><td class="pass-icon"></td><td>divide by zero â†’ error</td><td>POST</td><td><code>/api/v1/arithmetic/divide</code></td><td class="num">400</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>modulo</td><td>POST</td><td><code>/api/v1/arithmetic/modulo</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>modulo by zero â†’ error</td><td>POST</td><td><code>/api/v1/arithmetic/modulo</code></td><td class="num">400</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>abs negative</td><td>POST</td><td><code>/api/v1/arithmetic/abs</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>abs positive</td><td>POST</td><td><code>/api/v1/arithmetic/abs</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>negate positive</td><td>POST</td><td><code>/api/v1/arithmetic/negate</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>negate negative</td><td>POST</td><td><code>/api/v1/arithmetic/negate</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+</table>
+<h3>Powers <span class="badge badge-pass">11/11</span></h3>
+<table><tr><th></th><th>Test</th><th>Method</th><th>Path</th><th class='num'>Status</th><th class='num'>Latency</th></tr>
+<tr><td class="pass-icon"></td><td>2^10</td><td>POST</td><td><code>/api/v1/powers/power</code></td><td class="num">200</td><td class="num">3ms</td></tr>
+<tr><td class="pass-icon"></td><td>5^0</td><td>POST</td><td><code>/api/v1/powers/power</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>sqrt(16)</td><td>POST</td><td><code>/api/v1/powers/sqrt</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>sqrt(0)</td><td>POST</td><td><code>/api/v1/powers/sqrt</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>sqrt(-1) â†’ domain error</td><td>POST</td><td><code>/api/v1/powers/sqrt</code></td><td class="num">400</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>cbrt(27)</td><td>POST</td><td><code>/api/v1/powers/cbrt</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>cbrt(-8)</td><td>POST</td><td><code>/api/v1/powers/cbrt</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>square(5)</td><td>POST</td><td><code>/api/v1/powers/square</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>square(-3)</td><td>POST</td><td><code>/api/v1/powers/square</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>4th root of 16</td><td>POST</td><td><code>/api/v1/powers/nth_root</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>nth_root negative even â†’ domain error</td><td>POST</td><td><code>/api/v1/powers/nth_root</code></td><td class="num">400</td><td class="num">1ms</td></tr>
+</table>
+<h3>Trigonometry <span class="badge badge-pass">20/20</span></h3>
+<table><tr><th></th><th>Test</th><th>Method</th><th>Path</th><th class='num'>Status</th><th class='num'>Latency</th></tr>
+<tr><td class="pass-icon"></td><td>sin(0)</td><td>POST</td><td><code>/api/v1/trigonometry/sin</code></td><td class="num">200</td><td class="num">4ms</td></tr>
+<tr><td class="pass-icon"></td><td>sin(90 deg)</td><td>POST</td><td><code>/api/v1/trigonometry/sin</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>cos(0)</td><td>POST</td><td><code>/api/v1/trigonometry/cos</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>tan(0)</td><td>POST</td><td><code>/api/v1/trigonometry/tan</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>asin(0)</td><td>POST</td><td><code>/api/v1/trigonometry/asin</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>asin(1)</td><td>POST</td><td><code>/api/v1/trigonometry/asin</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>asin(2) â†’ domain error</td><td>POST</td><td><code>/api/v1/trigonometry/asin</code></td><td class="num">400</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>acos(1)</td><td>POST</td><td><code>/api/v1/trigonometry/acos</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>acos(2) â†’ domain error</td><td>POST</td><td><code>/api/v1/trigonometry/acos</code></td><td class="num">400</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>atan(0)</td><td>POST</td><td><code>/api/v1/trigonometry/atan</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>atan2(0, 1)</td><td>POST</td><td><code>/api/v1/trigonometry/atan2</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>atan2(1, 0)</td><td>POST</td><td><code>/api/v1/trigonometry/atan2</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>sinh(0)</td><td>POST</td><td><code>/api/v1/trigonometry/sinh</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>cosh(0)</td><td>POST</td><td><code>/api/v1/trigonometry/cosh</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>tanh(0)</td><td>POST</td><td><code>/api/v1/trigonometry/tanh</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>asinh(0)</td><td>POST</td><td><code>/api/v1/trigonometry/asinh</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>acosh(1)</td><td>POST</td><td><code>/api/v1/trigonometry/acosh</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>acosh(0.5) â†’ domain error</td><td>POST</td><td><code>/api/v1/trigonometry/acosh</code></td><td class="num">400</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>atanh(0)</td><td>POST</td><td><code>/api/v1/trigonometry/atanh</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>atanh(1) â†’ domain error</td><td>POST</td><td><code>/api/v1/trigonometry/atanh</code></td><td class="num">400</td><td class="num">1ms</td></tr>
+</table>
+<h3>Logarithmic <span class="badge badge-pass">11/11</span></h3>
+<table><tr><th></th><th>Test</th><th>Method</th><th>Path</th><th class='num'>Status</th><th class='num'>Latency</th></tr>
+<tr><td class="pass-icon"></td><td>ln(1)</td><td>POST</td><td><code>/api/v1/logarithmic/ln</code></td><td class="num">200</td><td class="num">3ms</td></tr>
+<tr><td class="pass-icon"></td><td>ln(e)</td><td>POST</td><td><code>/api/v1/logarithmic/ln</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>ln(0) â†’ domain error</td><td>POST</td><td><code>/api/v1/logarithmic/ln</code></td><td class="num">400</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>ln(-1) â†’ domain error</td><td>POST</td><td><code>/api/v1/logarithmic/ln</code></td><td class="num">400</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>log10(100)</td><td>POST</td><td><code>/api/v1/logarithmic/log10</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>log10(1)</td><td>POST</td><td><code>/api/v1/logarithmic/log10</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>log2(8)</td><td>POST</td><td><code>/api/v1/logarithmic/log2</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>log(8, base=2)</td><td>POST</td><td><code>/api/v1/logarithmic/log</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>log base 1 â†’ domain error</td><td>POST</td><td><code>/api/v1/logarithmic/log</code></td><td class="num">400</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>exp(0)</td><td>POST</td><td><code>/api/v1/logarithmic/exp</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>exp(1)</td><td>POST</td><td><code>/api/v1/logarithmic/exp</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+</table>
+<h3>Statistics <span class="badge badge-pass">12/12</span></h3>
+<table><tr><th></th><th>Test</th><th>Method</th><th>Path</th><th class='num'>Status</th><th class='num'>Latency</th></tr>
+<tr><td class="pass-icon"></td><td>mean</td><td>POST</td><td><code>/api/v1/statistics/mean</code></td><td class="num">200</td><td class="num">4ms</td></tr>
+<tr><td class="pass-icon"></td><td>median odd count</td><td>POST</td><td><code>/api/v1/statistics/median</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>median even count</td><td>POST</td><td><code>/api/v1/statistics/median</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>mode</td><td>POST</td><td><code>/api/v1/statistics/mode</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>stdev</td><td>POST</td><td><code>/api/v1/statistics/stdev</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>variance</td><td>POST</td><td><code>/api/v1/statistics/variance</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>pstdev</td><td>POST</td><td><code>/api/v1/statistics/pstdev</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>pvariance</td><td>POST</td><td><code>/api/v1/statistics/pvariance</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>min</td><td>POST</td><td><code>/api/v1/statistics/min</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>max</td><td>POST</td><td><code>/api/v1/statistics/max</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>sum</td><td>POST</td><td><code>/api/v1/statistics/sum</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>count</td><td>POST</td><td><code>/api/v1/statistics/count</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+</table>
+<h3>Constants <span class="badge badge-pass">10/10</span></h3>
+<table><tr><th></th><th>Test</th><th>Method</th><th>Path</th><th class='num'>Status</th><th class='num'>Latency</th></tr>
+<tr><td class="pass-icon"></td><td>get all constants</td><td>GET</td><td><code>/api/v1/constants</code></td><td class="num">200</td><td class="num">3ms</td></tr>
+<tr><td class="pass-icon"></td><td>get pi</td><td>GET</td><td><code>/api/v1/constants/pi</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>get e</td><td>GET</td><td><code>/api/v1/constants/e</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>get tau</td><td>GET</td><td><code>/api/v1/constants/tau</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>get golden_ratio</td><td>GET</td><td><code>/api/v1/constants/golden_ratio</code></td><td class="num">200</td><td class="num">3ms</td></tr>
+<tr><td class="pass-icon"></td><td>get sqrt2</td><td>GET</td><td><code>/api/v1/constants/sqrt2</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>get ln2</td><td>GET</td><td><code>/api/v1/constants/ln2</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>get ln10</td><td>GET</td><td><code>/api/v1/constants/ln10</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>get inf</td><td>GET</td><td><code>/api/v1/constants/inf</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>get nan</td><td>GET</td><td><code>/api/v1/constants/nan</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+</table>
+<h3>Conversions <span class="badge badge-pass">7/7</span></h3>
+<table><tr><th></th><th>Test</th><th>Method</th><th>Path</th><th class='num'>Status</th><th class='num'>Latency</th></tr>
+<tr><td class="pass-icon"></td><td>180 degrees to radians</td><td>POST</td><td><code>/api/v1/conversions/angle</code></td><td class="num">200</td><td class="num">3ms</td></tr>
+<tr><td class="pass-icon"></td><td>boiling point C to F</td><td>POST</td><td><code>/api/v1/conversions/temperature</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>freezing point C to K</td><td>POST</td><td><code>/api/v1/conversions/temperature</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>1 meter to feet</td><td>POST</td><td><code>/api/v1/conversions/length</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>1 mile to kilometers</td><td>POST</td><td><code>/api/v1/conversions/length</code></td><td class="num">200</td><td class="num">2ms</td></tr>
+<tr><td class="pass-icon"></td><td>1 kg to pounds</td><td>POST</td><td><code>/api/v1/conversions/weight</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+<tr><td class="pass-icon"></td><td>1 stone to kilograms</td><td>POST</td><td><code>/api/v1/conversions/weight</code></td><td class="num">200</td><td class="num">1ms</td></tr>
+</table>
+<h3>Nonexistent <span class="badge badge-pass">1/1</span></h3>
+<table><tr><th></th><th>Test</th><th>Method</th><th>Path</th><th class='num'>Status</th><th class='num'>Latency</th></tr>
+<tr><td class="pass-icon"></td><td>unknown endpoint â†’ 404</td><td>GET</td><td><code>/api/v1/nonexistent</code></td><td class="num">404</td><td class="num">1ms</td></tr>
+</table>
+<h2>Code Quality</h2>
+<div style="margin-bottom:1rem">
+<span class="badge badge-fail">5 errors</span>
+<span class="badge badge-warn">13 warnings</span>
+<span class="badge badge-info">ruff 0.15.1</span>
+</div>
+<table><tr><th>File</th><th class='num'>Line</th><th>Code</th><th>Message</th><th>Severity</th></tr>
+<tr><td><code>app.py</code></td><td class="num">3</td><td><code>I001</code></td><td>Import block is un-sorted or un-formatted</td><td><span class="badge badge-warn">warning</span></td></tr>
+<tr><td><code>math_engine.py</code></td><td class="num">7</td><td><code>I001</code></td><td>Import block is un-sorted or un-formatted</td><td><span class="badge badge-warn">warning</span></td></tr>
+<tr><td><code>math_engine.py</code></td><td class="num">12</td><td><code>F401</code></td><td>`typing.Any` imported but unused</td><td><span class="badge badge-warn">warning</span></td></tr>
+<tr><td><code>arithmetic.py</code></td><td class="num">65</td><td><code>E501</code></td><td>Line too long (101 &gt; 100)</td><td><span class="badge badge-fail">error</span></td></tr>
+<tr><td><code>arithmetic.py</code></td><td class="num">78</td><td><code>E501</code></td><td>Line too long (107 &gt; 100)</td><td><span class="badge badge-fail">error</span></td></tr>
+<tr><td><code>logarithmic.py</code></td><td class="num">3</td><td><code>I001</code></td><td>Import block is un-sorted or un-formatted</td><td><span class="badge badge-warn">warning</span></td></tr>
+<tr><td><code>logarithmic.py</code></td><td class="num">72</td><td><code>E501</code></td><td>Line too long (108 &gt; 100)</td><td><span class="badge badge-fail">error</span></td></tr>
+<tr><td><code>powers.py</code></td><td class="num">74</td><td><code>E501</code></td><td>Line too long (103 &gt; 100)</td><td><span class="badge badge-fail">error</span></td></tr>
+<tr><td><code>trigonometry.py</code></td><td class="num">75</td><td><code>E501</code></td><td>Line too long (109 &gt; 100)</td><td><span class="badge badge-fail">error</span></td></tr>
+<tr><td><code>conftest.py</code></td><td class="num">8</td><td><code>I001</code></td><td>Import block is un-sorted or un-formatted</td><td><span class="badge badge-warn">warning</span></td></tr>
+<tr><td><code>test_arithmetic.py</code></td><td class="num">3</td><td><code>I001</code></td><td>Import block is un-sorted or un-formatted</td><td><span class="badge badge-warn">warning</span></td></tr>
+<tr><td><code>test_arithmetic.py</code></td><td class="num">9</td><td><code>F401</code></td><td>`sci_calc.engine.math_engine.MathOverflowError` imported but unused</td><td><span class="badge badge-warn">warning</span></td></tr>
+<tr><td><code>test_constants.py</code></td><td class="num">3</td><td><code>I001</code></td><td>Import block is un-sorted or un-formatted</td><td><span class="badge badge-warn">warning</span></td></tr>
+<tr><td><code>test_conversions.py</code></td><td class="num">3</td><td><code>I001</code></td><td>Import block is un-sorted or un-formatted</td><td><span class="badge badge-warn">warning</span></td></tr>
+<tr><td><code>test_logarithmic.py</code></td><td class="num">3</td><td><code>I001</code></td><td>Import block is un-sorted or un-formatted</td><td><span class="badge badge-warn">warning</span></td></tr>
+<tr><td><code>test_powers.py</code></td><td class="num">3</td><td><code>I001</code></td><td>Import block is un-sorted or un-formatted</td><td><span class="badge badge-warn">warning</span></td></tr>
+<tr><td><code>test_statistics.py</code></td><td class="num">3</td><td><code>I001</code></td><td>Import block is un-sorted or un-formatted</td><td><span class="badge badge-warn">warning</span></td></tr>
+<tr><td><code>test_trigonometry.py</code></td><td class="num">3</td><td><code>I001</code></td><td>Import block is un-sorted or un-formatted</td><td><span class="badge badge-warn">warning</span></td></tr>
+</table>
+<h2>Qualitative Evaluation</h2>
+<div class="score-ring" style="margin-bottom:1.5rem">
+<div class="ring-container" style="width:80px;height:80px">
+  <svg width="80" height="80" viewBox="0 0 80 80">
+    <circle class="ring-bg" cx="40" cy="40" r="37.0"/>
+    <circle class="ring-fg" cx="40" cy="40" r="37.0"
+      stroke="var(--green)" stroke-dasharray="232.5" stroke-dashoffset="25.3"/>
+  </svg>
+  <div class="ring-label" style="color:var(--green)">89%</div>
+</div>
+<div><div style="font-size:1.5rem;font-weight:700">Overall Score</div><div style="color:var(--text2);font-size:.85rem">Semantic similarity to golden baseline</div></div>
+</div>
+<div class="phase-bars">
+<div class="phase-bar-group"><div class="phase-bar-title">inception</div>
+<div class="bar-row"><div class="bar-row-label">Intent</div><div class="bar-track"><div class="bar-fill" style="width:90%;background:var(--green)"></div></div><div class="bar-val" style="color:var(--green)">0.90</div></div>
+<div class="bar-row"><div class="bar-row-label">Design</div><div class="bar-track"><div class="bar-fill" style="width:89%;background:var(--green)"></div></div><div class="bar-val" style="color:var(--green)">0.89</div></div>
+<div class="bar-row"><div class="bar-row-label">Complete</div><div class="bar-track"><div class="bar-fill" style="width:88%;background:var(--green)"></div></div><div class="bar-val" style="color:var(--green)">0.88</div></div>
+<div class="bar-row"><div class="bar-row-label">Overall</div><div class="bar-track"><div class="bar-fill" style="width:89%;background:var(--green)"></div></div><div class="bar-val" style="color:var(--green)">0.89</div></div>
+</div>
+<div class="phase-bar-group"><div class="phase-bar-title">construction</div>
+<div class="bar-row"><div class="bar-row-label">Intent</div><div class="bar-track"><div class="bar-fill" style="width:93%;background:var(--green)"></div></div><div class="bar-val" style="color:var(--green)">0.93</div></div>
+<div class="bar-row"><div class="bar-row-label">Design</div><div class="bar-track"><div class="bar-fill" style="width:85%;background:var(--green)"></div></div><div class="bar-val" style="color:var(--green)">0.85</div></div>
+<div class="bar-row"><div class="bar-row-label">Complete</div><div class="bar-track"><div class="bar-fill" style="width:90%;background:var(--green)"></div></div><div class="bar-val" style="color:var(--green)">0.90</div></div>
+<div class="bar-row"><div class="bar-row-label">Overall</div><div class="bar-track"><div class="bar-fill" style="width:89%;background:var(--green)"></div></div><div class="bar-val" style="color:var(--green)">0.89</div></div>
+</div>
+</div>
+<h3>Inception Phase — Documents</h3>
+<table><tr><th>Document</th><th class='num'>Intent</th><th class='num'>Design</th><th class='num'>Completeness</th><th class='num'>Overall</th></tr>
+<tr><td><code>component-dependency.md</code></td><td class="num" style="color:var(--green)">1.00</td><td class="num" style="color:var(--green)">0.95</td><td class="num" style="color:var(--green)">0.90</td><td class="num" style="color:var(--green)"><strong>0.96</strong></td></tr>
+<tr><td><code>component-methods.md</code></td><td class="num" style="color:var(--green)">1.00</td><td class="num" style="color:var(--green)">0.95</td><td class="num" style="color:var(--green)">0.85</td><td class="num" style="color:var(--green)"><strong>0.95</strong></td></tr>
+<tr><td><code>components.md</code></td><td class="num" style="color:var(--green)">1.00</td><td class="num" style="color:var(--green)">1.00</td><td class="num" style="color:var(--green)">1.00</td><td class="num" style="color:var(--green)"><strong>1.00</strong></td></tr>
+<tr><td><code>services.md</code></td><td class="num" style="color:var(--green)">0.95</td><td class="num" style="color:var(--green)">0.90</td><td class="num" style="color:var(--green)">0.85</td><td class="num" style="color:var(--green)"><strong>0.91</strong></td></tr>
+<tr><td><code>application-design-plan.md</code></td><td class="num" style="color:var(--green)">1.00</td><td class="num" style="color:var(--green)">1.00</td><td class="num" style="color:var(--green)">1.00</td><td class="num" style="color:var(--green)"><strong>1.00</strong></td></tr>
+<tr><td><code>execution-plan.md</code></td><td class="num" style="color:var(--green)">1.00</td><td class="num" style="color:var(--green)">0.95</td><td class="num" style="color:var(--green)">0.95</td><td class="num" style="color:var(--green)"><strong>0.97</strong></td></tr>
+<tr><td><code>requirement-verification-questions.md</code></td><td class="num" style="color:var(--red)">0.30</td><td class="num" style="color:var(--red)">0.40</td><td class="num" style="color:var(--red)">0.50</td><td class="num" style="color:var(--red)"><strong>0.38</strong></td></tr>
+<tr><td><code>requirements.md</code></td><td class="num" style="color:var(--green)">0.95</td><td class="num" style="color:var(--green)">0.95</td><td class="num" style="color:var(--green)">0.95</td><td class="num" style="color:var(--green)"><strong>0.95</strong></td></tr>
+</table>
+<details><summary><code>component-dependency.md</code> &mdash; 0.96</summary>
+<div class="detail-body">Both documents capture identical intent: documenting component dependencies for a FastAPI math service with clear separation of concerns. Design is nearly identical with same architecture (routes, models, engine), same dependency patterns, and same key constraints (engine has zero framework dependencies, routes are thin adapters). Minor differences: CANDIDATE uses file paths (.py extensions) vs module notation, includes data flow diagram instead of dependency flow diagram, and omits external dependencies table and exception handler registration details. CANDIDATE adds clarification on synchronous calls and no async/database/queues. Overall highly aligned with trivial presentation differences.</div></details>
+<details><summary><code>component-methods.md</code> &mdash; 0.95</summary>
+<div class="detail-body">Intent is identical: both define the same mathematical operations, request/response models, and API structure. Design is nearly identical with same layered architecture (routes, models, engine), same function signatures, and same exception handling approach. Minor differences: CANDIDATE uses slightly different model names (BinaryOperationRequest vs TwoOperandRequest, UnaryOperationRequest vs SingleOperandRequest) and omits detailed route path/method tables. CANDIDATE lacks the detailed routing table with HTTP methods and paths, and doesn&#x27;t explicitly document the create_app() function or custom exception classes as separate entities, though the functionality is implied. Overall very strong alignment with minor organizational differences.</div></details>
+<details><summary><code>components.md</code> &mdash; 1.00</summary>
+<div class="detail-body">Both documents describe identical component architectures with the same four-layer structure (app entry point, routes, models, engine). All seven route modules are present and match in purpose. The models layer distinguishes requests and responses identically. The engine layer responsibilities are equivalent, including pure function design, stdlib-only dependencies, and domain-specific exceptions. Minor stylistic differences exist (formatting, level of detail in operation enumeration), but the architectural intent, design decisions, and topic coverage are functionally identical.</div></details>
+<details><summary><code>services.md</code> &mdash; 0.91</summary>
+<div class="detail-body">Both documents describe the same thin service architecture with direct route-to-engine delegation and no separate service layer. Intent is nearly identical. Design is very similar with same error handling flow and patterns, though CANDIDATE adds 404 handling and omits CORS middleware details. CANDIDATE is slightly less complete as it doesn&#x27;t mention CORS configuration but adds health check details not in REFERENCE.</div></details>
+<details><summary><code>application-design-plan.md</code> &mdash; 1.00</summary>
+<div class="detail-body">Both documents capture identical intent: a three-layer architecture (Routes, Models, Engine) for a Scientific Calculator API with FastAPI and Pydantic v2. Both explicitly state no design questions are needed due to fully specified tech-env. Both include the same deliverables (components.md, component-methods.md, services.md, component-dependency.md) and validation steps. The candidate provides slightly more context detail but maintains complete alignment with the reference.</div></details>
+<details><summary><code>execution-plan.md</code> &mdash; 0.97</summary>
+<div class="detail-body">Both documents have identical intent and goals, capturing the same requirements and execution strategy. Design approaches are nearly identical with same component structure and skip/execute decisions. Minor differences: REFERENCE includes more detailed success criteria (1 ULP precision, HTTP status codes, structured envelope) and slightly different workflow visualization format. CANDIDATE is slightly more concise but covers all major topics. Overall extremely high alignment.</div></details>
+<details><summary><code>requirement-verification-questions.md</code> &mdash; 0.38</summary>
+<div class="detail-body">Both documents aim to clarify ambiguities before requirements finalization, but they address almost entirely different concerns. REFERENCE focuses on floating-point handling, array limits, CORS, NaN serialization, precision, and API docs. CANDIDATE focuses on error envelope structure, mode return format, overflow handling, unknown units, coverage enforcement, and NaN input handling. Only Questions 1 (floating-point/overflow) and 4 (NaN handling) have thematic overlap, but ask different specific questions. Both documents have 6 questions and similar structure (partial completeness), but the substantive content differs significantly, indicating different areas of uncertainty were identified in each inception run.</div></details>
+<details><summary><code>requirements.md</code> &mdash; 0.95</summary>
+<div class="detail-body">Both documents capture nearly identical intent, requirements, and technical approach for a scientific calculator API. Minor differences: REFERENCE has FR-011 (NaN/Infinity serialization as strings) and FR-013 (explicit CORS requirement) which CANDIDATE omits. CANDIDATE has FR-10.3/10.4 (overflow/NaN input handling) more explicitly stated. CANDIDATE uses sub-numbered FR format (FR-1.1, FR-2.1) vs REFERENCE&#x27;s FR-001 style, but content is equivalent. Both specify same operations, error codes, tech stack, and constraints. CANDIDATE omits explicit mention of CORS and special NaN/Infinity serialization format, which are minor but notable gaps.</div></details>
+<h3>Construction Phase — Documents</h3>
+<table><tr><th>Document</th><th class='num'>Intent</th><th class='num'>Design</th><th class='num'>Completeness</th><th class='num'>Overall</th></tr>
+<tr><td><code>build-and-test-summary.md</code></td><td class="num" style="color:var(--green)">0.95</td><td class="num" style="color:var(--green)">0.90</td><td class="num" style="color:var(--green)">0.95</td><td class="num" style="color:var(--green)"><strong>0.93</strong></td></tr>
+<tr><td><code>build-instructions.md</code></td><td class="num" style="color:var(--green)">0.85</td><td class="num" style="color:var(--yellow)">0.75</td><td class="num" style="color:var(--green)">0.80</td><td class="num" style="color:var(--green)"><strong>0.80</strong></td></tr>
+<tr><td><code>integration-test-instructions.md</code></td><td class="num" style="color:var(--green)">0.85</td><td class="num" style="color:var(--yellow)">0.75</td><td class="num" style="color:var(--green)">0.90</td><td class="num" style="color:var(--green)"><strong>0.82</strong></td></tr>
+<tr><td><code>unit-test-instructions.md</code></td><td class="num" style="color:var(--green)">1.00</td><td class="num" style="color:var(--green)">0.90</td><td class="num" style="color:var(--green)">0.95</td><td class="num" style="color:var(--green)"><strong>0.95</strong></td></tr>
+<tr><td><code>sci-calc-code-generation-plan.md</code></td><td class="num" style="color:var(--green)">1.00</td><td class="num" style="color:var(--green)">0.95</td><td class="num" style="color:var(--green)">0.90</td><td class="num" style="color:var(--green)"><strong>0.96</strong></td></tr>
+</table>
+<details><summary><code>build-and-test-summary.md</code> &mdash; 0.93</summary>
+<div class="detail-body">Both documents capture the same core intent: summarizing build and test results for the sci-calc project with all tests passing and ready for deployment. Design approaches are nearly identical (FastAPI, hatchling, pytest, same module structure). Minor differences: CANDIDATE has 192 tests vs REFERENCE 187 tests (likely test refinements), CANDIDATE includes detailed bug fix documentation (NaN validator), and CANDIDATE uses custom SyncTestClient workaround for Windows asyncio issue. CANDIDATE provides more granular test breakdown by module. Both meet quality gates and declare deployment readiness. Coverage reporting differs (REFERENCE: 95.20% measured, CANDIDATE: deferred to CI). File counts slightly differ (REFERENCE: 16+9 files, CANDIDATE: 13+7 files) but core structure is equivalent. Overall highly similar with minor implementation variations.</div></details>
+<details><summary><code>build-instructions.md</code> &mdash; 0.80</summary>
+<div class="detail-body">Both documents share the core intent of providing build instructions for the sci-calc project using Python 3.13+ and uv. The candidate includes additional detail on build backends (hatchling), explicit dependency versions, package building steps, and troubleshooting sections not present in the reference. The reference focuses on simpler verification and development workflow. Design approaches are similar (uv-based, FastAPI/uvicorn stack) but candidate adds more build tooling detail. Candidate covers all major reference topics (prerequisites, install, verify, run server, linting) plus extras, though some reference elements like the health check curl command are missing.</div></details>
+<details><summary><code>integration-test-instructions.md</code> &mdash; 0.82</summary>
+<div class="detail-body">Both documents describe integration testing for the same FastAPI calculator application with similar goals (testing HTTP request/response cycles, validation, error handling). The candidate provides more granular detail with 63 tests across 7 domains vs reference&#x27;s 5 general scenarios. Design approach is similar (httpx.AsyncClient, ASGI transport, co-located tests) though candidate adds specific endpoint paths and test counts. Candidate covers all reference scenarios plus additional domains (constants, conversions, health). Minor differences in run commands but both use pytest. Overall strong alignment with enhanced detail in candidate.</div></details>
+<details><summary><code>unit-test-instructions.md</code> &mdash; 0.95</summary>
+<div class="detail-body">Both documents share identical intent: providing unit test execution instructions for the sci_calc project with pytest and coverage targets ≥90%. Design is highly similar with pytest/coverage commands, though CANDIDATE adds Windows asyncio workaround and more detailed test architecture breakdown. CANDIDATE has 192 tests vs REFERENCE&#x27;s 187 (minor evolution), and adds fallback test client documentation. REFERENCE includes detailed coverage breakdown table by module (95.20% achieved), while CANDIDATE focuses on test count breakdown by module. Both are complete construction phase test instructions with only minor structural differences.</div></details>
+<details><summary><code>sci-calc-code-generation-plan.md</code> &mdash; 0.96</summary>
+<div class="detail-body">Both documents target the same scientific calculator API with identical goals and requirements. Design is nearly identical with same layered architecture (engine/models/routes), same FastAPI framework, and same component breakdown. Candidate provides more granular implementation details (e.g., breaking engine into sub-steps by operation type, explicit error handling steps) while reference uses broader steps. Candidate consolidates some files (conftest in step 1 vs separate step 7) and adds more explicit testing details. Minor structural differences in step organization but covers all reference topics with additional implementation specificity.</div></details>
+<h2>Generated Artifacts</h2>
+<div class="card-grid">
+<div class="card"><div class="card-label">Source Files</div><div class="card-value">17</div></div>
+<div class="card"><div class="card-label">Test Files</div><div class="card-value">18</div></div>
+<div class="card"><div class="card-label">Config Files</div><div class="card-value">4</div></div>
+<div class="card"><div class="card-label">Total Files</div><div class="card-value">72</div></div>
+<div class="card"><div class="card-label">Lines of Code</div><div class="card-value">3,522</div></div>
+<div class="card"><div class="card-label">AIDLC Docs</div><div class="card-value">15</div></div>
+</div>
+<h2>Baseline Comparison</h2>
+<div style="color:var(--text2);font-size:.85rem;margin-bottom:1rem">vs golden <code>20260218T125810-b84d042dff254a72b4ffec926fe5ea99</code>
+ &middot; promoted 2026-02-18T13:45:06+00:00
+</div>
+<div class="cmp-summary">
+<div class="cmp-stat"><div class="cmp-stat-val delta-improved">0</div><div class="cmp-stat-label">Improved</div></div>
+<div class="cmp-stat"><div class="cmp-stat-val delta-regressed">0</div><div class="cmp-stat-label">Regressed</div></div>
+<div class="cmp-stat"><div class="cmp-stat-val delta-unchanged">20</div><div class="cmp-stat-label">Unchanged</div></div>
+</div>
+<h3>Unit Tests</h3>
+<table><tr><th></th><th>Metric</th><th class='num'>Golden</th><th class='num'>Current</th><th class='num'>Delta</th><th>Change</th></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Tests Passed</td><td class="num">192</td><td class="num">192</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Tests Failed</td><td class="num">0</td><td class="num">0</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Tests Total</td><td class="num">192</td><td class="num">192</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Coverage %</td><td class="num">91</td><td class="num">91</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+</table>
+<h3>Contract Tests</h3>
+<table><tr><th></th><th>Metric</th><th class='num'>Golden</th><th class='num'>Current</th><th class='num'>Delta</th><th>Change</th></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Contract Passed</td><td class="num">88</td><td class="num">88</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Contract Failed</td><td class="num">0</td><td class="num">0</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Contract Total</td><td class="num">88</td><td class="num">88</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+</table>
+<h3>Code Quality</h3>
+<table><tr><th></th><th>Metric</th><th class='num'>Golden</th><th class='num'>Current</th><th class='num'>Delta</th><th>Change</th></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Lint Errors</td><td class="num">5</td><td class="num">5</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Lint Warnings</td><td class="num">13</td><td class="num">13</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Lint Total</td><td class="num">18</td><td class="num">18</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+</table>
+<h3>Qualitative</h3>
+<table><tr><th></th><th>Metric</th><th class='num'>Golden</th><th class='num'>Current</th><th class='num'>Delta</th><th>Change</th></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Qualitative Score</td><td class="num">0.8910</td><td class="num">0.8910</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Inception Score</td><td class="num">0.8900</td><td class="num">0.8900</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Construction Score</td><td class="num">0.8920</td><td class="num">0.8920</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+</table>
+<h3>Artifacts</h3>
+<table><tr><th></th><th>Metric</th><th class='num'>Golden</th><th class='num'>Current</th><th class='num'>Delta</th><th>Change</th></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Source Files</td><td class="num">17</td><td class="num">17</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Test Files</td><td class="num">18</td><td class="num">18</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Lines of Code</td><td class="num">3,522</td><td class="num">3,522</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Doc Files</td><td class="num">15</td><td class="num">15</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+</table>
+<h3>Execution</h3>
+<table><tr><th></th><th>Metric</th><th class='num'>Golden</th><th class='num'>Current</th><th class='num'>Delta</th><th>Change</th></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Total Tokens</td><td class="num">9,835,935</td><td class="num">9,835,935</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Wall Clock (ms)</td><td class="num">1,445,460</td><td class="num">1,445,460</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+<tr><td><span class="delta-dot dot-unchanged"></span></td><td>Handoffs</td><td class="num">3</td><td class="num">3</td><td class="num delta-unchanged">0</td><td class="delta-unchanged">unchanged</td></tr>
+</table>
+<div class="footer">Generated by aidlc-reporting v0.1.0</div>
+</body></html>

@@ -1,0 +1,8 @@
+name: all-stages
+description: "Full AIDLC pipeline — forces every conditional stage"
+vision: vision.md
+tech_env: tech-env.md
+openapi: openapi.yaml
+golden_baseline: golden.yaml
+golden_aidlc_docs: golden-aidlc-docs/
+tags: [standard, comprehensive]

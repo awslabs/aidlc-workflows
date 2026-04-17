@@ -1,0 +1,15 @@
+# Gitleaks configuration
+# https://github.com/gitleaks/gitleaks#configuration
+
+title = "aidlc-workflows gitleaks config"
+
+[extend]
+# Extend the default ruleset (don't replace it)
+useDefault = true
+
+[allowlist]
+description = "Global allowlist"
+paths = [
+    '''\.gitleaks-baseline\.json$''',
+    '''uv\.lock$''',
+]

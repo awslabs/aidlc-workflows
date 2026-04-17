@@ -306,37 +306,43 @@ Update `aidlc-docs/aidlc-state.md`:
 
 ## Step 9: Present Results to User
 
-Present comprehensive message:
+Present completion message in this structure:
+     1. **Completion Announcement** (mandatory): Always start with this:
 
+```markdown
+# 🔨 Build and Test Complete
 ```
-"🔨 Build and Test Complete!
 
-**Build Status**: [Success/Failed]
+     2. **AI Summary** (optional): Provide structured bullet-point summary of build and test results
+        - Format: "Build and test has completed with the following results:"
+        - List build status and artifacts
+        - List test results by category (unit, integration, performance, etc.)
+        - List generated instruction files
+        - DO NOT include workflow instructions ("please review", "let me know", "proceed to next phase", "before we proceed")
+        - Keep factual and content-focused
+     3. **Formatted Workflow Message** (mandatory): Always end with this exact format:
 
-**Test Results**:
-✅ Unit Tests: [X] passed
-✅ Integration Tests: [X] scenarios passed
-✅ Performance Tests: [Status]
-✅ Additional Tests: [Status]
+```markdown
+> **📋 <u>**REVIEW REQUIRED:**</u>**  
+> Please examine the build and test summary at: `aidlc-docs/construction/build-and-test/build-and-test-summary.md`
 
-**Generated Files**:
-1. ✅ build-instructions.md
-2. ✅ unit-test-instructions.md
-3. ✅ integration-test-instructions.md
-4. ✅ performance-test-instructions.md (if applicable)
-5. ✅ [additional test files as needed]
-6. ✅ build-and-test-summary.md
 
-Review the summary in aidlc-docs/construction/build-and-test/build-and-test-summary.md
 
-**Ready to proceed to Operations stage for deployment planning?""
+> **🚀 <u>**WHAT'S NEXT?**</u>**
+>
+> **You may:**
+>
+> 🔧 **Request Changes** - Ask for modifications to the build and test instructions based on your review
+> ✅ **Approve & Continue** - Approve build and test results and proceed to **Operations**
+
+---
 ```
 
 ---
 
 ## Step 10: Log Interaction
 
-**MANDATORY**: Log the phase completion in `aidlc-docs/audit.md`:
+**MANDATORY**: Log the stage completion in `aidlc-docs/audit.md`:
 
 ```markdown
 ## Build and Test Stage
