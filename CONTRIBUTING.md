@@ -12,9 +12,25 @@ Before contributing, familiarize yourself with our [tenets](README.md#tenets).
 
 AI-DLC rules live in `aidlc-rules/aws-aidlc-rule-details/`. When contributing:
 
-- **Be reproducible**: Changes should be consistently reproducible either via test case or a series of step
+- **Be reproducible**: Changes should be consistently reproducible either via test case or a series of steps.
 - **Single source of truth**: Don't duplicate content. If guidance applies to multiple stages, put it in `common/` and reference it.
 - **Keep it agnostic**: The core methodology shouldn't assume specific IDEs, agents, or models. Tool-specific files are generated from the source.
+
+### Directory Structure — Do Not Rename or Move
+
+The folder names `aws-aidlc-rules/` and `aws-aidlc-rule-details/` under `aidlc-rules/` are part of the public contract. Workshops, tests, and the `core-workflow.md` path-resolution logic all depend on these exact names. Do not flatten, rename, or reorganize them.
+
+```text
+aidlc-rules/
+├── aws-aidlc-rules/            # Core workflow entry point
+│   └── core-workflow.md
+└── aws-aidlc-rule-details/     # Detailed rules referenced by the workflow
+    ├── common/
+    ├── inception/
+    ├── construction/
+    ├── extensions/
+    └── operations/
+```
 
 ### Rule Structure
 
@@ -24,6 +40,7 @@ Rules are organized by phase:
 - `inception/` - Planning and architecture rules
 - `construction/` - Design and implementation rules
 - `operations/` - Deployment and monitoring rules
+- `extensions/` - Optional cross-cutting constraint rules
 
 ### Testing Changes
 

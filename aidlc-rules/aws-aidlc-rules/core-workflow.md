@@ -11,10 +11,11 @@ The AI model intelligently assesses what stages are needed based on:
 4. Risk and impact assessment
 
 ## MANDATORY: Rule Details Loading
-**CRITICAL**: When performing any phase, you MUST read and use relevant content from rule detail files. Check these paths in order and use the first one that exists:
-- `.aidlc-rule-details/` (Cursor, Cline, Claude Code, GitHub Copilot)
-- `.kiro/aws-aidlc-rule-details/` (Kiro IDE and CLI)
-- `.amazonq/aws-aidlc-rule-details/` (Amazon Q Developer)
+**CRITICAL**: When performing any phase, you MUST read and use relevant content from rule detail files. Check these paths in order and use the first one that exists, regardless of which IDE or setup method was used:
+- `.aidlc/aidlc-rules/aws-aidlc-rule-details/` (typical with AI-assisted setup)
+- `.aidlc-rule-details/` (typical with Cursor, Cline, Claude Code, GitHub Copilot)
+- `.kiro/aws-aidlc-rule-details/` (typical with Kiro IDE and CLI)
+- `.amazonq/aws-aidlc-rule-details/` (typical with Amazon Q Developer)
 
 All subsequent rule detail file references (e.g., `common/process-overview.md`, `inception/workspace-detection.md`) are relative to whichever rule details directory was resolved above.
 
