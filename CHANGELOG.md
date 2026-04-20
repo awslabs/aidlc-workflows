@@ -1,8 +1,39 @@
-# Changelog
-
-All notable changes to this project will be documented in this file.
+# Changelog All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+
+## [0.1.8] - 2026-04-20
+
+### Bug Fixes
+
+- present extension opt-in prompts in user's conversation language (#177)
+- restore PR head branch detection lost in #172 merge (#173)
+- Modify tag creation process in tag-on-merge workflow (#174)
+- Update CodeBuild action version and add trigger (#175)
+- forks skip codebuild (#178)
+- Minor updates to README (#192)
+
+### Features
+
+- post trend report executive summary as PR comment (#172)
+- add security scanners workflow (#161)
+- agent-driven setup — drop the manual steps (#109)
+
+### CI/CD
+
+- add markdownlint infrastructure (#159)
+- Fix CodeQL action versions in workflow (#191)
+
+### Documentation
+
+- Clarification of zip download file name (#188)
+
+### Miscellaneous
+
+- bump cryptography in /scripts/aidlc-evaluator (#179)
+- bump pillow in /scripts/aidlc-evaluator (#183)
+- bump pytest in /scripts/aidlc-evaluator (#184)
+- bump python-multipart in /scripts/aidlc-evaluator (#186)
 
 ## [0.1.7] - 2026-04-02
 
@@ -29,7 +60,6 @@ All notable changes to this project will be documented in this file.
 - add developer's guide for running CodeBuild locally (#94)
 - add working-with-aidlc interaction guide and writing-inputs documents (#121)
 - comprehensive documentation review and remediation (#113)
-
 - enforce MD060 aligned table style, fix 1645 violations
 
 ## [0.1.6] - 2026-03-05
@@ -46,7 +76,7 @@ All notable changes to this project will be documented in this file.
 - add AIDLC Evaluation & Reporting Framework (#115)
 - update pull request linting conditions (#131)
 - add cross-release trend reporting package (#136)
-- align CodeBuild workflow with current evaluator CLI and add trend report pipeline  (#147)
+- align CodeBuild workflow with current evaluator CLI and add trend report pipeline (#147)
 - gate CodeBuild on 'codebuild' label + aidlc-rules paths (#150)
 - auto-label PRs touching aidlc-rules/ with codebuild label (#158)
 
@@ -106,8 +136,7 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
-- adding AIDLC skill to work with IDEs such as Claude, OpenCode and others
-- addin
+- adding AIDLC skill to work with IDEs such as Claude, OpenCode and others - addin
 - add leo file
 
 ### Miscellaneous
