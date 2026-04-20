@@ -2,7 +2,6 @@
 .amazonq/**
 .claude/**
 !.claude/settings.json
-!.claude/CLAUDE.md
 .codebuild/**
 .worktrees/**
 .vscode/**
