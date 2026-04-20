@@ -60,12 +60,13 @@ jobs:
         if: steps.version.outputs.skip != 'true'
         uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
           draft: true
           name: "AI-DLC Workflow v${{ steps.version.outputs.version }}"
           body: |
             Release v${{ steps.version.outputs.version }}
             
-            See [CHANGELOG.md](CHANGELOG.md) for details.
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ steps.version.outputs.tag }}/CHANGELOG.md) for details.
             
             ## Downloads
             - **ai-dlc-rules** - Rules format (Amazon Q, Kiro, etc.)
