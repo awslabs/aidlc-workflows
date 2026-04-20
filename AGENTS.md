@@ -46,6 +46,14 @@ docs/
   AI-DLC methodology (context management, prompt patterns, phase walkthroughs)
 - [docs/GENERATED_DOCS_REFERENCE.md](docs/GENERATED_DOCS_REFERENCE.md) — complete
   reference for the `aidlc-docs/` directory structure generated during workflows
+- [docs/writing-inputs/](docs/writing-inputs/) — guides and examples for vision and
+  technical environment documents
+
+**Which docs to read by task type:**
+
+- CI/CD, workflows, or releases → `ADMINISTRATIVE_GUIDE.md`, `DEVELOPERS_GUIDE.md`
+- aidlc-rules content → `WORKING-WITH-AIDLC.md`, `GENERATED_DOCS_REFERENCE.md`
+- Installation or setup instructions → `docs/writing-inputs/`
 
 ## Setup commands
 
