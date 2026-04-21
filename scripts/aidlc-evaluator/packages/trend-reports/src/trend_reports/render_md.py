@@ -58,8 +58,10 @@ def _render_infra_failure_banner(trend: TrendData) -> str:
     lines = [
         "> **WARNING: Infrastructure Failure Detected**",
         ">",
-        "> The following runs experienced infrastructure failures. "
-        "Their results are unreliable and have been excluded from regression checks.",
+        (
+            "> The following runs experienced infrastructure failures. "
+            "Their results are unreliable and have been excluded from regression checks."
+        ),
         ">",
     ]
     for r in infra_runs:
