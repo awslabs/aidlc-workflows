@@ -1,6 +1,6 @@
 # Multi-language sandbox image for running AI-generated code in isolation.
 #
-# Includes Python 3.13 + uv, Node.js 22 + npm, and common build tools.
+# Includes Python 3.14 + uv, Node.js 22 + npm, and common build tools.
 # Runs as a non-root user with no credentials or host tools.
 #
 # Security notes:
@@ -10,7 +10,7 @@
 
 # checkov:skip=CKV_DOCKER_2:HEALTHCHECK not needed for ephemeral test sandbox
 # nosemgrep: dockerfile-source-not-pinned
-FROM public.ecr.aws/docker/library/python:3.13-slim AS base
+FROM public.ecr.aws/docker/library/python:3.14-slim AS base
 
 # Install system dependencies and Node.js 22
 # nosemgrep: set-pipefail
