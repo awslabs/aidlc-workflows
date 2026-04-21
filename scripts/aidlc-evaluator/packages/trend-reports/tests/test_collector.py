@@ -642,7 +642,7 @@ class TestDetectInfraFailure:
         metrics = RunMetrics()
         contract = ContractTestResults(server_started=True)
         result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
-        assert result.is_infra_failure is False
+        assert not result.is_infra_failure
         assert result.reasons == []
 
     def test_throttle_events_flagged(self):
@@ -650,7 +650,7 @@ class TestDetectInfraFailure:
         metrics = RunMetrics(throttle_events=5)
         contract = ContractTestResults(server_started=True)
         result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
-        assert result.is_infra_failure is True
+        assert result.is_infra_failure
         assert InfraFailureReason.THROTTLED in result.reasons
 
     def test_service_unavailable_flagged(self):
@@ -658,7 +658,7 @@ class TestDetectInfraFailure:
         metrics = RunMetrics(service_unavailable_events=3)
         contract = ContractTestResults(server_started=True)
         result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
-        assert result.is_infra_failure is True
+        assert result.is_infra_failure
         assert InfraFailureReason.SERVICE_UNAVAILABLE in result.reasons
 
     def test_model_error_flagged(self):
@@ -666,7 +666,7 @@ class TestDetectInfraFailure:
         metrics = RunMetrics(model_error_events=1)
         contract = ContractTestResults(server_started=True)
         result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
-        assert result.is_infra_failure is True
+        assert result.is_infra_failure
         assert InfraFailureReason.MODEL_ERROR in result.reasons
 
     def test_run_failed_status(self):
@@ -674,7 +674,7 @@ class TestDetectInfraFailure:
         metrics = RunMetrics()
         contract = ContractTestResults(server_started=True)
         result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
-        assert result.is_infra_failure is True
+        assert result.is_infra_failure
         assert InfraFailureReason.RUN_FAILED in result.reasons
 
     def test_missing_status_means_crash(self):
@@ -682,7 +682,7 @@ class TestDetectInfraFailure:
         metrics = RunMetrics()
         contract = ContractTestResults(server_started=True)
         result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
-        assert result.is_infra_failure is True
+        assert result.is_infra_failure
         assert InfraFailureReason.RUN_CRASHED in result.reasons
 
     def test_metrics_missing(self):
@@ -690,7 +690,7 @@ class TestDetectInfraFailure:
         metrics = RunMetrics()
         contract = ContractTestResults(server_started=True)
         result = detect_infra_failure(meta, metrics, contract, has_metrics_file=False)
-        assert result.is_infra_failure is True
+        assert result.is_infra_failure
         assert InfraFailureReason.METRICS_MISSING in result.reasons
 
     def test_server_start_failed(self):
@@ -698,7 +698,7 @@ class TestDetectInfraFailure:
         metrics = RunMetrics()
         contract = ContractTestResults(server_started=False, server_error="Connection refused")
         result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
-        assert result.is_infra_failure is True
+        assert result.is_infra_failure
         assert InfraFailureReason.SERVER_START_FAILED in result.reasons
 
     def test_multiple_reasons(self):
@@ -706,7 +706,7 @@ class TestDetectInfraFailure:
         metrics = RunMetrics(throttle_events=10, service_unavailable_events=5)
         contract = ContractTestResults(server_started=False)
         result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
-        assert result.is_infra_failure is True
+        assert result.is_infra_failure
         assert len(result.reasons) >= 3
         assert "Infrastructure failure detected" in result.summary
 

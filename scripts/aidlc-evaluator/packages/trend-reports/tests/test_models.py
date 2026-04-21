@@ -91,7 +91,7 @@ class TestDataclassDefaults:
 class TestInfraFailure:
     def test_defaults_no_failure(self):
         inf = InfraFailure()
-        assert inf.is_infra_failure is False
+        assert not inf.is_infra_failure
         assert inf.reasons == []
         assert inf.summary == ""
 
@@ -101,7 +101,7 @@ class TestInfraFailure:
             reasons=[InfraFailureReason.THROTTLED, InfraFailureReason.SERVICE_UNAVAILABLE],
             summary="test summary",
         )
-        assert inf.is_infra_failure is True
+        assert inf.is_infra_failure
         assert len(inf.reasons) == 2
 
 
