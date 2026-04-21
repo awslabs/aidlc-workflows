@@ -665,63 +665,13 @@ These rules are used by `git-cliff --bumped-version` when auto-determining the n
 
 All scanner tools, GitHub Actions, and container images in the workflow files are pinned to specific versions or commit SHAs. This prevents supply-chain attacks and ensures reproducible builds, but requires periodic maintenance to stay current with security patches and new features.
 
-Pinned versions should be reviewed and updated **at least quarterly**, with the exception of the ClamAV container image which should be updated **monthly** (see below).
+Pinned versions should be reviewed and updated **at least quarterly**.
 
-### Update cadence
-
-| Component                     | Cadence   | Reason                                                                                        |
-| ----------------------------- | --------- | --------------------------------------------------------------------------------------------- |
-| GitHub Actions (SHA-pinned)   | Quarterly | Security patches and new features; low churn                                                  |
-| Scanner tool versions         | Quarterly | New rules and bug fixes; breaking changes are rare                                            |
-| ClamAV container image digest | Monthly   | Pinning the digest also freezes the malware signature database; stale signatures miss threats |
-
-### How to update GitHub Actions
-
-Look up the commit SHA for a new tag:
-
-```bash
-gh api repos/OWNER/REPO/git/ref/tags/TAG --jq '.object.sha'
-```
-
-For tags pointing to annotated tag objects (not commits directly), dereference:
-
-```bash
-gh api repos/OWNER/REPO/git/ref/tags/TAG --jq '.object.sha' | xargs -I{} gh api repos/OWNER/REPO/git/tags/{} --jq '.object.sha'
-```
-
-Update the SHA in the workflow file and keep the version comment in sync (e.g., `# v6.0.2`).
-
-### How to update the ClamAV image digest
-
-The ClamAV service container in `security-scanners.yml` is pinned to a `sha256` digest for supply-chain safety. This also freezes the virus signature database, so the digest should be updated **monthly**.
-
-Get the current `linux/amd64` digest:
-
-```bash
-docker buildx imagetools inspect clamav/clamav:latest
-```
-
-Look for the `linux/amd64` manifest digest (starts with `sha256:`). Update the `image:` line in the `clamav` service definition:
-
-```yaml
-image: clamav/clamav@sha256:<new-digest>
-```
-
-### How to update scanner tool versions
-
-Check latest versions from their respective sources:
-
-- **Bandit**: `pip index versions bandit` or [PyPI](https://pypi.org/project/bandit/)
-- **Semgrep**: `pip index versions semgrep` or [PyPI](https://pypi.org/project/semgrep/)
-- **Grype**: [GitHub releases](https://github.com/anchore/grype/releases)
-- **Gitleaks**: [GitHub releases](https://github.com/gitleaks/gitleaks/releases)
-- **Checkov**: `pip index versions checkov` or [PyPI](https://pypi.org/project/checkov/)
-
-### Verification
-
-After updating any pinned version:
-
-1. Push the change to a feature branch
-2. Verify the `security-scanners.yml` workflow runs successfully
-3. Check that scanner output (SARIF uploads, artifacts) is produced correctly
-4. Watch for new findings that may be introduced by updated rule sets
+<!-- TODO: Add step-by-step instructions for updating pinned versions, including:
+  - How to check for latest versions of each scanner tool (PyPI, GitHub releases, Docker Hub)
+  - How to look up commit SHAs for GitHub Actions (gh api repos/OWNER/REPO/git/ref/tags/TAG)
+  - How to look up Docker image digests (docker manifest inspect)
+  - How to verify the update works (run the workflow on a feature branch)
+  - How to handle breaking changes in scanner tool upgrades
+  - Consider automating this with Dependabot or Renovate
+-->
