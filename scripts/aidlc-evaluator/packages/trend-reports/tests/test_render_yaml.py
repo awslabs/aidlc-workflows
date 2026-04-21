@@ -7,6 +7,8 @@ from trend_reports.models import (
     BaselineMetrics,
     CodeQualityMetrics,
     ContractTestResults,
+    InfraFailure,
+    InfraFailureReason,
     QualitativeComparison,
     RunConfig,
     RunData,
@@ -72,3 +74,29 @@ class TestRenderTrendYaml:
         trend = _make_trend()
         result = render_trend_yaml(trend)
         assert isinstance(result, str)
+
+    def test_infra_failure_serialized(self):
+        trend = _make_trend()
+        trend.runs[0].infra_failure = InfraFailure(
+            is_infra_failure=True,
+            reasons=[InfraFailureReason.THROTTLED],
+            summary="test",
+        )
+        yaml_str = render_trend_yaml(trend)
+        parsed = yaml.safe_load(yaml_str)
+        infra = parsed["runs"][0]["infra_failure"]
+        assert infra["is_infra_failure"] is True
+        assert "bedrock_throttled" in infra["reasons"]
+        assert infra["summary"] == "test"
+
+    def test_infra_failure_reason_serialized_as_value(self):
+        trend = _make_trend()
+        trend.runs[0].infra_failure = InfraFailure(
+            is_infra_failure=True,
+            reasons=[InfraFailureReason.SERVICE_UNAVAILABLE, InfraFailureReason.RUN_FAILED],
+            summary="test",
+        )
+        yaml_str = render_trend_yaml(trend)
+        parsed = yaml.safe_load(yaml_str)
+        reasons = parsed["runs"][0]["infra_failure"]["reasons"]
+        assert reasons == ["bedrock_service_unavailable", "run_failed"]
