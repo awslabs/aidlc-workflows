@@ -676,7 +676,6 @@ Pinned versions should be reviewed and updated **at least quarterly**.
   - Consider automating this with Dependabot or Renovate
 -->
 
-
 Agent pre-commit checklist (recommended):
 
 - npx markdownlint-cli2 --fix "**/*.md"  # auto-fix markdown lint issues
@@ -684,4 +683,3 @@ Agent pre-commit checklist (recommended):
 - uv run pytest                            # run tests via uv wrapper
 
 Agents must run the checklist above and ensure all checks pass before committing and pushing changes.
-
