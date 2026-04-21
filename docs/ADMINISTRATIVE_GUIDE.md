@@ -675,3 +675,13 @@ Pinned versions should be reviewed and updated **at least quarterly**.
   - How to handle breaking changes in scanner tool upgrades
   - Consider automating this with Dependabot or Renovate
 -->
+
+
+Agent pre-commit checklist (recommended):
+
+- npx markdownlint-cli2 --fix "**/*.md"  # auto-fix markdown lint issues
+- npx markdownlint-cli2 "**/*.md"    # verify no lint errors
+- uv run pytest                            # run tests via uv wrapper
+
+Agents must run the checklist above and ensure all checks pass before committing and pushing changes.
+
