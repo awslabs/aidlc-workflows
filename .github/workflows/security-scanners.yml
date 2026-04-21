@@ -304,7 +304,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       clamav:
-        image: clamav/clamav@sha256:bf876a415b7ff77b9305b1de087e6d16833d170931581b01404e8761cb0dc87c
+        image: clamav/clamav@sha256:60ef5fee072ff46f91ca63ba09f36597e41693977600902d21df9d0d97f640e4
         ports:
           - 127.0.0.1:3310:3310
         options: >-
@@ -319,7 +319,7 @@ jobs:
       - name: Install clamdscan client
         run: |
           sudo apt-get update || true
-          sudo rm -f /var/lib/man-db/auto-update
+          sudo rm -f /var/lib/man-db/auto-update  # prevent man-db auto-update from blocking apt-get
           sudo apt-get install -y --no-install-recommends clamdscan
           sudo mkdir -p /etc/clamav
           cat << EOF | sudo tee /etc/clamav/clamd.conf
