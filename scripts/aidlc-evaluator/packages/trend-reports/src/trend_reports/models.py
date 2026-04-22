@@ -34,6 +34,27 @@ class RunType(Enum):
     PR = "pr"
 
 
+class InfraFailureReason(Enum):
+    """Reasons why a run is classified as an infrastructure failure."""
+
+    THROTTLED = "bedrock_throttled"
+    SERVICE_UNAVAILABLE = "bedrock_service_unavailable"
+    MODEL_ERROR = "bedrock_model_error"
+    RUN_FAILED = "run_failed"
+    RUN_CRASHED = "run_crashed"
+    SERVER_START_FAILED = "server_start_failed"
+    METRICS_MISSING = "metrics_missing"
+
+
+@dataclass
+class InfraFailure:
+    """Details about an infrastructure failure detected in a run."""
+
+    is_infra_failure: bool = False
+    reasons: list[InfraFailureReason] = field(default_factory=list)
+    summary: str = ""
+
+
 @dataclass(frozen=True, order=True)
 class SemVer:
     """Semantic version, comparable via tuple ordering."""
@@ -119,6 +140,12 @@ class RunMetrics:
     handoffs: list[HandoffMetrics] = field(default_factory=list)
     server_startup_success: bool = True
     error_count: int = 0
+    throttle_events: int = 0
+    service_unavailable_events: int = 0
+    model_error_events: int = 0
+    timeout_events: int = 0
+    failed_tool_calls: int = 0
+    validation_error_events: int = 0
 
 
 @dataclass
@@ -152,6 +179,8 @@ class ContractTestResults:
     failed: int = 0
     pass_rate: float = 0.0
     failures: list[ContractTestFailure] = field(default_factory=list)
+    server_started: bool = True
+    server_error: str = ""
 
 
 @dataclass
@@ -210,6 +239,7 @@ class RunData:
     contract_tests: ContractTestResults
     code_quality: CodeQualityMetrics
     qualitative: QualitativeComparison
+    infra_failure: InfraFailure = field(default_factory=InfraFailure)
 
 
 @dataclass
@@ -258,3 +288,5 @@ class GateResult:
     regressions: list[str] = field(default_factory=list)
     latest_label: str = ""
     comparison_label: str = ""
+    infra_failure_detected: bool = False
+    infra_failure_summary: str = ""

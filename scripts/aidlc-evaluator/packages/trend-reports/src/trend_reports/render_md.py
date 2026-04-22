@@ -18,6 +18,7 @@ def render_trend_markdown(trend: TrendData) -> str:
     """Render the full trend report as Markdown."""
     sections = [
         _render_header(trend),
+        _render_infra_failure_banner(trend),
         _render_toc(),
         _render_section_a(trend),
         _render_section_b(trend),
@@ -46,6 +47,28 @@ def _render_header(trend: TrendData) -> str:
         f"> **Repository:** `{trend.repo}`  \n"
         f"> **Generated:** {trend.generated_at}\n"
     )
+
+
+def _render_infra_failure_banner(trend: TrendData) -> str:
+    """Render a prominent warning banner if any runs have infra failures."""
+    infra_runs = [r for r in trend.runs if r.infra_failure.is_infra_failure]
+    if not infra_runs:
+        return ""
+
+    lines = [
+        "> **WARNING: Infrastructure Failure Detected**",
+        ">",
+        (
+            "> The following runs experienced infrastructure failures. "
+            "Their results are unreliable and have been excluded from regression checks."
+        ),
+        ">",
+    ]
+    for r in infra_runs:
+        reasons = ", ".join(reason.value for reason in r.infra_failure.reasons)
+        lines.append(f"> - **{r.label}**: {reasons}")
+    lines.append("")
+    return "\n".join(lines) + "\n"
 
 
 def _render_toc() -> str:
@@ -449,20 +472,42 @@ def _render_section_f(trend: TrendData) -> str:
         "Tracks whether the evaluation pipeline itself ran smoothly, independent of output quality.\n\n"
         "| Metric | What it measures |\n"
         "| --- | --- |\n"
-        "| **Error Events** | Runtime errors logged during the run (exceptions, timeouts, API failures). 0 = clean run. |\n"
+        "| **Infra Failure** | Whether infrastructure issues (Bedrock outage, throttling) invalidated the run. |\n"
+        "| **Total Errors** | Sum of all runtime error events. |\n"
+        "| **Throttle** | Bedrock API throttle (rate limit) events. |\n"
+        "| **Svc Unavail** | Bedrock service unavailable events. |\n"
+        "| **Model Error** | Bedrock model error events. |\n"
         "| **Handoffs** | Number of sequential pipeline phases completed. Typically 3 (generate, build/test, report). A different count may indicate an early abort or retry. |\n"
         "| **Server Startup** | Whether the generated application server started successfully. A failure here means the generated code couldn't even boot, preventing contract tests from running. |\n\n"
     )
     rows = [
         [
             r.label,
+            "**YES**" if r.infra_failure.is_infra_failure else "No",
             str(r.metrics.error_count),
+            str(r.metrics.throttle_events),
+            str(r.metrics.service_unavailable_events),
+            str(r.metrics.model_error_events),
             str(r.metrics.num_handoffs),
             "Yes" if r.metrics.server_startup_success else "**No**",
         ]
         for r in trend.runs
     ]
-    parts.append(_md_table(["Version", "Error Events", "Handoffs", "Server Startup"], rows))
+    parts.append(
+        _md_table(
+            [
+                "Version",
+                "Infra Failure",
+                "Total Errors",
+                "Throttle",
+                "Svc Unavail",
+                "Model Error",
+                "Handoffs",
+                "Server Startup",
+            ],
+            rows,
+        )
+    )
     return "\n".join(parts)
 
 

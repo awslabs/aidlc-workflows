@@ -19,6 +19,7 @@ def render_trend_html(trend: TrendData) -> str:
     parts = [
         _html_header("AIDLC Rules Trend Report"),
         _render_html_hero(trend),
+        _render_infra_failure_banner_html(trend),
         _render_nav(),
         _render_html_section_a(trend),
         _render_html_section_b(trend),
@@ -168,6 +169,16 @@ td:first-child { font-weight: 500; }
 /* Section description */
 .section-desc { color: var(--gray-500); font-size: 14px; margin: 0 0 12px 0; }
 
+/* Infra failure banner */
+.infra-banner {
+    padding: 16px 20px; margin: 0 0 24px 0;
+    background: var(--red-bg); border: 2px solid var(--red-border);
+    border-radius: var(--radius); color: var(--red-text);
+}
+.infra-banner h3 { margin: 0 0 8px 0; color: var(--red-text); font-size: 16px; }
+.infra-banner ul { margin: 4px 0 0 0; padding-left: 20px; }
+.badge-infra { background: var(--red-bg); color: var(--red-text); border: 1px solid var(--red-border); }
+
 /* Responsive */
 @media (max-width: 768px) {
     body { padding: 12px; }
@@ -224,6 +235,27 @@ def _render_nav() -> str:
     return f'<nav class="nav">{items}</nav>\n'
 
 
+def _render_infra_failure_banner_html(trend: TrendData) -> str:
+    """Render a prominent warning banner if any runs have infra failures."""
+    infra_runs = [r for r in trend.runs if r.infra_failure.is_infra_failure]
+    if not infra_runs:
+        return ""
+
+    items = []
+    for r in infra_runs:
+        reasons = ", ".join(reason.value for reason in r.infra_failure.reasons)
+        items.append(f"<li><strong>{escape(r.label)}</strong>: {escape(reasons)}</li>")
+
+    return (
+        '<div class="infra-banner">\n'
+        "  <h3>Infrastructure Failure Detected</h3>\n"
+        "  <p>The following runs experienced infrastructure failures. "
+        "Their results are unreliable and have been excluded from regression checks.</p>\n"
+        f"  <ul>{''.join(items)}</ul>\n"
+        "</div>\n"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Section A — Executive Summary
 # ---------------------------------------------------------------------------
@@ -248,14 +280,10 @@ def _render_html_section_a(trend: TrendData) -> str:
         else ("warn" if latest.contract_tests.pass_rate >= 0.95 else "bad")
     )
     unit_pass_rate = (
-        latest.unit_tests.passed / latest.unit_tests.total
-        if latest.unit_tests.total > 0
-        else 0.0
+        latest.unit_tests.passed / latest.unit_tests.total if latest.unit_tests.total > 0 else 0.0
     )
     bl_unit_pass_rate = (
-        bl.unit_tests_passed / bl.unit_tests_total
-        if bl.unit_tests_total > 0
-        else 0.0
+        bl.unit_tests_passed / bl.unit_tests_total if bl.unit_tests_total > 0 else 0.0
     )
     test_status = "good" if unit_pass_rate >= 1.0 else ("warn" if unit_pass_rate >= 0.95 else "bad")
     lint_status = "good" if latest.code_quality.lint_findings == 0 else "warn"
@@ -354,7 +382,9 @@ def _render_html_section_a(trend: TrendData) -> str:
         table_rows.append([label, golden, latest_val, vs])
         # Color the delta column based on metric direction
         delta_cls = ""
-        if vs not in ("=", "—") and (vs.startswith("+") or vs.startswith("-") or vs.startswith("−")):
+        if vs not in ("=", "—") and (
+            vs.startswith("+") or vs.startswith("-") or vs.startswith("−")
+        ):
             is_negative = vs.startswith("-") or vs.startswith("−")
             if label.lower() in lower_is_better:
                 delta_cls = "d-pos" if is_negative else "d-neg"
@@ -499,9 +529,7 @@ def _render_html_section_c(trend: TrendData) -> str:
     )
     bl_score = trend.baseline.qualitative_overall
     if bl_score:
-        parts.append(
-            f"<p>Golden baseline: <strong>{bl_score:.3f}</strong></p>\n"
-        )
+        parts.append(f"<p>Golden baseline: <strong>{bl_score:.3f}</strong></p>\n")
     parts.append("</div>\n<div>\n")
 
     rows = []
@@ -659,7 +687,14 @@ def _render_html_section_d(trend: TrendData) -> str:
             f"H{h.handoff_number}: {format_seconds_as_minutes(h.duration_seconds)}"
             for h in r.metrics.handoffs
         ]
-        rows.append([r.label, bar_html, format_seconds_as_minutes(r.metrics.execution_time_seconds), " · ".join(handoff_strs) if handoff_strs else "—"])
+        rows.append(
+            [
+                r.label,
+                bar_html,
+                format_seconds_as_minutes(r.metrics.execution_time_seconds),
+                " · ".join(handoff_strs) if handoff_strs else "—",
+            ]
+        )
         styles.append(["", "bar-cell", "", ""])
     parts.append(_html_table(["Version", "", "Wall Clock", "Handoff Breakdown"], rows, styles))
     parts.append("</div>\n</div>\n")
@@ -736,25 +771,61 @@ def _render_html_section_f(trend: TrendData) -> str:
     parts.append(
         '<p class="section-desc">Tracks whether the evaluation pipeline itself ran smoothly, independent of output quality.</p>\n'
         "<table>\n<thead>\n<tr>\n  <th>Metric</th>\n  <th>What it measures</th>\n</tr>\n</thead>\n<tbody>\n"
-        "<tr><td><strong>Error Events</strong></td><td>Runtime errors logged during the run (exceptions, timeouts, API failures). 0 = clean run.</td></tr>\n"
-        "<tr><td><strong>Handoffs</strong></td><td>Number of sequential pipeline phases completed. Typically 3 (generate, build/test, report). A different count may indicate an early abort or retry.</td></tr>\n"
-        "<tr><td><strong>Server Startup</strong></td><td>Whether the generated application server started successfully. A failure here means the generated code couldn&rsquo;t even boot, preventing contract tests from running.</td></tr>\n"
+        "<tr><td><strong>Infra Failure</strong></td><td>Whether infrastructure issues (Bedrock outage, throttling) invalidated the run.</td></tr>\n"
+        "<tr><td><strong>Total Errors</strong></td><td>Sum of all runtime error events. 0 = clean run.</td></tr>\n"
+        "<tr><td><strong>Throttle</strong></td><td>Bedrock API throttle (rate limit) events.</td></tr>\n"
+        "<tr><td><strong>Svc Unavail</strong></td><td>Bedrock service unavailable events.</td></tr>\n"
+        "<tr><td><strong>Model Error</strong></td><td>Bedrock model error events.</td></tr>\n"
+        "<tr><td><strong>Handoffs</strong></td><td>Number of sequential pipeline phases completed. Typically 3.</td></tr>\n"
+        "<tr><td><strong>Server Startup</strong></td><td>Whether the generated application server started successfully.</td></tr>\n"
         "</tbody>\n</table>\n"
     )
     rows = []
     styles = []
     for r in trend.runs:
         ok = r.metrics.server_startup_success
+        infra_html = (
+            '<span class="badge badge-infra">INFRA FAIL</span>'
+            if r.infra_failure.is_infra_failure
+            else '<span class="badge badge-pass">OK</span>'
+        )
         err_cls = "d-neg" if r.metrics.error_count > 0 else ""
+        throttle_cls = "d-neg" if r.metrics.throttle_events > 0 else ""
+        svc_cls = "d-neg" if r.metrics.service_unavailable_events > 0 else ""
+        model_cls = "d-neg" if r.metrics.model_error_events > 0 else ""
         ok_html = (
             '<span class="badge badge-pass">PASS</span>'
             if ok
             else '<span class="badge badge-fail">FAIL</span>'
         )
-        rows.append([r.label, str(r.metrics.error_count), str(r.metrics.num_handoffs), ok_html])
-        styles.append(["", err_cls, "", ""])
+        rows.append(
+            [
+                r.label,
+                infra_html,
+                str(r.metrics.error_count),
+                str(r.metrics.throttle_events),
+                str(r.metrics.service_unavailable_events),
+                str(r.metrics.model_error_events),
+                str(r.metrics.num_handoffs),
+                ok_html,
+            ]
+        )
+        styles.append(["", "", err_cls, throttle_cls, svc_cls, model_cls, "", ""])
     parts.append(
-        _html_table(["Version", "Error Events", "Handoffs", "Server Startup"], rows, styles)
+        _html_table(
+            [
+                "Version",
+                "Infra Status",
+                "Total Errors",
+                "Throttle",
+                "Svc Unavail",
+                "Model Error",
+                "Handoffs",
+                "Server Startup",
+            ],
+            rows,
+            styles,
+        )
     )
     return "".join(parts)
 

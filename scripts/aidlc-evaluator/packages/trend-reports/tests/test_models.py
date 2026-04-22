@@ -8,6 +8,8 @@ from trend_reports.models import (
     CollectorError,
     FetchError,
     GateResult,
+    InfraFailure,
+    InfraFailureReason,
     RunType,
     SemVer,
     TrendReportError,
@@ -82,3 +84,33 @@ class TestDataclassDefaults:
         gr = GateResult(passed=True)
         assert gr.regressions == []
         assert gr.latest_label == ""
+        assert gr.infra_failure_detected is False
+        assert gr.infra_failure_summary == ""
+
+
+class TestInfraFailure:
+    def test_defaults_no_failure(self):
+        inf = InfraFailure()
+        assert not inf.is_infra_failure
+        assert inf.reasons == []
+        assert inf.summary == ""
+
+    def test_with_reasons(self):
+        inf = InfraFailure(
+            is_infra_failure=True,
+            reasons=[InfraFailureReason.THROTTLED, InfraFailureReason.SERVICE_UNAVAILABLE],
+            summary="test summary",
+        )
+        assert inf.is_infra_failure
+        assert len(inf.reasons) == 2
+
+
+class TestInfraFailureReason:
+    def test_values(self):
+        assert InfraFailureReason.THROTTLED.value == "bedrock_throttled"
+        assert InfraFailureReason.SERVICE_UNAVAILABLE.value == "bedrock_service_unavailable"
+        assert InfraFailureReason.MODEL_ERROR.value == "bedrock_model_error"
+        assert InfraFailureReason.RUN_FAILED.value == "run_failed"
+        assert InfraFailureReason.RUN_CRASHED.value == "run_crashed"
+        assert InfraFailureReason.SERVER_START_FAILED.value == "server_start_failed"
+        assert InfraFailureReason.METRICS_MISSING.value == "metrics_missing"
