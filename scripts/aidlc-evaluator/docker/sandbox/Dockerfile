@@ -4,7 +4,6 @@
 # Runs as a non-root user with no credentials or host tools.
 #
 # Security notes:
-# - Base image is intentionally not pinned to a hash to receive security updates
 # - HEALTHCHECK is omitted as this is an ephemeral test sandbox, not a service
 # - RUN commands use pipes without pipefail, acceptable for dependency installation
 
