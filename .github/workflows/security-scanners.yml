@@ -46,7 +46,7 @@ jobs:
           set -e
           echo "exit_code=$GITLEAKS_EXIT" >> "$GITHUB_OUTPUT"
           exit 0
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: gitleaks.sarif
@@ -141,7 +141,7 @@ jobs:
           else
             echo "exit_code=0" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: semgrep.sarif
           path: semgrep-report_sarif.json
@@ -177,7 +177,7 @@ jobs:
           set -e
           echo "exit_code=$GRYPE_EXIT" >> "$GITHUB_OUTPUT"
           exit 0
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: grype.sarif
@@ -227,7 +227,7 @@ jobs:
             echo "exit_code=0" >> "$GITHUB_OUTPUT"
           fi
           exit 0
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: bandit.sarif
@@ -280,7 +280,7 @@ jobs:
           else
             echo "exit_code=0" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: checkov.sarif
@@ -336,7 +336,7 @@ jobs:
           set -e
           echo "exit_code=$CLAMAV_EXIT" >> "$GITHUB_OUTPUT"
           exit 0
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: clamdscan.txt
