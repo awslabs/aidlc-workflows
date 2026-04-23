@@ -29,7 +29,10 @@ docs/
 ├── GENERATED_DOCS_REFERENCE.md   # Full aidlc-docs/ directory reference
 └── writing-inputs/               # Guides and examples for vision/tech-env documents
 .github/
-├── workflows/                    # CI/CD pipelines (6 workflows)
+├── workflows/                    # CI/CD pipelines (8 workflows)
+├── dependabot.yml                # Dependabot dependency update configuration
+├── CODEOWNERS                    # Code ownership rules for PR reviews
+├── ISSUE_TEMPLATE/               # Issue templates
 ├── pull_request_template.md      # PR template with contributor statement
 └── labeler.yml                   # Auto-label rules (path → label mapping)
 .claude/                          # Claude Code project settings
@@ -53,7 +56,7 @@ docs/
 
 - CI/CD, workflows, or releases → `ADMINISTRATIVE_GUIDE.md`, `DEVELOPERS_GUIDE.md`
 - aidlc-rules content → `WORKING-WITH-AIDLC.md`, `GENERATED_DOCS_REFERENCE.md`
-- Installation or setup instructions → `docs/writing-inputs/`
+- Vision or technical environment documents → `docs/writing-inputs/`
 
 ## Setup commands
 
@@ -142,29 +145,38 @@ For full remediation and suppression details, see
 Short guidance for agents: prefer the repository uv wrapper and npx-based tools. Read docs/DEVELOPERS_GUIDE.md and docs/ADMINISTRATIVE_GUIDE.md before running any commands.
 
 Tests (uv):
+
+```bash
 uv run pytest
 uv run pytest --cov --cov-report=term-missing
+```
 
 Markdown lint (npx):
+
+```bash
 npx markdownlint-cli2 "**/*.md"
 npx markdownlint-cli2 --fix "**/*.md"
+```
 
-Dockerized security scans (recommended for local, cross-platform)
-- Grype:
-  docker run --rm -v "$PWD:/workspace" anchore/grype:latest grype dir:/workspace -o sarif=grype.sarif
-- Gitleaks:
-  docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest detect --source /repo --report-format sarif --report-path gitleaks.sarif
-- Semgrep:
-  docker run --rm -v "$PWD:/src" returntocorp/semgrep semgrep --config=r/all --sarif /src > semgrep.sarif
-- Checkov:
-  docker run --rm -v "$PWD:/src" bridgecrew/checkov --directory /src --output-file-path checkov.sarif --output sarif
-- Bandit:
-  docker run --rm -v "$PWD:/src" python:3.12-slim bash -c "pip install -q bandit && bandit -r /src -f sarif -o /src/bandit.sarif"
-- ClamAV:
-  docker run --rm -v "$PWD:/data" mkodockx/docker-clamav clamscan -r /data --log=/data/clamdscan.txt
+Dockerized security scans (recommended for local, cross-platform):
+
+```bash
+# Grype
+docker run --rm -v "$PWD:/workspace" anchore/grype:latest grype dir:/workspace -o sarif=grype.sarif
+# Gitleaks
+docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest detect --source /repo --report-format sarif --report-path gitleaks.sarif
+# Semgrep
+docker run --rm -v "$PWD:/src" returntocorp/semgrep semgrep --config=r/all --sarif /src > semgrep.sarif
+# Checkov
+docker run --rm -v "$PWD:/src" bridgecrew/checkov --directory /src --output-file-path checkov.sarif --output sarif
+# Bandit
+docker run --rm -v "$PWD:/src" python:3.12-slim bash -c "pip install -q bandit && bandit -r /src -f sarif -o /src/bandit.sarif"
+# ClamAV
+docker run --rm -v "$PWD:/data" mkodockx/docker-clamav clamscan -r /data --log=/data/clamdscan.txt
+```
 
 Notes:
+
 - These commands write SARIF/text artifacts to the project root so CI/agents can consume them.
 - CI already runs scanners; use these for local verification when Docker is available.
 - If Docker is unavailable, use the platform-specific installs documented in docs/DEVELOPERS_GUIDE.md.
-- Keep Copilot-specific instructions in .github/instructions/ to avoid duplication.
