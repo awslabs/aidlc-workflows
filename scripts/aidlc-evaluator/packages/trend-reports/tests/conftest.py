@@ -7,6 +7,7 @@ from trend_reports.models import (
     CodeQualityMetrics,
     ContractTestResults,
     DocumentScore,
+    InfraFailure,
     QualitativeComparison,
     RunConfig,
     RunData,
@@ -34,6 +35,7 @@ def make_run(
     document_scores: list[DocumentScore] | None = None,
     inception_score: float = 0.0,
     construction_score: float = 0.0,
+    infra_failure: InfraFailure | None = None,
 ) -> RunData:
     """Create a RunData instance for testing."""
     if semver is None and run_type == RunType.RELEASE:
@@ -65,6 +67,7 @@ def make_run(
             construction_score=construction_score,
             document_scores=document_scores or [],
         ),
+        infra_failure=infra_failure or InfraFailure(),
     )
 
 

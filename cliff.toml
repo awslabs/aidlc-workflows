@@ -17,14 +17,21 @@ body = """
 {% for group, commits in commits | group_by(attribute="group") %}
 
 ### {{ group | striptags | trim | upper_first }}
-{% for commit in commits %}
-- {{ commit.message | split(pat="\n") | first | trim }}\
-{% endfor %}
+
+{% for commit in commits %}\
+- {{ commit.message | split(pat="\n") | first | trim }}
+{% endfor %}\
 {% endfor %}
 """
 
 footer = ""
-trim = true
+# trim = false so each body's leading \n creates a blank line separator
+# between concatenated version sections (required for MD022/MD032)
+trim = false
+postprocessors = [
+  # Normalize triple+ blank lines to single blank (MD012/no-multiple-blanks)
+  { pattern = "\n{3,}", replace = "\n\n" },
+]
 
 [git]
 conventional_commits = true

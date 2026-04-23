@@ -12,27 +12,49 @@ Before contributing, familiarize yourself with our [tenets](README.md#tenets).
 
 AI-DLC rules live in `aidlc-rules/aws-aidlc-rule-details/`. When contributing:
 
-- **Be reproducible**: Changes should be consistently reproducible either via test case or a series of step
+- **Be reproducible**: Changes should be consistently reproducible either via test case or a series of steps.
 - **Single source of truth**: Don't duplicate content. If guidance applies to multiple stages, put it in `common/` and reference it.
 - **Keep it agnostic**: The core methodology shouldn't assume specific IDEs, agents, or models. Tool-specific files are generated from the source.
+
+### Directory Structure — Do Not Rename or Move
+
+The folder names `aws-aidlc-rules/` and `aws-aidlc-rule-details/` under `aidlc-rules/` are part of the public contract. Workshops, tests, and the `core-workflow.md` path-resolution logic all depend on these exact names. Do not flatten, rename, or reorganize them.
+
+```text
+aidlc-rules/
+├── aws-aidlc-rules/            # Core workflow entry point
+│   └── core-workflow.md
+└── aws-aidlc-rule-details/     # Detailed rules referenced by the workflow
+    ├── common/
+    ├── inception/
+    ├── construction/
+    ├── extensions/
+    └── operations/
+```
 
 ### Rule Structure
 
 Rules are organized by phase:
+
 - `common/` - Shared guidance across all phases
 - `inception/` - Planning and architecture rules
 - `construction/` - Design and implementation rules
 - `operations/` - Deployment and monitoring rules
+- `extensions/` - Optional cross-cutting constraint rules
 
 ### Testing Changes
 
 Test your rule changes with at least one supported platform (Amazon Q Developer, Kiro, or other tools) before submitting. Describe what you tested in your PR.
+
+If you're adding or updating installation instructions, ensure you've tested them on Mac,
+Windows CMD, and Windows Powershell.
 
 ## Reporting Bugs/Feature Requests
 
 Use GitHub issues to report bugs or suggest features. Before filing, check existing issues to avoid duplicates.
 
 Include:
+
 - Which rule or stage is affected
 - Expected vs actual behavior
 - The platform/model you tested with
@@ -56,7 +78,7 @@ To submit:
 
 This project has adopted the [Amazon Open Source Code of Conduct](https://aws.github.io/code-of-conduct).
 
-For more information see the [Code of Conduct FAQ](https://aws.github.io/code-of-conduct-faq) or contact opensource-codeofconduct@amazon.com with any additional questions or comments.
+For more information see the [Code of Conduct FAQ](https://aws.github.io/code-of-conduct-faq) or contact <opensource-codeofconduct@amazon.com> with any additional questions or comments.
 
 ## Security Issue Notifications
 

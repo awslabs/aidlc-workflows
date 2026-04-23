@@ -48,14 +48,14 @@ uv run python run.py full \
 
 The evaluation pipeline (`run.py full` or `scripts/run_evaluation.py`) orchestrates six stages:
 
-| Stage | Package | Description |
-| ------- | --------- | ------------- |
-| 1. Execution | `packages/execution` | Runs the AIDLC two-agent workflow to produce docs + code |
-| 2. Post-Run | (inside execution) | Installs deps and runs the generated project's tests |
-| 3. Quantitative | `packages/quantitative` | Lints, security-scans, and duplication-checks generated code |
-| 4. Contract | `packages/contracttest` | Spins up the generated app and validates API endpoints |
-| 5. Qualitative | `packages/qualitative` | Compares generated docs against golden baseline via Bedrock LLM |
-| 6. Report | `packages/reporting` | Generates consolidated Markdown + HTML reports |
+| Stage           | Package                 | Description                                                     |
+| --------------- | ----------------------- | --------------------------------------------------------------- |
+| 1. Execution    | `packages/execution`    | Runs the AIDLC two-agent workflow to produce docs + code        |
+| 2. Post-Run     | (inside execution)      | Installs deps and runs the generated project's tests            |
+| 3. Quantitative | `packages/quantitative` | Lints, security-scans, and duplication-checks generated code    |
+| 4. Contract     | `packages/contracttest` | Spins up the generated app and validates API endpoints          |
+| 5. Qualitative  | `packages/qualitative`  | Compares generated docs against golden baseline via Bedrock LLM |
+| 6. Report       | `packages/reporting`    | Generates consolidated Markdown + HTML reports                  |
 
 Output for each run is written to a timestamped folder under `runs/`:
 
@@ -134,17 +134,17 @@ Precedence: `CLI flags > YAML config > built-in defaults`
 
 Per-model config files in `config/` override the executor model while inheriting everything else from `default.yaml`:
 
-| File | Model |
-| ------ | ------- |
-| `config/opus-4-6.yaml` | Claude Opus 4.6 |
-| `config/opus-4-5.yaml` | Claude Opus 4.5 |
-| `config/sonnet-4-6.yaml` | Claude Sonnet 4.6 |
-| `config/sonnet-4-5.yaml` | Claude Sonnet 4.5 |
-| `config/nova-premier.yaml` | Amazon Nova Premier |
-| `config/nova-pro.yaml` | Amazon Nova Pro |
-| `config/nova-lite.yaml` | Amazon Nova Lite |
-| `config/mistral-large-3.yaml` | Mistral Large 3 (675B) |
-| `config/devstral-2.yaml` | Mistral Devstral 2 (123B, code-specialized) |
+| File                          | Model                                       |
+| ----------------------------- | ------------------------------------------- |
+| `config/opus-4-6.yaml`        | Claude Opus 4.6                             |
+| `config/opus-4-5.yaml`        | Claude Opus 4.5                             |
+| `config/sonnet-4-6.yaml`      | Claude Sonnet 4.6                           |
+| `config/sonnet-4-5.yaml`      | Claude Sonnet 4.5                           |
+| `config/nova-premier.yaml`    | Amazon Nova Premier                         |
+| `config/nova-pro.yaml`        | Amazon Nova Pro                             |
+| `config/nova-lite.yaml`       | Amazon Nova Lite                            |
+| `config/mistral-large-3.yaml` | Mistral Large 3 (675B)                      |
+| `config/devstral-2.yaml`      | Mistral Devstral 2 (123B, code-specialized) |
 
 ### Docker Sandbox
 
@@ -344,6 +344,7 @@ uv run python run.py ext-test --scenario sci-calc \
 ```
 
 This runs the evaluation twice:
+
 1. With all extension opt-ins answered "YES" (maximum guidance)
 2. With all extension opt-ins answered "NO" (baseline only)
 

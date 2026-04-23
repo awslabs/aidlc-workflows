@@ -28,14 +28,14 @@ The specific problems are:
 
 ### Target Users and Stakeholders
 
-| User Type | Description | Primary Need |
-|-----------|-------------|--------------|
-| Application Developer | Backend or frontend engineer integrating math into a product | Reliable, well-documented API with consistent results across calls |
-| EdTech Product Manager | Non-technical stakeholder at an education company | Confidence that calculation results shown to students are correct |
-| Financial Analyst / Quant Developer | Developer building financial models or trading systems | Arbitrary-precision arithmetic with auditable, versioned calculation history |
-| Engineering Simulation Developer | Engineer building CAD, physics, or modeling tools | High-performance matrix, vector, and differential equation operations |
-| Data Scientist | Analyst building preprocessing pipelines | Consistent statistical functions callable from any language or platform |
-| DevOps / Platform Engineer | Engineer responsible for uptime and integration | Low-latency, high-availability API with clear SLAs and monitoring |
+| User Type                           | Description                                                  | Primary Need                                                                 |
+| ----------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| Application Developer               | Backend or frontend engineer integrating math into a product | Reliable, well-documented API with consistent results across calls           |
+| EdTech Product Manager              | Non-technical stakeholder at an education company            | Confidence that calculation results shown to students are correct            |
+| Financial Analyst / Quant Developer | Developer building financial models or trading systems       | Arbitrary-precision arithmetic with auditable, versioned calculation history |
+| Engineering Simulation Developer    | Engineer building CAD, physics, or modeling tools            | High-performance matrix, vector, and differential equation operations        |
+| Data Scientist                      | Analyst building preprocessing pipelines                     | Consistent statistical functions callable from any language or platform      |
+| DevOps / Platform Engineer          | Engineer responsible for uptime and integration              | Low-latency, high-availability API with clear SLAs and monitoring            |
 
 ### Business Constraints
 
@@ -47,17 +47,17 @@ The specific problems are:
 
 ### Success Metrics
 
-| Metric | Current State | Target State (12 months post-MVP) | Measurement Method |
-|--------|--------------|-----------------------------------|-------------------|
-| Registered API accounts | 0 | 5,000 | API key registration count |
-| Monthly active API consumers | 0 | 1,200 | Unique API keys making at least 1 call/month |
-| API calls per month | 0 | 10 million | CloudWatch API Gateway metrics |
-| Paid subscribers | 0 | 200 | Billing system records |
-| Monthly recurring revenue | $0 | $80K | Billing system records |
-| API uptime | N/A | 99.9% | CloudWatch availability monitoring |
-| Mean response time (p50) | N/A | < 50ms | CloudWatch latency metrics |
-| Customer-reported accuracy bugs | N/A | < 5 per quarter | Support ticket tracking |
-| Developer documentation satisfaction | N/A | > 4.2 / 5.0 | Quarterly survey of registered developers |
+| Metric                               | Current State  | Target State (12 months post-MVP)   | Measurement Method                           |
+| ------------------------------------ | -------------- | ----------------------------------- | -------------------------------------------- |
+| Registered API accounts              | 0              | 5,000                               | API key registration count                   |
+| Monthly active API consumers         | 0              | 1,200                               | Unique API keys making at least 1 call/month |
+| API calls per month                  | 0              | 10 million                          | CloudWatch API Gateway metrics               |
+| Paid subscribers                     | 0              | 200                                 | Billing system records                       |
+| Monthly recurring revenue            | $0             | $80K                                | Billing system records                       |
+| API uptime                           | N/A            | 99.9%                               | CloudWatch availability monitoring           |
+| Mean response time (p50)             | N/A            | < 50ms                              | CloudWatch latency metrics                   |
+| Customer-reported accuracy bugs      | N/A            | < 5 per quarter                     | Support ticket tracking                      |
+| Developer documentation satisfaction | N/A            | > 4.2 / 5.0                         | Quarterly survey of registered developers    |
 
 ---
 
@@ -217,12 +217,12 @@ CalcEngine becomes the default computation layer for any application that needs 
 
 ### Long-Term Roadmap
 
-| Phase | Focus | Timeframe |
-|-------|-------|-----------|
-| MVP | Core arithmetic, trigonometry, basic statistics, expression evaluation, API platform, documentation portal, free + paid tiers | Months 1-6 |
-| Phase 2 | Linear algebra, calculus, financial math, arbitrary-precision mode, client SDKs (5 languages), calculation audit log, team workspaces | Months 7-14 |
-| Phase 3 | Unit conversion, physical constants, step-by-step solutions, batch processing, enterprise features, on-premises option | Months 15-22 |
-| Phase 4 | Advanced statistics (hypothesis testing, regression), symbolic computation, optimization solvers, marketplace listings | Months 23-30 |
+| Phase   | Focus                                                                                                                                 | Timeframe    |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| MVP     | Core arithmetic, trigonometry, basic statistics, expression evaluation, API platform, documentation portal, free + paid tiers         | Months 1-6   |
+| Phase 2 | Linear algebra, calculus, financial math, arbitrary-precision mode, client SDKs (5 languages), calculation audit log, team workspaces | Months 7-14  |
+| Phase 3 | Unit conversion, physical constants, step-by-step solutions, batch processing, enterprise features, on-premises option                | Months 15-22 |
+| Phase 4 | Advanced statistics (hypothesis testing, regression), symbolic computation, optimization solvers, marketplace listings                | Months 23-30 |
 
 ---
 
@@ -245,42 +245,42 @@ Prove that developers will pay for a hosted scientific calculator API by launchi
 
 ### Features In Scope (MVP)
 
-| Feature | Description | Priority | Rationale for Inclusion |
-|---------|-------------|----------|------------------------|
-| Basic arithmetic operations | Add, subtract, multiply, divide, modulo, power, square root, nth root, absolute value, floor, ceiling, rounding | Must Have | Foundation for all other calculations. Table stakes for any calculator API. |
-| Expression evaluation | Accept a string math expression (e.g., "2 * (3 + 4)^2 / sin(pi)") and return the evaluated result. Support operator precedence, parentheses, and nested functions. | Must Have | The single most valuable differentiator. Developers send expressions as strings instead of building parsers. |
-| Trigonometric functions | sin, cos, tan, asin, acos, atan, atan2 with degree and radian mode | Must Have | Universal requirement across EdTech, engineering, and graphics use cases. |
-| Logarithmic and exponential functions | log (base 10), ln (natural log), log with arbitrary base, exp, power | Must Have | Required for financial, scientific, and statistical calculations. |
-| Basic statistics | Mean, median, mode, standard deviation, variance, min, max, sum, count, percentile | Must Have | High-frequency need. Validates demand from data science and EdTech segments. |
-| Mathematical constants | pi, e, golden ratio (phi), sqrt(2), sqrt(3), ln(2), ln(10) to IEEE 754 double precision | Must Have | Low implementation cost, high utility. Prevents developers from hardcoding imprecise values. |
-| Factorial, permutations, combinations | n!, nPr, nCr with large number support | Must Have | Required for probability and combinatorics use cases in EdTech. |
-| Error handling and domain validation | Clear error responses for domain errors (sqrt of negative, log of zero, division by zero), overflow, and invalid expressions. Structured error format with error codes. | Must Have | Professional API quality. Bad error handling is the top reason developers abandon APIs. |
-| API key management | Developer signup, API key generation, key rotation, key revocation | Must Have | Minimum authentication infrastructure for a commercial API. |
-| Usage metering and rate limiting | Track calls per API key. Free tier: 10,000 calls/month. Paid tier: 1M calls/month. Clear rate limit headers in responses. | Must Have | Revenue model depends on usage-based pricing. Must be present at launch. |
-| REST API with JSON | All endpoints accept JSON, return JSON. Standard REST conventions. OpenAPI 3.x specification published. | Must Have | Expected standard for modern APIs. |
-| API documentation portal | Hosted documentation site with endpoint reference, code examples in 3 languages (Python, JavaScript, cURL), and interactive "try it" sandbox. | Must Have | Developer adoption depends entirely on documentation quality. |
-| Billing integration | Stripe-based subscription billing. Free tier, Starter ($29/mo), Professional ($99/mo). Usage overage billing. | Must Have | Revenue collection must be automated from day one. |
+| Feature                               | Description                                                                                                                                                             | Priority   | Rationale for Inclusion                                                                                      |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------ |
+| Basic arithmetic operations           | Add, subtract, multiply, divide, modulo, power, square root, nth root, absolute value, floor, ceiling, rounding                                                         | Must Have  | Foundation for all other calculations. Table stakes for any calculator API.                                  |
+| Expression evaluation                 | Accept a string math expression (e.g., "2 * (3 + 4)^2 / sin(pi)") and return the evaluated result. Support operator precedence, parentheses, and nested functions.      | Must Have  | The single most valuable differentiator. Developers send expressions as strings instead of building parsers. |
+| Trigonometric functions               | sin, cos, tan, asin, acos, atan, atan2 with degree and radian mode                                                                                                      | Must Have  | Universal requirement across EdTech, engineering, and graphics use cases.                                    |
+| Logarithmic and exponential functions | log (base 10), ln (natural log), log with arbitrary base, exp, power                                                                                                    | Must Have  | Required for financial, scientific, and statistical calculations.                                            |
+| Basic statistics                      | Mean, median, mode, standard deviation, variance, min, max, sum, count, percentile                                                                                      | Must Have  | High-frequency need. Validates demand from data science and EdTech segments.                                 |
+| Mathematical constants                | pi, e, golden ratio (phi), sqrt(2), sqrt(3), ln(2), ln(10) to IEEE 754 double precision                                                                                 | Must Have  | Low implementation cost, high utility. Prevents developers from hardcoding imprecise values.                 |
+| Factorial, permutations, combinations | n!, nPr, nCr with large number support                                                                                                                                  | Must Have  | Required for probability and combinatorics use cases in EdTech.                                              |
+| Error handling and domain validation  | Clear error responses for domain errors (sqrt of negative, log of zero, division by zero), overflow, and invalid expressions. Structured error format with error codes. | Must Have  | Professional API quality. Bad error handling is the top reason developers abandon APIs.                      |
+| API key management                    | Developer signup, API key generation, key rotation, key revocation                                                                                                      | Must Have  | Minimum authentication infrastructure for a commercial API.                                                  |
+| Usage metering and rate limiting      | Track calls per API key. Free tier: 10,000 calls/month. Paid tier: 1M calls/month. Clear rate limit headers in responses.                                               | Must Have  | Revenue model depends on usage-based pricing. Must be present at launch.                                     |
+| REST API with JSON                    | All endpoints accept JSON, return JSON. Standard REST conventions. OpenAPI 3.x specification published.                                                                 | Must Have  | Expected standard for modern APIs.                                                                           |
+| API documentation portal              | Hosted documentation site with endpoint reference, code examples in 3 languages (Python, JavaScript, cURL), and interactive "try it" sandbox.                           | Must Have  | Developer adoption depends entirely on documentation quality.                                                |
+| Billing integration                   | Stripe-based subscription billing. Free tier, Starter ($29/mo), Professional ($99/mo). Usage overage billing.                                                           | Must Have  | Revenue collection must be automated from day one.                                                           |
 
 ### Features Explicitly Out of Scope (MVP)
 
-| Feature | Reason for Deferral | Target Phase |
-|---------|-------------------|--------------|
-| Arbitrary-precision arithmetic | Adds significant complexity to every endpoint. Standard IEEE 754 double precision is sufficient for MVP validation. | Phase 2 |
-| Matrix and linear algebra operations | Large feature surface area. Not needed to validate core business hypothesis. | Phase 2 |
-| Calculus (differentiation, integration) | Requires numerical methods expertise and extensive edge-case testing. | Phase 2 |
-| Financial mathematics | Specialized domain. Validate general developer demand first. | Phase 2 |
-| Symbolic computation | Requires a computer algebra system. Out of scope for small team and MVP timeline. | Phase 3 |
-| Step-by-step solution breakdowns | High value for EdTech but significant implementation effort. Validate demand through customer interviews during MVP. | Phase 3 |
-| Unit conversion | Useful but not core to calculator value proposition. Many free alternatives exist. | Phase 3 |
-| Physical constants database | Low implementation cost but low urgency. Include in Phase 3 with unit conversion. | Phase 3 |
-| Client SDKs (Python, JS, Java, etc.) | Documentation with cURL and code examples is sufficient for MVP. SDKs accelerate adoption but are not required to validate demand. | Phase 2 |
-| Batch processing / webhooks | Needed for high-volume users. MVP focuses on synchronous single-calculation calls. | Phase 3 |
-| Calculation audit log | Important for regulated industries. Not needed for initial developer adoption. | Phase 2 |
-| Team workspaces | Enterprise feature. Individual developer accounts are sufficient for MVP. | Phase 3 |
-| On-premises deployment | Enterprise feature requiring significant packaging effort. | Phase 3+ |
-| Probability distributions (PDF, CDF) | Useful but not core to MVP validation. Basic statistics covers initial demand. | Phase 2 |
-| Regression analysis | Specialized statistical feature. Defer until statistics demand is validated. | Phase 4 |
-| Complex number arithmetic | Niche use case. Validate demand from engineering users first. | Phase 2 |
+| Feature                                 | Reason for Deferral                                                                                                                | Target Phase   |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| Arbitrary-precision arithmetic          | Adds significant complexity to every endpoint. Standard IEEE 754 double precision is sufficient for MVP validation.                | Phase 2        |
+| Matrix and linear algebra operations    | Large feature surface area. Not needed to validate core business hypothesis.                                                       | Phase 2        |
+| Calculus (differentiation, integration) | Requires numerical methods expertise and extensive edge-case testing.                                                              | Phase 2        |
+| Financial mathematics                   | Specialized domain. Validate general developer demand first.                                                                       | Phase 2        |
+| Symbolic computation                    | Requires a computer algebra system. Out of scope for small team and MVP timeline.                                                  | Phase 3        |
+| Step-by-step solution breakdowns        | High value for EdTech but significant implementation effort. Validate demand through customer interviews during MVP.               | Phase 3        |
+| Unit conversion                         | Useful but not core to calculator value proposition. Many free alternatives exist.                                                 | Phase 3        |
+| Physical constants database             | Low implementation cost but low urgency. Include in Phase 3 with unit conversion.                                                  | Phase 3        |
+| Client SDKs (Python, JS, Java, etc.)    | Documentation with cURL and code examples is sufficient for MVP. SDKs accelerate adoption but are not required to validate demand. | Phase 2        |
+| Batch processing / webhooks             | Needed for high-volume users. MVP focuses on synchronous single-calculation calls.                                                 | Phase 3        |
+| Calculation audit log                   | Important for regulated industries. Not needed for initial developer adoption.                                                     | Phase 2        |
+| Team workspaces                         | Enterprise feature. Individual developer accounts are sufficient for MVP.                                                          | Phase 3        |
+| On-premises deployment                  | Enterprise feature requiring significant packaging effort.                                                                         | Phase 3+       |
+| Probability distributions (PDF, CDF)    | Useful but not core to MVP validation. Basic statistics covers initial demand.                                                     | Phase 2        |
+| Regression analysis                     | Specialized statistical feature. Defer until statistics demand is validated.                                                       | Phase 4        |
+| Complex number arithmetic               | Niche use case. Validate demand from engineering users first.                                                                      | Phase 2        |
 
 ### MVP User Journeys
 
@@ -337,15 +337,15 @@ Prove that developers will pay for a hosted scientific calculator API by launchi
 
 ### Key Risks
 
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
-| Low developer adoption: market prefers local libraries over hosted APIs for math | Medium | High | Free tier lowers barrier. Emphasize cross-platform consistency and expression evaluation as differentiators that local libraries lack. Monitor signup-to-active-use conversion. |
-| Accuracy bugs damage credibility: a wrong calculation result reported publicly | Low | Critical | Comprehensive test suite (500+ cases per function), comparison against reference implementations (Wolfram Alpha, Python mpmath), automated regression testing on every deploy. |
-| Expression parser edge cases: unexpected input causes crashes or wrong results | Medium | High | Fuzz testing with randomized expressions, explicit grammar definition, sandbox the parser to prevent injection. |
-| Free tier abuse: bots or scrapers consume resources without converting | Medium | Medium | Rate limiting per API key, CAPTCHA on signup, anomaly detection on usage patterns. Adjust free tier limit if needed. |
-| Stripe billing integration delays MVP launch | Low | Medium | Begin billing integration in month 2. Use manual invoicing as temporary fallback if needed. |
-| Single-region outage takes down the entire service | Low | High | Deploy to two availability zones within US-East-1. Multi-region is Phase 2 but AZ redundancy provides baseline resilience. |
-| Competitor launches similar API during our development | Low | Medium | Speed to market is the primary defense. 6-month MVP timeline. Focus on developer experience as a moat: documentation quality, response time, error messages. |
+| Risk                                                                             | Likelihood  | Impact   | Mitigation                                                                                                                                                                      |
+| -------------------------------------------------------------------------------- | ----------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Low developer adoption: market prefers local libraries over hosted APIs for math | Medium      | High     | Free tier lowers barrier. Emphasize cross-platform consistency and expression evaluation as differentiators that local libraries lack. Monitor signup-to-active-use conversion. |
+| Accuracy bugs damage credibility: a wrong calculation result reported publicly   | Low         | Critical | Comprehensive test suite (500+ cases per function), comparison against reference implementations (Wolfram Alpha, Python mpmath), automated regression testing on every deploy.  |
+| Expression parser edge cases: unexpected input causes crashes or wrong results   | Medium      | High     | Fuzz testing with randomized expressions, explicit grammar definition, sandbox the parser to prevent injection.                                                                 |
+| Free tier abuse: bots or scrapers consume resources without converting           | Medium      | Medium   | Rate limiting per API key, CAPTCHA on signup, anomaly detection on usage patterns. Adjust free tier limit if needed.                                                            |
+| Stripe billing integration delays MVP launch                                     | Low         | Medium   | Begin billing integration in month 2. Use manual invoicing as temporary fallback if needed.                                                                                     |
+| Single-region outage takes down the entire service                               | Low         | High     | Deploy to two availability zones within US-East-1. Multi-region is Phase 2 but AZ redundancy provides baseline resilience.                                                      |
+| Competitor launches similar API during our development                           | Low         | Medium   | Speed to market is the primary defense. 6-month MVP timeline. Focus on developer experience as a moat: documentation quality, response time, error messages.                    |
 
 ### External Dependencies
 

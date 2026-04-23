@@ -4,7 +4,7 @@ When you run the AI-DLC workflow, all documentation artifacts are generated insi
 
 Below is the fully populated structure showing every possible file across all phases and stages. Conditional files are annotated with notes indicating when they appear.
 
-```
+```text
 aidlc-docs/
 ├── aidlc-state.md                                          # Workflow state tracker — project info, stage progress, current status
 ├── audit.md                                                # Complete audit trail — every user input, AI response, and approval with timestamps

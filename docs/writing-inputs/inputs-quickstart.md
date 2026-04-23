@@ -8,16 +8,16 @@ AI-DLC (AI-Driven Development Life Cycle) is a structured workflow that guides a
 
 ### 1. Vision Document -- what to build and why
 
-| Section | What to Write | How Long |
-|---------|--------------|----------|
-| **Executive Summary** | One paragraph: what is it, who is it for, why does it matter | 3-5 sentences |
-| **Problem Statement** | The specific business problem this solves | 1-2 paragraphs |
-| **Target Users** | Who will use it, what each user type needs | A table with one row per user type |
-| **Success Metrics** | How you measure whether this project succeeded | A table with measurable targets |
-| **Full Scope Vision** | Everything the product could become at maturity, organized by feature area | As many feature areas as needed |
-| **MVP Scope -- Features IN** | Every feature included in the first release, with rationale | A table. If it is not listed, it is not in the MVP. |
-| **MVP Scope -- Features OUT** | Features deliberately excluded from MVP, with reason and target phase | A table. This prevents scope creep. |
-| **Risks and Open Questions** | What could go wrong, what is still undecided | Tables and bullet lists |
+| Section                       | What to Write                                                              | How Long                                            |
+| ----------------------------- | -------------------------------------------------------------------------- | --------------------------------------------------- |
+| **Executive Summary**         | One paragraph: what is it, who is it for, why does it matter               | 3-5 sentences                                       |
+| **Problem Statement**         | The specific business problem this solves                                  | 1-2 paragraphs                                      |
+| **Target Users**              | Who will use it, what each user type needs                                 | A table with one row per user type                  |
+| **Success Metrics**           | How you measure whether this project succeeded                             | A table with measurable targets                     |
+| **Full Scope Vision**         | Everything the product could become at maturity, organized by feature area | As many feature areas as needed                     |
+| **MVP Scope -- Features IN**  | Every feature included in the first release, with rationale                | A table. If it is not listed, it is not in the MVP. |
+| **MVP Scope -- Features OUT** | Features deliberately excluded from MVP, with reason and target phase      | A table. This prevents scope creep.                 |
+| **Risks and Open Questions**  | What could go wrong, what is still undecided                               | Tables and bullet lists                             |
 
 **Key principle**: Separate the full vision from the MVP. The full vision is aspirational. The MVP is the smallest thing that delivers value.
 
@@ -28,15 +28,15 @@ Worked example: [example-vision-scientific-calculator-api.md](example-vision-sci
 
 ### 2. Technical Environment Document -- what tools to use
 
-| Section | What to Write | How Long |
-|---------|--------------|----------|
-| **Languages** | Required, permitted, and prohibited languages with versions | A table per category |
-| **Frameworks and Libraries** | Required, preferred, and prohibited with rationale and alternatives | A table per category |
-| **Cloud Services** | Allow list and disallow list of cloud services with constraints | A table per list |
-| **Architecture and Patterns** | API style, data patterns, messaging, project structure | Short sections with tables |
-| **Security** | Auth method, encryption, input validation, secrets management, and a chosen security compliance framework with controls documented per category | Several subsections |
-| **Testing** | Test types, coverage targets, tooling, CI/CD gates | Tables |
-| **Example Code** | Template code showing canonical patterns for endpoints, functions, tests, and infrastructure | Working code files in an `examples/` directory |
+| Section                       | What to Write                                                                                                                                   | How Long                                       |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| **Languages**                 | Required, permitted, and prohibited languages with versions                                                                                     | A table per category                           |
+| **Frameworks and Libraries**  | Required, preferred, and prohibited with rationale and alternatives                                                                             | A table per category                           |
+| **Cloud Services**            | Allow list and disallow list of cloud services with constraints                                                                                 | A table per list                               |
+| **Architecture and Patterns** | API style, data patterns, messaging, project structure                                                                                          | Short sections with tables                     |
+| **Security**                  | Auth method, encryption, input validation, secrets management, and a chosen security compliance framework with controls documented per category | Several subsections                            |
+| **Testing**                   | Test types, coverage targets, tooling, CI/CD gates                                                                                              | Tables                                         |
+| **Example Code**              | Template code showing canonical patterns for endpoints, functions, tests, and infrastructure                                                    | Working code files in an `examples/` directory |
 
 **Key principle**: Be explicit about what is allowed and what is not. Allow lists and disallow lists prevent the AI from making assumptions.
 
@@ -51,7 +51,7 @@ If you want to start fast and fill in details later, provide at least this:
 
 ### Vision (minimum)
 
-```
+```text
 1. One paragraph saying what you are building and for whom
 2. A list of MVP features (what is IN scope)
 3. A list of what is NOT in the MVP
@@ -64,7 +64,7 @@ See [example-minimal-vision-scientific-calculator-api.md](example-minimal-vision
 
 ### Technical Environment (minimum)
 
-```
+```text
 1. Language and version
 2. Package manager
 3. Web framework (if applicable)
@@ -91,7 +91,7 @@ If you are adding to or modifying an existing codebase, your inputs need to answ
 
 ### Vision (brownfield minimum)
 
-```
+```text
 1. Current state -- one paragraph describing what the system does today
 2. What we are adding or changing -- a clear description of the change
 3. Features IN scope for this iteration
@@ -106,7 +106,7 @@ See [example-minimal-vision-brownfield.md](example-minimal-vision-brownfield.md)
 
 ### Technical Environment (brownfield minimum)
 
-```
+```text
 1. Existing stack -- language, framework, database, infra -- with versions
 2. What to add (new services, tables, components)
 3. What must stay unchanged -- services, schemas, contracts, configs not to touch
@@ -126,6 +126,7 @@ See [example-minimal-tech-env-brownfield.md](example-minimal-tech-env-brownfield
 AI-DLC runs through two main phases:
 
 **Inception** -- understand and plan
+
 1. Detects your workspace (new project or existing code)
 2. Analyzes requirements (asks clarifying questions if anything is unclear)
 3. Creates user stories (if the project warrants them)
@@ -133,6 +134,7 @@ AI-DLC runs through two main phases:
 5. Designs components and units of work (if complexity warrants it)
 
 **Construction** -- design and build (per unit of work)
+
 1. Functional design (business logic, domain models)
 2. NFR requirements and design (performance, security, scalability)
 3. Infrastructure design (maps to actual cloud services)
@@ -145,7 +147,7 @@ Every stage requires your approval before proceeding. You can request changes, a
 
 ## File Overview
 
-```
+```text
 docs/writing-inputs/
   inputs-quickstart.md                               <-- You are here
   vision-document-guide.md                           <-- How to write a vision document

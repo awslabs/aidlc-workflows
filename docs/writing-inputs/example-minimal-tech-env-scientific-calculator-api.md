@@ -30,16 +30,16 @@
 
 ## Do NOT Use
 
-| Prohibited | Reason | Use Instead |
-|-----------|--------|-------------|
-| `eval()`, `exec()`, `compile()` | Security -- arbitrary code execution | AST-based expression parser |
-| Flask, Django | Project uses FastAPI | FastAPI |
-| requests | Blocks async event loop | httpx |
-| sympy | Too heavy for MVP | Custom expression parser |
-| pandas | Not needed -- single calculations, not dataframes | Standard Python |
-| pip, poetry, pipenv | Project uses uv exclusively | uv |
-| black, flake8, isort | Replaced by ruff | ruff |
-| AWS EC2, ECS, RDS | Serverless model preferred for MVP | Lambda, DynamoDB |
+| Prohibited                      | Reason                                            | Use Instead                 |
+| ------------------------------- | ------------------------------------------------- | --------------------------- |
+| `eval()`, `exec()`, `compile()` | Security -- arbitrary code execution              | AST-based expression parser |
+| Flask, Django                   | Project uses FastAPI                              | FastAPI                     |
+| requests                        | Blocks async event loop                           | httpx                       |
+| sympy                           | Too heavy for MVP                                 | Custom expression parser    |
+| pandas                          | Not needed -- single calculations, not dataframes | Standard Python             |
+| pip, poetry, pipenv             | Project uses uv exclusively                       | uv                          |
+| black, flake8, isort            | Replaced by ruff                                  | ruff                        |
+| AWS EC2, ECS, RDS               | Serverless model preferred for MVP                | Lambda, DynamoDB            |
 
 ## Security Basics
 

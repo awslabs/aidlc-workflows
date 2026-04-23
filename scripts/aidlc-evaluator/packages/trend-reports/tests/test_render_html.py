@@ -5,19 +5,18 @@ Smoke tests verify the output is valid HTML with expected sections.
 
 from __future__ import annotations
 
-from conftest import make_run
+from conftest import make_run, make_trend
 from trend_reports.models import (
     BaselineMetrics,
+    InfraFailure,
+    InfraFailureReason,
     TrendData,
 )
 from trend_reports.render_html import render_trend_html
 
 
 def _make_trend(*labels: str) -> TrendData:
-    runs = [
-        make_run(label, qualitative_score=0.85 + i * 0.02)
-        for i, label in enumerate(labels)
-    ]
+    runs = [make_run(label, qualitative_score=0.85 + i * 0.02) for i, label in enumerate(labels)]
     return TrendData(
         runs=runs,
         baseline=BaselineMetrics(
@@ -74,3 +73,40 @@ class TestRenderTrendHtml:
         trend = _make_trend("v0.1.0")
         result = render_trend_html(trend)
         assert "<style>" in result
+
+
+class TestInfraFailureBannerHtml:
+    def test_no_banner_when_no_infra_failure(self):
+        trend = _make_trend("v0.1.0", "v0.1.1")
+        result = render_trend_html(trend)
+        assert '<div class="infra-banner">' not in result
+
+    def test_banner_when_infra_failure(self):
+        r1 = make_run("v0.1.0")
+        r2 = make_run(
+            "v0.1.1",
+            infra_failure=InfraFailure(
+                is_infra_failure=True,
+                reasons=[InfraFailureReason.THROTTLED],
+                summary="bedrock_throttled",
+            ),
+        )
+        trend = make_trend(r1, r2)
+        result = render_trend_html(trend)
+        assert "infra-banner" in result
+        assert "v0.1.1" in result
+
+    def test_section_f_shows_infra_badge(self):
+        r1 = make_run("v0.1.0")
+        r2 = make_run(
+            "v0.1.1",
+            infra_failure=InfraFailure(
+                is_infra_failure=True,
+                reasons=[InfraFailureReason.THROTTLED],
+                summary="test",
+            ),
+        )
+        trend = make_trend(r1, r2)
+        result = render_trend_html(trend)
+        assert "badge-infra" in result
+        assert "INFRA FAIL" in result

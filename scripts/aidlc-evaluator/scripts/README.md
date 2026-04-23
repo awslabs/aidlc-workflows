@@ -105,6 +105,7 @@ python scripts/run_trend_report.py --baseline test_cases/sci-calc/golden.yaml
 ## Path Resolution
 
 All scripts properly resolve paths relative to the repository root, so they work correctly whether invoked:
+
 - Through the master `run.py` dispatcher
 - Directly from the repository root
 - Directly from the `scripts/` directory

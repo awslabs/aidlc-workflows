@@ -10,12 +10,14 @@ pipeline (stages 2–6).
 ## Input/Output Contract
 
 ### Inputs (provided to each IDE adapter)
+
 - `vision.md` — the application vision document
 - `tech-env.md` — technical environment specification
 - AIDLC rules — the full AIDLC workflow rules (from `aidlc-workflows` repo)
 - Initial prompt template — instructions for the IDE AI to follow the AIDLC process
 
 ### Outputs (captured from each IDE adapter)
+
 - `aidlc-docs/` — generated AIDLC documentation (same structure as Strands runs)
   - `inception/requirements/`, `inception/plans/`, `inception/application-design/`
   - `construction/plans/`, `construction/build-and-test/`
@@ -29,7 +31,7 @@ pipeline (stages 2–6).
 IDE outputs will not match the Strands run folder layout exactly. Each adapter must
 normalize its output to match the expected structure:
 
-```
+```text
 <run-folder>/
   run-meta.yaml          # adapter generates this
   run-metrics.yaml       # adapter generates (tokens if available, timing always)
@@ -103,7 +105,7 @@ class IDEAdapter(ABC):
 
 ## Run Orchestration
 
-```
+```text
 run_ide_evaluation.py
   ├── parse args (--ide <name>, --vision, --golden, etc.)
   ├── load adapter by name
@@ -114,6 +116,7 @@ run_ide_evaluation.py
 ```
 
 The orchestrator script:
+
 1. Instantiates the adapter for the target IDE
 2. Runs the adapter to generate outputs
 3. Runs post-generation tests (install deps + pytest/npm test)
@@ -122,6 +125,7 @@ The orchestrator script:
 ## Adapter Implementation Strategy
 
 ### Category A: CLI-scriptable IDEs
+
 IDEs with CLI or API support for sending prompts and receiving responses.
 
 - **Cursor** — Has CLI (`cursor` command). May support `--chat` or similar.
@@ -130,6 +134,7 @@ IDEs with CLI or API support for sending prompts and receiving responses.
 Approach: Subprocess invocation, parse stdout/stderr, monitor workspace for output files.
 
 ### Category B: VS Code extension IDEs
+
 IDEs that run as VS Code extensions with no independent CLI.
 
 - **Cline** — VS Code extension. Must automate VS Code.
@@ -138,6 +143,7 @@ IDEs that run as VS Code extensions with no independent CLI.
 Approach: Use `@vscode/test-electron` or Playwright-based VS Code automation.
 
 ### Category C: VS Code fork IDEs
+
 Standalone IDE forks of VS Code with built-in AI.
 
 - **Windsurf** — Codeium's fork. Electron app, VS Code internals.
@@ -146,6 +152,7 @@ Standalone IDE forks of VS Code with built-in AI.
 Approach: Electron automation via Playwright or native extension API.
 
 ### Common Post-Run Steps (all adapters)
+
 1. Scan workspace for `aidlc-docs/` directory structure
 2. Identify generated source code under `workspace/` or project root
 3. Normalize file layout to match expected schema
@@ -155,7 +162,7 @@ Approach: Electron automation via Playwright or native extension API.
 
 ## Package Structure
 
-```
+```text
 packages/ide-harness/
   pyproject.toml
   src/ide_harness/
@@ -182,7 +189,7 @@ packages/ide-harness/
 
 The prompt sent to each IDE AI must instruct it to follow the AIDLC process:
 
-```
+```text
 You are tasked with building an application following the AIDLC (AI Development
 Life Cycle) process. The AIDLC rules are provided in the `aidlc-rules/` directory.
 

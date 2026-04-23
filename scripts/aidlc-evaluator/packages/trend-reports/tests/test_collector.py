@@ -17,6 +17,7 @@ from trend_reports.collector import (
     collect_from_zip,
     collect_trend_data,
     compute_deltas,
+    detect_infra_failure,
     extract_zip,
     find_yaml_files,
     load_baseline,
@@ -30,6 +31,11 @@ from trend_reports.collector import (
 )
 from trend_reports.models import (
     CollectorError,
+    ContractTestResults,
+    InfraFailureReason,
+    RunConfig,
+    RunMeta,
+    RunMetrics,
     RunType,
     SemVer,
 )
@@ -482,26 +488,48 @@ class TestCollectFromDirectory:
     def test_full_directory(self, tmp_path):
         run_dir = tmp_path / "run-001"
         run_dir.mkdir()
-        _write_yaml(run_dir / "run-meta.yaml", {
-            "run_folder": "run-001",
-            "config": {"rules_ref": "v0.1.5"},
-        })
-        _write_yaml(run_dir / "run-metrics.yaml", {
-            "tokens": {"total": {"total_tokens": 9000000}},
-            "timing": {"total_wall_clock_ms": 600000},
-        })
-        _write_yaml(run_dir / "test-results.yaml", {
-            "test": {"parsed_results": {"passed": 175, "failed": 0, "total": 175}},
-        })
-        _write_yaml(run_dir / "contract-test-results.yaml", {
-            "total": 88, "passed": 88, "failed": 0,
-        })
-        _write_yaml(run_dir / "quality-report.yaml", {
-            "lint": {}, "summary": {"lint_total": 0},
-        })
-        _write_yaml(run_dir / "qualitative-comparison.yaml", {
-            "overall_score": 0.898, "phases": [],
-        })
+        _write_yaml(
+            run_dir / "run-meta.yaml",
+            {
+                "run_folder": "run-001",
+                "config": {"rules_ref": "v0.1.5"},
+            },
+        )
+        _write_yaml(
+            run_dir / "run-metrics.yaml",
+            {
+                "tokens": {"total": {"total_tokens": 9000000}},
+                "timing": {"total_wall_clock_ms": 600000},
+            },
+        )
+        _write_yaml(
+            run_dir / "test-results.yaml",
+            {
+                "test": {"parsed_results": {"passed": 175, "failed": 0, "total": 175}},
+            },
+        )
+        _write_yaml(
+            run_dir / "contract-test-results.yaml",
+            {
+                "total": 88,
+                "passed": 88,
+                "failed": 0,
+            },
+        )
+        _write_yaml(
+            run_dir / "quality-report.yaml",
+            {
+                "lint": {},
+                "summary": {"lint_total": 0},
+            },
+        )
+        _write_yaml(
+            run_dir / "qualitative-comparison.yaml",
+            {
+                "overall_score": 0.898,
+                "phases": [],
+            },
+        )
 
         run = collect_from_directory(run_dir)
         assert run.label == "v0.1.5"
@@ -529,10 +557,13 @@ class TestCollectFromDirectory:
     def test_missing_optional_files_use_defaults(self, tmp_path):
         run_dir = tmp_path / "run-minimal"
         run_dir.mkdir()
-        _write_yaml(run_dir / "run-meta.yaml", {
-            "run_folder": "run-002",
-            "config": {"rules_ref": "v0.1.0"},
-        })
+        _write_yaml(
+            run_dir / "run-meta.yaml",
+            {
+                "run_folder": "run-002",
+                "config": {"rules_ref": "v0.1.0"},
+            },
+        )
         run = collect_from_directory(run_dir)
         assert run.unit_tests.passed == 0
         assert run.contract_tests.total == 0
@@ -549,33 +580,203 @@ class TestCollectTrendDataDirectoryDispatch:
         # Create a directory bundle
         run_dir = tmp_path / "dir-bundle"
         run_dir.mkdir()
-        _write_yaml(run_dir / "run-meta.yaml", {
-            "run_folder": "run-dir", "config": {"rules_ref": "pr-42"},
-        })
+        _write_yaml(
+            run_dir / "run-meta.yaml",
+            {
+                "run_folder": "run-dir",
+                "config": {"rules_ref": "pr-42"},
+            },
+        )
         _write_yaml(run_dir / "run-metrics.yaml", {"tokens": {"total": {}}, "timing": {}})
         _write_yaml(run_dir / "test-results.yaml", {"test": {"parsed_results": {}}})
-        _write_yaml(run_dir / "contract-test-results.yaml", {
-            "total": 0, "passed": 0, "failed": 0,
-        })
+        _write_yaml(
+            run_dir / "contract-test-results.yaml",
+            {
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+            },
+        )
         _write_yaml(run_dir / "quality-report.yaml", {"lint": {}, "summary": {}})
-        _write_yaml(run_dir / "qualitative-comparison.yaml", {
-            "overall_score": 0.5, "phases": [],
-        })
+        _write_yaml(
+            run_dir / "qualitative-comparison.yaml",
+            {
+                "overall_score": 0.5,
+                "phases": [],
+            },
+        )
 
         # Create a zip bundle
-        zip_path = _make_report_zip(tmp_path, {
-            "run-meta.yaml": {"run_folder": "run-zip", "config": {"rules_ref": "v0.1.0"}},
-            "run-metrics.yaml": {"tokens": {"total": {}}, "timing": {}},
-            "test-results.yaml": {"test": {"parsed_results": {}}},
-            "contract-test-results.yaml": {"total": 0, "passed": 0, "failed": 0},
-            "quality-report.yaml": {"lint": {}, "summary": {}},
-            "qualitative-comparison.yaml": {"overall_score": 0.6, "phases": []},
-        })
+        zip_path = _make_report_zip(
+            tmp_path,
+            {
+                "run-meta.yaml": {"run_folder": "run-zip", "config": {"rules_ref": "v0.1.0"}},
+                "run-metrics.yaml": {"tokens": {"total": {}}, "timing": {}},
+                "test-results.yaml": {"test": {"parsed_results": {}}},
+                "contract-test-results.yaml": {"total": 0, "passed": 0, "failed": 0},
+                "quality-report.yaml": {"lint": {}, "summary": {}},
+                "qualitative-comparison.yaml": {"overall_score": 0.6, "phases": []},
+            },
+        )
 
         baseline_path = tmp_path / "golden.yaml"
         _write_yaml(baseline_path, {})
 
         trend = collect_trend_data(
-            [zip_path, run_dir], baseline_path, "test/repo", tmp_path / "work",
+            [zip_path, run_dir],
+            baseline_path,
+            "test/repo",
+            tmp_path / "work",
         )
         assert len(trend.runs) == 2
+
+
+# ---------------------------------------------------------------------------
+# Infrastructure failure detection
+# ---------------------------------------------------------------------------
+
+
+class TestDetectInfraFailure:
+    def test_clean_run_no_failure(self):
+        meta = RunMeta(run_id="r1", config=RunConfig(rules_ref="v0.1.0"), status="Status.COMPLETED")
+        metrics = RunMetrics()
+        contract = ContractTestResults(server_started=True)
+        result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
+        assert not result.is_infra_failure
+        assert result.reasons == []
+
+    def test_throttle_events_flagged(self):
+        meta = RunMeta(run_id="r1", config=RunConfig(rules_ref="v0.1.0"), status="Status.COMPLETED")
+        metrics = RunMetrics(throttle_events=5)
+        contract = ContractTestResults(server_started=True)
+        result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
+        assert result.is_infra_failure
+        assert InfraFailureReason.THROTTLED in result.reasons
+
+    def test_service_unavailable_flagged(self):
+        meta = RunMeta(run_id="r1", config=RunConfig(rules_ref="v0.1.0"), status="Status.COMPLETED")
+        metrics = RunMetrics(service_unavailable_events=3)
+        contract = ContractTestResults(server_started=True)
+        result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
+        assert result.is_infra_failure
+        assert InfraFailureReason.SERVICE_UNAVAILABLE in result.reasons
+
+    def test_model_error_flagged(self):
+        meta = RunMeta(run_id="r1", config=RunConfig(rules_ref="v0.1.0"), status="Status.COMPLETED")
+        metrics = RunMetrics(model_error_events=1)
+        contract = ContractTestResults(server_started=True)
+        result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
+        assert result.is_infra_failure
+        assert InfraFailureReason.MODEL_ERROR in result.reasons
+
+    def test_run_failed_status(self):
+        meta = RunMeta(run_id="r1", config=RunConfig(rules_ref="v0.1.0"), status="Status.FAILED")
+        metrics = RunMetrics()
+        contract = ContractTestResults(server_started=True)
+        result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
+        assert result.is_infra_failure
+        assert InfraFailureReason.RUN_FAILED in result.reasons
+
+    def test_missing_status_means_crash(self):
+        meta = RunMeta(run_id="r1", config=RunConfig(rules_ref="v0.1.0"), status="")
+        metrics = RunMetrics()
+        contract = ContractTestResults(server_started=True)
+        result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
+        assert result.is_infra_failure
+        assert InfraFailureReason.RUN_CRASHED in result.reasons
+
+    def test_metrics_missing(self):
+        meta = RunMeta(run_id="r1", config=RunConfig(rules_ref="v0.1.0"), status="Status.COMPLETED")
+        metrics = RunMetrics()
+        contract = ContractTestResults(server_started=True)
+        result = detect_infra_failure(meta, metrics, contract, has_metrics_file=False)
+        assert result.is_infra_failure
+        assert InfraFailureReason.METRICS_MISSING in result.reasons
+
+    def test_server_start_failed(self):
+        meta = RunMeta(run_id="r1", config=RunConfig(rules_ref="v0.1.0"), status="Status.COMPLETED")
+        metrics = RunMetrics()
+        contract = ContractTestResults(server_started=False, server_error="Connection refused")
+        result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
+        assert result.is_infra_failure
+        assert InfraFailureReason.SERVER_START_FAILED in result.reasons
+
+    def test_multiple_reasons(self):
+        meta = RunMeta(run_id="r1", config=RunConfig(rules_ref="v0.1.0"), status="Status.FAILED")
+        metrics = RunMetrics(throttle_events=10, service_unavailable_events=5)
+        contract = ContractTestResults(server_started=False)
+        result = detect_infra_failure(meta, metrics, contract, has_metrics_file=True)
+        assert result.is_infra_failure
+        assert len(result.reasons) >= 3
+        assert "Infrastructure failure detected" in result.summary
+
+
+class TestParseRunMetricsIndividualErrors:
+    def test_individual_error_fields_populated(self, tmp_path):
+        path = tmp_path / "run-metrics.yaml"
+        _write_yaml(
+            path,
+            {
+                "tokens": {"total": {"total_tokens": 100}},
+                "timing": {"total_wall_clock_ms": 1000},
+                "errors": {
+                    "throttle_events": 3,
+                    "service_unavailable_events": 2,
+                    "model_error_events": 1,
+                    "timeout_events": 4,
+                    "failed_tool_calls": 5,
+                    "validation_error_events": 6,
+                },
+            },
+        )
+        metrics = parse_run_metrics(path)
+        assert metrics.throttle_events == 3
+        assert metrics.service_unavailable_events == 2
+        assert metrics.model_error_events == 1
+        assert metrics.timeout_events == 4
+        assert metrics.failed_tool_calls == 5
+        assert metrics.validation_error_events == 6
+        assert metrics.error_count == 21
+
+    def test_missing_errors_default_to_zero(self, tmp_path):
+        path = tmp_path / "run-metrics.yaml"
+        _write_yaml(path, {"tokens": {"total": {}}, "timing": {}})
+        metrics = parse_run_metrics(path)
+        assert metrics.throttle_events == 0
+        assert metrics.service_unavailable_events == 0
+        assert metrics.error_count == 0
+
+
+class TestParseContractTestsServerStarted:
+    def test_server_started_true(self, tmp_path):
+        path = tmp_path / "contract-test-results.yaml"
+        _write_yaml(
+            path,
+            {"total": 88, "passed": 88, "failed": 0, "server_started": True, "server_error": None},
+        )
+        result = parse_contract_tests(path)
+        assert result.server_started is True
+        assert result.server_error == ""
+
+    def test_server_started_false(self, tmp_path):
+        path = tmp_path / "contract-test-results.yaml"
+        _write_yaml(
+            path,
+            {
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "server_started": False,
+                "server_error": "Connection refused",
+            },
+        )
+        result = parse_contract_tests(path)
+        assert result.server_started is False
+        assert result.server_error == "Connection refused"
+
+    def test_server_started_missing_defaults_true(self, tmp_path):
+        path = tmp_path / "contract-test-results.yaml"
+        _write_yaml(path, {"total": 88, "passed": 88, "failed": 0})
+        result = parse_contract_tests(path)
+        assert result.server_started is True
+        assert result.server_error == ""

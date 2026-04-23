@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from conftest import make_run, make_trend
 from trend_reports.gate import check_regressions, find_latest_and_previous
-from trend_reports.models import RunType
+from trend_reports.models import InfraFailure, InfraFailureReason, RunType
 
 
 class TestCheckRegressions:
@@ -93,3 +93,64 @@ class TestFindLatestAndPrevious:
         latest, prev = find_latest_and_previous(make_trend(r1, r_pr))
         assert latest is r_pr
         assert prev is r1
+
+
+class TestCheckRegressionsInfraFailure:
+    def test_latest_infra_failure_skips_regression(self):
+        """If latest run is an infra failure, gate passes with annotation."""
+        r1 = make_run("v0.1.0", qualitative_score=0.90)
+        r2 = make_run(
+            "v0.1.1",
+            qualitative_score=0.0,
+            contract_passed=0,
+            contract_total=88,
+            infra_failure=InfraFailure(
+                is_infra_failure=True,
+                reasons=[InfraFailureReason.THROTTLED],
+                summary="Infrastructure failure detected: bedrock_throttled",
+            ),
+        )
+        result = check_regressions(make_trend(r1, r2))
+        assert result.passed is True
+        assert result.infra_failure_detected is True
+        assert result.regressions == []
+        assert "infrastructure" in result.infra_failure_summary.lower()
+
+    def test_previous_infra_failure_finds_older_comparison(self):
+        """If comparison run is infra failure, gate should find an older non-infra run."""
+        r1 = make_run("v0.1.0", qualitative_score=0.90)
+        r2 = make_run(
+            "v0.1.1",
+            qualitative_score=0.0,
+            infra_failure=InfraFailure(
+                is_infra_failure=True,
+                reasons=[InfraFailureReason.SERVICE_UNAVAILABLE],
+                summary="test",
+            ),
+        )
+        r3 = make_run("v0.1.2", qualitative_score=0.91)
+        result = check_regressions(make_trend(r1, r2, r3))
+        assert result.passed is True
+        assert result.comparison_label == "v0.1.0"
+
+    def test_non_infra_failure_still_detects_regression(self):
+        """Normal runs should still trigger regressions as before."""
+        r1 = make_run("v0.1.0", qualitative_score=0.90)
+        r2 = make_run("v0.1.1", qualitative_score=0.85)
+        result = check_regressions(make_trend(r1, r2))
+        assert result.passed is False
+        assert result.infra_failure_detected is False
+
+    def test_all_runs_infra_failure_gate_passes(self):
+        """If all comparison candidates are infra failures, gate passes with annotation."""
+        infra = InfraFailure(
+            is_infra_failure=True,
+            reasons=[InfraFailureReason.THROTTLED],
+            summary="test",
+        )
+        r1 = make_run("v0.1.0", infra_failure=infra)
+        r2 = make_run("v0.1.1", qualitative_score=0.90)
+        result = check_regressions(make_trend(r1, r2))
+        # Latest is not infra, but comparison is; should skip with annotation
+        assert result.passed is True
+        assert result.infra_failure_detected is True

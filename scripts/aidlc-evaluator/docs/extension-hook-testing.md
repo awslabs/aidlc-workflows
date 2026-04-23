@@ -55,7 +55,8 @@ python run.py ext-test --list-configs
 ```
 
 Output:
-```
+
+```text
 Available extension test configurations:
 
   all-extensions        All Extensions Enabled
@@ -97,7 +98,7 @@ python run.py ext-test --scenario sci-calc \
 
 The extension test creates a structured output directory:
 
-```
+```text
 runs/<scenario>/extension-test/
 ├── 20260309T151234-ext-all-extensions/     # Run with all extensions
 │   ├── aidlc-docs/                         # Generated docs
@@ -123,6 +124,7 @@ The generated report includes:
 ### Test Configuration Summary
 
 Shows each configuration that was tested:
+
 - Configuration name and description
 - Pass/fail status
 - Duration
@@ -140,6 +142,7 @@ python run.py compare --runs-dir runs/<scenario>/extension-test \
 ### Analysis Guidance
 
 Suggests areas to examine:
+
 - Qualitative scores comparison
 - Differences in generated artifacts
 - Impact on code quality metrics
@@ -201,6 +204,7 @@ The extension opt-in mechanism is still under active development. The test scrip
 ### Extension Metadata
 
 Each test run includes an `extension-test-config.yaml` file documenting:
+
 - Which configuration was used
 - The opt-in settings applied
 - The rules reference (branch/tag/commit)

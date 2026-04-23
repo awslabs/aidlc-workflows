@@ -35,6 +35,7 @@ git checkout -b feature/your-feature-name
 ### 2. Make Changes
 
 Work in the appropriate package:
+
 - `aidlc-runner/` - Execution Framework (two-agent AIDLC workflow runner)
 - `packages/qualitative/` - Semantic Evaluation (intent & design similarity scoring)
 - `packages/quantitative/` - Code Evaluation (linting, security, organization)
@@ -43,6 +44,7 @@ Work in the appropriate package:
 - `packages/shared/` - Common utilities
 
 Or contribute to other work streams:
+
 - `test_cases/` - Golden Test Cases (baseline inputs)
 - `docs/writing-inputs/` - Vision and tech-env document guides
 - `.github/workflows/` - GitHub CI/CD Integration & Management
@@ -94,14 +96,14 @@ git commit -m "Add token tracking to nonfunctional package"
 
 The project is organized around six big rocks. Your changes will typically fall into one or more of these:
 
-| Work Stream | Description | Package / Area |
-|---|---|---|
-| **Golden Test Case** | Curated baseline test inputs | `test_cases/` |
-| **Execution Framework** | Two-agent AIDLC workflow runner (Owner: Jeff) | `aidlc-runner/` |
-| **Semantic Evaluation** | Intent & design similarity scoring | `packages/qualitative/` |
-| **Code Evaluation** | Linting, security, organization | `packages/quantitative/` |
-| **NFR Evaluation** | Tokens, timing, consistency | `packages/nonfunctional/` |
-| **GitHub CI/CD** | Pipeline integration & management | `.github/workflows/` |
+| Work Stream             | Description                                   | Package / Area            |
+| ----------------------- | --------------------------------------------- | ------------------------- |
+| **Golden Test Case**    | Curated baseline test inputs                  | `test_cases/`             |
+| **Execution Framework** | Two-agent AIDLC workflow runner (Owner: Jeff) | `aidlc-runner/`           |
+| **Semantic Evaluation** | Intent & design similarity scoring            | `packages/qualitative/`   |
+| **Code Evaluation**     | Linting, security, organization               | `packages/quantitative/`  |
+| **NFR Evaluation**      | Tokens, timing, consistency                   | `packages/nonfunctional/` |
+| **GitHub CI/CD**        | Pipeline integration & management             | `.github/workflows/`      |
 
 ## Code Standards
 

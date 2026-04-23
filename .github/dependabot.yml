@@ -1,0 +1,54 @@
+# Dependabot version updates
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
+#
+# Note: The ClamAV service container image in security-scanners.yml is pinned
+# by sha256 digest and is NOT covered by any Dependabot ecosystem. That digest
+# must be updated manually (monthly cadence). See:
+# docs/ADMINISTRATIVE_GUIDE.md → Updating Pinned Versions → How to update the ClamAV image digest
+
+version: 2
+updates:
+  # GitHub Actions — SHA-pinned actions across all workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # Python (uv) — evaluator framework dependencies
+  - package-ecosystem: "uv"
+    directory: "/scripts/aidlc-evaluator"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: "scope"
+    groups:
+      evaluator-deps:
+        patterns:
+          - "*"
+
+  # Pre-commit hooks — .pre-commit-config.yaml rev pins
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+
+  # Docker — sandbox Dockerfile base image
+  - package-ecosystem: "docker"
+    directory: "/scripts/aidlc-evaluator/docker/sandbox"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"

@@ -1,0 +1,28 @@
+# Checkov configuration
+# https://www.checkov.io/2.Basics/CLI%20Command%20Reference.html
+
+# Scan GitHub Actions workflows and Dockerfiles
+framework:
+  - github_actions
+  - dockerfile
+
+# Skip checks that conflict with this repo's patterns.
+#
+# Repo-wide suppressions go here. For file-level suppressions, use inline
+# comments in the source file:
+#
+#   Dockerfile:
+#     # checkov:skip=CKV_DOCKER_2:healthcheck not needed for build-only image
+#     FROM python:3.12-slim
+#
+#   GitHub Actions YAML:
+#     # checkov:skip=CKV_GHA_7:buildspec-override requires user parameters
+#     - uses: aws-actions/aws-codebuild-run-build@v1
+#
+# Multiple skips on one line:
+#     # checkov:skip=CKV_DOCKER_2,CKV_DOCKER_3:reason for both
+skip-check:
+  # CKV_GHA_7: "The build output cannot be affected by user parameters other
+  # than the build entry point and the top-level source location"
+  # — conflicts with inline buildspec-override in codebuild.yml
+  - CKV_GHA_7

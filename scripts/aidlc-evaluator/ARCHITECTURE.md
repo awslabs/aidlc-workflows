@@ -10,7 +10,7 @@ The framework validates changes to the [AI-DLC workflows](https://github.com/aws
 
 ## 2. High-Level Architecture
 
-```
+```text
                               ┌──────────────────────┐
                               │   Entry Points (CLI) │
                               └──────────┬───────────┘
@@ -60,20 +60,20 @@ The framework validates changes to the [AI-DLC workflows](https://github.com/aws
 
 The project uses a **uv workspace** (defined in the root `pyproject.toml`) with eight internal packages. Each package is independently structured with its own `pyproject.toml`, `src/` layout, and `tests/` directory.
 
-| Package | PyPI Name | Purpose |
-|---------|-----------|---------|
-| `packages/execution` | `aidlc-runner` | Two-agent swarm that runs the AIDLC workflow |
-| `packages/qualitative` | `aidlc-qualitative` | Semantic scoring of documents vs golden baseline |
-| `packages/quantitative` | `aidlc-quantitative` | Static analysis: linting, security, duplication |
-| `packages/contracttest` | `aidlc-contracttest` | API contract testing against OpenAPI specs |
-| `packages/nonfunctional` | `aidlc-nonfunctional` | NFR evaluation (tokens, timing, consistency) |
-| `packages/reporting` | `aidlc-reporting` | Consolidated report generation (Markdown + HTML) |
-| `packages/ide-harness` | (not published) | IDE adapter framework for third-party AI assistants |
-| `packages/shared` | `aidlc-shared` | Common utilities shared across packages |
+| Package                  | PyPI Name             | Purpose                                             |
+| ------------------------ | --------------------- | --------------------------------------------------- |
+| `packages/execution`     | `aidlc-runner`        | Two-agent swarm that runs the AIDLC workflow        |
+| `packages/qualitative`   | `aidlc-qualitative`   | Semantic scoring of documents vs golden baseline    |
+| `packages/quantitative`  | `aidlc-quantitative`  | Static analysis: linting, security, duplication     |
+| `packages/contracttest`  | `aidlc-contracttest`  | API contract testing against OpenAPI specs          |
+| `packages/nonfunctional` | `aidlc-nonfunctional` | NFR evaluation (tokens, timing, consistency)        |
+| `packages/reporting`     | `aidlc-reporting`     | Consolidated report generation (Markdown + HTML)    |
+| `packages/ide-harness`   | (not published)       | IDE adapter framework for third-party AI assistants |
+| `packages/shared`        | `aidlc-shared`        | Common utilities shared across packages             |
 
 **Dependency graph** (simplified):
 
-```
+```text
 run_evaluation.py ──► execution (aidlc-runner)
                   ──► quantitative
                   ──► contracttest
@@ -94,7 +94,7 @@ All packages communicate through **YAML files on disk**. There are no in-process
 
 Configuration follows a three-tier precedence model:
 
-```
+```text
 CLI flags  >  YAML config file  >  Built-in Python defaults
 ```
 
@@ -130,7 +130,7 @@ This is the core of the framework. It uses the **Strands SDK** multi-agent orche
 
 #### Two-Agent Swarm Architecture
 
-```
+```text
                     ┌──────────────────────┐
                     │   Strands Swarm      │
                     │                      │
@@ -147,17 +147,20 @@ This is the core of the framework. It uses the **Strands SDK** multi-agent orche
 ```
 
 **Executor Agent** — Drives the AIDLC workflow through all phases (Inception → Construction). It:
+
 - Loads AIDLC rule files on demand via the `load_rule` tool (lazy loading keeps context window usage low)
 - Reads/writes files in the run folder via sandboxed `read_file`, `write_file`, `list_files` tools
 - Executes shell commands (dependency install, test runs) via the `run_command` tool
 - Hands off to the Simulator when human input is needed (questions, approvals, reviews)
 
 **Simulator Agent** — Acts as a simulated human stakeholder. It:
+
 - Has the vision document (and optional tech-env document) embedded in its system prompt
 - Answers clarifying questions, approves documents, reviews code
 - Always hands back to the Executor to continue the workflow
 
 **Key design decisions:**
+
 - **Sandboxed file operations**: All file tools use `_resolve_safe()` to prevent path traversal outside the run folder
 - **Sandboxed command execution**: `run_command` uses a restricted environment (only PATH, HOME, LANG) to isolate execution
 - **Lazy rule loading**: Rules are loaded one-at-a-time as each stage begins, rather than pre-loading all rules into the system prompt
@@ -168,33 +171,34 @@ This is the core of the framework. It uses the **Strands SDK** multi-agent orche
 
 The Executor drives this sequence (some stages are conditional based on project scope):
 
-| # | Stage | Phase | Conditional? |
-|---|-------|-------|-------------|
-| 1 | Workspace Detection | Inception | Always |
-| 2 | Reverse Engineering | Inception | Brownfield only |
-| 3 | Requirements Analysis | Inception | Always |
-| 4 | User Stories | Inception | If complex |
-| 5 | Workflow Planning | Inception | Always |
-| 6 | Application Design | Inception | If needed |
-| 7 | Units Generation | Inception | If needed |
-| 8 | Functional Design | Construction | If needed |
-| 9 | NFR Requirements | Construction | If needed |
-| 10 | NFR Design | Construction | If needed |
-| 11 | Infrastructure Design | Construction | If needed |
-| 12 | Code Generation | Construction | Always |
-| 13 | Build and Test | Construction | Always |
+| #   | Stage                 | Phase        | Conditional?    |
+| --- | --------------------- | ------------ | --------------- |
+| 1   | Workspace Detection   | Inception    | Always          |
+| 2   | Reverse Engineering   | Inception    | Brownfield only |
+| 3   | Requirements Analysis | Inception    | Always          |
+| 4   | User Stories          | Inception    | If complex      |
+| 5   | Workflow Planning     | Inception    | Always          |
+| 6   | Application Design    | Inception    | If needed       |
+| 7   | Units Generation      | Inception    | If needed       |
+| 8   | Functional Design     | Construction | If needed       |
+| 9   | NFR Requirements      | Construction | If needed       |
+| 10  | NFR Design            | Construction | If needed       |
+| 11  | Infrastructure Design | Construction | If needed       |
+| 12  | Code Generation       | Construction | Always          |
+| 13  | Build and Test        | Construction | Always          |
 
 Each stage loads its corresponding rule file (e.g., `inception/requirements-analysis.md`) before execution. The Executor writes all documentation artifacts to `aidlc-docs/` and all generated code to `workspace/`.
 
 #### Rules Setup
 
 The runner either:
+
 - **Git clones** the AIDLC rules repository (default: `awslabs/aidlc-workflows`, ref configurable) into the run folder, then extracts the `aidlc-rules/` content
 - **Copies** from a local path when `rules_source: "local"` is configured
 
 #### Run Folder Layout
 
-```
+```text
 runs/<YYYYMMDDTHHMMSS>-<rules_slug>/
   ├── vision.md                      # Copied input
   ├── tech-env.md                    # Copied input (if provided)
@@ -213,6 +217,7 @@ runs/<YYYYMMDDTHHMMSS>-<rules_slug>/
 #### Post-Run Test Evaluation
 
 After the swarm completes, `post_run.py` performs automatic testing:
+
 1. **Project detection**: BFS scan of `workspace/` for marker files (`pyproject.toml`, `package.json`, `Cargo.toml`, `go.mod`) up to 3 levels deep
 2. **Dependency install**: Runs the appropriate install command (e.g., `uv pip install -e ".[dev]"`)
 3. **Test execution**: Runs the appropriate test command (e.g., `uv run pytest`)
@@ -229,14 +234,14 @@ Runs static analysis tools against the generated code in `workspace/`. The analy
 
 #### Tool Selection by Project Type
 
-| Project Type | Linter | Security Scanner | Duplication |
-|-------------|--------|-----------------|-------------|
-| Python | ruff | bandit + semgrep | PMD CPD |
-| Node.js | eslint | npm audit + semgrep | PMD CPD |
+| Project Type  | Linter   | Security Scanner    | Duplication   |
+| ------------- | -------- | ------------------- | ------------- |
+| Python        | ruff     | bandit + semgrep    | PMD CPD       |
+| Node.js       | eslint   | npm audit + semgrep | PMD CPD       |
 
 #### Analysis Flow
 
-```
+```text
 scan_workspace(path)
   ├── detect project type (pyproject.toml → Python, package.json → Node)
   ├── run_ruff() or run_eslint()         → LintFinding[]
@@ -247,6 +252,7 @@ scan_workspace(path)
 ```
 
 Each tool runner:
+
 1. Checks if the tool is available (`shutil.which` or `uv run --version`)
 2. Executes with JSON output format
 3. Parses structured output into standardized finding models
@@ -262,7 +268,7 @@ Validates the generated application's API endpoints against an OpenAPI 3.x speci
 
 #### Architecture
 
-```
+```text
 openapi.yaml ──► spec.py (parser) ──► ContractSpec
                                           ├── AppConfig (module, port, framework)
                                           └── TestCase[] (from x-test-cases extensions)
@@ -277,6 +283,7 @@ ContractSpec ──► runner.py ──► HTTP requests ──► CaseResult[]
 ```
 
 **Key mechanics:**
+
 - **Spec parsing**: The OpenAPI spec uses custom `x-app` (server configuration) and `x-test-cases` (per-operation test inputs/expected outputs) extensions
 - **Server management**: `ServerProcess` creates an isolated venv for the workspace project, starts uvicorn, polls `/health` until ready, and cleanly shuts down after tests
 - **Test execution**: Each test case sends an HTTP request and validates: status code matches, response body contains expected keys/values (recursive deep match with floating-point tolerance)
@@ -290,7 +297,7 @@ Compares the generated AIDLC documents against a golden baseline using semantic 
 
 #### Document Matching
 
-```
+```text
 golden aidlc-docs/         candidate aidlc-docs/
   inception/                 inception/
     requirements.md    ◄──►   requirements.md         (paired)
@@ -306,11 +313,11 @@ Documents are paired by relative path. Internal workflow files (`aidlc-state.md`
 
 Each document pair is scored on three dimensions (0.0 to 1.0):
 
-| Dimension | Weight | What It Measures |
-|-----------|--------|-----------------|
-| Intent Similarity | 0.4 | Same goals, requirements, and purpose |
-| Design Similarity | 0.4 | Same architecture, components, patterns |
-| Completeness | 0.2 | Candidate covers all reference topics |
+| Dimension         | Weight   | What It Measures                        |
+| ----------------- | -------- | --------------------------------------- |
+| Intent Similarity | 0.4      | Same goals, requirements, and purpose   |
+| Design Similarity | 0.4      | Same architecture, components, patterns |
+| Completeness      | 0.2      | Candidate covers all reference topics   |
 
 **Overall per-document** = 0.4 × intent + 0.4 × design + 0.2 × completeness
 
@@ -319,11 +326,13 @@ Scores are aggregated per-phase (inception, construction) then into an overall s
 #### Two Scorer Implementations
 
 **HeuristicScorer** (offline, deterministic):
+
 - Intent: Term-frequency cosine similarity with stopword removal
 - Design: Weighted blend of technical identifier Jaccard similarity (0.6) and heading structure Jaccard similarity (0.4)
 - Completeness: Fraction of reference headings present in candidate
 
 **LlmScorer** (default, requires Bedrock):
+
 - Sends both documents to an LLM via the Bedrock `converse` API
 - Prompt asks for JSON with the three dimension scores plus notes
 - Uses temperature 0.0 for reproducibility
@@ -338,6 +347,7 @@ Generates consolidated reports by collecting all YAML artifacts from the run fol
 #### Data Collection
 
 `reporting.collector.collect(run_folder)` reads all YAML files and assembles a `ReportData` dataclass containing:
+
 - `RunMeta` — identity, timing, models, rules
 - `RunMetrics` — tokens (total + per-agent), wall clock, handoff timeline, artifact counts, error counts, context size stats
 - `TestResults` — unit test pass/fail/total with pass percentage
@@ -348,6 +358,7 @@ Generates consolidated reports by collecting all YAML artifacts from the run fol
 #### Baseline Comparison
 
 If a `golden.yaml` baseline file exists (auto-discovered next to the `--golden` directory), the report includes a regression comparison:
+
 1. `extract_baseline()` flattens `ReportData` into a `BaselineMetrics` with ~30 numeric fields
 2. `compare()` computes deltas and classifies each metric as improved/regressed/unchanged
 3. Classification respects directionality (e.g., fewer lint errors = improved, higher test pass% = improved)
@@ -365,7 +376,7 @@ If a `golden.yaml` baseline file exists (auto-discovered next to the `--golden` 
 
 The main entry point. Orchestrates all six stages sequentially:
 
-```
+```text
 parse CLI args
   │
   ├── --test mode ──► run pytest on all packages ──► exit
@@ -393,7 +404,7 @@ parse CLI args
 
 Runs `run_evaluation.py` in a loop for each selected model config:
 
-```
+```text
 discover_models()     ← scans config/*.yaml, excludes default.yaml
   │
   for each model:
@@ -412,7 +423,7 @@ Each model run is fully isolated — a separate subprocess invocation with its o
 
 Generates a side-by-side comparison matrix after batch evaluation:
 
-```
+```text
 find_model_runs()     ← discovers run folders by model name suffix
   │
   for each model:
@@ -430,7 +441,7 @@ The comparison table includes ~30 metrics across unit tests, contract tests, cod
 
 Runs the AIDLC workflow through third-party IDE AI assistants:
 
-```
+```text
 get_adapter(name)     ← lazy import from registry
   │
   ├── check_prerequisites()
@@ -440,6 +451,7 @@ get_adapter(name)     ← lazy import from registry
 ```
 
 **Adapter pattern**: Each IDE is implemented as a subclass of `IDEAdapter` with three methods:
+
 - `check_prerequisites()` — verify the IDE is installed and configured
 - `run(config)` — execute the AIDLC process through the IDE
 - `name` — human-readable identifier
@@ -454,7 +466,7 @@ Supported adapters: Cursor, Cline, Copilot, Kiro, Windsurf, Antigravity.
 
 Every stage communicates through YAML files in the run folder. No in-memory state crosses stage boundaries.
 
-```
+```text
 Stage 1 (execution)
   ├── writes: run-meta.yaml, run-metrics.yaml, test-results.yaml
   ├── writes: aidlc-docs/**/*.md, workspace/**/*
@@ -533,6 +545,7 @@ A flat numeric snapshot of ~30 key metrics from a promoted run. Used as the regr
 ### 9.1 Strands SDK (Multi-Agent)
 
 The execution package uses the [Strands Agents SDK](https://github.com/strands-agents/sdk-python) for:
+
 - `Agent` — wraps a Bedrock model with a system prompt and tool set
 - `Swarm` — orchestrates handoffs between agents with configurable limits (max handoffs, max iterations, execution timeout, node timeout)
 - `@tool` decorator — registers Python functions as callable tools for agents
@@ -542,6 +555,7 @@ The execution package uses the [Strands Agents SDK](https://github.com/strands-a
 ### 9.2 Amazon Bedrock
 
 All LLM calls go through Amazon Bedrock via boto3. Configuration:
+
 - Read timeout: 900s (15 min) for execution agents, 300s (5 min) for the qualitative scorer
 - Connect timeout: 30s
 - Retry policy: 10 attempts with adaptive mode
@@ -549,14 +563,14 @@ All LLM calls go through Amazon Bedrock via boto3. Configuration:
 
 ### 9.3 Static Analysis Tools
 
-| Tool | Purpose | Output Format | Graceful Degradation |
-|------|---------|--------------|---------------------|
-| ruff | Python linting | JSON | Skipped if not on PATH |
-| bandit | Python security | JSON | Skipped if not on PATH |
-| semgrep | Multi-language security | JSON | Skipped if not on PATH |
-| eslint | JS/TS linting | JSON | Falls back to npx |
-| npm audit | JS dependency security | JSON | Needs package-lock.json |
-| PMD CPD | Code duplication | XML | Configurable path or PATH scan |
+| Tool      | Purpose                 | Output Format  | Graceful Degradation           |
+| --------- | ----------------------- | -------------- | ------------------------------ |
+| ruff      | Python linting          | JSON           | Skipped if not on PATH         |
+| bandit    | Python security         | JSON           | Skipped if not on PATH         |
+| semgrep   | Multi-language security | JSON           | Skipped if not on PATH         |
+| eslint    | JS/TS linting           | JSON           | Falls back to npx              |
+| npm audit | JS dependency security  | JSON           | Needs package-lock.json        |
+| PMD CPD   | Code duplication        | XML            | Configurable path or PATH scan |
 
 ---
 
@@ -565,6 +579,7 @@ All LLM calls go through Amazon Bedrock via boto3. Configuration:
 ### 10.1 File Sandboxing
 
 All file operations performed by AI agents are sandboxed to the run folder:
+
 - `_resolve_safe(run_folder, relative_path)` resolves the path and verifies it stays within the run folder boundary
 - Path traversal attempts (e.g., `../../etc/passwd`) are rejected with a `ValueError`
 - Applied to: `read_file`, `write_file`, `list_files`, `run_command`
@@ -572,6 +587,7 @@ All file operations performed by AI agents are sandboxed to the run folder:
 ### 10.2 Command Sandboxing
 
 The `run_command` tool provides a restricted shell environment:
+
 - Only `PATH`, `HOME`, `LANG`, `TERM` are set (plus tool-specific vars like `UV_CACHE_DIR`)
 - `HOME` is set to the run folder to prevent reading host user configuration
 - Commands have a configurable timeout (default 120s)
@@ -580,6 +596,7 @@ The `run_command` tool provides a restricted shell environment:
 ### 10.3 Server Isolation (Contract Tests)
 
 The contract test server runs in its own venv:
+
 - `ServerProcess._ensure_venv()` creates an isolated venv in the workspace project
 - This prevents `uv run` from walking up the directory tree and resolving the parent project
 - The server is started via the venv's own Python binary
@@ -590,7 +607,7 @@ The contract test server runs in its own venv:
 
 Test cases live in `test_cases/` and follow a standard structure:
 
-```
+```text
 test_cases/<case-name>/
   ├── vision.md              # Project vision and constraints
   ├── tech-env.md            # Technical environment requirements
@@ -640,16 +657,16 @@ The default test case is `sci-calc` (a scientific calculator API). All CLI defau
 
 ## 13. Dependency Stack
 
-| Component | Technology |
-|-----------|-----------|
-| Language | Python 3.13+ |
-| Package manager | uv (workspace mode) |
-| AI orchestration | Strands Agents SDK |
-| LLM provider | Amazon Bedrock (boto3) |
-| HTTP client | httpx (contract tests) |
-| ASGI server | uvicorn (contract tests) |
-| Test framework | pytest |
-| Serialization | PyYAML |
-| Linting | ruff |
-| Security scanning | bandit, semgrep |
-| Duplication detection | PMD CPD (external) |
+| Component             | Technology               |
+| --------------------- | ------------------------ |
+| Language              | Python 3.13+             |
+| Package manager       | uv (workspace mode)      |
+| AI orchestration      | Strands Agents SDK       |
+| LLM provider          | Amazon Bedrock (boto3)   |
+| HTTP client           | httpx (contract tests)   |
+| ASGI server           | uvicorn (contract tests) |
+| Test framework        | pytest                   |
+| Serialization         | PyYAML                   |
+| Linting               | ruff                     |
+| Security scanning     | bandit, semgrep          |
+| Duplication detection | PMD CPD (external)       |
