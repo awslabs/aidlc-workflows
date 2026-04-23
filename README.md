@@ -44,6 +44,7 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 - [Cline](#cline)
 - [Claude Code](#claude-code)
 - [GitHub Copilot](#github-copilot)
+- [OpenAI Codex](#openai-codex)
 - [Other Agents](#other-agents)
 
 ---
@@ -486,6 +487,64 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
 <my-project>/
 ├── .github/
 │   └── copilot-instructions.md
+└── .aidlc-rule-details/
+    ├── common/
+    ├── inception/
+    ├── construction/
+    ├── extensions/
+    └── operations/
+```
+
+---
+
+### OpenAI Codex
+
+AI-DLC supports OpenAI Codex as a supported coding agent, using the [Codex AGENTS.md](https://developers.openai.com/codex/guides/agents-md) convention to deliver its intelligent workflow. Codex automatically discovers and loads `AGENTS.md` from your project root when you start a session.
+
+The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+
+**Unix/Linux/macOS:**
+
+```bash
+cp ~/Downloads/aidlc-rules/aws-aidlc-rules/core-workflow.md ./AGENTS.md
+mkdir -p .aidlc-rule-details
+cp -R ~/Downloads/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/
+```
+
+**Windows PowerShell:**
+
+```powershell
+Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\AGENTS.md"
+New-Item -ItemType Directory -Force -Path ".aidlc-rule-details"
+Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse
+```
+
+**Windows CMD:**
+
+```cmd
+copy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\AGENTS.md"
+mkdir .aidlc-rule-details
+xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+```
+
+**Verify Setup:**
+
+1. Start a Codex session in your project directory
+2. Ask Codex: For existing project - "Using AIDLC analyze the project?" or For new project "Using Aidlc what workflow do you see" .
+3. Codex should describe the AI-DLC three-phase workflow (Inception → Construction → Operations)
+
+> [!NOTE]
+> The `AGENTS.md` file is designed to fit within Codex's instruction budget under default settings. If you add substantial project-specific content and Codex reports that the project documentation exceeds its instruction limit, you can increase the limit in your Codex configuration (for example, by adjusting `project_doc_max_bytes` in your `config.toml` file):
+>
+> ```toml
+> project_doc_max_bytes = 65536  # Example value; choose a limit appropriate for your project
+> ```
+
+**Directory Structure:**
+
+```text
+<my-project>/
+├── AGENTS.md
 └── .aidlc-rule-details/
     ├── common/
     ├── inception/
