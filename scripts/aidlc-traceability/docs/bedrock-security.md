@@ -96,11 +96,11 @@ If temporary credentials are not available, use named profiles with access keys 
 
 When AI analysis is enabled, the following data is sent to the Amazon Bedrock API:
 
-| Data Type | Content | Volume |
-|-----------|---------|--------|
-| Artifact summaries | IDs, titles, descriptions from parsed artifacts | All artifacts |
-| Source code snippets | File contents for Component→Code linking | Up to 30 files, 200 lines each |
-| System prompts | Agent instructions (static, no user data) | 4 prompts per run |
+| Data Type            | Content                                         | Volume                         |
+| -------------------- | ----------------------------------------------- | ------------------------------ |
+| Artifact summaries   | IDs, titles, descriptions from parsed artifacts | All artifacts                  |
+| Source code snippets | File contents for Component→Code linking        | Up to 30 files, 200 lines each |
+| System prompts       | Agent instructions (static, no user data)       | 4 prompts per run              |
 
 ### Data Residency
 

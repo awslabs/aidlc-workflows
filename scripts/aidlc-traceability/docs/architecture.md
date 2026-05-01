@@ -126,6 +126,7 @@ flowchart LR
 ```
 
 **Key properties:**
+
 - The tool only **reads** project files; it does not modify them
 - Reports are written to the local filesystem only
 - Amazon Bedrock calls are outbound HTTPS (TLS 1.2+) and only occur when AI is enabled
@@ -184,12 +185,12 @@ graph TB
 
 ## Technology Stack
 
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| CLI | Click | Command-line interface |
-| Models | Pydantic | Data validation and serialization |
-| Graph | NetworkX | Directed graph for traceability relationships |
-| AI | Strands Agents + Amazon Bedrock | Optional relationship discovery |
-| AWS | boto3 | Amazon Bedrock API access |
-| Templates | Jinja2 (available) | Report template rendering |
-| Output | Rich | Terminal formatting |
+| Component | Technology                      | Purpose                                       |
+| --------- | ------------------------------- | --------------------------------------------- |
+| CLI       | Click                           | Command-line interface                        |
+| Models    | Pydantic                        | Data validation and serialization             |
+| Graph     | NetworkX                        | Directed graph for traceability relationships |
+| AI        | Strands Agents + Amazon Bedrock | Optional relationship discovery               |
+| AWS       | boto3                           | Amazon Bedrock API access                     |
+| Templates | Jinja2 (available)              | Report template rendering                     |
+| Output    | Rich                            | Terminal formatting                           |

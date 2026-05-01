@@ -21,9 +21,9 @@ Copyright (c) 2026 AIDLC Traceability Tool Contributors
 
 ### Required Languages
 
-| Language | Version | Purpose | Rationale |
-|----------|---------|---------|-----------|
-| Python | 3.12+ | CLI tool, parsing, report generation | Rich ecosystem for text processing, cross-platform, AI-DLC uses Python for CDK |
+| Language | Version | Purpose                              | Rationale                                                                      |
+| -------- | ------- | ------------------------------------ | ------------------------------------------------------------------------------ |
+| Python   | 3.12+   | CLI tool, parsing, report generation | Rich ecosystem for text processing, cross-platform, AI-DLC uses Python for CDK |
 
 ### Permitted Languages
 
@@ -31,11 +31,11 @@ None. Python-only for MVP to maintain simplicity.
 
 ### Prohibited Languages
 
-| Language | Reason |
-|----------|--------|
-| JavaScript/TypeScript | Adds complexity, Python sufficient for CLI tool |
-| Go/Rust | Overkill for text processing tool, team lacks expertise |
-| Shell scripts | Not cross-platform, limited parsing capabilities |
+| Language              | Reason                                                  |
+| --------------------- | ------------------------------------------------------- |
+| JavaScript/TypeScript | Adds complexity, Python sufficient for CLI tool         |
+| Go/Rust               | Overkill for text processing tool, team lacks expertise |
+| Shell scripts         | Not cross-platform, limited parsing capabilities        |
 
 ---
 
@@ -43,38 +43,39 @@ None. Python-only for MVP to maintain simplicity.
 
 ### Required Frameworks
 
-| Framework/Library | Version | Domain | Rationale |
-|-------------------|---------|--------|-----------|
-| Click | 8.x | CLI framework | Industry standard for Python CLIs, excellent help text generation |
-| Pydantic | 2.x | Data validation and models | Type-safe artifact parsing, validation |
-| pytest | 8.x | Unit testing | Standard Python test framework |
-| NetworkX | 3.x | Graph data structure | Efficient relationship graph for traceability |
-| **strands-agents** | **1.x** | **AI Agent Framework** | **Strands Agent SDK for Amazon Bedrock integration** |
-| **boto3** | **latest** | **AWS SDK** | **Amazon Bedrock API access for Claude Sonnet 4.5** |
-| **Jinja2** | **3.x** | **HTML Templating** | **Generate interactive HTML reports with embedded CSS/JS** |
-| **rich** | **13.x** | **Terminal Output** | **Colored console output, progress indicators** |
+| Framework/Library  | Version    | Domain                     | Rationale                                                         |
+| ------------------ | ---------- | -------------------------- | ----------------------------------------------------------------- |
+| Click              | 8.x        | CLI framework              | Industry standard for Python CLIs, excellent help text generation |
+| Pydantic           | 2.x        | Data validation and models | Type-safe artifact parsing, validation                            |
+| pytest             | 8.x        | Unit testing               | Standard Python test framework                                    |
+| NetworkX           | 3.x        | Graph data structure       | Efficient relationship graph for traceability                     |
+| **strands-agents** | **1.x**    | **AI Agent Framework**     | **Strands Agent SDK for Amazon Bedrock integration**              |
+| **boto3**          | **latest** | **AWS SDK**                | **Amazon Bedrock API access for Claude Sonnet 4.5**               |
+| **Jinja2**         | **3.x**    | **HTML Templating**        | **Generate interactive HTML reports with embedded CSS/JS**        |
+| **rich**           | **13.x**   | **Terminal Output**        | **Colored console output, progress indicators**                   |
 
 ### Preferred Libraries
 
-| Library | Purpose | Use When |
-|---------|---------|----------|
-| pathlib | File system operations | All file operations (prefer over os.path) |
-| re (standard library) | Pattern matching | Parsing artifact IDs, extracting sections from markdown |
-| json (standard library) | Data serialization | AI agent responses, metadata storage |
+| Library                 | Purpose                | Use When                                                |
+| ----------------------- | ---------------------- | ------------------------------------------------------- |
+| pathlib                 | File system operations | All file operations (prefer over os.path)               |
+| re (standard library)   | Pattern matching       | Parsing artifact IDs, extracting sections from markdown |
+| json (standard library) | Data serialization     | AI agent responses, metadata storage                    |
 
 ### Prohibited Libraries
 
-| Library | Reason | Alternative |
-|---------|--------|-------------|
-| BeautifulSoup | Not needed for markdown parsing | markdown-it-py |
-| Pandas | Overkill for simple data structures | Native Python dicts/lists |
-| Django/Flask | No web server needed for MVP | N/A |
-| SQLAlchemy | No database needed | In-memory graph with NetworkX |
-| Requests | No HTTP calls needed for MVP | N/A |
+| Library       | Reason                              | Alternative                   |
+| ------------- | ----------------------------------- | ----------------------------- |
+| BeautifulSoup | Not needed for markdown parsing     | markdown-it-py                |
+| Pandas        | Overkill for simple data structures | Native Python dicts/lists     |
+| Django/Flask  | No web server needed for MVP        | N/A                           |
+| SQLAlchemy    | No database needed                  | In-memory graph with NetworkX |
+| Requests      | No HTTP calls needed for MVP        | N/A                           |
 
 ### Library Approval Process
 
 For MVP, stick to required and preferred libraries. Any additional library requires justification in a GitHub issue with:
+
 - Why existing libraries are insufficient
 - License compatibility check (must be MIT/Apache/BSD)
 - Maintenance status (active within last 6 months)
@@ -88,7 +89,7 @@ For MVP, stick to required and preferred libraries. Any additional library requi
 
 **Pipeline Architecture** - 6-stage sequential pipeline with clear inputs/outputs:
 
-```
+```text
 Input: Project root directory
   ↓
 Stage 1: Discovery (find aidlc-docs/ + scan src/ for code files)
@@ -115,12 +116,14 @@ Each stage is a separate module with defined interfaces.
 **What**: Rule-based inference of requirement→story relationships using keyword matching
 **Why**: AI-DLC projects often lack explicit requirement-to-story links; this stage bridges the gap
 **How**:
+
 - Extracts keywords from requirement titles and descriptions
 - Matches keywords against story titles and acceptance criteria
 - Creates "inferred_from" relationships when confidence > threshold
 - Runs AFTER parsing, BEFORE AI analysis (to provide AI with more context)
 
 **Implementation Notes**:
+
 - Uses fuzzy matching with configurable similarity threshold (default: 0.7)
 - Filters common words (the, and, or, is, etc.) before matching
 - Marks inferred relationships with metadata for audit trail
@@ -131,12 +134,14 @@ Each stage is a separate module with defined interfaces.
 **Design Pattern**: Focused sub-agents instead of single monolithic agent
 
 **4 Specialized Agents**:
+
 1. **Requirements → Stories Agent**: Maps business requirements to user stories
 2. **Stories → Units Agent**: Traces user stories to implementation units
 3. **Units → Components Agent**: Links units to design components
 4. **Components → Code Agent**: Connects components to actual source files
 
 **Why Focused Agents?**:
+
 - **Context Isolation**: Each agent sees only its artifact pair (prevents context pollution)
 - **Parallel Execution**: Agents can run simultaneously (future optimization)
 - **Token Efficiency**: Smaller prompts = fewer tokens per agent
@@ -144,6 +149,7 @@ Each stage is a separate module with defined interfaces.
 - **Debugging**: Easier to diagnose which layer has issues
 
 **How It Works**:
+
 - Each agent receives filtered artifact lists (e.g., Components Agent sees only components and code)
 - Agent uses Strands tools to read file contents when needed
 - Agent returns structured JSON with relationship data
@@ -151,12 +157,14 @@ Each stage is a separate module with defined interfaces.
 - Invalid relationships logged as warnings, valid ones added to graph
 
 **Implementation**:
+
 - File: `src/traceability/agent.py`
 - Functions: `create_req_story_agent()`, `create_story_unit_agent()`, etc.
 - Model: Claude Sonnet 4.5 via Amazon Bedrock
 - Configurable via `--profile` and `--region` CLI flags
 
 **AI Validation (CRITICAL)**:
+
 - AI output is NEVER trusted without validation
 - Pipeline validates all artifact IDs against parsed artifacts
 - Invalid relationships are filtered and counted
@@ -165,7 +173,7 @@ Each stage is a separate module with defined interfaces.
 
 ### Project Structure
 
-```
+```text
 traceability/
   src/
     traceability/
@@ -221,17 +229,17 @@ traceability/
 
 ### Design Patterns
 
-| Pattern | When to Use | When Not to Use |
-|---------|-------------|-----------------|
-| Strategy Pattern | Different parsers for different artifact types | Single artifact type |
-| Builder Pattern | Constructing complex traceability graph | Simple data structures |
-| Template Method | Report generation with shared structure | Completely different report formats |
-| Visitor Pattern | Traversing graph for analysis | Simple iteration sufficient |
+| Pattern          | When to Use                                    | When Not to Use                     |
+| ---------------- | ---------------------------------------------- | ----------------------------------- |
+| Strategy Pattern | Different parsers for different artifact types | Single artifact type                |
+| Builder Pattern  | Constructing complex traceability graph        | Simple data structures              |
+| Template Method  | Report generation with shared structure        | Completely different report formats |
+| Visitor Pattern  | Traversing graph for analysis                  | Simple iteration sufficient         |
 
 ### Boilerplate Detection System (CRITICAL FEATURE)
 
 **What**: Language-independent detection of boilerplate code files that should NOT count against coverage metrics
-**Why**: Prevents false negatives (e.g., "90% of code has no tests!" when 80% is __init__.py files)
+**Why**: Prevents false negatives (e.g., "90% of code has no tests!" when 80% is **init**.py files)
 **Where**: Implemented in `src/traceability/parsers/code.py::_is_boilerplate()`
 
 **10+ Detection Patterns**:
@@ -270,9 +278,10 @@ traceability/
 
 10. **Import-Heavy Files**:
     - Heuristic: Even if >15 lines, if >50% are imports, mark as boilerplate
-    - Handles __init__.py with many re-exports
+    - Handles **init**.py with many re-exports
 
 **Implementation Details**:
+
 - Returns `True` if file matches ANY pattern
 - Marks artifact metadata: `{"boilerplate": true}`
 - Adds `[Boilerplate]` tag to artifact title in reports
@@ -280,12 +289,14 @@ traceability/
 - Adaptive thresholds: line counts, percentage cutoffs tuned via testing
 
 **Why Language-Independent?**:
+
 - Python, JavaScript, TypeScript, Java, C#, Rust all have boilerplate
 - Uses filename patterns, path patterns, and content heuristics (not syntax parsing)
 - Works across ecosystems without language-specific parsers
 
 **Coverage Impact**:
-- Before: "Units with Code: 6%" (includes 45 __init__.py files)
+
+- Before: "Units with Code: 6%" (includes 45 **init**.py files)
 - After: "Units with Code: 6%" (excludes 45 boilerplate files)
 - Accurate metric: Only real implementation code counted
 
@@ -302,40 +313,47 @@ traceability/
 ### Parser Details
 
 **Requirements Parser** (`requirements.py`):
+
 - Format: `## REQ-001: Title` or `## NFR-042: Title`
 - Extracts: ID, title, type (functional/non-functional), description
 - Validates: ID format, required fields present
 
 **Stories Parser** (`stories.py`):
+
 - Format: `### US-CAT-001: Title` OR `### Story 1.1: Title` (numeric format)
 - Numeric conversion: `Story 1.1` → `US-1.1`, `Story 2.3` → `US-2.3`
 - Extracts: ID, title, acceptance criteria, related requirements
 - Validates: ID format, uniqueness
 
 **Units Parser** (`units.py`):
+
 - Format: `### Unit: unit-name`
 - Extracts: Unit name, description, related stories, dependencies
 - Relationships: Parses explicit story references in unit descriptions
 
 **Components Parser** (`components.py`):
+
 - Format: `### Component: component-name` in application-components.md
 - Extracts: Component name, type (service/module/class), description
 - Relationships: Links components to units via naming conventions
 - Validates: Component names are valid identifiers
 
 **Code Plans Parser** (`code_plans.py`):
+
 - Format: Numbered steps in code-plan.md
 - Extracts: Step number, description, target file/directory
 - Creates: CODE_PLAN artifacts for traceability
 - Purpose: Shows intent-to-implementation trace
 
 **Code Parser** (`code.py`):
+
 - Languages: Python (.py), JavaScript (.js), TypeScript (.ts, .tsx)
 - Extracts: File path, language, lines of code, module/class/function names
 - Boilerplate Detection: 10+ patterns (see Boilerplate Detection section)
 - Metadata: `{"boilerplate": true/false, "language": "Python", "lines_of_code": 150}`
 
 **Linker** (`linker.py`):
+
 - Purpose: Infer requirement→story relationships when not explicit
 - Method: Keyword extraction + fuzzy matching (threshold: 0.7)
 - Output: Relationships marked with `{"inferred": true}` metadata
@@ -343,26 +361,31 @@ traceability/
 ### Error Handling and Validation
 
 **Discovery Errors**:
+
 - **Missing aidlc-docs directory**: Search recursively from project root, error if not found after full scan
 - **No source code**: Warn but continue (generates artifact-only traceability)
 
 **Parsing Errors**:
+
 - **Missing artifacts**: Warn but continue (partial AI-DLC workflows are valid)
 - **Malformed artifacts**: Log error with file path and line number, skip artifact, continue processing
 - **Invalid content**: Validation errors (bad IDs, broken references) logged with details, artifact marked as invalid
 
 **AI Validation (CRITICAL)**:
+
 - **Invalid artifact IDs**: Filter relationships referencing non-existent artifacts
 - **Hallucinated relationships**: Count skipped relationships, warn if >10% invalid
 - **Tool call failures**: Retry with exponential backoff (Strands Agent handles this)
 - **Token limit exceeded**: Agent reads directory names instead of full file contents
 
 **Graph Building Errors**:
+
 - **Missing relationship endpoints**: Log warning with source/target IDs, skip relationship
 - **Circular dependencies**: Detect and report as warning, break cycles for traversal
 - **Orphaned artifacts**: Identified in coverage gap analysis, not an error
 
 **General Errors**:
+
 - **Empty project**: Exit with clear error message and usage instructions
 - **AWS credential errors**: Warn and fall back to --no-ai behavior
 - **File read errors**: Log warning with file path, continue with other artifacts
@@ -373,12 +396,12 @@ traceability/
 
 ### Test Strategy Overview
 
-| Test Type | Required | Coverage Target | Tooling |
-|-----------|----------|----------------|---------|
-| Unit Tests | Yes | 90% line coverage minimum | pytest + pytest-cov |
-| Integration Tests | Yes | All end-to-end workflows | pytest with fixture projects |
-| Property-Based Tests | Conditional | Graph algorithms | hypothesis |
-| Performance Tests | Yes | <5 min for 50-story project | pytest-benchmark |
+| Test Type            | Required    | Coverage Target             | Tooling                      |
+| -------------------- | ----------- | --------------------------- | ---------------------------- |
+| Unit Tests           | Yes         | 90% line coverage minimum   | pytest + pytest-cov          |
+| Integration Tests    | Yes         | All end-to-end workflows    | pytest with fixture projects |
+| Property-Based Tests | Conditional | Graph algorithms            | hypothesis                   |
+| Performance Tests    | Yes         | <5 min for 50-story project | pytest-benchmark             |
 
 ### Unit Testing Standards
 
@@ -408,11 +431,11 @@ traceability/
 
 ### CI/CD Testing Gates
 
-| Pipeline Stage | Required Tests | Failure Action |
-|---------------|---------------|----------------|
-| Pre-commit | ruff linting, mypy type checking | Block commit |
-| Pull Request | Unit tests, integration tests, coverage check | Block merge |
-| Pre-release | All tests + performance benchmarks | Block release |
+| Pipeline Stage | Required Tests                                | Failure Action |
+| -------------- | --------------------------------------------- | -------------- |
+| Pre-commit     | ruff linting, mypy type checking              | Block commit   |
+| Pull Request   | Unit tests, integration tests, coverage check | Block merge    |
+| Pre-release    | All tests + performance benchmarks            | Block release  |
 
 ---
 
@@ -470,17 +493,20 @@ traceability generate --input ~/my-project --output ~/reports --format both --ve
 ### Amazon Bedrock Configuration (NEW)
 
 **CLI Flags**:
+
 - `--profile TEXT`: AWS profile name for Amazon Bedrock API access (uses default credential chain if not set)
 - `--region TEXT`: AWS region for Amazon Bedrock endpoint (default: `us-east-1`)
 - `--no-ai`: Skip AI analysis entirely (uses only heuristic linking)
 
 **AWS Setup Requirements**:
+
 - User must have AWS credentials configured (`~/.aws/credentials` or environment variables)
 - Credentials must have Amazon Bedrock API access (model: `us.anthropic.claude-sonnet-4-20250514-v1:0`)
 - If specified profile not found, falls back to default AWS profile
 - If no credentials found, tool warns and continues with --no-ai behavior
 
 **Why Configurable?**:
+
 - Different AWS accounts may use different profile names
 - Multi-region deployments may require region override
 - CI/CD environments may not have AWS access (use --no-ai)
@@ -531,21 +557,21 @@ Report Type: Single-file comprehensive report
 
 Summary view with document references:
 
-| Requirement | Stories | Units | Code Files | Tests |
-|-------------|---------|-------|------------|-------|
-| REQ-001: User authentication | STORY-001, STORY-002 | auth-unit | 2 files | 5 tests |
-| REQ-002: Data validation | STORY-003 | validation-unit | 1 file | 12 tests |
-| ... | ... | ... | ... | ... |
+| Requirement                  | Stories              | Units           | Code Files | Tests    |
+| ---------------------------- | -------------------- | --------------- | ---------- | -------- |
+| REQ-001: User authentication | STORY-001, STORY-002 | auth-unit       | 2 files    | 5 tests  |
+| REQ-002: Data validation     | STORY-003            | validation-unit | 1 file     | 12 tests |
+| ...                          | ...                  | ...             | ...        | ...      |
 
 ## Reverse Traceability Matrix
 
 Summary view with document references:
 
-| Code File | Unit | Stories | Requirements |
-|-----------|------|---------|--------------|
-| auth-service.ts | auth-unit | STORY-001, STORY-002 | REQ-001 |
-| validator.ts | validation-unit | STORY-003 | REQ-002 |
-| ... | ... | ... | ... |
+| Code File       | Unit            | Stories              | Requirements |
+| --------------- | --------------- | -------------------- | ------------ |
+| auth-service.ts | auth-unit       | STORY-001, STORY-002 | REQ-001      |
+| validator.ts    | validation-unit | STORY-003            | REQ-002      |
+| ...             | ...             | ...                  | ...          |
 
 ## Detailed Traceability
 
@@ -602,6 +628,7 @@ For brownfield projects, code locations reference existing structure:
 ```
 
 **HTML Output**: Interactive single-file HTML with embedded CSS and JavaScript, same structure as markdown but with:
+
 - **Styled tables** with alternating row colors
 - **Clickable internal navigation** links between artifacts
 - **Collapsible sidebar** with artifact categories (Requirements, Stories, Units, Code)
@@ -652,40 +679,44 @@ When AI analysis is enabled (`--no-ai` is not set), the tool requires AWS creden
 
 **Rationale**: Industry standard for application security. Most categories do not apply to local CLI tools, but framework provides structured security review.
 
-| OWASP Category | Applicability | Mitigation |
-|----------------|--------------|------------|
-| A01: Broken Access Control | Not Applicable | No authentication or authorization in CLI tool |
-| A02: Cryptographic Failures | Not Applicable | No sensitive data storage or transmission |
-| A03: Injection | **Applicable** | Use pathlib for file paths, no shell command execution, validate all file paths against project root |
-| A04: Insecure Design | **Applicable** | Follow secure coding practices, input validation, error handling |
-| A05: Security Misconfiguration | Low Risk | No server configuration, minimal dependencies |
-| A06: Vulnerable Components | **Applicable** | Dependabot scanning, license checks, regular updates |
-| A07: Authentication Failures | Not Applicable | No authentication in CLI tool |
-| A08: Software and Data Integrity | **Applicable** | Verify artifact structure before parsing, detect malformed input |
-| A09: Logging Failures | Low Risk | Log errors to stderr, no sensitive data in logs |
-| A10: Server-Side Request Forgery | Not Applicable | No network requests in MVP |
+| OWASP Category                   | Applicability  | Mitigation                                                                                           |
+| -------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------- |
+| A01: Broken Access Control       | Not Applicable | No authentication or authorization in CLI tool                                                       |
+| A02: Cryptographic Failures      | Not Applicable | No sensitive data storage or transmission                                                            |
+| A03: Injection                   | **Applicable** | Use pathlib for file paths, no shell command execution, validate all file paths against project root |
+| A04: Insecure Design             | **Applicable** | Follow secure coding practices, input validation, error handling                                     |
+| A05: Security Misconfiguration   | Low Risk       | No server configuration, minimal dependencies                                                        |
+| A06: Vulnerable Components       | **Applicable** | Dependabot scanning, license checks, regular updates                                                 |
+| A07: Authentication Failures     | Not Applicable | No authentication in CLI tool                                                                        |
+| A08: Software and Data Integrity | **Applicable** | Verify artifact structure before parsing, detect malformed input                                     |
+| A09: Logging Failures            | Low Risk       | Log errors to stderr, no sensitive data in logs                                                      |
+| A10: Server-Side Request Forgery | Not Applicable | No network requests in MVP                                                                           |
 
 **Detailed Controls:**
 
 **A03: Injection**
+
 - Use `pathlib.Path` for all file operations, not string concatenation
 - Validate input paths are within expected project structure
 - No use of `eval()`, `exec()`, or shell command execution
 - Sanitize any user-provided paths before file system access
 
 **A04: Insecure Design**
+
 - Fail securely: default to rejecting malformed input
 - Validate artifact structure before processing
 - Limit recursion depth in graph traversal (max 1000 levels)
 - Implement timeouts for long-running operations
 
 **A06: Vulnerable Components**
+
 - Pin all dependencies with exact versions in `uv.lock`
 - Run `uv sync --locked` in CI for reproducible builds
 - Dependabot PRs reviewed within 7 days
 - No dependencies with known critical vulnerabilities
 
 **A08: Software and Data Integrity**
+
 - Validate markdown structure matches expected AI-DLC format
 - Detect and report malformed artifacts without crashing
 - Checksum validation for distributed packages (future)
@@ -699,6 +730,7 @@ When AI analysis is enabled (`--no-ai` is not set), the tool requires AWS creden
 **Location**: `examples/parser-pattern/`
 
 **Files**:
+
 - `requirements_parser.py` - Example parser implementation
 - `test_requirements_parser.py` - Corresponding tests
 - `README.md` - Pattern explanation
@@ -870,12 +902,12 @@ How to parse AI-DLC requirements.md files and extract structured requirement obj
 
 ## Customization Guide
 
-| Element | Customize? | Notes |
-|---------|-----------|-------|
-| Requirement ID pattern | No | Must match AI-DLC standard: REQ-\d+ |
-| Pydantic validation | No | Keep strict validation for data integrity |
-| Markdown parsing logic | Yes | Adapt to different artifact structures |
-| Error messages | Yes | Customize for user-facing errors |
+| Element                | Customize? | Notes                                     |
+| ---------------------- | ---------- | ----------------------------------------- |
+| Requirement ID pattern | No         | Must match AI-DLC standard: REQ-\d+       |
+| Pydantic validation    | No         | Keep strict validation for data integrity |
+| Markdown parsing logic | Yes        | Adapt to different artifact structures    |
+| Error messages         | Yes        | Customize for user-facing errors          |
 
 ## Related Standards
 

@@ -7,26 +7,26 @@ Copyright (c) 2026 AIDLC Traceability Tool Contributors
 
 ## Scan Summary
 
-| Attribute | Value |
-|-----------|-------|
-| **Scan Date** | 2026-04-16 |
-| **Scan ID** | 20260416-152901 |
-| **Tools Run** | 8 (Bandit, Semgrep, pip-audit, Ruff, MyPy, Vulture, Radon, pytest-cov) |
-| **Overall Status** | PASS |
-| **Overall Risk** | LOW |
+| Attribute          | Value                                                                  |
+| ------------------ | ---------------------------------------------------------------------- |
+| **Scan Date**      | 2026-04-16                                                             |
+| **Scan ID**        | 20260416-152901                                                        |
+| **Tools Run**      | 8 (Bandit, Semgrep, pip-audit, Ruff, MyPy, Vulture, Radon, pytest-cov) |
+| **Overall Status** | PASS                                                                   |
+| **Overall Risk**   | LOW                                                                    |
 
 ## Results
 
-| Scanner | Status | Findings |
-|---------|--------|----------|
-| Bandit (SAST) | PASS | 0 issues |
-| Semgrep (SAST) | PASS | 0 issues |
-| pip-audit (Dependency CVEs) | PASS | 0 CVEs (113 dependencies scanned) |
-| Ruff (Code Quality) | PASS | 0 issues |
-| MyPy (Type Checking) | INFO | 6 errors (all missing third-party type stubs, not code defects) |
-| Vulture (Dead Code) | PASS | 0 findings |
-| Radon (Complexity) | INFO | 10.55 average complexity |
-| pytest-cov (Coverage) | PASS | 75.1% coverage, 120 tests passed, 0 failed |
+| Scanner                     | Status | Findings                                                        |
+| --------------------------- | ------ | --------------------------------------------------------------- |
+| Bandit (SAST)               | PASS   | 0 issues                                                        |
+| Semgrep (SAST)              | PASS   | 0 issues                                                        |
+| pip-audit (Dependency CVEs) | PASS   | 0 CVEs (113 dependencies scanned)                               |
+| Ruff (Code Quality)         | PASS   | 0 issues                                                        |
+| MyPy (Type Checking)        | INFO   | 6 errors (all missing third-party type stubs, not code defects) |
+| Vulture (Dead Code)         | PASS   | 0 findings                                                      |
+| Radon (Complexity)          | INFO   | 10.55 average complexity                                        |
+| pytest-cov (Coverage)       | PASS   | 75.1% coverage, 120 tests passed, 0 failed                      |
 
 ## Critical/High Findings Addressed
 
@@ -38,14 +38,14 @@ All Critical and High severity findings from the prior scan (20260416-150508) ha
 
 ## Compensating Controls
 
-| Area | Control |
-|------|---------|
-| **Dependency management** | Dependencies pinned via uv.lock; pip-audit included in security scanning suite |
-| **SAST scanning** | Bandit and Semgrep run with zero findings |
-| **Code quality** | Ruff enforces consistent coding standards with zero violations |
-| **Test coverage** | 120 tests covering 75% of codebase; all passing |
-| **No hardcoded credentials** | Verified by Bandit scan; boto3 credential chain used exclusively |
-| **No dangerous functions** | No eval/exec usage detected across codebase |
+| Area                         | Control                                                                        |
+| ---------------------------- | ------------------------------------------------------------------------------ |
+| **Dependency management**    | Dependencies pinned via uv.lock; pip-audit included in security scanning suite |
+| **SAST scanning**            | Bandit and Semgrep run with zero findings                                      |
+| **Code quality**             | Ruff enforces consistent coding standards with zero violations                 |
+| **Test coverage**            | 120 tests covering 75% of codebase; all passing                                |
+| **No hardcoded credentials** | Verified by Bandit scan; boto3 credential chain used exclusively               |
+| **No dangerous functions**   | No eval/exec usage detected across codebase                                    |
 
 ## Remaining Informational Items
 

@@ -13,6 +13,7 @@ This directory contains the complete specifications for the AI-DLC Traceability 
 **Documentation Status**: ✅ **COMPREHENSIVE AND AIDLC-RECREATION READY** (as of 2026-03-25)
 
 The Traceability Matrix Tool is a fully functional standalone CLI application that:
+
 - ✅ Parses AI-DLC markdown artifacts (requirements, stories, units, components, code plans)
 - ✅ Discovers and parses **source code files** (Python, JavaScript, TypeScript) with **language-independent boilerplate detection** (10+ patterns)
 - ✅ Uses **multi-agent AI architecture** (4 focused agents: req→story, story→unit, unit→component, component→code) via Strands Agent with Amazon Bedrock
@@ -28,9 +29,11 @@ The Traceability Matrix Tool is a fully functional standalone CLI application th
 ## Documentation Files
 
 ### [vision-traceability-matrix-tool.md](vision-traceability-matrix-tool.md)
+
 **Purpose**: Defines WHAT to build and WHY
 
 **Key Sections**:
+
 - **Executive Summary**: One-paragraph project description
 - **Business Context**: Problem statement, target users, success metrics
 - **Full Scope Vision**: Complete long-term product vision with all feature areas
@@ -40,9 +43,11 @@ The Traceability Matrix Tool is a fully functional standalone CLI application th
 **Target Audience**: Product managers, stakeholders, compliance officers, QA engineers
 
 ### [technical-environment-traceability-matrix-tool.md](technical-environment-traceability-matrix-tool.md)
+
 **Purpose**: Defines HOW to build it (technical constraints and standards)
 
 **Key Sections**:
+
 - **Programming Languages**: Python 3.12+ (required), prohibited alternatives
 - **Frameworks and Libraries**: Click, Pydantic, NetworkX, pytest (required/preferred/prohibited)
 - **Architecture and Patterns**: Pipeline architecture, project structure, design patterns
@@ -79,6 +84,7 @@ If developing without AI-DLC:
 ## Key Decisions Documented
 
 ### Scope Decisions
+
 - **✅ MVP COMPLETED**: Forward and reverse traceability matrix with markdown/HTML output
 - **✅ IMPLEMENTED EARLY**: Interactive HTML navigation (originally Phase 3)
 - **✅ IMPLEMENTED EARLY**: AI-powered code analysis with Strands Agent
@@ -87,6 +93,7 @@ If developing without AI-DLC:
 - **Deferred to Phase 4+**: Web UI, Jira integration
 
 ### Technical Decisions
+
 - **Language**: Python 3.12+ (team expertise, rich ecosystem)
 - **Architecture**: 6-stage pipeline (discovery → parsing → heuristic linking → AI analysis → graph → analysis → generation)
 - **Graph Library**: NetworkX (efficient relationship graph)
@@ -99,6 +106,7 @@ If developing without AI-DLC:
 - **Heuristic Linking**: Stage 2.5 keyword-based requirement→story inference (runs before AI analysis)
 
 ### Security Decisions
+
 - **Framework**: OWASP Top 10 (2021) adapted for CLI tool
 - **Key Controls**: Path injection prevention, dependency scanning, input validation
 - **Not Applicable**: Authentication, encryption (local tool, no network access)
@@ -114,6 +122,7 @@ If developing without AI-DLC:
 ## Questions or Feedback
 
 For questions about these specifications:
+
 - **Vision questions**: Contact product owner or project manager
 - **Technical questions**: Contact development team lead or architect
 - **Security questions**: Contact security team or compliance officer
@@ -121,6 +130,7 @@ For questions about these specifications:
 ## Document Maintenance
 
 These specifications should be updated when:
+
 - MVP scope changes (add/remove features)
 - Technical constraints change (new libraries, security requirements)
 - Open questions are resolved
@@ -130,7 +140,9 @@ These specifications should be updated when:
 **Version**: 1.1 (MVP IMPLEMENTED + COMPREHENSIVE DOCUMENTATION)
 
 ### Version 1.1 Updates (2026-03-25)
+
 Enhanced documentation with missing implementation details for AIDLC recreation:
+
 - ✅ Added **boilerplate detection system** details (10+ language-independent patterns)
 - ✅ Documented **multi-agent architecture** (4 focused agents vs single agent)
 - ✅ Explained **Stage 2.5 heuristic linking** (requirement→story inference)

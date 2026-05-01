@@ -16,6 +16,7 @@ The AI-DLC Traceability Matrix Tool is a **fully operational** standalone utilit
 ### Problem Statement
 
 AI-DLC generates extensive documentation artifacts across its workflow (requirements, user stories, application design, units, code, tests), but these artifacts exist as separate files without explicit traceability links. Reviewers and regulators need to answer questions like:
+
 - "Which requirement drove this code change?"
 - "Which tests validate this user story?"
 - "What code implements this business requirement?"
@@ -32,13 +33,13 @@ Manually tracing these relationships across dozens of markdown files is time-con
 
 ### Target Users and Stakeholders
 
-| User Type | Description | Primary Need |
-|-----------|-------------|--------------|
+| User Type                   | Description                                               | Primary Need                                                                |
+| --------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------- |
 | Quality Assurance Engineers | Validate completeness of implementation and test coverage | Gap analysis reports showing untested stories or unimplemented requirements |
-| Compliance Officers | Demonstrate regulatory compliance during audits | Exportable traceability matrices in standard formats |
-| Project Managers | Track implementation progress and identify risks | Summary dashboards showing completion status per story/requirement |
-| Developers | Understand impact of requirement changes | Reverse traceability from code back to originating requirements |
-| External Auditors | Verify that development process meets standards | Read-only access to traceability reports with evidence links |
+| Compliance Officers         | Demonstrate regulatory compliance during audits           | Exportable traceability matrices in standard formats                        |
+| Project Managers            | Track implementation progress and identify risks          | Summary dashboards showing completion status per story/requirement          |
+| Developers                  | Understand impact of requirement changes                  | Reverse traceability from code back to originating requirements             |
+| External Auditors           | Verify that development process meets standards           | Read-only access to traceability reports with evidence links                |
 
 ### Business Constraints
 
@@ -50,13 +51,13 @@ Manually tracing these relationships across dozens of markdown files is time-con
 
 ### Success Metrics
 
-| Metric | Current State | Target State | Measurement Method |
-|--------|--------------|--------------|-------------------|
-| Traceability Report Generation Time | Manual (hours) | Automated (<5 minutes for typical project) | CLI execution time |
-| Audit Preparation Time | 2-3 days per audit | <4 hours per audit | Time tracking during audits |
-| Coverage Gap Detection | Manual review | Automated with 100% accuracy | Compare tool output vs manual review |
-| Adoption Rate | 0 projects | 10 AI-DLC projects within 6 months | Usage tracking |
-| Regulatory Audit Pass Rate | Baseline TBD | 100% pass rate for traceability evidence | Audit outcomes |
+| Metric                              | Current State      | Target State                               | Measurement Method                   |
+| ----------------------------------- | ------------------ | ------------------------------------------ | ------------------------------------ |
+| Traceability Report Generation Time | Manual (hours)     | Automated (<5 minutes for typical project) | CLI execution time                   |
+| Audit Preparation Time              | 2-3 days per audit | <4 hours per audit                         | Time tracking during audits          |
+| Coverage Gap Detection              | Manual review      | Automated with 100% accuracy               | Compare tool output vs manual review |
+| Adoption Rate                       | 0 projects         | 10 AI-DLC projects within 6 months         | Usage tracking                       |
+| Regulatory Audit Pass Rate          | Baseline TBD       | 100% pass rate for traceability evidence   | Audit outcomes                       |
 
 ## Full Scope Vision
 
@@ -67,6 +68,7 @@ Every AI-DLC project has instant, auditable traceability from business requireme
 ### Feature Areas
 
 #### Feature Area 1: Artifact Parsing and Relationship Extraction
+
 - **Description**: Parse AI-DLC markdown artifacts and extract traceability relationships
 - **Key Capabilities**:
   - Parse requirements.md to extract functional and non-functional requirements
@@ -86,6 +88,7 @@ Every AI-DLC project has instant, auditable traceability from business requireme
 - **User Value**: Automated extraction eliminates manual traceability documentation, accurate coverage metrics via boilerplate exclusion, AI-powered relationship discovery fills gaps
 
 #### Feature Area 2: Traceability Matrix Generation
+
 - **Description**: Generate comprehensive traceability matrices in multiple formats
 - **Key Capabilities**:
   - Forward traceability: requirement → story → code → test
@@ -98,6 +101,7 @@ Every AI-DLC project has instant, auditable traceability from business requireme
 - **User Value**: Instant visibility into project completeness and compliance
 
 #### Feature Area 3: Interactive Navigation and Drill-Down
+
 - **Description**: Navigate traceability relationships interactively
 - **Key Capabilities**:
   - ✅ **Click-through navigation** in HTML reports (requirement → story → code) - IMPLEMENTED
@@ -114,6 +118,7 @@ Every AI-DLC project has instant, auditable traceability from business requireme
 - **User Value**: Efficient audit preparation and review workflows, single-file HTML sharing, offline viewing
 
 #### Feature Area 4: Change Impact Analysis
+
 - **Description**: Identify downstream impacts of requirement or code changes
 - **Key Capabilities**:
   - "What depends on this requirement?" queries
@@ -125,6 +130,7 @@ Every AI-DLC project has instant, auditable traceability from business requireme
 - **User Value**: Proactive risk management during requirement changes
 
 #### Feature Area 5: Compliance Reporting
+
 - **Description**: Generate traceability reports supporting compliance documentation
 - **Key Capabilities**:
   - Pre-configured report templates for FDA, SOX, DO-178C, ISO 13485
@@ -136,6 +142,7 @@ Every AI-DLC project has instant, auditable traceability from business requireme
 - **User Value**: Streamlined regulatory audits with pre-packaged evidence
 
 #### Feature Area 6: CI/CD Integration
+
 - **Description**: Integrate traceability checks into development pipelines
 - **Key Capabilities**:
   - CLI exit codes for pass/fail traceability checks
@@ -157,6 +164,7 @@ Every AI-DLC project has instant, auditable traceability from business requireme
 ### User Journeys (Full Vision)
 
 #### Journey 1: QA Engineer Validates Test Coverage
+
 1. QA engineer runs `traceability generate --format html` in AI-DLC project root
 2. Tool parses all aidlc-docs artifacts and generates traceability matrix
 3. HTML report opens in browser showing all stories with coverage status
@@ -167,6 +175,7 @@ Every AI-DLC project has instant, auditable traceability from business requireme
 **Outcome**: Complete test coverage validated and gaps identified in <10 minutes
 
 #### Journey 2: Compliance Officer Prepares for FDA Audit
+
 1. Compliance officer runs `traceability generate --template fda-21cfr --output audit-package/`
 2. Tool generates traceability matrix with requirement IDs, test evidence, and timestamps to support FDA documentation requirements
 3. Officer reviews matrix, verifies all requirements trace to tests
@@ -175,6 +184,7 @@ Every AI-DLC project has instant, auditable traceability from business requireme
 **Outcome**: Audit-ready traceability evidence generated in <1 hour
 
 #### Journey 3: Developer Assesses Change Impact
+
 1. Developer needs to modify a core requirement in requirements.md
 2. Runs `traceability impact --requirement REQ-042`
 3. Tool shows: 2 stories, 3 units, 8 code files, 12 tests depend on REQ-042
@@ -191,12 +201,12 @@ Every AI-DLC project has instant, auditable traceability from business requireme
 
 ### Long-Term Roadmap
 
-| Phase | Focus | Timeframe |
-|-------|-------|-----------|
-| MVP | CLI tool, markdown/HTML output, basic traceability matrix | Q2 2026 |
-| Phase 2 | Gap analysis, coverage metrics, compliance templates, CI/CD integration | Q3 2026 |
-| Phase 3 | Interactive HTML navigation, change impact analysis, PDF export | Q4 2026 |
-| Phase 4 | Multi-project support, Jira integration, custom report templates | Q1 2027 |
+| Phase   | Focus                                                                   | Timeframe |
+| ------- | ----------------------------------------------------------------------- | --------- |
+| MVP     | CLI tool, markdown/HTML output, basic traceability matrix               | Q2 2026   |
+| Phase 2 | Gap analysis, coverage metrics, compliance templates, CI/CD integration | Q3 2026   |
+| Phase 3 | Interactive HTML navigation, change impact analysis, PDF export         | Q4 2026   |
+| Phase 4 | Multi-project support, Jira integration, custom report templates        | Q1 2027   |
 
 ## MVP Scope
 
@@ -226,51 +236,52 @@ Generate a complete forward traceability matrix (requirements → stories → un
 
 ### Features In Scope (MVP) - ✅ ALL COMPLETED
 
-| Feature | Description | Status | Implementation Notes |
-|---------|-------------|--------|---------------------|
-| Artifact Parser | Parse requirements.md, stories.md, unit-of-work.md, components.md, code-plan.md | ✅ DONE | Handles numeric story format (Story 1.1), traditional format (US-XXX) |
-| Source Code Discovery | Scan src/, lib/, app/ for .py, .js, .ts files | ✅ DONE | Auto-discovers 50+ code files |
-| Boilerplate Detection | Language-independent detection of 10+ boilerplate patterns | ✅ DONE | Excludes __init__.py, test fixtures, auto-generated code, type defs, constants, barrel files from metrics |
-| Multi-Agent AI Architecture | 4 focused agents (req→story, story→unit, unit→component, component→code) | ✅ DONE | Context isolation, parallel-ready, token-efficient, specialized prompts |
-| AI-Powered Analysis | Use Strands Agent with Amazon Bedrock to infer relationships | ✅ DONE | Claude Sonnet 4.5, configurable --profile and --region |
-| Heuristic Linking (Stage 2.5) | Keyword-based requirement→story inference | ✅ DONE | Fuzzy matching with 0.7 similarity threshold, runs before AI analysis |
-| Content Validation | Verify artifact IDs exist before creating relationships | ✅ DONE | Validates AI output, filters invalid relationships with warnings |
-| Relationship Extractor | Build graph of requirement → story → unit → component → code | ✅ DONE | NetworkX directed graph with 120+ edges in test project |
-| Markdown Matrix Generator | Output traceability matrix as markdown tables | ✅ DONE | Includes forward, reverse, detailed sections with metrics |
-| Interactive HTML Interface | Clickable navigation, collapsible/resizable sidebar, dark mode, search | ✅ DONE | JavaScript-powered UI, bidirectional trace, single-file HTML |
-| Forward Traceability Report | Show "what implements this requirement" view | ✅ DONE | Requirements → Stories → Units → Components → Code navigation |
-| Reverse Traceability Report | Show "what requirement drove this code" view | ✅ DONE | Code → Components → Units → Stories → Requirements navigation |
-| Coverage Gap Detection | Identify units without code, stories without units (excluding boilerplate) | ✅ DONE | Accurate metrics: boilerplate files don't count against coverage |
-| CLI Interface | `traceability generate` command with options | ✅ DONE | Supports --format, --output, --no-ai, --verbose, --profile, --region |
-| Both Format Output | Generate markdown AND HTML simultaneously | ✅ DONE | --format both creates both files in one pass |
-| Dynamic Artifact Discovery | Scan for aidlc-docs/ directory dynamically | ✅ DONE | Recursively searches project root |
-| Flexible Output Location | Specify output directory instead of file | ✅ DONE | --output accepts directory path, creates standard filenames |
+| Feature                       | Description                                                                     | Status  | Implementation Notes                                                                                      |
+| ----------------------------- | ------------------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------------------------------------- |
+| Artifact Parser               | Parse requirements.md, stories.md, unit-of-work.md, components.md, code-plan.md | ✅ DONE | Handles numeric story format (Story 1.1), traditional format (US-XXX)                                     |
+| Source Code Discovery         | Scan src/, lib/, app/ for .py, .js, .ts files                                   | ✅ DONE | Auto-discovers 50+ code files                                                                             |
+| Boilerplate Detection         | Language-independent detection of 10+ boilerplate patterns                      | ✅ DONE | Excludes **init**.py, test fixtures, auto-generated code, type defs, constants, barrel files from metrics |
+| Multi-Agent AI Architecture   | 4 focused agents (req→story, story→unit, unit→component, component→code)        | ✅ DONE | Context isolation, parallel-ready, token-efficient, specialized prompts                                   |
+| AI-Powered Analysis           | Use Strands Agent with Amazon Bedrock to infer relationships                    | ✅ DONE | Claude Sonnet 4.5, configurable --profile and --region                                                    |
+| Heuristic Linking (Stage 2.5) | Keyword-based requirement→story inference                                       | ✅ DONE | Fuzzy matching with 0.7 similarity threshold, runs before AI analysis                                     |
+| Content Validation            | Verify artifact IDs exist before creating relationships                         | ✅ DONE | Validates AI output, filters invalid relationships with warnings                                          |
+| Relationship Extractor        | Build graph of requirement → story → unit → component → code                    | ✅ DONE | NetworkX directed graph with 120+ edges in test project                                                   |
+| Markdown Matrix Generator     | Output traceability matrix as markdown tables                                   | ✅ DONE | Includes forward, reverse, detailed sections with metrics                                                 |
+| Interactive HTML Interface    | Clickable navigation, collapsible/resizable sidebar, dark mode, search          | ✅ DONE | JavaScript-powered UI, bidirectional trace, single-file HTML                                              |
+| Forward Traceability Report   | Show "what implements this requirement" view                                    | ✅ DONE | Requirements → Stories → Units → Components → Code navigation                                             |
+| Reverse Traceability Report   | Show "what requirement drove this code" view                                    | ✅ DONE | Code → Components → Units → Stories → Requirements navigation                                             |
+| Coverage Gap Detection        | Identify units without code, stories without units (excluding boilerplate)      | ✅ DONE | Accurate metrics: boilerplate files don't count against coverage                                          |
+| CLI Interface                 | `traceability generate` command with options                                    | ✅ DONE | Supports --format, --output, --no-ai, --verbose, --profile, --region                                      |
+| Both Format Output            | Generate markdown AND HTML simultaneously                                       | ✅ DONE | --format both creates both files in one pass                                                              |
+| Dynamic Artifact Discovery    | Scan for aidlc-docs/ directory dynamically                                      | ✅ DONE | Recursively searches project root                                                                         |
+| Flexible Output Location      | Specify output directory instead of file                                        | ✅ DONE | --output accepts directory path, creates standard filenames                                               |
 
 ### Features Status Update
 
-| Feature | Original Plan | Actual Status | Notes |
-|---------|--------------|---------------|-------|
-| Interactive HTML navigation | Phase 3 | ✅ **IMPLEMENTED IN MVP** | JavaScript sidebar, search, clickable navigation, dark mode, resizable sidebar |
-| AI-powered code analysis | Not in original plan | ✅ **IMPLEMENTED IN MVP** | Strands Agent with Amazon Bedrock, 4 focused agents, configurable AWS profile/region |
-| Multi-agent architecture | Not in original plan | ✅ **IMPLEMENTED IN MVP** | 4 specialized agents for context isolation and accuracy |
-| Boilerplate detection | Not in original plan | ✅ **IMPLEMENTED IN MVP** | Language-independent, 10+ patterns, excludes from coverage metrics |
-| Heuristic linking | Not in original plan | ✅ **IMPLEMENTED IN MVP** | Stage 2.5: keyword-based requirement→story inference |
-| Source code parsing | Mentioned but not detailed | ✅ **IMPLEMENTED IN MVP** | Auto-discovers Python, JavaScript, TypeScript files with metadata |
-| Components layer | Not in original plan | ✅ **IMPLEMENTED IN MVP** | 4-layer traceability: req→story→unit→component→code |
-| Code plans layer | Not in original plan | ✅ **IMPLEMENTED IN MVP** | Parses code-plan.md for intent-to-implementation trace |
-| Change impact analysis | Phase 3 | ⏳ Phase 2 | Requires diff parsing and state comparison |
-| Compliance report templates | Phase 2 | ⏳ Phase 2 | Requires regulatory research and template design |
-| CI/CD integration | Phase 2 | ⏳ Phase 2 | Requires quality gate logic and exit code handling |
-| PDF export | Phase 3 | ⏳ Phase 3 | Requires PDF generation library integration |
-| Multi-project support | Phase 4 | ⏳ Phase 4 | Adds complexity, not needed for single-project MVP |
-| Jira/GitHub Issues integration | Phase 4 | ⏳ Phase 4 | Requires API integration and auth handling |
-| Custom report templates | Phase 4 | ⏳ Phase 4 | Requires template engine and configuration system |
-| Real-time monitoring | Phase 4+ | ⏳ Phase 4+ | Requires file watching and incremental updates |
-| Web UI | Phase 4+ | ⏳ Phase 4+ | Requires server infrastructure and frontend app |
+| Feature                        | Original Plan              | Actual Status             | Notes                                                                                |
+| ------------------------------ | -------------------------- | ------------------------- | ------------------------------------------------------------------------------------ |
+| Interactive HTML navigation    | Phase 3                    | ✅ **IMPLEMENTED IN MVP** | JavaScript sidebar, search, clickable navigation, dark mode, resizable sidebar       |
+| AI-powered code analysis       | Not in original plan       | ✅ **IMPLEMENTED IN MVP** | Strands Agent with Amazon Bedrock, 4 focused agents, configurable AWS profile/region |
+| Multi-agent architecture       | Not in original plan       | ✅ **IMPLEMENTED IN MVP** | 4 specialized agents for context isolation and accuracy                              |
+| Boilerplate detection          | Not in original plan       | ✅ **IMPLEMENTED IN MVP** | Language-independent, 10+ patterns, excludes from coverage metrics                   |
+| Heuristic linking              | Not in original plan       | ✅ **IMPLEMENTED IN MVP** | Stage 2.5: keyword-based requirement→story inference                                 |
+| Source code parsing            | Mentioned but not detailed | ✅ **IMPLEMENTED IN MVP** | Auto-discovers Python, JavaScript, TypeScript files with metadata                    |
+| Components layer               | Not in original plan       | ✅ **IMPLEMENTED IN MVP** | 4-layer traceability: req→story→unit→component→code                                  |
+| Code plans layer               | Not in original plan       | ✅ **IMPLEMENTED IN MVP** | Parses code-plan.md for intent-to-implementation trace                               |
+| Change impact analysis         | Phase 3                    | ⏳ Phase 2                | Requires diff parsing and state comparison                                           |
+| Compliance report templates    | Phase 2                    | ⏳ Phase 2                | Requires regulatory research and template design                                     |
+| CI/CD integration              | Phase 2                    | ⏳ Phase 2                | Requires quality gate logic and exit code handling                                   |
+| PDF export                     | Phase 3                    | ⏳ Phase 3                | Requires PDF generation library integration                                          |
+| Multi-project support          | Phase 4                    | ⏳ Phase 4                | Adds complexity, not needed for single-project MVP                                   |
+| Jira/GitHub Issues integration | Phase 4                    | ⏳ Phase 4                | Requires API integration and auth handling                                           |
+| Custom report templates        | Phase 4                    | ⏳ Phase 4                | Requires template engine and configuration system                                    |
+| Real-time monitoring           | Phase 4+                   | ⏳ Phase 4+               | Requires file watching and incremental updates                                       |
+| Web UI                         | Phase 4+                   | ⏳ Phase 4+               | Requires server infrastructure and frontend app                                      |
 
 ### MVP User Journeys
 
 #### Journey 1: Generate Basic Traceability Matrix
+
 1. User navigates to AI-DLC project root directory
 2. Runs `traceability generate`
 3. Tool scans aidlc-docs/ directory and parses artifacts
@@ -281,6 +292,7 @@ Generate a complete forward traceability matrix (requirements → stories → un
 **Limitation vs Full Vision**: Manual navigation of markdown file, no interactive filtering
 
 #### Journey 2: Export HTML Report for Audit
+
 1. User runs `traceability generate --format html`
 2. Tool generates `traceability-matrix.html` with styled tables
 3. User opens HTML in browser for easier reading
@@ -312,13 +324,13 @@ Generate a complete forward traceability matrix (requirements → stories → un
 
 ### Key Risks
 
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
-| AI-DLC artifact structure changes break parser | Medium | High | Version parser to match AI-DLC versions, add schema validation |
-| Projects with skipped phases have insufficient data | High | Medium | Graceful degradation, report what's available, warn about gaps |
-| Large projects (1000+ stories) cause performance issues | Medium | Medium | Implement streaming parsing, add progress indicators, optimize graph algorithms |
-| Markdown parsing ambiguity causes incorrect relationships | Medium | High | Strict artifact format validation, comprehensive test suite with edge cases |
-| Users expect features beyond MVP scope | High | Low | Clear documentation of MVP limitations and roadmap |
+| Risk                                                      | Likelihood | Impact | Mitigation                                                                      |
+| --------------------------------------------------------- | ---------- | ------ | ------------------------------------------------------------------------------- |
+| AI-DLC artifact structure changes break parser            | Medium     | High   | Version parser to match AI-DLC versions, add schema validation                  |
+| Projects with skipped phases have insufficient data       | High       | Medium | Graceful degradation, report what's available, warn about gaps                  |
+| Large projects (1000+ stories) cause performance issues   | Medium     | Medium | Implement streaming parsing, add progress indicators, optimize graph algorithms |
+| Markdown parsing ambiguity causes incorrect relationships | Medium     | High   | Strict artifact format validation, comprehensive test suite with edge cases     |
+| Users expect features beyond MVP scope                    | High       | Low    | Clear documentation of MVP limitations and roadmap                              |
 
 ### External Dependencies
 

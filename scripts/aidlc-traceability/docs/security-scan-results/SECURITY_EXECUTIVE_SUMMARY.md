@@ -12,13 +12,13 @@ Automated security audit of AIDLC Traceability Tool.
 
 ## Key Findings
 
-| Category | Result | Status |
-|----------|--------|--------|
-| Security Vulnerabilities | 0 | Pass |
-| Dependency CVEs | 0 | Pass |
-| Code Quality | 0 issues | Pass |
-| Test Coverage | 75.1% | Below Target |
-| Code Complexity | 10.55 avg | Pass |
+| Category                 | Result    | Status       |
+| ------------------------ | --------- | ------------ |
+| Security Vulnerabilities | 0         | Pass         |
+| Dependency CVEs          | 0         | Pass         |
+| Code Quality             | 0 issues  | Pass         |
+| Test Coverage            | 75.1%     | Below Target |
+| Code Complexity          | 10.55 avg | Pass         |
 
 ## Recommendation
 

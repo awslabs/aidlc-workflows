@@ -38,11 +38,13 @@ AIDLC Traceability Matrix Tool is available now as a free, open-source CLI utili
 **Getting Started:**
 
 Install AIDLC Traceability Matrix Tool via pip:
+
 ```bash
 pip install aidlc-traceability
 ```
 
 Run it in any AI-DLC project directory:
+
 ```bash
 traceability generate --format html
 ```
@@ -84,6 +86,7 @@ A: Yes. If your AI-DLC project includes reverse engineering artifacts (for brown
 **Q: What coverage gaps does it identify?**
 
 A: The tool flags:
+
 - Requirements without stories
 - Stories without units or code
 - Code without tests
@@ -125,6 +128,7 @@ A: The tool dynamically scans for the `aidlc-docs/` directory starting from your
 **Q: Why build this as a separate tool instead of integrating it into AI-DLC?**
 
 A: Three reasons:
+
 1. **Separation of concerns**: AI-DLC generates artifacts; the traceability tool analyzes them. Keeping them separate allows independent evolution.
 2. **Optional adoption**: Teams can choose when to generate traceability reports. Integration would make it mandatory at specific stages.
 3. **Reusability**: The tool could potentially analyze non-AI-DLC projects in the future if they follow similar artifact structures.
@@ -144,6 +148,7 @@ A: The parser is versioned to match AI-DLC versions. We'll maintain compatibilit
 **Q: How do we measure success?**
 
 A: Five metrics tracked over 6 months:
+
 1. Report generation time (target: < 5 minutes for 50-story projects)
 2. Audit preparation time reduction (target: 2-3 days → < 4 hours)
 3. Coverage gap detection accuracy (target: 100% vs. manual review)
@@ -157,12 +162,14 @@ A: **Artifact structure variability**. If AI-DLC projects deviate from standard 
 **Q: Why markdown and HTML output instead of PDF or Excel?**
 
 A: Markdown is:
+
 - Human-readable in any text editor
 - Version-controllable (can track changes over time)
 - Easily convertible to other formats
 - Standard in developer workflows
 
 HTML with embedded CSS provides:
+
 - Better readability than plain markdown
 - Single-file sharing (no external dependencies)
 - Offline viewing (no server required)
@@ -173,6 +180,7 @@ PDF and Excel exports are planned for Phase 3 based on user demand.
 **Q: How do we handle large projects with 1000+ stories?**
 
 A: MVP targets typical projects (50-100 stories). For large projects, we'll implement:
+
 - Streaming parsing (don't load all artifacts into memory)
 - Progress indicators (show parsing status)
 - Optimized graph algorithms (efficient relationship traversal)
@@ -183,6 +191,7 @@ These optimizations are planned for Phase 2 if performance becomes an issue.
 **Q: What if artifacts have malformed IDs or broken relationships?**
 
 A: MVP includes content validation that checks:
+
 - Requirement IDs follow expected format (REQ-001, NFR-042, etc.)
 - Story IDs are unique and properly formatted
 - Relationship references point to existing artifacts
@@ -201,6 +210,7 @@ A: The tool builds a bidirectional graph during parsing. Forward traceability fo
 **Q: What's the long-term vision beyond MVP?**
 
 A: Four phases:
+
 - **Phase 2** (Q3 2026): Gap analysis metrics, compliance templates (FDA, SOX, DO-178C), CI/CD integration, quality gates
 - **Phase 3** (Q4 2026): Interactive HTML navigation, change impact analysis, PDF export, trend tracking
 - **Phase 4** (Q1 2027): Multi-project support, Jira/GitHub Issues integration, custom report templates, web UI
@@ -210,6 +220,7 @@ Ultimate vision: Every AI-DLC project has instant, auditable traceability with a
 **Q: How does this relate to existing traceability tools like Jama or Helix RM?**
 
 A: Those are enterprise requirements management platforms with traceability as one feature. They require significant setup, licensing costs, and process changes. AIDLC Traceability Matrix Tool is:
+
 - Free and open-source
 - Zero setup (just install and run)
 - Designed specifically for AI-DLC artifact structure

@@ -118,7 +118,7 @@ Each agent is focused on a specific artifact pair, preventing context pollution 
 
 ## Project Structure
 
-```
+```text
 AIDLC-Traceability/
 ├── src/traceability/        # Main implementation
 │   ├── cli.py              # Click-based CLI
@@ -175,6 +175,7 @@ uv sync
 ### Markdown Report
 
 The markdown report includes:
+
 - Summary statistics (artifact counts, coverage percentages)
 - Complete traceability matrix showing all relationships
 - Gap analysis highlighting orphaned artifacts
@@ -183,6 +184,7 @@ The markdown report includes:
 ### HTML Report
 
 The HTML report provides:
+
 - Interactive dark mode toggle
 - Resizable sidebar for navigation
 - Collapsible sections

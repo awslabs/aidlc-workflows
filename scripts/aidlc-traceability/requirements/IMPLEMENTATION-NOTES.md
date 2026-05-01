@@ -15,6 +15,7 @@ The AIDLC Traceability Matrix Tool has been successfully implemented and tested 
 ## Key Implementations
 
 ### 1. Source Code Discovery and Parsing (NEW)
+
 - **What**: Automatic discovery of Python, JavaScript, and TypeScript source files
 - **How**: Scans `src/`, `lib/`, `app/` directories recursively
 - **Why**: Enables code-to-requirement traceability (reverse trace)
@@ -24,6 +25,7 @@ The AIDLC Traceability Matrix Tool has been successfully implemented and tested 
 - **Tested**: ✅ Successfully discovered 50 source files in AIDLC-DesignReview project
 
 ### 2. AI-Powered Code Analysis (NEW)
+
 - **What**: Uses Strands Agent with Amazon Bedrock (Claude Sonnet 4.5) to infer code-to-unit relationships
 - **How**: Analyzes directory structure and naming patterns to map code files to units
 - **Why**: Manual code mapping would be time-consuming and error-prone
@@ -37,6 +39,7 @@ The AIDLC Traceability Matrix Tool has been successfully implemented and tested 
 - **Tested**: ✅ Successfully created 120 relationships in test project
 
 ### 3. Interactive HTML Interface (Phase 3 feature delivered early)
+
 - **What**: JavaScript-powered clickable interface for navigating traceability
 - **How**: Embedded JavaScript in single-file HTML output
 - **Features**:
@@ -49,6 +52,7 @@ The AIDLC Traceability Matrix Tool has been successfully implemented and tested 
 - **Tested**: ✅ Generated 449KB interactive HTML file
 
 ### 4. Enhanced Story Parser
+
 - **What**: Flexible story ID parser handles multiple formats
 - **Formats Supported**:
   - Traditional: `### US-CAT-001: Title`
@@ -60,6 +64,7 @@ The AIDLC Traceability Matrix Tool has been successfully implemented and tested 
 - **Tested**: ✅ Parsed 71 stories from AIDLC-DesignReview (0 before fix)
 
 ### 5. AI Validation and Graph Warnings
+
 - **What**: Validates AI-generated relationships before adding to graph
 - **How**:
   - AI agent receives list of valid artifact IDs
@@ -72,6 +77,7 @@ The AIDLC Traceability Matrix Tool has been successfully implemented and tested 
 - **Tested**: ✅ Filtered 78 invalid AI relationships, warned user
 
 ### 6. Dual Format Generation
+
 - **What**: `--format both` generates markdown AND HTML simultaneously
 - **How**: Runs pipeline once, generates both outputs
 - **Why**: Users often need both formats (markdown for Git, HTML for audits)
@@ -81,6 +87,7 @@ The AIDLC Traceability Matrix Tool has been successfully implemented and tested 
 - **Tested**: ✅ Generated both files in single pass
 
 ### 7. Directory-Based Output
+
 - **What**: `--output` accepts directory path instead of file path
 - **How**: Creates standard filenames (`traceability-matrix.md`, `traceability-matrix.html`) in specified directory
 - **Why**: Simplifies usage, consistent naming
@@ -90,6 +97,7 @@ The AIDLC Traceability Matrix Tool has been successfully implemented and tested 
 ## Test Results
 
 ### Test Project: AIDLC-DesignReview
+
 - **Project Type**: Real AI-DLC project with complete documentation and source code
 - **Artifacts Discovered**:
   - 21 Requirements (14 FR, 7 NFR)
@@ -113,18 +121,21 @@ The AIDLC Traceability Matrix Tool has been successfully implemented and tested 
 ## Bug Fixes During Implementation
 
 ### Bug #1: Story Parser Too Restrictive
+
 - **Problem**: Only matched `### US-XXX:` and `### STORY-XXX:` patterns
 - **Impact**: 0 of 71 stories parsed in test project
 - **Fix**: Added support for `### Story 1.1:` numeric format
 - **Result**: 71 stories successfully parsed
 
 ### Bug #2: AI Hallucinating Artifact IDs
+
 - **Problem**: AI created relationships to artifacts that don't exist
 - **Impact**: 143 relationships claimed but 0 edges in graph
 - **Fix**: Validate all artifact IDs against parsed artifacts before accepting relationships
 - **Result**: 78 invalid relationships filtered, 67 valid relationships retained
 
 ### Bug #3: Silent Relationship Failures
+
 - **Problem**: Graph builder silently ignored relationships with invalid IDs
 - **Impact**: No visibility into data quality issues
 - **Fix**: Return skipped count from `build_graph()`, warn user
@@ -133,21 +144,25 @@ The AIDLC Traceability Matrix Tool has been successfully implemented and tested 
 ## Architectural Decisions
 
 ### Decision 1: Strands Agent over Custom AI Integration
+
 - **Rationale**: Strands provides structured tools, retry logic, and model abstraction
 - **Trade-offs**: Additional dependency, but cleaner code and better reliability
 - **Result**: AI integration took 2 hours instead of estimated 2 days
 
 ### Decision 2: Embedded JavaScript in HTML
+
 - **Rationale**: Single-file distribution, offline viewing, no build step
 - **Trade-offs**: Large file size (449KB), but acceptable for reports
 - **Result**: Users can share one file via email/Slack
 
 ### Decision 3: Directory Naming to Unit Mapping
+
 - **Rationale**: AI token limits prevented reading all 50 code files
 - **Trade-offs**: Less precise than reading file contents, but 90% accuracy
 - **Result**: 5/5 core units correctly mapped (100%)
 
 ### Decision 4: --output as Directory not File
+
 - **Rationale**: Dual format output needs two files, consistent naming easier
 - **Trade-offs**: Breaking change from spec, but better UX
 - **Result**: Simplified CLI, positive feedback
@@ -179,13 +194,13 @@ The AIDLC Traceability Matrix Tool has been successfully implemented and tested 
 
 ## Success Metrics Achieved
 
-| Metric | Target | Actual | Status |
-|--------|--------|--------|--------|
-| Artifact Parsing | All types | 6 types (req, story, unit, component, code, code_plan) | ✅ EXCEEDED |
-| Report Generation Time | <5 min for 50 stories | <2 min for 71 stories + 50 code files | ✅ EXCEEDED |
-| Coverage Gap Detection | 100% accuracy | 21 gaps identified correctly | ✅ MET |
-| Interactive Navigation | Phase 3 | Delivered in MVP | ✅ EXCEEDED |
-| AI Integration | Not planned | Fully functional with Amazon Bedrock | ✅ EXCEEDED |
+| Metric                 | Target                | Actual                                                 | Status      |
+| ---------------------- | --------------------- | ------------------------------------------------------ | ----------- |
+| Artifact Parsing       | All types             | 6 types (req, story, unit, component, code, code_plan) | ✅ EXCEEDED |
+| Report Generation Time | <5 min for 50 stories | <2 min for 71 stories + 50 code files                  | ✅ EXCEEDED |
+| Coverage Gap Detection | 100% accuracy         | 21 gaps identified correctly                           | ✅ MET      |
+| Interactive Navigation | Phase 3               | Delivered in MVP                                       | ✅ EXCEEDED |
+| AI Integration         | Not planned           | Fully functional with Amazon Bedrock                   | ✅ EXCEEDED |
 
 ## Lessons Learned
 
@@ -209,6 +224,7 @@ The AIDLC Traceability Matrix Tool has been successfully implemented and tested 
 ## Contact
 
 For questions about this implementation:
+
 - **Architecture**: See `src/traceability/pipeline.py` for main flow
 - **AI Integration**: See `src/traceability/agent.py` for Strands Agent setup
 - **Bug Reports**: Check this document first, then GitHub issues
