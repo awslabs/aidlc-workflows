@@ -5,7 +5,7 @@ description = "Evaluation and reporting framework for AI-DLC workflows"
 requires-python = ">=3.13"
 dependencies = [
     "pyyaml>=6.0",
-    "boto3>=1.42.96",
+    "boto3>=1.43.2",
     "aidlc-runner",
     "aidlc-qualitative",
     "aidlc-quantitative",
