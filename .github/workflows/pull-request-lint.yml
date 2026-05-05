@@ -38,19 +38,20 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       PR_LABELS_JSON: ${{ toJson(github.event.pull_request.labels.*.name) }}
+      PR_NUMBER_INPUT: ${{ github.event.pull_request.number }}
     steps:
       - name: Get PR info
         id: get-pr
         run: |
-          if [ "${{ github.event_name }}" == "merge_group" ]; then
-            PR_NUMBER=$(echo "${{ github.ref }}" | grep -oP '(?<=/pr-)\d+' || echo "")
-            PR_LABELS=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER | jq -c '[.labels[].name] // []')
+          if [ "$GITHUB_EVENT_NAME" == "merge_group" ]; then
+            PR_NUMBER=$(echo "$GITHUB_REF" | grep -oP '(?<=/pr-)\d+' || echo "")
+            PR_LABELS=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" | jq -c '[.labels[].name] // []')
             echo "::group::Getting Information"
-            gh api repos/${{ github.repository }}/pulls/$PR_NUMBER
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
             echo $PR_LABELS
             echo "::endgroup::"
-          elif [ "${{ github.event_name }}" == "pull_request" -o "${{ github.event_name }}" == "pull_request_target" ]; then
-            PR_NUMBER="${{ github.event.pull_request.number }}"
+          elif [ "$GITHUB_EVENT_NAME" == "pull_request" -o "$GITHUB_EVENT_NAME" == "pull_request_target" ]; then
+            PR_NUMBER="$PR_NUMBER_INPUT"
             PR_LABELS=$(echo "$PR_LABELS_JSON" | jq -c '.')
           fi
           echo "::group::Debug Output Values"
