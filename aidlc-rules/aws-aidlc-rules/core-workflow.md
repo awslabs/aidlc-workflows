@@ -31,13 +31,21 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 
 **Loading process**:
 1. List all subdirectories under `extensions/` (e.g., `extensions/security/`, `extensions/compliance/`)
-2. In each subdirectory, load ONLY `*.opt-in.md` files — these contain the extension's opt-in prompt. The corresponding rules file is derived by convention: strip the `.opt-in.md` suffix and append `.md` (e.g., `security-baseline.opt-in.md` → `security-baseline.md`)
-3. Do NOT load full rule files (e.g., `security-baseline.md`) at this stage
+2. In each subdirectory, load ONLY `*.opt-in.md` files — these contain the extension's prompt. The corresponding rules file is derived by convention: strip the `.opt-in.md` suffix and append `.md` (e.g., `security-baseline.opt-in.md` → `security-baseline.md`)
+3. Check each `*.opt-in.md` file for `**Default**: Enabled`:
+   - If present: this is a **default-enabled** extension — load its full rules file immediately at workflow start. The opt-in file's prompt becomes an opt-out question during Requirements Analysis.
+   - If not present: this is a standard **opt-in** extension — do NOT load the full rules file yet.
 
-**Deferred Rule Loading**:
-- During Requirements Analysis, opt-in prompts from the loaded `*.opt-in.md` files are presented to the user
-- When the user opts IN for an extension, load the corresponding rules file (derived by naming convention) at that point
+**Deferred Rule Loading** (standard opt-in extensions only):
+- During Requirements Analysis, opt-in prompts are presented to the user
+- When the user opts IN, load the corresponding rules file at that point
 - When the user opts OUT, the full rules file is never loaded — saving context
+
+**Default-Enabled Extensions**:
+- Rules are loaded and enforced from workflow start (no deferral)
+- During Requirements Analysis, the opt-out prompt is presented to give the user explicit choice to disable
+- If the user opts OUT, mark the extension as disabled in `aidlc-docs/aidlc-state.md` and stop enforcement from that point forward
+- If the user does not answer or keeps enabled, enforcement continues unchanged
 - Extensions without a matching `*.opt-in.md` file are always enforced — load their rule files immediately at workflow start
 
 **Enforcement** (applies only to loaded/enabled extensions):

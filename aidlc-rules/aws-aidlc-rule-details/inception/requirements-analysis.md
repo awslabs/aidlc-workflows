@@ -90,21 +90,27 @@ Analyze whatever the user has provided:
 
 **When in doubt, ask questions** - incomplete requirements lead to poor implementations.
 
-### Step 5.1: Extension Opt-In Prompts
+### Step 5.1: Extension Opt-In / Opt-Out Prompts
 
-**MANDATORY**: Scan all loaded `*.opt-in.md` files (loaded at workflow start from `extensions/` subdirectories) for an `## Opt-In Prompt` section. For each extension that declares one, include that question in the clarifying questions file created in Step 6. Present each opt-in question in the same language as the user's conversation.
+**MANDATORY**: Scan all loaded `*.opt-in.md` files (loaded at workflow start from `extensions/` subdirectories) for an `## Opt-In Prompt` or `## Opt-Out Prompt` section. For each extension that declares one, include that question in the clarifying questions file created in Step 6. Present each question in the same language as the user's conversation.
+
+**Default-enabled extensions** (those with `**Default**: Enabled` in their opt-in file) are already loaded and enforced. Their prompt gives the user the choice to disable. **Standard opt-in extensions** are not yet loaded; their prompt gives the user the choice to enable.
 
 After receiving answers:
 1. Record each extension's enablement status in `aidlc-docs/aidlc-state.md` under `## Extension Configuration`:
 
 ```markdown
 ## Extension Configuration
-| Extension | Enabled | Decided At |
-|---|---|---|
-| [Extension Name] | [Yes/No] | Requirements Analysis |
+| Extension | Default | Enabled | Decided At |
+|---|---|---|---|
+| Security Baseline | On | Yes | Requirements Analysis |
+| [Other Extension] | Off | [Yes/No] | Requirements Analysis |
 ```
 
-2. **Deferred Rule Loading**: For each extension the user opted IN, load the full rules file now. The rules file is derived by naming convention: strip `.opt-in.md` from the opt-in filename and append `.md` (e.g., `security-baseline.opt-in.md` → `security-baseline.md`). For extensions the user opted OUT, do NOT load the full rules file.
+2. **Rule Loading**:
+   - **Default-enabled extensions**: Already loaded. If user explicitly opts OUT, mark as disabled in aidlc-state.md and stop enforcement from that point forward.
+   - **Standard opt-in extensions**: If user opts IN, load the full rules file now. The rules file is derived by naming convention: strip `.opt-in.md` from the opt-in filename and append `.md`. If user opts OUT, do NOT load the full rules file.
+   - **No answer provided**: Default-enabled extensions remain enabled. Standard opt-in extensions remain disabled.
 
 ### Step 6: Generate Clarifying Questions (PROACTIVE APPROACH)
    - **ALWAYS** create `aidlc-docs/inception/requirements/requirement-verification-questions.md` unless requirements are exceptionally clear and complete
