@@ -50,7 +50,7 @@ class TestSemVer:
         assert SemVer(0, 1, 9) < SemVer(1, 0, 0)
 
     def test_equality(self):
-        assert SemVer(1, 2, 3) == SemVer(1, 2, 3)
+        assert SemVer(1, 2, 3) == SemVer(1, 2, 3)  # nosemgrep: template.eqeq-is-bad - dataclass equality via __eq__ is intentional here
 
     def test_frozen(self):
         sv = SemVer(1, 2, 3)

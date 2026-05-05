@@ -138,6 +138,8 @@ def fetch_workflow_runs(
     if event is not None:
         cmd.extend(["--event", event])
 
+    # nosec B603, B607 - cmd is a static gh CLI invocation with validated string arguments (repo, branch, event)
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise FetchError(f"Failed to list workflow runs for {repo}: {result.stderr.strip()}")
