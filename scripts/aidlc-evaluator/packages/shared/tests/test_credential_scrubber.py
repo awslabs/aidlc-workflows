@@ -26,7 +26,7 @@ class TestScrubCredentials:
 
     def test_jwt_token(self):
         """Test JWT token redaction."""
-        text = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        text = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"  # nosemgrep: generic.secrets.security.detected-jwt-token - intentional test fixture for credential scrubber validation
         result = scrub_credentials(text)
         assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" not in result
         assert "[REDACTED-JWT-TOKEN]" in result
@@ -60,7 +60,7 @@ class TestScrubCredentials:
 
     def test_api_key_hex(self):
         """Test generic API key redaction (hex format)."""
-        text = "api_key=a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+        text = "api_key=a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"  # nosemgrep: generic.secrets.security.detected-generic-api-key - intentional test fixture for credential scrubber validation
         result = scrub_credentials(text)
         assert "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4" not in result
         assert "[REDACTED-API-KEY]" in result
