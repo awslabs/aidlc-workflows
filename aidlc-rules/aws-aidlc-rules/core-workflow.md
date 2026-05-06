@@ -74,6 +74,62 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 3. This should only be done ONCE at the start of a new workflow
 4. Do NOT load this file in subsequent interactions to save context space
 
+## MANDATORY: Workflow Progress Trail
+**CRITICAL**: At the end of EVERY assistant response during an active AI-DLC session, append a one-line workflow progress trail derived from `aidlc-docs/aidlc-state.md`. This gives the user constant in-chat orientation without requiring them to open state files.
+
+**Format**: `AI-DLC Progress: <stage1> (<status>) -> <stage2> (<status>) -> ...`
+
+**Status values** (plain text, no emoji or symbol markers):
+- `(done)` — stage completed and approved
+- `(in progress)` — current stage
+- `(skipped)` — stage skipped (conditional stage that the AI determined was not needed, or user explicitly skipped)
+- `(pending)` — stage not yet started
+- `(pending, conditional)` — pending stage that may be skipped based on intelligent assessment
+
+**Rendering rules**:
+
+The trail uses a **uniform collapse model** at three levels: Inception phase, each Construction Unit, and Build and Test. Each level renders as a single entry when fully done or fully pending, and expands when active.
+
+1. **Inception phase** (the seven Inception stages collectively):
+   - **Fully-done** (every Inception stage is `done` or `skipped`): render as a single entry `inception (done)`
+   - **Fully-pending** (no Inception stage has started yet): render as a single entry `inception (pending)` — note this case is rare because Workspace Detection runs immediately
+   - **In-progress** (any Inception stage is `in progress`, or some are `done`/`skipped` while others are `pending`): render `inception (in progress): <stage1> (<status>) -> <stage2> (<status>) -> ...` listing every Inception stage in workflow order
+2. **Construction unit count visibility** — the number of units is NOT known until Units Generation reaches a terminal status:
+   - **Units Generation NOT yet terminal** (status is `pending` or `in progress`): the unit count is unknown, so do NOT render any per-unit entries. Render Construction as a single placeholder `construction (pending)` between the Inception entry and `build-and-test`.
+   - **Units Generation `done`**: read the unit count from `aidlc-docs/aidlc-state.md` and render unit-level entries (rule 3).
+   - **Units Generation `skipped`**: a skip implies a single implicit unit. Render exactly one `Unit 1/1 (...)` entry per rule 3.
+3. **Per-unit Construction stages** (Functional Design, NFR Requirements, NFR Design, Infrastructure Design, Code Generation) — apply the collapse model per-unit, only when unit count is known per rule 2:
+   - **Fully-done unit** (every per-unit stage is `done` or `skipped`): render as a single entry `Unit X/Y (done)`
+   - **In-progress unit** (any per-unit stage is `in progress`, or some are `done`/`skipped` while others are `pending`): render `Unit X/Y (in progress): <stage1> (<status>) -> <stage2> (<status>) -> ...`
+   - **Active-next unit** — the FIRST unit that is not fully-done is the "active" unit. Even if all its per-unit stages are still `pending` (i.e., the unit hasn't actually started), it MUST be rendered expanded so the user sees what's coming up next: `Unit X/Y (pending): <stage1> (<status>) -> <stage2> (<status>) -> ...`
+   - **Other fully-pending unit** (a fully-pending unit that is NOT the first not-fully-done unit): render as a single entry `Unit X/Y (pending)`
+4. **Build and Test**: render as a single `build-and-test (<status>)` entry. No unit prefix — it runs once after all units complete.
+5. Use lowercase kebab-case stage names: `workspace-detection`, `reverse-engineering`, `requirements-analysis`, `user-stories`, `workflow-planning`, `application-design`, `units-generation`, `functional-design`, `nfr-requirements`, `nfr-design`, `infrastructure-design`, `code-generation`, `build-and-test`
+6. Source the status of each stage from `aidlc-docs/aidlc-state.md` (already authoritative). Do NOT introduce new state files.
+7. All entries are joined by ` -> ` (space-arrow-space) — both top-level entries and the expanded sub-stages within an in-progress phase or unit — so the trail is uniformly parseable.
+
+**When to skip rendering the trail**:
+- No `aidlc-docs/aidlc-state.md` exists yet (i.e., before Workspace Detection has run)
+- Workflow is complete (Build and Test approved by user)
+
+**Example A** (mid-Construction, brownfield project, second of three units in progress — Inception fully done, Unit 1 done, Unit 3 not started):
+
+```text
+AI-DLC Progress: inception (done) -> Unit 1/3 (done) -> Unit 2/3 (in progress): functional-design (in progress) -> nfr-requirements (pending, conditional) -> nfr-design (pending, conditional) -> infrastructure-design (pending, conditional) -> code-generation (pending) -> Unit 3/3 (pending) -> build-and-test (pending)
+```
+
+**Example B** (mid-Inception, greenfield project, Requirements Analysis active — Units Generation not yet run, so unit count is unknown and Construction collapses to a placeholder):
+
+```text
+AI-DLC Progress: inception (in progress): workspace-detection (done) -> reverse-engineering (skipped) -> requirements-analysis (in progress) -> user-stories (pending, conditional) -> workflow-planning (pending) -> application-design (pending, conditional) -> units-generation (pending, conditional) -> construction (pending) -> build-and-test (pending)
+```
+
+**Example C** (Inception just finished, Units Generation produced 3 units, Construction not yet started — Unit 1 is the active-next unit so it expands; Units 2 and 3 stay collapsed):
+
+```text
+AI-DLC Progress: inception (done) -> Unit 1/3 (pending): functional-design (pending, conditional) -> nfr-requirements (pending, conditional) -> nfr-design (pending, conditional) -> infrastructure-design (pending, conditional) -> code-generation (pending) -> Unit 2/3 (pending) -> Unit 3/3 (pending) -> build-and-test (pending)
+```
+
 # Adaptive Software Development Workflow
 
 ---
@@ -108,6 +164,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 5. **MANDATORY**: Log findings in audit.md
 6. Present completion message to user (see workspace-detection.md for message formats)
 7. Automatically proceed to next phase
+8. **MANDATORY**: Append workflow progress trail per `MANDATORY: Workflow Progress Trail` rule (Inception stages render under the active `inception (in progress):` header; once all Inception stages are done/skipped the entire phase collapses to `inception (done)`)
 
 ## Reverse Engineering (CONDITIONAL - Brownfield Only)
 
@@ -135,6 +192,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 
 4. **Wait for Explicit Approval**: Present detailed completion message (see reverse-engineering.md for message format) - DO NOT PROCEED until user confirms
 5. **MANDATORY**: Log user's response in audit.md with complete raw input
+6. **MANDATORY**: Append workflow progress trail per `MANDATORY: Workflow Progress Trail` rule (Inception stages render under the active `inception (in progress):` header; once all Inception stages are done/skipped the entire phase collapses to `inception (done)`)
 
 ## Requirements Analysis (ALWAYS EXECUTE - Adaptive Depth)
 
@@ -156,6 +214,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 4. Execute at appropriate depth (minimal/standard/comprehensive)
 5. **Wait for Explicit Approval**: Follow approval format from requirements-analysis.md detailed steps - DO NOT PROCEED until user confirms
 6. **MANDATORY**: Log user's response in audit.md with complete raw input
+7. **MANDATORY**: Append workflow progress trail per `MANDATORY: Workflow Progress Trail` rule (Inception stages render under the active `inception (in progress):` header; once all Inception stages are done/skipped the entire phase collapses to `inception (done)`)
 
 ## User Stories (CONDITIONAL)
 
@@ -225,6 +284,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 8. **PART 2 - Generation**: Execute approved plan to generate stories and personas
 9. **Wait for Explicit Approval**: Follow approval format from user-stories.md detailed steps - DO NOT PROCEED until user confirms
 10. **MANDATORY**: Log user's response in audit.md with complete raw input
+11. **MANDATORY**: Append workflow progress trail per `MANDATORY: Workflow Progress Trail` rule (Inception stages render under the active `inception (in progress):` header; once all Inception stages are done/skipped the entire phase collapses to `inception (done)`)
 
 ## Workflow Planning (ALWAYS EXECUTE)
 
@@ -244,6 +304,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 6. **MANDATORY**: Validate all content before file creation per content-validation.md rules
 7. **Wait for Explicit Approval**: Present recommendations using language from workflow-planning.md Step 9, emphasizing user control to override recommendations - DO NOT PROCEED until user confirms
 8. **MANDATORY**: Log user's response in audit.md with complete raw input
+9. **MANDATORY**: Append workflow progress trail per `MANDATORY: Workflow Progress Trail` rule (Inception stages render under the active `inception (in progress):` header; once all Inception stages are done/skipped the entire phase collapses to `inception (done)`)
 
 ## Application Design (CONDITIONAL)
 
@@ -265,6 +326,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 4. Execute at appropriate depth (minimal/standard/comprehensive)
 5. **Wait for Explicit Approval**: Present detailed completion message (see application-design.md for message format) - DO NOT PROCEED until user confirms
 6. **MANDATORY**: Log user's response in audit.md with complete raw input
+7. **MANDATORY**: Append workflow progress trail per `MANDATORY: Workflow Progress Trail` rule (Inception stages render under the active `inception (in progress):` header; once all Inception stages are done/skipped the entire phase collapses to `inception (done)`)
 
 ## Units Generation (CONDITIONAL)
 
@@ -285,6 +347,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 4. Execute at appropriate depth (minimal/standard/comprehensive)
 5. **Wait for Explicit Approval**: Present detailed completion message (see units-generation.md for message format) - DO NOT PROCEED until user confirms
 6. **MANDATORY**: Log user's response in audit.md with complete raw input
+7. **MANDATORY**: Append workflow progress trail per `MANDATORY: Workflow Progress Trail` rule (Inception stages render under the active `inception (in progress):` header; once all Inception stages are done/skipped the entire phase collapses to `inception (done)`)
 
 ---
 
@@ -329,6 +392,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 4. **MANDATORY**: Present standardized 2-option completion message as defined in functional-design.md - DO NOT use emergent 3-option behavior
 5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
 6. **MANDATORY**: Log user's response in audit.md with complete raw input
+7. **MANDATORY**: Append workflow progress trail per `MANDATORY: Workflow Progress Trail` rule (the active unit will render expanded as `Unit X/Y (in progress): <stage>...`; other units collapse to a single `(done)` or `(pending)` entry)
 
 ### NFR Requirements (CONDITIONAL, per-unit)
 
@@ -349,6 +413,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 4. **MANDATORY**: Present standardized 2-option completion message as defined in nfr-requirements.md - DO NOT use emergent behavior
 5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
 6. **MANDATORY**: Log user's response in audit.md with complete raw input
+7. **MANDATORY**: Append workflow progress trail per `MANDATORY: Workflow Progress Trail` rule (per-unit stages render under the active `Unit X/Y (in progress):` header; other units stay collapsed)
 
 ### NFR Design (CONDITIONAL, per-unit)
 
@@ -367,6 +432,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 4. **MANDATORY**: Present standardized 2-option completion message as defined in nfr-design.md - DO NOT use emergent behavior
 5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
 6. **MANDATORY**: Log user's response in audit.md with complete raw input
+7. **MANDATORY**: Append workflow progress trail per `MANDATORY: Workflow Progress Trail` rule (per-unit stages render under the active `Unit X/Y (in progress):` header; other units stay collapsed)
 
 ### Infrastructure Design (CONDITIONAL, per-unit)
 
@@ -386,6 +452,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 4. **MANDATORY**: Present standardized 2-option completion message as defined in infrastructure-design.md - DO NOT use emergent behavior
 5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
 6. **MANDATORY**: Log user's response in audit.md with complete raw input
+7. **MANDATORY**: Append workflow progress trail per `MANDATORY: Workflow Progress Trail` rule (per-unit stages render under the active `Unit X/Y (in progress):` header; other units stay collapsed)
 
 ### Code Generation (ALWAYS EXECUTE, per-unit)
 
@@ -403,6 +470,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 5. **MANDATORY**: Present standardized 2-option completion message as defined in code-generation.md - DO NOT use emergent behavior
 6. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
 7. **MANDATORY**: Log user's response in audit.md with complete raw input
+8. **MANDATORY**: Append workflow progress trail per `MANDATORY: Workflow Progress Trail` rule (per-unit stages render under the active `Unit X/Y (in progress):` header; other units stay collapsed)
 
 ---
 
@@ -419,6 +487,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 4. Create instruction files in build-and-test/ subdirectory: build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, build-and-test-summary.md
 5. **Wait for Explicit Approval**: Ask: "**Build and test instructions complete. Ready to proceed to Operations stage?**" - DO NOT PROCEED until user confirms
 6. **MANDATORY**: Log user's response in audit.md with complete raw input
+7. **MANDATORY**: Append workflow progress trail per `MANDATORY: Workflow Progress Trail` rule (Build and Test does NOT use the `Unit X/Y:` prefix because it runs once after all units complete)
 
 ---
 
@@ -452,6 +521,7 @@ The Operations stage will eventually include:
 - **Transparent Planning**: Always show execution plan before starting
 - **User Control**: User can request stage inclusion/exclusion
 - **Progress Tracking**: Update aidlc-state.md with executed and skipped stages
+- **Workflow Progress Trail**: Append the one-line `AI-DLC Progress: ...` trail at the end of EVERY assistant response during an active AI-DLC session (see `MANDATORY: Workflow Progress Trail` above)
 - **Complete Audit Trail**: Log ALL user inputs and AI responses in audit.md with timestamps
   - **CRITICAL**: Capture user's COMPLETE RAW INPUT exactly as provided
   - **CRITICAL**: Never summarize or paraphrase user input in audit log
