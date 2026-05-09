@@ -21,9 +21,28 @@ B) Review a previous stage ([Show available stages])
 [Answer]: 
 ```
 
+## MANDATORY: Approval Gate Status Interpretation
+
+**CRITICAL**: `COMPLETED` in `aidlc-state.md` means the artifact was *generated*, not necessarily that the user *approved* it. A fresh session reading the state file cannot distinguish between these two states from `COMPLETED` alone.
+
+When resuming a session, apply the following rules before proceeding past any stage:
+
+| State file entry | Interpretation | Correct action |
+|---|---|---|
+| `[ ] Stage Name` | Not started | Begin stage from scratch |
+| `[x] Stage Name (Approved)` | Generated AND approved | Proceed to next stage |
+| `[x] Stage Name` (no `(Approved)` annotation) | Generated, approval status unknown | **Halt. Present the artifact and request explicit approval before continuing** |
+
+**On resumption, for every stage marked `[x]` without `(Approved)`, you MUST**:
+1. Load the stage artifact from the project docs directory
+2. Present it to the user with: *"I can see [Stage Name] was completed in a previous session but I cannot confirm it was approved. Please review the artifact below and confirm: **Approve and continue** or **Request changes**."*
+3. Do NOT proceed to the next stage until the user explicitly approves
+
+**Audit trail cross-check**: When in doubt, read `aidlc-docs/audit.md`. If the audit trail shows "awaiting user approval" for a stage that `aidlc-state.md` marks as `COMPLETED`, treat it as unapproved and halt at the gate.
+
 ## MANDATORY: Session Continuity Instructions
 1. **Always read aidlc-state.md first** when detecting existing project
-2. **Parse current status** from the workflow file to populate the prompt
+2. **Parse current status** from the workflow file to populate the prompt — and apply the approval gate interpretation rules above before advancing past any stage
 3. **MANDATORY: Load Previous Stage Artifacts** - Before resuming any stage, automatically read all relevant artifacts from previous stages:
    - **Reverse Engineering**: Read architecture.md, code-structure.md, api-documentation.md
    - **Requirements Analysis**: Read requirements.md, requirement-verification-questions.md
