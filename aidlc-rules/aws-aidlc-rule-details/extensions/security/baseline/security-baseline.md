@@ -292,16 +292,15 @@ These rules are cross-cutting constraints that apply to every AI-DLC stage. At e
 
 ## Appendix: OWASP Reference Mapping
 
-<!-- TODO: CRITICAL - This entire OWASP mapping table needs verification. The "2025" edition may not exist; the latest published OWASP Top 10 is 2021. Category IDs (A01-A10), numbering, and names must be validated against the actual published standard before relying on this mapping. -->
-For human reviewers, the following maps SECURITY rules to OWASP Top 10 (2025) categories:
+For human reviewers, the following maps SECURITY rules to OWASP Top 10 (2021) categories:
 
 | SECURITY Rule | OWASP Category |
 |---|---|
-| SECURITY-08 | A01:2025 – Broken Access Control |
-| SECURITY-09 | A02:2025 – Security Misconfiguration |
-| SECURITY-10 | A03:2025 – Software Supply Chain Failures |
-| SECURITY-11 | A06:2025 – Insecure Design |
-| SECURITY-12 | A07:2025 – Authentication Failures |
-| SECURITY-13 | A08:2025 – Software or Data Integrity Failures |
-| SECURITY-14 | A09:2025 – Logging & Alerting Failures |
-| SECURITY-15 | A10:2025 – Mishandling of Exceptional Conditions |
+| SECURITY-08 | A01:2021 – Broken Access Control |
+| SECURITY-09 | A05:2021 – Security Misconfiguration |
+| SECURITY-10 | A06:2021 – Vulnerable and Outdated Components |
+| SECURITY-11 | A04:2021 – Insecure Design |
+| SECURITY-12 | A07:2021 – Identification and Authentication Failures |
+| SECURITY-13 | A08:2021 – Software and Data Integrity Failures |
+| SECURITY-14 | A09:2021 – Security Logging and Monitoring Failures |
+| SECURITY-15 | A04:2021 – Insecure Design |
