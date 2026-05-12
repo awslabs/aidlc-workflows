@@ -75,8 +75,8 @@ On Windows (CMD):
 
 ```cmd
 mkdir .kiro\steering
-xcopy %USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rules .kiro\steering\aws-aidlc-rules\ /E /I
-xcopy %USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details .kiro\aws-aidlc-rule-details\ /E /I
+xcopy %USERPROFILE%\Downloads\ai-dlc-rules-v0.1.8\aidlc-rules\aws-aidlc-rules .kiro\steering\aws-aidlc-rules\ /E /I
+xcopy %USERPROFILE%\Downloads\ai-dlc-rules-v0.1.8\aidlc-rules\aws-aidlc-rule-details .kiro\aws-aidlc-rule-details\ /E /I
 ```
 
 Your project should look like:
