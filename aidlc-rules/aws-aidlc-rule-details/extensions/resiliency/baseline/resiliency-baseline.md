@@ -54,6 +54,26 @@ Verification items in this document are plain bullet points describing complianc
 - RPO is defined and documented for each workload with persistent data
 - Targets are justified by business requirements (not arbitrary)
 
+**Follow-up Question (ask before finalizing requirements)**:
+
+Before finalizing the Requirements phase, the model MUST ask the user the following clarifying question to capture recovery targets and establish the Disaster Recovery strategy. The user's answer directly drives DR strategy selection in RESILIENCY-11 and data protection decisions in RESILIENCY-12.
+
+```markdown
+## Question: RTO/RPO Goals and Disaster Recovery Strategy
+What are your Recovery Time Objective (RTO) and Recovery Point Objective (RPO) goals? These determine the appropriate Disaster Recovery strategy and infrastructure redundancy level.
+
+A) RPO/RTO: Hours — Backup & Restore strategy. Lowest cost ($). Data backed up, no services deployed. Redeploy from IaC and restore from backups on failure. Suitable for non-critical workloads.
+B) RPO/RTO: 10s of minutes — Pilot Light strategy. Cost: $$. Data live, services idle. Infrastructure deployed but not running, scaled up on failover. Suitable for important workloads.
+C) RPO/RTO: Minutes — Warm Standby strategy. Cost: $$$. Data live, services run at reduced capacity. Scaled up during failover. Suitable for business-critical applications.
+D) RPO/RTO: Near real-time — Multi-site Active/Active strategy. Highest cost ($$$$). Data live, live services in multiple regions simultaneously. Suitable for mission-critical, zero-downtime requirements.
+E) N/A — Single-region deployment is acceptable, no cross-region DR needed. Rely on multi-AZ availability within one region.
+X) Other (please describe after [Answer]: tag below)
+
+[Answer]: 
+```
+
+The user's selected RTO/RPO targets MUST be documented in the requirements output and propagated to all downstream stages (Application Design, NFR Requirements, NFR Design, Infrastructure Design).
+
 ---
 
 ## PILLAR 2: CHANGE MANAGEMENT & AUTOMATION
