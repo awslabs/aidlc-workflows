@@ -107,6 +107,7 @@ def run_ruff(project_root: Path) -> ToolResult:
             sev = "error" if item.get("code", "").startswith("E") else "warning"
             raw_path = item.get("filename", "?")
             try:
+                # nosemgrep: ai.ai-best-practices.hooks-path-traversal - relative_to() enforces path stays within project_root; ValueError on escape
                 rel_path = str(Path(raw_path).relative_to(project_root))
             except ValueError:
                 rel_path = raw_path
@@ -320,6 +321,7 @@ def run_semgrep(project_root: Path) -> ToolResult:
             sev = _SEMGREP_SEVERITY_MAP.get(raw_sev, "medium")
             raw_path = item.get("path", "?")
             try:
+                # nosemgrep: ai.ai-best-practices.hooks-path-traversal - relative_to() enforces path stays within project_root; ValueError on escape
                 rel_path = str(Path(raw_path).relative_to(project_root))
             except ValueError:
                 rel_path = raw_path
