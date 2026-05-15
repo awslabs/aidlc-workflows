@@ -216,7 +216,7 @@ jobs:
           pip install -r requirements.txt
           rm requirements.txt
           set +e
-          bandit -c .bandit -r scripts/aidlc-evaluator -f sarif -o bandit-report_sarif.json
+          bandit -c .bandit -r scripts/ -f sarif -o bandit-report_sarif.json
           BANDIT_EXIT=$?
           set -e
           # Fail only if HIGH severity findings exist (level=error in SARIF)
