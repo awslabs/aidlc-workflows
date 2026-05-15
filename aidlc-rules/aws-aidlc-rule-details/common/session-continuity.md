@@ -16,6 +16,7 @@ Based on your aidlc-state.md, here's your current status:
 **What would you like to work on today?**
 
 A) Continue where you left off ([Next step description])
+
 B) Review a previous stage ([Show available stages])
 
 [Answer]: 

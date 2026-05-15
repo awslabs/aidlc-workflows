@@ -61,8 +61,11 @@ Open the file and fill in each `[Answer]:` tag. Questions use multiple-choice fo
 Where will this service be deployed?
 
 A) AWS Lambda (serverless)
+
 B) AWS ECS Fargate (containerized)
+
 C) Existing on-premises infrastructure
+
 X) Other (please describe after [Answer]: tag below)
 
 [Answer]: B
