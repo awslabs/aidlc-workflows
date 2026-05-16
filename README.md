@@ -15,6 +15,7 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 - [Key Features](#key-features)
 - [Extensions](#extensions)
 - [Supporting Tools](#supporting-tools)
+- [AI-DLC Workflow Guide Skill](#ai-dlc-workflow-guide-skill)
 - [Tenets](#tenets)
 - [Prerequisites](#prerequisites)
 - [Troubleshooting](#troubleshooting)
@@ -738,6 +739,134 @@ The installer automatically detects your workspace root and installs the hook to
 
 - [scripts/aidlc-designreview/README.md](scripts/aidlc-designreview/README.md) — Main documentation
 - [scripts/aidlc-designreview/INSTALLATION.md](scripts/aidlc-designreview/INSTALLATION.md) — Hook installation guide
+
+---
+
+## AI-DLC Workflow Guide Skill
+
+The `aidlc-workflow-guide` skill provides a real-time AI-DLC development companion for **GitHub Copilot** (VS Code)
+and **Claude Code**. It activates the `aidlc-specialist` agent, which guides you through every phase — requirements
+analysis, design, implementation, testing, and refactoring — while generating and reviewing AI-DLC artifacts
+alongside you.
+
+> [!NOTE]
+> This skill is separate from the core AI-DLC workflow rules and can be added on top of any existing AI-DLC
+> platform setup.
+
+The commands below assume you have cloned or downloaded this repository to your `Downloads` folder.
+If you used a different location, replace the source path accordingly.
+
+---
+
+### GitHub Copilot
+
+**Unix/Linux/macOS:**
+
+```bash
+mkdir -p .github/skills
+cp -R ~/Downloads/aidlc-workflows/skills/aidlc-workflow-guide .github/skills/
+```
+
+**Windows PowerShell:**
+
+```powershell
+New-Item -ItemType Directory -Force -Path ".github\skills"
+Copy-Item -Recurse "$env:USERPROFILE\Downloads\aidlc-workflows\skills\aidlc-workflow-guide" ".github\skills\"
+```
+
+**Windows CMD:**
+
+```cmd
+mkdir .github\skills
+xcopy %USERPROFILE%\Downloads\aidlc-workflows\skills\aidlc-workflow-guide .github\skills\aidlc-workflow-guide\ /E /I
+```
+
+**Directory Structure:**
+
+```text
+<my-project>/
+├── .github/
+│   ├── copilot-instructions.md          (AI-DLC core workflow rules)
+│   └── skills/
+│       └── aidlc-workflow-guide/
+│           ├── SKILL.md
+│           ├── agents/
+│           │   └── aidlc-specialist.md
+│           └── references/
+│               ├── requirements-phase.md
+│               ├── design-phase.md
+│               ├── implementation-phase.md
+│               ├── testing-phase.md
+│               └── refactoring-phase.md
+```
+
+**Verify Setup:**
+
+1. Open VS Code with your project folder
+2. Open the GitHub Copilot Chat panel and switch to **Agent** mode
+3. Confirm that `aidlc-specialist` appears in the agent selection list
+4. Start a session: `"Using AI-DLC, let's begin requirements analysis"` — the `aidlc-specialist` agent will activate and guide you
+
+---
+
+### Claude Code
+
+Claude Code discovers sub-agents placed in `.claude/agents/`. The `aidlc-specialist` agent and its reference
+files are installed there so Claude Code can invoke them automatically.
+
+**Unix/Linux/macOS:**
+
+```bash
+mkdir -p .claude/agents
+mkdir -p .claude/aidlc-workflow-guide/references
+cp ~/Downloads/aidlc-workflows/skills/aidlc-workflow-guide/agents/aidlc-specialist.md .claude/agents/
+cp ~/Downloads/aidlc-workflows/skills/aidlc-workflow-guide/SKILL.md .claude/aidlc-workflow-guide/
+cp ~/Downloads/aidlc-workflows/skills/aidlc-workflow-guide/references/* .claude/aidlc-workflow-guide/references/
+```
+
+**Windows PowerShell:**
+
+```powershell
+New-Item -ItemType Directory -Force -Path ".claude\agents"
+New-Item -ItemType Directory -Force -Path ".claude\aidlc-workflow-guide\references"
+Copy-Item "$env:USERPROFILE\Downloads\aidlc-workflows\skills\aidlc-workflow-guide\agents\aidlc-specialist.md" ".claude\agents\"
+Copy-Item "$env:USERPROFILE\Downloads\aidlc-workflows\skills\aidlc-workflow-guide\SKILL.md" ".claude\aidlc-workflow-guide\"
+Copy-Item "$env:USERPROFILE\Downloads\aidlc-workflows\skills\aidlc-workflow-guide\references\*" ".claude\aidlc-workflow-guide\references\"
+```
+
+**Windows CMD:**
+
+```cmd
+mkdir .claude\agents
+mkdir .claude\aidlc-workflow-guide\references
+copy %USERPROFILE%\Downloads\aidlc-workflows\skills\aidlc-workflow-guide\agents\aidlc-specialist.md .claude\agents\
+copy %USERPROFILE%\Downloads\aidlc-workflows\skills\aidlc-workflow-guide\SKILL.md .claude\aidlc-workflow-guide\
+xcopy %USERPROFILE%\Downloads\aidlc-workflows\skills\aidlc-workflow-guide\references .claude\aidlc-workflow-guide\references\ /E /I
+```
+
+**Directory Structure:**
+
+```text
+<my-project>/
+├── CLAUDE.md                                (AI-DLC core workflow rules)
+└── .claude/
+    ├── agents/
+    │   └── aidlc-specialist.md
+    └── aidlc-workflow-guide/
+        ├── SKILL.md
+        └── references/
+            ├── requirements-phase.md
+            ├── design-phase.md
+            ├── implementation-phase.md
+            ├── testing-phase.md
+            └── refactoring-phase.md
+```
+
+**Verify Setup:**
+
+1. Start Claude Code in your project directory
+2. Ask: `"Using AI-DLC, let's begin requirements analysis"` — the `aidlc-specialist` sub-agent will activate automatically
+3. Use `/agents` to confirm `aidlc-specialist` is listed as an available sub-agent
 
 ---
 
