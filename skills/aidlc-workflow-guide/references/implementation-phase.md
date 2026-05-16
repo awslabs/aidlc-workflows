@@ -1,66 +1,66 @@
-# 実装フェーズ 支援ガイド
-## Code Generation + Infrastructure Design（Mob Construction）
+# Implementation Phase Support Guide
+## Code Generation + Infrastructure Design (Mob Construction)
 
 ---
 
-## このフェーズの目的
+## Purpose of This Phase
 
-設計を**動くコード**に変換する。AIが高速生成し、開発者がリアルタイムに検証・修正する。
-「Mob Construction」：チーム全員がAIの生成プロセスに参加し、技術判断を行う。
+Convert design into **working code**. AI generates rapidly while developers validate and revise in real time.
+"Mob Construction": the entire team participates in the AI generation process and makes technical decisions.
 
 ---
 
-## Code Generation の2段階プロセス
+## Two-Stage Process for Code Generation
 
-### Part 1: コード生成計画（承認が必要）
+### Part 1: Code Generation Plan (Approval Required)
 
-実装前に必ずチェックボックス付きの計画を提示し、開発者の承認を取る:
+Before implementing, always present a checklist-based plan and obtain developer approval:
 
 ```markdown
-## コード生成計画: [Unit名]
+## Code Generation Plan: [Unit Name]
 
-### 生成するファイル一覧
-- [ ] src/handlers/[name].ts       - APIハンドラー
-- [ ] src/services/[name].ts       - ビジネスロジック
-- [ ] src/repositories/[name].ts   - データアクセス層
-- [ ] src/models/[name].ts         - 型定義・スキーマ
-- [ ] tests/unit/[name].test.ts    - ユニットテスト
-- [ ] tests/integration/[name].test.ts - 統合テスト
-- [ ] infra/lib/[name]-stack.ts    - CDKスタック
+### Files to Generate
+- [ ] src/handlers/[name].ts       - API handler
+- [ ] src/services/[name].ts       - Business logic
+- [ ] src/repositories/[name].ts   - Data access layer
+- [ ] src/models/[name].ts         - Type definitions / schema
+- [ ] tests/unit/[name].test.ts    - Unit tests
+- [ ] tests/integration/[name].test.ts - Integration tests
+- [ ] infra/lib/[name]-stack.ts    - CDK stack
 
-### 技術スタック確認
-- ランタイム: Node.js 22 / Python 3.12 / [確認]
-- フレームワーク: Hono / Express / [確認]
-- テストフレームワーク: Vitest / Jest / pytest / [確認]
+### Tech Stack Confirmation
+- Runtime: Node.js 22 / Python 3.12 / [confirm]
+- Framework: Hono / Express / [confirm]
+- Test Framework: Vitest / Jest / pytest / [confirm]
 - IaC: AWS CDK (TypeScript)
 
-### 実装方針
-1. [実装の主要な判断事項1]
-2. [実装の主要な判断事項2]
+### Implementation Approach
+1. [Key implementation decision 1]
+2. [Key implementation decision 2]
 
-この計画で進めてよいですか？
+Shall we proceed with this plan?
 ```
 
-### Part 2: 実装の実行
+### Part 2: Executing the Implementation
 
-承認を受けたら、計画に従ってコードを生成する。
+Once approved, generate code following the plan.
 
-**生成順序（推奨）**:
-1. 型定義・モデル（他のファイルが依存するため最初）
-2. リポジトリ層（データアクセス）
-3. サービス層（ビジネスロジック）
-4. ハンドラー層（API）
-5. CDKスタック（インフラ）
-6. テスト（各層に対して）
+**Recommended generation order**:
+1. Type definitions / models (first, as other files depend on them)
+2. Repository layer (data access)
+3. Service layer (business logic)
+4. Handler layer (API)
+5. CDK stack (infrastructure)
+6. Tests (for each layer)
 
 ---
 
-## コード品質の原則
+## Code Quality Principles
 
 ### TypeScript / Node.js
 
 ```typescript
-// 良い例: 型安全・エラーハンドリング・単一責任
+// Good example: type-safe, error handling, single responsibility
 export async function getUserById(userId: string): Promise<User | null> {
   try {
     const result = await dynamoClient.get({
@@ -75,41 +75,41 @@ export async function getUserById(userId: string): Promise<User | null> {
   }
 }
 
-// 悪い例: any型・エラー握り潰し・不明確な処理
+// Bad example: any type, swallowed errors, unclear processing
 async function getUser(id: any) {
   try {
     return await db.get(id);
   } catch(e) {
-    return null; // エラーを隠蔽
+    return null; // Error is hidden
   }
 }
 ```
 
-### セキュリティ必須項目
+### Security Essentials
 
 ```typescript
-// 環境変数からシークレットを読む（ハードコード厳禁）
+// Read secrets from environment variables (never hardcode)
 const TABLE_NAME = process.env.TABLE_NAME!;
 const SECRET = await getSecretValue(process.env.SECRET_ARN!);
 
-// 入力バリデーション（ユーザー入力は必ず検証）
+// Input validation (always validate user input)
 const schema = z.object({
   userId: z.string().uuid(),
   content: z.string().max(1000)
 });
-const validated = schema.parse(input); // 失敗時は自動でエラー
+const validated = schema.parse(input); // Throws automatically on failure
 
-// APIゲートウェイでのレート制限設定
-// → CDKのThrottlingSettings で設定
+// Rate limiting via API Gateway
+// → Configure via CDK ThrottlingSettings
 ```
 
 ---
 
-## CDK / IaC 実装ガイド
+## CDK / IaC Implementation Guide
 
-CDKコードの生成は `aws-cdk-architect` スキルを参照すること。
+Refer to the `aws-cdk-architect` skill for CDK code generation.
 
-### CDKスタックの基本構造
+### Basic CDK Stack Structure
 
 ```typescript
 import * as cdk from 'aws-cdk-lib';
@@ -119,16 +119,16 @@ export class MyServiceStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // 1. DynamoDBテーブル
+    // 1. DynamoDB table
     const table = new dynamodb.Table(this, 'Table', {
       partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,  // コスト最適化
-      removalPolicy: cdk.RemovalPolicy.DESTROY,           // 開発時のみ
-      pointInTimeRecovery: true,                          // 本番必須
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,  // Cost optimization
+      removalPolicy: cdk.RemovalPolicy.DESTROY,           // Development only
+      pointInTimeRecovery: true,                          // Required for production
     });
 
-    // 2. Lambda関数
+    // 2. Lambda function
     const handler = new lambda.Function(this, 'Handler', {
       runtime: lambda.Runtime.NODEJS_22_X,
       code: lambda.Code.fromAsset('dist'),
@@ -140,7 +140,7 @@ export class MyServiceStack extends cdk.Stack {
       memorySize: 512,
     });
 
-    // 3. 最小権限でIAMロールを設定
+    // 3. Grant least-privilege IAM permissions
     table.grantReadWriteData(handler);
 
     // 4. API Gateway
@@ -155,49 +155,49 @@ export class MyServiceStack extends cdk.Stack {
 }
 ```
 
-### AI-DLC成果物への記録
+### Recording in AI-DLC Artifacts
 
-コード生成完了後、要約をMarkdownで記録:
+After code generation, record a summary in Markdown:
 
 ```markdown
-# コード生成サマリー: [Unit名]
+# Code Generation Summary: [Unit Name]
 
-## 生成ファイル
-| ファイル | 説明 |
+## Generated Files
+| File | Description |
 |---------|------|
-| src/handlers/user.ts | ユーザーAPIハンドラー（GET/POST/DELETE） |
-| infra/lib/user-stack.ts | DynamoDB + Lambda + API Gateway CDKスタック |
+| src/handlers/user.ts | User API handler (GET/POST/DELETE) |
+| infra/lib/user-stack.ts | DynamoDB + Lambda + API Gateway CDK stack |
 
-## 技術的判断
-- [重要な実装判断とその理由]
+## Technical Decisions
+- [Key implementation decisions and their rationale]
 
-## 既知の制限
-- [実装上の制限・TODO]
+## Known Limitations
+- [Implementation constraints / TODOs]
 ```
 
 ---
 
-## Mob Construction の実践
+## Mob Construction in Practice
 
-実装中に開発者が確認すべきタイミング:
+Key moments when developers should review during implementation:
 
-1. **型定義レビュー**: 「このスキーマで要件を満たしているか」
-2. **エラーハンドリング確認**: 「このエラーケースは想定通りか」
-3. **セキュリティチェック**: 「この権限設定で問題ないか」
-4. **テスト戦略確認**: 「このテストで十分か」
+1. **Type definition review**: "Does this schema satisfy the requirements?"
+2. **Error handling review**: "Is this error case handled as expected?"
+3. **Security check**: "Are these permissions configured correctly?"
+4. **Test strategy review**: "Are these tests sufficient?"
 
 ---
 
-## よくある実装ミスと対処法
+## Common Implementation Mistakes and Fixes
 
-**ミス1**: シークレットのハードコード
-→ `process.env.XXX` または AWS Secrets Manager を使用
+**Mistake 1**: Hardcoded secrets
+→ Use `process.env.XXX` or AWS Secrets Manager
 
-**ミス2**: Lambda関数のタイムアウト設定忘れ
-→ デフォルト3秒は短すぎる。処理時間の2〜3倍に設定
+**Mistake 2**: Forgetting Lambda function timeout configuration
+→ The default 3 seconds is too short. Set to 2–3x the expected processing time
 
-**ミス3**: DynamoDBのアクセスパターン設計ミス
-→ 先にクエリパターンを定義し、それに合わせてテーブル設計する
+**Mistake 3**: Poor DynamoDB access pattern design
+→ Define query patterns first, then design the table accordingly
 
-**ミス4**: CDKのRemovalPolicyをPRODで DESTROY にする
-→ 本番環境は必ず `RETAIN` または `SNAPSHOT`
+**Mistake 4**: Setting CDK RemovalPolicy to DESTROY in production
+→ Always use `RETAIN` or `SNAPSHOT` for production environments

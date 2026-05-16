@@ -1,79 +1,78 @@
-# リファクタリング・品質改善フェーズ 支援ガイド
+# Refactoring and Quality Improvement Phase Support Guide
 
 ---
 
-## このフェーズの目的
+## Purpose of This Phase
 
-動くコードを**保守しやすく・拡張しやすく・安全に**改善する。
-AI-DLCでは、ボルト完了後や機能追加前に行うことが多い。
-
----
-
-## リファクタリングのトリガー
-
-以下のサインが出たらリファクタリングを検討する:
-
-- 同じコードが3箇所以上に重複している（DRY原則違反）
-- 1つの関数が50行を超えている
-- 「何をしているか」がすぐに分からないコードがある
-- テストが書きにくいコードがある（依存が複雑すぎる）
-- TypeScriptの型エラーが頻繁に起きる箇所がある
+Improve working code to be **more maintainable, extensible, and secure**.
+In AI-DLC, this is often done after a Bolt completes or before adding new features.
 
 ---
 
-## AI-DLC文脈でのリファクタリング優先度
+## Triggers for Refactoring
 
-ハッカソン期間中は時間が限られているため、優先順位をつける:
+Consider refactoring when you see the following signs:
 
-### 高優先度（審査に影響）
-1. **セキュリティ問題**の修正（シークレットのハードコード等）
-2. **致命的なバグ**の修正
-3. **README・ドキュメント**の改善（審査員が見る）
-
-### 中優先度（品質向上）
-4. **重複コードの削除**（共通処理の関数化）
-5. **エラーハンドリングの改善**
-6. **型安全性の向上**
-
-### 低優先度（時間があれば）
-7. パフォーマンス最適化
-8. コメントの追加・改善
-9. ログ出力の整備
+- The same code is duplicated in 3 or more places (DRY principle violation)
+- A single function exceeds 50 lines
+- Code whose purpose is not immediately clear
+- Code that is difficult to test (overly complex dependencies)
+- Frequent TypeScript type errors in certain areas
 
 ---
 
-## リファクタリングの実行手順
+## Refactoring Priorities in the AI-DLC Context
 
-### Step 1: 現状分析
+Prioritize based on available time:
 
-`coderabbit:code-review` スキルを呼び出して現状の問題を洗い出す。
-またはコードを読み込んで以下を確認:
+### High Priority (Impacts Review / Production)
+1. Fixing **security issues** (hardcoded secrets, etc.)
+2. Fixing **critical bugs**
+3. Improving **README and documentation** (reviewed by evaluators)
+
+### Medium Priority (Quality Improvement)
+4. **Eliminating duplicated code** (extracting common processing into functions)
+5. **Improving error handling**
+6. **Improving type safety**
+
+### Low Priority (If time permits)
+7. Performance optimization
+8. Adding / improving comments
+9. Improving log output
+
+---
+
+## Refactoring Execution Steps
+
+### Step 1: Current State Analysis
+
+Call the `coderabbit:code-review` skill to identify issues, or read the code and check the following:
 
 ```
-確認項目:
-□ 重複コードの箇所
-□ 長すぎる関数（50行超）
-□ 複雑すぎる条件分岐（ネスト3段階以上）
-□ any型の使用箇所
-□ ハードコードされた値
-□ テストのないコード
+Checklist:
+□ Locations of duplicated code
+□ Functions that are too long (over 50 lines)
+□ Overly complex conditional branches (3+ levels of nesting)
+□ Uses of the `any` type
+□ Hardcoded values
+□ Code without tests
 ```
 
-### Step 2: 安全なリファクタリング
+### Step 2: Safe Refactoring
 
-**必ず既存テストが通る状態で始める**:
+**Always start with existing tests passing**:
 
 ```bash
-npm test  # すべてGreenであることを確認してからリファクタリング開始
+npm test  # Confirm all Green before starting refactoring
 ```
 
-**リファクタリングパターン**:
+**Refactoring patterns**:
 
 ```typescript
-// Before: 重複コード
+// Before: duplicated code
 async function getUserById(id: string) {
   const result = await dynamoClient.get({
-    TableName: 'users-table',  // ← ハードコード
+    TableName: 'users-table',  // ← hardcoded
     Key: { pk: `USER#${id}` }
   }).promise();
   if (!result.Item) throw new Error('Not found');
@@ -82,14 +81,14 @@ async function getUserById(id: string) {
 
 async function updateUser(id: string, data: any) {
   const existing = await dynamoClient.get({
-    TableName: 'users-table',  // ← 同じハードコード
+    TableName: 'users-table',  // ← same hardcoded value
     Key: { pk: `USER#${id}` }
   }).promise();
   if (!existing.Item) throw new Error('Not found');
   // ...
 }
 
-// After: 共通化・型安全
+// After: shared function, type-safe
 const TABLE_NAME = process.env.USERS_TABLE_NAME!;
 
 async function getItemOrThrow(key: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -104,62 +103,62 @@ async function getUserById(id: string): Promise<User> {
 }
 ```
 
-### Step 3: テストの更新
+### Step 3: Update Tests
 
-リファクタリング後にテストが変わる場合は更新する:
+If tests need to change after refactoring, update them:
 
 ```bash
-npm test        # すべてGreenであることを確認
-npm run test:coverage  # カバレッジが下がっていないことを確認
+npm test        # Confirm all Green
+npm run test:coverage  # Confirm coverage has not decreased
 ```
 
 ---
 
-## コードレビューとの連携
+## Integration with Code Review
 
-リファクタリング計画を立てたら `coderabbit:code-review` または `superpowers:requesting-code-review` スキルを使ってレビューを受ける。
+Once a refactoring plan is established, use the `coderabbit:code-review` or `superpowers:requesting-code-review` skill to get a review.
 
-**レビューで確認すべき観点**:
-- 変更がテストで検証されているか
-- 新しい設計がより理解しやすいか
-- パフォーマンスが劣化していないか
-- セキュリティ上の問題が解消されているか
+**Key review considerations**:
+- Are the changes verified by tests?
+- Is the new design more understandable?
+- Has performance not degraded?
+- Have security issues been resolved?
 
 ---
 
-## aidlc-docs への記録
+## Recording in aidlc-docs
 
-リファクタリングを行った場合、Construction フェーズの成果物に記録する:
+When refactoring is performed, record it in the Construction phase artifacts:
 
 ```markdown
-# コード改善ログ: [Unit名]
+# Code Improvement Log: [Unit Name]
 
-## 実施日
+## Date
 2026-05-XX
 
-## 改善内容
-| 問題 | 解決方法 | 影響ファイル |
+## Improvements Made
+| Issue | Solution | Affected Files |
 |------|---------|-------------|
-| 重複コードを3箇所で確認 | 共通関数 `getItemOrThrow` を抽出 | repositories/*.ts |
-| any型の使用 | 適切な型定義に変更 | handlers/user.ts |
+| Duplicated code found in 3 places | Extracted common function `getItemOrThrow` | repositories/*.ts |
+| Use of `any` type | Changed to proper type definitions | handlers/user.ts |
 
-## テスト結果
-- ユニットテスト: 全件PASS
-- カバレッジ: 85% → 88%（改善）
+## Test Results
+- Unit tests: All PASS
+- Coverage: 85% → 88% (improved)
 ```
 
 ---
 
-## 技術的負債の可視化
+## Visualizing Technical Debt
 
-長期的な改善のために技術的負債を記録する:
+Record technical debt for long-term improvement:
 
 ```markdown
-# 技術的負債リスト
+# Technical Debt List
 
-| ID | 問題 | 優先度 | 推定工数 | 担当 |
+| ID | Issue | Priority | Estimated Effort | Owner |
 |----|------|--------|---------|------|
-| TD-001 | ~~重複コードX~~ | 高 | 1h | ~~完了~~ |
-| TD-002 | エラーハンドリング不足 | 中 | 2h | - |
-| TD-003 | テストカバレッジ低い箇所 | 低 | 3h | - |
+| TD-001 | ~~Duplicated code X~~ | High | 1h | ~~Done~~ |
+| TD-002 | Insufficient error handling | Medium | 2h | - |
+| TD-003 | Low test coverage areas | Low | 3h | - |
 ```

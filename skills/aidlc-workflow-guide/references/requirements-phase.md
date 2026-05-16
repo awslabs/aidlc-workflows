@@ -1,167 +1,160 @@
-# 要件定義フェーズ 支援ガイド
+# Requirements Phase Support Guide
 ## Requirements Analysis + User Stories
 
 ---
 
-## このフェーズの目的
+## Purpose of This Phase
 
-**「何を作るか」を全員が同じ理解で持つ**ことがゴール。
-AIが質問・整理・文書化を高速で行い、開発者・チームがビジネス判断を下す。
+The goal is for **everyone to share the same understanding of what to build**.
+AI rapidly performs questioning, organization, and documentation, while developers and the team make business decisions.
 
 ---
 
-## Requirements Analysis の進め方
+## How to Conduct Requirements Analysis
 
-### Step 1: インテント分析（AIが実行）
+### Step 1: Intent Analysis (Executed by AI)
 
-ユーザーのリクエストから以下を読み取る:
-- **What**: 何を作りたいか
-- **Why**: なぜ作るか（ビジネス価値）
-- **Who**: 誰のためのサービスか
-- **How**: どの技術スタックを想定しているか（あれば）
-- **Constraints**: 制約（期限・予算・既存システム等）
+Extract the following from the user's request:
+- **What**: What they want to build
+- **Why**: Why they are building it (business value)
+- **Who**: Who the service is for
+- **How**: What technology stack is envisioned (if any)
+- **Constraints**: Constraints (deadlines, budget, existing systems, etc.)
 
-### Step 2: 要件確認質問の生成（Mob Elaboration）
+### Step 2: Generate Requirements Verification Questions (Mob Elaboration)
 
-質問は **`common/question-format-guide.md`** の形式に従いA/B/C/D形式で生成する。
+Questions must be generated in A/B/C/D format following **`common/question-format-guide.md`**.
 
-**良い質問の例**:
+**Example of a good question**:
 ```
-Q1. このサービスのコアターゲットユーザーは誰ですか？
+Q1. Who is the core target user of this service?
 
-A) 一般消費者（BtoC）
-B) 企業/ビジネスユーザー（BtoB）
-C) 開発者・技術者
-D) 上記の複数の組み合わせ
+A) General consumers (B2C)
+B) Business/enterprise users (B2B)
+C) Developers and engineers
+D) A combination of the above
 
 [Answer]: A
 ```
 
-**質問の深度レベル**:
-- **Minimal**: 3〜5問（シンプルなリクエスト）
-- **Standard**: 6〜10問（通常の機能開発）
-- **Comprehensive**: 11〜15問（複雑・高リスク）
+**Question Depth Levels**:
+- **Minimal**: 3–5 questions (simple request)
+- **Standard**: 6–10 questions (typical feature development)
+- **Comprehensive**: 11–15 questions (complex or high-risk)
 
-**必ず聞くべき質問カテゴリ**:
-1. ターゲットユーザー・ペルソナ
-2. コア機能（Must Have）の優先順位
-3. 非機能要件（性能・セキュリティ・可用性）
-4. 既存システムとの統合
-5. スケール要件（ユーザー数・データ量）
-6. デプロイ環境（AWS前提の確認）
+**Required question categories**:
+1. Target users and personas
+2. Priority of core features (Must Have)
+3. Non-functional requirements (performance, security, availability)
+4. Integration with existing systems
+5. Scale requirements (number of users, data volume)
+6. Deployment environment (confirm AWS assumption)
 
-### Step 3: requirements.md の生成
+### Step 3: Generate requirements.md
 
-回答を受け取ったら以下の形式で生成する:
+After receiving answers, generate in the following format:
 
 ```markdown
-# 要件定義書
+# Requirements Document
 
-## プロジェクト概要
-[サービスの概要・目的・ビジネス価値]
+## Project Overview
+[Service overview, purpose, business value]
 
-## ターゲットユーザー
-[ペルソナの定義]
+## Target Users
+[Persona definitions]
 
-## 機能要件
+## Functional Requirements
 
-### Must Have（必須）
-- FR-001: [機能説明] - [理由]
-- FR-002: [機能説明] - [理由]
+### Must Have
+- FR-001: [Feature description] - [Reason]
+- FR-002: [Feature description] - [Reason]
 
-### Should Have（重要）
-- FR-010: [機能説明]
+### Should Have
+- FR-010: [Feature description]
 
-### Could Have（あれば良い）
-- FR-020: [機能説明]
+### Could Have
+- FR-020: [Feature description]
 
-## 非機能要件
+## Non-Functional Requirements
 
-### 性能要件
-- NFR-001: [例] APIレスポンスタイム 95パーセンタイルで 500ms以下
-- NFR-002: [例] 同時接続ユーザー数 1,000人以上対応
+### Performance Requirements
+- NFR-001: [e.g.] API response time 95th percentile under 500ms
+- NFR-002: [e.g.] Support 1,000+ concurrent users
 
-### セキュリティ要件
-- NFR-010: [例] 認証にAWS Cognitoを使用
-- NFR-011: [例] 全通信をHTTPS/TLS 1.3で暗号化
+### Security Requirements
+- NFR-010: [e.g.] Use AWS Cognito for authentication
+- NFR-011: [e.g.] Encrypt all communications with HTTPS/TLS 1.3
 
-### 可用性要件
-- NFR-020: [例] 月間稼働率 99.9%以上（SLA）
+### Availability Requirements
+- NFR-020: [e.g.] Monthly uptime 99.9% or higher (SLA)
 
-### スケーラビリティ要件
-- NFR-030: [例] 負荷に応じたオートスケーリング
+### Scalability Requirements
+- NFR-030: [e.g.] Auto-scaling based on load
 
-## 制約事項
-- [技術的制約・ビジネス的制約]
+## Constraints
+- [Technical and business constraints]
 
-## 前提条件
-- [AWSアカウント・既存システム等]
+## Assumptions
+- [AWS account, existing systems, etc.]
 ```
 
-### Step 4: 承認プロセス
+### Step 4: Approval Process
 
-要件文書生成後:
-1. ユーザーに確認を求める
-2. 修正がある場合は反映
-3. aidlc-state.md の Requirements Analysis を `[x]` に更新
-4. **完全な生テキスト**をaudit.mdに記録（要約厳禁）
+After generating the requirements document:
+1. Ask the user for confirmation
+2. Incorporate any revisions
+3. Update Requirements Analysis to `[x]` in aidlc-state.md
+4. Record the **complete raw text** in audit.md (no summarization)
 
 ---
 
-## User Stories の進め方
+## How to Conduct User Stories
 
-### ペルソナ定義テンプレート
+### Persona Definition Template
 
 ```markdown
-## ペルソナ: [名前]
+## Persona: [Name]
 
-**属性**:
-- 年齢: [例] 25〜35歳
-- 職業: [例] フリーランスデザイナー
-- ITリテラシー: [高/中/低]
+**Attributes**:
+- Age: [e.g.] 25–35
+- Occupation: [e.g.] Freelance designer
+- Tech literacy: [High/Medium/Low]
 
-**課題**:
-- [解決したい問題1]
-- [解決したい問題2]
+**Pain points**:
+- [Problem to solve 1]
+- [Problem to solve 2]
 
-**ゴール**:
-- [このサービスで達成したいこと]
+**Goals**:
+- [What they want to achieve with this service]
 ```
 
-### ユーザーストーリー形式
+### User Story Format
 
 ```
-[ストーリーID]: [ペルソナ名]として、
-[やりたいこと]がしたい。
-なぜなら[理由・目的]だから。
+[Story ID]: As a [persona name],
+I want to [desired action].
+Because [reason/purpose].
 
-受け入れ基準:
-- [ ] [テスト可能な条件1]
-- [ ] [テスト可能な条件2]
-- [ ] [テスト可能な条件3]
+Acceptance Criteria:
+- [ ] [Testable condition 1]
+- [ ] [Testable condition 2]
+- [ ] [Testable condition 3]
 ```
 
-**良い受け入れ基準の条件**:
-- Given-When-Then形式が理想
-- テスト可能（曖昧な表現NG）
-- 1つの基準が1つの動作を表す
-
-### AWS Summit Hackathon 向け: テーマ適合確認
-
-「人をダメにするサービス」テーマの場合、以下を要件に含める:
-- ユーザーが「ダメになる」メカニズムの具体的な定義
-- ダメになることをユーザーが望む理由（価値提案）
-- ダメ化の段階的プロセス（依存・習慣化のメカニズム）
+**Conditions for good acceptance criteria**:
+- Given-When-Then format is ideal
+- Testable (avoid ambiguous expressions)
+- One criterion represents one behavior
 
 ---
 
-## よくある問題と対処法
+## Common Problems and Solutions
 
-**問題**: 要件が曖昧・広すぎる
-→ インテント分析を深め、追加質問を生成。「MVP（最小限の機能）は何か？」を必ず聞く
+**Problem**: Requirements are vague or too broad
+→ Deepen intent analysis and generate additional questions. Always ask "What is the MVP (minimum viable product)?"
 
-**問題**: 非機能要件が抜けている
-→ NFRのチェックリストを使って漏れを確認する
+**Problem**: Non-functional requirements are missing
+→ Use the NFR checklist to verify completeness
 
-**問題**: 要件とテーマ（ハッカソン）の整合性が弱い
-→ `aws-summit-hackathon-reviewer` スキルを呼び出してテーマ適合性をチェック
+**Problem**: Weak alignment between requirements and theme
+→ Call the `aws-summit-hackathon-reviewer` skill to check theme compliance

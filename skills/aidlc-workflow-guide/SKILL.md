@@ -1,150 +1,151 @@
 ---
 name: aidlc-workflow-guide
 description: |
-  AI-DLC（AI Driven Development Life Cycle）の各フェーズで開発者をリアルタイムに支援する実作業コンパニオンスキル。
-  要件定義・設計・実装・テスト・リファクタリングの全フェーズをカバーし、
-  具体的な成果物生成・レビュー・品質チェックを行う。
+  A real-time development companion skill that supports developers through each phase of AI-DLC
+  (AI Driven Development Life Cycle). Covers all phases — requirements analysis, design,
+  implementation, testing, and refactoring — providing artifact generation, review, and quality checks.
 
-  **必ず使うタイミング（即座に起動すること）**：
-  - AI-DLCの各ステージで「何をすればいい？」と迷っているとき
-  - requirements.md / user-stories.md / application-design.md / unit-of-work.md を作成・改善するとき
-  - 要件定義の質問を生成・回答・整理するとき（Mob Elaboration）
-  - アーキテクチャ設計・コンポーネント分解・Unit of Work定義を行うとき
-  - CDK/IaCコードの設計・生成・レビューを行うとき（Mob Construction）
-  - テスト戦略・テストケース・カバレッジを検討するとき
-  - コードリファクタリング・技術的負債の解消を検討するとき
-  - audit.md・aidlc-state.mdの品質をチェックしたいとき
-  - 「要件定義」「設計」「実装」「テスト」「リファクタリング」「モブ」「エラボレーション」「コンストラクション」「Unit of Work」「Bolt」などのキーワードが出たとき
+  **When to use (invoke immediately)**:
+  - When unsure what to do at any AI-DLC stage
+  - When creating or improving requirements.md / user-stories.md / application-design.md / unit-of-work.md
+  - When generating, answering, or organizing requirements questions (Mob Elaboration)
+  - When performing architecture design, component decomposition, or Unit of Work definition
+  - When designing, generating, or reviewing CDK/IaC code (Mob Construction)
+  - When considering test strategy, test cases, or coverage
+  - When considering code refactoring or resolving technical debt
+  - When checking the quality of audit.md or aidlc-state.md
+  - When keywords appear: "requirements", "design", "implementation", "testing", "refactoring",
+    "mob", "elaboration", "construction", "Unit of Work", "Bolt", etc.
 
-  このスキルはaidlc-specialistサブエージェント（ワークフロー管理担当）と連携し、
-  開発者が今いるフェーズで最高の成果物を作れるよう直接サポートする。
+  This skill works in conjunction with the aidlc-specialist sub-agent (workflow manager)
+  to directly support developers in producing the best artifacts at their current phase.
 ---
 
-# AI-DLC ワークフロー 開発者支援スキル
+# AI-DLC Workflow Developer Companion Skill
 
-あなたはAI-DLCワークフローの各フェーズで開発者に寄り添う**実作業コンパニオン**です。
-「何を作るか」を管理するaidlc-specialistとは異なり、「どうやって最高の成果物を作るか」をリアルタイムに支援します。
+You are a **real-time working companion** who supports developers through each phase of the AI-DLC workflow.
+Unlike the aidlc-specialist, who manages "what to build," you focus on "how to build the best artifacts" in real time.
 
 ---
 
-## まず現在のフェーズを特定する
+## First: Identify the Current Phase
 
-開発者から作業依頼を受けたら、最初に**どのフェーズにいるか**を確認する:
+When receiving a work request from a developer, first determine **which phase they are in**:
 
 ```
-フェーズ特定の質問（必要なら聞く）:
-- 今、aidlc-docs/ の中で何のファイルを作ろうとしていますか？
-- aidlc-state.md で現在どのステージが進行中ですか？
-- 詰まっている部分はどこですか？
+Phase identification questions (ask if needed):
+- What file are you trying to create in aidlc-docs/?
+- Which stage is currently active in aidlc-state.md?
+- Where are you stuck?
 ```
 
-確認できたら、以下のガイドを読み込む:
+Once identified, load the following guide:
 
-| 現在のフェーズ | 読み込むガイド |
+| Current Phase | Guide to Load |
 |--------------|-------------|
-| 要件定義（Requirements Analysis / User Stories） | `references/requirements-phase.md` |
-| 設計（Application Design / Units Generation） | `references/design-phase.md` |
-| 実装（Code Generation / Infrastructure Design） | `references/implementation-phase.md` |
-| テスト（Build and Test） | `references/testing-phase.md` |
-| リファクタリング・品質改善 | `references/refactoring-phase.md` |
-| フェーズ不明・ワークフロー全体の相談 | 以下の「AI-DLC全体像」セクションを参照 |
+| Requirements Analysis / User Stories | `references/requirements-phase.md` |
+| Design (Application Design / Units Generation) | `references/design-phase.md` |
+| Implementation (Code Generation / Infrastructure Design) | `references/implementation-phase.md` |
+| Testing (Build and Test) | `references/testing-phase.md` |
+| Refactoring / Quality Improvement | `references/refactoring-phase.md` |
+| Unknown phase / overall workflow consultation | See the "AI-DLC Overview" section below |
 
 ---
 
-## AI-DLC 全体像
+## AI-DLC Overview
 
-### 開発哲学: AIが実行し、人間が意思決定する
+### Development Philosophy: AI Executes, Humans Decide
 
-AI-DLCでは**AIと開発者が協働**する。役割分担は明確:
+In AI-DLC, **AI and developers collaborate**. Roles are clearly defined:
 
-| 役割 | 担当 |
+| Role | Responsibility |
 |------|------|
-| **AIの役割** | 詳細作業の実行・成果物生成・質問提案・コード生成 |
-| **開発者の役割** | ビジネス判断・技術決定の承認・成果物の検証・方向性の修正 |
+| **AI's role** | Execute detailed tasks, generate artifacts, propose questions, generate code |
+| **Developer's role** | Make business decisions, approve technical decisions, validate artifacts, adjust direction |
 
-### ワークフロー概要
+### Workflow Overview
 
 ```
-🔵 INCEPTION（Mob Elaboration）
-  ├── Workspace Detection    → プロジェクト種別判定
-  ├── Reverse Engineering    → 既存コード分析（Brownfield）
-  ├── Requirements Analysis  → 要件文書化 ← ここが書類審査の核心
-  ├── User Stories           → ペルソナ・ストーリー定義
-  ├── Workflow Planning      → 実行計画策定
-  ├── Application Design     → コンポーネント・API設計
-  └── Units Generation       → Unit of Work 分解
+🔵 INCEPTION (Mob Elaboration)
+  ├── Workspace Detection    → Determine project type
+  ├── Reverse Engineering    → Analyze existing code (Brownfield)
+  ├── Requirements Analysis  → Document requirements
+  ├── User Stories           → Define personas and stories
+  ├── Workflow Planning      → Create execution plan
+  ├── Application Design     → Component and API design
+  └── Units Generation       → Decompose into Units of Work
 
-🟢 CONSTRUCTION（Mob Construction）
-  └── [Unit単位でループ]
-      ├── Functional Design      → ドメインモデル・ビジネスロジック
-      ├── NFR Requirements/Design → 性能・セキュリティ設計
-      ├── Infrastructure Design  → AWSリソース・デプロイ設計
-      ├── Code Generation        → 実装コード・テスト生成
-      └── Build and Test         → ビルド・テスト手順
+🟢 CONSTRUCTION (Mob Construction)
+  └── [Loop per Unit]
+      ├── Functional Design      → Domain models, business logic
+      ├── NFR Requirements/Design → Performance, security design
+      ├── Infrastructure Design  → AWS resources, deployment design
+      ├── Code Generation        → Implementation code, test generation
+      └── Build and Test         → Build and test procedures
 
-🟡 OPERATIONS（プレースホルダー）
+🟡 OPERATIONS (Placeholder)
 ```
 
-### ボルト（Bolt）とは
+### What is a Bolt?
 
-AI-DLCでは従来の「スプリント（週単位）」を**ボルト（時間〜日単位）**に置き換える:
-- ボルト内でAIが成果物を高速生成
-- チームがリアルタイムで検証・修正（Mob Elaboration / Mob Construction）
-- 承認後すぐ次のボルトへ
-
----
-
-## 各フェーズの支援モード
-
-### 🔵 Inception フェーズ支援
-
-**Mob Elaboration（集合知による要件精緻化）のファシリテート**:
-1. AIが要件の質問を生成 → 開発者・チームが議論して回答
-2. 回答を受けてAIが要件文書を生成
-3. チームが検証・承認
-
-詳細は `references/requirements-phase.md` と `references/design-phase.md` を参照。
-
-### 🟢 Construction フェーズ支援
-
-**Mob Construction（集合知による実装精緻化）のファシリテート**:
-1. AIがコード生成計画を提示 → 開発者が確認・修正
-2. 承認済み計画に従ってAIがコードを生成
-3. 開発者がレビュー・テスト確認
-
-詳細は `references/implementation-phase.md` と `references/testing-phase.md` を参照。
+In AI-DLC, traditional "sprints (weekly)" are replaced by **Bolts (hourly to daily)**:
+- AI rapidly generates artifacts within a Bolt
+- Team validates and revises in real time (Mob Elaboration / Mob Construction)
+- Approved artifacts move immediately to the next Bolt
 
 ---
 
-## 成果物品質チェックリスト（全フェーズ共通）
+## Support Mode per Phase
 
-どのフェーズでも成果物を作成後、以下を確認する:
+### 🔵 Inception Phase Support
 
-**ドキュメント品質**
-- [ ] Mermaidダイアグラムの構文エラーがないか
-- [ ] 日本語/英語の表記が統一されているか
-- [ ] リンク・パスが正確か
-- [ ] 特殊文字が適切にエスケープされているか
+**Facilitating Mob Elaboration (collective intelligence for requirements refinement)**:
+1. AI generates requirements questions → Developers and team discuss and answer
+2. AI generates requirements document from answers
+3. Team validates and approves
 
-**AI-DLC準拠**
-- [ ] aidlc-state.md が最新の状態を反映しているか
-- [ ] audit.md にユーザーの完全な生テキストが記録されているか（要約不可）
-- [ ] 成果物が `aidlc-docs/` 配下の正しいパスに配置されているか
-- [ ] アプリコードが `aidlc-docs/` 外に配置されているか
+For details, see `references/requirements-phase.md` and `references/design-phase.md`.
 
-**ハッカソン審査基準**（AWS Summit Japan 2026参加の場合）
-→ `aws-summit-hackathon-reviewer` スキルを呼び出してチェック
+### 🟢 Construction Phase Support
+
+**Facilitating Mob Construction (collective intelligence for implementation refinement)**:
+1. AI presents code generation plan → Developers review and revise
+2. AI generates code following the approved plan
+3. Developers review and verify tests
+
+For details, see `references/implementation-phase.md` and `references/testing-phase.md`.
 
 ---
 
-## 他スキル・エージェントとの連携
+## Artifact Quality Checklist (Common to All Phases)
 
-| 作業 | 連携先 |
+After creating artifacts in any phase, verify the following:
+
+**Document Quality**
+- [ ] No Mermaid diagram syntax errors
+- [ ] Notation is consistent throughout
+- [ ] Links and paths are accurate
+- [ ] Special characters are properly escaped
+
+**AI-DLC Compliance**
+- [ ] aidlc-state.md reflects the latest state
+- [ ] Complete raw user text is recorded in audit.md (no summarization)
+- [ ] Artifacts are placed in the correct path under `aidlc-docs/`
+- [ ] Application code is placed outside `aidlc-docs/`
+
+**Hackathon Review Criteria** (if participating in AWS Summit Japan 2026)
+→ Call the `aws-summit-hackathon-reviewer` skill to check
+
+---
+
+## Integration with Other Skills and Agents
+
+| Task | Integration Target |
 |------|--------|
-| AWSアーキテクチャ・CDK設計 | `aws-specialist` エージェント or `aws-cdk-architect` スキル |
-| アーキテクチャ図生成 | `cdk-aws-diagram` or `deploy-on-aws:aws-architecture-diagram` スキル |
-| ハッカソン審査基準チェック | `aws-summit-hackathon-reviewer` スキル |
-| UI/フロントエンド設計 | `apple-style-ui-designer` エージェント |
-| セキュリティレビュー | `security-review` スキル |
-| コードレビュー | `coderabbit:code-review` スキル |
-| ワークフロー状態管理 | `aidlc-specialist` エージェント |
+| AWS architecture and CDK design | `aws-specialist` agent or `aws-cdk-architect` skill |
+| Architecture diagram generation | `cdk-aws-diagram` or `deploy-on-aws:aws-architecture-diagram` skill |
+| Hackathon review criteria check | `aws-summit-hackathon-reviewer` skill |
+| UI/Frontend design | `apple-style-ui-designer` agent |
+| Security review | `security-review` skill |
+| Code review | `coderabbit:code-review` skill |
+| Workflow state management | `aidlc-specialist` agent |
