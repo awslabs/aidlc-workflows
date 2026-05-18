@@ -1,7 +1,8 @@
 # Baseline Resiliency Rules
 
 ## Overview
-These resiliency rules are MANDATORY cross-cutting constraints that apply across all AI-DLC phases. They are derived from the AWS Resilience Readiness Review (RRR) assessment framework, which evaluates workloads across six pillars: Business Goals, Change Management & Automation, Integrated Observability, High Availability, Disaster Recovery, and Continuous Improvement.
+These resiliency rules are MANDATORY cross-cutting constraints that apply across all AI-DLC phases. They are derived from established cloud reliability frameworks (such as the AWS Well-Architected Reliability Pillar and 
+resilience best practices). The rules are organized across six pillars: Business Goals, Change Management & Automation, Integrated Observability, High Availability, Disaster Recovery, and Continuous Improvement.
 
 **Enforcement**: At each applicable stage, the model MUST verify compliance with these rules before presenting the stage completion message to the user.
 
@@ -66,7 +67,7 @@ A) RPO/RTO: Hours — Backup & Restore strategy. Lowest cost ($). Data backed up
 B) RPO/RTO: 10s of minutes — Pilot Light strategy. Cost: $$. Data live, services idle. Infrastructure deployed but not running, scaled up on failover. Suitable for important workloads.
 C) RPO/RTO: Minutes — Warm Standby strategy. Cost: $$$. Data live, services run at reduced capacity. Scaled up during failover. Suitable for business-critical applications.
 D) RPO/RTO: Near real-time — Multi-site Active/Active strategy. Highest cost ($$$$). Data live, live services in multiple regions simultaneously. Suitable for mission-critical, zero-downtime requirements.
-E) N/A — Single-region deployment is acceptable, no cross-region DR needed. Rely on multi-AZ availability within one region.
+E) N/A — Single-region deployment is acceptable, no cross-region DR needed. Rely on multi-zone availability within one region.
 X) Other (please describe after [Answer]: tag below)
 
 [Answer]: 
@@ -97,7 +98,7 @@ The user's selected RTO/RPO targets MUST be documented in the requirements outpu
 ## Rule RESILIENCY-04: Automated Deployment and Rollback
 
 **Rule**: All production deployments MUST be automated with clearly defined rollback procedures:
-- **Infrastructure as Code**: All infrastructure MUST be defined using IaC (CloudFormation, Terraform, CDK, or equivalent) — no manual console changes in production
+- **Infrastructure as Code**: All infrastructure MUST be defined using IaC (e.g., cloudformation templates, Terraform, Pulumi, or equivalent) — no manual console changes in production
 - **Automated deployment**: A CI/CD pipeline or automated deployment process MUST be defined
 - **Rollback procedure**: Every deployment MUST have a documented and tested rollback mechanism
 - **Blue/green or canary**: Critical workloads SHOULD use progressive deployment strategies (blue/green, canary, or rolling) to limit blast radius
@@ -118,12 +119,12 @@ The user's selected RTO/RPO targets MUST be documented in the requirements outpu
 
 **Rule**: Every deployed workload MUST have monitoring configured across the three pillars of observability — metrics, logs, and traces:
 - **Metrics**: Key operational metrics MUST be collected (latency, error rate, throughput, saturation) for each component
-- **Logs**: Structured logging MUST be configured and routed to a centralized log service (see also SECURITY-03 if security extension is enabled)
+- **Logs**: Structured logging MUST be configured and routed to a centralized log service
 - **Traces**: For distributed systems with multiple services, distributed tracing MUST be configured to track requests across service boundaries
 - **Dashboards**: A monitoring dashboard MUST be defined showing key health indicators for the workload
 
 **Verification**:
-- Each component has metrics collection configured (CloudWatch, Prometheus, or equivalent)
+- Each component has metrics collection configured (using a cloud-native or third-party observability platform)
 - Structured logging is routed to a centralized service
 - Distributed tracing is configured for multi-service architectures (N/A for single-service)
 - A dashboard definition or configuration exists for operational health monitoring
@@ -149,8 +150,8 @@ The user's selected RTO/RPO targets MUST be documented in the requirements outpu
 ## Rule RESILIENCY-07: Resiliency Monitoring
 
 **Rule**: The resiliency posture of deployed workloads MUST be actively monitored:
-- **Resiliency assessment**: Workloads SHOULD be registered with AWS Resilience Hub (or equivalent) for continuous resiliency assessment
-- **Alarm configuration**: Alarms MUST be configured for conditions that indicate resiliency degradation (e.g., single-AZ operation, replication lag, backup failures)
+- **Resiliency assessment**: Workloads SHOULD be registered with a resiliency assessment tool (cloud-provider-native or third-party) for continuous resiliency posture evaluation
+- **Alarm configuration**: Alarms MUST be configured for conditions that indicate resiliency degradation (e.g., single-zone operation, replication lag, backup failures)
 - **Capacity monitoring**: Auto-scaling metrics and capacity utilization MUST be monitored to detect scaling limits before they cause outages
 
 **Verification**:
@@ -164,19 +165,19 @@ The user's selected RTO/RPO targets MUST be documented in the requirements outpu
 
 ---
 
-## Rule RESILIENCY-08: Multi-AZ Deployment
+## Rule RESILIENCY-08: Multi-Zone Deployment
 
-**Rule**: All production workloads MUST be deployed across multiple Availability Zones to mitigate datacenter-level failures:
-- **Compute**: Compute resources (EC2, ECS, EKS) MUST be distributed across at least 2 AZs. Serverless services (Lambda, Fargate) are inherently multi-AZ.
-- **Data stores**: Databases and caches MUST use multi-AZ configurations (RDS Multi-AZ, ElastiCache Multi-AZ, DynamoDB global tables or on-demand)
-- **Load balancing**: Traffic MUST be distributed across AZs using a load balancer (ALB, NLB) or DNS-based routing
-- **Static stability**: The architecture MUST be able to continue operating if one AZ becomes unavailable, without requiring control plane operations to recover
+**Rule**: All production workloads MUST be deployed across multiple availability zones (or equivalent fault isolation boundaries) to mitigate datacenter-level failures:
+- **Compute**: Compute resources (VMs, container clusters) MUST be distributed across at least 2 availability zones. Serverless services are typically multi-zone by default.
+- **Data stores**: Databases and caches MUST use multi-zone configurations (replicated, clustered, or globally distributed)
+- **Load balancing**: Traffic MUST be distributed across zones using a load balancer or DNS-based routing
+- **Static stability**: The architecture MUST be able to continue operating if one zone becomes unavailable, without requiring control plane operations to recover
 
 **Verification**:
-- Compute resources are deployed across 2+ AZs (or use inherently multi-AZ serverless services)
-- Data stores use multi-AZ configurations
-- Load balancing distributes traffic across AZs
-- Architecture documentation confirms static stability (no control plane dependency for AZ failover)
+- Compute resources are deployed across 2+ availability zones (or use inherently multi-zone serverless services)
+- Data stores use multi-zone configurations
+- Load balancing distributes traffic across zones
+- Architecture documentation confirms static stability (no control plane dependency for zone failover)
 
 ---
 
@@ -187,14 +188,14 @@ The user's selected RTO/RPO targets MUST be documented in the requirements outpu
 - **Scaling limits**: Minimum and maximum capacity limits MUST be defined to prevent both under-provisioning and runaway scaling
 - **Pre-warming**: For workloads with predictable traffic patterns, scheduled scaling or pre-warming SHOULD be configured
 - **Serverless limits**: Serverless functions MUST have concurrency limits configured to prevent downstream service overload
-- **Service quota awareness**: Teams MUST identify AWS service quotas relevant to the workload (e.g., Lambda concurrency, API Gateway request rates, S3 request limits) and document any quotas that require increases before production launch. Quota utilization SHOULD be monitored and alarmed at 80% threshold.
+- **Service quota awareness**: Teams MUST identify cloud provider service quotas and limits relevant to the workload (e.g., function concurrency, API request rates, storage request limits) and document any quotas that require increases before production launch. Quota utilization SHOULD be monitored and alarmed at an 80% threshold.
 
 **Verification**:
 - Auto-scaling is configured for compute resources (or serverless is used)
 - Minimum and maximum scaling limits are defined
 - Scaling triggers are appropriate for the workload pattern
 - Serverless concurrency limits are configured where applicable
-- Relevant AWS service quotas are identified and documented
+- Relevant cloud provider service quotas are identified and documented
 - Quota increase requests are planned for any limits that may be exceeded under expected load
 
 ---
@@ -242,7 +243,7 @@ The user's selected RTO/RPO targets MUST be documented in the requirements outpu
 ## Rule RESILIENCY-12: Data Backup and Replication
 
 **Rule**: All persistent data MUST be backed up and/or replicated according to the defined RPO:
-- **Automated backups**: Database and storage backups MUST be automated (AWS Backup, RDS automated backups, S3 versioning, or equivalent)
+- **Automated backups**: Database and storage backups MUST be automated using a managed backup service or scheduled job (e.g., automated database snapshots, object storage versioning, or equivalent)
 - **Cross-region replication**: Critical data SHOULD be replicated to a secondary region for regional disaster scenarios
 - **Backup validation**: Backup integrity MUST be periodically validated through test restores
 - **Retention policy**: Backup retention periods MUST be defined and aligned with business and compliance requirements
@@ -261,7 +262,7 @@ The user's selected RTO/RPO targets MUST be documented in the requirements outpu
 
 **Rule**: Every DR strategy MUST have documented and tested failover and recovery procedures:
 - **Runbooks**: Step-by-step failover and failback runbooks MUST be documented
-- **Automation**: Failover procedures SHOULD be automated where possible (Route 53 health checks, Aurora Global Database failover, Elastic Disaster Recovery)
+- **Automation**: Failover procedures SHOULD be automated where possible (e.g., DNS health-check based routing, managed database global replication, dedicated disaster recovery services)
 - **Communication plan**: A communication plan for stakeholders during DR events MUST be defined
 - **Recovery validation**: Post-failover validation steps MUST be documented to confirm the workload is operating correctly in the DR environment
 
@@ -281,7 +282,7 @@ The user's selected RTO/RPO targets MUST be documented in the requirements outpu
 
 **Rule**: Resiliency mechanisms MUST be tested regularly to validate they work as expected:
 - **DR drills**: DR failover procedures MUST be tested at least annually (more frequently for critical workloads)
-- **Chaos experiments**: Production or pre-production environments SHOULD run controlled chaos experiments (AWS Fault Injection Service or equivalent) to discover unknown failure modes
+- **Chaos experiments**: Production or pre-production environments SHOULD run controlled chaos experiments (using a fault injection or chaos engineering tool) to discover unknown failure modes
 - **Game days**: Teams SHOULD conduct periodic game days to practice incident response and validate runbooks
 - **Test documentation**: All resiliency tests MUST be documented with results, findings, and remediation actions
 
@@ -319,9 +320,11 @@ These rules are cross-cutting constraints that apply to every AI-DLC stage. At e
 
 ---
 
-## Appendix: AWS Well-Architected Reliability Pillar Mapping
+## Appendix: Reliability Pillar Mapping (AWS Well-Architected)
 
-| RESILIENCY Rule | Well-Architected Reliability Concept |
+The following table maps each rule to a corresponding concept in the AWS Well-Architected Reliability Pillar. This mapping is informational and demonstrates alignment with one of the most established cloud reliability frameworks. The rules themselves are cloud-provider-agnostic.
+
+| RESILIENCY Rule | Reliability Concept |
 |---|---|
 | RESILIENCY-01 | Workload architecture — understand business impact |
 | RESILIENCY-02 | Design for availability — define recovery objectives |
@@ -330,7 +333,7 @@ These rules are cross-cutting constraints that apply to every AI-DLC stage. At e
 | RESILIENCY-05 | Monitor workload resources — observability |
 | RESILIENCY-06 | Design interactions to prevent failures — health checks |
 | RESILIENCY-07 | Monitor workload resources — resiliency posture |
-| RESILIENCY-08 | Use fault isolation — multi-AZ |
+| RESILIENCY-08 | Use fault isolation — multi-zone |
 | RESILIENCY-09 | Design for horizontal scaling — auto-scaling |
 | RESILIENCY-10 | Design interactions to prevent failures — circuit breaking |
 | RESILIENCY-11 | Plan for disaster recovery — strategy selection |
@@ -339,9 +342,11 @@ These rules are cross-cutting constraints that apply to every AI-DLC stage. At e
 | RESILIENCY-14 | Test reliability — chaos engineering and DR testing |
 | RESILIENCY-15 | Operate and observe — incident response and learning |
 
-## Appendix: RRR Assessment Pillar Mapping
+## Appendix: Resilience Readiness Pillar Mapping (AWS RRR)
 
-| RRR Assessment Pillar | RESILIENCY Rules |
+The following table maps each rule to a pillar in the AWS Resilience Readiness Review (RRR) framework. This mapping is informational; the rules apply to any cloud provider.
+
+| Resiliency Assessment Area | RESILIENCY Rules |
 |---|---|
 | Business Goals | RESILIENCY-01, RESILIENCY-02 |
 | Change Management & Automation | RESILIENCY-03, RESILIENCY-04 |
