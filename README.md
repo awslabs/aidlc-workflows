@@ -15,6 +15,7 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 - [Key Features](#key-features)
 - [Extensions](#extensions)
 - [Supporting Tools](#supporting-tools)
+- [Build Output](#build-output)
 - [Tenets](#tenets)
 - [Prerequisites](#prerequisites)
 - [Troubleshooting](#troubleshooting)
@@ -738,6 +739,19 @@ The installer automatically detects your workspace root and installs the hook to
 
 - [scripts/aidlc-designreview/README.md](scripts/aidlc-designreview/README.md) — Main documentation
 - [scripts/aidlc-designreview/INSTALLATION.md](scripts/aidlc-designreview/INSTALLATION.md) — Hook installation guide
+
+---
+
+## Build Output
+
+The `build/` directory contains generated artifacts derived from the source AI-DLC rules. These are alternative formats of the core workflow, produced for consumption by specific platforms or standards.
+
+| Directory       | Description                                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------------------ |
+| `build/skills/` | AI-DLC rules converted to [AgentSkills](https://agentskills.io/home) format for use with compatible agents |
+
+> [!NOTE]
+> The `build/` directory is generated output. Do not edit files in `build/` directly — modify the source rules in `aidlc-rules/` instead.
 
 ---
 
