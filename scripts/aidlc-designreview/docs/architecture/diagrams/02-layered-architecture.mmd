@@ -1,0 +1,76 @@
+%% Copyright (c) 2026 AIDLC Design Reviewer Contributors
+%% Licensed under the MIT License
+%% See LICENSE file in the project root for full license text
+
+%% 5-Layer Architecture Diagram
+%% AIDLC Design Reviewer - Layered Architecture Pattern
+
+graph TB
+    subgraph Layer1["⬜ LAYER 1: CLI Interface"]
+        CLI1["Command Parsing<br/>(Click Framework)"]
+        CLI2["User Interaction &<br/>Progress Display"]
+        CLI3["Exit Code Handling"]
+    end
+
+    subgraph Layer2["⬜ LAYER 2: Orchestration"]
+        ORCH1["Workflow Coordination"]
+        ORCH2["Error Handling<br/>& Recovery"]
+        ORCH3["Timing & Metrics<br/>Collection"]
+    end
+
+    subgraph Layer3["⬜ LAYER 3: Business Logic"]
+        subgraph Unit2["Unit 2: Validation"]
+            VAL1["Scanner"]
+            VAL2["Classifier"]
+            VAL3["Loader"]
+            VAL4["Validator"]
+        end
+
+        subgraph Unit4["Unit 4: AI Review"]
+            AI1["Critique Agent"]
+            AI2["Alternatives Agent"]
+            AI3["Gap Agent"]
+        end
+
+        subgraph Unit5["Unit 5: Reporting"]
+            REP1["Report Builder"]
+            REP2["Formatters<br/>(HTML/Markdown)"]
+            REP3["Templates<br/>(Jinja2)"]
+        end
+
+        subgraph Unit3["Unit 3: Parsing"]
+            PAR1["AppDesign Parser"]
+            PAR2["FuncDesign Parser"]
+            PAR3["TechEnv Parser"]
+        end
+
+        subgraph Unit1["Unit 1: Foundation"]
+            FND1["ConfigManager"]
+            FND2["Logger"]
+            FND3["Pattern Library"]
+            FND4["Prompt Manager"]
+        end
+    end
+
+    subgraph Layer4["⬜ LAYER 4: Integration"]
+        INT1["Amazon Bedrock Client<br/>(boto3)"]
+        INT2["Strands SDK Wrapper"]
+        INT3["Retry & Backoff Logic"]
+    end
+
+    subgraph Layer5["⬜ LAYER 5: External Services"]
+        EXT1["☁️ Amazon Bedrock API"]
+        EXT2["🔐 AWS IAM"]
+        EXT3["📊 CloudWatch Logs"]
+    end
+
+    Layer1 --> Layer2
+    Layer2 --> Layer3
+    Layer3 --> Layer4
+    Layer4 --> Layer5
+
+    style Layer1 fill:#E8F4F8,stroke:#4A90E2,stroke-width:2px
+    style Layer2 fill:#FFF4E6,stroke:#FF9800,stroke-width:2px
+    style Layer3 fill:#F3E5F5,stroke:#9C27B0,stroke-width:2px
+    style Layer4 fill:#E8F5E9,stroke:#4CAF50,stroke-width:2px
+    style Layer5 fill:#FFEBEE,stroke:#F44336,stroke-width:2px

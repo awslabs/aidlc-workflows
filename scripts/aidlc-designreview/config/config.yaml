@@ -1,0 +1,112 @@
+# Copyright (c) 2026 AIDLC Design Reviewer Contributors
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+# =============================================================================
+# Design Reviewer — Full Configuration Example
+# =============================================================================
+#
+# Place as config.yaml in the directory where you run design-reviewer,
+# or pass --config /path/to/config.yaml on the command line.
+#
+#   cp config/example-config.yaml config.yaml
+#
+# Only the [aws] and [models] sections are required.
+# Everything else has sensible defaults (shown below).
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# AWS Configuration  (REQUIRED)
+# ---------------------------------------------------------------------------
+# SECURITY: Only temporary credentials via IAM roles, profiles, or STS are supported.
+# Long-term access keys are NOT supported to follow security recommendations.
+# ---------------------------------------------------------------------------
+aws:
+  # AWS region where Amazon Bedrock is enabled
+  region: us-east-1
+
+  # AWS profile name from ~/.aws/credentials or ~/.aws/config
+  # Profile should use IAM roles, AWS SSO, or temporary credentials
+  # Examples:
+  #   - IAM role via instance profile or ECS task role
+  #   - AWS SSO profile: aws sso login --profile <profile-name>
+  #   - Temporary credentials via STS assume-role
+  profile_name: default
+
+  # Amazon Bedrock Guardrails (OPTIONAL - recommended for production)
+  # Provides content filtering, PII redaction, and safety controls
+  # See docs/ai-security/BEDROCK_GUARDRAILS.md for setup instructions
+  # guardrail_id: abc123xyz          # Your guardrail ID from AWS
+  # guardrail_version: "1"            # Guardrail version (or "DRAFT")
+
+# ---------------------------------------------------------------------------
+# Model Configuration  (REQUIRED)
+# ---------------------------------------------------------------------------
+models:
+  # Model used by all agents unless overridden below
+  # Supported: claude-opus-4-6 | claude-sonnet-4-6 | claude-haiku-4-5
+  model: claude-sonnet-4-6
+
+  # Per-agent overrides (optional — falls back to default_model)
+  # critique_model: claude-opus-4-6       # more capable model for critique
+  # alternatives_model: claude-sonnet-4-6
+  # gap_model: claude-sonnet-4-6
+
+# ---------------------------------------------------------------------------
+# Review Settings  (OPTIONAL — defaults shown)
+# ---------------------------------------------------------------------------
+review:
+  # Minimum severity level to include in reports
+  # Values: critical | high | medium | low
+  severity_threshold: high
+
+  # Toggle individual analysis agents
+  enable_alternatives: true
+  enable_gap_analysis: true
+
+  # Quality score thresholds control the quality label in the report.
+  # Score is a weighted sum: critical=4, high=3, medium=2, low=1 per finding.
+  # quality_thresholds:
+  #   excellent_max_score: 5        # score 0-5   → Excellent (Approve)
+  #   good_max_score: 15            # score 6-15  → Good (Approve)
+  #   needs_improvement_max_score: 30  # score 16-30 → Needs Improvement (Explore Alternatives)
+  #                                    # score >30   → Poor (Request Changes)
+
+# ---------------------------------------------------------------------------
+# Logging Configuration  (OPTIONAL — defaults shown)
+# ---------------------------------------------------------------------------
+logging:
+  # Path to the log file (relative to working directory, or absolute)
+  log_file_path: logs/design-reviewer.log
+
+  # Console log level: DEBUG | INFO | WARNING | ERROR | CRITICAL
+  log_level: INFO
+
+  # Log rotation: max file size before rotating (MB)
+  max_log_size_mb: 2
+
+  # Number of rotated backup files to keep
+  backup_count: 5
+
+# ---------------------------------------------------------------------------
+# Advanced  (OPTIONAL — rarely needed)
+# ---------------------------------------------------------------------------
+# Override bundled pattern library or prompt directories:
+# patterns_directory: ~/.design-reviewer/patterns
+# prompts_directory: ~/.design-reviewer/prompts

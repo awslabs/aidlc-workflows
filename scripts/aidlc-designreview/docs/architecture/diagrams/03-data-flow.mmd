@@ -1,0 +1,52 @@
+%% Copyright (c) 2026 AIDLC Design Reviewer Contributors
+%% Licensed under the MIT License
+%% See LICENSE file in the project root for full license text
+
+%% Data Flow Diagram
+%% AIDLC Design Reviewer - End-to-End Data Flow
+
+graph LR
+    Input[("📄 Design Documents<br/>(Markdown Files)")]
+    Scanner["1️⃣ Scanner<br/>Discover Files"]
+    Classifier["2️⃣ Classifier<br/>AI Classification"]
+    Loader["3️⃣ Loader<br/>Read Content"]
+    Validator["4️⃣ Validator<br/>Structure Check"]
+    Parser["5️⃣ Parser<br/>Extract Entities"]
+    Critique["6️⃣ Critique Agent<br/>Quality Analysis"]
+    Alternatives["7️⃣ Alternatives Agent<br/>Suggestions"]
+    Gap["8️⃣ Gap Agent<br/>Missing Elements"]
+    Builder["9️⃣ Report Builder<br/>Consolidate Results"]
+    Formatter["🔟 Formatter<br/>HTML/Markdown"]
+    Output[("📊 Review Reports<br/>(HTML + Markdown)")]
+
+    Bedrock[("☁️ Amazon Bedrock<br/>(Claude Models)")]
+
+    Input --> Scanner
+    Scanner --> Classifier
+    Classifier -.->|"AI Call"| Bedrock
+    Classifier --> Loader
+    Loader --> Validator
+    Validator --> Parser
+    Parser --> Critique
+    Critique -.->|"AI Call"| Bedrock
+    Critique --> Alternatives
+    Alternatives -.->|"AI Call"| Bedrock
+    Alternatives --> Gap
+    Gap -.->|"AI Call"| Bedrock
+    Gap --> Builder
+    Builder --> Formatter
+    Formatter --> Output
+
+    style Input fill:#E3F2FD,stroke:#1976D2,stroke-width:2px
+    style Output fill:#C8E6C9,stroke:#388E3C,stroke-width:2px
+    style Bedrock fill:#FF9900,stroke:#CC7A00,stroke-width:3px,color:#fff
+    style Scanner fill:#FFF9C4,stroke:#F57F17,stroke-width:2px
+    style Classifier fill:#FFF9C4,stroke:#F57F17,stroke-width:2px
+    style Loader fill:#FFF9C4,stroke:#F57F17,stroke-width:2px
+    style Validator fill:#FFF9C4,stroke:#F57F17,stroke-width:2px
+    style Parser fill:#FFE0B2,stroke:#E65100,stroke-width:2px
+    style Critique fill:#B3E5FC,stroke:#0277BD,stroke-width:2px
+    style Alternatives fill:#B3E5FC,stroke:#0277BD,stroke-width:2px
+    style Gap fill:#B3E5FC,stroke:#0277BD,stroke-width:2px
+    style Builder fill:#C5CAE9,stroke:#303F9F,stroke-width:2px
+    style Formatter fill:#C5CAE9,stroke:#303F9F,stroke-width:2px
