@@ -52,7 +52,10 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 
 AI-DLC uses [Kiro Steering Files](https://kiro.dev/docs/cli/steering/) within your project workspace.  
 
-The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+
+> [!NOTE]
+> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
 
 On macOS/Linux:
 
@@ -112,7 +115,10 @@ Run `kiro-cli`, then `/context show`, and confirm entries for `.kiro/steering/aw
 
 AI-DLC uses [Amazon Q Rules](https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/context-project-rules.html) within your project workspace.
 
-The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+
+> [!NOTE]
+> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
 
 On macOS/Linux:
 
@@ -161,7 +167,10 @@ To verify the rules are loaded:
 
 AI-DLC uses [Cursor Rules](https://cursor.com/docs/context/rules) to implement its intelligent workflow.
 
-The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+
+> [!NOTE]
+> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
 
 #### Option 1: Project Rules (Recommended)
 
@@ -277,7 +286,10 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
 
 AI-DLC uses Cline Rules to implement its intelligent workflow.
 
-The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+
+> [!NOTE]
+> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
 
 #### Option 1: .clinerules Directory (Recommended)
 
@@ -362,7 +374,10 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
 
 AI-DLC uses Claude Code's project memory file (`CLAUDE.md`) to implement its intelligent workflow.
 
-The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+
+> [!NOTE]
+> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
 
 #### Option 1: Project Root (Recommended)
 
@@ -444,7 +459,10 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
 
 AI-DLC uses [GitHub Copilot custom instructions](https://code.visualstudio.com/docs/copilot/customization/custom-instructions) to implement its intelligent workflow. The `.github/copilot-instructions.md` file is automatically detected and applied to all chat requests in the workspace.
 
-The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+
+> [!NOTE]
+> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
 
 **Unix/Linux/macOS:**
 
@@ -500,7 +518,10 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
 
 AI-DLC supports OpenAI Codex as a supported coding agent, using the [Codex AGENTS.md](https://developers.openai.com/codex/guides/agents-md) convention to deliver its intelligent workflow. Codex automatically discovers and loads `AGENTS.md` from your project root when you start a session.
 
-The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+
+> [!NOTE]
+> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
 
 **Unix/Linux/macOS:**
 
