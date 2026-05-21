@@ -24,3 +24,26 @@ jobs:
       - uses: DavidAnson/markdownlint-cli2-action@ded1f9488f68a970bc66ea5619e13e9b52e601cd #v23.2.0
         with:
           globs: "**/*.md"
+      - name: Check multiple-choice options are blank-line separated (issue #246)
+        run: |
+          # Multiple-choice options like "A) ..." on consecutive lines without
+          # a blank-line separator collapse into a single paragraph in strict
+          # CommonMark renderers (IntelliJ/PyCharm preview). Scope mirrors the
+          # markdownlint ignores in .markdownlint-cli2.yaml.
+          matches=$(find . -name '*.md' \
+            -not -path './node_modules/*' \
+            -not -path './.claude/*' \
+            -not -path './scripts/aidlc-evaluator/test_cases/*' \
+            -not -path './.git/*' \
+            -not -name 'CHANGELOG.md' \
+            -print | xargs awk '
+              FNR == 1 { prev_is_option = 0 }
+              /^[A-Z]\) / && prev_is_option { print FILENAME ":" FNR ": " $0 }
+              { prev_is_option = /^[A-Z]\) / }
+            ')
+          if [ -n "$matches" ]; then
+            echo "Found multiple-choice options on consecutive lines without blank-line separators."
+            echo "Add a blank line between each option so CommonMark renderers display them on separate lines."
+            echo "$matches"
+            exit 1
+          fi
