@@ -9,6 +9,8 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 ## Table of Contents
 
 - [Common](#common)
+  - [Option A: Clone this repository](#option-a-clone-this-repository-recommended)
+  - [Option B: Download the release zip](#option-b-download-the-release-zip)
 - [Platform-Specific Setup](#platform-specific-setup)
 - [Usage](#usage)
 - [Three-Phase Adaptive Workflow](#three-phase-adaptive-workflow)
@@ -29,11 +31,46 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 
 ## Common
 
+Choose how you want to get the AI-DLC rules — clone this repository or download the release zip — then follow the matching steps below.
+
+---
+
+### Option A: Clone this repository (recommended)
+
+If you have cloned this repository, use the included install script to copy the rules to your target project automatically. The script prompts for your coding agent and target project directory, so it works regardless of where you cloned the repo.
+
+**macOS/Linux:**
+
+```bash
+./scripts/install.sh
+```
+
+**Windows PowerShell:**
+
+```powershell
+.\scripts\install.ps1
+```
+
+You can also pass the agent and target project directory as arguments to skip the prompts:
+
+```bash
+# Example: install for Claude Code into ~/my-project
+./scripts/install.sh claude-code ~/my-project
+```
+
+Valid agent names: `kiro` · `amazonq` · `cursor` · `cline` · `claude-code` · `copilot` · `codex`
+
+Once the script completes, jump to the [Usage](#usage) section — you're done.
+
+---
+
+### Option B: Download the release zip
+
 1. Download the latest release zip file named `ai-dlc-rules-v<release-number>.zip` from the [Releases page](../../releases/latest) to a folder **outside** your project directory (e.g., `~/Downloads`).
 2. Extract the zip. It contains an `aidlc-rules/` folder with two subdirectories:
    - `aws-aidlc-rules/` — the core AI-DLC workflow rules
    - `aws-aidlc-rule-details/` — detailed rules conditionally referenced by the core rules
-3. Follow the setup instructions for your coding agent and platform below.
+3. Follow the platform-specific setup instructions below.
 
 ---
 
