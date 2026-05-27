@@ -1,0 +1,48 @@
+[project]
+name = "aidlc-traceability"
+version = "0.1.0"
+description = "Generate traceability matrices from AI-DLC project artifacts"
+requires-python = "==3.12.*"
+license = {text = "MIT"}
+license-files = ["LICENSE"]
+dependencies = [
+    "click>=8.0",
+    "pydantic>=2.0",
+    "networkx>=3.0",
+    "strands-agents>=1.0",
+    "strands-agents-tools>=0.1",
+    "boto3",
+    "jinja2",
+    "rich",
+]
+
+[project.optional-dependencies]
+security = [
+    "bandit",
+    "pip-audit",
+    "ruff",
+    "mypy",
+    "vulture",
+    "radon",
+    "coverage",
+    "pytest-cov",
+]
+# Note: semgrep must be installed separately as a standalone tool:
+#   uv tool install 'semgrep<1.50' --python 3.12
+# Newer versions require glibc >=2.35 which may not be available.
+
+[project.scripts]
+traceability = "traceability.cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/traceability"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120

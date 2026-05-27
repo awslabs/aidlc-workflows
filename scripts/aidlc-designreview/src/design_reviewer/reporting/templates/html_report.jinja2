@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Design Review Report - {{ metadata.project_name }}</title>
+<style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;line-height:1.6;color:#333;max-width:1200px;margin:0 auto;padding:20px;background:#f5f5f5}.report-container{background:#fff;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1);padding:30px}h1{color:#1a1a2e;border-bottom:3px solid #16213e;padding-bottom:10px;margin-bottom:20px}h2{color:#16213e;margin-top:30px;margin-bottom:15px;border-bottom:1px solid #e0e0e0;padding-bottom:8px}h3{color:#0f3460;margin-top:20px;margin-bottom:10px}table{width:100%;border-collapse:collapse;margin:15px 0}th,td{padding:10px 12px;border:1px solid #ddd;text-align:left}th{background:#f8f9fa;font-weight:600}tr:hover{background:#f5f5f5}.severity-critical{color:#fff;background:#dc3545;padding:2px 8px;border-radius:3px;font-weight:bold;font-size:0.85em}.severity-high{color:#fff;background:#fd7e14;padding:2px 8px;border-radius:3px;font-weight:bold;font-size:0.85em}.severity-medium{color:#333;background:#ffc107;padding:2px 8px;border-radius:3px;font-weight:bold;font-size:0.85em}.severity-low{color:#fff;background:#0d6efd;padding:2px 8px;border-radius:3px;font-weight:bold;font-size:0.85em}.quality-label{font-size:1.5em;font-weight:bold;padding:5px 15px;border-radius:5px;display:inline-block;margin:10px 0}.quality-excellent{color:#155724;background:#d4edda}.quality-good{color:#155724;background:#d4edda}.quality-needs-improvement{color:#856404;background:#fff3cd}.quality-poor{color:#721c24;background:#f8d7da}.accordion{margin:10px 0;border:1px solid #ddd;border-radius:5px;overflow:hidden}.accordion-header{background:#f8f9fa;padding:12px 15px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-weight:600}.accordion-header:hover{background:#e9ecef}.accordion-body{padding:15px;display:none;border-top:1px solid #ddd}.accordion.open .accordion-body{display:block}.accordion-toggle{font-size:1.2em;transition:transform 0.2s}.accordion.open .accordion-toggle{transform:rotate(90deg)}.filter-bar{margin:15px 0;padding:10px;background:#f8f9fa;border-radius:5px;display:flex;gap:10px;flex-wrap:wrap}.filter-btn{padding:6px 14px;border:2px solid;border-radius:20px;cursor:pointer;font-weight:600;font-size:0.85em;transition:opacity 0.2s}.filter-btn.active{opacity:1}.filter-btn.inactive{opacity:0.4}.filter-critical{border-color:#dc3545;color:#dc3545;background:#fff}.filter-critical.active{background:#dc3545;color:#fff}.filter-high{border-color:#fd7e14;color:#fd7e14;background:#fff}.filter-high.active{background:#fd7e14;color:#fff}.filter-medium{border-color:#ffc107;color:#856404;background:#fff}.filter-medium.active{background:#ffc107;color:#333}.filter-low{border-color:#0d6efd;color:#0d6efd;background:#fff}.filter-low.active{background:#0d6efd;color:#fff}.recommended{background:#e8f5e9;border:2px solid #4caf50;border-radius:5px;padding:10px;margin:5px 0}.action-option{padding:8px 12px;margin:5px 0;border-radius:5px;border:1px solid #ddd}.toc{background:#f8f9fa;padding:15px 20px;border-radius:5px;margin:15px 0}.toc a{color:#0f3460;text-decoration:none}.toc a:hover{text-decoration:underline}.toc ul{list-style:none;padding-left:15px}.alert{padding:15px 20px;margin:20px 0;border-radius:5px;border-left:5px solid}.alert-warning{background:#fff3cd;border-left-color:#ffc107;color:#856404}.alert ul{margin:10px 0 10px 20px}hr{border:none;border-top:1px solid #e0e0e0;margin:25px 0}@media(max-width:768px){body{padding:10px}.report-container{padding:15px}table{font-size:0.9em}.filter-bar{flex-direction:column}}</style>
+</head>
+<body>
+<div class="report-container">
+
+<h1>Design Review Report</h1>
+
+<nav class="toc">
+<strong>Table of Contents</strong>
+<ul>
+<li><a href="#metadata">Metadata</a></li>
+<li><a href="#executive-summary">Executive Summary</a></li>
+<li><a href="#design-critique">Design Critique</a></li>
+<li><a href="#alternative-approaches">Alternative Approaches</a></li>
+<li><a href="#gap-analysis">Gap Analysis</a></li>
+<li><a href="#appendix">Appendix</a></li>
+</ul>
+</nav>
+
+<hr>
+
+<h2 id="metadata">Metadata</h2>
+<table>
+<tr><th>Timestamp</th><td>{{ metadata.review_timestamp.isoformat() }}</td></tr>
+<tr><th>Tool Version</th><td>{{ metadata.tool_version }}</td></tr>
+<tr><th>Project</th><td>{{ metadata.project_name }}</td></tr>
+<tr><th>Project Path</th><td>{{ metadata.project_path }}</td></tr>
+<tr><th>Review Duration</th><td>{{ "%.1f" | format(metadata.review_duration) }}s</td></tr>
+{% for agent, model in metadata.models_used.items() %}
+<tr><th>Model ({{ agent }})</th><td>{{ model }}</td></tr>
+{% endfor %}
+</table>
+
+<h3>Severity Summary</h3>
+<table>
+<tr><th>Severity</th><th>Count</th></tr>
+{% for severity, count in metadata.severity_counts.items() %}
+<tr><td><span class="{{ severity | severity_color }}">{{ severity | capitalize }}</span></td><td>{{ count }}</td></tr>
+{% endfor %}
+</table>
+
+<hr>
+
+<h2 id="executive-summary">Executive Summary</h2>
+
+<div class="quality-label quality-{{ executive_summary.quality_label.value | lower | replace(' ', '-') }}">
+{{ executive_summary.quality_label.value }} (Score: {{ executive_summary.quality_score }})
+</div>
+
+<h3>Top Findings</h3>
+{% if executive_summary.top_findings %}
+{% for finding in executive_summary.top_findings %}
+<div style="margin:8px 0;padding:8px 12px;border-left:4px solid {% if finding.severity.value == 'critical' %}#dc3545{% elif finding.severity.value == 'high' %}#fd7e14{% elif finding.severity.value == 'medium' %}#ffc107{% else %}#0d6efd{% endif %};">
+<strong><span class="{{ finding.severity.value | severity_color }}">{{ finding.severity.value | upper }}</span></strong>
+{{ finding.title }} <em>({{ finding.source_agent }})</em>
+<br><small>{{ finding.description }}</small>
+</div>
+{% endfor %}
+{% else %}
+<p>No significant findings identified.</p>
+{% endif %}
+
+<h3>Recommended Actions</h3>
+{% for action in executive_summary.all_actions %}
+<div class="action-option {% if action.is_recommended %}recommended{% endif %}">
+{% if action.is_recommended %}<strong>&raquo; {{ action.action }} (Recommended)</strong>{% else %}{{ action.action }}{% endif %}
+&mdash; {{ action.description }}
+</div>
+{% endfor %}
+
+<hr>
+
+<h2 id="design-critique">Design Critique</h2>
+
+<div class="filter-bar">
+<strong>Filter:</strong>
+<button class="filter-btn filter-critical active" onclick="toggleFilter('critical')">Critical</button>
+<button class="filter-btn filter-high active" onclick="toggleFilter('high')">High</button>
+<button class="filter-btn filter-medium active" onclick="toggleFilter('medium')">Medium</button>
+<button class="filter-btn filter-low active" onclick="toggleFilter('low')">Low</button>
+</div>
+
+{% if critique_findings %}
+{% for severity_level in ["critical", "high", "medium", "low"] %}
+{% set findings_at_level = critique_findings | selectattr("severity.value", "equalto", severity_level) | list %}
+{% if findings_at_level %}
+<h3>{{ severity_level | capitalize }} Findings ({{ findings_at_level | length }})</h3>
+{% for finding in findings_at_level %}
+<div class="accordion finding-item" data-severity="{{ severity_level }}">
+<div class="accordion-header" onclick="toggleAccordion(this)">
+<span><span class="{{ severity_level | severity_color }}">{{ severity_level | upper }}</span> {{ finding.title }}</span>
+<span class="accordion-toggle">&#9654;</span>
+</div>
+<div class="accordion-body">
+<p><strong>Location:</strong> {{ finding.location }}</p>
+<p><strong>Description:</strong> {{ finding.description }}</p>
+<p><strong>Recommendation:</strong> {{ finding.recommendation }}</p>
+</div>
+</div>
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% else %}
+<p>No critique findings.</p>
+{% endif %}
+
+<hr>
+
+<h2 id="alternative-approaches">Alternative Approaches</h2>
+
+{% if alternative_suggestions %}
+{% for suggestion in alternative_suggestions %}
+<div class="accordion">
+<div class="accordion-header" onclick="toggleAccordion(this)">
+<span>{{ suggestion.title }}</span>
+<span class="accordion-toggle">&#9654;</span>
+</div>
+<div class="accordion-body">
+{% if suggestion.overview %}
+<p>{{ suggestion.overview }}</p>
+{% elif suggestion.description %}
+<p>{{ suggestion.description }}</p>
+{% endif %}
+{% if suggestion.what_changes %}
+<p><strong>What Changes:</strong> {{ suggestion.what_changes }}</p>
+{% endif %}
+{% if suggestion.implementation_complexity %}
+<p><strong>Implementation Complexity:</strong> {{ suggestion.implementation_complexity | capitalize }}{% if suggestion.complexity_justification %} &mdash; {{ suggestion.complexity_justification }}{% endif %}</p>
+{% endif %}
+{% if suggestion.advantages %}
+<p><strong>Advantages:</strong></p>
+<ul>
+{% for adv in suggestion.advantages %}
+<li>{{ adv }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% if suggestion.disadvantages %}
+<p><strong>Disadvantages:</strong></p>
+<ul>
+{% for dis in suggestion.disadvantages %}
+<li>{{ dis }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% if suggestion.trade_offs %}
+<table>
+<tr><th>Type</th><th>Description</th></tr>
+{% for trade_off in suggestion.trade_offs %}
+<tr><td>{{ trade_off.type | capitalize }}</td><td>{{ trade_off.description }}</td></tr>
+{% endfor %}
+</table>
+{% endif %}
+{% if suggestion.related_finding_id %}
+<p><em>Related to finding: {{ suggestion.related_finding_id }}</em></p>
+{% endif %}
+</div>
+</div>
+{% endfor %}
+{% if alternatives_recommendation %}
+<h3>Recommendation</h3>
+<p>{{ alternatives_recommendation }}</p>
+{% endif %}
+{% else %}
+<p>No alternative approaches suggested.</p>
+{% endif %}
+
+<hr>
+
+<h2 id="gap-analysis">Gap Analysis</h2>
+
+<div class="filter-bar">
+<strong>Filter:</strong>
+<button class="filter-btn filter-critical active" onclick="toggleFilter('critical')">Critical</button>
+<button class="filter-btn filter-high active" onclick="toggleFilter('high')">High</button>
+<button class="filter-btn filter-medium active" onclick="toggleFilter('medium')">Medium</button>
+<button class="filter-btn filter-low active" onclick="toggleFilter('low')">Low</button>
+</div>
+
+{% if gap_findings %}
+{% for severity_level in ["critical", "high", "medium", "low"] %}
+{% set findings_at_level = gap_findings | selectattr("severity.value", "equalto", severity_level) | list %}
+{% if findings_at_level %}
+<h3>{{ severity_level | capitalize }} Gaps ({{ findings_at_level | length }})</h3>
+{% for finding in findings_at_level %}
+<div class="accordion finding-item" data-severity="{{ severity_level }}">
+<div class="accordion-header" onclick="toggleAccordion(this)">
+<span><span class="{{ severity_level | severity_color }}">{{ severity_level | upper }}</span> {{ finding.title }}</span>
+<span class="accordion-toggle">&#9654;</span>
+</div>
+<div class="accordion-body">
+<p><strong>Category:</strong> {{ finding.category }}</p>
+<p><strong>Description:</strong> {{ finding.description }}</p>
+<p><strong>Recommendation:</strong> {{ finding.recommendation }}</p>
+</div>
+</div>
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% else %}
+<p>No gaps identified.</p>
+{% endif %}
+
+<hr>
+
+<h2 id="appendix">Appendix</h2>
+
+<h3>Agent Status</h3>
+<table>
+<tr><th>Agent</th><th>Status</th><th>Findings</th><th>Execution Time</th></tr>
+{% for agent in agent_statuses %}
+<tr>
+<td>{{ agent.agent_name }}</td>
+<td>{{ agent.status.value | capitalize }}</td>
+<td>{{ agent.finding_count }}</td>
+<td>{{ "%.1f" | format(agent.execution_time) if agent.execution_time is not none else "N/A" }}s</td>
+</tr>
+{% endfor %}
+</table>
+
+{% for agent in agent_statuses %}
+{% if agent.error_message %}
+<p><strong>{{ agent.agent_name }} Error:</strong> {{ agent.error_message }}</p>
+{% endif %}
+{% endfor %}
+
+{% if metadata.token_usage %}
+<h3>Token Usage</h3>
+<table>
+<tr><th>Agent</th><th>Input Tokens</th><th>Output Tokens</th></tr>
+{% for agent, usage in metadata.token_usage.items() %}
+<tr>
+<td>{{ agent }}</td>
+<td>{{ usage.input_tokens }}</td>
+<td>{{ usage.output_tokens }}</td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+
+<hr>
+
+<h2>Legal Disclaimer</h2>
+<div class="alert alert-warning">
+<p><strong>IMPORTANT:</strong> This report is generated by an AI-powered automated design review tool and is provided for <strong>advisory purposes only</strong>. The recommendations, findings, and assessments contained herein:</p>
+
+<ul>
+<li>✅ <strong>Are advisory only</strong> - Not binding recommendations or requirements</li>
+<li>✅ <strong>Require human review</strong> - Must be reviewed and validated by qualified professionals before implementation</li>
+<li>✅ <strong>May contain errors</strong> - AI-generated content may include inaccuracies or incomplete analysis</li>
+<li>✅ <strong>Not a substitute for professional judgment</strong> - Does not replace expert architectural or security review</li>
+<li>✅ <strong>Context-dependent</strong> - May not consider organization-specific constraints or requirements</li>
+</ul>
+
+<p><strong>Limitations:</strong></p>
+<ul>
+<li>AI models may produce biased, incomplete, or incorrect recommendations</li>
+<li>Analysis is limited to information provided in design documents</li>
+<li>Does not guarantee compliance with security, regulatory, or industry standards</li>
+<li>Tool and models are continuously updated; results may vary over time</li>
+</ul>
+
+<p><strong>No Warranties:</strong> This report is provided "AS IS" without warranties of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, or non-infringement. The authors and providers assume no liability for any errors, omissions, or damages arising from the use of this report.</p>
+
+<p><strong>User Responsibility:</strong> Users are solely responsible for:</p>
+<ul>
+<li>Validating all recommendations before implementation</li>
+<li>Verifying compliance with applicable standards and regulations</li>
+<li>Conducting thorough security and architectural reviews</li>
+<li>Making final design and implementation decisions</li>
+</ul>
+</div>
+
+<hr>
+<p><em>Report generated by AIDLC Design Reviewer v{{ metadata.tool_version }}</em></p>
+<p><strong>Copyright (c) 2026 AIDLC Design Reviewer Contributors</strong><br>
+Licensed under the MIT License<br>
+See LICENSE file for details</p>
+
+</div>
+
+<script>
+function toggleAccordion(header){var acc=header.parentElement;acc.classList.toggle('open');}
+var filterState={critical:true,high:true,medium:true,low:true};
+function toggleFilter(severity){filterState[severity]=!filterState[severity];document.querySelectorAll('.filter-btn.filter-'+severity).forEach(function(btn){btn.classList.toggle('active',filterState[severity]);btn.classList.toggle('inactive',!filterState[severity]);});document.querySelectorAll('.finding-item[data-severity="'+severity+'"]').forEach(function(el){el.style.display=filterState[severity]?'':'none';});}
+</script>
+</body>
+</html>

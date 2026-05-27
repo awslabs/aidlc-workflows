@@ -1,0 +1,263 @@
+# Design Review Report
+
+## Table of Contents
+
+- [Metadata](#metadata)
+- [Executive Summary](#executive-summary)
+- [Design Critique](#design-critique)
+- [Alternative Approaches](#alternative-approaches)
+- [Gap Analysis](#gap-analysis)
+- [Appendix](#appendix)
+
+---
+
+## Metadata
+
+| Field | Value |
+|-------|-------|
+| **Timestamp** | {{ metadata.review_timestamp.isoformat() }} |
+| **Tool Version** | {{ metadata.tool_version | markdown_escape }} |
+| **Project** | {{ metadata.project_name | markdown_escape }} |
+| **Project Path** | {{ metadata.project_path | markdown_escape }} |
+| **Review Duration** | {{ "%.1f" | format(metadata.review_duration) }}s |
+{% for agent, model in metadata.models_used.items() %}
+| **Model ({{ agent | markdown_escape }})** | {{ model | markdown_escape }} |
+{% endfor %}
+
+### Severity Summary
+
+| Severity | Count |
+|----------|-------|
+{% for severity, count in metadata.severity_counts.items() %}
+| {{ severity | capitalize }} | {{ count }} |
+{% endfor %}
+
+### Agent Execution Times
+
+| Agent | Time (s) |
+|-------|----------|
+{% for agent, time in metadata.agent_execution_times.items() %}
+| {{ agent | markdown_escape }} | {{ "%.1f" | format(time) }} |
+{% endfor %}
+
+{% if metadata.token_usage %}
+### Token Usage
+
+| Agent | Input Tokens | Output Tokens |
+|-------|-------------|--------------|
+{% for agent, usage in metadata.token_usage.items() %}
+| {{ agent | markdown_escape }} | {{ usage.input_tokens }} | {{ usage.output_tokens }} |
+{% endfor %}
+{% endif %}
+
+### Configuration
+
+| Setting | Value |
+|---------|-------|
+| Severity Threshold | {{ metadata.config_settings.severity_threshold }} |
+| Alternatives Enabled | {{ metadata.config_settings.alternatives_enabled }} |
+| Gap Analysis Enabled | {{ metadata.config_settings.gap_analysis_enabled }} |
+
+---
+
+## Executive Summary
+
+**Overall Quality: {{ executive_summary.quality_label.value }}** (Score: {{ executive_summary.quality_score }})
+
+### Top Findings
+
+{% if executive_summary.top_findings %}
+{% for finding in executive_summary.top_findings %}
+{{ loop.index }}. **[{{ finding.severity.value | upper }}]** {{ finding.title | markdown_escape }}
+   - {{ finding.description | markdown_escape }}
+   - Source: {{ finding.source_agent }}
+{% endfor %}
+{% else %}
+No significant findings identified.
+{% endif %}
+
+### Recommended Actions
+
+{% for action in executive_summary.all_actions %}
+- {% if action.is_recommended %}**>>> {{ action.action }}** (Recommended){% else %}{{ action.action }}{% endif %}: {{ action.description | markdown_escape }}
+{% endfor %}
+
+### Severity Distribution
+
+| Severity | Count |
+|----------|-------|
+{% for severity, count in executive_summary.severity_distribution.items() %}
+| {{ severity | capitalize }} | {{ count }} |
+{% endfor %}
+
+---
+
+## Design Critique
+
+{% if critique_findings %}
+{% for severity_level in ["critical", "high", "medium", "low"] %}
+{% set findings_at_level = critique_findings | selectattr("severity.value", "equalto", severity_level) | list %}
+{% if findings_at_level %}
+### {{ severity_level | capitalize }} Findings ({{ findings_at_level | length }})
+
+{% for finding in findings_at_level %}
+#### {{ finding.title | markdown_escape }}
+
+- **Severity**: {{ finding.severity.value | capitalize }}
+- **Location**: {{ finding.location | markdown_escape }}
+- **Description**: {{ finding.description | markdown_escape }}
+- **Recommendation**: {{ finding.recommendation | markdown_escape }}
+
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% else %}
+No critique findings.
+{% endif %}
+
+---
+
+## Alternative Approaches
+
+{% if alternative_suggestions %}
+{% for suggestion in alternative_suggestions %}
+### {{ suggestion.title | markdown_escape }}
+
+{% if suggestion.overview %}
+{{ suggestion.overview | markdown_escape }}
+{% elif suggestion.description %}
+{{ suggestion.description | markdown_escape }}
+{% endif %}
+
+{% if suggestion.what_changes %}
+**What Changes**: {{ suggestion.what_changes | markdown_escape }}
+{% endif %}
+
+{% if suggestion.implementation_complexity %}
+**Implementation Complexity**: {{ suggestion.implementation_complexity | capitalize }}{% if suggestion.complexity_justification %} — {{ suggestion.complexity_justification | markdown_escape }}{% endif %}
+
+{% endif %}
+{% if suggestion.advantages %}
+**Advantages**:
+{% for adv in suggestion.advantages %}
+- {{ adv | markdown_escape }}
+{% endfor %}
+{% endif %}
+
+{% if suggestion.disadvantages %}
+**Disadvantages**:
+{% for dis in suggestion.disadvantages %}
+- {{ dis | markdown_escape }}
+{% endfor %}
+{% endif %}
+
+{% if suggestion.trade_offs %}
+| Type | Description |
+|------|-------------|
+{% for trade_off in suggestion.trade_offs %}
+| {{ trade_off.type | capitalize }} | {{ trade_off.description | markdown_escape }} |
+{% endfor %}
+{% endif %}
+
+{% if suggestion.related_finding_id %}
+*Related to finding: {{ suggestion.related_finding_id }}*
+{% endif %}
+
+---
+
+{% endfor %}
+{% if alternatives_recommendation %}
+### Recommendation
+
+{{ alternatives_recommendation | markdown_escape }}
+{% endif %}
+{% else %}
+No alternative approaches suggested.
+{% endif %}
+
+---
+
+## Gap Analysis
+
+{% if gap_findings %}
+{% for severity_level in ["critical", "high", "medium", "low"] %}
+{% set findings_at_level = gap_findings | selectattr("severity.value", "equalto", severity_level) | list %}
+{% if findings_at_level %}
+### {{ severity_level | capitalize }} Gaps ({{ findings_at_level | length }})
+
+{% for finding in findings_at_level %}
+#### {{ finding.title | markdown_escape }}
+
+- **Severity**: {{ finding.severity.value | capitalize }}
+- **Category**: {{ finding.category | markdown_escape }}
+- **Description**: {{ finding.description | markdown_escape }}
+- **Recommendation**: {{ finding.recommendation | markdown_escape }}
+
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% else %}
+No gaps identified.
+{% endif %}
+
+---
+
+## Appendix
+
+### Agent Status
+
+| Agent | Status | Findings | Execution Time |
+|-------|--------|----------|---------------|
+{% for agent in agent_statuses %}
+| {{ agent.agent_name | markdown_escape }} | {{ agent.status.value | capitalize }} | {{ agent.finding_count }} | {{ "%.1f" | format(agent.execution_time) if agent.execution_time is not none else "N/A" }}s |
+{% endfor %}
+
+{% for agent in agent_statuses %}
+{% if agent.error_message %}
+**{{ agent.agent_name }} Error**: {{ agent.error_message | markdown_escape }}
+{% endif %}
+{% endfor %}
+
+{% if metadata.token_usage %}
+### Token Usage
+
+| Agent | Input Tokens | Output Tokens |
+|-------|-------------|--------------|
+{% for agent, usage in metadata.token_usage.items() %}
+| {{ agent | markdown_escape }} | {{ usage.input_tokens }} | {{ usage.output_tokens }} |
+{% endfor %}
+{% endif %}
+
+---
+
+## Legal Disclaimer
+
+**IMPORTANT**: This report is generated by an AI-powered automated design review tool and is provided for **advisory purposes only**. The recommendations, findings, and assessments contained herein:
+
+- ✅ **Are advisory only** - Not binding recommendations or requirements
+- ✅ **Require human review** - Must be reviewed and validated by qualified professionals before implementation
+- ✅ **May contain errors** - AI-generated content may include inaccuracies or incomplete analysis
+- ✅ **Not a substitute for professional judgment** - Does not replace expert architectural or security review
+- ✅ **Context-dependent** - May not consider organization-specific constraints or requirements
+
+**Limitations**:
+- AI models may produce biased, incomplete, or incorrect recommendations
+- Analysis is limited to information provided in design documents
+- Does not guarantee compliance with security, regulatory, or industry standards
+- Tool and models are continuously updated; results may vary over time
+
+**No Warranties**: This report is provided "AS IS" without warranties of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, or non-infringement. The authors and providers assume no liability for any errors, omissions, or damages arising from the use of this report.
+
+**User Responsibility**: Users are solely responsible for:
+- Validating all recommendations before implementation
+- Verifying compliance with applicable standards and regulations
+- Conducting thorough security and architectural reviews
+- Making final design and implementation decisions
+
+---
+
+*Report generated by AIDLC Design Reviewer v{{ metadata.tool_version }}*
+
+**Copyright (c) 2026 AIDLC Design Reviewer Contributors**
+Licensed under the MIT License
+See LICENSE file for details

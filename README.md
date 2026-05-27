@@ -14,6 +14,7 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 - [Three-Phase Adaptive Workflow](#three-phase-adaptive-workflow)
 - [Key Features](#key-features)
 - [Extensions](#extensions)
+- [Supporting Tools](#supporting-tools)
 - [Tenets](#tenets)
 - [Prerequisites](#prerequisites)
 - [Troubleshooting](#troubleshooting)
@@ -44,8 +45,6 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 - [Cline](#cline)
 - [Claude Code](#claude-code)
 - [GitHub Copilot](#github-copilot)
-- [OpenAI Codex](#openai-codex)
-- [Other Agents](#other-agents)
 
 ---
 
@@ -53,7 +52,10 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 
 AI-DLC uses [Kiro Steering Files](https://kiro.dev/docs/cli/steering/) within your project workspace.  
 
-The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+
+> [!NOTE]
+> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
 
 On macOS/Linux:
 
@@ -113,7 +115,10 @@ Run `kiro-cli`, then `/context show`, and confirm entries for `.kiro/steering/aw
 
 AI-DLC uses [Amazon Q Rules](https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/context-project-rules.html) within your project workspace.
 
-The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+
+> [!NOTE]
+> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
 
 On macOS/Linux:
 
@@ -162,7 +167,10 @@ To verify the rules are loaded:
 
 AI-DLC uses [Cursor Rules](https://cursor.com/docs/context/rules) to implement its intelligent workflow.
 
-The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+
+> [!NOTE]
+> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
 
 #### Option 1: Project Rules (Recommended)
 
@@ -278,7 +286,10 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
 
 AI-DLC uses Cline Rules to implement its intelligent workflow.
 
-The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+
+> [!NOTE]
+> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
 
 #### Option 1: .clinerules Directory (Recommended)
 
@@ -363,7 +374,10 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
 
 AI-DLC uses Claude Code's project memory file (`CLAUDE.md`) to implement its intelligent workflow.
 
-The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+
+> [!NOTE]
+> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
 
 #### Option 1: Project Root (Recommended)
 
@@ -445,7 +459,10 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
 
 AI-DLC uses [GitHub Copilot custom instructions](https://code.visualstudio.com/docs/copilot/customization/custom-instructions) to implement its intelligent workflow. The `.github/copilot-instructions.md` file is automatically detected and applied to all chat requests in the workspace.
 
-The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+
+> [!NOTE]
+> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
 
 **Unix/Linux/macOS:**
 
@@ -501,7 +518,10 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
 
 AI-DLC supports OpenAI Codex as a supported coding agent, using the [Codex AGENTS.md](https://developers.openai.com/codex/guides/agents-md) convention to deliver its intelligent workflow. Codex automatically discovers and loads `AGENTS.md` from your project root when you start a session.
 
-The commands below assume you extracted the zip to your `Downloads` folder. If you used a different location, replace `Downloads` with your actual folder path.
+The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+
+> [!NOTE]
+> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
 
 **Unix/Linux/macOS:**
 
@@ -672,6 +692,76 @@ You can extend an existing category or create an entirely new one.
 
 ---
 
+## Supporting Tools
+
+The `scripts/` directory contains supporting tools that enhance the AI-DLC workflow:
+
+### AIDLC Evaluator
+
+**Location:** [`scripts/aidlc-evaluator/`](scripts/aidlc-evaluator/)
+
+Automated testing and reporting framework for validating changes to AI-DLC workflows. The evaluator provides:
+
+- **Golden Test Cases** — Curated baseline test cases for validation
+- **Execution Framework** — Orchestration for running test cases through evaluation pipelines
+- **Semantic Evaluation** — AI-based assessment of output correctness and completeness
+- **Code Evaluation** — Static analysis (linting, security scanning, duplication detection)
+- **NFR Evaluation** — Non-functional requirements testing (token usage, execution time, cross-model consistency)
+- **CI/CD Integration** — Automated pipelines for PR validation
+
+**Quick Start:**
+
+```bash
+cd scripts/aidlc-evaluator
+uv sync
+uv run python run.py test
+```
+
+**Documentation:** See [scripts/aidlc-evaluator/README.md](scripts/aidlc-evaluator/README.md)
+
+---
+
+### AIDLC Design Reviewer
+
+**Location:** [`scripts/aidlc-designreview/`](scripts/aidlc-designreview/)
+
+⚠️ **EXPERIMENTAL FEATURE** — AI-powered design review tool that analyzes AIDLC design artifacts using Claude models via AWS Bedrock.
+
+**Features:**
+
+- **Multi-Agent Review** — Three specialized AI agents (Critique, Alternatives, Gap Analysis)
+- **Quality Scoring** — Weighted severity analysis with actionable recommendations
+- **Two Deployment Modes:**
+  - **CLI Tool** — On-demand reviews for CI/CD pipelines
+  - **Claude Code Hook** — Real-time review during development (experimental)
+
+**Installation (CLI Tool):**
+
+```bash
+cd scripts/aidlc-designreview
+uv sync --extra test
+source .venv/bin/activate  # Linux/Mac
+design-reviewer --aidlc-docs /path/to/aidlc-docs
+```
+
+**Installation (Claude Code Hook):**
+
+```bash
+# From workspace root
+./scripts/aidlc-designreview/tool-install/install-linux.sh      # Linux
+./scripts/aidlc-designreview/tool-install/install-mac.sh        # macOS
+.\scripts\aidlc-designreview\tool-install\install-windows.ps1   # Windows PowerShell
+```
+
+The installer automatically detects your workspace root and installs the hook to `.claude/`.
+
+**Documentation:**
+
+- [scripts/aidlc-designreview/README.md](scripts/aidlc-designreview/README.md) — Main documentation
+- [scripts/aidlc-designreview/INSTALLATION.md](scripts/aidlc-designreview/INSTALLATION.md) — Hook installation guide
+
+---
+
 ## Tenets
 
 These are our core principles to guide our decision making.
@@ -717,17 +807,10 @@ Have one of our supported platforms/tools for Assisted AI Coding installed:
 
 ### Platform-Specific Issues
 
-#### Kiro
+#### Amazon Q Developer / Kiro
 
-- Use `/context show` in Kiro CLI to verify rules are loaded
-- Check `.kiro/steering/` directory structure
-- Note: Kiro uses `aws-aidlc-rule-details` (not `.aidlc-rule-details/`) under the `.kiro/` directory
-
-#### Amazon Q Developer
-
-- Check `.amazonq/rules/` directory structure
-- Verify rules are listed in the Amazon Q Chat Rules panel
-- Note: Amazon Q uses `aws-aidlc-rule-details` (not `.aidlc-rule-details/`) under the `.amazonq/` directory
+- Use `/context show` to verify rules are loaded
+- Check `.amazonq/rules/` or `.kiro/steering/` directory structure
 
 #### Cursor
 
@@ -793,54 +876,20 @@ For the complete reference of all documentation artifacts generated by the AI-DL
 
 ## Experimental: AI-Assisted Setup (Release Download)
 
-> Instead of manually copying files, let your AI agent handle the setup. This is an experimental workflow — currently validated with Kiro, Claude code, Cursor, Antigravity.
->
-> **Note:** This approach requires your agent to have shell access (e.g., Kiro, Claude Code, Cline). For agents without shell access, follow the [Common](#common) setup above.
-
-Paste this prompt into your AI agent:
-
-```text
-Set up AI-DLC in this project by doing the following:
-
-1. Download the latest AI-DLC release:
-   - Use the GitHub API to find the latest release asset URL:
-     curl -sL https://api.github.com/repos/awslabs/aidlc-workflows/releases/latest \
-       | grep -o '"browser_download_url": *"[^"]*"' \
-       | head -1 \
-       | cut -d'"' -f4
-   - Download the zip from that URL to /tmp/aidlc-rules.zip
-   - Extract it: unzip -o /tmp/aidlc-rules.zip -d /tmp/aidlc-release
-   - Copy the aidlc-rules/ folder from the extracted contents into .aidlc at the project root
-   - Clean up: rm -rf /tmp/aidlc-rules.zip /tmp/aidlc-release
-
-2. Create the appropriate rules/steering file for your IDE using the options below.
-   Pick the one that matches the agent you are running in:
-
-   - Kiro IDE or Kiro CLI     → create `.kiro/steering/ai-dlc.md`
-   - Amazon Q Developer       → create `.amazonq/rules/ai-dlc.md`
-   - Antigravity              → create `.agent/rules/ai-dlc.md`
-   - Cursor                   → create `.cursor/rules/ai-dlc.mdc` with frontmatter:
-                                  ---
-                                  description: "AI-DLC workflow"
-                                  alwaysApply: true
-                                  ---
-   - Cline                    → create `.clinerules/ai-dlc.md`
-   - Claude Code              → create `CLAUDE.md`
-   - GitHub Copilot           → create `.github/copilot-instructions.md`
-   - Any other agent          → create `AGENTS.md`
-
-3. The file content should be:
-   When the user invokes AI-DLC, read and follow
-   `.aidlc/aidlc-rules/aws-aidlc-rules/core-workflow.md` to start the workflow.
-
-4. Add `.aidlc` to `.gitignore` unless I explicitly ask you not to.
-
-5. Confirm what file you created and that `.aidlc` is gitignored.
-```
-
-The agent will download the latest release, create the correct config file for your IDE, and gitignore the `.aidlc` directory automatically.
-
-**Updating AI-DLC** — Re-run the prompt above. The agent will download the latest release and overwrite the existing `.aidlc/` folder.
+| Resource                                            | Link                                                                                                                          |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| AI-DLC Method Definition Paper                      | [Paper](https://prod.d13rzhkk8cj2z0.amplifyapp.com/)                                                                          |
+| AI-DLC Methodology Blog                             | [AWS Blog](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/)                                             |
+| AI-DLC Open-source Launch Blog                      | [AWS Blog](https://aws.amazon.com/blogs/devops/open-sourcing-adaptive-workflows-for-ai-driven-development-life-cycle-ai-dlc/) |
+| AI-DLC Example Walkthrough Blog                     | [AWS Blog](https://aws.amazon.com/blogs/devops/building-with-ai-dlc-using-amazon-q-developer/)                                |
+| Amazon Q Developer Documentation                    | [Docs](https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/q-in-IDE.html)                                                |
+| Kiro CLI Documentation                              | [Docs](https://kiro.dev/docs/cli/steering/)                                                                                   |
+| Cursor Rules Documentation                          | [Docs](https://cursor.com/docs/context/rules)                                                                                 |
+| Claude Code Documentation                           | [GitHub](https://github.com/anthropics/claude-code)                                                                           |
+| GitHub Copilot Documentation                        | [Docs](https://docs.github.com/en/copilot)                                                                                    |
+| Working with AI-DLC (interaction patterns and tips) | [docs/WORKING-WITH-AIDLC.md](docs/WORKING-WITH-AIDLC.md)                                                                      |
+| Contributing Guidelines                             | [CONTRIBUTING.md](CONTRIBUTING.md)                                                                                            |
+| Code of Conduct                                     | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)                                                                                      |
 
 ---
 

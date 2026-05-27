@@ -1,0 +1,93 @@
+# Copyright (c) 2026 AIDLC Design Reviewer Contributors
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+# =============================================================================
+# Default Configuration for Design Reviewer
+# =============================================================================
+# This file contains bundled defaults that are used when optional sections
+# are missing from user's config.yaml
+#
+# NOTE: AWS credentials and region MUST be provided by the user in their
+# config.yaml. These are NOT optional and have no defaults for security reasons.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# AWS Configuration (REQUIRED - No defaults, must be in user config)
+# ---------------------------------------------------------------------------
+# User MUST provide in their config.yaml:
+aws:
+  region: us-east-1
+  profile_name: default
+#     guardrail_id: abc123xyz          # Optional
+#     guardrail_version: "1"           # Optional
+
+# ---------------------------------------------------------------------------
+# Model Configuration (REQUIRED - No defaults, must be in user config)
+# ---------------------------------------------------------------------------
+# User MUST provide in their config.yaml:
+models:
+  default_model: claude-sonnet-4-6
+#     critique_model: claude-opus-4-6       # Optional
+#     alternatives_model: claude-sonnet-4-6  # Optional
+#     gap_model: claude-sonnet-4-6          # Optional
+
+# ---------------------------------------------------------------------------
+# Review Settings (Optional - defaults used if not in user config)
+# ---------------------------------------------------------------------------
+review:
+  # Minimum severity level to include in reports
+  # Values: critical | high | medium | low
+  severity_threshold: medium
+
+  # Toggle individual analysis agents
+  enable_alternatives: true
+  enable_gap_analysis: true
+
+  # Quality score thresholds control the quality label in the report
+  # Score is a weighted sum: critical=4, high=3, medium=2, low=1 per finding
+  quality_thresholds:
+    excellent_max_score: 5        # score 0-5   → Excellent (Approve)
+    good_max_score: 15            # score 6-15  → Good (Approve)
+    needs_improvement_max_score: 30  # score 16-30 → Needs Improvement (Explore Alternatives)
+                                      # score >30   → Poor (Request Changes)
+
+# ---------------------------------------------------------------------------
+# Logging Configuration (Optional - defaults used if not in user config)
+# ---------------------------------------------------------------------------
+logging:
+  # Path to the log file (relative to working directory, or absolute)
+  log_file_path: logs/design-reviewer.log
+
+  # Console log level: DEBUG | INFO | WARNING | ERROR | CRITICAL
+  log_level: INFO
+
+  # Log rotation: max file size before rotating (MB)
+  max_log_size_mb: 10
+
+  # Number of rotated backup files to keep
+  backup_count: 5
+
+# ---------------------------------------------------------------------------
+# Advanced Settings (Optional - rarely needed)
+# ---------------------------------------------------------------------------
+# Override bundled pattern library or prompt directories
+# These are only needed if you want to use custom patterns or prompts
+# patterns_directory: ~/.design-reviewer/patterns
+# prompts_directory: ~/.design-reviewer/prompts

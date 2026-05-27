@@ -1,0 +1,364 @@
+#!/usr/bin/env bash
+# AIDLC Design Review Hook - PreToolUse Entry Point
+#
+# Purpose: Review design artifacts before code generation
+# Trigger: Claude Code PreToolUse hook (before Write/Edit/Bash tool calls)
+#
+# Exit Codes:
+#   0 = Continue with code generation (hook allows)
+#   1 = Stop code generation (hook blocks)
+#
+# Environment Variables:
+#   DEBUG=1 - Enable debug logging
+#   SKIP_REVIEW=1 - Skip review (for testing/bypass)
+#   AIDLC_DOCS_PATH=/path/to/docs - Override aidlc-docs location (for testing)
+#   TEST_MODE=1 - Disable bypass detection (for testing)
+
+set -euo pipefail
+
+# ==================== Setup ====================
+
+# Determine project root and lib directory
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export CWD="$(cd "$HOOK_DIR/../.." && pwd)"
+export LIB_DIR="${HOOK_DIR}/../lib"
+
+# Override aidlc-docs location if AIDLC_DOCS_PATH is set (for testing)
+if [ -n "${AIDLC_DOCS_PATH:-}" ]; then
+    export AIDLC_DOCS_DIR="$AIDLC_DOCS_PATH"
+else
+    export AIDLC_DOCS_DIR="${CWD}/aidlc-docs"
+fi
+
+# Source all required modules
+source "${LIB_DIR}/logger.sh"
+source "${LIB_DIR}/config-parser.sh"
+source "${LIB_DIR}/config-defaults.sh"
+source "${LIB_DIR}/review-executor.sh"
+source "${LIB_DIR}/user-interaction.sh"
+source "${LIB_DIR}/report-generator.sh"
+source "${LIB_DIR}/audit-logger.sh"
+
+# ==================== Configuration ====================
+
+log_info "======================================================================"
+log_info "AIDLC Design Review Hook - Starting"
+log_info "======================================================================"
+
+# Load configuration
+load_config
+validate_and_fix_config
+
+log_info "Configuration loaded from: $CONFIG_SOURCE"
+log_debug "CONFIG_ENABLED=$CONFIG_ENABLED"
+log_debug "CONFIG_DRY_RUN=$CONFIG_DRY_RUN"
+log_debug "CONFIG_REVIEW_THRESHOLD=$CONFIG_REVIEW_THRESHOLD"
+
+# Check if hook is enabled
+if [ "$CONFIG_ENABLED" = "false" ]; then
+    log_info "Hook disabled via configuration, skipping review"
+    exit 0
+fi
+
+# Check for bypass
+if [ "${SKIP_REVIEW:-0}" = "1" ]; then
+    log_warning "SKIP_REVIEW=1 detected, bypassing review (logged to audit trail)"
+    log_audit_entry "Review Bypassed" "SKIP_REVIEW environment variable set"
+    exit 0
+fi
+
+# Detect bypass attempts (skip in test mode)
+if [ "${TEST_MODE:-0}" != "1" ]; then
+    if ! detect_bypass; then
+        log_error "Bypass detection failed, requiring review"
+        log_audit_entry "Bypass Denied" "User denied bypass attempt"
+        exit 1
+    fi
+else
+    log_info "TEST_MODE=1: Skipping bypass detection"
+fi
+
+# ==================== Unit Detection ====================
+
+# Determine which DESIGN artifacts to review
+# Only review design outputs, not requirements or planning artifacts
+
+UNITS_TO_REVIEW=()
+
+# Discover inception phase DESIGN artifacts
+# Only review application-design (not requirements, user-stories, or plans)
+if [ -d "${AIDLC_DOCS_DIR}/inception/application-design" ]; then
+    UNITS_TO_REVIEW+=("inception/application-design")
+fi
+
+# Discover construction phase artifacts (units, build-and-test, etc.)
+if [ -d "${AIDLC_DOCS_DIR}/construction" ]; then
+    while IFS= read -r -d '' unit_dir; do
+        unit_name=$(basename "$unit_dir")
+        # Skip plans directory
+        if [ "$unit_name" != "plans" ]; then
+            # Prefix with phase for clarity
+            UNITS_TO_REVIEW+=("construction/$unit_name")
+        fi
+    done < <(find "${AIDLC_DOCS_DIR}/construction" -mindepth 1 -maxdepth 1 -type d -print0)
+fi
+
+if [ ${#UNITS_TO_REVIEW[@]} -eq 0 ]; then
+    log_info "No artifacts found for review, skipping"
+    exit 0
+fi
+
+log_info "Found ${#UNITS_TO_REVIEW[@]} artifact(s) for potential review: ${UNITS_TO_REVIEW[*]}"
+
+# ==================== Initial User Prompt ====================
+
+# Check if interactive mode is enabled
+if [ "$CONFIG_INTERACTIVE" = "true" ]; then
+    # Prompt user before starting review
+    log_audit_entry "Review Prompt" "Prompting user for initial review decision"
+
+    user_decision=$(prompt_initial_review)
+
+    if [ "$user_decision" = "N" ]; then
+        log_info "User declined review, proceeding with code generation"
+        log_audit_entry "Review Declined" "User chose not to review design artifacts"
+        exit 0
+    fi
+
+    log_info "User accepted review, proceeding with design analysis"
+    log_audit_entry "Review Started" "User accepted review for ${#UNITS_TO_REVIEW[@]} unit(s)"
+else
+    # Non-interactive mode - proceed automatically
+    log_info "Non-interactive mode: proceeding with design review automatically"
+    log_audit_entry "Review Started" "Non-interactive mode: auto-starting review for ${#UNITS_TO_REVIEW[@]} unit(s)"
+fi
+
+# ==================== Review Execution ====================
+
+# For each unit, execute review
+TOTAL_CRITICAL=0
+TOTAL_HIGH=0
+TOTAL_MEDIUM=0
+TOTAL_LOW=0
+COMBINED_FINDINGS=""
+COMBINED_ALTERNATIVES=""
+COMBINED_GAPS=""
+declare -a UNIT_RESPONSES  # Store JSON responses for each unit
+declare -a UNIT_NAMES      # Store unit names
+
+for unit_name in "${UNITS_TO_REVIEW[@]}"; do
+    log_info "----------------------------------------------------------------------"
+    log_info "Reviewing unit: $unit_name"
+    log_info "----------------------------------------------------------------------"
+
+    create_review_marker "$unit_name"
+
+    # Discover and aggregate artifacts
+    if ! aggregate_artifacts "$unit_name"; then
+        log_warning "No artifacts found for unit: $unit_name, skipping"
+        continue
+    fi
+
+    log_info "Discovered ${#DISCOVERED_ARTIFACTS[@]} artifacts (${TOTAL_SIZE_BYTES} bytes)"
+
+    log_info "Invoking multi-agent design review for unit: $unit_name"
+    log_audit_entry "AI Review Invoked" "Invoking multi-agent design review for $unit_name with ${#DISCOVERED_ARTIFACTS[@]} artifacts"
+
+    # ==================== Multi-Agent AI Review ====================
+
+    # Prepare design content with markers for security
+    design_content="<!-- DESIGN DOCUMENT START -->
+$AGGREGATED_CONTENT
+<!-- DESIGN DOCUMENT END -->"
+
+    # Initialize combined response
+    critique_json=""
+    alternatives_json=""
+    gap_json=""
+
+    # Agent 1: Critique (always runs)
+    log_info "Running critique agent with Claude Opus 4.6..."
+    critique_prompt=$(load_prompt_template "critique" "$design_content" "medium")
+    if call_ai_agent "critique" "$critique_prompt"; then
+        critique_json="$AGENT_RESPONSE"
+        log_debug "Critique agent completed (${#critique_json} chars)"
+    else
+        log_error "Critique agent failed"
+        critique_json='{"findings": []}'
+    fi
+
+    # Agent 2: Alternatives (conditional)
+    if [ "$CONFIG_ENABLE_ALTERNATIVES" = "true" ]; then
+        log_info "Running alternatives agent with Claude Opus 4.6..."
+        alternatives_prompt=$(load_prompt_template "alternatives" "$design_content")
+        if call_ai_agent "alternatives" "$alternatives_prompt"; then
+            alternatives_json="$AGENT_RESPONSE"
+            log_debug "Alternatives agent completed (${#alternatives_json} chars)"
+        else
+            log_error "Alternatives agent failed"
+            alternatives_json='{"suggestions": [], "recommendation": ""}'
+        fi
+    else
+        log_info "Alternatives agent disabled"
+        alternatives_json='{"suggestions": [], "recommendation": "Alternatives analysis disabled"}'
+    fi
+
+    # Agent 3: Gap Analysis (conditional)
+    if [ "$CONFIG_ENABLE_GAP_ANALYSIS" = "true" ]; then
+        log_info "Running gap analysis agent with Claude Opus 4.6..."
+        gap_prompt=$(load_prompt_template "gap" "$design_content")
+        if call_ai_agent "gap" "$gap_prompt"; then
+            gap_json="$AGENT_RESPONSE"
+            log_debug "Gap analysis agent completed (${#gap_json} chars)"
+        else
+            log_error "Gap analysis agent failed"
+            gap_json='{"findings": []}'
+        fi
+    else
+        log_info "Gap analysis agent disabled"
+        gap_json='{"findings": []}'
+    fi
+
+    # Validate all JSON responses before combining
+    if ! echo "$critique_json" | jq empty 2>/dev/null; then
+        log_error "Invalid critique JSON, using empty findings"
+        critique_json='{"findings": []}'
+    fi
+    if ! echo "$alternatives_json" | jq empty 2>/dev/null; then
+        log_error "Invalid alternatives JSON, using empty response"
+        alternatives_json='{"suggestions": [], "recommendation": ""}'
+    fi
+    if ! echo "$gap_json" | jq empty 2>/dev/null; then
+        log_error "Invalid gap JSON, using empty findings"
+        gap_json='{"findings": []}'
+    fi
+
+    # Combine all agent responses into single JSON structure
+    ai_response=$(jq -n \
+        --argjson critique "$critique_json" \
+        --argjson alternatives "$alternatives_json" \
+        --argjson gap "$gap_json" \
+        '{
+            critique: $critique,
+            alternatives: $alternatives,
+            gap: $gap
+        }' 2>&1)
+
+    if [ $? -ne 0 ]; then
+        log_error "Failed to combine JSON responses: $ai_response"
+        exit 1
+    fi
+
+    log_debug "Combined multi-agent response (${#ai_response} chars)"
+
+    log_debug "AI Response received (${#ai_response} characters)"
+
+    # Parse response
+    parse_response "$ai_response"
+
+    log_info "Findings detected: ${#FINDINGS_CRITICAL[@]} critical, ${#FINDINGS_HIGH[@]} high, ${#FINDINGS_MEDIUM[@]} medium, ${#FINDINGS_LOW[@]} low"
+    log_info "Quality Score: $QUALITY_SCORE"
+
+    # Accumulate totals (findings + gaps)
+    TOTAL_CRITICAL=$((TOTAL_CRITICAL + ${#FINDINGS_CRITICAL[@]} + ${#GAPS_CRITICAL[@]}))
+    TOTAL_HIGH=$((TOTAL_HIGH + ${#FINDINGS_HIGH[@]} + ${#GAPS_HIGH[@]}))
+    TOTAL_MEDIUM=$((TOTAL_MEDIUM + ${#FINDINGS_MEDIUM[@]} + ${#GAPS_MEDIUM[@]}))
+    TOTAL_LOW=$((TOTAL_LOW + ${#FINDINGS_LOW[@]} + ${#GAPS_LOW[@]}))
+
+    # Store unit data for consolidated report
+    UNIT_NAMES+=("$unit_name")
+    UNIT_RESPONSES+=("$ai_response")
+
+    # Accumulate findings for combined summary
+    unit_findings=$(format_findings)
+    COMBINED_FINDINGS+="## Unit: $unit_name"$'\n\n'
+    COMBINED_FINDINGS+="$unit_findings"$'\n\n'
+
+    # Accumulate alternatives
+    if [ ${#ALTERNATIVES[@]} -gt 0 ]; then
+        unit_alternatives=$(format_alternatives)
+        COMBINED_ALTERNATIVES+="## Unit: $unit_name"$'\n\n'
+        COMBINED_ALTERNATIVES+="$unit_alternatives"$'\n\n'
+    fi
+
+    # Accumulate gaps
+    unit_gaps_total=$((${#GAPS_CRITICAL[@]} + ${#GAPS_HIGH[@]} + ${#GAPS_MEDIUM[@]} + ${#GAPS_LOW[@]}))
+    if [ $unit_gaps_total -gt 0 ]; then
+        unit_gaps=$(format_gaps)
+        COMBINED_GAPS+="## Unit: $unit_name"$'\n\n'
+        COMBINED_GAPS+="$unit_gaps"$'\n\n'
+    fi
+
+    remove_review_marker
+done
+
+# ==================== Generate Consolidated Report ====================
+
+log_info "Generating consolidated report for all units..."
+
+# Create master report with all units combined
+if ! generate_consolidated_report; then
+    log_error "Failed to generate consolidated report"
+else
+    log_info "Consolidated report generated successfully"
+    log_audit_entry "Report Generated" "Generated consolidated report for ${#UNIT_NAMES[@]} units with total quality issues: $TOTAL_CRITICAL critical, $TOTAL_HIGH high, $TOTAL_MEDIUM medium, $TOTAL_LOW low"
+fi
+
+# ==================== Post-Review Decision ====================
+
+log_info "======================================================================"
+log_info "Review Complete - Total Findings Across All Units"
+log_info "======================================================================"
+log_info "Critical: $TOTAL_CRITICAL"
+log_info "High: $TOTAL_HIGH"
+log_info "Medium: $TOTAL_MEDIUM"
+log_info "Low: $TOTAL_LOW"
+
+# Check if findings exceed threshold
+total_findings=$((TOTAL_CRITICAL + TOTAL_HIGH + TOTAL_MEDIUM + TOTAL_LOW))
+
+if [ "$total_findings" -lt "$CONFIG_REVIEW_THRESHOLD" ]; then
+    log_info "Findings ($total_findings) below threshold ($CONFIG_REVIEW_THRESHOLD), auto-approving"
+    log_audit_entry "Review Auto-Approved" "Findings below threshold, proceeding with code generation"
+    exit 0
+fi
+
+# Check blocking criteria
+if [ "$CONFIG_BLOCK_ON_CRITICAL" = "true" ] && [ "$TOTAL_CRITICAL" -gt 0 ]; then
+    log_warning "Blocking criteria met: ${TOTAL_CRITICAL} critical findings detected"
+    COMBINED_FINDINGS="⚠️  **BLOCKING**: ${TOTAL_CRITICAL} critical finding(s) detected"$'\n\n'"$COMBINED_FINDINGS"
+fi
+
+if [ "$TOTAL_HIGH" -ge "$CONFIG_BLOCK_ON_HIGH_COUNT" ]; then
+    log_warning "Blocking criteria met: ${TOTAL_HIGH} high findings (threshold: ${CONFIG_BLOCK_ON_HIGH_COUNT})"
+    COMBINED_FINDINGS="⚠️  **BLOCKING**: ${TOTAL_HIGH} high finding(s) detected (threshold: ${CONFIG_BLOCK_ON_HIGH_COUNT})"$'\n\n'"$COMBINED_FINDINGS"
+fi
+
+# Dry run check
+if is_dry_run; then
+    log_info "DRY RUN MODE: Would prompt user, but proceeding automatically"
+    log_audit_entry "Dry Run" "Dry run mode enabled, auto-continuing without user prompt"
+    exit 0
+fi
+
+# Check if interactive mode is enabled
+if [ "$CONFIG_INTERACTIVE" = "true" ]; then
+    # Prompt user for post-review decision
+    log_audit_entry "Post-Review Prompt" "Prompting user for post-review decision"
+
+    if prompt_post_review "$COMBINED_FINDINGS"; then
+        log_info "User chose to CONTINUE with code generation"
+        log_audit_entry "Review Completed - Continue" "User chose to continue with code generation despite findings"
+        exit 0
+    else
+        log_info "User chose to STOP code generation"
+        log_audit_entry "Review Completed - Stopped" "User chose to stop code generation due to findings"
+        exit 1
+    fi
+else
+    # Non-interactive mode - display findings and continue
+    log_info "Non-interactive mode: displaying findings and continuing automatically"
+    display_findings "$COMBINED_FINDINGS"
+    log_audit_entry "Review Completed - Auto-Continue" "Non-interactive mode: auto-continuing with code generation"
+    exit 0
+fi
