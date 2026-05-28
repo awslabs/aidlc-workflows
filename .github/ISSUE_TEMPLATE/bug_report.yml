@@ -45,14 +45,23 @@ body:
     validations:
       required: true
 
-  - type: input
+  - type: dropdown
     id: version
     attributes:
       label: AI-DLC Version
-      description: Which version of AI-DLC are you using? Or the git commit hash if running from source.
-      placeholder: e.g., 0.1.5 or abc1234
+      description: Which version of AI-DLC are you using?
+      options:
+        - v1 (current)
+        - v2 (alpha)
     validations:
       required: true
+
+  - type: input
+    id: version-detail
+    attributes:
+      label: Release / Commit
+      description: The release number or git commit hash if running from source.
+      placeholder: e.g., 0.1.5 or abc1234
 
   - type: dropdown
     id: phase

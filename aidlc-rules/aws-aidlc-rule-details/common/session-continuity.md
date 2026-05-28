@@ -16,6 +16,7 @@ Based on your aidlc-state.md, here's your current status:
 **What would you like to work on today?**
 
 A) Continue where you left off ([Next step description])
+
 B) Review a previous stage ([Show available stages])
 
 [Answer]: 
@@ -30,7 +31,12 @@ B) Review a previous stage ([Show available stages])
    - **User Stories**: Read stories.md, personas.md, story-generation-plan.md
    - **Application Design**: Read application-design artifacts (components.md, component-methods.md, services.md)
    - **Design (Units)**: Read unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md
-   - **Per-Unit Design**: Read functional-design.md, nfr-requirements.md, nfr-design.md, infrastructure-design.md
+   - **Per-Unit Design**: Per-unit artifacts live under `aidlc-docs/construction/{unit-name}/` in
+     `functional-design/`, `nfr-requirements/`, `nfr-design/`, and `infrastructure-design/`
+     subdirectories. On resume, determine the in-progress unit from `aidlc-state.md` and load that
+     unit's design artifacts, plus the design artifacts of any units it depends on (per
+     `unit-of-work-dependency.md`). The exact files in each subdirectory are enumerated by the
+     corresponding construction stage rules.
    - **Code Stages**: Read all code files, plans, AND all previous artifacts
 4. **Smart Context Loading by Stage**:
    - **Early Stages (Workspace Detection, Reverse Engineering)**: Load workspace analysis

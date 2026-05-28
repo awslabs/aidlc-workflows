@@ -1,0 +1,29 @@
+AIDLC Design Reviewer
+Copyright 2026 AIDLC Design Reviewer Contributors
+
+This product includes software developed by the AIDLC Design Reviewer project.
+
+This software uses the following third-party libraries and services:
+
+## Amazon Bedrock
+- Provider: Amazon Web Services, Inc.
+- License: AWS Customer Agreement
+- Website: https://aws.amazon.com/bedrock/
+
+## Anthropic Claude Models
+- Provider: Anthropic PBC
+- Models: Claude Opus 4.6, Claude Sonnet 4.6, Claude Haiku 4.5
+- Accessed via: Amazon Bedrock
+- Website: https://www.anthropic.com/
+
+## Python Libraries
+See pyproject.toml for complete list of dependencies and their licenses:
+- boto3 (Apache 2.0)
+- pydantic (MIT)
+- click (BSD)
+- jinja2 (BSD)
+- pyyaml (MIT)
+- strands (MIT)
+- backoff (MIT)
+
+For full license texts, see the LICENSE file and individual package licenses.

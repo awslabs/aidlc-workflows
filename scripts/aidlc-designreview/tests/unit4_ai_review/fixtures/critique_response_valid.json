@@ -1,0 +1,25 @@
+{
+  "findings": [
+    {
+      "title": "Missing Error Handling in Data Pipeline",
+      "severity": "high",
+      "description": "The data processing pipeline lacks comprehensive error handling for malformed input records.",
+      "location": "functional-design/business-logic-model.md Section 3.2",
+      "recommendation": "Add input validation at pipeline entry point with fallback to dead-letter queue."
+    },
+    {
+      "title": "Tight Coupling Between Auth and User Service",
+      "severity": "medium",
+      "description": "Authentication logic is directly coupled to the user service, making it difficult to swap auth providers.",
+      "location": "application-design/component-diagram.md",
+      "recommendation": "Introduce an AuthProvider interface to decouple authentication from user management."
+    },
+    {
+      "title": "No Rate Limiting on Public API",
+      "severity": "critical",
+      "description": "The public-facing API has no rate limiting, exposing the system to potential denial-of-service attacks.",
+      "location": "application-design/api-design.md Section 2.1",
+      "recommendation": "Implement rate limiting middleware with configurable per-client thresholds."
+    }
+  ]
+}

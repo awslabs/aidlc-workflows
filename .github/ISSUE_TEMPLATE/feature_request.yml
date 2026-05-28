@@ -25,6 +25,17 @@ body:
       required: true
 
   - type: dropdown
+    id: version
+    attributes:
+      label: Version
+      description: Which version of AI-DLC does this relate to?
+      options:
+        - v1 (current)
+        - v2 (alpha)
+    validations:
+      required: true
+
+  - type: dropdown
     id: area
     attributes:
       label: Area

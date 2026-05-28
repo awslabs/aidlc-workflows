@@ -1,0 +1,18 @@
+{
+  "findings": [
+    {
+      "title": "Missing Disaster Recovery Plan",
+      "description": "No disaster recovery strategy is documented for the data store components.",
+      "severity": "high",
+      "category": "Reliability",
+      "recommendation": "Document RPO/RTO targets and implement automated backup/restore procedures."
+    },
+    {
+      "title": "No API Versioning Strategy",
+      "description": "The design does not specify how API versions will be managed over time.",
+      "severity": "medium",
+      "category": "API Design",
+      "recommendation": "Define URL-based or header-based versioning strategy with deprecation policy."
+    }
+  ]
+}

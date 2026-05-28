@@ -143,7 +143,7 @@ jobs:
       - name: Configure AWS credentials
         # env.ACT is set by the 'act' CLI tool for local testing
         if: ${{ !env.ACT && steps.cache-check.outputs.cache-hit != 'true' }}
-        uses: aws-actions/configure-aws-credentials@ec61189d14ec14c8efccab744f656cffd0e33f37 # v6.1.0
+        uses: aws-actions/configure-aws-credentials@d979d5b3a71173a29b74b5b88418bfda9437d885 # v6.1.1
         with:
           role-to-assume: ${{ secrets.AWS_CODEBUILD_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
