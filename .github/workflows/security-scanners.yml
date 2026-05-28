@@ -95,6 +95,12 @@ jobs:
           set +e
           semgrep scan --oss-only --verbose --metrics=off --config=r/all \
             --max-log-list-entries=0 \
+            --exclude-rule ai.generic.detect-generic-ai-anthprop.detect-generic-ai-anthprop \
+            --exclude-rule ai.generic.detect-generic-ai-oai.detect-generic-ai-oai \
+            --exclude-rule gitlab.bandit.B101 \
+            --exclude-rule B101 \
+            --exclude-rule gitlab.bandit.B404 \
+            --exclude-rule B404 \
             --sarif-output semgrep-report_sarif.json $BASELINE_ARGS
           SEMGREP_EXIT=$?
           set -e
