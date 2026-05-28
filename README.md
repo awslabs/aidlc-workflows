@@ -39,6 +39,25 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 
 ## Platform-Specific Setup
 
+> [!TIP]
+> **Prefer automated setup?** Run the one-liner below from your project root and follow the prompts — it downloads the rules and installs them for your chosen agent automatically.
+>
+> macOS / Linux:
+>
+> ```bash
+> bash <(curl -sL https://raw.githubusercontent.com/awslabs/aidlc-workflows/main/scripts/setup/setup.sh)
+> ```
+>
+> Windows (PowerShell):
+>
+> ```powershell
+> irm https://raw.githubusercontent.com/awslabs/aidlc-workflows/main/scripts/setup/setup.ps1 | iex
+> ```
+>
+> **Offline / air-gapped networks:** If GitHub is not accessible, transfer the release zip (`ai-dlc-rules-v*.zip`) and the setup script (`setup.sh` or `setup.ps1`) to your machine via USB, internal mirror, or file share. Extract the zip, then run the script — it will detect that GitHub is unreachable and prompt you for the local path to the extracted `aidlc-rules/` folder. See [`scripts/setup/README.md`](scripts/setup/README.md) for details.
+
+### Manual Setup
+
 - [Kiro](#kiro)
 - [Amazon Q Developer IDE Plugin](#amazon-q-developer-ide-pluginextension)
 - [Cursor IDE](#cursor-ide)
