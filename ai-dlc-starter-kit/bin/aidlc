@@ -1,0 +1,452 @@
+#!/usr/bin/env bash
+# AI-DLC CLI v2.0 — Manage the AI-DLC lifecycle across projects
+# Usage: aidlc <command> [options]
+
+set -euo pipefail
+
+AIDLC_DIR=".aidlc"
+VERSION="2.0.0"
+
+# --- Helpers ---
+
+find_aidlc_root() {
+    local dir="$PWD"
+    while [ "$dir" != "/" ]; do
+        if [ -d "$dir/$AIDLC_DIR" ]; then
+            echo "$dir"
+            return 0
+        fi
+        dir="$(dirname "$dir")"
+    done
+    return 1
+}
+
+require_aidlc() {
+    ROOT=$(find_aidlc_root) || {
+        echo "Error: Not in an AI-DLC initialized project (no .aidlc/ found)."
+        echo "Run 'aidlc init [directory]' first."
+        exit 1
+    }
+}
+
+current_phase() {
+    grep "^phase:" "$ROOT/$AIDLC_DIR/state.md" 2>/dev/null | sed 's/phase: *//' || echo "unknown"
+}
+
+update_state() {
+    local key="$1"
+    local value="$2"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        sed -i '' "s/^${key}:.*/${key}: ${value}/" "$ROOT/$AIDLC_DIR/state.md"
+    else
+        sed -i "s/^${key}:.*/${key}: ${value}/" "$ROOT/$AIDLC_DIR/state.md"
+    fi
+}
+
+update_timestamp() {
+    local now
+    now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    update_state "last_updated" "$now"
+}
+
+# --- Commands ---
+
+cmd_init() {
+    local target="${1:-.}"
+    local starterkit_dir="${AIDLC_STARTERKIT:-}"
+
+    if [ -z "$starterkit_dir" ]; then
+        script_dir="$(cd "$(dirname "$0")" && pwd)"
+        if [ -d "$script_dir/../rules" ] && [ -f "$script_dir/../init.sh" ]; then
+            starterkit_dir="$script_dir/.."
+        else
+            echo "Error: Cannot find AI-DLC starterkit."
+            echo "Set AIDLC_STARTERKIT=/path/to/ai-dlc-starterkit or run init.sh directly."
+            exit 1
+        fi
+    fi
+
+    exec "$starterkit_dir/init.sh" "$target"
+}
+
+cmd_status() {
+    require_aidlc
+    local state_file="$ROOT/$AIDLC_DIR/state.md"
+
+    echo "AI-DLC Status"
+    echo "============="
+    if [ -f "$state_file" ]; then
+        while IFS=: read -r key value; do
+            printf "  %-15s %s\n" "${key}:" "${value## }"
+        done < <(grep -E "^(project|phase|task|started|last_updated|outcome):" "$state_file")
+    else
+        echo "  State file not found."
+    fi
+
+    echo ""
+    echo "Documents:"
+    for doc in requirements execution-plan; do
+        local path="$ROOT/$AIDLC_DIR/docs/${doc}.md"
+        if [ -f "$path" ]; then
+            printf "  %-25s %s lines\n" "${doc}.md" "$(wc -l < "$path" | tr -d ' ')"
+        else
+            printf "  %-25s (empty)\n" "${doc}.md"
+        fi
+    done
+    printf "  %-25s " "audit.md"
+    if [ -f "$ROOT/$AIDLC_DIR/audit.md" ]; then
+        echo "$(wc -l < "$ROOT/$AIDLC_DIR/audit.md" | tr -d ' ') lines"
+    else
+        echo "(empty)"
+    fi
+}
+
+cmd_phase() {
+    require_aidlc
+    local action="${1:-}"
+
+    if [ -z "$action" ]; then
+        current_phase
+        exit 0
+    fi
+
+    case "$action" in
+        rollback)
+            cmd_rollback "${2:-}"
+            return
+            ;;
+        list)
+            echo "Valid phases: detect requirements plan implement verify audit complete"
+            return
+            ;;
+    esac
+
+    local valid_phases="detect requirements plan implement verify audit complete"
+    if ! echo "$valid_phases" | grep -qw "$action"; then
+        echo "Error: Invalid phase '$action'"
+        echo "Valid phases: $valid_phases"
+        exit 1
+    fi
+
+    update_state "phase" "$action"
+    update_timestamp
+    echo "Phase set to: $action"
+}
+
+cmd_docs() {
+    require_aidlc
+    echo "AI-DLC Documents"
+    echo "================"
+    for f in requirements execution-plan; do
+        local path="$ROOT/$AIDLC_DIR/docs/${f}.md"
+        if [ -f "$path" ]; then
+            printf "  %-25s %s lines\n" "${f}.md" "$(wc -l < "$path" | tr -d ' ')"
+        else
+            printf "  %-25s (not created)\n" "${f}.md"
+        fi
+    done
+    printf "  %-25s " "audit.md"
+    if [ -f "$ROOT/$AIDLC_DIR/audit.md" ]; then
+        echo "$(wc -l < "$ROOT/$AIDLC_DIR/audit.md" | tr -d ' ') lines"
+    else
+        echo "(not created)"
+    fi
+    echo ""
+    echo "History:"
+    if [ -d "$ROOT/$AIDLC_DIR/history" ] && [ "$(ls -A "$ROOT/$AIDLC_DIR/history" 2>/dev/null)" ]; then
+        ls -1 "$ROOT/$AIDLC_DIR/history/" | head -10
+    else
+        echo "  (no rollback snapshots)"
+    fi
+}
+
+cmd_show() {
+    require_aidlc
+    local rule="${1:-}"
+    if [ -z "$rule" ]; then
+        echo "Usage: aidlc show <rule-name>"
+        echo "Available rules:"
+        ls -1 "$ROOT/$AIDLC_DIR/rules/" 2>/dev/null || echo "  (none)"
+        exit 1
+    fi
+
+    local rule_file="$ROOT/$AIDLC_DIR/rules/$rule"
+    if [ -f "$rule_file" ]; then
+        cat "$rule_file"
+    elif [ -f "$ROOT/$AIDLC_DIR/rules/${rule}.md" ]; then
+        cat "$ROOT/$AIDLC_DIR/rules/${rule}.md"
+    else
+        echo "Rule not found: $rule"
+        echo "Available:"
+        ls -1 "$ROOT/$AIDLC_DIR/rules/"
+    fi
+}
+
+# --- Rollback ---
+
+cmd_rollback() {
+    require_aidlc
+    local target_phase="${1:-}"
+
+    if [ -z "$target_phase" ]; then
+        echo "Usage: aidlc phase rollback <phase>"
+        echo "Phases: detect requirements plan implement verify audit"
+        echo ""
+        echo "Example: aidlc phase rollback plan"
+        exit 1
+    fi
+
+    local valid_phases="detect requirements plan implement verify audit"
+    if ! echo "$valid_phases" | grep -qw "$target_phase"; then
+        echo "Error: Invalid phase '$target_phase'"
+        echo "Valid phases: $valid_phases"
+        exit 1
+    fi
+
+    local current=$(current_phase)
+
+    # Map phases to numbers for comparison
+    phase_to_num() {
+        case "$1" in
+            detect) echo 1 ;;
+            requirements) echo 2 ;;
+            plan) echo 3 ;;
+            implement) echo 4 ;;
+            verify) echo 5 ;;
+            audit) echo 6 ;;
+            complete) echo 7 ;;
+            *) echo 0 ;;
+        esac
+    }
+
+    local target_num=$(phase_to_num "$target_phase")
+    local current_num=$(phase_to_num "$current")
+
+    if [ "$target_num" -ge "$current_num" ]; then
+        echo "Error: Rollback target must be an earlier phase."
+        echo "Current phase: $current (phase $current_num)"
+        echo "Target phase:  $target_phase (phase $target_num)"
+        exit 1
+    fi
+
+    # Create snapshot of current state before rollback
+    local timestamp
+    timestamp=$(date -u +%Y%m%d-%H%M%S)
+    local snapshot_file="$ROOT/$AIDLC_DIR/history/${timestamp}-rollback-${current}-to-${target_phase}.md"
+
+    mkdir -p "$ROOT/$AIDLC_DIR/history"
+
+    cat > "$snapshot_file" << SNAPSHOT
+# Rollback Snapshot
+
+**Date:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
+**From:** $current (phase $current_num)
+**To:** $target_phase (phase $target_num)
+**Initiated by:** aidlc CLI
+
+## State at Rollback
+$(cat "$ROOT/$AIDLC_DIR/state.md")
+
+## Reasons for Rollback
+<!-- Add your reasons here -->
+
+## Actions to Reconsider
+<!-- What went wrong in the rolled-back phases -->
+SNAPSHOT
+
+    # Update state
+    update_state "phase" "$target_phase"
+    update_timestamp
+
+    echo "Rollback complete: $current → $target_phase"
+    echo ""
+    echo "Snapshot saved: .aidlc/history/${timestamp}-rollback-${current}-to-${target_phase}.md"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Review the snapshot in .aidlc/history/"
+    echo "  2. The $target_phase phase rules are now active"
+    echo "  3. Begin work with the corrected direction"
+}
+
+cmd_new() {
+    local name="${1:-}"
+
+    if [ -z "$name" ]; then
+        echo "Usage: aidlc new <project-name>"
+        echo ""
+        echo "Creates a new directory and initializes AI-DLC in it."
+        echo ""
+        echo "Options:"
+        echo "  --force    Overwrite if directory exists"
+        echo ""
+        echo "Examples:"
+        echo "  aidlc new my-app"
+        echo "  aidlc new ~/projects/backend --force"
+        exit 1
+    fi
+
+    local force=false
+    if [ "${2:-}" = "--force" ] || [ "${2:-}" = "-f" ]; then
+        force=true
+    fi
+
+    local target="$name"
+    # If name doesn't start with / or ~, treat as relative to current dir
+    if [[ "$name" != /* ]] && [[ "$name" != ~* ]]; then
+        target="$PWD/$name"
+    fi
+    # Expand ~
+    target="${target/#\~/$HOME}"
+
+    if [ -d "$target" ] && [ "$force" = false ]; then
+        echo "Error: Directory already exists: $target"
+        echo "Use --force to overwrite, or 'aidlc init $target' to init in existing dir."
+        exit 1
+    fi
+
+    mkdir -p "$target"
+    echo "Created: $target"
+
+    # Initialize AI-DLC
+    cmd_init "$target"
+}
+
+cmd_update() {
+    local mode="${1:-global}"
+
+    case "$mode" in
+        --project|-p)
+            cmd_update_project
+            ;;
+        --help|-h)
+            echo "Usage: aidlc update [--project]"
+            echo ""
+            echo "  aidlc update            Update global installation (~/.aidlc-starterkit/)"
+            echo "  aidlc update --project  Sync current project's .aidlc/ from global install"
+            exit 0
+            ;;
+        global|"")
+            cmd_update_global
+            ;;
+        *)
+            echo "Unknown option: $mode"
+            echo "Usage: aidlc update [--project]"
+            exit 1
+            ;;
+    esac
+}
+
+cmd_update_global() {
+    local install_dir="${AIDLC_STARTERKIT:-$HOME/.aidlc-starterkit}"
+
+    if [ ! -d "$install_dir" ]; then
+        echo "AI-DLC is not installed globally."
+        echo "Run 'install.sh' from the starterkit directory first."
+        exit 1
+    fi
+
+    echo "Updating global installation: $install_dir"
+
+    # Check if it's a git repo
+    if [ -d "$install_dir/.git" ]; then
+        echo "  Pulling latest from git..."
+        (cd "$install_dir" && git pull --rebase) || {
+            echo "  Warning: git pull failed. Trying file copy from source..."
+        }
+    fi
+
+    # Check for source metadata
+    if [ -f "$install_dir/.install-source" ]; then
+        local source
+        source=$(cat "$install_dir/.install-source")
+        if [ -d "$source" ] && [ -f "$source/rules/phase-01-detect.md" ]; then
+            echo "  Syncing rules from: $source"
+            cp "$source/rules/"*.md "$install_dir/rules/"
+            cp "$source/templates/"*.md "$install_dir/templates/"
+            cp "$source/CLAUDE.md" "$install_dir/CLAUDE.md"
+            cp "$source/bin/aidlc" "$install_dir/bin/aidlc"
+            cp "$source/bin/aidlcstart" "$install_dir/bin/aidlcstart"
+            chmod +x "$install_dir/bin/aidlc" "$install_dir/bin/aidlcstart"
+            echo "  Done. Rules, templates, and CLI updated."
+            return
+        fi
+    fi
+
+    echo "  No update source found. Re-run install.sh to refresh."
+}
+
+cmd_update_project() {
+    require_aidlc
+    local install_dir="${AIDLC_STARTERKIT:-$HOME/.aidlc-starterkit}"
+
+    if [ ! -d "$install_dir/rules" ]; then
+        echo "Global installation not found at $install_dir"
+        echo "Run 'install.sh' first."
+        exit 1
+    fi
+
+    echo "Syncing project .aidlc/ from global installation..."
+    cp "$install_dir/rules/"*.md "$ROOT/$AIDLC_DIR/rules/"
+    cp "$install_dir/templates/"*.md "$ROOT/$AIDLC_DIR/templates/"
+    cp "$install_dir/CLAUDE.md" "$ROOT/$AIDLC_DIR/CLAUDE.md"
+    echo "  Done. Project rules and templates updated from $install_dir"
+}
+
+# --- Version & Help ---
+
+cmd_version() {
+    echo "aidlc v$VERSION"
+    echo "AI-Driven Development Life Cycle — Starterkit CLI"
+}
+
+cmd_help() {
+    echo "AI-DLC CLI v$VERSION"
+    echo ""
+    echo "Usage: aidlc <command> [args]"
+    echo ""
+    echo "Commands:"
+    echo "  new <name>           Create new directory + init AI-DLC (one command)"
+    echo "  init [dir]           Initialize AI-DLC in an existing project directory"
+    echo "  update               Update global installation or sync project (--project)"
+    echo "  status               Show current phase and project info"
+    echo "  phase [name]         Get or set the current phase"
+    echo "  phase list           List all valid phases"
+    echo "  phase rollback <n>   Roll back to an earlier phase (saves snapshot)"
+    echo "  show <rule>          Display a phase rule file"
+    echo "  docs                 List AI-DLC documents and rollback history"
+    echo "  version              Show version"
+    echo "  help                 Show this help"
+    echo ""
+    echo "Environment:"
+    echo "  AIDLC_STARTERKIT     Path to the starterkit (for 'aidlc init')"
+    echo ""
+    echo "Examples:"
+    echo "  aidlc new my-app              Create folder + init AI-DLC"
+    echo "  aidlc update                  Update global installation"
+    echo "  aidlc update --project        Sync current project from latest"
+    echo "  aidlc init ~/my-project       Init AI-DLC in existing project"
+    echo "  aidlc status"
+    echo "  aidlc phase plan"
+    echo "  aidlc phase rollback requirements"
+    echo "  aidlc show phase-01-detect.md"
+    echo "  aidlc docs"
+}
+
+# --- Router ---
+
+case "${1:-help}" in
+    new)      shift; cmd_new "$@" ;;
+    update)   shift; cmd_update "$@" ;;
+    init)     shift; cmd_init "$@" ;;
+    status)   cmd_status ;;
+    phase)    shift; cmd_phase "$@" ;;
+    show)     shift; cmd_show "${1:-}" ;;
+    docs)     cmd_docs ;;
+    version)  cmd_version ;;
+    help|--help|-h) cmd_help ;;
+    *)
+        echo "Unknown command: ${1:-}"
+        echo "Run 'aidlc help' for usage."
+        exit 1
+        ;;
+esac

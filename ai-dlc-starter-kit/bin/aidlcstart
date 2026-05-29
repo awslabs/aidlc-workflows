@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+# aidlcstart — Interactive entry point for AI-DLC
+# Usage: aidlcstart [project-directory]
+#
+# Smart behavior:
+#   aidlcstart              → In project: show status, offer actions
+#                             Not in project: init current directory
+#   aidlcstart <dir>        → Initialize AI-DLC in <dir>
+#   aidlcstart --status     → Show status only
+
+set -euo pipefail
+
+AIDLC_DIR=".aidlc"
+BOLD="\033[1m"
+GREEN="\033[0;32m"
+YELLOW="\033[0;33m"
+CYAN="\033[0;36m"
+RESET="\033[0m"
+
+# Find aidlc CLI
+AIDLC_BIN=""
+if command -v aidlc &>/dev/null; then
+    AIDLC_BIN="aidlc"
+elif [ -n "${AIDLC_STARTERKIT:-}" ] && [ -f "$AIDLC_STARTERKIT/bin/aidlc" ]; then
+    AIDLC_BIN="$AIDLC_STARTERKIT/bin/aidlc"
+elif [ -f "$HOME/.aidlc-starterkit/bin/aidlc" ]; then
+    AIDLC_BIN="$HOME/.aidlc-starterkit/bin/aidlc"
+fi
+
+if [ -z "$AIDLC_BIN" ]; then
+    echo "Error: AI-DLC CLI not found."
+    echo "Install first: run install.sh from the ai-dlc-starterkit directory."
+    exit 1
+fi
+
+# --- Find .aidlc/ directory walking up ---
+find_aidlc_root() {
+    local dir="$PWD"
+    while [ "$dir" != "/" ]; do
+        if [ -d "$dir/$AIDLC_DIR" ]; then
+            echo "$dir"
+            return 0
+        fi
+        dir="$(dirname "$dir")"
+    done
+    return 1
+}
+
+# --- Banner ---
+banner() {
+    echo ""
+    echo -e "${BOLD}${CYAN}╔══════════════════════════════════╗${RESET}"
+    echo -e "${BOLD}${CYAN}║      AI-DLC Starterkit           ║${RESET}"
+    echo -e "${BOLD}${CYAN}╚══════════════════════════════════╝${RESET}"
+    echo ""
+}
+
+# --- Init flow ---
+do_init() {
+    local target="${1:-$PWD}"
+
+    # Resolve target to absolute
+    target="$(cd "$target" 2>/dev/null && pwd || echo "")"
+    if [ -z "$target" ]; then
+        echo "Directory does not exist. Create it first:"
+        echo "  mkdir -p $1 && aidlcstart $1"
+        exit 1
+    fi
+
+    banner
+
+    # Check if already initialized
+    if [ -d "$target/$AIDLC_DIR" ]; then
+        echo -e "${GREEN}Already initialized!${RESET}"
+        do_status "$target"
+        return
+    fi
+
+    echo -e "Project: ${BOLD}$(basename "$target")${RESET}"
+    echo "Path:    $target"
+    echo ""
+
+    # Detect project type
+    SOURCE_FILES=$(find "$target" -maxdepth 2 \
+        \( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.py" \
+        -o -name "*.rs" -o -name "*.go" -o -name "*.java" \) \
+        2>/dev/null | head -1)
+
+    if [ -z "$SOURCE_FILES" ] && [ ! -f "$target/package.json" ] && [ ! -f "$target/Cargo.toml" ]; then
+        echo -e "Type: ${GREEN}Greenfield${RESET} (new project)"
+    else
+        echo -e "Type: ${YELLOW}Brownfield${RESET} (existing codebase)"
+    fi
+
+    echo ""
+    echo -n "Initialize AI-DLC here? [Y/n]: "
+    read -r answer
+    if [ "$answer" = "n" ] || [ "$answer" = "N" ]; then
+        echo "Cancelled."
+        exit 0
+    fi
+
+    # Run init
+    "$AIDLC_BIN" init "$target"
+
+    echo ""
+    echo -e "${BOLD}${GREEN}Ready!${RESET} Start a Claude Code session — AI-DLC is active."
+    echo ""
+    echo "Quick commands:"
+    echo "  aidlc status               Check current phase"
+    echo "  aidlc phase plan            Set to planning phase"
+    echo "  aidlcstart                  Show this menu again"
+}
+
+# --- Status flow (already initialized) ---
+do_status() {
+    local root="${1:-$(find_aidlc_root)}"
+
+    banner
+
+    if [ -z "$root" ]; then
+        echo "Not in an AI-DLC project."
+        echo ""
+        echo "Options:"
+        echo "  1) Initialize current directory"
+        echo "  2) Initialize another directory"
+        echo "  3) Exit"
+        echo ""
+        echo -n "Choose [1-3]: "
+        read -r choice
+        case "$choice" in
+            1) do_init "$PWD" ;;
+            2)
+                echo -n "Directory path: "
+                read -r dir
+                do_init "$dir"
+                ;;
+            *) exit 0 ;;
+        esac
+        return
+    fi
+
+    # Show status
+    echo -e "Project: ${BOLD}$(basename "$root")${RESET}"
+    "$AIDLC_BIN" status 2>/dev/null || true
+
+    echo ""
+    echo "Actions:"
+    echo "  1) Set phase"
+    echo "  2) View rule file"
+    echo "  3) View documents"
+    echo "  4) Rollback to earlier phase"
+    echo "  5) Initialize another project"
+    echo "  6) Exit"
+    echo ""
+    echo -n "Choose [1-6]: "
+    read -r choice
+
+    case "$choice" in
+        1)
+            echo ""
+            echo "Phases: detect | requirements | plan | implement | verify | audit | complete"
+            echo -n "Set phase to: "
+            read -r phase
+            [ -n "$phase" ] && "$AIDLC_BIN" phase "$phase"
+            ;;
+        2)
+            echo ""
+            echo "Available rules:"
+            ls -1 "$root/$AIDLC_DIR/rules/"
+            echo -n "Show rule: "
+            read -r rule
+            [ -n "$rule" ] && "$AIDLC_BIN" show "$rule"
+            ;;
+        3)
+            "$AIDLC_BIN" docs
+            ;;
+        4)
+            echo ""
+            echo -n "Rollback to phase: "
+            read -r phase
+            [ -n "$phase" ] && "$AIDLC_BIN" phase rollback "$phase"
+            ;;
+        5)
+            echo ""
+            echo -n "Directory path: "
+            read -r dir
+            do_init "$dir"
+            ;;
+        *) exit 0 ;;
+    esac
+}
+
+# --- Handle --status flag ---
+if [ "${1:-}" = "--status" ] || [ "${1:-}" = "-s" ]; then
+    ROOT=$(find_aidlc_root) || true
+    if [ -z "$ROOT" ]; then
+        echo "Not in an AI-DLC project."
+        exit 1
+    fi
+    "$AIDLC_BIN" status
+    exit 0
+fi
+
+# --- Handle --help ---
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    echo "aidlcstart — AI-DLC interactive entry point"
+    echo ""
+    echo "Usage:"
+    echo "  aidlcstart                Interactive menu"
+    echo "  aidlcstart <dir>          Initialize in existing <dir>"
+    echo "  aidlcstart new <name>     Create new directory + init (one command)"
+    echo "  aidlcstart --status       Show status only"
+    echo ""
+    echo "Install: run install.sh from the ai-dlc-starterkit directory"
+    exit 0
+fi
+
+# --- Handle 'new' subcommand ---
+if [ "${1:-}" = "new" ]; then
+    shift
+    "$AIDLC_BIN" new "$@"
+    exit $?
+fi
+
+# --- Main ---
+if [ -n "${1:-}" ]; then
+    # Explicit directory given — init mode
+    do_init "$1"
+else
+    # No args — detect context
+    ROOT=$(find_aidlc_root) || true
+    if [ -n "$ROOT" ]; then
+        do_status "$ROOT"
+    else
+        # Not in a project — offer to init
+        do_init "$PWD"
+    fi
+fi
