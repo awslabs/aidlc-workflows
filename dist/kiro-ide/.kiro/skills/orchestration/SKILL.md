@@ -94,9 +94,9 @@ orchestrator    → clarification-provided   (wrote human's answers to questions
 owner           → further-clarification    (needs more answers)
 orchestrator    → clarification-provided   (wrote human's follow-up answers to questions.md, then invokes owner)
 owner           → artifact-generated       (produced output artifacts)
-orchestrator    → review-needed            (invokes contributors)
-orchestrator    → reviewed                 (all contributors have returned their reviews)
-owner           → refined                  (addressed review comments)
+orchestrator    → contribution-needed      (invokes contributors)
+orchestrator    → contributed              (all contributors have returned their contributions)
+owner           → refined                  (addressed contributor feedback)
 orchestrator    → final-review-needed      (invokes reviewer)
 orchestrator    → final-review-complete    (reviewer has returned their review)
 owner           → finalised                (addressed reviewer feedback)
@@ -111,9 +111,10 @@ orchestrator    → complete                 (human approved)
 
 - Each actor only sets state for what THEY did — never for what someone else will do
 - When re-invoking a persona, pass all relevant files from the stage directory as context
-- If no contributors are assigned, skip review — go from `artifact-generated` to `final-review-needed` (if reviewer assigned) or `presented` (if no reviewer)
-- If no review comments exist, skip refine — go from `reviewed` to `final-review-needed` (if reviewer assigned) or `presented` (if no reviewer)
+- If no contributors are assigned, skip contribution — go from `artifact-generated` to `final-review-needed` (if reviewer assigned) or `presented` (if no reviewer)
+- If no contributor comments exist, skip refine — go from `contributed` to `final-review-needed` (if reviewer assigned) or `presented` (if no reviewer)
 - The final reviewer step is NEVER skipped when a reviewer is assigned in the workflow. Only the absence of a reviewer in the stage definition removes that step.
+- When invoking multiple contributors, invoke them ALL in a single turn (parallel). Do not wait for one contributor to finish before invoking the next.
 - Mandatory post-review sequence when reviewer is assigned: `refined` → `final-review-needed` → `final-review-complete` → `finalised` → `presented`
 
 ### How to invoke a persona:
@@ -134,14 +135,14 @@ When describing a persona invocation to the human, use the correct verb for thei
 - **Contributors** → "Invoking \<persona\> to **contribute** to the \<artifact\>."
 - **Reviewers** → "Invoking \<persona\> to **review** the \<artifact\>."
 
-Do not use "review" for contributors or "contribute" for reviewers. This applies to all messages — including your reasoning text when transitioning to `review-needed`. The state name `review-needed` is a technical label; when communicating to the human about contributors, always say "contribute", never "review".
+Do not use "review" for contributors or "contribute" for reviewers.
 
 ## Process Verification
 
 The process checker (`tools/process-checker.js`) runs after sub-agent invocations. It checks only:
 
 - If outputs are declared in state, do the files exist on disk?
-- If reviews are declared and stage is past review, did all reviewers review?
+- If contributions are declared and stage is past the contribution step, did all contributors contribute?
 
 It does not track state transitions. It does not check content quality.
 

@@ -46,8 +46,8 @@
               "clarification-provided",
               "further-clarification",
               "artifact-generated",
-              "review-needed",
-              "reviewed",
+              "contribution-needed",
+              "contributed",
               "refined",
               "final-review-needed",
               "final-review-complete",
@@ -71,20 +71,20 @@
             "type": "string",
             "description": "Persona assigned as final reviewer (e.g. product-lead)"
           },
-          "reviews": {
+          "contributions": {
             "type": "array",
-            "description": "Review status for each assigned contributor",
+            "description": "Contribution status for each assigned contributor",
             "items": {
               "type": "object",
-              "required": ["persona", "reviewed"],
+              "required": ["persona", "contributed"],
               "properties": {
                 "persona": {
                   "type": "string",
                   "description": "Contributor persona name"
                 },
-                "reviewed": {
+                "contributed": {
                   "type": "boolean",
-                  "description": "Whether this persona has completed their review"
+                  "description": "Whether this persona has completed their contribution"
                 }
               }
             }

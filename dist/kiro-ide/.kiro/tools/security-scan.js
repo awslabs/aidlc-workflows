@@ -2,7 +2,7 @@
 /**
  * security-scan.js
  *
- * A tool used by the security-engineer persona during review of
+ * A tool used by the security-engineer persona during contribution to
  * code-generation and infrastructure-design stages.
  *
  * Wraps external security scanning tools (semgrep, checkov, trivy)

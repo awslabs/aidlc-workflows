@@ -15,7 +15,7 @@ behaviour: |
   - Coherence — do the parts fit together without contradictions?
   - Traceability — can you trace from input (intent/requirements) through to output?
   - Template compliance — does the output follow the expected structure?
-  - Nothing dropped — were all questions answered, all review comments addressed?
+  - Nothing dropped — were all questions answered, all contributor contributions addressed?
 
 associated-skills:
   - quality-review

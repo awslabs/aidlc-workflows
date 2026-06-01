@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * process-checker.js — Verifies artifacts and reviews for the current active stage.
+ * process-checker.js — Verifies artifacts and contributions for the current active stage.
  *
  * Only checks the current active stage (not complete, not pending).
  * Checks:
  *   1. If outputs declared, do the files exist on disk?
- *   2. If reviews declared and stage is past review, did all reviewers review?
+ *   2. If contributions declared and stage is past the contribution step, did all contributors contribute?
  *
  * If there's nothing to check, says so and passes.
  *
@@ -81,13 +81,13 @@ if (activeStage.outputs && activeStage.outputs.length > 0) {
   }
 }
 
-// 2. If reviews declared and stage is past review, verify all reviewed
-if (activeStage.reviews && activeStage.reviews.length > 0 && ["refined", "presented", "changes-requested", "complete"].includes(activeStage.status)) {
-  for (const review of activeStage.reviews) {
-    if (review.reviewed) {
-      details.push(`${review.persona} reviewed`);
+// 2. If contributions declared and stage is past the contribution step, verify all contributed
+if (activeStage.contributions && activeStage.contributions.length > 0 && ["refined", "presented", "changes-requested", "complete"].includes(activeStage.status)) {
+  for (const contribution of activeStage.contributions) {
+    if (contribution.contributed) {
+      details.push(`${contribution.persona} contributed`);
     } else {
-      failures.push(`${review.persona} has not reviewed but stage is at '${activeStage.status}'`);
+      failures.push(`${contribution.persona} has not contributed but stage is at '${activeStage.status}'`);
     }
   }
 }
