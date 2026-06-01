@@ -2,7 +2,7 @@
   "title": "Intent State",
   "description": "Tracks progress through the workflow. One file per intent at state/state.json.",
   "type": "object",
-  "required": ["intent", "created", "updated", "path", "stages"],
+  "required": ["intent", "created", "updated", "stages"],
   "properties": {
     "intent": {
       "type": "string",
@@ -17,10 +17,6 @@
       "type": "string",
       "format": "date-time",
       "description": "Last state update timestamp"
-    },
-    "path": {
-      "type": "string",
-      "description": "Which workflow path was chosen (e.g. A, B, C, D, or custom)"
     },
     "stages": {
       "type": "array",

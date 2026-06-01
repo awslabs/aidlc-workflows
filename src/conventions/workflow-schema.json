@@ -2,15 +2,11 @@
   "title": "Composed Workflow",
   "description": "The adaptive workflow composed for a specific intent. Persisted at workflow.json in the intent directory.",
   "type": "object",
-  "required": ["intent", "path", "composed", "stages"],
+  "required": ["intent", "composed", "stages"],
   "properties": {
     "intent": {
       "type": "string",
       "description": "Intent name/slug"
-    },
-    "path": {
-      "type": "string",
-      "description": "Which standard path was chosen (A, B, C, D, or custom)"
     },
     "composed": {
       "type": "string",

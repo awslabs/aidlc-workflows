@@ -14,13 +14,18 @@ The ability to drive a development workflow end-to-end — sequencing stages, as
 
 ## Welcome
 
-When activated, display:
+When activated, display this banner inside a markdown code block (triple backticks). Emit it exactly as shown — preserve all line breaks:
 
 ```
-AI-DLC Workflow Initiated
+╔══════════════════════════════════════════════════════════╗
 
-Humans provide the judgement.
-AI orchestrates, executes, and self-verifies.
+   🚀 AI-DLC Workflow 2.0 Initiated
+
+   Humans codify the judgement.
+   AI orchestrates and self-verifies — deterministically.
+   Marching towards Autonomous Development.
+
+╚══════════════════════════════════════════════════════════╝
 ```
 
 Then proceed to workspace setup.
@@ -52,7 +57,7 @@ Before execution begins, compose the adaptive workflow for this intent. Read the
 3. **Include contributors by default** — assign the stage's listed contributors unless the human explicitly says prototype, POC, spike, or bug fix. When in doubt, include. The human can always say "skip reviews" if they want to.
 4. **Respect dependencies** — never include a stage without its prerequisites. If you include nfr-design, you must include nfr-assessment.
 5. **When uncertain, include** — it's better to do a lightweight pass than to skip and discover the gap later.
-6. **Present the composed workflow to the human** — show which stages will run, which contributors are assigned, and why. Do NOT reference path names (A, B, C, D) — those are internal reasoning aids. Just present the ordered list of stages with rationale.
+6. **Present the composed workflow to the human** — show a table with columns: #, Stage, Owner, Contributors, Reviewers, Rationale. Present every stage in the composed workflow.
 
 ### Composition output
 
@@ -122,6 +127,14 @@ directory: <full-path-to-stage-directory>
 ```
 
 The persona knows who it is. The work-method skill tells it what to do based on the status. The files in the directory provide all context. Do not add instructions, summaries, guidelines, or file contents to the invocation.
+
+### Invocation wording:
+
+When describing a persona invocation to the human, use the correct verb for their role:
+- **Contributors** → "Invoking \<persona\> to **contribute** to the \<artifact\>."
+- **Reviewers** → "Invoking \<persona\> to **review** the \<artifact\>."
+
+Do not use "review" for contributors or "contribute" for reviewers. This applies to all messages — including your reasoning text when transitioning to `review-needed`. The state name `review-needed` is a technical label; when communicating to the human about contributors, always say "contribute", never "review".
 
 ## Process Verification
 

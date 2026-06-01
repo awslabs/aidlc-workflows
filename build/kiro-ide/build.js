@@ -154,8 +154,8 @@ function personaToAgent(yamlContent) {
     promptLines.push("");
   }
 
-  // Append platform-specific prompt augment if it exists
-  const augmentFile = path.join(SRC, "platform-config", "kiro-ide", "persona-prompt-augment.yaml");
+  // Append target-specific prompt augment if it exists
+  const augmentFile = path.join(SRC, "target-config", "kiro-ide", "persona-prompt-augment.yaml");
   if (fs.existsSync(augmentFile)) {
     const augmentContent = fs.readFileSync(augmentFile, "utf-8");
     const augment = parseYaml(augmentContent);
@@ -220,7 +220,7 @@ cpR(path.join(SRC, "conventions"), path.join(OUT, "conventions"));
 cpR(path.join(SRC, "tools"), path.join(OUT, "tools"));
 
 // 6. Copy Kiro-specific hooks
-const hooksSrc = path.join(SRC, "platform-config", "kiro-ide", "hooks");
+const hooksSrc = path.join(SRC, "target-config", "kiro-ide", "hooks");
 const hooksDest = path.join(OUT, "hooks");
 fs.mkdirSync(hooksDest, { recursive: true });
 if (fs.existsSync(hooksSrc)) {

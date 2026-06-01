@@ -61,7 +61,7 @@ src/
 │   ├── audit-schema.json            ← human decision log format
 │   ├── workflow-schema.json         ← composed workflow format
 │   └── question-format.md           ← clarification question format
-└── platform-config/                 ← platform-specific source files
+└── target-config/                   ← target-specific source files
     ├── kiro-ide/hooks/              ← Kiro-specific hooks
     └── claude-code/.keep            ← future
 ```
@@ -84,9 +84,9 @@ State your intent naturally in chat. The orchestrator activates and proposes a w
 
 The orchestrator right-sizes the workflow to your intent. You approve before it starts, and you can adjust mid-flight ("add security-engineer as reviewer").
 
-## Platform Support
+## Target Support
 
-The source is platform-agnostic. Build scripts transform it for specific targets:
+The source is target-agnostic. Build scripts transform it for specific targets:
 
 - **Kiro IDE** — `node build/kiro-ide/build.js` → `dist/kiro-ide/.kiro/`
 - **Claude Code** — coming soon

@@ -24,7 +24,7 @@ Ask me what you'd like to do.
 - `src/skills/common/` — skills auto-included in all personas
 - `src/tools/` — computational scripts
 - `src/conventions/` — schemas and format definitions
-- `src/platform-config/` — platform-specific source (hooks, augments)
+- `src/target-config/` — target-specific source (hooks, augments)
 - `build/kiro-ide/build.js` — Kiro IDE build script
 - `dist/` — generated output (never edit directly)
 

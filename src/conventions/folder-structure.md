@@ -41,5 +41,5 @@ The runtime folder structure for an intent execution. Created by the workspace-s
 2. Output artifacts live in the stage's directory.
 3. Questions asked during clarification are recorded in `questions.md` within the stage directory.
 4. `state.json` and `audit.json` are machine-parseable — see their respective schemas in `conventions/`.
-5. `workflow.json` records the composed path for this intent — see `workflow-schema.json`.
+5. `workflow.json` records the composed workflow for this intent — see `workflow-schema.json`.
 6. The workspace-setup stage creates this entire structure. No other stage creates directories.
