@@ -1,68 +1,86 @@
 # Stage Dependency Graph
 
-Directed graph of all available stages. Stages have flexible inputs — they can consume outputs from multiple predecessors or start from raw intent. The graph shows data flow possibilities, not a rigid sequence.
+Directed graph of all available stages. The orchestrator reads this during workflow composition to select and order stages for a given intent.
 
-The orchestrator reads this graph, assesses what the human brings (existing documents, preferences), and composes the right ordering. Example orderings are recommendations — the human confirms or overrides.
-
-## Stages
+## All Stages
 
 ### Meta stages (always run, owned by orchestrator)
 
-| Stage | Prerequisites | Produces |
+| Stage | Purpose |
+|---|---|
+| workspace-setup | Create intent directory skeleton |
+| workflow-composition | Compose the adaptive workflow for this intent |
+
+### Domain stages
+
+| Stage | Purpose | Owner |
 |---|---|---|
-| workspace-setup | (entry point — raw intent) | intent directory, intent.md, state.json, audit.json |
-| workflow-composition | workspace-setup | workflow.json |
+| reverse-engineering | Analyse existing codebase, produce design artifacts describing what exists | solutions-architect |
+| requirements-analysis | Elicit and structure requirements from intent | product-owner |
+| story-generation | Decompose requirements into implementable stories | product-owner |
+| wireframe-design | Design UI screens as HTML wireframes | ux-designer |
+| application-design | Design logical component structure, services, dependencies | solutions-architect |
+| code-generation | Generate production code in layers | (tbd) |
+| build-and-test | Build, test, and verify the code | (tbd) |
 
-### Domain stages (selected per intent)
+## Dependencies
 
-| Stage | Can Start From | Produces |
-|---|---|---|
-| requirements-analysis | intent, wireframes, stories, or existing docs | `requirements.md` |
-| story-generation | requirements, intent, or wireframes | `stories.md`, `personas.md` |
-| wireframe-design | stories + personas, requirements, or intent | `screen-data-map.md`, `screen-structure.md`, `wireframe-guidance.md` |
+Stages have flexible inputs — they can start from multiple predecessors or directly from intent. This is not a rigid pipeline.
 
-## Example Orderings
+| Stage | Can consume from |
+|---|---|
+| reverse-engineering | intent (target codebase must be accessible) |
+| requirements-analysis | intent, wireframes, stories, existing docs, RE artifacts |
+| story-generation | requirements, intent, wireframes |
+| wireframe-design | stories + personas, requirements, intent |
+| application-design | requirements, stories, wireframes, RE artifacts |
+| code-generation | application-design, stories, requirements |
+| build-and-test | code-generation output |
 
-These are common orderings for domain stages. The orchestrator proposes one based on the intent and confirms with the human during workflow-composition.
+## Composition Rules
 
-### Requirements-first (default)
+These rules guide the orchestrator when composing a workflow. They are internal reasoning — do not surface rule names or path labels to the human.
 
-```
-workspace-setup → workflow-composition → requirements-analysis → story-generation → wireframe-design
-```
+### Entry point detection
 
-Best for: complex systems, compliance-heavy projects, teams that want formal requirements before design.
+The orchestrator must assess what the human brings:
 
-### Wireframes-first
+- **Raw intent only** → start from requirements-analysis or wireframe-design (ask which)
+- **Existing requirements doc provided** → skip requirements-analysis (or run in validate-and-augment mode)
+- **Existing stories provided** → skip story-generation
+- **Existing wireframes provided** → skip wireframe-design, derive requirements from them if needed
+- **Existing codebase (brownfield)** → check if org-ai-kb has context; if not, reverse-engineering needed
+- **Bug fix intent** → minimal workflow (maybe just code-generation → build-and-test)
+- **Feature intent on existing system** → reverse-engineering + partial workflow
 
-```
-workspace-setup → workflow-composition → wireframe-design → story-generation → requirements-analysis
-```
+### Greenfield vs Brownfield
 
-Best for: UI-heavy products, design-thinking teams, prototyping-first approaches.
+- **Greenfield** — no existing codebase. Reverse-engineering only if learning from another repo.
+- **Brownfield** — existing codebase. Check org-ai-kb for existing context:
+  - Context exists → skip reverse-engineering, use existing artifacts
+  - No context → reverse-engineering first, one invocation per repo in scope
+- **Mixed** — some repos exist, some are new. RE the existing ones.
 
-### Stories-first
+### Right-sizing
 
-```
-workspace-setup → workflow-composition → story-generation → requirements-analysis → wireframe-design
-```
+- A trivial bug fix: code-generation → build-and-test (maybe requirements-analysis for documentation)
+- A simple utility: requirements-analysis → code-generation → build-and-test
+- A feature add (brownfield): reverse-engineering → requirements-analysis → story-generation → application-design → code-generation → build-and-test
+- A full greenfield system: requirements-analysis → story-generation → wireframe-design → application-design → code-generation → build-and-test
+- Wireframes only: wireframe-design (possibly requirements-analysis first)
+- Migration: reverse-engineering → requirements-analysis → application-design → code-generation → build-and-test
 
-Best for: agile teams that think in user stories, teams that find formal requirements too heavy upfront.
+### User-specified ordering
 
-### Minimal (skip stages)
+The human may specify their preferred order (e.g. "requirements then wireframes before stories"). Respect their preference — rearrange stages accordingly. The dependency graph allows flexible ordering as long as each stage has at least one valid input available.
 
-```
-workspace-setup → workflow-composition → story-generation → (downstream)
-```
+### Artifacts provided by human
 
-Best for: small features, bug fixes, teams that provide their own requirements document.
+If the human provides artifacts (files, MCP sources, or paste in chat):
+- Treat them as the output of the stage that would have produced them
+- Skip that stage (or offer to validate/augment the provided artifact)
+- Proceed with the next stage using the provided artifact as input
 
-## Rules
+### Reverse-engineering for learning
 
-1. Meta stages always run first, in order. They are not optional.
-2. Domain stages are selected during workflow-composition based on the intent.
-3. Every domain stage can start from raw intent as a minimum — no stage is blocked if upstream stages are skipped.
-4. Stages produce richer output when they have richer input.
-5. The orchestrator proposes an ordering and confirms with the human before starting. The human may reorder, skip, or add stages.
-6. If a stage's output already exists (human provided it), the stage can be skipped or run in "validate and augment" mode.
-7. Customers may add stages by creating a new folder under `stages/` with `definition.md` + `templates/` and updating this graph.
+Even in greenfield, the human may want to reverse-engineer an existing repo to learn patterns, conventions, or architecture. Include RE when the human references an existing codebase they want to learn from, regardless of whether the new system will modify it.
