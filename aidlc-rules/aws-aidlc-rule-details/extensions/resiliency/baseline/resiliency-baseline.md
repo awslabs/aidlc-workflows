@@ -2,7 +2,7 @@
 
 ## Overview
 These resiliency rules are MANDATORY cross-cutting constraints that apply across all AI-DLC phases. They are derived from established cloud reliability frameworks (such as the AWS Well-Architected Reliability Pillar and 
-resilience best practices). The rules are organized across six pillars: Business Goals, Change Management & Automation, Integrated Observability, High Availability, Disaster Recovery, and Continuous Improvement.
+resilience best practices) and apply to workloads on any cloud provider. The rules are organized across six pillars: Business Goals, Change Management & Automation, Integrated Observability, High Availability, Disaster Recovery, and Continuous Improvement.
 
 **Enforcement**: At each applicable stage, the model MUST verify compliance with these rules before presenting the stage completion message to the user.
 
@@ -20,6 +20,22 @@ All rules in this document are **blocking** by default. If any rule's verificati
 
 ### Verification Criteria Format
 Verification items in this document are plain bullet points describing compliance checks. They are distinct from the `- [ ]` / `- [x]` progress-tracking checkboxes used in stage plan files. Each item should be evaluated as compliant or non-compliant during review.
+
+### User Decision Points (the model MUST ask, NOT decide)
+This extension follows the AI-DLC principle that architectural and process decisions belong to the user, not the LLM. The model MUST present the clarifying questions defined in the rules below and use the user's answers — it MUST NOT silently choose on the user's behalf. The decisions explicitly deferred to the user are:
+
+| Decision | Rule | Question presented |
+|---|---|---|
+| RTO/RPO targets and DR strategy | RESILIENCY-02 | DR strategy selection (Backup&Restore → Active/Active) |
+| Change management process | RESILIENCY-03 | Use existing org process vs propose vs exempt |
+| CI/CD tooling | RESILIENCY-04 | Use existing pipeline vs propose |
+| Rollback mechanism | RESILIENCY-04 | Version redeploy / blue-green / canary / DB-aware / existing |
+| Deployment style | RESILIENCY-04 | Direct / rolling / blue-green / canary |
+| Regional topology | RESILIENCY-08 | Single-region multi-zone vs multi-region active-passive/active |
+| Incident response process | RESILIENCY-15 | Use existing org process vs propose |
+| Resiliency testing approach | RESILIENCY-14 | Use existing practice vs propose vs defer to Operations |
+
+Where an organization already has a process (change management, CI/CD, incident response, DR testing), the model MUST reference and conform to it rather than inventing a new one.
 
 ---
 
@@ -83,31 +99,81 @@ The user's selected RTO/RPO targets MUST be documented in the requirements outpu
 
 ## Rule RESILIENCY-03: Change Management Process
 
-**Rule**: Every project MUST have a documented change management process that minimizes the risk of change-induced failures:
-- **Change documentation**: All production changes MUST be documented with scope, risk assessment, and rollback plan
-- **Change approval**: Changes to critical workloads MUST require explicit approval before deployment
-- **Change history**: A record of all production changes MUST be maintained for post-incident analysis
+**Rule**: Every project MUST integrate with a change management process that minimizes the risk of change-induced failures. The default expectation is that the organization already HAS a change management process — this rule directs the project to identify and conform to it, not to invent a new one.
+
+**Clarifying Question (ask during Requirements; do not assume an answer)**:
+
+```markdown
+## Question: Change Management Process
+How should production changes for this workload be governed? AI-DLC will conform the design to your answer rather than inventing a process.
+
+A) Use our existing organizational change management process — provide the name/tool (e.g., ServiceNow, Jira Change, internal CAB). AI-DLC will reference it and ensure deployable artifacts fit that process (change records, approval gates).
+B) No formal process exists yet — AI-DLC should propose a lightweight change management process (change record + approval + rollback note) for the team to adopt.
+C) N/A — this workload is exempt from formal change management (e.g., internal tooling). Document the exemption rationale.
+X) Other (describe after [Answer]: tag below)
+
+[Answer]: 
+```
 
 **Verification**:
-- A change management process is documented (or referenced from organizational standards)
-- Production changes include rollback plans
-- Change history is auditable
+- The change management process is identified by name (existing org process) OR explicitly proposed/exempted per the user's answer
+- Production changes reference the identified process for approval and change records
+- Change history mechanism is identified (existing tool or proposed)
+
+**Note**: If the user selects A, the model MUST NOT redefine the process — only reference it and ensure artifacts (e.g., deployment configs, runbooks) are compatible with it.
 
 ---
 
 ## Rule RESILIENCY-04: Automated Deployment and Rollback
 
-**Rule**: All production deployments MUST be automated with clearly defined rollback procedures:
-- **Infrastructure as Code**: All infrastructure MUST be defined using IaC (e.g., cloudformation templates, Terraform, Pulumi, or equivalent) — no manual console changes in production
-- **Automated deployment**: A CI/CD pipeline or automated deployment process MUST be defined
-- **Rollback procedure**: Every deployment MUST have a documented and tested rollback mechanism
-- **Blue/green or canary**: Critical workloads SHOULD use progressive deployment strategies (blue/green, canary, or rolling) to limit blast radius
+**Rule**: All production deployments ideally should be automated, and the rollback approach MUST be explicitly chosen by the user — not inferred by the model. The project MUST reuse the organization's existing CI/CD tooling and deployment conventions where they exist.
+
+**Definitions** (to remove ambiguity):
+- **Rollback**: The defined mechanism to return the running workload to its last known-good state after a failed deployment. This rule does NOT assume a specific mechanism — the user selects one below.
+- **Deployment style**: The strategy used to release a change (direct/in-place, rolling, blue/green, or canary).
+
+**Clarifying Questions (ask during Requirements or NFR Design; do not assume answers)**:
+
+```markdown
+## Question: CI/CD and Deployment Tooling
+What CI/CD tooling and deployment process should this workload use?
+
+A) Use our existing CI/CD pipeline — provide the tool (e.g., GitHub Actions, GitLab CI, Jenkins, CodePipeline). AI-DLC will produce artifacts compatible with it.
+B) No pipeline exists — AI-DLC should propose a CI/CD pipeline definition appropriate to the chosen IaC and runtime.
+X) Other (describe after [Answer]: tag below)
+
+[Answer]: 
+
+## Question: Rollback Mechanism
+How should a failed production deployment be rolled back?
+
+A) Redeploy previous IaC/artifact version (version-pinned rollback)
+B) Blue/green swap back to the previous environment
+C) Canary auto-rollback on health/metric regression
+D) Database-aware rollback required (schema/data migration reversal) — flag for explicit design
+E) Use our organization's existing rollback procedure — provide reference
+X) Other (describe after [Answer]: tag below)
+
+[Answer]: 
+
+## Question: Deployment Style
+What deployment strategy is acceptable for this workload's risk profile?
+
+A) Direct / in-place (lowest cost, highest blast radius) — acceptable for non-critical workloads
+B) Rolling (gradual instance replacement)
+C) Blue/green (zero-downtime cutover, higher cost)
+D) Canary (progressive traffic shift with automated rollback)
+X) Other (describe after [Answer]: tag below)
+
+[Answer]: 
+```
 
 **Verification**:
-- All infrastructure is defined in IaC templates (no manual resource creation)
-- Deployment steps are automated or scripted (not manual console clicks)
-- Rollback procedures are documented for each deployable component
-- Deployment strategy is documented (direct, rolling, blue/green, canary)
+- IaC tool is identified (existing org standard or user-selected)
+- CI/CD pipeline is identified (existing) or proposed per the user's answer
+- Rollback mechanism is explicitly selected by the user and documented (not inferred)
+- Deployment style is explicitly selected by the user and matches the workload's criticality from RESILIENCY-01
+- For database-aware rollbacks (Question 2, option D), a migration reversal approach is documented
 
 ---
 
@@ -165,18 +231,37 @@ The user's selected RTO/RPO targets MUST be documented in the requirements outpu
 
 ---
 
-## Rule RESILIENCY-08: Multi-Zone Deployment
+## Rule RESILIENCY-08: Multi-Zone and Multi-Region Deployment
 
-**Rule**: All production workloads MUST be deployed across multiple availability zones (or equivalent fault isolation boundaries) to mitigate datacenter-level failures:
+**Rule**: Production workloads MUST have an explicitly chosen fault-isolation topology. The multi-zone baseline is required for production; the multi-region decision MUST be made by the user (driven by the RTO/RPO answer in RESILIENCY-02), not inferred by the model.
+
+**Multi-zone baseline (required for production)**:
 - **Compute**: Compute resources (VMs, container clusters) MUST be distributed across at least 2 availability zones. Serverless services are typically multi-zone by default.
 - **Data stores**: Databases and caches MUST use multi-zone configurations (replicated, clustered, or globally distributed)
 - **Load balancing**: Traffic MUST be distributed across zones using a load balancer or DNS-based routing
-- **Static stability**: The architecture MUST be able to continue operating if one zone becomes unavailable, without requiring control plane operations to recover
+- **Static stability**: The architecture MUST continue operating if one zone becomes unavailable, without requiring control plane operations to recover
+
+**Multi-region decision (user-driven — do not infer)**:
+
+The choice between single-region multi-zone and multi-region is a cost/complexity tradeoff that MUST be made by the user. If the RESILIENCY-02 answer was D (Active/Active) or C (Warm Standby with cross-region scope), multi-region is implied — confirm with the user. Otherwise ask:
+
+```markdown
+## Question: Regional Topology
+Does this workload require multi-region deployment, or is single-region with multi-zone redundancy sufficient?
+
+A) Single-region, multi-zone — tolerates zone failure, not full-region failure. Lower cost. (Aligns with RTO/RPO options A/B/E.)
+B) Multi-region active-passive — survives region failure with failover. Higher cost. (Aligns with Warm Standby / Pilot Light cross-region.)
+C) Multi-region active-active — survives region failure with no downtime. Highest cost. (Aligns with Active/Active.)
+X) Other (describe after [Answer]: tag below)
+
+[Answer]: 
+```
 
 **Verification**:
 - Compute resources are deployed across 2+ availability zones (or use inherently multi-zone serverless services)
 - Data stores use multi-zone configurations
 - Load balancing distributes traffic across zones
+- The multi-region topology is explicitly selected by the user and consistent with the RTO/RPO target from RESILIENCY-02
 - Architecture documentation confirms static stability (no control plane dependency for zone failover)
 
 ---
@@ -280,33 +365,55 @@ The user's selected RTO/RPO targets MUST be documented in the requirements outpu
 
 ## Rule RESILIENCY-14: Chaos Engineering and DR Testing
 
-**Rule**: Resiliency mechanisms MUST be tested regularly to validate they work as expected:
-- **DR drills**: DR failover procedures MUST be tested at least annually (more frequently for critical workloads)
-- **Chaos experiments**: Production or pre-production environments SHOULD run controlled chaos experiments (using a fault injection or chaos engineering tool) to discover unknown failure modes
-- **Game days**: Teams SHOULD conduct periodic game days to practice incident response and validate runbooks
-- **Test documentation**: All resiliency tests MUST be documented with results, findings, and remediation actions
+**Rule**: Resiliency mechanisms MUST have a defined testing approach. Where the organization already has DR testing or chaos engineering practices, this rule directs the project to reference them rather than invent new ones.
+
+**Clarifying Question (ask during NFR Design; do not assume)**:
+
+```markdown
+## Question: Resiliency Testing Approach
+How will resiliency mechanisms (failover, recovery) be validated?
+
+A) Use our existing DR testing / game day / chaos engineering practice — provide the reference. AI-DLC will document test scenarios that fit it.
+B) No practice exists — AI-DLC should propose a DR testing schedule and chaos experiment plan for adoption.
+C) Defer to the Operations phase — capture test scenarios now, execute during Operations.
+X) Other (describe after [Answer]: tag below)
+
+[Answer]: 
+```
 
 **Verification**:
-- DR testing schedule is defined (at minimum annually)
-- Chaos engineering approach is documented (even if planned for future implementation)
-- Test results and findings are tracked and remediated
-- Game day or incident simulation exercises are planned or conducted
+- A resiliency testing approach is identified (existing practice, proposed plan, or deferred to Operations per the user's answer)
+- DR test scenarios are documented for the selected DR strategy (RESILIENCY-11)
+- Test results tracking mechanism is identified (existing or proposed)
+
+**Note**: Execution of chaos experiments and DR drills is an Operations-phase activity. This rule ensures the test scenarios and schedule are captured at design time so Operations has a defined starting point.
 
 ---
 
 ## Rule RESILIENCY-15: Incident Response and Correction of Errors
 
-**Rule**: Every project MUST have an incident response process and a mechanism for learning from failures:
-- **Incident response plan**: A documented incident response process MUST exist covering detection, triage, mitigation, and resolution
-- **Correction of Errors (COE)**: Post-incident reviews MUST be conducted for all significant outages, documenting root cause, timeline, impact, and corrective actions
-- **Action tracking**: Corrective actions from COEs MUST be tracked to completion
-- **Knowledge sharing**: Lessons learned from incidents MUST be shared with the broader team
+**Rule**: Every project MUST integrate with an incident response process. As with change management, the default expectation is that the organization already HAS an incident response process — this rule directs the project to reference and conform to it.
+
+**Clarifying Question (ask during Requirements or NFR Design; do not assume)**:
+
+```markdown
+## Question: Incident Response Process
+How are production incidents handled for this workload?
+
+A) Use our existing incident response process — provide the reference (e.g., PagerDuty runbooks, internal IR/on-call process). AI-DLC will align alerting and runbooks to it.
+B) No formal process exists — AI-DLC should propose a lightweight incident response and Correction of Errors (COE) process for adoption.
+X) Other (describe after [Answer]: tag below)
+
+[Answer]: 
+```
 
 **Verification**:
-- An incident response plan is documented (or referenced from organizational standards)
-- A COE/post-mortem process is defined
-- Corrective action tracking mechanism exists
-- Knowledge sharing process is documented
+- The incident response process is identified by name (existing) or proposed per the user's answer
+- A COE/post-mortem mechanism is identified (existing org practice or proposed)
+- Alerting from RESILIENCY-05 routes into the identified incident response process
+- Corrective action tracking mechanism is identified
+
+**Note**: If the user selects A, the model MUST reference the existing process and ensure observability/alerting integrates with it — not redefine it.
 
 ---
 
