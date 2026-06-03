@@ -58,7 +58,7 @@ uv sync
 uv run aidlc-runner --vision <path-to-vision-file> [--tech-env <path-to-tech-env-file>] [options]
 ```
 
-The only required argument is `--vision`, which points to a markdown file describing what to build. Optionally, `--tech-env` provides a technical environment document that defines how to build it (languages, frameworks, security controls, testing standards). See the [input document guide](GUIDE_TO_WRITING_VISION_DOCS.md) for details on writing these documents.
+The only required argument is `--vision`, which points to a markdown file describing what to build. Optionally, `--tech-env` provides a technical environment document that defines how to build it (languages, frameworks, security controls, testing standards). See the [input document guide](../../../../docs/writing-inputs/inputs-quickstart.md) for details on writing these documents.
 
 ### Examples
 
