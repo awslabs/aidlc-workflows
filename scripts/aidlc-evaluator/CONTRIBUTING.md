@@ -146,7 +146,7 @@ When reporting bugs or requesting features:
 ## Questions?
 
 - Review [FAQ.md](./FAQ.md) for common questions
-- Check [OPERATING_PRINCIPLES.md](./OPERATING_PRINCIPLES.md) for decision-making guidance
+- Check the [Tenets](../../README.md#tenets) for decision-making guidance
 - Ask in PR comments or open a discussion
 
 ## Code of Conduct
