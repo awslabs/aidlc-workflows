@@ -20,6 +20,7 @@ Directed graph of all available stages. The orchestrator reads this during workf
 | story-generation | Decompose requirements into implementable stories | product-owner |
 | wireframe-design | Design UI screens as HTML wireframes | ux-designer |
 | application-design | Design logical component structure, services, dependencies | solutions-architect |
+| units-generation | Decompose application design into implementable units of work | systems-architect |
 | code-generation | Generate production code in layers | (tbd) |
 | build-and-test | Build, test, and verify the code | (tbd) |
 
@@ -34,7 +35,8 @@ Stages have flexible inputs — they can start from multiple predecessors or dir
 | story-generation | requirements, intent, wireframes |
 | wireframe-design | stories + personas, requirements, intent |
 | application-design | requirements, stories, wireframes, RE artifacts |
-| code-generation | application-design, stories, requirements |
+| units-generation | application-design (components + interactions must be known) |
+| code-generation | units-generation, application-design, stories, requirements |
 | build-and-test | code-generation output |
 
 ## Composition Rules
