@@ -17,7 +17,9 @@ Should the resiliency baseline be applied to this project?
 Treat the output as a well-grounded **first draft of your resiliency posture** to build on and validate — not a finished, production-certified result.
 
 A) Yes — apply the resiliency baseline as directional best practices and design-time guidance (recommended for business-critical workloads, as an informed starting point that you can validate and harden before go-live)
+
 B) No — skip the resiliency baseline (suitable for PoCs, prototypes, and experimental projects where rapid iteration matters more than reliability)
+
 X) Other (please describe after [Answer]: tag below)
 
 [Answer]: 

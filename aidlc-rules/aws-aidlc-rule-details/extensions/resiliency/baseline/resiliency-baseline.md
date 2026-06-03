@@ -80,10 +80,15 @@ Before finalizing the Requirements phase, the model MUST ask the user the follow
 What are your Recovery Time Objective (RTO) and Recovery Point Objective (RPO) goals? These determine the appropriate Disaster Recovery strategy and infrastructure redundancy level.
 
 A) RPO/RTO: Hours — Backup & Restore strategy. Lowest cost ($). Data backed up, no services deployed. Redeploy from IaC and restore from backups on failure. Suitable for non-critical workloads.
+
 B) RPO/RTO: 10s of minutes — Pilot Light strategy. Cost: $$. Data live, services idle. Infrastructure deployed but not running, scaled up on failover. Suitable for important workloads.
+
 C) RPO/RTO: Minutes — Warm Standby strategy. Cost: $$$. Data live, services run at reduced capacity. Scaled up during failover. Suitable for business-critical applications.
+
 D) RPO/RTO: Near real-time — Multi-site Active/Active strategy. Highest cost ($$$$). Data live, live services in multiple regions simultaneously. Suitable for mission-critical, zero-downtime requirements.
+
 E) N/A — Single-region deployment is acceptable, no cross-region DR needed. Rely on multi-zone availability within one region.
+
 X) Other (please describe after [Answer]: tag below)
 
 [Answer]: 
@@ -108,8 +113,11 @@ The user's selected RTO/RPO targets MUST be documented in the requirements outpu
 How should production changes for this workload be governed? AI-DLC will conform the design to your answer rather than inventing a process.
 
 A) Use our existing organizational change management process — provide the name/tool (e.g., ServiceNow, Jira Change, internal CAB). AI-DLC will reference it and ensure deployable artifacts fit that process (change records, approval gates).
+
 B) No formal process exists yet — AI-DLC should propose a lightweight change management process (change record + approval + rollback note) for the team to adopt.
+
 C) N/A — this workload is exempt from formal change management (e.g., internal tooling). Document the exemption rationale.
+
 X) Other (describe after [Answer]: tag below)
 
 [Answer]: 
@@ -139,7 +147,9 @@ X) Other (describe after [Answer]: tag below)
 What CI/CD tooling and deployment process should this workload use?
 
 A) Use our existing CI/CD pipeline — provide the tool (e.g., GitHub Actions, GitLab CI, Jenkins, CodePipeline). AI-DLC will produce artifacts compatible with it.
+
 B) No pipeline exists — AI-DLC should propose a CI/CD pipeline definition appropriate to the chosen IaC and runtime.
+
 X) Other (describe after [Answer]: tag below)
 
 [Answer]: 
@@ -148,10 +158,15 @@ X) Other (describe after [Answer]: tag below)
 How should a failed production deployment be rolled back?
 
 A) Redeploy previous IaC/artifact version (version-pinned rollback)
+
 B) Blue/green swap back to the previous environment
+
 C) Canary auto-rollback on health/metric regression
+
 D) Database-aware rollback required (schema/data migration reversal) — flag for explicit design
+
 E) Use our organization's existing rollback procedure — provide reference
+
 X) Other (describe after [Answer]: tag below)
 
 [Answer]: 
@@ -160,9 +175,13 @@ X) Other (describe after [Answer]: tag below)
 What deployment strategy is acceptable for this workload's risk profile?
 
 A) Direct / in-place (lowest cost, highest blast radius) — acceptable for non-critical workloads
+
 B) Rolling (gradual instance replacement)
+
 C) Blue/green (zero-downtime cutover, higher cost)
+
 D) Canary (progressive traffic shift with automated rollback)
+
 X) Other (describe after [Answer]: tag below)
 
 [Answer]: 
@@ -250,8 +269,11 @@ The choice between single-region multi-zone and multi-region is a cost/complexit
 Does this workload require multi-region deployment, or is single-region with multi-zone redundancy sufficient?
 
 A) Single-region, multi-zone — tolerates zone failure, not full-region failure. Lower cost. (Aligns with RTO/RPO options A/B/E.)
+
 B) Multi-region active-passive — survives region failure with failover. Higher cost. (Aligns with Warm Standby / Pilot Light cross-region.)
+
 C) Multi-region active-active — survives region failure with no downtime. Highest cost. (Aligns with Active/Active.)
+
 X) Other (describe after [Answer]: tag below)
 
 [Answer]: 
@@ -374,8 +396,11 @@ X) Other (describe after [Answer]: tag below)
 How will resiliency mechanisms (failover, recovery) be validated?
 
 A) Use our existing DR testing / game day / chaos engineering practice — provide the reference. AI-DLC will document test scenarios that fit it.
+
 B) No practice exists — AI-DLC should propose a DR testing schedule and chaos experiment plan for adoption.
+
 C) Defer to the Operations phase — capture test scenarios now, execute during Operations.
+
 X) Other (describe after [Answer]: tag below)
 
 [Answer]: 
@@ -401,7 +426,9 @@ X) Other (describe after [Answer]: tag below)
 How are production incidents handled for this workload?
 
 A) Use our existing incident response process — provide the reference (e.g., PagerDuty runbooks, internal IR/on-call process). AI-DLC will align alerting and runbooks to it.
+
 B) No formal process exists — AI-DLC should propose a lightweight incident response and Correction of Errors (COE) process for adoption.
+
 X) Other (describe after [Answer]: tag below)
 
 [Answer]: 
