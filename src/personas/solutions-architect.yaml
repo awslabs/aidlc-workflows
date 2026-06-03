@@ -21,12 +21,14 @@ behaviour: |
 
 associated-skills:
   - system-thinking
+  - codebase-analysis
   - constraint-analysis
   - component-decomposition
   - scalability-reasoning
   - technology-evaluation
 
 stages-owned:
+  - reverse-engineering
   - application-design
   - units-generation
   - infrastructure-design
