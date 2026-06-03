@@ -12,11 +12,7 @@ Should the resiliency baseline be applied to this project?
 
 **What this extension is.** Enabling it applies a set of **directional, design-time best practices** for building resilient systems, derived from the **AWS Well-Architected Framework (Reliability Pillar)** and resilience-review guidance. It steers requirements, design, and code toward fault tolerance, high availability, observability, and recoverability — covering 15 practice areas across business goals, change management, observability, high availability, disaster recovery, and continuous improvement.
 
-**What this extension is NOT.** Enabling it does **not** make your workload production-ready, nor does it certify or guarantee any availability, RTO, or RPO target. It is a **starting point** that scaffolds good resiliency decisions early — it is not a substitute for:
-- a formal **AWS Well-Architected Review** of the built system,
-- **failure-mode and load/performance testing** (e.g., AZ-loss drills, dependency-outage tests, concurrency/throughput testing),
-- **infrastructure verification** of the actual deployed resources (the design phase captures intent and directional templates; production hardening and validation continue into Construction and the Operations phase), and
-- **human engineering review** of application-level correctness (e.g., concurrency, idempotency, data-integrity), which these practices guide but cannot fully verify.
+**What this extension is NOT.** Enabling it does **not** make your workload production-ready, nor does it certify or guarantee any availability, RTO, or RPO target. It is a **starting point** that scaffolds good resiliency decisions early — it is not a substitute for a formal **AWS Well-Architected Review** of the built system.
 
 Treat the output as a well-grounded **first draft of your resiliency posture** to build on and validate — not a finished, production-certified result.
 
