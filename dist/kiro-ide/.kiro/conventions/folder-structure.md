@@ -18,28 +18,35 @@ The runtime folder structure for an intent execution. Created by the workspace-s
         │   └── audit.json               participation log (machine-parseable, append-only)
         │
         └── stages/
-            ├── requirements-analysis/
-            │   ├── requirements.md
-            │   └── questions.md
-            ├── story-generation/
-            │   ├── stories.md
-            │   ├── personas.md
-            │   └── questions.md
-            ├── wireframe-design/
-            │   ├── screen-data-map.md
-            │   ├── screen-structure.md
-            │   ├── wireframe-guidance.md
-            │   └── questions.md
-            └── <stage-name>/
-                ├── <output-artifacts>
-                └── questions.md
+            ├── inception/
+            │   ├── reverse-engineering/
+            │   ├── requirements-analysis/
+            │   ├── story-generation/
+            │   ├── wireframe-design/
+            │   ├── application-design/
+            │   └── units-generation/
+            │
+            ├── construction/
+            │   ├── <unit-name>/
+            │   │   ├── functional-design/
+            │   │   ├── nfr-requirements/
+            │   │   ├── nfr-design/
+            │   │   ├── infrastructure-design/
+            │   │   └── code-generation/
+            │   └── build-and-test/
+            │
+            └── operations/
+                └── (future stages)
 ```
 
 ## Rules
 
-1. Each stage gets its own subdirectory under `stages/`.
-2. Output artifacts live in the stage's directory.
-3. Questions asked during clarification are recorded in `questions.md` within the stage directory.
-4. `state.json` and `audit.json` are machine-parseable — see their respective schemas in `conventions/`.
-5. `workflow.json` records the composed workflow for this intent — see `workflow-schema.json`.
-6. The workspace-setup stage creates this entire structure. No other stage creates directories.
+1. Stages are grouped by phase: `inception/`, `construction/`, `operations/`.
+2. Each stage gets its own subdirectory under its phase.
+3. Construction stages are scoped per-unit: `construction/<unit-name>/<stage-name>/`.
+4. `build-and-test` sits at the construction level (not per-unit) — it runs after all units.
+5. Output artifacts live in the stage's directory.
+6. Questions asked during clarification are recorded in `questions.md` within the stage directory.
+7. `state.json` and `audit.json` are machine-parseable — see their respective schemas in `conventions/`.
+8. `workflow.json` records the composed workflow for this intent — see `workflow-schema.json`.
+9. The workspace-setup stage creates the phase directories. Per-unit directories are created when units-generation completes.
