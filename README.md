@@ -248,8 +248,11 @@ The source is target-agnostic. Build scripts transform it for specific targets:
 ### Build and Install (Kiro)
 
 ```bash
+# From the aidlc-workflows directory:
 npm run build
-cp -R dist/kiro-ide/.kiro /path/to/your/project/
+
+# From your project directory:
+cp -R /path/to/aidlc-workflows/dist/kiro-ide/.kiro .
 ```
 
 ## Naming Convention
