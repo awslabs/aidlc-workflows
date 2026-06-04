@@ -15,12 +15,13 @@ Directed graph of all available stages. The orchestrator reads this during workf
 
 | Stage | Purpose | Owner |
 |---|---|---|
-| reverse-engineering | Analyse existing codebase, produce design artifacts describing what exists | solutions-architect |
+| reverse-engineering | Analyse existing codebase, produce design artifacts describing what exists | systems-architect |
 | requirements-analysis | Elicit and structure requirements from intent | product-owner |
 | story-generation | Decompose requirements into implementable stories | product-owner |
 | wireframe-design | Design UI screens as HTML wireframes | ux-designer |
 | application-design | Design logical component structure, services, dependencies | solutions-architect |
 | units-generation | Decompose application design into implementable units of work | systems-architect |
+| application-design | Design logical component structure, services, dependencies | systems-architect |
 | code-generation | Generate production code in layers | (tbd) |
 | build-and-test | Build, test, and verify the code | (tbd) |
 
