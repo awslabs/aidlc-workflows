@@ -17,7 +17,13 @@ Compose the adaptive workflow for this intent. This is a conversation, not a for
 5. **Identify what's implied** — greenfield or brownfield? Simple or complex? What stages are obviously needed, what can be skipped?
 5. **Ask only what you can't infer** — don't ask 10 questions. Ask the 1-2 that actually affect the workflow (beyond the integration scan).
 6. **Propose the workflow** — present as a table with columns: #, Stage, Owner, Contributors, Reviewer. Add a brief rationale paragraph below the table. Use language like "Here's what I think we could do" and "What do you think?"
-7. **Offer contributor choice** — ask as a question: "Do you want security/architecture review on this? I'd recommend it given [reason], but your call."
+7. **Offer to adjust** — after presenting the proposal, offer context-specific options derived from the actual workflow you just proposed. Examples of what to surface (pick what's relevant, not all):
+   - If contributors are included: "Run without reviews for a faster pass"
+   - If a stage could reasonably be skipped: "Drop [stage] if you want to defer that"
+   - If a reviewer is assigned: "Skip [reviewer] if this is exploratory"
+   - If a stage is missing that might add value: "Add [stage] if you want [benefit]"
+   
+   These should be actionable suggestions based on the proposed workflow, not generic boilerplate.
 8. **Handle artifacts the human already has** — if they mention existing docs, stories, or wireframes, ask how to source them (paste, file path, MCP) or offer to generate.
 
 ## Composition principles
