@@ -29,8 +29,6 @@ Document how patterns interact or depend on each other:
 
 ## Gaps
 
-NFR targets not yet addressed by a pattern (should be empty if design is complete):
-
 | NFR Target | Gap | Resolution path |
 |---|---|---|
-| [target] | [what's not covered] | [what's needed — deferred to infra-design? needs further analysis?] |
+| [target] | [what's not covered] | [what's needed] |

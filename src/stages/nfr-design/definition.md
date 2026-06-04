@@ -2,7 +2,7 @@
 
 ## Description
 
-Design the architectural patterns and logical components that satisfy the NFR targets established in nfr-assessment. This is about *how* to meet the quality attributes: resilience patterns, caching strategies, scaling mechanisms, observability instrumentation, security enforcement points. Technology-aware but not infrastructure-specific — it defines what logical capabilities are needed, not which cloud services implement them (that's infrastructure-design).
+Design the architectural patterns and logical components that satisfy the NFR targets established in nfr-assessment. Resilience patterns, caching strategies, scaling mechanisms, observability instrumentation, security enforcement points. Defines what logical capabilities are needed, not which cloud services implement them.
 
 ## Inputs
 

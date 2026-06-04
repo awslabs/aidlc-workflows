@@ -1,7 +1,6 @@
 # NFR Targets
 
 > Minimum structure. Sections may be omitted with rationale or extended as needed.
-> Each target traces back to an NFR in requirements.md. If a requirement is not applicable to this unit, state so.
 
 ## Unit
 
