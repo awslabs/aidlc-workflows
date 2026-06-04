@@ -2,7 +2,7 @@
 
 ## Description
 
-Map logical components from nfr-design to actual infrastructure services and define the deployment architecture for this unit.
+Map logical components from nfr-design to actual infrastructure services and define the deployment architecture.
 
 ## Inputs
 
@@ -11,10 +11,10 @@ Map logical components from nfr-design to actual infrastructure services and def
 
 ## Outputs
 
-Artifacts this stage can produce. The owner's plan determines which are relevant for this unit. Additional artifacts may be produced if the unit warrants them.
+Artifacts this stage can produce. The owner's plan determines which are relevant. Additional artifacts may be produced if warranted.
 
 - `service-mapping.md` — logical components mapped to concrete infrastructure services
-- `deployment-architecture.md` — how the unit is deployed, scaled, and networked
+- `deployment-architecture.md` — how the system is deployed, scaled, and networked
 
 ## Owner
 
