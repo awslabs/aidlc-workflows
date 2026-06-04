@@ -20,7 +20,6 @@ behaviour: |
 
 associated-skills:
   - aidlc-security-engineering-skill
-  - aidlc-work-method
 
 associated-tools:
   - security-scan
