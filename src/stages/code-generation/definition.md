@@ -19,20 +19,6 @@ Artifacts this stage can produce. The owner's plan determines which are relevant
 - Database migration scripts (if applicable)
 - API documentation generated from code (if applicable)
 
-## Execution Method
-
-The plan for this stage follows a write-test-verify cycle:
-
-1. **Project setup** — scaffold the project structure, install dependencies, verify it builds clean
-2. **Per-layer or per-feature** — for each piece of functionality:
-   - Write the production code
-   - Write the corresponding tests
-   - Run build + tests — confirm green before proceeding
-3. **Integration wiring** — connect layers, verify end-to-end flow compiles and passes
-4. **Final verification** — full build, all tests pass, no regressions
-
-Each plan step must end with a verified state. Do not proceed to the next step with a broken build.
-
 ## Owner
 
 aidlc-sw-dev-engineer-agent
