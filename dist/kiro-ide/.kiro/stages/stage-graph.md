@@ -23,6 +23,7 @@ Directed graph of all available stages. The orchestrator reads this during workf
 | units-generation | Decompose application design into implementable units of work | aidlc-systems-architect-agent |
 | functional-design | Design detailed business logic, domain entities, rules, and API spec per unit | aidlc-systems-architect-agent |
 | nfr-assessment | Operationalise NFRs into measurable targets and tech stack choices per unit | aidlc-systems-architect-agent |
+| nfr-design | Design patterns and logical components that satisfy NFR targets per unit | aidlc-systems-architect-agent |
 | code-generation | Generate production code in layers | (tbd) |
 | build-and-test | Build, test, and verify the code | (tbd) |
 
@@ -40,7 +41,8 @@ Stages have flexible inputs — they can start from multiple predecessors or dir
 | units-generation | application-design (components + interactions must be known) |
 | functional-design | units-generation (unit definition + assigned stories + contracts) |
 | nfr-assessment | requirements.md (NFR section), functional-design artifacts for this unit |
-| code-generation | functional-design, nfr-assessment, units-generation, application-design, stories, requirements |
+| nfr-design | nfr-assessment (targets + tech stack), functional-design artifacts, unit-contracts |
+| code-generation | functional-design, nfr-assessment, nfr-design, units-generation, application-design, stories, requirements |
 | build-and-test | code-generation output |
 
 ## Composition Rules
