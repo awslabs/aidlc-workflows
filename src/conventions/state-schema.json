@@ -71,6 +71,11 @@
             "type": "string",
             "description": "Persona assigned as final reviewer (e.g. product-lead)"
           },
+          "reviewIterations": {
+            "type": "integer",
+            "default": 0,
+            "description": "Number of owner→reviewer review cycles completed for this stage. Incremented each time the reviewer returns not-ready and the owner re-finalises."
+          },
           "contributions": {
             "type": "array",
             "description": "Contribution status for each assigned contributor",

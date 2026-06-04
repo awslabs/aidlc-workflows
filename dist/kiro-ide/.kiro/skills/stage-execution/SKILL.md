@@ -41,6 +41,16 @@ owner           → refined                  (addressed contributor feedback)
 orchestrator    → final-review-needed      (invokes reviewer)
 orchestrator    → final-review-complete    (reviewer has returned their review)
 owner           → finalised                (addressed reviewer feedback)
+
+--- REVIEW LOOP DECISION (orchestrator) ---
+IF reviewer verdict is "ready"        → presented (show to human)
+IF reviewer verdict is "not-ready"
+  AND reviewIterations < maxReviewIterations
+                                      → final-review-needed (increment reviewIterations, send back to owner then reviewer)
+IF reviewer verdict is "not-ready"
+  AND reviewIterations >= maxReviewIterations
+                                      → presented (reviewer bypassed, human becomes quality gate)
+
 orchestrator    → presented                (showed artifact to human)
 orchestrator    → changes-requested        (human wants changes)
 owner           → finalised                (addressed human feedback)
@@ -48,14 +58,25 @@ orchestrator    → presented                (re-showed to human)
 orchestrator    → complete                 (human approved)
 ```
 
+## Review Loop
+
+When a reviewer is assigned, the cycle between owner and reviewer repeats until either:
+1. The reviewer returns verdict "ready" — artifact proceeds to human
+2. The iteration cap (`maxReviewIterations` in workflow.json, default 3) is reached — reviewer is bypassed, artifact goes to human with unresolved findings noted
+
+After the cap is reached, the reviewer is out of the loop for that stage. The human and owner iterate directly (`presented → changes-requested → finalised → presented`) until the human approves.
+
+The `reviewIterations` counter in state.json tracks how many times the reviewer has returned "not-ready" for this stage. It is incremented each time the reviewer returns a "not-ready" verdict and the owner is sent back to address findings.
+
 ## Rules
 
 - Each actor only sets state for what THEY did — never for what someone else will do
 - When re-invoking a persona, pass all relevant files from the stage directory as context
 - If no contributors are assigned, skip review — go from `artifact-generated` to `final-review-needed` (if reviewer assigned) or `presented` (if no reviewer)
 - If no contributor comments exist, skip refine — go from `reviewed` to `final-review-needed` (if reviewer assigned) or `presented` (if no reviewer)
-- The final reviewer step is NEVER skipped when a reviewer is assigned in the workflow
-- Mandatory post-review sequence when reviewer is assigned: `refined` → `final-review-needed` → `final-review-complete` → `finalised` → `presented`
+- The final reviewer step is NEVER skipped when a reviewer is assigned — unless `reviewIterations` has reached `maxReviewIterations`
+- After the reviewer returns a verdict, the orchestrator decides next step based on verdict + iteration count (see Review Loop above)
+- Once the iteration cap is reached, the reviewer does not participate again for that stage — human and owner work together directly
 
 ## How to Invoke a Persona
 

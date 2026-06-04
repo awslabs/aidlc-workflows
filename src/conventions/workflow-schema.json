@@ -13,6 +13,11 @@
       "format": "date-time",
       "description": "When the workflow was composed"
     },
+    "maxReviewIterations": {
+      "type": "integer",
+      "default": 3,
+      "description": "Maximum number of owner→reviewer cycles before the reviewer is bypassed and the human becomes the quality gate. Applies globally to all stages."
+    },
     "stages": {
       "type": "array",
       "description": "Ordered list of stages to execute",
