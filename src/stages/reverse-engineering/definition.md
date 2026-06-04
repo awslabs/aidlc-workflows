@@ -23,12 +23,12 @@ Artifacts this stage can produce. The owner's plan determines which are relevant
 
 ## Owner
 
-systems-architect
+aidlc-systems-architect-agent
 
 ## Contributors
 
-- security-architect
+- aidlc-security-architect-agent
 
 ## Reviewer
 
-architecture-reviewer
+aidlc-architecture-reviewer-agent

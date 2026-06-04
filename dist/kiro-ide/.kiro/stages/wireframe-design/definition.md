@@ -18,13 +18,13 @@ Design the UI surface of the system — screens, layouts, navigation, and intera
 
 ## Owner
 
-ux-designer
+aidlc-ux-designer-agent
 
 ## Contributors
 
-- product-owner
-- security-engineer
+- aidlc-product-manager-agent
+- aidlc-security-architect-agent
 
 ## Reviewer
 
-product-lead
+aidlc-sw-quality-reviewer

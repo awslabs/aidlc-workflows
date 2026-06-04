@@ -64,10 +64,10 @@ These are internal reasoning aids. Do not reference them by name to the human.
 >
 > | # | Stage | Owner | Contributors | Reviewer |
 > |---|---|---|---|---|
-> | 1 | Requirements analysis | product-owner | security-engineer, solutions-architect | product-lead |
-> | 2 | Story generation | product-owner | security-engineer | product-lead |
-> | 3 | Wireframe design | ux-designer | product-owner, solutions-architect | product-lead |
-> | 4 | Application design | solutions-architect | security-engineer | product-lead |
+> | 1 | Requirements analysis | aidlc-product-manager-agent | aidlc-security-architect-agent, aidlc-systems-architect-agent | aidlc-sw-quality-reviewer |
+> | 2 | Story generation | aidlc-product-manager-agent | aidlc-security-architect-agent | aidlc-sw-quality-reviewer |
+> | 3 | Wireframe design | aidlc-ux-designer-agent | aidlc-product-manager-agent, aidlc-systems-architect-agent | aidlc-sw-quality-reviewer |
+> | 4 | Application design | aidlc-systems-architect-agent | aidlc-security-architect-agent | aidlc-architecture-reviewer-agent |
 > | 5 | Code generation | (tbd) | — | — |
 > | 6 | Build and test | (tbd) | — | — |
 >

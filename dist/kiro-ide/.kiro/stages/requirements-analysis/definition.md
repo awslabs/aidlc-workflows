@@ -17,13 +17,13 @@ Elicit, structure, and validate requirements from the human's statement of inten
 
 ## Owner
 
-product-owner
+aidlc-product-manager-agent
 
 ## Contributors
 
-- security-engineer
-- solutions-architect
+- aidlc-security-architect-agent
+- aidlc-systems-architect-agent
 
 ## Reviewer
 
-product-lead
+aidlc-sw-quality-reviewer

@@ -19,12 +19,12 @@ Artifacts this stage can produce. The owner's plan determines which are relevant
 
 ## Owner
 
-systems-architect
+aidlc-systems-architect-agent
 
 ## Contributors
 
-- product-manager
+- aidlc-product-manager-agent
 
 ## Reviewer
 
-architecture-reviewer
+aidlc-architecture-reviewer-agent
