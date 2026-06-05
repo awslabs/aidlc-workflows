@@ -79,6 +79,7 @@ The `reviewIterations` counter in state.json tracks how many times the reviewer 
 7. **In full autonomy mode**, the audit log must clearly distinguish auto-approved entries from actual human decisions. Use "auto-approved (full autonomy)" rather than recording a fabricated human decision.
 8. Each actor only sets state for what THEY did — never for what someone else will do.
 9. When re-invoking a persona, pass all relevant files from the stage directory as context.
+10. **If a stage has no `autonomy` property in workflow.json, default to `supervised`.** Human gates always block unless explicitly opted out.
 
 ## How to Invoke a Persona
 
