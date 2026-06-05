@@ -50,6 +50,12 @@
           "skip-reason": {
             "type": "string",
             "description": "Why the stage was skipped (only when skipped: true)"
+          },
+          "autonomy": {
+            "type": "string",
+            "enum": ["full", "supervised"],
+            "default": "supervised",
+            "description": "Per-stage autonomy mode. 'supervised' = human gates block and wait. 'full' = human gates auto-approve (audit notes auto-approval)."
           }
         }
       }

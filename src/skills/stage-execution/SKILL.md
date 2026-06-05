@@ -26,57 +26,59 @@ After each stage completes, update the checkpoint. This enables:
 - **Resume** — resume from the last completed stage if interrupted
 - **Visibility** — human can see what's done, in progress, and ahead
 
-## State Transitions — Who Sets What
+## State Transitions
 
-```
-orchestrator    → plan-and-clarify         (invokes owner)
-owner           → clarification-asked      (wrote questions.md + plan.md)
-orchestrator    → clarification-provided   (wrote human's answers to questions.md, then invokes owner)
-owner           → further-clarification    (needs more answers)
-orchestrator    → clarification-provided   (wrote human's follow-up answers to questions.md, then invokes owner)
-owner           → artifact-generated       (produced output artifacts)
-orchestrator    → review-needed            (invokes contributors)
-orchestrator    → reviewed                 (all contributors have returned their reviews)
-owner           → refined                  (addressed contributor feedback)
-orchestrator    → final-review-needed      (invokes reviewer)
-orchestrator    → final-review-complete    (reviewer has returned their review)
-owner           → finalised                (addressed reviewer feedback)
+Each row is one transition. The "Blocks on Human?" column determines whether the orchestrator must yield and wait for a human response before proceeding.
 
---- REVIEW LOOP DECISION (orchestrator) ---
-IF reviewer verdict is "ready"        → presented (show to human)
-IF reviewer verdict is "not-ready"
-  AND reviewIterations < maxReviewIterations
-                                      → final-review-needed (increment reviewIterations, send back to owner then reviewer)
-IF reviewer verdict is "not-ready"
-  AND reviewIterations >= maxReviewIterations
-                                      → presented (reviewer bypassed, human becomes quality gate)
+| # | From State | To State | State Setter | Activity | Blocks on Human? |
+|---|---|---|---|---|---|
+| 1 | pending | plan-and-clarify | Orchestrator | Invoke owner persona | NO |
+| 2 | plan-and-clarify | clarification-asked | Owner | Wrote plan.md (and questions.md if questions exist) | NO |
+| 3 | clarification-asked | clarification-provided | Orchestrator | Present plan and questions to human, write answers | **If supervised** |
+| 4 | clarification-provided | further-clarification | Owner | Needs more answers (optional, may skip to #6) | NO |
+| 5 | further-clarification | clarification-provided | Orchestrator | Present follow-up questions to human, write answers | **If supervised** |
+| 6 | clarification-provided | artifact-generated | Owner | Produced output artifacts | NO |
+| 7 | artifact-generated | contribution-needed | Orchestrator | Invoke contributors (skip to #10 if no contributors) | NO |
+| 8 | contribution-needed | contributed | Contributors | All contributors wrote their contribution files | NO |
+| 9 | contributed | refined | Owner | Addressed contributor feedback, updated artifacts | NO |
+| 10 | refined | final-review-needed | Orchestrator | Invoke reviewer (skip to #13 if no reviewer) | NO |
+| 11 | final-review-needed | final-review-complete | Reviewer | Returned verdict (READY or NOT-READY) | NO |
+| 12a | final-review-complete (NOT-READY, iterations < max) | final-review-needed | Orchestrator | Increment reviewIterations, send back to owner then reviewer | NO |
+| 12b | final-review-complete (READY) | presented | Orchestrator | Present artifact summary to human | NO |
+| 12c | final-review-complete (NOT-READY, iterations >= max) | presented | Orchestrator | Bypass reviewer, present to human with unresolved findings noted | NO |
+| 13 | presented | complete | Orchestrator | Record human's approval in audit, advance to next stage | **If supervised** |
+| 14 | presented | changes-requested | Orchestrator | Record human's requested changes in audit | **If supervised** |
+| 15 | changes-requested | finalised | Owner | Addressed human feedback, updated artifacts | NO |
+| 16 | finalised | presented | Orchestrator | Re-present updated artifact to human | NO |
 
-orchestrator    → presented                (showed artifact to human)
-orchestrator    → changes-requested        (human wants changes)
-owner           → finalised                (addressed human feedback)
-orchestrator    → presented                (re-showed to human)
-orchestrator    → complete                 (human approved)
-```
+## Per-Stage Autonomy
+
+Each stage in `workflow.json` has an `autonomy` property:
+
+| Mode | Behaviour |
+|---|---|
+| `full` | Human gates are auto-approved. Orchestrator still sets `presented` (for auditability) but immediately advances to `complete`. Clarification questions are self-answered using the owner's recommendations. Audit entries note "auto-approved (full autonomy)." |
+| `supervised` | All human gates block. Orchestrator must yield and wait for the human to respond at every row marked "If supervised." |
 
 ## Review Loop
 
 When a reviewer is assigned, the cycle between owner and reviewer repeats until either:
-1. The reviewer returns verdict "ready" — artifact proceeds to human
-2. The iteration cap (`maxReviewIterations` in workflow.json, default 3) is reached — reviewer is bypassed, artifact goes to human with unresolved findings noted
+1. The reviewer returns verdict "ready" — artifact proceeds to human (row 12b)
+2. The iteration cap (`maxReviewIterations` in workflow.json, default 3) is reached — reviewer is bypassed, artifact goes to human with unresolved findings noted (row 12c)
 
-After the cap is reached, the reviewer is out of the loop for that stage. The human and owner iterate directly (`presented → changes-requested → finalised → presented`) until the human approves.
-
-The `reviewIterations` counter in state.json tracks how many times the reviewer has returned "not-ready" for this stage. It is incremented each time the reviewer returns a "not-ready" verdict and the owner is sent back to address findings.
+The `reviewIterations` counter in state.json tracks how many times the reviewer has returned "not-ready." Once the cap is reached, the reviewer does not participate again — human and owner work together directly.
 
 ## Rules
 
-- Each actor only sets state for what THEY did — never for what someone else will do
-- When re-invoking a persona, pass all relevant files from the stage directory as context
-- If no contributors are assigned, skip review — go from `artifact-generated` to `final-review-needed` (if reviewer assigned) or `presented` (if no reviewer)
-- If no contributor comments exist, skip refine — go from `reviewed` to `final-review-needed` (if reviewer assigned) or `presented` (if no reviewer)
-- The final reviewer step is NEVER skipped when a reviewer is assigned — unless `reviewIterations` has reached `maxReviewIterations`
-- After the reviewer returns a verdict, the orchestrator decides next step based on verdict + iteration count (see Review Loop above)
-- Once the iteration cap is reached, the reviewer does not participate again for that stage — human and owner work together directly
+1. **Transitions that block on human (in supervised mode) must NEVER be completed in the same turn as the preceding transition.** The orchestrator must yield and wait for a human message before proceeding.
+2. **No row may be skipped** unless explicitly noted (e.g., "skip to #10 if no contributors").
+3. **The orchestrator must NEVER write an audit entry recording a human decision until the human has actually responded in chat.**
+4. **The `presented` state is always a hard stop in supervised mode** — the orchestrator presents a summary and waits. Period.
+5. **Row 3 is always a human gate in supervised mode.** Even if the owner has no questions, the plan itself is presented for human approval or adjustment.
+6. **The human can override autonomy at any time** by saying "stop" or "let me review that" — this implicitly switches the current stage to supervised.
+7. **In full autonomy mode**, the audit log must clearly distinguish auto-approved entries from actual human decisions. Use "auto-approved (full autonomy)" rather than recording a fabricated human decision.
+8. Each actor only sets state for what THEY did — never for what someone else will do.
+9. When re-invoking a persona, pass all relevant files from the stage directory as context.
 
 ## How to Invoke a Persona
 
