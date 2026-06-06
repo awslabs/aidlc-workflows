@@ -2,7 +2,7 @@
 
 ## Description
 
-Generate production code following the rhythm of a real developer: write code, write tests, verify it compiles and passes before moving to the next layer. Each step in the plan produces working, verified code — not a batch dump at the end.
+Generate production code following the rhythm of a real developer: write code, write tests, verify it compiles and passes before moving to the next layer. Each step in the plan produces working, verified code — not a batch dump at the end. Testing progresses from mocks to real bounded-context dependencies (e.g. the unit's own database) when available. Cross-unit integration is out of scope — that happens after deployment.
 
 ## Inputs
 
@@ -13,11 +13,10 @@ Generate production code following the rhythm of a real developer: write code, w
 
 Artifacts this stage can produce. The owner's plan determines which are relevant. Additional artifacts may be produced if warranted.
 
-- Production source code at the workspace root (never in aidlc-docs/)
+- Production source code at the workspace root (never in aidlc-docs/) with mocks as well as actual dependency calls where available
 - Test code alongside production code
-- Configuration files (env, build, deploy)
-- Database migration scripts (if applicable)
-- API documentation generated from code (if applicable)
+- Configuration files (env, build)
+- Data scripts (schema creation, seed data — if applicable)
 
 ## Owner
 

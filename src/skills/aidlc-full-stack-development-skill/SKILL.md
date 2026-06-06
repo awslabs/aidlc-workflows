@@ -17,6 +17,8 @@ Write production-quality code that works. Not just code that looks right — cod
 - One concern at a time — scaffold first, then domain logic, then integration, then polish
 - Brownfield respect — match existing patterns, styles, and conventions. Don't introduce a new paradigm next to the old one
 - Fail fast — if a step doesn't compile or tests don't pass, fix it before moving on
+- Abstract external dependencies — place databases, queues, caches, and external APIs behind interfaces (ports/adapters, factory pattern, repository pattern). Generate both the interface and the real implementation.
+- Bounded-context dependencies are yours — a unit's own database, its own cache, its own queue are part of the unit. Test against them when available. Cross-unit calls are not — those use mocks until integration after deployment.
 
 ## Approach
 
@@ -34,8 +36,9 @@ Every plan step follows this rhythm:
 2. **Domain layer** — entities, business rules, core logic + unit tests → verify
 3. **Service/application layer** — orchestration, use cases + tests → verify
 4. **API/interface layer** — controllers, handlers, routes + tests → verify
-5. **Integration** — wire layers together, integration tests → verify
-6. **Infrastructure glue** — config, migrations, deployment files → verify full build
+5. **Integration wiring** — wire layers together, integration tests with mocks → verify
+6. **Bounded-context verification** — if real dependencies are available (local DB, container), swap mocks for real connections and verify. If not available, note as pending for post-deployment.
+7. **Infrastructure glue** — IaC, config, migrations, deployment scripts → verify full build
 
 Adapt the layers to the tech stack. Not every project has all of these.
 
@@ -48,6 +51,4 @@ Adapt the layers to the tech stack. Not every project has all of these.
 
 ## Application
 
-When applied at code-generation, this skill drives the plan structure and the step-by-step execution. Each step in the plan is a write-test-verify cycle.
-
-When applied at build-and-test, this skill manifests as: understanding how to run the build, interpret test output, diagnose failures, and fix them.
+When applied at code-generation, this skill drives the plan structure and the step-by-step execution. Each step is a write-test-verify cycle. Testing progresses from mocks to real bounded-context dependencies when available. Cross-unit integration remains mocked until post-deployment.
