@@ -20,7 +20,8 @@ Directed graph of all available stages. The orchestrator reads this during workf
 | story-generation | Decompose requirements into implementable stories | aidlc-product-manager-agent |
 | wireframe-design | Design UI screens as HTML wireframes | aidlc-ux-designer-agent |
 | domain-design | Identify and detail the logical building blocks (components) of the system | aidlc-systems-architect-agent |
-| units-generation | Decompose application design into implementable units of work | aidlc-systems-architect-agent |
+| units-generation | Group domain-design building blocks into deployable units | aidlc-systems-architect-agent |
+| contract-design | Define inter-unit contracts so teams can build in parallel | aidlc-systems-architect-agent |
 | functional-design | Design detailed business logic, domain entities, rules, and API spec per unit | aidlc-systems-architect-agent |
 | nfr-assessment | Operationalise NFRs into measurable targets and tech stack choices per unit | aidlc-systems-architect-agent |
 | nfr-design | Design patterns and logical components that satisfy NFR targets per unit | aidlc-systems-architect-agent |
@@ -39,7 +40,8 @@ Stages have flexible inputs — they can start from multiple predecessors or dir
 | wireframe-design | stories + personas, requirements, intent |
 | domain-design | requirements, stories, wireframes, RE artifacts |
 | units-generation | domain-design (components.yaml must exist) |
-| functional-design | units-generation (unit definition + assigned stories + contracts) |
+| contract-design | units-generation (units + dependencies), components.yaml (entity shapes) |
+| functional-design | contract-design (contracts for this unit's boundaries), units-generation (unit definition + assigned stories) |
 | nfr-assessment | requirements.md (NFR section), functional-design artifacts for this unit |
 | nfr-design | nfr-assessment (targets + tech stack), functional-design artifacts, unit-contracts |
 | infrastructure-design | nfr-design (logical components + patterns), tech-stack-decisions |
