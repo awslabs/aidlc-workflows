@@ -2,7 +2,7 @@
 
 ## Description
 
-Decompose the approved application design into implementable units of work. Each unit is a logical grouping of functionality that can be designed, built, and tested as a cohesive piece. For microservices, each unit typically becomes an independently deployable service. For monoliths, units represent logical modules within the single application. This stage bridges inception (what to build) and construction (how to build it, per-unit).
+Take the building blocks from domain-design and determine how to group them into deployable units. The architect interviews the human to understand their constraints — team structure, deployment preferences, scaling needs, operational maturity — and proposes a grouping that fits. The result might be microservices, a modular monolith, a handful of big services, separate frontends, or any combination. The components don't change — only how they're packaged into units for development and deployment.
 
 ## Inputs
 
