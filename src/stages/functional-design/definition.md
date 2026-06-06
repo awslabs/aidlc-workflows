@@ -7,7 +7,7 @@ Design the detailed business logic — domain entities, business rules, algorith
 ## Inputs
 
 - **Required:** Unit definition from `units.md` + assigned stories from `unit-story-map.md`
-- **Optional context:** `unit-contracts.md` (provider-side contracts), `components.md`, `requirements.md`, RE artifacts
+- **Optional context:** Contracts from `contract-design/` (for this unit's provider/consumer boundaries), `components.yaml`, `requirements.md`, RE artifacts
 
 ## Outputs
 
@@ -16,7 +16,7 @@ Artifacts this stage can produce. The owner's plan determines which are relevant
 - `business-logic.md` — algorithms, workflows, state machines, decision trees
 - `domain-entities.md` — entities, value objects, aggregates with fields, invariants, and lifecycle
 - `business-rules.md` — validation rules, constraints, policies expressed as logic
-- `api-specification.md` — public interface: endpoints, operations, request/response shapes, error codes
+- `api-specification.md` — public interface: endpoints, operations, request/response shapes, error codes (elaborating on this unit's contracts from contract-design)
 
 ## Owner
 
