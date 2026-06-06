@@ -6,7 +6,7 @@ Decompose the approved application design into implementable units of work. Each
 
 ## Inputs
 
-- **Required:** `components.md` or `component-interactions.md` from application-design (the system's logical structure must be known)
+- **Required:** `components.yaml` from domain-design (the system's building blocks must be known)
 - **Optional context:** `stories.md`, `requirements.md`, RE artifacts, deployment constraints
 
 ## Outputs

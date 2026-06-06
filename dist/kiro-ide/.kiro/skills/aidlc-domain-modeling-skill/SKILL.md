@@ -1,14 +1,14 @@
 ---
 name: aidlc-domain-modeling-skill
 description: |
-  The ability to identify and define the core domain concepts of a system — its entities, their relationships, ownership boundaries, and the language the system speaks. Applied by the Systems Architect when establishing what data and concepts a system manages.
+  The ability to identify and define the core domain concepts of a system — its components, entities, relationships, ownership boundaries, and the language the system speaks. Applied by the Systems Architect at the domain-design stage.
 ---
 
 # Domain Modeling
 
 ## Purpose
 
-Identify the core domain concepts, define their boundaries, establish ownership, and create a shared language that aligns code with the business domain.
+Identify the logical building blocks of a system, define their boundaries, establish entity ownership, and create a shared language that aligns code with the business domain.
 
 ## Principles
 
@@ -18,38 +18,73 @@ Identify the core domain concepts, define their boundaries, establish ownership,
 - The model uses business language — if the business says "order", the code says "order", not "transaction record"
 - Boundaries prevent contamination — data that belongs to one domain doesn't leak into another without explicit interface
 
+## Component Identification
+
+A component is a bounded piece of software with its own business logic, entities, and lifecycle.
+
+### What IS a component
+
+- Has business logic you implement (not just configuration)
+- Owns entities with behaviour (not just data storage)
+- Has a public interface other components call
+- Could be deployed independently if you chose to
+- Has a distinct reason to change independently from other components
+
+### What is NOT a component
+
+- **Databases** (PostgreSQL, DynamoDB, MongoDB) — these are dependencies OF components
+- **Caches** (Redis, Memcached) — infrastructure a component uses
+- **Message brokers** (Kafka, SQS, RabbitMQ) — communication infrastructure
+- **Web servers / reverse proxies** (nginx, Apache) — deployment infrastructure
+- **Third-party services** (Stripe, SendGrid, Twilio) — external dependencies you consume
+- **Cloud services** (S3, CloudWatch, Lambda) — infrastructure you configure
+
+### The grey area
+
+Some things look like infrastructure but contain business logic you write:
+- An API Gateway that ONLY routes → not a component (it's config)
+- An API Gateway with custom auth logic, input validation, rate limiting → IS a component (you're writing logic)
+- A Lambda that just forwards to SQS → not a component
+- A Lambda with business validation and transformation → IS a component
+
+**The test:** "Am I writing business logic here, or just configuring something?" If you're writing logic, it's a component.
+
 ## Approach
 
-### 1. Entity identification
+### 1. Component identification
 
-From requirements, stories, and domain context:
-- What are the core nouns? (users, orders, products, sessions, etc.)
+From requirements and domain context:
+- What are the distinct business capabilities?
+- What has its own lifecycle (changes independently)?
+- What owns its own data?
+- What has a distinct reason to exist as a separate piece of software?
+
+### 2. Entity identification
+
+For each component:
+- What are the core nouns it owns? (users, sessions, questions, scores)
 - What lifecycle does each have? (created, active, archived, deleted)
-- What are the natural aggregates? (order + line items are one unit)
+- What are the natural aggregates? (quiz session + question responses)
+- What attributes does each entity need?
 
-### 2. Relationship mapping
+### 3. Relationship and dependency mapping
+
+Between components:
+- Who calls whom? Why? (capture the interaction)
+- Who depends on whom? Who is depended upon?
 
 Between entities:
 - What references what? In which direction?
-- One-to-one, one-to-many, many-to-many?
-- Required or optional?
 - Does the relationship cross a component boundary?
-
-### 3. Ownership assignment
-
-For each entity/aggregate:
-- Which component is the source of truth?
-- Who can write? Who can only read?
-- How does data get exposed to non-owners? (API, event, cache)
 
 ### 4. Boundary validation
 
-- Can each bounded context be understood without referencing another's internals?
+- Can each component be understood without referencing another's internals?
 - Are there entities that multiple components want to own? (resolve the conflict)
-- Does the model support the stated NFRs? (e.g., can you scale the order domain independently from the user domain?)
+- Is any "component" actually infrastructure you should consume rather than build? (the database test)
 
 ## Application
 
-When applied at application-design, this skill drives the `data-ownership.md` artifact and informs the component boundaries in `components.md`.
+When applied at domain-design, this skill drives the `components.yaml` and `components.md` artifacts — the full component catalogue with behaviour, dependencies, and entities.
 
-When applied at other stages, this skill manifests as: validating that designs respect entity ownership, flagging data access patterns that bypass the owning component, and ensuring naming consistency with the domain model.
+When applied at other stages, this skill manifests as: validating that designs respect component boundaries and entity ownership, flagging data access patterns that bypass the owning component, and ensuring naming consistency with the domain model.
