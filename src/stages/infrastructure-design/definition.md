@@ -13,8 +13,7 @@ Map logical components from nfr-design to actual infrastructure services and def
 
 Artifacts this stage can produce. The owner's plan determines which are relevant. Additional artifacts may be produced if warranted.
 
-- `service-mapping.md` — logical components mapped to concrete infrastructure services
-- `deployment-architecture.md` — how the system is deployed, scaled, and networked
+- `infrastructure-specification.md` — service mapping, compute, network topology, security boundaries, observability, and deployment strategy in one document
 
 ## Owner
 
