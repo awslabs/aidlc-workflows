@@ -61,6 +61,19 @@ Read the final reviewer's review file. Address their findings — fix remaining 
 
 After finalising, set this stage's status in `state/state.json` to `finalised`.
 
+## Artifact Resolution
+
+Stages consume artifact roles, not rigid stage paths. For each concern needed by the current stage, use the richest available upstream artifact.
+
+Use this priority:
+
+1. **Prefer when available** — use later, more detailed upstream artifacts when they exist.
+2. **Infer when skipped** — if a producing stage was skipped, infer the minimum needed detail from the best available earlier artifact.
+3. **Preserve blueprint identity** — when inferring or expanding, preserve stable IDs, names, responsibilities, boundaries, and dependency directions from copied-forward artifacts.
+4. **Document the fallback** — record in `plan.md` which artifacts were used and what had to be inferred because a stage was skipped.
+
+A skipped stage is not an error. It only changes how much the current stage must infer from available upstream artifacts.
+
 ## Persistence
 
 - Everything you produce gets written to a file on disk

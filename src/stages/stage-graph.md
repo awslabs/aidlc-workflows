@@ -53,6 +53,8 @@ The default elaboration path should preserve abstraction level and blueprint ide
 
 From `units-generation` onward, stages must copy forward the relevant blueprint artifacts into the current stage directory before adding lower-level detail. Stable IDs from upstream artifacts must be preserved. Additional artifacts are allowed, but they must reference the copied-forward IDs. The main copied-forward blueprint artifacts are `components.yaml`, `unit.md` / `units.md`, `unit-dependencies.md`, `unit-story-map.md`, and `api-specification.md`.
 
+Stages should follow the artifact resolution rules in `skills/common/aidlc-work-method/SKILL.md`: prefer richer upstream artifacts when available, infer from earlier artifacts when stages were skipped, and document the fallback in `plan.md`.
+
 After `units-generation`, construction stages fan out per unit. Each selected unit should get its own `functional-design`, `nfr-design`, `infrastructure-design`, and `code-generation` stage instance under `stages/construction/<unit-name>/`. `contract-design` remains a cross-unit stage because it defines boundaries between units.
 
 ## Composition Rules
