@@ -87,4 +87,6 @@ Between entities:
 
 When applied at domain-design, this skill drives the `components.yaml` and `components.md` artifacts — the full component catalogue with behaviour, dependencies, and entities.
 
+When applied at functional-design, this skill drives the `entities.yaml`, `rules.yaml`, and `functional-spec.md` artifacts. **entities.yaml and rules.yaml are the source of truth. Write them first. Then derive functional-spec.md from them — the mermaid diagram, state machines, and rules summary must reflect what's in the YAMLs. If there's a conflict, YAMLs win.**
+
 When applied at other stages, this skill manifests as: validating that designs respect component boundaries and entity ownership, flagging data access patterns that bypass the owning component, and ensuring naming consistency with the domain model.

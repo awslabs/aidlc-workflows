@@ -2,21 +2,20 @@
 
 ## Description
 
-Design the detailed business logic — domain entities, business rules, algorithms, data flows, and public API specification. Technology-agnostic: describes *what the logic does*, not what infrastructure runs it. The API specification elaborates on provider-side contracts from `unit-contracts.md`.
+Detail the business logic for each component within a unit: entities with full attribute schemas, business rules with enforcement logic, workflows as step sequences, and state machines for lifecycle entities. Technology-agnostic — implementable in any language. No code, no SQL, no framework references.
 
 ## Inputs
 
 - **Required:** Unit definition from `units.md` + assigned stories from `unit-story-map.md`
-- **Optional context:** Contracts from `contract-design/` (for this unit's provider/consumer boundaries), `components.yaml`, `requirements.md`, RE artifacts
+- **Optional context:** Contracts from `contract-design/` (for this unit's provider/consumer boundaries), `components.yaml` from domain-design, `requirements.md`
 
 ## Outputs
 
 Artifacts this stage can produce. The owner's plan determines which are relevant. Additional artifacts may be produced if warranted.
 
-- `business-logic.md` — algorithms, workflows, state machines, decision trees
-- `domain-entities.md` — entities, value objects, aggregates with fields, invariants, and lifecycle
-- `business-rules.md` — validation rules, constraints, policies expressed as logic
-- `api-specification.md` — public interface: endpoints, operations, request/response shapes, error codes (elaborating on this unit's contracts from contract-design)
+- `entities.yaml` — detailed entity schemas with attributes, types, constraints, relationships (source of truth)
+- `rules.yaml` — numbered business rules with trigger, logic, violation behaviour (source of truth)
+- `functional-spec.md` — human-readable view: entity diagram (mermaid), state machines, workflows, rules summary (derived from the YAMLs)
 
 ## Owner
 
