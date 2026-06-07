@@ -1,29 +1,55 @@
-Component: [Component Name]
-Behaviour-description: [Detailed description of what this component does — include business rules, validation logic, security constraints, and key behaviours. Be specific.]
-Dependency:
-  - Component:
-        Name: [Component it calls]
-        Interaction: [Why and what for — e.g. "Authentication calls Email Service to send verification emails"]
-Dependent-Component:
-  - Component:
-        Name: [Component that calls this one]
-        Interaction: [Why and what for — e.g. "API Gateway calls Authentication to validate sessions"]
-Entities:
-  [EntityName]:
-    Attributes:
-      - [attribute-name]
-      - [attribute-name]
-  [EntityName]:
-    Attributes:
-      - [attribute-name]
+Component:
+  Id: CMP-001
+  Name: "[Component Name]"
+  Behaviour-summary: "[Conceptual description of the business capability this component owns. Stay technology-agnostic and avoid detailed rules, validation logic, deployment, or implementation choices.]"
+  Responsibilities:
+    - "[business capability or responsibility]"
+  Boundaries:
+    - "[what this component does not own]"
+  Source:
+    Requirements:
+      - FR-1
+    Stories:
+      - S-1
+  Dependency:
+    - Component:
+          Id: CMP-002
+          Name: "[Component it calls]"
+          Interaction: "[Why and what for - e.g. Authentication calls Email Service to send verification emails]"
+  Dependent-Component:
+    - Component:
+          Id: CMP-003
+          Name: "[Component that calls this one]"
+          Interaction: "[Why and what for - e.g. API Gateway calls Authentication to validate sessions]"
+  Entities:
+    ENT-001:
+      Name: "[EntityName]"
+      Description: "[conceptual meaning of this entity]"
+      Attributes:
+        - "[attribute-name]"
+        - "[attribute-name]"
+    ENT-002:
+      Name: "[EntityName]"
+      Description: "[conceptual meaning of this entity]"
+      Attributes:
+        - "[attribute-name]"
 
 ---
 
-Component: [Next Component]
-Behaviour-description: [...]
-Dependency: []
-Dependent-Component: []
-Entities:
-  [EntityName]:
-    Attributes:
-      - [attribute-name]
+Component:
+  Id: CMP-002
+  Name: "[Next Component]"
+  Behaviour-summary: "[...]"
+  Responsibilities: []
+  Boundaries: []
+  Source:
+    Requirements: []
+    Stories: []
+  Dependency: []
+  Dependent-Component: []
+  Entities:
+    ENT-003:
+      Name: "[EntityName]"
+      Description: "[conceptual meaning of this entity]"
+      Attributes:
+        - "[attribute-name]"

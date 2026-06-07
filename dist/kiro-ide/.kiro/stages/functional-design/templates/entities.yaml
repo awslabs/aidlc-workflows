@@ -1,27 +1,38 @@
-Entity: [Entity Name]
-Description: [What this entity represents in the domain]
-Attributes:
-  - name: [attribute name]
-    type: [logical type — uuid, string, integer, boolean, timestamp, enum, etc.]
-    required: [true/false]
-    unique: [true/false, if applicable]
-    references: [Entity.attribute, if foreign key]
-    values: [list of allowed values, for enums]
-    default: [default value, if any]
-    min: [minimum, if applicable]
-    max: [maximum, if applicable]
-    constraints: [additional constraints in plain language]
-Constraints:
-  - [Business constraint on this entity as a whole]
-Relationships:
-  - entity: [Related entity name]
-    cardinality: [1:1 / 1:N / N:1 / N:M]
-    direction: [plain language description of the relationship]
+- id: ENT-001
+  name: "[Entity Name]"
+  component-id: CMP-001
+  component-name: "[Component Name]"
+  description: "[What this entity represents in the domain]"
+  source:
+    requirements:
+      - FR-1
+    stories:
+      - S-1
+  attributes:
+    - name: "[attribute name]"
+      type: "[logical type - uuid, string, integer, boolean, timestamp, enum, etc.]"
+      required: "[true/false]"
+      unique: "[true/false, if applicable]"
+      references: "[Entity.attribute, if foreign key]"
+      values: "[list of allowed values, for enums]"
+      default: "[default value, if any]"
+      min: "[minimum, if applicable]"
+      max: "[maximum, if applicable]"
+      constraints: "[additional constraints in plain language]"
+  constraints:
+    - "[Business constraint on this entity as a whole]"
+  relationships:
+    - entity-id: ENT-002
+      entity: "[Related entity name]"
+      cardinality: "[1:1 / 1:N / N:1 / N:M]"
+      direction: "[plain language description of the relationship]"
 
 ---
 
-Entity: [Next Entity]
-Description: [...]
-Attributes:
-  - name: [...]
-    type: [...]
+- id: ENT-002
+  name: "[Next Entity]"
+  component-id: CMP-001
+  description: "[...]"
+  attributes:
+    - name: "[...]"
+      type: "[...]"

@@ -6,8 +6,9 @@ Generate production code following the rhythm of a real developer: write code, w
 
 ## Inputs
 
-- **Required:** functional-design artifacts (business-logic, domain-entities, business-rules, api-specification)
-- **Optional context:** nfr-design artifacts (patterns, logical components), infrastructure-design (service mapping, deployment), tech-stack-decisions, unit-contracts, RE code-structure (brownfield — existing patterns to follow)
+- **Required:** functional-design artifacts (`entities.yaml`, `rules.yaml`, `functional-spec.md`, `api-specification.md`)
+- **Required copy-forward:** `components.yaml` and `unit.md` from infrastructure-design if present, otherwise from nfr-design or functional-design
+- **Optional context:** `nfr-specification.md`, `infrastructure-specification.md`, contracts from `contract-design`, `unit-story-map.md`, `stories.md`, `requirements.md`, RE `code-structure.md` (brownfield — existing patterns to follow)
 
 ## Outputs
 
@@ -17,6 +18,9 @@ Artifacts this stage can produce. The owner's plan determines which are relevant
 - Test code alongside production code
 - Configuration files (env, build)
 - Data scripts (schema creation, seed data — if applicable)
+- `implementation-map.md` — trace from component, unit, entity, rule, API, NFR, and infrastructure IDs to source files, tests, configuration, and data scripts
+- `components.yaml` — copied-forward physical blueprint expanded with implementation file/test references; original design IDs and decisions must be preserved
+- `unit.md` — copied-forward physical unit definition expanded with implementation status and file/test/config references
 
 ## Owner
 

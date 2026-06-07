@@ -45,6 +45,18 @@ Stages have flexible inputs — they can start from multiple predecessors or dir
 | infrastructure-design | nfr-design (spec with patterns + tech stack) |
 | code-generation | functional-design, nfr-design, infrastructure-design, units-generation, domain-design, stories, requirements |
 
+## Artifact Flow
+
+The default elaboration path should preserve abstraction level and blueprint identity:
+
+`intent.md` → `requirements.md` → `stories.md` / `personas.md` → `screen-*.md` / `wireframes/` → `components.yaml` → `units.md` / `unit-dependencies.md` / `unit-story-map.md` → `contracts/` / `contract-summary.md` → per-unit `entities.yaml` / `rules.yaml` / `api-specification.md` / `functional-spec.md` → per-unit `nfr-specification.md` → per-unit `infrastructure-specification.md` → source, tests, configuration, and data scripts.
+
+From `units-generation` onward, stages must copy forward the relevant blueprint artifacts into the current stage directory before adding lower-level detail. Stable IDs from upstream artifacts must be preserved. Additional artifacts are allowed, but they must reference the copied-forward IDs. The main copied-forward blueprint artifacts are `components.yaml`, `unit.md` / `units.md`, `unit-dependencies.md`, `unit-story-map.md`, and `api-specification.md`.
+
+Stages should follow the artifact resolution rules in `skills/common/aidlc-work-method/SKILL.md`: prefer richer upstream artifacts when available, infer from earlier artifacts when stages were skipped, and document the fallback in `plan.md`.
+
+After `units-generation`, construction stages fan out per unit. Each selected unit should get its own `functional-design`, `nfr-design`, `infrastructure-design`, and `code-generation` stage instance under `stages/construction/<unit-name>/`. `contract-design` remains a cross-unit stage because it defines boundaries between units.
+
 ## Composition Rules
 
 These rules guide the orchestrator when composing a workflow. They are internal reasoning — do not surface rule names or path labels to the human.
@@ -72,11 +84,11 @@ The orchestrator must assess what the human brings:
 ### Right-sizing
 
 - A trivial bug fix: code-generation (maybe requirements-analysis for documentation)
-- A simple utility: requirements-analysis → code-generation
-- A feature add (brownfield): reverse-engineering → requirements-analysis → story-generation → domain-design → code-generation
-- A full greenfield system: requirements-analysis → story-generation → wireframe-design → domain-design → code-generation
+- A simple utility: requirements-analysis → domain-design → functional-design → code-generation
+- A feature add (brownfield): reverse-engineering → requirements-analysis → story-generation → domain-design → units-generation → contract-design → functional-design → code-generation
+- A full greenfield system: requirements-analysis → story-generation → wireframe-design → domain-design → units-generation → contract-design → functional-design → nfr-design → infrastructure-design → code-generation
 - Wireframes only: wireframe-design (possibly requirements-analysis first)
-- Migration: reverse-engineering → requirements-analysis → domain-design → code-generation
+- Migration: reverse-engineering → requirements-analysis → domain-design → units-generation → functional-design → nfr-design → infrastructure-design → code-generation
 
 ### User-specified ordering
 

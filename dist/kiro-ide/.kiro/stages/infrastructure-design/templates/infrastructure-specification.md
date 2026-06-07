@@ -4,15 +4,15 @@
 
 ## Service Mapping
 
-| Logical Component | Service | Provider | Rationale | NFR Satisfied |
-|---|---|---|---|---|
-| [from nfr-specification patterns/tech-stack] | [actual service] | [AWS/Azure/GCP/other] | [why this service] | [NFR-n] |
+| Blueprint ID | Logical Component | Service | Provider | Rationale | NFR Satisfied |
+|---|---|---|---|---|---|
+| CMP-001 | [from nfr-specification patterns/tech-stack] | [actual service] | [AWS/Azure/GCP/other] | [why this service] | [NFR-n] |
 
 ## Compute
 
-| Component | Compute type | Sizing | Scaling approach |
-|---|---|---|---|
-| [what runs] | [container/serverless/VM/etc.] | [size rationale] | [how it scales] |
+| Blueprint ID | Component | Compute type | Sizing | Scaling approach |
+|---|---|---|---|---|
+| CMP-001 | [what runs] | [container/serverless/VM/etc.] | [size rationale] | [how it scales] |
 
 ## Network Topology
 
@@ -39,3 +39,10 @@
 | IaC tool | [CDK/Terraform/Pulumi/other] | [why] |
 | Deploy method | [rolling/blue-green/canary] | [why] |
 | Rollback | [how to recover] | [RTO expectation] |
+
+## Copied Blueprint Expansions
+
+| Blueprint ID | Expansion Target | Infrastructure Detail Added |
+|---|---|---|
+| CMP-001 | components.yaml | [compute/storage/network/IAM/observability mapping added] |
+| UNIT-001 | unit.md | [deployment topology, runtime config, IaC references added] |

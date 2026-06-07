@@ -11,12 +11,12 @@
 
 ## Component Summary
 
-| Component | Purpose | Dependencies | Entities Owned |
-|---|---|---|---|
-| [name] | [one-line purpose] | [components it calls] | [entity names] |
+| Component ID | Component | Capability | Dependencies | Entities Owned |
+|---|---|---|---|---|
+| CMP-001 | [name] | [one-line conceptual capability] | [components it calls] | [entity names] |
 
 ## Rationale
 
-| Component | Why it's a separate component |
-|---|---|
-| [name] | [distinct lifecycle, distinct concern, distinct data ownership, distinct change rate — pick what applies] |
+| Component ID | Component | Why it's a separate component |
+|---|---|---|
+| CMP-001 | [name] | [distinct lifecycle, distinct concern, distinct data ownership, distinct change rate - pick what applies] |

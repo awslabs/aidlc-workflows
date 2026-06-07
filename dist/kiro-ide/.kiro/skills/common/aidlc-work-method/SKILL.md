@@ -61,10 +61,24 @@ Read the final reviewer's review file. Address their findings — fix remaining 
 
 After finalising, set this stage's status in `state/state.json` to `finalised`.
 
+## Artifact Resolution
+
+Stages consume artifact roles, not rigid stage paths. For each concern needed by the current stage, use the richest available upstream artifact.
+
+Use this priority:
+
+1. **Prefer when available** — use later, more detailed upstream artifacts when they exist.
+2. **Infer when skipped** — if a producing stage was skipped, infer the minimum needed detail from the best available earlier artifact.
+3. **Preserve blueprint identity** — when inferring or expanding, preserve stable IDs, names, responsibilities, boundaries, and dependency directions from copied-forward artifacts.
+4. **Document the fallback** — record in `plan.md` which artifacts were used and what had to be inferred because a stage was skipped.
+
+A skipped stage is not an error. It only changes how much the current stage must infer from available upstream artifacts.
+
 ## Persistence
 
 - Everything you produce gets written to a file on disk
 - Read and follow all files in `conventions/` — they define folder structure, question format, state format, and where everything goes
 - Use the templates in the stage's `templates/` directory as the starting format for output artifacts
+- When a stage refines a previous artifact, copy the relevant upstream artifact into the current stage directory first, preserve its stable IDs and structure, and expand it in place. New artifacts may be created when useful, but they must reference stable IDs from the copied-forward artifact so the blueprint does not drift as details are added.
 - Never return content only in chat — always write to disk first
 - Read files directly from the file system — do not rely on the orchestrator to pass file contents to you. You have file read tools; use them.

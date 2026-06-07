@@ -107,7 +107,7 @@
                 },
                 "locationRelativeToIntentRoot": {
                   "type": "string",
-                  "description": "DIRECTORY path relative to intent root where the file lives. Must end with '/'. Examples: '/' for intent root, '/state/' for state directory, '/stages/requirements-analysis/' for a domain stage directory."
+                  "description": "DIRECTORY path relative to intent root where the file lives. Must end with '/'. Examples: '/' for intent root, '/state/' for state directory, '/stages/inception/requirements-analysis/' for an inception stage directory, '/stages/construction/<unit-name>/functional-design/' for a per-unit construction stage directory."
                 }
               }
             }

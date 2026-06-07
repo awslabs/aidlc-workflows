@@ -4,9 +4,9 @@
 
 ## Contracts
 
-| # | Provider Unit | Consumer Unit | Mechanism | Spec File | Owner |
-|---|---|---|---|---|---|
-| C-1 | [who exposes] | [who consumes] | [REST / async event / shared schema / gRPC / etc.] | [filename in contracts/] | [who owns the spec] |
+| Contract ID | Dependency ID | Provider Unit | Provider Component | Consumer Unit | Consumer Component | Mechanism | Spec File | Owner |
+|---|---|---|---|---|---|---|---|---|
+| C-001 | UDEP-001 | UNIT-001 | CMP-001 | UNIT-002 | CMP-002 | [REST / async event / shared schema / gRPC / etc.] | [filename in contracts/] | [who owns the spec] |
 
 ## Contract Ownership Rules
 
