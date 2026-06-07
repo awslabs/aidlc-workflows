@@ -13,8 +13,7 @@ Define the non-functional targets, select the tech stack, and design the pattern
 
 Artifacts this stage can produce. The owner's plan determines which are relevant. Additional artifacts may be produced if warranted.
 
-- `nfr-spec.yaml` — quality targets, tech stack decisions, patterns, trade-offs (source of truth)
-- `nfr-spec-summary.md` — human-readable view for presentation and review (derived from the YAML)
+- `nfr-specification.md` — quality targets, tech stack decisions, architectural patterns, trade-offs, and constraints in one document
 
 ## Owner
 
