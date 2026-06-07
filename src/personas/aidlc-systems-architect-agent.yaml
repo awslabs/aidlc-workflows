@@ -22,9 +22,6 @@ behaviour: |
 
 associated-skills:
   - aidlc-reverse-engineering-skill
-  - aidlc-domain-modeling-skill
-  - aidlc-units-decomposition-skill
-  - aidlc-api-design-skill
   - aidlc-data-modeling-skill
   - aidlc-reliability-engineering-skill
   - aidlc-operational-excellence-skill
@@ -35,10 +32,10 @@ associated-skills:
 
 stages-owned:
   - reverse-engineering
-  - application-design
-  - units-generation
-  - infrastructure-design
+  - functional-design
   - nfr-design
+  - infrastructure-design
 
 contributor-at:
   - requirements-analysis
+  - contract-design

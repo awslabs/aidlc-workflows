@@ -19,9 +19,9 @@ Directed graph of all available stages. The orchestrator reads this during workf
 | requirements-analysis | Elicit and structure requirements from intent | aidlc-product-manager-agent |
 | story-generation | Decompose requirements into implementable stories | aidlc-product-manager-agent |
 | wireframe-design | Design UI screens as HTML wireframes | aidlc-ux-designer-agent |
-| domain-design | Identify and detail the logical building blocks (components) of the system | aidlc-systems-architect-agent |
-| units-generation | Group domain-design building blocks into deployable units | aidlc-systems-architect-agent |
-| contract-design | Define inter-unit contracts so teams can build in parallel | aidlc-systems-architect-agent |
+| domain-design | Identify and detail the logical building blocks (components) of the system | aidlc-app-architect-agent |
+| units-generation | Group domain-design building blocks into deployable units | aidlc-app-architect-agent |
+| contract-design | Define inter-unit contracts so teams can build in parallel | aidlc-app-architect-agent |
 | functional-design | Design detailed business logic, domain entities, rules, and API spec per unit | aidlc-systems-architect-agent |
 | nfr-design | Define quality targets, tech stack, and architectural patterns | aidlc-systems-architect-agent |
 | infrastructure-design | Map logical components to infrastructure services and define deployment | aidlc-systems-architect-agent |

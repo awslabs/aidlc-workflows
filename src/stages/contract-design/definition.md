@@ -22,7 +22,7 @@ Artifacts this stage can produce. The owner's plan determines which are relevant
 
 ## Owner
 
-aidlc-systems-architect-agent
+aidlc-app-architect-agent
 
 ## Contributors
 
