@@ -3,6 +3,12 @@
 > Minimum structure. Sections may be omitted with rationale or extended as needed.
 > This is the human-readable view. entities.yaml and rules.yaml are the source of truth.
 
+## Scope
+
+| Unit | Components Covered | Source Stories |
+|---|---|---|
+| UNIT-001 | CMP-001, CMP-002 | S-1, S-3 |
+
 ## Entity Relationships
 
 ```mermaid
@@ -17,9 +23,9 @@ For entities with lifecycle states:
 
 ### [Entity Name]
 
-| Current | Event | Next | Guard |
-|---|---|---|---|
-| [state] | [what triggers transition] | [state] | [condition that must be true] |
+| Entity ID | Current | Event | Next | Guard |
+|---|---|---|---|---|
+| ENT-001 | [state] | [what triggers transition] | [state] | [condition that must be true] |
 
 ## Workflows
 
@@ -34,4 +40,4 @@ For entities with lifecycle states:
 
 | ID | Rule | Category | Applies to |
 |---|---|---|---|
-| BR-001 | [short description] | [category] | [component/entity] |
+| BR-001 | [short description] | [category] | CMP-001 / ENT-001 |

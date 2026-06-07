@@ -30,7 +30,7 @@ The ability to identify threats, classify data sensitivity, recognize trust boun
 
 When applied at requirements-analysis: ensure security-relevant capabilities are captured as requirements, sensitive data types are identified with at least high-level classification, and compliance obligations are stated.
 
-When applied at application-design: identify trust boundaries between components, flag unprotected data flows, ensure auth enforcement points are defined.
+When applied at domain-design: identify trust boundaries between components, flag unprotected data flows, ensure auth enforcement points are defined.
 
 When applied at code-generation: verify parameterized queries, output encoding, CSRF protection, secure headers, secrets management patterns are followed.
 

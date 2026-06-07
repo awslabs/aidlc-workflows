@@ -1,14 +1,14 @@
 ---
 name: aidlc-full-stack-development-skill
 description: |
-  The ability to write production code across the full stack — backend, frontend, infrastructure, tests — following a disciplined write-test-verify cycle. Applied by the SW Dev Engineer at the code-generation stage.
+  Apply disciplined implementation practices across backend, frontend, infrastructure, configuration, and tests: write-test-verify, repository convention matching, integration boundary control, and appropriate test strategy.
 ---
 
 # Full Stack Development
 
-## Purpose
+## Definition
 
-Write production-quality code that works. Not just code that looks right — code that compiles, passes tests, and handles edge cases before moving on.
+Produce or review implementation work so that it is correct, maintainable, testable, aligned with repository conventions, and verified incrementally. This skill treats implementation as a disciplined loop: make a small change, test it at the right level, verify the system still works, then continue.
 
 ## Principles
 
@@ -20,17 +20,17 @@ Write production-quality code that works. Not just code that looks right — cod
 - Abstract external dependencies — place databases, queues, caches, and external APIs behind interfaces (ports/adapters, factory pattern, repository pattern). Generate both the interface and the real implementation.
 - Bounded-context dependencies are yours — a unit's own database, its own cache, its own queue are part of the unit. Test against them when available. Cross-unit calls are not — those use mocks until integration after deployment.
 
-## Approach
+## Patterns
 
 ### Write-Test-Verify Cycle
 
-Every plan step follows this rhythm:
+Every implementation step follows this rhythm:
 
 1. **Write** — produce the production code for this step
 2. **Test** — write corresponding tests (unit, integration as appropriate)
 3. **Verify** — run build + tests. Green means proceed. Red means fix before continuing.
 
-### Typical plan structure
+### Implementation Slicing
 
 1. **Project setup** — scaffold structure, install dependencies, verify clean build
 2. **Domain layer** — entities, business rules, core logic + unit tests → verify
@@ -40,9 +40,9 @@ Every plan step follows this rhythm:
 6. **Bounded-context verification** — if real dependencies are available (local DB, container), swap mocks for real connections and verify. If not available, note as pending for post-deployment.
 7. **Infrastructure glue** — IaC, config, migrations, deployment scripts → verify full build
 
-Adapt the layers to the tech stack. Not every project has all of these.
+Adapt the slices to the tech stack. Not every project has all of these layers.
 
-### Brownfield rules
+### Repository Convention Matching
 
 - Check if target files exist before creating
 - Modify in place — never create `ClassName_new` or `ClassName_modified` copies
@@ -51,4 +51,6 @@ Adapt the layers to the tech stack. Not every project has all of these.
 
 ## Application
 
-When applied at code-generation, this skill drives the plan structure and the step-by-step execution. Each step is a write-test-verify cycle. Testing progresses from mocks to real bounded-context dependencies when available. Cross-unit integration remains mocked until post-deployment.
+When applied to implementation, this skill shapes how code, tests, configuration, data scripts, and infrastructure glue are produced: changes are sliced into verifiable increments, repository conventions are followed, dependencies are isolated behind clear boundaries, and each slice is checked with the appropriate test level.
+
+When applied in review, this skill flags: unverified changes, broken or missing tests, divergence from local patterns, over-broad implementation slices, unsafe edits to brownfield code, unclear integration boundaries, direct coupling to external systems that should be abstracted, and test strategy gaps.

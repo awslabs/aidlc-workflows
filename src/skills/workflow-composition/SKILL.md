@@ -88,7 +88,7 @@ These are internal reasoning aids. Do not reference them by name to the human.
 >
 > Orchestrator: "Got it — you have requirements and wireframes. I'll skip those stages. Can you point me to the files?
 >
-> Then I'll compose: story-generation → application-design → code-generation → build-and-test. With your requirements and wireframes feeding into stories as context."
+> Then I'll compose: story-generation → domain-design → units-generation → functional-design → code-generation. With your requirements and wireframes feeding into stories as context."
 
 **Example 5: Wireframes first**
 > Human: "We want to start with wireframes for a library app"
@@ -102,8 +102,8 @@ These are internal reasoning aids. Do not reference them by name to the human.
 >
 > Orchestrator: "Express to Fastify migration — brownfield platform change. Does org-ai-kb have context on this repo, or should I reverse-engineer it?
 >
-> Proposed flow: reverse-engineering → requirements-analysis → application-design → code-generation → build-and-test."
+> Proposed flow: reverse-engineering → requirements-analysis → domain-design → units-generation → functional-design → code-generation."
 
 ## Output
 
-Persist the composed workflow as `workflow.json` in the intent directory per `conventions/workflow-schema.json`. This is the contract for this intent's execution. Create stage output directories for each selected stage.
+Persist the composed workflow as `workflow.json` in the intent directory per `conventions/workflow-schema.json`. This is the contract for this intent's execution. Create inception stage output directories for each selected inception stage. Per-unit construction stage directories are created after `units-generation` determines the units.

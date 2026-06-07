@@ -1,7 +1,7 @@
 ---
 name: aidlc-api-design-skill
 description: |
-  Design clear, versioned, backward-compatible contracts between units and services. Produce API specifications that are precise enough for consumers to code against without ambiguity. Applied by the Systems Architect at the functional-design stage when defining a unit's public interface.
+  Design clear, versioned, backward-compatible interfaces and contracts between units, services, and external consumers. Applies wherever interfaces/contracts are designed or reviewed.
 ---
 
 # API Design
@@ -52,6 +52,6 @@ For each operation:
 
 ## Application
 
-When applied at functional-design, this skill produces the `api-specification.md` artifact — the detailed provider-side interface spec for the unit.
+When applied to interface design, this skill adds precise operations, payload shapes, error semantics, versioning rules, and consumer-facing compatibility guarantees to the relevant artifact, such as `api-specification.md` or contract specs.
 
-When applied at other stages, this skill manifests as: reviewing API designs for consumer-friendliness, checking backward compatibility of proposed changes, and flagging ambiguous or inconsistent interface definitions.
+When applied in review, this skill manifests as: checking API designs for consumer-friendliness, backward compatibility, clear ownership, explicit failure behaviour, and unambiguous interface definitions.

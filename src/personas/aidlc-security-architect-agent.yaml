@@ -23,15 +23,3 @@ associated-skills:
 
 associated-tools:
   - security-scan
-
-stages-owned: []
-
-contributor-at:
-  - reverse-engineering
-  - requirements-analysis
-  - story-generation
-  - application-design
-  - functional-design
-  - nfr-assessment
-  - infrastructure-design
-  - code-generation

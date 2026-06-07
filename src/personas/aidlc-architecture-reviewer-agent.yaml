@@ -19,12 +19,4 @@ behaviour: |
   - You flag inconsistencies across artifacts — if architecture.md says three services but component-inventory.md lists four, that's a finding
 
 associated-skills:
-  - aidlc-architecture-trade-off-analysis-skill
-
-stages-owned: []
-
-contributor-at: []
-
-reviewer-at:
-  - reverse-engineering
-  - application-design
+  - aidlc-architecture-review-skill

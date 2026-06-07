@@ -4,18 +4,19 @@
 
 ## Unit Inventory
 
-| Unit | Purpose | Type | Components Owned |
-|---|---|---|---|
-| [name] | [what this unit delivers] | [service / module / library / infrastructure] | [which components from application-design live here] |
+| Unit ID | Unit | Purpose | Packaging Assumption | Components Owned |
+|---|---|---|---|---|
+| UNIT-001 | [name] | [what this unit delivers] | [module / service candidate / library / frontend / worker candidate] | [CMP-001, CMP-002] |
 
 ## Unit Details
 
 ### [Unit Name]
 
+- **ID:** UNIT-001
 - **Purpose:** [single-sentence reason this unit exists as a separate buildable piece]
 - **Responsibilities:**
   - [what it does — expressed as capabilities, not files]
 - **Boundaries:** [what is explicitly NOT this unit's job]
-- **Deployment model:** [how this unit runs — lambda, container, static, embedded, etc.]
+- **Packaging assumption:** [how this unit should be packaged conceptually; avoid cloud/runtime choices]
 - **Build independence:** [can this unit be built/tested without other units running?]
 - **Change rate:** [how often this unit is expected to change relative to others]

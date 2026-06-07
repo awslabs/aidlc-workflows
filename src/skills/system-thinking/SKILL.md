@@ -29,6 +29,6 @@ The ability to reason about systems as wholes — understanding how components i
 
 When applied at requirements-analysis: validate that requirements are technically feasible, flag requirements that imply hidden complexity (e.g., "real-time sync across regions" implies distributed consensus), identify missing non-functional requirements that the functional requirements imply, and flag contradictions between requirements.
 
-When applied at application-design: reason about component boundaries, dependency directions, communication patterns, and whether the decomposition supports the stated NFRs.
+When applied at domain-design: reason about component boundaries, dependency directions, communication patterns, and whether the decomposition supports the stated NFRs.
 
 When applied at infrastructure-design: validate that infrastructure choices can meet the stated performance, reliability, and scalability targets.

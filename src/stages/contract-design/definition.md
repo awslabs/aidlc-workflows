@@ -13,6 +13,9 @@ Define the contracts between units so teams can build in parallel with confidenc
 
 Artifacts this stage can produce. The owner's plan determines which are relevant. Additional artifacts may be produced if warranted.
 
+- `components.yaml` — copied from units-generation and expanded only with contract references for component interactions that cross unit boundaries
+- `units.md` — copied from units-generation and expanded only with boundary contract references
+- `unit-dependencies.md` — copied from units-generation and expanded only with contract IDs/spec file references for each integration point
 - `contracts/` — directory containing one spec file per inter-unit boundary, in the appropriate format:
   - OpenAPI spec (for synchronous REST/HTTP contracts)
   - AsyncAPI spec (for event-driven/message-based contracts)

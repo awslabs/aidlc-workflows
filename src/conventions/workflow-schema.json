@@ -33,6 +33,15 @@
             "type": "string",
             "description": "Persona assigned as owner for this stage"
           },
+          "unit": {
+            "type": "string",
+            "description": "Unit name for construction-phase stage instances. Absent for inception stages."
+          },
+          "phase": {
+            "type": "string",
+            "enum": ["inception", "construction", "operations"],
+            "description": "Workflow phase used to locate the stage directory."
+          },
           "contributors": {
             "type": "array",
             "items": { "type": "string" },

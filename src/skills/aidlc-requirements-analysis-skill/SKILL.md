@@ -36,4 +36,4 @@ When applied at the requirements-analysis stage, this skill produces a structure
 - Assumptions flagged explicitly
 - Out of scope items listed explicitly
 
-When applied at other stages (e.g., by a contributor contributing to application-design), this skill manifests as: checking that every design decision traces back to a stated requirement, flagging design elements that have no requirement basis, and identifying requirements that are not addressed by the design.
+When applied at other stages (e.g., by a contributor contributing to domain-design), this skill manifests as: checking that every design decision traces back to a stated requirement, flagging design elements that have no requirement basis, and identifying requirements that are not addressed by the design.

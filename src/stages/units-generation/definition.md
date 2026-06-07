@@ -13,6 +13,7 @@ Take the building blocks from domain-design and determine how to group them into
 
 Artifacts this stage can produce. The owner's plan determines which are relevant for this system. Additional artifacts may be produced if the system warrants them.
 
+- `components.yaml` — copied from domain-design unchanged except for added unit ownership references; component IDs, names, behaviours, dependencies, and entity names must be preserved
 - `units.md` — unit definitions with responsibilities, boundaries, and owned components
 - `unit-dependencies.md` — dependency matrix showing build/deploy ordering and integration points
 - `unit-story-map.md` — which stories each unit implements, ensuring full coverage

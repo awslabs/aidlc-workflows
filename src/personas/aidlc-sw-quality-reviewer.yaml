@@ -19,12 +19,3 @@ behaviour: |
 
 associated-skills:
   - aidlc-architecture-review-skill
-
-stages-owned: []
-
-contributor-at: []
-
-reviewer-at:
-  - requirements-analysis
-  - story-generation
-  - wireframe-design

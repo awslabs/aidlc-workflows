@@ -1,17 +1,24 @@
 - id: BR-001
-  statement: [Precise statement of what the rule enforces]
-  category: [validation / authorization / constraint / calculation / policy]
-  applies-to: [Which component or entity]
-  trigger: [What event or action causes this rule to be evaluated]
-  logic: [IF condition THEN outcome, expressed in plain language]
-  violation: [What happens when the rule is broken — reject, warn, default, degrade]
-  source: [FR-n or NFR-n from requirements]
+  statement: "[Precise statement of what the rule enforces]"
+  category: "[validation / authorization / constraint / calculation / policy]"
+  applies-to:
+    component-id: CMP-001
+    entity-id: ENT-001
+    api-id: API-001
+  trigger: "[What event or action causes this rule to be evaluated]"
+  logic: "[IF condition THEN outcome, expressed in plain language]"
+  violation: "[What happens when the rule is broken - reject, warn, default, degrade]"
+  source:
+    requirements:
+      - FR-1
+    stories:
+      - S-1
 
 - id: BR-002
-  statement: [...]
-  category: [...]
-  applies-to: [...]
-  trigger: [...]
-  logic: [...]
-  violation: [...]
-  source: [...]
+  statement: "[...]"
+  category: "[...]"
+  applies-to: "[...]"
+  trigger: "[...]"
+  logic: "[...]"
+  violation: "[...]"
+  source: "[...]"

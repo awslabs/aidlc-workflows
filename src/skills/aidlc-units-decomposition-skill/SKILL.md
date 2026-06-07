@@ -54,8 +54,8 @@ Check the decomposition against:
 
 ## Application
 
-When applied at application-design, this skill drives the `components.md`, `component-interactions.md`, and `services.md` artifacts.
+When applied at domain-design, this skill helps validate `components.yaml` and `components.md` for clear component boundaries and dependency direction.
 
-When applied at units-generation (construction phase), this skill is used to break the approved design into implementable units of work with dependency ordering.
+When applied at units-generation, this skill drives `units.md`, `unit-dependencies.md`, and `unit-story-map.md`.
 
 When applied as a contributor to other stages, this skill manifests as: validating that proposed changes respect component boundaries, flagging designs that create unintended coupling, and identifying components being asked to take on conflicting responsibilities.
