@@ -23,8 +23,7 @@ Directed graph of all available stages. The orchestrator reads this during workf
 | units-generation | Group domain-design building blocks into deployable units | aidlc-systems-architect-agent |
 | contract-design | Define inter-unit contracts so teams can build in parallel | aidlc-systems-architect-agent |
 | functional-design | Design detailed business logic, domain entities, rules, and API spec per unit | aidlc-systems-architect-agent |
-| nfr-assessment | Operationalise NFRs into measurable targets and tech stack choices per unit | aidlc-systems-architect-agent |
-| nfr-design | Design patterns and logical components that satisfy NFR targets per unit | aidlc-systems-architect-agent |
+| nfr-design | Define quality targets, tech stack, and architectural patterns | aidlc-systems-architect-agent |
 | infrastructure-design | Map logical components to infrastructure services and define deployment | aidlc-systems-architect-agent |
 | code-generation | Generate production code per unit with write-test-verify cycles | aidlc-sw-dev-engineer-agent |
 
@@ -42,10 +41,9 @@ Stages have flexible inputs — they can start from multiple predecessors or dir
 | units-generation | domain-design (components.yaml must exist) |
 | contract-design | units-generation (units + dependencies), components.yaml (entity shapes) |
 | functional-design | contract-design (contracts for this unit's boundaries), units-generation (unit definition + assigned stories) |
-| nfr-assessment | requirements.md (NFR section), functional-design artifacts for this unit |
-| nfr-design | nfr-assessment (targets + tech stack), functional-design artifacts, unit-contracts |
-| infrastructure-design | nfr-design (logical components + patterns), tech-stack-decisions |
-| code-generation | functional-design, nfr-assessment, nfr-design, infrastructure-design, units-generation, domain-design, stories, requirements |
+| nfr-design | requirements.md (NFR section), functional-design artifacts, components.yaml |
+| infrastructure-design | nfr-design (spec with patterns + tech stack) |
+| code-generation | functional-design, nfr-design, infrastructure-design, units-generation, domain-design, stories, requirements |
 
 ## Composition Rules
 

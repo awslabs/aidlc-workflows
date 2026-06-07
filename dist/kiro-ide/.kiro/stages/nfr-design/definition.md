@@ -2,19 +2,19 @@
 
 ## Description
 
-Design the architectural patterns and logical components that satisfy the NFR targets established in nfr-assessment. Resilience patterns, caching strategies, scaling mechanisms, observability instrumentation, security enforcement points. Defines what logical capabilities are needed, not which cloud services implement them.
+Define the non-functional targets, select the tech stack, and design the patterns that satisfy quality attributes — all in one pass. Requirements already captured NFRs at a high level with architect and security input. This stage makes them concrete and actionable: measurable targets, technology choices, architectural patterns, and explicit trade-offs.
 
 ## Inputs
 
-- **Required:** `nfr-targets.md` and `tech-stack-decisions.md` from nfr-assessment
-- **Optional context:** functional-design artifacts (business logic shapes the patterns), `unit-contracts.md` (integration patterns affect resilience design)
+- **Required:** `requirements.md` (NFR section), functional-design artifacts
+- **Optional context:** `components.yaml` from domain-design, contracts from contract-design, RE artifacts (existing infrastructure constraints)
 
 ## Outputs
 
 Artifacts this stage can produce. The owner's plan determines which are relevant. Additional artifacts may be produced if warranted.
 
-- `nfr-patterns.md` — architectural patterns selected to meet each NFR target (with rationale and trade-offs)
-- `logical-components.md` — non-business components needed: caches, queues, circuit breakers, rate limiters, health checks, metric emitters
+- `nfr-spec.yaml` — quality targets, tech stack decisions, patterns, trade-offs (source of truth)
+- `nfr-spec-summary.md` — human-readable view for presentation and review (derived from the YAML)
 
 ## Owner
 
@@ -22,7 +22,7 @@ aidlc-systems-architect-agent
 
 ## Contributors
 
-- aidlc-security-architect-agent: validate security patterns are defence-in-depth and enforcement points are complete
+- aidlc-security-architect-agent
 
 ## Reviewer
 
