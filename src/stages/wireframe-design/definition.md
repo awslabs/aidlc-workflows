@@ -26,4 +26,4 @@ aidlc-ux-designer-agent
 
 ## Reviewer
 
-aidlc-sw-quality-reviewer
+aidlc-product-lead-agent

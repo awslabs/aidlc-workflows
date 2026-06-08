@@ -25,4 +25,4 @@ aidlc-product-manager-agent
 
 ## Reviewer
 
-aidlc-sw-quality-reviewer
+aidlc-product-lead-agent

@@ -70,9 +70,9 @@ These are internal reasoning aids. Do not reference them by name to the human.
 >
 > | # | Stage | Owner | Contributors | Reviewer |
 > |---|---|---|---|---|
-> | 1 | Requirements analysis | aidlc-product-manager-agent | aidlc-systems-architect-agent | aidlc-sw-quality-reviewer |
-> | 2 | Story generation | aidlc-product-manager-agent | aidlc-systems-architect-agent | aidlc-sw-quality-reviewer |
-> | 3 | Wireframe design | aidlc-ux-designer-agent | aidlc-product-manager-agent, aidlc-systems-architect-agent | aidlc-sw-quality-reviewer |
+> | 1 | Requirements analysis | aidlc-product-manager-agent | aidlc-systems-architect-agent | aidlc-product-lead-agent |
+> | 2 | Story generation | aidlc-product-manager-agent | aidlc-systems-architect-agent | aidlc-product-lead-agent |
+> | 3 | Wireframe design | aidlc-ux-designer-agent | aidlc-product-manager-agent, aidlc-systems-architect-agent | aidlc-product-lead-agent |
 > | 4 | Domain design | aidlc-app-architect-agent | aidlc-product-manager-agent | aidlc-architecture-reviewer-agent |
 > | 5 | Units generation | aidlc-app-architect-agent | aidlc-product-manager-agent | aidlc-architecture-reviewer-agent |
 > | 6 | Contract design | aidlc-app-architect-agent | aidlc-product-manager-agent | aidlc-architecture-reviewer-agent |

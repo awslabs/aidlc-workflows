@@ -61,6 +61,17 @@ Read the final reviewer's review file. Address their findings — fix remaining 
 
 After finalising, set this stage's status in `state/state.json` to `finalised`.
 
+## State Write Contract
+
+Whenever you produce or modify a file in the stage directory, register it in the current stage entry's `outputs` array before handing control back. Use this exact format:
+
+```json
+{
+  "name": "<filename-only>",
+  "locationRelativeToIntentRoot": "<directory-relative-to-intent-root-ending-with-/>"
+}
+```
+
 ## Artifact Resolution
 
 Stages consume artifact roles, not rigid stage paths. For each concern needed by the current stage, use the richest available upstream artifact.
