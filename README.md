@@ -645,7 +645,7 @@ Deployment and monitoring (future)
 
 ## Extensions
 
-AI-DLC supports an extension system that lets you layer additional rules on top of the core workflow. Extensions are markdown files organized under `aws-aidlc-rule-details/extensions/` and grouped by category (e.g., `security/`, `testing/`).
+AI-DLC supports an extension system that lets you layer additional rules on top of the core workflow. Extensions are markdown files organized under `aws-aidlc-rule-details/extensions/` and grouped by category (e.g., `security/`, `testing/`, `resiliency/`).
 
 ### How Extensions Work
 
@@ -669,14 +669,20 @@ aws-aidlc-rule-details/
     │   └── baseline/
     │       ├── security-baseline.md          # Baseline security rules
     │       └── security-baseline.opt-in.md   # Opt-in prompt
-    └── testing/                       # Extension category
-        └── property-based/
-            ├── property-based-testing.md          # Property-based testing rules
-            └── property-based-testing.opt-in.md   # Opt-in prompt
+    ├── testing/                       # Extension category
+    │   └── property-based/
+    │       ├── property-based-testing.md          # Property-based testing rules
+    │       └── property-based-testing.opt-in.md   # Opt-in prompt
+    ├── resiliency/
+    │   └── baseline/
+    │       ├── resiliency-baseline.md          # Baseline resiliency rules
+    │       └── resiliency-baseline.opt-in.md   # Opt-in prompt
 ```
 
 > [!IMPORTANT]
 > The security extension rules are provided as a directional reference for building effective security rules within AI-DLC workflows. Each organization should build, customize, and thoroughly test their own security rules before deploying in production workflows.
+>
+> The resiliency extension rules are provided as a directional best practices for building resilient workloads rules within AI-DLC workflows. Each organization should build, customize, and thoroughly test their own resiliency rules before deploying in production workflows.
 
 ### Adding Your Own Extensions
 
