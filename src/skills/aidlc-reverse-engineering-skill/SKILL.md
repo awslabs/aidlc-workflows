@@ -1,7 +1,7 @@
 ---
 name: aidlc-reverse-engineering-skill
 description: |
-  The ability to systematically analyse an existing codebase — discovering its structure, architecture, APIs, data models, dependencies, and quality posture — and produce structured design artifacts that make the system understandable to downstream stages. Applied by the Systems Architect as the primary skill at the reverse-engineering stage.
+  Systematically analyse an existing codebase — discovering its structure, architecture, APIs, data models, dependencies, and quality posture — and produce structured design artifacts that make the system understandable to downstream work.
 ---
 
 # Reverse Engineering

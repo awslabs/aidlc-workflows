@@ -47,6 +47,10 @@
             "items": { "type": "string" },
             "description": "Personas assigned as contributors"
           },
+          "reviewer": {
+            "type": "string",
+            "description": "Persona assigned as final reviewer. Optional; absent when this stage has no reviewer."
+          },
           "rationale": {
             "type": "string",
             "description": "Why this stage was included (or why it was ordered here)"

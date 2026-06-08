@@ -1,7 +1,7 @@
 ---
 name: aidlc-units-decomposition-skill
 description: |
-  The ability to decompose a system into well-bounded components with clear responsibilities, explicit interfaces, and intentional dependency directions. Applied by the Systems Architect when breaking a system into its logical parts and defining how they interact.
+  Decompose a system into well-bounded components or deployable units with clear responsibilities, explicit interfaces, and intentional dependency directions. Applies wherever system structure is split, grouped, or reviewed for coupling and ownership.
 ---
 
 # Units Decomposition

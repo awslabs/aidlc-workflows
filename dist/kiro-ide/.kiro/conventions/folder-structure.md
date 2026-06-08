@@ -30,11 +30,9 @@ The runtime folder structure for an intent execution. Created by the workspace-s
             ├── construction/
             │   ├── <unit-name>/
             │   │   ├── functional-design/
-            │   │   ├── nfr-requirements/
             │   │   ├── nfr-design/
             │   │   ├── infrastructure-design/
             │   │   └── code-generation/
-            │   └── build-and-test/
             │
             └── operations/
                 └── (future stages)
@@ -46,9 +44,8 @@ The runtime folder structure for an intent execution. Created by the workspace-s
 2. Each stage gets its own subdirectory under its phase.
 3. Construction stages are scoped per-unit: `construction/<unit-name>/<stage-name>/`.
 4. `contract-design` sits at the inception level because it defines cross-unit boundary agreements before per-unit construction begins.
-5. `build-and-test` sits at the construction level (not per-unit) — it runs after all units.
-6. Output artifacts live in the stage's directory.
-7. Questions asked during clarification are recorded in `questions.md` within the stage directory.
-8. `state.json` and `audit.json` are machine-parseable — see their respective schemas in `conventions/`.
-9. `workflow.json` records the composed workflow for this intent — see `workflow-schema.json`.
-10. The workspace-setup stage creates the phase directories. Per-unit directories are created when units-generation completes.
+5. Output artifacts live in the stage's directory.
+6. Questions asked during clarification are recorded in `questions.md` within the stage directory.
+7. `state.json` and `audit.json` are machine-parseable — see their respective schemas in `conventions/`.
+8. `workflow.json` records the composed workflow for this intent — see `workflow-schema.json`.
+9. The workspace-setup stage creates the phase directories. Per-unit directories are created when units-generation completes.

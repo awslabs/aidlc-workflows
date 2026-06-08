@@ -1,7 +1,7 @@
 ---
 name: aidlc-user-empathy-skill
 description: |
-  The ability to think from the user's perspective — understanding their goals, frustrations, workflows, and the context in which they interact with the system. Applied by the Product Owner persona at requirements, stories, and wireframes stages.
+  Think from the user's perspective — understanding goals, frustrations, workflows, and the context in which people interact with the system. Applies wherever user value, journeys, stories, screens, or acceptance criteria are shaped or reviewed.
 ---
 
 # User Empathy

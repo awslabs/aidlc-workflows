@@ -54,14 +54,14 @@ These are internal reasoning aids. Do not reference them by name to the human.
 **Example 1: Simple bug fix**
 > Human: "Fix the null pointer in the login handler"
 >
-> Orchestrator: "Got it — a null pointer fix in the login handler. That's a targeted brownfield bug fix. I'd suggest: code-generation → build-and-test. Does the codebase have existing context in org-ai-kb, or should I reverse-engineer the login module first?"
+> Orchestrator: "Got it — a null pointer fix in the login handler. That's a targeted brownfield bug fix. I'd suggest: code-generation. Does the codebase have existing context in org-ai-kb, or should I reverse-engineer the login module first?"
 
 **Example 2: Feature on existing system**
 > Human: "I want to work on story-2041: add a dropdown to an existing page"
 >
 > Orchestrator: "Story-2041 — adding a dropdown to an existing page. Small brownfield UI change. I need the story details. Would you like to paste it, point me to a file, or should I generate it from what you've described?
 >
-> For the implementation I'd suggest: code-generation → build-and-test. Do you want the code reviewed by a solutions architect, or is this straightforward enough to skip reviews?"
+> For the implementation I'd suggest: code-generation. Do you want the code reviewed by a solutions architect, or is this straightforward enough to skip reviews?"
 
 **Example 3: Greenfield system**
 > Human: "Build a library management app with admin and member roles"
@@ -73,9 +73,13 @@ These are internal reasoning aids. Do not reference them by name to the human.
 > | 1 | Requirements analysis | aidlc-product-manager-agent | aidlc-systems-architect-agent | aidlc-sw-quality-reviewer |
 > | 2 | Story generation | aidlc-product-manager-agent | aidlc-systems-architect-agent | aidlc-sw-quality-reviewer |
 > | 3 | Wireframe design | aidlc-ux-designer-agent | aidlc-product-manager-agent, aidlc-systems-architect-agent | aidlc-sw-quality-reviewer |
-> | 4 | Application design | aidlc-systems-architect-agent | — | aidlc-architecture-reviewer-agent |
-> | 5 | Code generation | (tbd) | — | — |
-> | 6 | Build and test | (tbd) | — | — |
+> | 4 | Domain design | aidlc-app-architect-agent | aidlc-product-manager-agent | aidlc-architecture-reviewer-agent |
+> | 5 | Units generation | aidlc-app-architect-agent | aidlc-product-manager-agent | aidlc-architecture-reviewer-agent |
+> | 6 | Contract design | aidlc-app-architect-agent | aidlc-product-manager-agent | aidlc-architecture-reviewer-agent |
+> | 7 | Functional design | aidlc-systems-architect-agent | aidlc-product-manager-agent | aidlc-architecture-reviewer-agent |
+> | 8 | NFR design | aidlc-systems-architect-agent | — | aidlc-architecture-reviewer-agent |
+> | 9 | Infrastructure design | aidlc-systems-architect-agent | — | aidlc-architecture-reviewer-agent |
+> | 10 | Code generation | aidlc-sw-dev-engineer-agent | aidlc-systems-architect-agent | aidlc-code-reviewer-agent |
 >
 > Rationale: full system with auth, integrations, and two user roles warrants the complete workflow with reviews.
 >

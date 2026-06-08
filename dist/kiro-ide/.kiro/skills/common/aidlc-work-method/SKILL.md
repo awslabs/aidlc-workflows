@@ -65,6 +65,8 @@ After finalising, set this stage's status in `state/state.json` to `finalised`.
 
 Stages consume artifact roles, not rigid stage paths. For each concern needed by the current stage, use the richest available upstream artifact.
 
+Stage definition inputs describe required knowledge and preferred artifact sources, not hard dependencies on specific upstream stages unless explicitly marked non-skippable. If an input says "Required: <artifact>", interpret that as "this concern must be understood"; use the preferred artifact when available, otherwise infer the minimum needed detail from the richest available upstream source and document the fallback in `plan.md`.
+
 Use this priority:
 
 1. **Prefer when available** — use later, more detailed upstream artifacts when they exist.

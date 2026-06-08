@@ -1,7 +1,7 @@
 ---
 name: aidlc-requirements-analysis-skill
 description: |
-  The ability to elicit, decompose, and structure requirements from ambiguous human intent into a verifiable, complete specification. Applied by the Product Owner as primary skill at the requirements-analysis stage.
+  Elicit, decompose, and structure requirements from ambiguous human intent into verifiable, traceable specifications. Applies wherever requirements are discovered, refined, validated, or used to check downstream artifacts.
 ---
 
 # Requirements Analysis

@@ -1,7 +1,7 @@
 ---
 name: aidlc-domain-modeling-skill
 description: |
-  The ability to identify and define the core domain concepts of a system — its components, entities, relationships, ownership boundaries, and the language the system speaks. Applied by the Systems Architect at the domain-design stage.
+  Identify and define the core domain concepts of a system — components, entities, relationships, ownership boundaries, and the language the system speaks. Applies wherever domain structure, entity ownership, or business capability boundaries are designed or reviewed.
 ---
 
 # Domain Modeling

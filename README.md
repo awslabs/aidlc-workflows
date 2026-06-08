@@ -135,13 +135,7 @@ Use Kiro IDE in **Vibe** mode to run the AI-DLC workflow.
 
 ## Contributing
 
-This branch is pre-release. If you want to experiment:
-
-- Edit `src/` only — never hand-edit `dist/`, it is generated.
-- Rebuild with `npm run build` after changes.
-- Stages are self-contained folders — add a new stage by creating `src/stages/<name>/definition.md` + `templates/`.
-- Personas are YAML — add a new persona by creating `src/personas/<name>.yaml`.
-- Skills follow the frontmatter + markdown format — add under `src/skills/<name>/SKILL.md`.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for AI-DLC authoring principles, change workflow, testing guidance, and the pull request checklist.
 
 ---
 

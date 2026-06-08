@@ -8,46 +8,52 @@ Please read through this document before submitting any issues or pull requests.
 
 Before contributing, familiarize yourself with our [tenets](README.md#tenets).
 
-## Contributing Rules
+## AI-DLC Authoring Principles
 
-AI-DLC rules live in `aidlc-rules/aws-aidlc-rule-details/`. When contributing:
+AI-DLC separates stages, personas, skills, templates, and artifacts. Each concept has one job. Keep those boundaries clear so workflows remain adaptive and the generated runtime remains consistent.
 
-- **Be reproducible**: Changes should be consistently reproducible either via test case or a series of steps.
-- **Single source of truth**: Don't duplicate content. If guidance applies to multiple stages, put it in `common/` and reference it.
-- **Keep it agnostic**: The core methodology shouldn't assume specific IDEs, agents, or models. Tool-specific files are generated from the source.
+- **Stages own workflow placement**: Stage definitions are the source of truth for owners, contributors, reviewers, inputs, and outputs. Do not repeat stage ownership in personas or skills.
+- **Personas own identity**: Personas describe perspective, behaviour, judgment style, and associated reusable skills. They should not list stage ownership, contributor mappings, or reviewer mappings.
+- **Skills are transferable capabilities**: A skill defines reusable expertise: definition, principles, patterns, and application. Avoid tying a skill to one persona or one stage.
+- **Avoid stage leakage in skills**: Prefer wording like "applies wherever contracts are designed or reviewed" over "applied by Systems Architect at functional-design."
+- **Artifacts flow by identity**: Later stages copy forward upstream blueprint artifacts and expand them in place. Preserve stable IDs, names, boundaries, responsibilities, and dependency directions.
+- **Required means required knowledge**: Stage inputs describe concerns the stage must understand, not hard dependencies on exact upstream paths unless explicitly marked non-skippable.
+- **Use artifact roles over rigid filenames**: A stage should resolve "functional behaviour" or "blueprint identity" from the richest available upstream artifact rather than fail because a preferred file is missing.
+- **Keep abstraction levels clean**: Early stages stay conceptual. Functional design adds logical behaviour. NFR and infrastructure stages add quality and physical deployment detail. Code generation adds implementation.
+- **Templates match stage granularity**: Templates should ask for the level of detail appropriate to their stage. Do not ask domain-design for database tables, IaC, or framework details.
+- **Common rules belong in common skills**: Cross-cutting behaviour such as artifact resolution, copy-forward, fallback inference, persistence, and review flow should live in common skills instead of being repeated in every stage.
+- **Examples are executable guidance**: LLMs learn from examples. Keep examples aligned with `src/stages/stage-graph.md` and current stage names.
+- **Generated resources must resolve**: Runtime agent resources must point only to files that exist. Planned future skills may be listed as backlog intent, but generated `skill://` resources must be resolvable.
+- **Review at the artifact's abstraction level**: Do not require later-stage deployment, scaling, or failure-mode details from early conceptual artifacts unless those artifacts make premature or contradictory claims.
 
-### Directory Structure — Do Not Rename or Move
+## Making Changes
 
-The folder names `aws-aidlc-rules/` and `aws-aidlc-rule-details/` under `aidlc-rules/` are part of the public contract. Workshops, tests, and the `core-workflow.md` path-resolution logic all depend on these exact names. Do not flatten, rename, or reorganize them.
+- Edit source files under `src/`.
+- Rebuild generated runtime files with `npm run build`.
+- Do not hand-edit `dist/kiro-ide/.kiro` except when diagnosing generation issues; generated changes should come from `src/`.
+- Add or update stages under `src/stages/<stage-name>/definition.md` and `templates/`.
+- Add or update personas under `src/personas/<persona-name>.yaml`.
+- Add or update skills under `src/skills/<skill-name>/SKILL.md`.
+- Keep target-specific generation logic under `build/` and `src/target-config/`.
 
-```text
-aidlc-rules/
-├── aws-aidlc-rules/            # Core workflow entry point
-│   └── core-workflow.md
-└── aws-aidlc-rule-details/     # Detailed rules referenced by the workflow
-    ├── common/
-    ├── inception/
-    ├── construction/
-    ├── extensions/
-    └── operations/
-```
+## Pull Request Checklist
 
-### Rule Structure
+Before submitting a PR, verify:
 
-Rules are organized by phase:
+- Stage additions or removals are reflected in `src/stages/stage-graph.md`.
+- Stage owner, contributor, and reviewer mappings appear only in stage definitions.
+- Skill descriptions are persona-neutral and stage-neutral unless the skill is explicitly an orchestration/process skill.
+- Templates match the abstraction level of their stage.
+- Artifact copy-forward and stable-ID preservation are respected where downstream stages expand upstream artifacts.
+- `dist/kiro-ide/.kiro` has been rebuilt from `src/`.
+- Generated agent `skill://` resources resolve to real skill files.
+- Stale stage names do not remain in examples, conventions, or generated output.
 
-- `common/` - Shared guidance across all phases
-- `inception/` - Planning and architecture rules
-- `construction/` - Design and implementation rules
-- `operations/` - Deployment and monitoring rules
-- `extensions/` - Optional cross-cutting constraint rules
+## Testing Changes
 
-### Testing Changes
+Test your changes with at least one supported target runtime, currently Kiro. Describe what you tested in your PR.
 
-Test your rule changes with at least one supported platform (Amazon Q Developer, Kiro, or other tools) before submitting. Describe what you tested in your PR.
-
-If you're adding or updating installation instructions, ensure you've tested them on Mac,
-Windows CMD, and Windows Powershell.
+If you're adding or updating installation instructions, ensure you've tested them on Mac, Windows CMD, and Windows Powershell.
 
 ## Reporting Bugs/Feature Requests
 
