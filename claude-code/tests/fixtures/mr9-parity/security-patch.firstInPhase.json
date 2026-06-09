@@ -1,0 +1,7 @@
+{
+  "initialization": "workspace-scaffold",
+  "ideation": "none",
+  "inception": "reverse-engineering",
+  "construction": "nfr-requirements",
+  "operation": "deployment-pipeline"
+}

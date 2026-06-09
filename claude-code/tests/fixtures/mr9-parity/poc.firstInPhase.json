@@ -1,0 +1,7 @@
+{
+  "initialization": "workspace-scaffold",
+  "ideation": "intent-capture",
+  "inception": "reverse-engineering",
+  "construction": "code-generation",
+  "operation": "none"
+}

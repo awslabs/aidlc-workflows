@@ -15,6 +15,8 @@ For learning more about AI-DLC, read this [blog](https://aws.amazon.com/blogs/de
 
 - [Getting Started](#getting-started)
 - [Platform Support](#platform-support)
+- [Kiro](#kiro)
+- [Claude Code](#claude-code)
 - [Usage](#usage)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
@@ -24,7 +26,9 @@ For learning more about AI-DLC, read this [blog](https://aws.amazon.com/blogs/de
 
 ## Getting Started
 
-v2 does not yet ship release zips. To try it, clone this branch and follow the platform-specific build and install instructions for your coding agent.
+> Using Claude Code instead of Kiro? See [`claude-code/README.md`](./claude-code/README.md) for its setup.
+
+To try AI-DLC v2, clone this branch and follow the build and install instructions below.
 
 ### Prerequisites
 
@@ -37,7 +41,7 @@ Clone into a folder **outside** your project (e.g. `~/workspaces/aidlc-workflows
 
 ```bash
 git clone -b v2 https://github.com/awslabs/aidlc-workflows.git ~/workspaces/aidlc-workflows
-cd ~/workspaces/aidlc-workflows
+cd ~/workspaces/aidlc-workflows/kiro
 ```
 
 Build the AI-DLC distribution:
@@ -46,9 +50,9 @@ Build the AI-DLC distribution:
 npm run build
 ```
 
-This produces `dist/kiro-ide/.kiro/`.
+This produces `dist/kiro-ide/.kiro/` (inside `kiro/`).
 
-Then jump to the setup instructions for your platform below.
+Then jump to the setup instructions below.
 
 ---
 
@@ -56,10 +60,10 @@ Then jump to the setup instructions for your platform below.
 
 v2 currently supports:
 
-- [Kiro IDE](https://kiro.dev/)
-- [Kiro CLI](https://kiro.dev/cli/)
+- **[Kiro](#kiro)** — [Kiro IDE](https://kiro.dev/) and [Kiro CLI](https://kiro.dev/cli/)
+- **[Claude Code](#claude-code)**
 
-More targets (Q Developer, Cursor, Cline, Claude Code, Copilot, etc.) are planned — see v1 if you need those today.
+More targets (Q Developer, Cursor, Cline, Copilot, etc.) are planned — see v1 if you need those today.
 
 ### Kiro
 
@@ -75,19 +79,19 @@ Run these commands from your **project root** (the folder you open in Kiro):
 **macOS / Linux:**
 ```bash
 mkdir -p .kiro
-cp -R ~/workspaces/aidlc-workflows/dist/kiro-ide/.kiro/ .kiro/
+cp -R ~/workspaces/aidlc-workflows/kiro/dist/kiro-ide/.kiro/ .kiro/
 ```
 
 **Windows (PowerShell):**
 ```powershell
 New-Item -ItemType Directory -Force -Path ".kiro"
-Copy-Item -Recurse -Force "$env:USERPROFILE\workspaces\aidlc-workflows\dist\kiro-ide\.kiro\*" ".kiro\"
+Copy-Item -Recurse -Force "$env:USERPROFILE\workspaces\aidlc-workflows\kiro\dist\kiro-ide\.kiro\*" ".kiro\"
 ```
 
 **Windows (CMD):**
 ```cmd
 if not exist .kiro mkdir .kiro
-xcopy %USERPROFILE%\workspaces\aidlc-workflows\dist\kiro-ide\.kiro .kiro\ /E /I /Y
+xcopy %USERPROFILE%\workspaces\aidlc-workflows\kiro\dist\kiro-ide\.kiro .kiro\ /E /I /Y
 ```
 
 After install, your `.kiro/` directory should include these subdirectories (alongside anything else Kiro already manages there):
@@ -108,6 +112,10 @@ After install, your `.kiro/` directory should include these subdirectories (alon
 Open the skills panel in Kiro IDE and confirm you see entries for the AI-DLC skills (`aidlc-orchestration`, `aidlc-kickoff`, `aidlc-requirements-analysis-skill`, etc.) under your workspace.
 
 Use Kiro IDE in **Vibe** mode to run the AI-DLC workflow.
+
+### Claude Code
+
+For Claude Code, follow the setup in [`claude-code/README.md`](./claude-code/README.md).
 
 ---
 

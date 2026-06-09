@@ -11,3 +11,6 @@ codebuild_build.sh
 .kiro
 
 .bkup-src/
+
+node_modules/
+dist/

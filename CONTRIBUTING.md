@@ -28,24 +28,26 @@ AI-DLC separates stages, personas, skills, templates, and artifacts. Each concep
 
 ## Making Changes
 
-- Edit source files under `src/`.
-- Rebuild generated runtime files with `npm run build`.
-- Do not hand-edit `dist/kiro-ide/.kiro` except when diagnosing generation issues; generated changes should come from `src/`.
-- Add or update stages under `src/stages/<stage-name>/definition.md` and `templates/`.
-- Add or update personas under `src/personas/<persona-name>.yaml`.
-- Add or update skills under `src/skills/<skill-name>/SKILL.md`.
-- Keep target-specific generation logic under `build/` and `src/target-config/`.
+These instructions cover the **Kiro** implementation under `kiro/`. For the Claude Code implementation, see [`claude-code/README.md`](claude-code/README.md) and its docs.
+
+- Edit source files under `kiro/src/`.
+- Rebuild generated runtime files by running `npm run build` from `kiro/`.
+- Do not hand-edit `kiro/dist/kiro-ide/.kiro` except when diagnosing generation issues; generated changes should come from `kiro/src/`.
+- Add or update stages under `kiro/src/stages/<stage-name>/definition.md` and `templates/`.
+- Add or update personas under `kiro/src/personas/<persona-name>.yaml`.
+- Add or update skills under `kiro/src/skills/<skill-name>/SKILL.md`.
+- Keep target-specific generation logic under `kiro/build/` and `kiro/src/target-config/`.
 
 ## Pull Request Checklist
 
 Before submitting a PR, verify:
 
-- Stage additions or removals are reflected in `src/stages/stage-graph.md`.
+- Stage additions or removals are reflected in `kiro/src/stages/stage-graph.md`.
 - Stage owner, contributor, and reviewer mappings appear only in stage definitions.
 - Skill descriptions are persona-neutral and stage-neutral unless the skill is explicitly an orchestration/process skill.
 - Templates match the abstraction level of their stage.
 - Artifact copy-forward and stable-ID preservation are respected where downstream stages expand upstream artifacts.
-- `dist/kiro-ide/.kiro` has been rebuilt from `src/`.
+- `kiro/dist/kiro-ide/.kiro` has been rebuilt from `kiro/src/`.
 - Generated agent `skill://` resources resolve to real skill files.
 - Stale stage names do not remain in examples, conventions, or generated output.
 

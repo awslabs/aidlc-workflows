@@ -1,0 +1,175 @@
+# Agent System
+
+This chapter documents the agent architecture: how agents are structured, configured, loaded by the framework, and how to add or modify them.
+
+For user-facing agent descriptions, see the [User Guide -- Agents](../guide/05-agents.md).
+
+---
+
+## Agent Structure
+
+Each agent is a flat `.md` file in `.claude/agents/` with YAML frontmatter followed by a markdown body. The conductor reads these files to frame its perspective during inline stage execution or to build context for subagent delegation.
+
+### Frontmatter Contract
+
+Every agent file must include this YAML frontmatter:
+
+```yaml
+---
+name: aidlc-architect-agent               # Agent identifier (matches filename without .md)
+description: >                      # Brief role summary (shown in Claude Code agent list)
+  System architect responsible for application design,
+  NFR design, and component decomposition.
+disallowedTools: Task               # Agents cannot spawn subagents
+modelOverride: opus                 # opus for high-judgment work; sonnet for templated output
+---
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Agent identifier, must match filename |
+| `description` | Yes | Brief role summary |
+| `tools` | No | Optional allowlist; omit to inherit the full session toolset. Listing it narrows the agent and drops inherited MCP tools unless `mcp__<server>__<tool>` ids are also listed |
+| `disallowedTools` | Yes | Must include `Task` -- only the conductor delegates |
+| `modelOverride` | No | `opus` (default for most agents) or `sonnet` (templated-output agents only) |
+
+### Markdown Body Sections
+
+Below the frontmatter, the markdown body defines:
+
+| Section | Purpose |
+|---------|---------|
+| **Core Responsibilities** | What the agent does in each of its owned stages |
+| **Stages Owned** | Lead and supporting stage assignments |
+| **Collaboration** | Receives from / Works with / Hands off to |
+| **Knowledge Loading** | The 6-step loading order (see [Knowledge System](10-knowledge-system.md)) |
+| **Key Principles** | Behavioral guidelines for the agent |
+
+---
+
+## Shared Configuration
+
+All 11 agents share a common configuration baseline. None declares a `tools:` allowlist, so every agent inherits the **full session toolset** — all of Claude Code's built-in tools plus any MCP tools provisioned to the session. The one shipped restriction is `disallowedTools: Task`.
+
+### The session toolset (inherited by every agent)
+
+Every agent inherits the built-in Claude Code tools, including:
+
+| Tool | Purpose |
+|------|---------|
+| Read | Read files from the filesystem |
+| Edit | Perform exact string replacements in files |
+| Write | Write files to the filesystem |
+| Glob | Fast file pattern matching |
+| Grep | Content search using ripgrep |
+| AskUserQuestion | Interactive user prompts (main-thread stages only) |
+
+### Common Disallowed Claude Code Tools
+
+| Tool | Reason |
+|------|--------|
+| Task | Agents operate as delegated workers. Only the SKILL.md conductor performs the Task call. `disallowedTools: Task` avoids cascading subagent chains. |
+
+### Tools each persona is expected to exercise
+
+Every agent *can* reach Bash and WebSearch by inheritance; the table records which personas the methodology **expects** to use them in their stage work, not a per-agent grant. To genuinely restrict a persona, add an optional `tools:` allowlist (which drops inherited MCP unless `mcp__<server>__<tool>` ids are also listed) — this implementation ships no such restrictions.
+
+| Tool | Expected to exercise it |
+|------|---------------------|
+| Bash | aidlc-aws-platform-agent, aidlc-devsecops-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
+| WebSearch | aidlc-product-agent, aidlc-design-agent, aidlc-compliance-agent |
+
+### Model Overrides
+
+| Model | Agents |
+|-------|--------|
+| opus | aidlc-architect-agent, aidlc-product-agent, aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-aws-platform-agent |
+| sonnet | aidlc-delivery-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
+
+The default is opus. An agent uses sonnet only when its output is dominantly templated or pattern-following (delivery plans, CI/CD YAML, observability/runbook scaffolding) and the methodology is already encoded in knowledge files.
+
+Opus is used for any agent whose work involves high-judgment, multi-constraint reasoning that cascades downstream:
+
+- **product** — interpreting ambiguous intent
+- **design** — UX trade-offs
+- **architect** — architectural decomposition
+- **developer** — code synthesis under dense context
+- **quality** — risk-based test strategy
+- **devsecops** — threat prioritisation
+- **compliance** — regulatory edge cases
+- **aws-platform** — cloud architecture trade-offs
+
+---
+
+## Agent Comparison Matrix
+
+| Agent | Bash | WebSearch | Opus Model | Lead Stages | Support Stages | Total |
+|-------|------|-----------|------------|-------------|----------------|-------|
+| aidlc-product-agent | No | Yes | Yes | 5 | 3 | 8 |
+| aidlc-design-agent | No | Yes | Yes | 2 | 2 | 4 |
+| aidlc-delivery-agent | No | No | No | 3 | 2 | 5 |
+| aidlc-architect-agent | No | No | Yes | 6 | 3 | 9 |
+| aidlc-aws-platform-agent | Yes | No | Yes | 2 | 4 | 6 |
+| aidlc-compliance-agent | No | Yes | Yes | 0 | 4 | 4 |
+| aidlc-devsecops-agent | Yes | No | Yes | 0 | 5 | 5 |
+| aidlc-developer-agent | Yes | No | Yes | 2 | 3 | 5 |
+| aidlc-quality-agent | Yes | No | Yes | 2 | 2 | 4 |
+| aidlc-pipeline-deploy-agent | Yes | No | No | 4 | 0 | 4 |
+| aidlc-operations-agent | Yes | No | No | 3 | 0 | 3 |
+
+**Observations:**
+- aidlc-architect-agent has the broadest stage involvement (9 stages across 3 phases).
+- Eight of 11 agents run on opus; the three sonnet agents (delivery, pipeline-deploy, operations) handle dominantly templated planning, CI/CD, and runbook work.
+- aidlc-compliance-agent operates purely in an advisory capacity (4 support stages, no lead stages).
+- Six of 11 agents have Bash access, all in roles that need CLI interaction.
+- Three agents have WebSearch access for research tasks.
+
+---
+
+## Phase Participation
+
+| Agent | Init (0) | Ideation (1) | Inception (2) | Construction (3) | Operation (4) |
+|-------|----------|--------------|---------------|-------------------|---------------|
+| aidlc-product-agent | -- | L (intent-capture, market-research, scope-definition), S (rough-mockups, approval-handoff) | L (requirements-analysis, user-stories), S (refined-mockups) | -- | -- |
+| aidlc-design-agent | -- | L (rough-mockups) | L (refined-mockups), S (user-stories, application-design) | -- | -- |
+| aidlc-delivery-agent | -- | L (team-formation, approval-handoff), S (scope-definition) | L (delivery-planning), S (units-generation) | -- | -- |
+| aidlc-architect-agent | -- | L (feasibility), S (intent-capture) | L (application-design, units-generation), S (reverse-engineering, delivery-planning) | L (functional-design, nfr-requirements, nfr-design) | -- |
+| aidlc-aws-platform-agent | -- | S (feasibility) | S (application-design) | L (infrastructure-design), S (nfr-design) | L (environment-provisioning), S (feedback-optimization) |
+| aidlc-compliance-agent | -- | S (feasibility) | -- | S (nfr-requirements, infrastructure-design) | S (environment-provisioning) |
+| aidlc-devsecops-agent | -- | -- | S (practices-discovery) | S (nfr-requirements, infrastructure-design, build-and-test) | S (environment-provisioning) |
+| aidlc-developer-agent | -- | -- | L (reverse-engineering), S (practices-discovery) | L (code-generation), S (functional-design) | S (deployment-execution) |
+| aidlc-quality-agent | -- | -- | S (practices-discovery) | L (build-and-test), S (nfr-requirements) | L (performance-validation) |
+| aidlc-pipeline-deploy-agent | -- | -- | L (practices-discovery) | L (ci-pipeline) | L (deployment-pipeline, deployment-execution) |
+| aidlc-operations-agent | -- | -- | -- | -- | L (observability-setup, incident-response, feedback-optimization) |
+
+L = Lead, S = Support
+
+---
+
+## How to Add an Agent
+
+Agent display names and example knowledge files are authoritative in each agent's `.md` frontmatter via the `display_name` and `examples` fields — no TypeScript edits required. See [Contributing: Adding an Agent](11-contributing.md#adding-an-agent) for the full recipe (required frontmatter fields, verification steps, and what validates automatically vs. manually). Quick summary of the steps:
+
+1. Create `.claude/agents/{name}-agent.md` with the required frontmatter: `name`, `display_name`, `examples`, `description`, `disallowedTools` (including `Task`), `modelOverride`. An optional `tools:` allowlist narrows the inherited toolset; omit it to inherit the full session toolset. `loadAgents()` in `dist/claude/.claude/tools/aidlc-lib.ts` discovers the file on next invocation.
+2. Add knowledge files to `.claude/knowledge/{name}-agent/`
+3. Update `dist/claude/.claude/tools/data/stage-graph.json` to reference the new agent in `lead_agent` / `support_agents` fields for stages it participates in
+4. Add the agent to the stage files where it participates (lead or support)
+5. Add a knowledge README template entry for `aidlc-docs/knowledge/{name}-agent/`
+6. Update tests: smoke tests for file existence, feature tests for stage-agent cross-references
+7. Update documentation in this file and [reference/agents/](agents/)
+
+## How to Modify an Agent
+
+- **Change tools**: Add or edit a `tools:` allowlist in frontmatter to narrow the agent; omit it to inherit the full session toolset. A `tools:` list drops inherited MCP tools unless the `mcp__<server>__<tool>` ids are also listed.
+- **Change model**: Edit `modelOverride` to `opus` or `sonnet`.
+- **Change behavior**: Edit the markdown body sections (responsibilities, principles).
+- **Change stage assignments**: Edit both the agent file (Stages Owned section) and the relevant stage files. Update the orchestrator's stage graph.
+
+---
+
+## Cross-References
+
+- [Architecture](01-architecture.md) -- 5-layer model including agent layer
+- [Knowledge System](10-knowledge-system.md) -- knowledge loading order
+- [Agents Technical Reference](agents/) -- per-agent technical details
+- [Stage Protocol](04-stage-protocol.md) -- agent persona loading rules

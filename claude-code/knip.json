@@ -1,0 +1,19 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "dist/claude/.claude/tools/*.ts",
+    "dist/claude/.claude/hooks/*.ts",
+    "tests/fixtures/v05-mr9-sensor-fire/scripts/*.ts"
+  ],
+  "project": [
+    "dist/claude/.claude/tools/**/*.ts",
+    "dist/claude/.claude/hooks/**/*.ts",
+    "tests/fixtures/v05-mr9-sensor-fire/**/*.ts"
+  ],
+  "ignore": [
+    "tests/fixtures/v05-mr9-sensor-fire/{failing-linter,failing-type-check,passing-typescript,slow-command}/sample.ts"
+  ],
+  "ignoreUnresolved": [
+    "./aidlc-lib.ts"
+  ]
+}

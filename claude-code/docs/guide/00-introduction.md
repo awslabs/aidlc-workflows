@@ -1,0 +1,76 @@
+# Introduction
+
+## What is AI-DLC?
+
+AI-DLC (AI-Driven Development Life Cycle) is a methodology for structuring AI-assisted software development into repeatable, traceable phases. It originated from the [AWS AI-DLC methodology](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/) and is implemented natively on Claude Code.
+
+You invoke it with a single command:
+
+```
+/aidlc Build a REST API for inventory management
+```
+
+AI-DLC then guides you through a structured workflow — from capturing your intent, through requirements, design, implementation, testing, and deployment — while keeping you in control at every decision point.
+
+## Philosophy: Small Mob, Broad Agents
+
+Rather than dozens of narrow specialists (an approach that recreates waterfall handoff chains), AI-DLC uses **11 broadly capable agents** that each participate across multiple stages and phases. Each agent carries context across stages, eliminating handoffs and reducing coordination overhead.
+
+This mirrors how effective human teams work: a mob of 3-5 people covers an entire feature, each bringing broad skills rather than a single narrow specialty.
+
+## How the Orchestrator Works
+
+At its core, AI-DLC runs a simple loop. A deterministic **engine** decides what happens next; the **conductor** (the `/aidlc` session, `SKILL.md`) carries it out, then asks the engine for the next move. Across that loop the framework:
+
+1. **Reads stage files** — 32 stage definitions across 5 phases, each specifying inputs, steps, outputs, and the lead agent
+2. **Loads agent personas** — Activates domain-expert perspectives (architect, developer, product manager, etc.) with specialized knowledge
+3. **Manages state and audit** — Tracks progress in `aidlc-state.md` and logs every decision to `audit.md` for traceability
+4. **Delegates to subagents** — For stages requiring focused, autonomous work (reverse engineering, code generation), spawns a subprocess
+5. **Presents approval gates** — After each stage, you review and approve before the workflow advances
+
+The engine owns the routing (which stage is next, which scope, when to stop); the conductor owns execution quality (running the stage well, asking good questions, surfacing decisions to you). Most stages run **inline**: the conductor adopts the agent's perspective and works directly with you in conversation. Two stages run as **subagents**: the work is delegated to a background subprocess and results are presented when done. For the full architecture, see the Developer Reference's [Engine and Skill System](../reference/17-skill-system.md).
+
+## Who This Guide Is For
+
+This guide is for anyone **using** AI-DLC to build software:
+
+- **New users** — Start with [Getting Started](01-getting-started.md) and [Your First Workflow](02-your-first-workflow.md)
+- **Regular users** — Reference [CLI Commands](11-cli-commands.md), [Scopes, Depth, and Test Strategy](04-scopes-and-depth.md), and [Troubleshooting](15-troubleshooting.md)
+- **Team leads** — See [Knowledge](07-knowledge.md) and [Rules and the Learning Loop](08-rules-and-the-learning-loop.md) for customizing AI-DLC to your team's standards
+
+To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, author rules and sensors, or add team knowledge (all configuration, no code) — see the [Harness Engineer Guide](../harness/00-overview.md). For changing the AI-DLC codebase itself, see the [Developer Reference](../reference/00-overview.md).
+
+## Key Numbers
+
+| Metric | Value |
+|--------|-------|
+| Phases | 5 (Initialization, Ideation, Inception, Construction, Operation) |
+| Stages | 32 |
+| Agents | 11 domain-expert personas |
+| Scopes | 9 (enterprise through workshop) + auto-detect |
+| Depth levels | 3 (Minimal, Standard, Comprehensive) |
+| Test strategy levels | 3 (Minimal, Standard, Comprehensive) |
+| Audit event types | 67 |
+
+## Guide Map
+
+| Chapter | What You'll Learn |
+|---------|------------------|
+| [Getting Started](01-getting-started.md) | Prerequisites, installation, first health check |
+| [Your First Workflow](02-your-first-workflow.md) | Annotated walkthrough of a complete run |
+| [Phases and Stages](03-phases-and-stages.md) | The 5 phases and 32 stages explained |
+| [Scopes, Depth, and Test Strategy](04-scopes-and-depth.md) | How to choose and override scope/depth/test strategy |
+| [Agents](05-agents.md) | The 11 agents: who does what and when |
+| [Interaction Modes](06-interaction-modes.md) | Guide Me / Edit File / Chat and approval gates |
+| [Knowledge](07-knowledge.md) | Adding company standards and conventions |
+| [Rules and the Learning Loop](08-rules-and-the-learning-loop.md) | Self-learning behavioral rules |
+| [State and Audit](09-state-and-audit.md) | How progress and decisions are tracked |
+| [Session Management](10-session-management.md) | Resume, redo, jump, recovery, and session reporting skills |
+| [CLI Commands](11-cli-commands.md) | Complete flag reference with examples |
+| [Customization](12-customization.md) | Settings, scope config, agent tuning |
+| [Artifacts Reference](13-artifacts-reference.md) | The `aidlc-docs/` directory explained |
+| [Troubleshooting](15-troubleshooting.md) | Symptom-based problem solving |
+| [Worked Examples](16-worked-examples.md) | Full bugfix and feature walkthroughs |
+| [Skills and Runner Commands](17-skills.md) | The `/aidlc-*` stage- and scope-runner commands and the author-your-own-runner path |
+| [Workshop Mode](workshop-mode.md) | Multi-developer manual recipe for the workshop scope (claim semantics via git push) |
+| [Glossary](glossary.md) | All terminology defined |

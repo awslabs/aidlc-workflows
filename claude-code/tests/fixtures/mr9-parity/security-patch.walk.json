@@ -1,0 +1,11 @@
+[
+  "workspace-scaffold",
+  "workspace-detection",
+  "state-init",
+  "reverse-engineering",
+  "nfr-requirements",
+  "code-generation",
+  "build-and-test",
+  "deployment-pipeline",
+  "deployment-execution"
+]

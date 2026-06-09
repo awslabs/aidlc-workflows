@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "dist/claude/.claude/hooks/*.ts",
+    "dist/claude/.claude/tools/*.ts",
+    "dist/claude/.claude/tools/data/*.json",
+    "tests/**/*.ts"
+  ],
+  "exclude": ["tests/fixtures/**"]
+}

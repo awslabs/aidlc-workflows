@@ -1,0 +1,162 @@
+[
+  {
+    "slug": "workspace-scaffold",
+    "phase": "initialization",
+    "action": "EXECUTE"
+  },
+  {
+    "slug": "workspace-detection",
+    "phase": "initialization",
+    "action": "EXECUTE"
+  },
+  {
+    "slug": "state-init",
+    "phase": "initialization",
+    "action": "EXECUTE"
+  },
+  {
+    "slug": "intent-capture",
+    "phase": "ideation",
+    "action": "SKIP"
+  },
+  {
+    "slug": "market-research",
+    "phase": "ideation",
+    "action": "SKIP"
+  },
+  {
+    "slug": "feasibility",
+    "phase": "ideation",
+    "action": "SKIP"
+  },
+  {
+    "slug": "scope-definition",
+    "phase": "ideation",
+    "action": "SKIP"
+  },
+  {
+    "slug": "team-formation",
+    "phase": "ideation",
+    "action": "SKIP"
+  },
+  {
+    "slug": "rough-mockups",
+    "phase": "ideation",
+    "action": "SKIP"
+  },
+  {
+    "slug": "approval-handoff",
+    "phase": "ideation",
+    "action": "SKIP"
+  },
+  {
+    "slug": "reverse-engineering",
+    "phase": "inception",
+    "action": "SKIP"
+  },
+  {
+    "slug": "practices-discovery",
+    "phase": "inception",
+    "action": "EXECUTE"
+  },
+  {
+    "slug": "requirements-analysis",
+    "phase": "inception",
+    "action": "EXECUTE"
+  },
+  {
+    "slug": "user-stories",
+    "phase": "inception",
+    "action": "SKIP"
+  },
+  {
+    "slug": "refined-mockups",
+    "phase": "inception",
+    "action": "SKIP"
+  },
+  {
+    "slug": "application-design",
+    "phase": "inception",
+    "action": "SKIP"
+  },
+  {
+    "slug": "units-generation",
+    "phase": "inception",
+    "action": "SKIP"
+  },
+  {
+    "slug": "delivery-planning",
+    "phase": "inception",
+    "action": "SKIP"
+  },
+  {
+    "slug": "functional-design",
+    "phase": "construction",
+    "action": "SKIP"
+  },
+  {
+    "slug": "nfr-requirements",
+    "phase": "construction",
+    "action": "EXECUTE"
+  },
+  {
+    "slug": "nfr-design",
+    "phase": "construction",
+    "action": "EXECUTE"
+  },
+  {
+    "slug": "infrastructure-design",
+    "phase": "construction",
+    "action": "EXECUTE"
+  },
+  {
+    "slug": "code-generation",
+    "phase": "construction",
+    "action": "SKIP"
+  },
+  {
+    "slug": "build-and-test",
+    "phase": "construction",
+    "action": "SKIP"
+  },
+  {
+    "slug": "ci-pipeline",
+    "phase": "construction",
+    "action": "EXECUTE"
+  },
+  {
+    "slug": "deployment-pipeline",
+    "phase": "operation",
+    "action": "EXECUTE"
+  },
+  {
+    "slug": "environment-provisioning",
+    "phase": "operation",
+    "action": "EXECUTE"
+  },
+  {
+    "slug": "deployment-execution",
+    "phase": "operation",
+    "action": "EXECUTE"
+  },
+  {
+    "slug": "observability-setup",
+    "phase": "operation",
+    "action": "EXECUTE"
+  },
+  {
+    "slug": "incident-response",
+    "phase": "operation",
+    "action": "SKIP"
+  },
+  {
+    "slug": "performance-validation",
+    "phase": "operation",
+    "action": "SKIP"
+  },
+  {
+    "slug": "feedback-optimization",
+    "phase": "operation",
+    "action": "SKIP"
+  }
+]

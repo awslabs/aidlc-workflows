@@ -1,0 +1,2941 @@
+{
+  "generator": "tests/gen-coverage-registry.ts",
+  "generatedFrom": "disk (units re-enumerated fresh)",
+  "unitClasses": [
+    "function",
+    "audit",
+    "scope",
+    "stage",
+    "hook",
+    "subcommand",
+    "render-surface"
+  ],
+  "minMechanism": {
+    "function": "none",
+    "audit": "none",
+    "scope": "none",
+    "stage": "none",
+    "hook": "none",
+    "subcommand": "cli",
+    "render-surface": "tui"
+  },
+  "counts": {
+    "total": 297,
+    "enumeratedByClass": {
+      "function": 96,
+      "audit": 67,
+      "scope": 9,
+      "stage": 32,
+      "hook": 10,
+      "subcommand": 77,
+      "render-surface": 6
+    },
+    "coveredByClass": {
+      "function": 30,
+      "audit": 18,
+      "scope": 5,
+      "stage": 4,
+      "hook": 5,
+      "subcommand": 53,
+      "render-surface": 6
+    }
+  },
+  "units": [
+    {
+      "unitClass": "audit",
+      "unitId": "ARTIFACT_CREATED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "ARTIFACT_REUSED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "ARTIFACT_UPDATED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "AUDIT_FORKED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "AUDIT_MERGED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "AUTONOMY_MODE_SET",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "BOLT_COMPLETED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "BOLT_FAILED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "BOLT_STARTED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "DECISION_RECORDED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "DEPTH_CHANGED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "ERROR_LOGGED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t137.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t34.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "GATE_APPROVED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/workflow/t126-emitter-pairing-cofire.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "GATE_REJECTED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t136.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "GUARDRAIL_LOADED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t105.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "HEALTH_CHECKED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "MEMORY_EMPTY",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "MERGE_DISPATCH_FALLBACK",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "MERGE_DISPATCH_INVOKED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "MERGE_DISPATCH_RETURNED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "PHASE_COMPLETED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/workflow/t113.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "PHASE_SKIPPED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "PHASE_STARTED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/workflow/t126-emitter-pairing-cofire.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "PHASE_VERIFIED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/workflow/t113.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "PRACTICES_AFFIRMED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "PRACTICES_DISCOVERED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "PRACTICES_OVERRIDE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "PRACTICES_SECTION_EMPTY",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "QUESTION_ANSWERED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "RECOVERY_COMPLETED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t35.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "RULE_LEARNED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SCOPE_CHANGED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SCOPE_DETECTED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SENSOR_BUDGET_OVERRIDE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SENSOR_FAILED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SENSOR_FIRED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/tui/t-tui-custom-harness.serial.tui.test.ts",
+          "mechanism": "tui"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SENSOR_PASSED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SENSOR_PROPOSED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SESSION_COMPACTED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SESSION_ENDED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SESSION_RESUMED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SESSION_STARTED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "STAGE_AWAITING_APPROVAL",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "STAGE_COMPLETED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/workflow/t126-emitter-pairing-cofire.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "STAGE_JUMPED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/workflow/t57-workflow-backward-jump.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "STAGE_REVISING",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t136.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "STAGE_SKIPPED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "STAGE_STARTED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/workflow/t126-emitter-pairing-cofire.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/workflow/t138-scope-exclusion-counts.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/workflow/t53.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "STATE_FORKED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "STATE_MERGED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SUBAGENT_COMPLETED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SWARM_BATON_RETURNED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SWARM_COMPLETED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SWARM_DEGRADED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SWARM_STARTED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SWARM_UNIT_CONVERGED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "SWARM_UNIT_FAILED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "TEST_RUN_MODE_ENABLED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "TEST_STRATEGY_CHANGED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t28-integration-test-strategy.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "WORKFLOW_COMPLETED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/workflow/t113.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "WORKFLOW_STARTED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/workflow/t126-emitter-pairing-cofire.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "WORKSPACE_INITIALISED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/tui/t-tui-custom-harness.serial.tui.test.ts",
+          "mechanism": "tui"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "WORKSPACE_SCAFFOLDED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "WORKSPACE_SCANNED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/stage/t70.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "WORKTREE_CREATED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "WORKTREE_DISCARDED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "WORKTREE_MERGED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:__resetGraphCache",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:_resetScopeMappingForTests",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:_resetStageGraphForTests",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:acquireAuditLock",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:appendSlug",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:appendUnderHeading",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t71.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:artifactsRegistry",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t66.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:auditFilePath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t106.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:auditLockDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:BOLT_SLUG_MAX_LENGTH",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:BOLT_SLUG_REGEX",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:canonicalExportJson",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:canonicalScopeGridJson",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:canonicalStageGraphJson",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t66.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CHECKBOX_MAP",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CHECKBOX_REVERSE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:compileStageGraph",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t66.none.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/feature/t88.none.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/integration/t110.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:consumersOf",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t66.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:countCheckboxes",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:emitError",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:emitRefsList",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:emitStageFrontmatter",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t65.none.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t64.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:errorMessage",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:errorStack",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:escapeRegex",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t109.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:exportBundle",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:extractMarkdownSection",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t71.none.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t80.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:findAllEvents",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:findCycles",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t66.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:findStageByNumber",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:findStageBySlug",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:firstInScopeStageOfPhase",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:FORK_EMITTED_TAG_REGEX",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:getField",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isClaudeCodeHookInput",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isoTimestamp",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isPackageJson",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isPlainObject",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:listField",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:loadAgents",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t65.none.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t61.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:loadGraph",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t66.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:loadRules",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t66.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:loadScopeGrid",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:loadScopeMapping",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t39-count.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:loadScopeMetadata",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:loadSensors",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t66.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:loadStageGraph",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:MERGE_SUCCEEDED_TAG_REGEX",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:mustGet",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:mustPop",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:mustShift",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:nextInScopeStage",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:numericStageOrder",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseArgs",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseBoltDag",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseCheckboxes",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t107.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseFieldArgs",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseMemoryEntries",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t88.none.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t97.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseMemoryHeadings",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t88.none.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t97.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseRefsList",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseStageFrontmatter",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t43.none.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/feature/t44.none.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/feature/t65.none.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t05.none.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t14.none.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t64.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:parseStateStageSuffixes",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:PHASE_NUMBERS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:PHASES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:producersOf",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t66.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readStateFile",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordHookDrop",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:releaseAuditLock",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:removeSlug",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:replaceSection",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t71.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolvePlanForScope",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveProjectDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveProjectDirFromHook",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveRulesForStage",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t66.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveSensorsForStage",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t66.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveStage",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:scalarField",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:setCheckbox",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t108.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:setField",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:setFieldStrict",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:setOrInsertField",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:SLUG_TAG_REGEX",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:stageIndex",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:stagesInScope",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:stateFilePath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t106.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:subgraphForScope",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t66.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:toPosix",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:topoSort",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t66.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:transposeScopeGrid",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:validateBoltSlug",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:validateScope",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t66.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:validScopes",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t60.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:withAuditLock",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:worktreePath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t69.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeFileAtomic",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeStateFile",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-audit-logger",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-log-subagent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t09.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-runtime-compile",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t91.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-sensor-fire",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-session-end",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-session-start",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-statusline",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t11.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-stop",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-sync-statusline",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t29.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-validate-state",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t08.none.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "render-surface",
+      "unitId": "statusline-align",
+      "minMechanism": "tui",
+      "coveredBy": [
+        {
+          "file": "tests/tui/t-tui-render-statusline.serial.tui.test.ts",
+          "mechanism": "tui"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "render-surface",
+      "unitId": "statusline-colour",
+      "minMechanism": "tui",
+      "coveredBy": [
+        {
+          "file": "tests/tui/t-tui-render-colour.serial.tui.test.ts",
+          "mechanism": "tui"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "render-surface",
+      "unitId": "statusline-complete",
+      "minMechanism": "tui",
+      "coveredBy": [
+        {
+          "file": "tests/tui/t-tui-render-complete.serial.tui.test.ts",
+          "mechanism": "tui"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "render-surface",
+      "unitId": "statusline-counter",
+      "minMechanism": "tui",
+      "coveredBy": [
+        {
+          "file": "tests/tui/t-tui-render-statusline.serial.tui.test.ts",
+          "mechanism": "tui"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "render-surface",
+      "unitId": "statusline-phase-bar",
+      "minMechanism": "tui",
+      "coveredBy": [
+        {
+          "file": "tests/tui/t-tui-render-statusline.serial.tui.test.ts",
+          "mechanism": "tui"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "render-surface",
+      "unitId": "statusline-stage-name",
+      "minMechanism": "tui",
+      "coveredBy": [
+        {
+          "file": "tests/tui/t-tui-render-statusline.serial.tui.test.ts",
+          "mechanism": "tui"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "scope",
+      "unitId": "bugfix",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/tui/t-tui-t139-revision-loop-idempotency.serial.tui.test.ts",
+          "mechanism": "tui"
+        },
+        {
+          "file": "tests/tui/t-tui-t50-bugfix-scope.serial.tui.test.ts",
+          "mechanism": "tui"
+        },
+        {
+          "file": "tests/workflow/t53.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "scope",
+      "unitId": "enterprise",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "scope",
+      "unitId": "feature",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/tui/t-tui-t29-env-scope.serial.tui.test.ts",
+          "mechanism": "tui"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "scope",
+      "unitId": "infra",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "scope",
+      "unitId": "mvp",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "scope",
+      "unitId": "poc",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/tui/t-tui-t51-poc-scope.serial.tui.test.ts",
+          "mechanism": "tui"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "scope",
+      "unitId": "refactor",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "scope",
+      "unitId": "security-patch",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/workflow/t138-scope-exclusion-counts.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "scope",
+      "unitId": "workshop",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/tui/t-tui-t58-workshop-scope.serial.tui.test.ts",
+          "mechanism": "tui"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "construction/build-and-test",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "construction/ci-pipeline",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "construction/code-generation",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "construction/functional-design",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "construction/infrastructure-design",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "construction/nfr-design",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "construction/nfr-requirements",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "ideation/approval-handoff",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/tui/t-tui-t101-memory-lifecycle.serial.tui.test.ts",
+          "mechanism": "tui"
+        },
+        {
+          "file": "tests/tui/t-tui-t24-stage-jump.serial.tui.test.ts",
+          "mechanism": "tui"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "ideation/feasibility",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "ideation/intent-capture",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/tui/t-tui-t73-intent-capture.serial.tui.test.ts",
+          "mechanism": "tui"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "ideation/market-research",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "ideation/rough-mockups",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "ideation/scope-definition",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "ideation/team-formation",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "inception/application-design",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "inception/delivery-planning",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "inception/practices-discovery",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "inception/refined-mockups",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "inception/requirements-analysis",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/tui/t-tui-t74-requirements-analysis.serial.tui.test.ts",
+          "mechanism": "tui"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "inception/reverse-engineering",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "inception/units-generation",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "inception/user-stories",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "initialization/state-init",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "initialization/workspace-detection",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/stage/t70.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/stage/t71-stage-workspace-detection-brownfield.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "initialization/workspace-scaffold",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "operation/deployment-execution",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "operation/deployment-pipeline",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "operation/environment-provisioning",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "operation/feedback-optimization",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "operation/incident-response",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "operation/observability-setup",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "operation/performance-validation",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-audit append",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-audit append-raw",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-audit audit-fork",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-audit audit-merge",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-bolt abort",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-bolt complete",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t33.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-bolt dispatch-event",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t79.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-bolt fail",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t33.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-bolt hold-merge",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-bolt release-merge",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-bolt set-autonomy",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t33.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-bolt start",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t33.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-graph artifacts",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t63.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-graph compile",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-graph consumers",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-graph cycles",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-graph export",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-graph producers",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-graph resolve",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-graph scope",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-graph topo",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-graph validate-scope",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-jump execute",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t25.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/integration/t26.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/unit/t19.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/workflow/t57-workflow-backward-jump.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-jump resolve",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t118.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t117.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t118.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t19.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/workflow/t57-workflow-backward-jump.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-learnings persist",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t97.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-learnings surface",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t97.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-log answer",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t31.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-log decision",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t31.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-runtime compile",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t102.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/feature/t90.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/feature/t96.none.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/feature/t98.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-runtime fragment-fork",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t96.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-runtime fragment-merge",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t96.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-runtime read",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-runtime summary",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t106.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-sensor describe",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-sensor fire",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t92.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-sensor list",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t93.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state acknowledge-compaction",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state advance",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state approve",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t49.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/feature/t51.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t115.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t17.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state checkbox",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state complete-workflow",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state count",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state finalize",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state fork",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t76.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state gate-start",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state get",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state lookup",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state merge",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t76.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state practices-event",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t81.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state practices-promote",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t75.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state reject",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state resume",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state reuse-artifact",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state revise",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state set",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state set-skeleton-stance",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state skip",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility config-change",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t28-integration-test-strategy.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/tui/t-tui-t27-depth-override.serial.tui.test.ts",
+          "mechanism": "tui"
+        },
+        {
+          "file": "tests/unit/t27.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility detect-scope",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t27.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t60.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t67.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility doctor",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t104.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t22.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/unit/t103.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t27.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t37.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t84.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t85.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility enable-test-run",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t27.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility help",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t31-help.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t23.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility init",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t39.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t21.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/stage/t70.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/unit/t20.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t27.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility resolve-env-scope",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t27.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility scope-change",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t27.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t36.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility scope-table",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t60.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t67.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility set-status",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t27.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility state-init",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility status",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t20.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/unit/t27.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t38.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility version",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-validate outputs",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/feature/t45.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-worktree create",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/worktree/t02.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t05.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t06.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-worktree discard",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/worktree/t04.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-worktree info",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t72.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-worktree list",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-worktree merge",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/worktree/t03.cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-worktree verify",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    }
+  ]
+}

@@ -1,0 +1,332 @@
+# Scopes, Depth, and Test Strategy
+
+Scopes control **which stages execute**. Depth controls **how much detail** each stage produces. Test strategy controls **how many tests** are generated. Together, they adapt the lifecycle to your task — from a comprehensive enterprise feature to a quick bugfix.
+
+---
+
+## The 9 Scopes
+
+Every workflow runs under one of 9 named scopes. Each scope defines a stage set and a default depth level.
+
+### enterprise
+
+**Use when:** Building a regulated enterprise feature that requires full audit trail, compliance review, and production-grade operations.
+
+- **Stages:** All 32
+- **Default depth:** Comprehensive
+- **Includes:** Full compliance, security, and operations stages
+
+### feature
+
+**Use when:** Building a new feature of any size. This is the default scope when AI-DLC cannot determine a more specific match.
+
+- **Stages:** All 32
+- **Default depth:** Standard
+- **Includes:** All stages, standard artifact detail
+
+### mvp
+
+**Use when:** Building a greenfield minimum viable product. Skips late-stage operations but retains full design and construction.
+
+- **Stages:** 22 of 32
+- **Default depth:** Standard
+- **Skips:** All 7 Operation stages (deployment pipeline, environment provisioning, deployment execution, observability, incident response, performance validation, feedback) plus Market Research, Team Formation, and Approval Handoff from Ideation (10 skipped, 22 executed)
+
+### poc
+
+**Use when:** Proving feasibility quickly. Skips most Ideation and Inception stages, focuses on getting to code fast.
+
+- **Stages:** 8 of 32
+- **Default depth:** Minimal
+- **Skips:** Market Research, Feasibility, Team Formation, Mockups, User Stories, most Operation stages
+
+### bugfix
+
+**Use when:** Fixing a specific bug. Streamlined path from intent capture through code generation and testing.
+
+- **Stages:** 7 of 32
+- **Default depth:** Minimal
+- **Skips:** Market Research, Feasibility, Team Formation, Mockups, most design and architecture stages, all Operation stages
+
+### refactor
+
+**Use when:** Cleaning up or restructuring existing code without changing functionality.
+
+- **Stages:** 8 of 32
+- **Default depth:** Minimal
+- **Skips:** Similar to bugfix — focused on code analysis, design, and implementation
+
+### infra
+
+**Use when:** Making infrastructure changes (new environments, CDK/CloudFormation updates, cost optimization).
+
+- **Stages:** 13 of 32
+- **Default depth:** Standard
+- **Skips:** User-facing stages (stories, mockups, user flows) — focuses on architecture, infrastructure, and deployment
+
+### security-patch
+
+**Use when:** Responding to a CVE or security vulnerability. Fast path through security-relevant stages.
+
+- **Stages:** 9 of 32
+- **Default depth:** Minimal
+- **Skips:** Market Research, Team Formation, Mockups, non-security design stages
+
+### workshop
+
+**Use when:** Running an AI-DLC workshop or training session. The project is pre-decided by the facilitator; participants work through inception, construction, and operation as a mob.
+
+- **Stages:** 25 of 32
+- **Default depth:** Standard
+- **Default test strategy:** Minimal (Nyquist) — keeps workshop pace fast
+- **Skips:** All Ideation stages (1.1-1.7) — project scope is pre-decided
+
+See [Workshop Mode](workshop-mode.md) for the multi-developer manual recipe and claim semantics.
+
+---
+
+## Scope Routing Table
+
+Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope identity) plus each stage's `scopes:` frontmatter (membership), compiled into `.claude/tools/data/scope-grid.json`. Run `bun .claude/tools/aidlc-utility.ts scope-table` for the live compiled table (and `bun .claude/tools/aidlc-utility.ts help` for the user-facing one-liners).
+
+| Scope | EXECUTE / Total | Depth | Test Strategy | Use Case |
+|-------|-----------------|-------|---------------|----------|
+| `enterprise` | 32 / 32 | Comprehensive | Comprehensive | Regulated enterprise feature, full audit trail |
+| `feature` | 32 / 32 | Standard | Standard | Default for new features |
+| `mvp` | 22 / 32 | Standard | Standard | Greenfield, skip late operations |
+| `poc` | 8 / 32 | Minimal | Minimal | Prove feasibility fast |
+| `bugfix` | 7 / 32 | Minimal | Minimal | Fix a specific bug |
+| `refactor` | 8 / 32 | Minimal | Minimal | Clean up existing code |
+| `infra` | 13 / 32 | Standard | Standard | Infrastructure change |
+| `security-patch` | 9 / 32 | Minimal | Minimal | CVE response |
+| `workshop` | 25 / 32 | Standard | **Minimal** | AI-DLC workshop or training session |
+| (auto-detect) | Varies | Varies | Varies | AI determines from freeform intent |
+
+> **Per-project default scope:** teams can pre-set the default scope for a project by setting `AWS_AIDLC_DEFAULT_SCOPE` in `.claude/settings.json` — useful for workshops where every participant should start at `workshop` without remembering the flag. See [Customization § Per-Project Default Scope](12-customization.md#per-project-default-scope).
+
+---
+
+## Auto-Detection from Freeform Intent
+
+You don't have to specify a scope explicitly. Describe what you want, and the orchestrator detects the appropriate scope from keywords:
+
+```
+/aidlc Build a REST API for inventory management
+```
+
+The engine analyzes your intent against keyword patterns:
+
+| Keywords | Detected Scope |
+|----------|---------------|
+| "fix", "bug", "broken" | `bugfix` |
+| "refactor", "clean up", "simplify" | `refactor` |
+| "infrastructure", "deploy", "infra" | `infra` |
+| "security", "CVE", "vulnerability", "patch" | `security-patch` |
+| "proof of concept", "prototype", "poc", "spike" | `poc` |
+| "mvp", "minimum viable" | `mvp` |
+| "workshop", "lab", "training" | `workshop` |
+| Everything else | `feature` |
+
+**Disambiguation rule:** If your input contains both a scope keyword and a longer project description (more than 5 words), the orchestrator defaults to `feature` and asks you to confirm. This prevents mismatches like "Fix the infrastructure monitoring dashboard" being routed to `infra` when `feature` is more appropriate.
+
+After detection, you always get a confirmation prompt naming the scope and the stage count:
+
+```
+This looks like a feature workflow. I'll run 32 stages. OK?
+```
+
+Confirm to proceed, or reply with a different scope (or `--depth <level>`) to course-correct before the workflow starts.
+
+---
+
+## The 3 Depth Levels
+
+Depth controls the detail level of artifacts produced at each stage. The scope sets a default depth, but you can override it.
+
+| Depth | Artifact Detail | When to Use |
+|-------|----------------|-------------|
+| **Minimal** | Core essentials only. Short documents, key decisions, minimal supporting analysis. | Quick fixes, patches, proofs of concept |
+| **Standard** | Balanced detail. Complete requirements, architecture decisions with rationale, thorough test plans. | Most features and MVPs |
+| **Comprehensive** | Full enterprise detail. Exhaustive requirements, compliance matrices, detailed NFR specifications, complete audit documentation. | Regulated features, enterprise deployments |
+
+### How depth affects stages
+
+At each stage, the agent adjusts its output based on the active depth:
+
+- **Minimal:** 1-2 page artifact, key decisions only, skip optional sections
+- **Standard:** Complete artifact, all required sections, concise rationale
+- **Comprehensive:** Expanded artifact, optional sections included, detailed justification, compliance cross-references
+
+### Overriding depth
+
+You can change the depth at three points:
+
+1. **Via the `--depth` CLI flag** — override depth at invocation time:
+   ```
+   /aidlc --depth comprehensive
+   /aidlc --scope bugfix --depth standard
+   /aidlc --stage code-generation --depth minimal
+   ```
+2. **At scope confirmation** — when the orchestrator confirms the detected scope, reply with `--depth <level>` instead of just confirming
+3. **At any approval gate** — request a different depth level as part of your feedback
+
+The first completion message in each session reminds you:
+
+```
+**Project depth**: Standard — depth adapts artifact detail.
+**Test strategy**: Standard — test strategy controls test volume.
+You can request different depth or test strategy at any approval gate.
+```
+
+---
+
+## Specifying Scope Directly
+
+### Explicit scope
+
+```
+/aidlc feature
+/aidlc bugfix
+/aidlc enterprise
+```
+
+### Scope with description
+
+```
+/aidlc bugfix Fix the login timeout issue
+/aidlc poc Build a quick prototype for the search feature
+```
+
+### Override scope with utility command
+
+```
+/aidlc --scope bugfix
+/aidlc --scope enterprise --stage code-generation
+```
+
+The `--scope` flag is composable with `--stage`, `--phase`, and `--depth` for jump operations.
+
+### Override depth
+
+```
+/aidlc --depth minimal
+/aidlc --scope bugfix --depth comprehensive
+/aidlc --scope enterprise --depth standard --stage code-generation
+```
+
+The `--depth` flag overrides the scope's default depth level. Valid values: `minimal`, `standard`, `comprehensive` (case-insensitive).
+
+### Override test strategy
+
+```
+/aidlc --test-strategy minimal
+/aidlc --depth standard --test-strategy minimal
+```
+
+The `--test-strategy` flag overrides the test strategy independently of depth. See the full explanation in [The 3 Test Strategy Levels](#the-3-test-strategy-levels) below.
+
+---
+
+## The 3 Test Strategy Levels
+
+Test strategy controls **how many tests** are generated and **which test types** are included. It is independent of depth — depth controls artifact detail (documents, diagrams, questions), while test strategy controls test volume only. This separation lets you run a full Standard-depth workflow with Minimal testing when speed matters more than test coverage.
+
+### Minimal — Nyquist model
+
+Inspired by the Nyquist rate from signal processing: the minimum sampling frequency needed to reconstruct a signal. Minimal test strategy generates the minimum tests needed to verify every requirement — no more, no less.
+
+- **1 test per identified requirement** (requirement-driven, not component-driven)
+- **Happy-path floor:** every component gets at least 1 happy-path unit test, even if no requirement maps to it
+- **Unit tests only** — skip integration, E2E, performance, and security tests
+- **~5-15 tests total** for a typical project
+- Soft guideline — the agent can exceed when safety-critical context demands it
+
+**Best for:** Workshops, training sessions, proofs of concept, quick bugfixes — any context where you want to verify correctness without investing in a full test suite.
+
+### Standard — per-component model
+
+Balanced test coverage that validates boundaries between components.
+
+- **5-8 tests per component**
+- **Unit + integration tests** (key boundaries between components)
+- E2E, performance, and security tests only if NFR requirements explicitly call for them
+- **Test pyramid proportions:** ~75% unit / ~20% integration / ~5% E2E
+- Soft guideline
+
+**Best for:** Most features and MVPs — good coverage without over-investing in testing.
+
+### Comprehensive — full coverage model
+
+Thorough test coverage across all test types.
+
+- **10-15 tests per component**
+- **All test types:** unit + integration + E2E + performance (if NFRs exist) + security (if NFRs exist)
+- **Test pyramid proportions** apply across all types
+- Soft guideline
+
+**Best for:** Enterprise features, regulated systems, any context requiring an audit trail of test coverage.
+
+### How test strategy defaults work
+
+Test strategy defaults to the **depth level** for most scopes — if your depth is Standard, your test strategy is Standard too. However, some scopes declare their own default:
+
+| Scope | Depth | Test Strategy | Why different? |
+|-------|-------|---------------|----------------|
+| `workshop` | Standard | **Minimal** | Full artifacts for learning, but fast Nyquist testing to keep pace |
+
+All other scopes inherit their test strategy from depth. You can always override with `--test-strategy`.
+
+### Overriding test strategy
+
+You can change the test strategy at three points:
+
+1. **Via the `--test-strategy` CLI flag** — override at invocation time:
+   ```
+   /aidlc --test-strategy minimal
+   /aidlc --depth standard --test-strategy minimal
+   /aidlc --scope bugfix --test-strategy comprehensive
+   ```
+2. **Mid-workflow** — change test strategy on an active workflow:
+   ```
+   /aidlc --test-strategy comprehensive
+   ```
+3. **At any approval gate** — request a different test strategy as part of your feedback
+
+### Common depth + test strategy combinations
+
+| Depth | Test Strategy | Effect | When to use |
+|-------|--------------|--------|-------------|
+| Standard | Standard | Full artifacts, balanced tests | Most features (default) |
+| Standard | Minimal | Full artifacts, Nyquist tests | Workshops, time-boxed sessions |
+| Minimal | Minimal | Lean artifacts, lean tests | Quick bugfixes, patches |
+| Comprehensive | Comprehensive | Full everything | Regulated enterprise features |
+| Comprehensive | Standard | Full artifacts, balanced tests | Enterprise with pragmatic testing |
+| Minimal | Comprehensive | Lean artifacts, thorough tests | Critical bugfix needing confidence |
+
+---
+
+## Choosing the Right Scope
+
+| Situation | Recommended Scope |
+|-----------|------------------|
+| New feature for a production application | `feature` |
+| Greenfield product from scratch | `mvp` or `feature` |
+| Quick validation of an approach | `poc` |
+| Known bug to fix | `bugfix` |
+| Code cleanup without behavior changes | `refactor` |
+| New AWS environment or CDK changes | `infra` |
+| CVE or security vulnerability response | `security-patch` |
+| Regulated feature requiring compliance | `enterprise` |
+| AI-DLC workshop or training lab | `workshop` |
+
+When in doubt, start with `feature` — it includes all 32 stages, and you can skip individual stages at their approval gates.
+
+---
+
+## Next Steps
+
+- [Phases and Stages](03-phases-and-stages.md) — what each stage does
+- [Agents](05-agents.md) — which agents participate in which scopes
+- [Skills and Runner Commands](17-skills.md) — the one-word `/aidlc-<scope>` runners for bugfix, feature, mvp, and security-patch
+- [CLI Commands](11-cli-commands.md) — full command reference
+- [Glossary](glossary.md) — terminology reference

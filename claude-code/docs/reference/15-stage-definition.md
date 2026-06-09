@@ -1,0 +1,337 @@
+# Stage Definition
+
+This chapter documents the **file format** for AI-DLC stage definitions — the
+YAML frontmatter contract, the three-compartment body model, and the compile
+pipeline that turns those sources into `stage-graph.json`. It complements
+[Stage Protocol](04-stage-protocol.md), which covers the runtime behavioural
+contract (approval gates, question flow, state tracking). This chapter is
+about what a stage file *contains*; the Stage Protocol chapter is about what
+a stage *does*.
+
+Contributors read this to understand the format. When writing or editing a
+stage file, refer to the authoritative contract at
+`dist/claude/.claude/aidlc-common/protocols/stage-definition.md`. That file is
+the canonical spec — this chapter adds narrative and "when to use" guidance.
+
+---
+
+## Two audiences, one file
+
+Every stage `.md` file serves two readers:
+
+- **The parser** (`parseStageFrontmatter` in `lib.ts`, ships in MR 7). Reads
+  the YAML frontmatter, produces a structured `StageEntry`. Doesn't touch the
+  body.
+- **The LLM agent** executing the stage. Reads the body, follows the prose
+  instructions, produces artifacts. Doesn't touch the frontmatter.
+
+Keeping both in one file means contributors see the graph edges and the
+execution steps side by side. Splitting them across separate files (one YAML
+for the graph, one prose for the agent) would break the inline visibility
+that makes stages reviewable.
+
+---
+
+## Why Variant A3
+
+The format is called "Variant A3" — the third of three authorship variants
+weighed during v0.3.0 planning:
+
+- **One file beats split files.** Frontmatter plus prose in one `.md` keeps
+  graph structure and execution steps together. A reviewer reading a stage
+  sees both.
+- **Grep-friendly.** Plain text. No binary format, no YAML-vs-JSON
+  translation at author time.
+- **Diff-friendly.** Field additions, renames, and body edits all show up
+  cleanly in a code review.
+
+The rejected alternative was a central graph file (`stage-graph.json`
+hand-edited) with prose-only stages. Loses the inline visibility of knowing
+which artifacts a stage produces while editing its prose.
+
+---
+
+## Authoring flow
+
+```
+┌─────────┐         ┌──────────────────┐         ┌──────────────────┐         ┌──────────────────┐
+│ Edit    │  ───→   │ Pre-commit hook  │  ───→   │ stage-graph.json │  ───→   │ loadStageGraph() │
+│ stage   │         │ aidlc-graph      │         │ (build artifact, │         │ (runtime,        │
+│ .md YAML│         │ compile          │         │  checked in)     │         │  unchanged)      │
+└─────────┘         └──────────────────┘         └──────────────────┘         └──────────────────┘
+     │                                                                                 ▲
+     │                              ┌──────────────────┐                               │
+     └────────────────────────────→ │ CI drift check   │ ──── blocks merge on drift ───┘
+                                    │ compile --check  │
+                                    └──────────────────┘
+```
+
+The YAML is authoritative. The JSON is a build artifact. CI enforces the
+relationship.
+
+`aidlc-graph compile` and `compile --check` ship as CLI subcommands (MR 9);
+run compile manually after editing stage YAML, and CI enforces `compile
+--check` to catch drift. A pre-commit hook that automates this is deferred
+to a later MR. `stage-graph.json` is a compiled artifact — do not edit it
+by hand; edit the YAML and recompile.
+
+---
+
+## Field reference — when to use
+
+The authoritative spec has a complete field table with types and constraints.
+This section adds narrative on the fields that need judgment calls.
+
+### `requires_stage`
+
+Encodes dependency edges. Two roles:
+
+1. **Semantic data dependency.** "I consume artifact X, which stage Y
+   produces" → add `Y` to `requires_stage`.
+2. **Presentation-order edge.** Two stages in the same phase with no
+   semantic dependency but a fixed ordering (e.g., `market-research` before
+   `feasibility` in Ideation). Add the weak edge so the computed
+   `display_order` lands stably.
+
+The compile step's slug-alphabetical tiebreak is a safety net. For stages
+that must land in a specific order, author the edge explicitly rather than
+relying on alphabetical accident.
+
+### `for_each`
+
+Names an artifact whose instances drive iteration. The stage runs once per
+instance.
+
+Today's use case: five Construction stages (`functional-design`,
+`nfr-requirements`, `nfr-design`, `infrastructure-design`, `code-generation`)
+run once per Unit — they each declare `for_each: unit-of-work` (the artifact
+`units-generation` produces).
+
+Tomorrow's use cases: a stage that runs per environment, per tenant, per
+region, per compliance jurisdiction. The primitive is workflow-engine
+generic; Construction happens to exercise it first.
+
+**Aggregation is inferred, not declared.** A stage that consumes an artifact
+produced by a `for_each` stage, without declaring its own `for_each`, is an
+aggregation step by definition. `build-and-test` is the canonical example —
+it runs once after all five Construction `for_each` stages have iterated
+across Units, consuming their aggregated outputs. No explicit `fan_in` or
+aggregation field — graph traversal figures it out.
+
+### `consumes[].required`
+
+Boolean per consume entry. Semantically **scoped to the active plan**,
+not a global assertion that the artifact always exists somewhere:
+
+> `required: true` means *"if the producing stage runs in the active
+> plan, this consume must be satisfied."* It does **not** mean "the
+> producer always runs." When a scope excludes the producer
+> (e.g., `bugfix` skips `units-generation`), every `required: true`
+> consume of that producer's artifacts becomes moot — there is
+> nothing to require.
+
+**Why the scoped reading.** Every scope except the `all`-execute ones
+(`enterprise`, `feature`, `workshop`) deliberately skips upstream
+stages. A flat global `required: true` would make those scopes
+structurally invalid, which is wrong — they're legitimate operating
+modes. The real contract is conditional: "if upstream runs, feed me
+downstream." The stage body already handles the absence case
+gracefully (prose instructions like "if available" or fallbacks from
+context).
+
+**What this means for the doctor lint.** The lint walks each
+active scope and reports "stage X's `required: true` consume for
+artifact Y is moot because Y's producer is SKIP in this scope." That's
+advisory, not blocking — the user has already opted into the
+truncation by picking the scope.
+
+**What v0.10.0 adds.** The reserved `when:` primitive (see "Reserved"
+section below) will let authors express richer predicates —
+`when: producer-in-plan`, `when: mode == brownfield`,
+`when: scope != poc`. Today's `required: true` + `conditional_on:
+brownfield|greenfield` pair covers the two dimensions v0.3.0 needs;
+`when:` generalises it.
+
+### `consumes[].conditional_on`
+
+Captures the brownfield/greenfield split. Example:
+`reverse-engineering` produces artifacts only in brownfield mode; stages
+that consume those artifacts mark the consume
+`conditional_on: brownfield` to tell the scope resolver "this consume is
+only required when we're in brownfield".
+
+For unconditional consumes, **omit the field entirely**. There is no
+`always` value — an unconditional consume simply has no `conditional_on`
+key.
+
+### `mode`
+
+Dispatch mechanism, three values:
+
+- `inline` — the conductor runs the stage in its own context. Short stages,
+  fast to execute, no context pressure.
+- `subagent` — delegates via the Task tool to a fresh subagent context.
+  Long stages (Construction code generation) that would blow out the main
+  conductor context.
+- `agent-team` — **reserved**. For when Anthropic's experimental
+  `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` primitive stabilises and we need
+  direct agent-to-agent messaging. Likely first consumer is v0.8.0's Ralph
+  loop driver. No stage declares `agent-team` in v0.3.0.
+
+Note: multi-agent execution today is expressed via `support_agents`. The
+conductor invokes the lead agent first, then each supporter in turn with
+the lead's output as context (see
+`dist/claude/.claude/aidlc-common/protocols/stage-protocol.md:611`). Agents do
+not invoke each other — only the conductor delegates. `agent-team` is
+specifically for the future case where direct inter-agent messaging is
+needed, not the general "multiple agents touch the stage" case.
+
+**Consumer contract.** Orchestrator code reading the `mode` field must
+handle `agent-team` explicitly — at minimum throw "mode agent-team not yet
+implemented". Do not fall through to a default execution path. Silent
+fallthrough on enum extension is a known foot-gun.
+
+### `lead_agent` and `support_agents`
+
+The lead agent owns the stage. The lead's persona (skills, knowledge, tool
+allowlist) is loaded at stage start. Support agents add perspective — a
+stage might lead with `aidlc-product-agent` for requirements work but load
+`aidlc-delivery-agent` as support for capacity reality-checking.
+
+Both fields validate dynamically against `.claude/agents/*.md` via
+`loadAgents()` (introduced in MR 3). No hardcoded enum in the schema —
+adding an agent means dropping its `.md` file in `.claude/agents/` with the
+required frontmatter. See
+[Contributing: Adding an Agent](11-contributing.md#adding-an-agent).
+
+---
+
+## Relationship to agent frontmatter
+
+Stages and agents follow the same YAML-first discipline. Agent frontmatter
+(see [Agent System](05-agent-system.md#frontmatter-contract)) declares
+*who* — the agent's name, allowed tools, model override. Stage frontmatter
+declares *what* — which artifacts the stage produces and consumes, which
+agents it delegates to, how it executes.
+
+Both formats:
+
+- Are authoritative sources for their domain (no parallel hardcoded maps).
+- Ship with a `loadX()` helper that returns typed structures.
+- Validate dynamically against the filesystem rather than against a
+  hardcoded enum.
+
+Adding a new stage is the same shape as adding a new agent: drop an `.md`
+file, add the required frontmatter, and the helpers pick it up at runtime.
+
+---
+
+## Worked example
+
+The canonical example is `scope-definition`. The normative YAML block lives
+in `dist/claude/.claude/aidlc-common/protocols/stage-definition.md` — refer
+there rather than duplicating here.
+
+The example encodes, in structured form, what today's prose describes:
+
+- `requires_stage: [intent-capture]` encodes the prose instruction "Read
+  intent statement from `aidlc-docs/ideation/intent-capture/`". The parser
+  does not care about the prose — it just sees the graph edge — but human
+  readers should keep them in sync.
+- `consumes: [{artifact: intent-statement, required: true}]` says this
+  stage is blocked until `intent-statement` exists. If the scope's resolver
+  can't find a producer for `intent-statement`, the doctor's
+  missing-producer check fails.
+- `produces: [scope-document, intent-backlog, scope-definition-questions]`
+  is the forward edge — other stages looking for "who produces
+  `scope-document`?" find this one via `aidlc-graph.ts producersOf()`.
+- No `for_each` field — `scope-definition` runs once per workflow.
+
+---
+
+## Three-compartment body model
+
+The body of a stage file has three compartments, declared in this order.
+Only `## Steps` is populated in v0.3.0.
+
+| Compartment | v0.3.0 | v0.5.0 | What goes here |
+|-------------|--------|--------|----------------|
+| `## Steps` | Required, populated | Unchanged | Imperative prose the agent follows |
+| `## Sensors` | Reserved, absent | Populated | Deterministic sensor bindings (IDs from the flat `.claude/sensors/` registry) |
+| `## Learn` | Reserved, absent | Populated | Loop-driver bindings and observer rules |
+
+Pre-declaring the three compartments in v0.3.0 meant v0.5.0's additions
+were slot-in changes, not body restructures. See [Sensor
+System](07-sensor-system.md) for the `## Sensors` binding semantics and
+the pull-import model.
+
+**MR 8 migration rule:** wrap the existing body under `## Steps`, nothing
+else. Most stage files already use `## Steps` as their first body heading.
+
+---
+
+## YAML migration — shipped
+
+MR 7 shipped `parseStageFrontmatter` and `emitStageFrontmatter` in
+`lib.ts` — YAML-only, no prose back-compat path. MR 8 migrated all 31
+stage files to YAML frontmatter in a single atomic change. MR 9 expanded
+`aidlc-graph.ts` to compile the YAML into `stage-graph.json` and added
+`compile --check` as the CI drift guard. Running `bun aidlc-graph.ts
+compile --check` on a clean tree exits 0; editing any stage YAML without
+recompiling the JSON exits 1 with a clear message.
+
+---
+
+## Known limits in v0.3.0
+
+- **`for_each` is new.** The 5 Construction stages with `**Per-Unit**: Yes`
+  migrate to `for_each: unit-of-work`; the other 26 stages omit the field
+  entirely.
+- **Sensors / Learn compartments declared but empty.** The parser
+  tolerates their absence; v0.5.0 populated them (see [Sensor
+  System](07-sensor-system.md)).
+- **No runtime validation beyond drift check.** The parser accepts any
+  YAML that produces a valid `StageEntry`; doctor's later extensions add
+  advisory rule/sensor checks on top.
+
+---
+
+## Future extensions — reserved namespace
+
+The spec reserves names for primitives AI-DLC will likely add in later
+releases. The schema rejects unknown keys — reserving the names here
+prevents future contributions from colliding with ad-hoc additions.
+
+| Key | Likely release | What it will do |
+|-----|----------------|-----------------|
+| `when` | v0.10.0 fitness compiler | Structured condition. Compiles `condition` prose into machine-enforceable logic. Supersedes `consumes[].conditional_on` and generalises today's scope-aware `consumes[].required` with richer predicates (`producer-in-plan`, `mode == brownfield`, `scope != poc`) |
+| `on_failure` | v0.8.0 Ralph loop | Declarative error recovery — "if this stage fails, jump back to X" or "retry with adjusted inputs". Moves revision semantics out of `stage-protocol-recovery.md` prose |
+| `blocks_on` | v0.4.0 Construction (if surfaced) | Completion dependency without data read — splits today's overloaded `requires_stage` (which conflates "I consume your output" with "I run after you") |
+| `timeout` | v0.5.0 sensor binding | Execution budget (deadline). Homed in sensor bindings, not stage frontmatter |
+| `retry` | v0.8.0 Ralph loop | Retry policy on failure. Homed in loop config, not stage frontmatter |
+
+Design rationale: Claude Code's own task primitives (TaskCreate family plus
+`/loop` and cron) omit dependency, blocks, retry, and timeout — all
+multi-step orchestration is pushed to client-side code. This implementation mirrors that
+choice by homing execution behaviour (retries, timeouts, failure handling)
+in the loop and sensor subsystems rather than the stage spec. The fields
+above would be modest structural extensions if consumers emerge, not new
+paradigms.
+
+The reserved-namespace pattern has precedent in the audit taxonomy
+([State Machine](12-state-machine.md)), which pre-registers event names with an
+Emitter cell of `Reserved (v0.x MR N)` — the name exists in the registry but no
+code emits it until the consumer MR ships, at which point the same commit
+replaces the `Reserved` marker with the real emitter path.
+
+---
+
+## Cross-references
+
+- `dist/claude/.claude/aidlc-common/protocols/stage-definition.md` — the
+  authoritative spec this chapter narrates.
+- [Stage Protocol](04-stage-protocol.md) — runtime execution behaviour.
+- [Agent System](05-agent-system.md) — parallel YAML-first contract for
+  agent files.
+- [State Machine](12-state-machine.md) — where stage execution emits audit
+  events.
