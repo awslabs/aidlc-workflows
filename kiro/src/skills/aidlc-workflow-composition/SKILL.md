@@ -31,8 +31,8 @@ Compose the adaptive workflow for this intent. This is a conversation, not a for
 - **Right-size aggressively** — a bug fix doesn't need requirements analysis. A full system does.
 - **Include contributors by default** — unless the human explicitly says prototype, POC, spike, or bug fix. The human can always say "skip reviews."
 - **Respect the human's preferred ordering** — if they say "wireframes first, then requirements", do that.
-- **Artifacts already provided = stage skipped** — if the human provides requirements.md, skip requirements-analysis (or offer to validate/augment it).
-- **Brownfield = check for existing context** — if org-ai-kb has context, use it. If not, propose reverse-engineering.
+- **Artifacts already provided = stage skipped** — if the human provides requirements, skip requirements-analysis (or offer to validate/augment it).
+- **Brownfield = check for existing context** — if prior AI-DLC artifacts for this codebase already exist (ask the repository), use them. If not, propose reverse-engineering.
 - **Watch for brownfield cues** — when the intent mentions integrations (SSO, OAuth, SAML, payment, messaging APIs, third-party services) or modifications to existing systems, ask whether there's an existing implementation or reference codebase to learn from. This is a cue for reverse-engineering even in greenfield — "we're building new, but we have an existing SSO integration elsewhere we should study." Keywords: "SSO", "OAuth", "SAML", "integrate with", "connect to", "use our existing", "modify the", "extend the", "add to the current", "WhatsApp", "payment", "third-party".
 - **Do NOT surface path labels** (A, B, C, D) — those are internal reasoning. Just present the ordered list.
 
@@ -45,7 +45,7 @@ a) Paste it here in chat
 b) Point me to a file path or MCP source
 c) I'll generate it for you — then you review"
 
-Based on the answer: receive it, write it to the stage directory, set status to `artifact-generated`, then proceed (offer review or move to next stage).
+Based on the answer: receive it, save it as the corresponding artifact in the stage scope (via `saveArtifact`), set status to `artifact-generated`, then proceed (offer review or move to next stage).
 
 ## Composition examples
 
@@ -54,7 +54,7 @@ These are internal reasoning aids. Do not reference them by name to the human.
 **Example 1: Simple bug fix**
 > Human: "Fix the null pointer in the login handler"
 >
-> Orchestrator: "Got it — a null pointer fix in the login handler. That's a targeted brownfield bug fix. I'd suggest: code-generation. Does the codebase have existing context in org-ai-kb, or should I reverse-engineer the login module first?"
+> Orchestrator: "Got it — a null pointer fix in the login handler. That's a targeted brownfield bug fix. I'd suggest: code-generation. Is there existing AI-DLC context for this codebase, or should I reverse-engineer the login module first?"
 
 **Example 2: Feature on existing system**
 > Human: "I want to work on story-2041: add a dropdown to an existing page"
@@ -104,10 +104,10 @@ These are internal reasoning aids. Do not reference them by name to the human.
 **Example 6: Migration**
 > Human: "Migrate our Express API to Fastify"
 >
-> Orchestrator: "Express to Fastify migration — brownfield platform change. Does org-ai-kb have context on this repo, or should I reverse-engineer it?
+> Orchestrator: "Express to Fastify migration — brownfield platform change. Is there existing AI-DLC context for this repo, or should I reverse-engineer it?
 >
 > Proposed flow: reverse-engineering → requirements-analysis → domain-design → units-generation → functional-design → code-generation."
 
 ## Output
 
-Persist the composed workflow as `workflow.json` in the intent directory per `conventions/workflow-schema.json`. This is the contract for this intent's execution. Create inception stage output directories for each selected inception stage. Per-unit construction stage directories are created after `units-generation` determines the units.
+Persist the composed workflow as the `workflow` artifact (via `saveArtifact`) per `conventions/workflow-schema.json`. This is the contract for this intent's execution. Call `createStageScope` for each selected inception stage. Per-unit construction stage scopes are created after `units-generation` determines the units.

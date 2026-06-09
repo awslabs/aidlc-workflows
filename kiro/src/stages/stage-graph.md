@@ -8,7 +8,7 @@ Directed graph of all available stages. The orchestrator reads this during workf
 
 | Stage | Purpose |
 |---|---|
-| workspace-setup | Create intent directory skeleton |
+| workspace-setup | Initialise the intent and its state and audit artifacts |
 | workflow-composition | Compose the adaptive workflow for this intent |
 
 ### Domain stages
@@ -38,10 +38,10 @@ Stages have flexible inputs — they can start from multiple predecessors or dir
 | story-generation | requirements, intent, wireframes |
 | wireframe-design | stories + personas, requirements, intent |
 | domain-design | requirements, stories, wireframes, RE artifacts |
-| units-generation | domain-design (components.yaml must exist) |
-| contract-design | units-generation (units + dependencies), components.yaml (entity shapes) |
+| units-generation | domain-design (`components` must exist) |
+| contract-design | units-generation (units + dependencies), `components` (entity shapes) |
 | functional-design | contract-design (contracts for this unit's boundaries), units-generation (unit definition + assigned stories) |
-| nfr-design | requirements.md (NFR section), functional-design artifacts, components.yaml |
+| nfr-design | `requirements` (NFR section), functional-design artifacts, `components` |
 | infrastructure-design | nfr-design (spec with patterns + tech stack) |
 | code-generation | functional-design, nfr-design, infrastructure-design, units-generation, domain-design, stories, requirements |
 
@@ -49,13 +49,13 @@ Stages have flexible inputs — they can start from multiple predecessors or dir
 
 The default elaboration path should preserve abstraction level and blueprint identity:
 
-`intent.md` → `requirements.md` → `stories.md` / `personas.md` → `screen-*.md` / `wireframes/` → `components.yaml` → `units.md` / `unit-dependencies.md` / `unit-story-map.md` → `contracts/` / `contract-summary.md` → per-unit `entities.yaml` / `rules.yaml` / `api-specification.md` / `functional-spec.md` → per-unit `nfr-specification.md` → per-unit `infrastructure-specification.md` → source, tests, configuration, and data scripts.
+`intent` → `requirements` → `stories` / `personas` → `screen-data-map` / `screen-structure` / `wireframes` → `components` → `units` / `unit-dependencies` / `unit-story-map` → `contracts` / `contract-summary` → per-unit `entities` / `rules` / `api-specification` / `functional-spec` → per-unit `nfr-specification` → per-unit `infrastructure-specification` → source, tests, configuration, and data scripts.
 
-From `units-generation` onward, stages must copy forward the relevant blueprint artifacts into the current stage directory before adding lower-level detail. Stable IDs from upstream artifacts must be preserved. Additional artifacts are allowed, but they must reference the copied-forward IDs. The main copied-forward blueprint artifacts are `components.yaml`, `unit.md` / `units.md`, `unit-dependencies.md`, `unit-story-map.md`, and `api-specification.md`.
+From `units-generation` onward, stages must copy forward the relevant blueprint artifacts into the current stage scope before adding lower-level detail. Stable IDs from upstream artifacts must be preserved. Additional artifacts are allowed, but they must reference the copied-forward IDs. The main copied-forward blueprint artifacts are `components`, `unit` / `units`, `unit-dependencies`, `unit-story-map`, and `api-specification`.
 
-Stages should follow the artifact resolution rules in `skills/common/aidlc-work-method/SKILL.md`: prefer richer upstream artifacts when available, infer from earlier artifacts when stages were skipped, and document the fallback in `plan.md`.
+Stages should follow the artifact resolution rules in `skills/common/aidlc-work-method/SKILL.md`: prefer richer upstream artifacts when available, infer from earlier artifacts when stages were skipped, and document the fallback in the `plan` artifact.
 
-After `units-generation`, construction stages fan out per unit. Each selected unit should get its own `functional-design`, `nfr-design`, `infrastructure-design`, and `code-generation` stage instance under `stages/construction/<unit-name>/`. `contract-design` remains a cross-unit stage because it defines boundaries between units.
+After `units-generation`, construction stages fan out per unit. Each selected unit should get its own `functional-design`, `nfr-design`, `infrastructure-design`, and `code-generation` stage instance scoped to that unit (construction phase, `unit` set). `contract-design` remains a cross-unit stage because it defines boundaries between units.
 
 ## Composition Rules
 
@@ -69,14 +69,14 @@ The orchestrator must assess what the human brings:
 - **Existing requirements doc provided** → skip requirements-analysis (or run in validate-and-augment mode)
 - **Existing stories provided** → skip story-generation
 - **Existing wireframes provided** → skip wireframe-design, derive requirements from them if needed
-- **Existing codebase (brownfield)** → check if org-ai-kb has context; if not, reverse-engineering needed
+- **Existing codebase (brownfield)** → check if prior AI-DLC context exists (ask the repository); if not, reverse-engineering needed
 - **Bug fix intent** → minimal workflow (maybe just code-generation)
 - **Feature intent on existing system** → reverse-engineering + partial workflow
 
 ### Greenfield vs Brownfield
 
 - **Greenfield** — no existing codebase. Reverse-engineering only if learning from another repo.
-- **Brownfield** — existing codebase. Check org-ai-kb for existing context:
+- **Brownfield** — existing codebase. Check the repository for existing AI-DLC context:
   - Context exists → skip reverse-engineering, use existing artifacts
   - No context → reverse-engineering first, one invocation per repo in scope
 - **Mixed** — some repos exist, some are new. RE the existing ones.

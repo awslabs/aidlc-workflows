@@ -6,14 +6,14 @@ Decompose requirements into user stories and system stories across all system la
 
 ## Inputs (any of)
 
-- `requirements.md` (standard path — derive stories from structured requirements)
-- `intent.md` (if the team skips formal requirements, derive stories directly from intent)
-- `wireframes/` (if the team started with wireframes, derive stories from screen flows)
+- `requirements` (standard path — derive stories from structured requirements)
+- `intent` (if the team skips formal requirements, derive stories directly from intent)
+- `wireframes` (if the team started with wireframes, derive stories from screen flows)
 
 ## Outputs
 
-- `stories.md`
-- `personas.md`
+- `stories`
+- `personas`
 
 ## Owner
 

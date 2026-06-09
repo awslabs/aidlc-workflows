@@ -7,8 +7,15 @@
  *   src/skills/              → dist/kiro-ide/.kiro/skills/        (copy)
  *   src/stages/              → dist/kiro-ide/.kiro/stages/        (copy)
  *   src/conventions/         → dist/kiro-ide/.kiro/conventions/   (copy)
- *   src/tools/               → dist/kiro-ide/.kiro/tools/         (copy)
  *   src/kiro-ide/hooks/      → dist/kiro-ide/.kiro/hooks/         (copy)
+ *
+ * Repository backend (artifact storage) — selected by BACKEND:
+ *   src/repository/<BACKEND>/artifact-repository.md → conventions/artifact-repository.md  (active adapter)
+ *   src/repository/<BACKEND>/verifier.js            → tools/process-checker.js            (active verifier)
+ *
+ * Switching storage backends is a one-line change: set BACKEND (or the AIDLC_BACKEND
+ * env var) to another folder under src/repository/. The interface, skills, schemas, and
+ * stage definitions are backend-neutral and do not change.
  *
  * Usage: node build/kiro-ide/build.js
  */
@@ -20,6 +27,9 @@ const { execSync } = require("child_process");
 const ROOT = path.resolve(__dirname, "..", "..");
 const SRC = path.join(ROOT, "src");
 const OUT = path.join(ROOT, "dist", "kiro-ide", ".kiro");
+
+// Active artifact-repository backend. Override with AIDLC_BACKEND=<name>.
+const BACKEND = process.env.AIDLC_BACKEND || "markdown-fs";
 
 // --- Helpers ---
 
@@ -216,8 +226,19 @@ cpR(path.join(SRC, "stages"), path.join(OUT, "stages"));
 // 4. Copy conventions
 cpR(path.join(SRC, "conventions"), path.join(OUT, "conventions"));
 
-// 5. Copy tools
-cpR(path.join(SRC, "tools"), path.join(OUT, "tools"));
+// 5. Wire the active repository backend: adapter → conventions/, verifier → tools/
+const backendDir = path.join(SRC, "repository", BACKEND);
+const adapterSrc = path.join(backendDir, "artifact-repository.md");
+const verifierSrc = path.join(backendDir, "verifier.js");
+if (!fs.existsSync(adapterSrc) || !fs.existsSync(verifierSrc)) {
+  console.error(`  FAIL: repository backend '${BACKEND}' is missing artifact-repository.md or verifier.js at ${backendDir}`);
+  process.exit(1);
+}
+console.log(`Using repository backend: ${BACKEND}`);
+fs.copyFileSync(adapterSrc, path.join(OUT, "conventions", "artifact-repository.md"));
+const toolsDest = path.join(OUT, "tools");
+fs.mkdirSync(toolsDest, { recursive: true });
+fs.copyFileSync(verifierSrc, path.join(toolsDest, "process-checker.js"));
 
 // 6. Copy Kiro-specific hooks
 const hooksSrc = path.join(SRC, "target-config", "kiro-ide", "hooks");

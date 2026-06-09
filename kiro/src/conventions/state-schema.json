@@ -1,6 +1,6 @@
 {
   "title": "Intent State",
-  "description": "Tracks progress through the workflow. One file per intent at state/state.json.",
+  "description": "Tracks progress through the workflow. One 'state' artifact per intent, persisted via the repository (see conventions/repository-interface.md).",
   "type": "object",
   "required": ["intent", "created", "updated", "stages"],
   "properties": {
@@ -96,18 +96,47 @@
           },
           "outputs": {
             "type": "array",
-            "description": "List of output artifacts produced",
+            "description": "List of output artifacts produced. Each is identified by its logical artifact type and address — never by a file path. The active repository adapter resolves the address to physical storage. See conventions/repository-interface.md.",
             "items": {
               "type": "object",
-              "required": ["name", "locationRelativeToIntentRoot"],
+              "required": ["type", "address"],
               "properties": {
-                "name": {
+                "type": {
                   "type": "string",
-                  "description": "Filename only (e.g. 'intent.md', 'requirements.md', 'state.json')"
+                  "description": "Logical artifact type from the catalog in conventions/repository-interface.md (e.g. 'intent', 'requirements', 'components'). Carries no format or extension."
                 },
-                "locationRelativeToIntentRoot": {
-                  "type": "string",
-                  "description": "DIRECTORY path relative to intent root where the file lives. Must end with '/'. Examples: '/' for intent root, '/state/' for state directory, '/stages/inception/requirements-analysis/' for an inception stage directory, '/stages/construction/<unit-name>/functional-design/' for a per-unit construction stage directory."
+                "address": {
+                  "type": "object",
+                  "description": "Backend-neutral ArtifactAddress locating this artifact (see conventions/repository-interface.md).",
+                  "required": ["container", "type"],
+                  "properties": {
+                    "container": {
+                      "type": "string",
+                      "enum": ["intent-root", "state", "audit", "stage"],
+                      "description": "Which logical store the artifact lives in."
+                    },
+                    "phase": {
+                      "type": "string",
+                      "enum": ["inception", "construction", "operations"],
+                      "description": "Workflow phase. Present when container = 'stage'."
+                    },
+                    "stage": {
+                      "type": "string",
+                      "description": "Stage name. Present when container = 'stage'."
+                    },
+                    "unit": {
+                      "type": "string",
+                      "description": "Unit name for construction-phase stage instances."
+                    },
+                    "scope": {
+                      "type": "string",
+                      "description": "Scope name for multi-instance stages."
+                    },
+                    "type": {
+                      "type": "string",
+                      "description": "Logical artifact type (matches the sibling 'type' field)."
+                    }
+                  }
                 }
               }
             }

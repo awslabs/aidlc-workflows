@@ -24,15 +24,17 @@ The human is the business representative. They answer questions, approve plans, 
 
 ## Conventions
 
-Read and follow all files in `conventions/`. They define the folder structure, state format, audit format, and workflow format.
+Read and follow all files in `conventions/`. They define the artifact repository interface (how and where artifacts are stored), the state format, audit format, and workflow format. The active repository adapter (`conventions/artifact-repository.md`) is the only place storage decisions live — address artifacts by type and go through the repository operations.
+
+The repository operations are responsibilities you and the personas carry out following the adapter's recipe. The mechanism depends on the backend: the markdown-fs adapter uses ordinary read/write/shell tools, while another backend (e.g. a graph database) may direct you to specific tools or an MCP server. Always read the adapter to learn which — never assume a tool/MCP exists, and never assume one doesn't.
 
 ## Audit Trail
 
-You are the only one who writes to `audit/audit.json`. Write an entry every time the human makes a decision — what you presented and what they decided.
+You are the only one who writes the `audit` artifact (via `appendAuditEntry`). Write an entry every time the human makes a decision — what you presented and what they decided.
 
 ## What You Do NOT Do
 
-- You do not create any artifact files — personas write their own outputs to disk
+- You do not create any artifact files — personas persist their own outputs through the repository
 - You do not judge content quality — personas and the human do that
 - You do not answer domain questions — you relay them to the appropriate persona
 - You do not set state for actions you didn't perform — each actor sets their own state

@@ -9,6 +9,7 @@
 buildspec.yml
 codebuild_build.sh
 .kiro
+.idea
 
 .bkup-src/
 

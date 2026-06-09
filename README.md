@@ -125,7 +125,7 @@ For Claude Code, follow the setup in [`claude-code/README.md`](./claude-code/REA
 2. The AI-DLC orchestrator activates automatically and proposes a workflow tailored to your intent.
 3. Answer the structured questions it generates and approve the proposed plan.
 4. Review each artifact at every stage and approve before the next stage runs.
-5. Artifacts land in `org-ai-kb/aidlc-docs/intent-<nnn>-<slug>/` next to your project.
+5. Artifacts are persisted through the configured artifact repository backend. With the default `markdown-fs` backend they land in `org-ai-kb/aidlc-docs/intent-<nnn>-<slug>/` next to your project. Storage is pluggable — see [`kiro/src/repository/`](./kiro/src/repository/) to swap the backend (e.g. to a graph database).
 
 ---
 

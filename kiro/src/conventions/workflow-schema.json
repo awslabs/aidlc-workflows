@@ -1,6 +1,6 @@
 {
   "title": "Composed Workflow",
-  "description": "The adaptive workflow composed for a specific intent. Persisted at workflow.json in the intent directory.",
+  "description": "The adaptive workflow composed for a specific intent. Persisted as the 'workflow' artifact via the repository (see conventions/repository-interface.md).",
   "type": "object",
   "required": ["intent", "composed", "stages"],
   "properties": {
@@ -27,7 +27,7 @@
         "properties": {
           "stage": {
             "type": "string",
-            "description": "Stage name (must match a stage directory under stages/)"
+            "description": "Stage name (must match a stage definition under stages/)"
           },
           "owner": {
             "type": "string",
@@ -40,7 +40,7 @@
           "phase": {
             "type": "string",
             "enum": ["inception", "construction", "operations"],
-            "description": "Workflow phase used to locate the stage directory."
+            "description": "Workflow phase. Used together with the stage name (and unit, for construction) to address the stage's artifact scope — see conventions/repository-interface.md."
           },
           "contributors": {
             "type": "array",

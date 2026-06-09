@@ -2,7 +2,7 @@
 
 ## Description
 
-Create the minimal intent directory skeleton — the intent root, state file, and audit file. Stage output folders are NOT created here — they are created after workflow composition determines which stages will run.
+Initialise the intent through the repository — the intent home, the `state` artifact, and the `audit` artifact. Stage scopes are NOT created here — they are created after workflow composition determines which stages will run.
 
 ## Inputs (any of)
 
@@ -10,11 +10,11 @@ Create the minimal intent directory skeleton — the intent root, state file, an
 
 ## Outputs
 
-Meta stage — outputs are structural:
-- Intent directory at workspace root per `conventions/folder-structure.md`
-- `intent.md`
-- `state/state.json` (initialized per `conventions/state-schema.json`)
-- `audit/audit.json` (initialized per `conventions/audit-schema.json`)
+Meta stage — outputs are structural (created via `initIntent`, see `conventions/repository-interface.md`):
+- The intent home
+- `intent`
+- `state` (initialized per `conventions/state-schema.json`)
+- `audit` (initialized per `conventions/audit-schema.json`)
 
 ## Owner
 

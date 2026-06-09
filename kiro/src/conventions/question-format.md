@@ -24,4 +24,4 @@ d) Other
 - Show progress: "Q1 of N", "Q2 of N", etc.
 - Wait for the human's answer before presenting the next question
 - Trade Offs and Recommendation sections are optional per question — include them when the choice has meaningful implications, skip for straightforward questions
-- All questions are persisted to `questions.md` in the stage output directory
+- All questions are persisted as the `questions` artifact in the stage scope (see `conventions/repository-interface.md`)

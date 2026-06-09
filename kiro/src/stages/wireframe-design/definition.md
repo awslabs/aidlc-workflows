@@ -6,15 +6,15 @@ Design the UI surface of the system — screens, layouts, navigation, and intera
 
 ## Inputs (any of)
 
-- `stories.md` + `personas.md` (standard path — design screens from stories)
-- `requirements.md` (if the team prefers wireframes before stories, derive screens from requirements)
-- `intent.md` (if the team wants to start with wireframes first, derive screens from raw intent)
+- `stories` + `personas` (standard path — design screens from stories)
+- `requirements` (if the team prefers wireframes before stories, derive screens from requirements)
+- `intent` (if the team wants to start with wireframes first, derive screens from raw intent)
 
 ## Outputs
 
-- `screen-data-map.md` — what data each screen shows/collects, source stories
-- `screen-structure.md` — screen inventory, navigation map, shared components
-- `wireframes/` — directory containing one HTML file per screen (the actual wireframes)
+- `screen-data-map` — what data each screen shows/collects, source stories
+- `screen-structure` — screen inventory, navigation map, shared components
+- `wireframes` — a collection, one HTML wireframe per screen (the actual wireframes)
 
 ## Owner
 

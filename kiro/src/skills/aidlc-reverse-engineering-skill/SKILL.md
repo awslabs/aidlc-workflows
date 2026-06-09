@@ -63,6 +63,6 @@ Without running tools (unless available), assess:
 
 ## Application
 
-When applied at the reverse-engineering stage, this skill produces the seven output artifacts defined in the stage definition: business-overview.md, architecture.md, code-structure.md, api-documentation.md, component-inventory.md, technology-stack.md, and dependencies.md.
+When applied at the reverse-engineering stage, this skill produces the seven output artifacts defined in the stage definition: `business-overview`, `architecture`, `code-structure`, `api-documentation`, `component-inventory`, `technology-stack`, and `dependencies`.
 
 When applied as a contributor to other stages (e.g., requirements-analysis on a brownfield project), this skill manifests as: validating that stated requirements align with the existing system's actual architecture, flagging requirements that conflict with current system boundaries, and identifying existing capabilities that may already satisfy requirements.

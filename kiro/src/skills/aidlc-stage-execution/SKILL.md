@@ -15,7 +15,7 @@ For each stage in `workflow.json`:
 1. Read **only** the current stage's `definition.md` (do NOT read all stage definitions upfront)
 2. Verify inputs exist (outputs from prior stages)
 3. Drive the stage execution cycle (below)
-4. After stage completes, update `state/state.json` outputs array with each output as `{"name": "<filename>", "locationRelativeToIntentRoot": "<path>/"}`
+4. After stage completes, ensure each output is registered in state's outputs array as `{"type": "<artifact-type>", "address": { ... }}` (see the State Write Contract in `skills/common/aidlc-work-method/SKILL.md`)
 5. Advance to the next stage
 
 ## Checkpoint
@@ -39,7 +39,7 @@ Each row is one transition. The "Blocks on Human?" column determines whether the
 | 5 | further-clarification | clarification-provided | Orchestrator | Present follow-up questions to human, write answers | **If supervised** |
 | 6 | clarification-provided | artifact-generated | Owner | Produced output artifacts | NO |
 | 7 | artifact-generated | contribution-needed | Orchestrator | Invoke contributors (skip to #10 if no contributors) | NO |
-| 8 | contribution-needed | contributed | Contributors | All contributors wrote their contribution files | NO |
+| 8 | contribution-needed | contributed | Contributors | All contributors saved their contribution artifacts | NO |
 | 9 | contributed | refined | Owner | Addressed contributor feedback, updated artifacts | NO |
 | 10 | refined | final-review-needed | Orchestrator | Invoke reviewer (skip to #13 if no reviewer) | NO |
 | 11 | final-review-needed | final-review-complete | Reviewer | Returned verdict (READY or NOT-READY) | NO |
@@ -78,7 +78,7 @@ The `reviewIterations` counter in state.json tracks how many times the reviewer 
 6. **The human can override autonomy at any time** by saying "stop" or "let me review that" — this implicitly switches the current stage to supervised.
 7. **In full autonomy mode**, the audit log must clearly distinguish auto-approved entries from actual human decisions. Use "auto-approved (full autonomy)" rather than recording a fabricated human decision.
 8. Each actor only sets state for what THEY did — never for what someone else will do.
-9. When re-invoking a persona, pass all relevant files from the stage directory as context.
+9. When re-invoking a persona, point it at the stage scope — it reads the relevant artifacts through the repository for context.
 10. **If a stage has no `autonomy` property in workflow.json, default to `supervised`.** Human gates always block unless explicitly opted out.
 
 ## How to Invoke a Persona
@@ -88,16 +88,16 @@ Use this exact format — nothing more:
 ```
 stage: <stage-name>
 status: <current-status>
-directory: <full-path-to-stage-directory>
+scope: <stage-scope — phase, stage, and unit if construction>
 ```
 
-The persona knows who it is. The work-method skill tells it what to do based on the status. The files in the directory provide all context. Do not add instructions, summaries, guidelines, or file contents to the invocation.
+The persona knows who it is. The work-method skill tells it what to do based on the status. The artifacts in the stage scope provide all context — the persona reads them through the repository. Do not add instructions, summaries, guidelines, or artifact contents to the invocation.
 
 ## Process Verification
 
-The process checker (`tools/process-checker.js`) runs after sub-agent invocations. It checks only:
+The process checker (`tools/process-checker.js`, the active repository backend's verifier) runs after sub-agent invocations. It checks only:
 
-- If outputs are declared in state, do the files exist on disk?
+- If outputs are declared in state, do the resolved artifacts exist?
 - If reviews are declared and stage is past review, did all reviewers review?
 
 It does not track state transitions. It does not check content quality.

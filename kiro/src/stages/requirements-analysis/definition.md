@@ -6,14 +6,14 @@ Elicit, structure, and validate requirements from the human's statement of inten
 
 ## Inputs (any of)
 
-- `intent.md` (raw human intent — minimum starting point)
-- `wireframes/` (if the team started with wireframes, derive requirements from them)
-- `stories.md` (if the team started with stories, derive requirements from them)
+- `intent` (raw human intent — minimum starting point)
+- `wireframes` (if the team started with wireframes, derive requirements from them)
+- `stories` (if the team started with stories, derive requirements from them)
 - Existing requirements document provided by the human
 
 ## Outputs
 
-- `requirements.md`
+- `requirements`
 
 ## Owner
 

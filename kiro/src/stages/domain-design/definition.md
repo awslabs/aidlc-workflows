@@ -6,15 +6,14 @@ Identify and detail the logical building blocks of the system based on requireme
 
 ## Inputs
 
-- **Required:** `requirements.md`
-- **Optional context:** `stories.md`, RE artifacts, existing architecture documentation
+- **Required:** `requirements`
+- **Optional context:** `stories`, RE artifacts, existing architecture documentation
 
 ## Outputs
 
 Artifacts this stage can produce. The owner's plan determines which are relevant. Additional artifacts may be produced if warranted.
 
-- `components.yaml` — structured component catalogue (machine-readable): each component with behaviour, dependencies, dependent-components, and owned entities with attributes
-- `components.md` — human-readable view with mermaid diagram and summary table
+- `components` — the component catalogue: a machine-readable view (each component with behaviour, dependencies, dependent-components, and owned entities with attributes) and a human-readable view with mermaid diagram and summary table
 
 ## Owner
 
