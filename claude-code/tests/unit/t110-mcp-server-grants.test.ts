@@ -173,7 +173,7 @@ describe("t110 MCP registry integrity + inheritance access model (migrated from 
   });
 
   // --- threat-composer is intentionally NOT here (lands with the threat-model
-  // stage in a later MR) -------------------------------------------------------
+  // stage in a later PR) -------------------------------------------------------
   // .sh L66-70.
   test("threat-composer-ai is intentionally NOT declared (deferred) [.sh test 8]", () => {
     expect(DECLARED.has("threat-composer-ai")).toBe(false);

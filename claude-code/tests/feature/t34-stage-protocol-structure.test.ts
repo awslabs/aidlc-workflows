@@ -17,7 +17,7 @@
 // MECHANISM = none. The .sh shelled out to `grep` / `sed` over file content and
 // never touched a function, a CLI tool, argv, exit codes, or a process boundary.
 // gen-coverage-registry derives mechanism from the DRIVERS a test body calls
-// (MR3): this twin calls NO driver (no driveAidlc, no tui-drive.ts, no spawn of
+// (milestone 3): this twin calls NO driver (no driveAidlc, no tui-drive.ts, no spawn of
 // an aidlc-*.ts tool or run-tests.sh), so its derived set is the deterministic
 // `none` floor — matching the t14 / t43 / t44 protocol-content family. Every
 // assertion is readFileSync + a string / regex / count check on the real bytes

@@ -162,7 +162,7 @@ Files are loaded automatically when the agent is activated (steps 4-5 of the loa
 
 ### Knowledge by Agent
 
-> This table is a snapshot. The authoritative `display_name` + `examples` for each agent lives in the agent's frontmatter at `.claude/agents/<slug>.md` and is surfaced programmatically via `loadAgents()` in `dist/claude/.claude/tools/aidlc-lib.ts`. Add a new agent there first; update this table in the same MR.
+> This table is a snapshot. The authoritative `display_name` + `examples` for each agent lives in the agent's frontmatter at `.claude/agents/<slug>.md` and is surfaced programmatically via `loadAgents()` in `dist/claude/.claude/tools/aidlc-lib.ts`. Add a new agent there first; update this table in the same PR.
 
 | Directory | Purpose | Example Files |
 |-----------|---------|---------------|

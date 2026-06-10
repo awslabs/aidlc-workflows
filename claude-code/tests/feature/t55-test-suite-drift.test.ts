@@ -16,13 +16,13 @@
 // so this benign namespace counts toward nothing and breaks no coverage ratchet.
 //
 // ─────────────────────────────────────────────────────────────────────────────
-// MR4-REALITY ADAPTATION (why this twin is NOT a 1:1 transliteration)
+// milestone-4-REALITY ADAPTATION (why this twin is NOT a 1:1 transliteration)
 // ─────────────────────────────────────────────────────────────────────────────
 // The .sh's whole premise was validating drift across `.sh` test files: each
 // `.sh` encodes its assertion count in three places — the TAP `plan N` line, the
 // header `(N tests)` comment, and its tests/README.md registry row — and those
-// drifted independently. The MR4 migration has retired ~159 of the 160
-// deterministic `.sh` to `t<NN>[-desc].test.ts` (this t55 is the last; MR5
+// drifted independently. The milestone 4 migration has retired ~159 of the 160
+// deterministic `.sh` to `t<NN>[-desc].test.ts` (this t55 is the last; milestone 5
 // retires the remaining ~29 claude-driving `.sh`). The tree is now ~30 `.sh` +
 // ~200 `.test.ts`.
 //
@@ -41,7 +41,7 @@
 // the bidirectional README check (the load-bearing check 3) is scoped to `.sh`:
 // every `.sh` on disk has a README row, every README row points to an existing
 // file. A `.test.ts` lacking a README row is CORRECT under the current design and
-// must NOT red. (When MR5 retires the last `.sh`, the README's test-row tables go
+// must NOT red. (When milestone 5 retires the last `.sh`, the README's test-row tables go
 // empty and check 3 becomes vacuously true on both sides — still correct.)
 //
 // ─────────────────────────────────────────────────────────────────────────────
@@ -86,7 +86,7 @@
 //           The README/09-testing t112 rows stay carved.
 //
 // 7 .sh `ok` lines -> 7 expect()-bearing test() cases here (same count, same
-// observables, scoped to the current MR4 tree as documented per-check).
+// observables, scoped to the current milestone 4 tree as documented per-check).
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
@@ -294,9 +294,9 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
   });
 
   // ───────────────────────────────────────────────────────────────────────────
-  // Check 4 — dynamic-plan allowlist honesty (ADAPTED to MR4).
+  // Check 4 — dynamic-plan allowlist honesty (ADAPTED to milestone 4).
   // The .sh's DYNAMIC_PLAN_ALLOWLIST named three `.sh` whose `plan` was a
-  // computed expression. All three were migrated to `.test.ts` in MR4 (the `.sh`
+  // computed expression. All three were migrated to `.test.ts` in milestone 4 (the `.sh`
   // are GONE), and a `.test.ts` has no TAP plan at all — so the allowlist concept
   // is obsolete. The honest invariant now: NO surviving `.sh` carries a
   // non-literal (DYNAMIC) plan, so nothing needs allowlisting. We also confirm
@@ -423,7 +423,7 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
   // are carved — t06 and t112 are now `.test.ts`), plus the README/09-testing
   // t112 rows that narrate the move.
   // ───────────────────────────────────────────────────────────────────────────
-  test("7: no stale aidlc-claude-code/ distributable-root references (post-v0.6.0-MR-0) [.sh ok 7]", () => {
+  test("7: no stale aidlc-claude-code/ distributable-root references (post-v0.6.0-milestone-0) [.sh ok 7]", () => {
     const hits = grepHits(
       [
         join(REPO_ROOT, "dist", "claude", ".claude"),
@@ -439,7 +439,7 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
 // ─────────────────────────────────────────────────────────────────────────────
 // Carve-out predicates (TS ports of the .sh's `grep -v` chains). Each takes a
 // "path:lineno:content" hit string. STEM matching (e.g. "t55-test-suite-drift")
-// carves BOTH the `.sh` and the `.test.ts` form of a file — the MR4 update that
+// carves BOTH the `.sh` and the `.test.ts` form of a file — the milestone 4 update that
 // the original `.sh`-suffix carve-outs missed.
 // ─────────────────────────────────────────────────────────────────────────────
 

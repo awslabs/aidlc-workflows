@@ -11,7 +11,7 @@
 //
 // Subject under test (the shipped user-facing CLAUDE.md, NOT this repo's):
 //   dist/claude/.claude/CLAUDE.md — its "## AI-DLC Structure" section
-//   enumerates the user-visible .claude/ surfaces. Wave-1 (MR 2) flattened
+//   enumerates the user-visible .claude/ surfaces. Wave-1 (milestone 2) flattened
 //   practices/ + rules/ into a single flat rules/ dir, renamed
 //   aidlc-knowledge/ -> knowledge/, and v0.5.0 added the sensors/ surface.
 //   This test pins that the shipped doc reflects that layout: no legacy
@@ -62,18 +62,18 @@ describe("distributable CLAUDE.md describes the post-Wave-1 .claude/ layout", ()
   });
 
   test("describes a flat .claude/rules/ layout (no nested rules/aidlc/guardrails) [.sh test 2]", () => {
-    // MR 2 flattened the rules tree; the legacy nested guardrails path must be
+    // milestone 2 flattened the rules tree; the legacy nested guardrails path must be
     // gone. .sh: grep -q "\.claude/rules/aidlc/guardrails" => must NOT match.
     expect(countOccurrences(readClaudeMd(), ".claude/rules/aidlc/guardrails")).toBe(0);
   });
 
   test("does not reference the removed .claude/practices/ path [.sh test 3]", () => {
-    // practices/ merged into rules/ in MR 2. .sh: grep -q "\.claude/practices".
+    // practices/ merged into rules/ in milestone 2. .sh: grep -q "\.claude/practices".
     expect(countOccurrences(readClaudeMd(), ".claude/practices")).toBe(0);
   });
 
   test("does not reference the legacy aidlc-knowledge/ parent [.sh test 4]", () => {
-    // aidlc-knowledge/ renamed to knowledge/ in MR 2.
+    // aidlc-knowledge/ renamed to knowledge/ in milestone 2.
     // .sh: grep -q "\.claude/aidlc-knowledge".
     expect(countOccurrences(readClaudeMd(), ".claude/aidlc-knowledge")).toBe(0);
   });

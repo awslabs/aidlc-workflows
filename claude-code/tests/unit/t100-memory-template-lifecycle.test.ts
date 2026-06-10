@@ -1,7 +1,7 @@
 // covers: function:parseMemoryHeadings, file:knowledge/aidlc-shared/memory-template.md, subcommand:aidlc-state:advance, subcommand:aidlc-state:approve
 //
 // t100 — Per-stage memory.md template structure + parser-safety +
-// aidlc-state.ts advance/approve `memory_path` JSON key (v0.5.0 MR 13).
+// aidlc-state.ts advance/approve `memory_path` JSON key (v0.5.0 milestone 13).
 // Migrated from tests/unit/t100-memory-template-lifecycle.sh (TAP plan 19).
 //
 // Mechanism: MIXED.

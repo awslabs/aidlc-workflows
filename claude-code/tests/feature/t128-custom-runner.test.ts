@@ -1,7 +1,7 @@
 // covers: subcommand:aidlc-graph:compile, subcommand:aidlc-graph:topo, subcommand:aidlc-runner-gen:write, subcommand:aidlc-runner-gen:check, subcommand:aidlc-orchestrate:next, function:emitSingleRunStage
 //
 // t128 — a CUSTOM stage authored as a FILE becomes drivable through the
-// generated runner with NO code change (v0.6.0 Wave 3 MR 14). Migrated from
+// generated runner with NO code change (v0.6.0 Wave 3 milestone 14). Migrated from
 // tests/feature/t128-custom-runner.sh (TAP plan 8). This is the proof of the
 // extensibility headline — "to add a stage, write a stage file": drop a stage
 // `.md` into `aidlc-common/stages/<phase>/`, recompile the graph, run the
@@ -127,7 +127,7 @@ function buildSandbox(): string {
   projects.push(proj);
   const claude = join(proj, ".claude");
 
-  // Drop a fixture scope .md so `fixture-scope` is a valid scope (post-MR-12,
+  // Drop a fixture scope .md so `fixture-scope` is a valid scope (post-PR-12,
   // validScopes() derives from .claude/scopes/*.md presence). The custom stage
   // declares membership via `scopes:` frontmatter; at compile that transposes
   // into the scope-grid marking the custom stage EXECUTE under fixture-scope.

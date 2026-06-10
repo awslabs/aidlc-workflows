@@ -1,6 +1,6 @@
 // covers: data:scope-grid(poc), cli:aidlc-bolt(dispatch-event), cli:aidlc-state(practices-event), cli:aidlc-utility(init)
 //
-// t63 — Construction worktrees per scope, poc (v0.4.0 MR 13). Migrated from
+// t63 — Construction worktrees per scope, poc (v0.4.0 milestone 13). Migrated from
 // tests/workflow/t63-construction-worktrees-poc.sh (TAP plan 5). poc is the
 // skeleton-on / rapid scope: code-generation EXECUTEs, practices-discovery is
 // SKIPPED (the orchestrator falls back to org.md / hardcoded defaults at the
@@ -22,7 +22,7 @@
 // Source under test:
 //   dist/claude/.claude/tools/data/scope-grid.json — poc.stages map
 //       (transpose of per-stage `scopes:` frontmatter; runtime source of truth
-//        after MR 12 retired scope-mapping.json — helpers.sh:46-48)
+//        after milestone 12 retired scope-mapping.json — helpers.sh:46-48)
 //   dist/claude/.claude/tools/aidlc-bolt.ts:660 handleDispatchEvent
 //       — MERGE_DISPATCH_INVOKED requires --practices-excerpt; emits
 //         appendAuditEntry(pd, "MERGE_DISPATCH_INVOKED", {Bolt slug, ...}) (:670-684)

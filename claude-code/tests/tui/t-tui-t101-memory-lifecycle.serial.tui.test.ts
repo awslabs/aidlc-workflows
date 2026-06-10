@@ -1,7 +1,7 @@
 // covers: stage:ideation/approval-handoff
 //
 // t-tui-t101-memory-lifecycle.serial.tui.test.ts — drive the per-stage
-// memory.md START→APPROVAL lifecycle (v0.5.0 MR 13) through a REAL claude TUI.
+// memory.md START→APPROVAL lifecycle (v0.5.0 milestone 13) through a REAL claude TUI.
 // PATTERN A (land + render, NOT answer-and-advance): jump to approval-handoff,
 // prove memory.md is faithfully created at stage start, WAIT for the approval
 // gate to PAINT, and assert the landed state + the rendered gate WHILE PAUSED on

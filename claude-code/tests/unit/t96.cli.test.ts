@@ -298,7 +298,7 @@ describe("t96 unknown subcommand", () => {
   });
 });
 
-// --- 14. --project-dir plumbing (B1 from MR 11 plan) ----------------------
+// --- 14. --project-dir plumbing (B1 from milestone 11 plan) ----------------------
 describe("t96 --project-dir plumbing (B1)", () => {
   test("pre-strip works in spawnSibling-style invocation order", () => {
     // Verify the spawnSibling-style invocation order works:

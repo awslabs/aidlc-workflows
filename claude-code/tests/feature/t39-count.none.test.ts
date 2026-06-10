@@ -1,7 +1,7 @@
 // covers: function:loadScopeMapping
 //
 // t39 — scope EXECUTE-count validation. Migrated from the bash TAP test
-// tests/feature/t39-scope-stage-count-validation.sh (plan 9). Post-MR-10 the
+// tests/feature/t39-scope-stage-count-validation.sh (plan 9). Post-PR-10 the
 // authoritative source for per-scope stage inclusion is scope-mapping.json:
 // each scope carries a `stages` map of <slug> -> "EXECUTE" | "SKIP"
 // (ScopeDefinition, aidlc-lib.ts:36-46). The .sh spawned `bun -e` per case to

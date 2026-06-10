@@ -460,7 +460,7 @@ describe("t66 plan-identity parity (spawnSync CLI-boundary: 9 scopes)", () => {
 // importable, but the .sh assertion proves the `resolve <scope> --stdout` CLI
 // path (env read + stdout byte-shape), so spawnSync the real tool.
 //
-// v0.6.0 SURFACE NOTE: the .sh framed this as the "MR 12 cutover safety net"
+// v0.6.0 SURFACE NOTE: the .sh framed this as the "milestone 12 cutover safety net"
 // proving the frontmatter-derived grid == the LEGACY scope-mapping-derived plan
 // BEFORE scope-mapping.json was retired. scope-mapping.json IS now retired
 // (verified: dist/claude/.claude/tools/data/ has scope-grid.json, no
@@ -1017,7 +1017,7 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
 });
 
 // =============================================================================
-// rules_in_context resolution (MR 7a) — (.sh:966-1037, 6 assertions)
+// rules_in_context resolution (milestone 7a) — (.sh:966-1037, 6 assertions)
 // =============================================================================
 
 describe("t66 rules_in_context resolution (in-process + spawnSync seams)", () => {
@@ -1108,7 +1108,7 @@ describe("t66 rules_in_context resolution (in-process + spawnSync seams)", () =>
 });
 
 // =============================================================================
-// sensors_applicable resolution (MR 7b) — (.sh:1049-1137, 6 assertions)
+// sensors_applicable resolution (milestone 7b) — (.sh:1049-1137, 6 assertions)
 // =============================================================================
 
 describe("t66 sensors_applicable resolution (in-process + spawnSync seams)", () => {

@@ -1,10 +1,10 @@
 // covers: subcommand:aidlc-runtime:compile
 //
 // CLI-contract port of tests/feature/t102-memory-roundtrip.sh (TAP plan 6),
-// mechanism = cli. The .sh exercises the producer→consumer round-trip the MR
-// 13 card implies: the producer side writes memory.md from the SHIPPED MR 13
+// mechanism = cli. The .sh exercises the producer→consumer round-trip the PR
+// 13 card implies: the producer side writes memory.md from the SHIPPED milestone 13
 // template (knowledge/aidlc-shared/memory-template.md) and appends real
-// entries; the MR 8 consumer — `aidlc-runtime.ts compile`, the subcommand the
+// entries; the milestone 8 consumer — `aidlc-runtime.ts compile`, the subcommand the
 // PostToolUse hook fires — reads them. Every consumer assertion that shelled
 // out to `bun aidlc-runtime.ts compile` is preserved here by SPAWNING the real
 // CLI via node:child_process spawnSync (the run_compile helper, t102:79-82),
@@ -84,7 +84,7 @@ const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 const RUNTIME_TS = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
-// The SHIPPED MR 13 template the .sh `cp`s (t102:29).
+// The SHIPPED milestone 13 template the .sh `cp`s (t102:29).
 const TEMPLATE = join(AIDLC_SRC, "knowledge", "aidlc-shared", "memory-template.md");
 
 const tempDirs: string[] = [];
@@ -207,7 +207,7 @@ describe("t102 memory.md producer -> runtime compile round-trip (migrated from t
   });
 
   // --- Case 2: N=3 real entries -> compile records memory_entries === 3 -----
-  test("2: N=3 real entries -> memory_entries === 3, breakdown sums to 3 (MR 8 reads MR 13's file)", () => {
+  test("2: N=3 real entries -> memory_entries === 3, breakdown sums to 3 (milestone 8 reads milestone 13's file)", () => {
     const proj = makeProject();
     seedTemplateMemory(proj);
     // Append 3 real entries: 2 interpretations + 1 tradeoff (t102:108-114).

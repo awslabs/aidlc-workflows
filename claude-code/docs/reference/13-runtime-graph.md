@@ -3,7 +3,7 @@
 > Audience: Tier 2/3 (team adopter, framework contributor).
 
 This chapter documents the per-workflow `runtime-graph.json` artefact
-introduced in v0.5.0 MR 8 — the data-plane mirror of `stage-graph.json`,
+introduced in v0.5.0 milestone 8 — the data-plane mirror of `stage-graph.json`,
 materialised from the audit log on every approval gate. Cross-link to
 [Plane Architecture](02-plane-architecture.md) (the control/data plane
 separation that motivates this artefact) and
@@ -24,8 +24,8 @@ memory.md looks like, what sensors fired. One file per workflow, lives
 at `aidlc-docs/runtime-graph.json`. Same node shape as
 `stage-graph.json`, populated with telemetry instead of structure.
 
-It exists so consumers (MR 11's Bolt fork/merge, MR 12's gate ritual,
-MR 14's doctor, v0.10.0's cross-workflow observer) read one
+It exists so consumers (milestone 11's Bolt fork/merge, milestone 12's gate ritual,
+milestone 14's doctor, v0.10.0's cross-workflow observer) read one
 materialised view rather than re-walking the audit log on every query.
 
 ---
@@ -33,7 +33,7 @@ materialised view rather than re-walking the audit log on every query.
 ## 2. Schema
 
 The TS interface below is the locked contract. Changing it requires
-bumping every consumer in the same MR.
+bumping every consumer in the same PR.
 
 ```ts
 interface RuntimeGraph {
@@ -62,13 +62,13 @@ interface RuntimeStage {
     tradeoffs: number;
     open_questions: number;
   } | null;
-  sensor_firings: SensorFiring[]; // empty array in MR 8 (sensors fire in MR 9 + MR 10)
+  sensor_firings: SensorFiring[]; // empty array in milestone 8 (sensors fire in milestone 9 + milestone 10)
   outcome: "approved" | "failed" | "pending";
   learnings_captured: {           // null on pending rows; populated on transition to approved
-    from_orchestrator: number;    // zero in MR 8 (gate ritual is MR 12)
+    from_orchestrator: number;    // zero in milestone 8 (gate ritual is milestone 12)
     from_user_addition: number;
   } | null;
-  instances?: BoltInstance[];     // present only when stage runs per-Bolt; MR 11 populates
+  instances?: BoltInstance[];     // present only when stage runs per-Bolt; milestone 11 populates
 }
 
 interface BoltInstance {
@@ -85,8 +85,8 @@ interface BoltInstance {
 
 interface SensorFiring {
   id: string;
-  fire_id: string;                // 8-hex correlator emitted by the MR 9 dispatcher on every row
-  result: "passed" | "failed" | "budget-override" | "incomplete"; // 4-state (MR 12 Q10)
+  fire_id: string;                // 8-hex correlator emitted by the milestone 9 dispatcher on every row
+  result: "passed" | "failed" | "budget-override" | "incomplete"; // 4-state (milestone 12 Q10)
   ts: string;                     // FIRED row's timestamp
   detail_path?: string;
 }
@@ -217,7 +217,7 @@ Pending rows with zero entries do NOT emit. A stage still in flight
 may legitimately have zero entries because the conductor hasn't
 written to memory.md yet — emitting MEMORY_EMPTY mid-flight would
 generate noise that doesn't represent a real diary skip. The signal
-MR 14's doctor wants is "stage approved with zero entries" — that
+milestone 14's doctor wants is "stage approved with zero entries" — that
 requires the stage to have approved.
 
 ### Idempotency — exactly once per (slug, gate-completion)
@@ -253,7 +253,7 @@ duplicate emits, no phantom artefacts.
 
 ## 6. v0.4.0 backfill rule
 
-Stages that completed before MR 13's memory.md lifecycle ships have
+Stages that completed before milestone 13's memory.md lifecycle ships have
 no memory.md history. The backfill rule:
 
 - `memory_entries: null` ↔ `memory_breakdown: null` ↔ no MEMORY_EMPTY emit.
@@ -299,7 +299,7 @@ v0.6.0 `--resume`, which will need this carve-out.
 ### Parallel-Bolt mid-flight recovery (closed in v0.5.0)
 
 A workflow with parallel Bolts crashing mid-batch had no per-Bolt
-recovery seam in MR 8 — the schema reserved `instances?` but compile
+recovery seam in milestone 8 — the schema reserved `instances?` but compile
 only wrote single-instance rows on main, and worktrees never received
 a runtime-graph fragment. Closed in v0.5.0 by `aidlc-runtime.ts
 fragment-fork` (Bolt start) and `fragment-merge` (Bolt complete
@@ -378,13 +378,13 @@ the deterministic anchor.
 
 ---
 
-## 10. Known gaps closed by future MRs
+## 10. Known gaps closed by future PRs
 
-- **MEMORY_EMPTY-rate metric** — MR 14 doctor surfaces the rate using
+- **MEMORY_EMPTY-rate metric** — milestone 14 doctor surfaces the rate using
   the `(Stage, ISO-second)` de-dup tuple frozen in §5.
-- **`learnings_captured` provenance counts** — MR 12 gate ritual
+- **`learnings_captured` provenance counts** — milestone 12 gate ritual
   populates `from_orchestrator` and `from_user_addition`.
-- **`sensor_firings` array** — MR 9 + MR 10 dispatch sensors and
+- **`sensor_firings` array** — milestone 9 + milestone 10 dispatch sensors and
   populate this slot.
 - **Bolt fork/merge of runtime-graph.json** — closed in v0.5.0 by
   `fragment-fork` (no new audit event; rides on STATE_FORKED +

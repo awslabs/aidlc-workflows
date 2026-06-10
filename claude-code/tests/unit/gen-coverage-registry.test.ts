@@ -573,9 +573,9 @@ describe("committed coverage registry is fresh (the live CI ratchet)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 8. mechanismsOf is BODY-DERIVED (MR3, the Wave-2 keystone).
+// 8. mechanismsOf is BODY-DERIVED (milestone 3, the Wave-2 keystone).
 //
-// Until MR3, mechanism came from the filename SEGMENT (t17.cli -> cli). MR3
+// Until milestone 3, mechanism came from the filename SEGMENT (t17.cli -> cli). milestone 3
 // makes it the SET read from the drivers the body actually CALLS (refactor doc
 // §2): driveAidlc( -> sdk, a tui-drive.ts spawn -> tui, and a shipped-binary
 // subprocess (claude -p, a bun/node spawn of an aidlc-*.ts tool, or a bash
@@ -585,14 +585,14 @@ describe("committed coverage registry is fresh (the live CI ratchet)", () => {
 //       comment-strip recovers a swallowed spawn; an import is not a drive.
 //   (b) THE none->cli RECLASSIFICATION SET — broadening the cli arm beyond
 //       `claude -p` reclassifies exactly the deterministic tool/hook/runner
-//       spawners. This is the MR3 deliverable; the set is MEASURED off disk and
+//       spawners. This is the milestone 3 deliverable; the set is MEASURED off disk and
 //       pinned here so a predicate regression (a missed spawn, or a false
 //       positive flipping an import-only floor test) reds immediately.
 //   (c) HONESTY: derived == recorded — for every committed coverage claim, the
 //       mechanism the registry stored equals mechanismsOf(body) recomputed live,
 //       so the registry can never record a mechanism the body does not drive.
 // ---------------------------------------------------------------------------
-describe("mechanismsOf is body-derived (MR3)", () => {
+describe("mechanismsOf is body-derived (milestone 3)", () => {
   // (a) Known-answer fixtures — each a minimal in-test source string. The
   // filename argument is chosen to DISAGREE with the body so "body wins" is
   // unambiguous.
@@ -670,7 +670,7 @@ describe("mechanismsOf is body-derived (MR3)", () => {
   });
 
   test("a suffix-free file with a dotted descriptive slug seeds none (no throw)", () => {
-    // Forward-compat for MR6 (suffix drop): once .none/.cli are gone, a test whose
+    // Forward-compat for milestone 6 (suffix drop): once .none/.cli are gone, a test whose
     // basename carries a DOT in a descriptive slug (not a mechanism segment) must
     // fall back to none, never crash the generator. mechanismOfTestFile recognises
     // only real mechanism segments; any other trailing dot-segment seeds none.
@@ -711,16 +711,16 @@ describe("mechanismsOf is body-derived (MR3)", () => {
     return out;
   }
 
-  // (b) The MR3 reclassification set — MEASURED off disk, pinned here. A file is
+  // (b) The milestone 3 reclassification set — MEASURED off disk, pinned here. A file is
   // a none->cli reclassification when its filename segment says `none` but its
   // body derives `cli` (a deterministic tool/hook/runner subprocess). If the
   // predicate regresses (misses a spawn, or false-positives an import-only floor
   // test), this list changes and the test reds — naming exactly which file moved.
   //
   // MAINTENANCE (read before you touch this): this pin is a deliberate manual
-  // ratchet. When a later MR adds or rewrites a DETERMINISTIC test that spawns an
-  // aidlc-*.ts tool / a hook / run-tests.sh under the bun-or-node runtime (MR4's
-  // floor rewrites and MR5's .sh->bun ports will do exactly this), that file is a
+  // ratchet. When a later PR adds or rewrites a DETERMINISTIC test that spawns an
+  // aidlc-*.ts tool / a hook / run-tests.sh under the bun-or-node runtime (milestone 4's
+  // floor rewrites and milestone 5's .sh->bun ports will do exactly this), that file is a
   // new none->cli member and this test WILL red. That red is correct — add the
   // new file's tests/-relative path to this array (the failure message prints the
   // exact path that moved). Do NOT relax the assertion; the whole point is that a

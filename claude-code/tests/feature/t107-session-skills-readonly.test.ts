@@ -21,7 +21,7 @@
 //   dist/claude/.claude/skills/aidlc-replay/SKILL.md
 //   dist/claude/.claude/skills/aidlc-outcomes-pack/SKILL.md
 // Each declares YAML frontmatter (name / user-invocable / classification) and
-// a Markdown body. The MR-C contract the .sh pins:
+// a Markdown body. The PR-C contract the .sh pins:
 //   - name == aidlc-<slug>, user-invocable: true, classification: read-only.
 //   - every skill sources numbers from `aidlc-runtime.ts summary --json`.
 //   - the retired "characters / 4" token heuristic must not reappear anywhere.

@@ -2,7 +2,7 @@
 //
 // CLI-contract port of tests/unit/t83-doctor-orphan-worktree.sh (TAP plan 16),
 // mechanism = cli. The .sh has no colon-form `# covers:` header; its prose
-// header declares it covers v0.4.0 MR 15 doctor reconciliation Checks 1, 3, 4,
+// header declares it covers v0.4.0 milestone 15 doctor reconciliation Checks 1, 3, 4,
 // 6 — the orphan-reconciliation family. All of that surface is the
 // `handleDoctor(projectDir)` subcommand of aidlc-utility.ts, so the covers id
 // is `subcommand:aidlc-utility:doctor` (the SAME id t104's doctor twin uses;

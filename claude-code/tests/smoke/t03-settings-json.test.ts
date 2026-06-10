@@ -18,7 +18,7 @@
 // MECHANISM = none. The .sh shelled out to `jq` over a JSON file and never
 // touched a function, a CLI tool, argv, exit codes, or a process boundary.
 // gen-coverage-registry derives mechanism from the DRIVERS a test body calls
-// (MR3): this twin calls NO driver (no driveAidlc, no tui-drive.ts, no spawn of
+// (milestone 3): this twin calls NO driver (no driveAidlc, no tui-drive.ts, no spawn of
 // an aidlc-*.ts tool or run-tests.sh), so its derived set is the deterministic
 // `none` floor — matching the t47 / t34 / t14 content-structure family. Every
 // assertion is readFileSync + JSON.parse + a value check on the real bytes of

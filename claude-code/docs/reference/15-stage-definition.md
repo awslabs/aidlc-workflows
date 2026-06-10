@@ -19,7 +19,7 @@ the canonical spec — this chapter adds narrative and "when to use" guidance.
 
 Every stage `.md` file serves two readers:
 
-- **The parser** (`parseStageFrontmatter` in `lib.ts`, ships in MR 7). Reads
+- **The parser** (`parseStageFrontmatter` in `lib.ts`, ships in milestone 7). Reads
   the YAML frontmatter, produces a structured `StageEntry`. Doesn't touch the
   body.
 - **The LLM agent** executing the stage. Reads the body, follows the prose
@@ -69,10 +69,10 @@ which artifacts a stage produces while editing its prose.
 The YAML is authoritative. The JSON is a build artifact. CI enforces the
 relationship.
 
-`aidlc-graph compile` and `compile --check` ship as CLI subcommands (MR 9);
+`aidlc-graph compile` and `compile --check` ship as CLI subcommands (milestone 9);
 run compile manually after editing stage YAML, and CI enforces `compile
 --check` to catch drift. A pre-commit hook that automates this is deferred
-to a later MR. `stage-graph.json` is a compiled artifact — do not edit it
+to a later PR. `stage-graph.json` is a compiled artifact — do not edit it
 by hand; edit the YAML and recompile.
 
 ---
@@ -199,7 +199,7 @@ stage might lead with `aidlc-product-agent` for requirements work but load
 `aidlc-delivery-agent` as support for capacity reality-checking.
 
 Both fields validate dynamically against `.claude/agents/*.md` via
-`loadAgents()` (introduced in MR 3) — `aidlc-graph.ts compile` passes the
+`loadAgents()` (introduced in milestone 3) — `aidlc-graph.ts compile` passes the
 discovered agent slugs into `validateStageFrontmatter`, so a `lead_agent` or
 `support_agents` value naming an agent with no matching file fails the
 compile loudly (`lead_agent "<name>" has no matching .claude/agents/*.md`)
@@ -272,16 +272,16 @@ were slot-in changes, not body restructures. See [Sensor
 System](07-sensor-system.md) for the `## Sensors` binding semantics and
 the pull-import model.
 
-**MR 8 migration rule:** wrap the existing body under `## Steps`, nothing
+**milestone 8 migration rule:** wrap the existing body under `## Steps`, nothing
 else. Most stage files already use `## Steps` as their first body heading.
 
 ---
 
 ## YAML migration — shipped
 
-MR 7 shipped `parseStageFrontmatter` and `emitStageFrontmatter` in
-`lib.ts` — YAML-only, no prose back-compat path. MR 8 migrated all 31
-stage files to YAML frontmatter in a single atomic change. MR 9 expanded
+milestone 7 shipped `parseStageFrontmatter` and `emitStageFrontmatter` in
+`lib.ts` — YAML-only, no prose back-compat path. milestone 8 migrated all 31
+stage files to YAML frontmatter in a single atomic change. milestone 9 expanded
 `aidlc-graph.ts` to compile the YAML into `stage-graph.json` and added
 `compile --check` as the CI drift guard. Running `bun aidlc-graph.ts
 compile --check` on a clean tree exits 0; editing any stage YAML without
@@ -327,8 +327,8 @@ paradigms.
 
 The reserved-namespace pattern has precedent in the audit taxonomy
 ([State Machine](12-state-machine.md)), which pre-registers event names with an
-Emitter cell of `Reserved (v0.x MR N)` — the name exists in the registry but no
-code emits it until the consumer MR ships, at which point the same commit
+Emitter cell of `Reserved (v0.x PR N)` — the name exists in the registry but no
+code emits it until the consumer PR ships, at which point the same commit
 replaces the `Reserved` marker with the real emitter path.
 
 ---

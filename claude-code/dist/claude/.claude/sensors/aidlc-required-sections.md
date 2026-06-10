@@ -32,7 +32,7 @@ the malformed block never reaches the compiler. Every other artefact keeps
 the generic H2-count check only.
 
 Per-stage shape can override the default heading set when the stage's
-`## Sensors` body documents the override (post-MR-12 mechanism). The
+`## Sensors` body documents the override (post-milestone-12 mechanism). The
 framework ships no per-stage overrides by default — teams introduce
 specific heading shapes via the §13 learning loop when there's a real
 reason.

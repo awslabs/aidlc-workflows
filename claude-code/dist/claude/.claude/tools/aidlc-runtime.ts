@@ -14,7 +14,7 @@
 //
 // Schema is locked in docs/reference/13-runtime-graph.md and pinned by
 // the test suite. Changing the shape requires bumping every consumer
-// (Bolt fork/merge, gate ritual, lifecycle, doctor) in the same MR.
+// (Bolt fork/merge, gate ritual, lifecycle, doctor) in the same change.
 //
 // Determinism: re-running compile against the same audit log produces a
 // byte-equivalent runtime-graph.json. Emitted MEMORY_EMPTY rows are
@@ -754,7 +754,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
 
   // Bolt/unit batch DAG — append only when a valid edge block exists, so the
   // key order stays {…, stages, bolt_dag} and the absent case is byte-identical
-  // to the pre-MR-15 envelope (no empty-node noise).
+  // to the pre-milestone-15 envelope (no empty-node noise).
   const boltDag = computeBoltDag(projectDir);
   if (boltDag) {
     graph.bolt_dag = boltDag;
@@ -1068,7 +1068,7 @@ Learnings captured
 // hash same buffer. Closes the byte-copy / hash race against a concurrent
 // compile rewriting main runtime-graph.json mid-fork.
 //
-// Source-absent fallback: when main has no runtime-graph.json yet (pre-MR-8
+// Source-absent fallback: when main has no runtime-graph.json yet (pre-milestone-8
 // state, or fresh init), write an empty graph to the worktree fragment
 // path via the refactored writeEmptyGraph(wtPath, { acquireLock: false }).
 // fragment-fork takes no audit lock anywhere (L9 — no audit emit).

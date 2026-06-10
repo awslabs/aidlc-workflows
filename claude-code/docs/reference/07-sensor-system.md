@@ -86,7 +86,7 @@ timeout_seconds: 5                           # optional
 | `id` | ✓ | kebab-case string | Equals filename stem minus `aidlc-` prefix; cross-referenced from rule files' `pairing:` field (see [Rule System](08-rule-system.md)). |
 | `kind` | ✓ | enum | Only `deterministic` is accepted today; `llm` reserved for the v0.11.0 LLM-dispatch chapter. See [`kind` enum](#kind-enum) below. |
 | `command` | ✓ | string | Canonical invocation prefix — each shipped sensor names its own per-sensor script (e.g. `bun .claude/tools/aidlc-sensor-required-sections.ts`). The dispatcher (`aidlc-sensor.ts`) appends `--stage <slug>` plus the file flag matching the sensor's input shape: `--output-path <path>` for document sensors, `--file-path <path>` for the code sensors (`linter`, `type-check`). |
-| `default_severity` | ✓ | enum | Only `advisory` is accepted today; `blocking` reserved for the v0.10.0 ralph-driver chapter per ROADMAP. |
+| `default_severity` | ✓ | enum | Only `advisory` is accepted today; `blocking` reserved for the future ralph-driver work. |
 | `description` | ✓ | string | One-line human description. |
 | `category` | optional | string | Free-form descriptive label (the four shipped manifests use `document-shape` and `code-quality`; not a closed enum). |
 | `matches` | optional | glob string | Capability filter consumed by the PostToolUse hook at fire time. See [`matches` filter](#matches-filter) below. |
@@ -222,7 +222,7 @@ before matching against the manifest `id`.
 failure produces an audit row + a detail file but does NOT block the
 stage's gate or the user's workflow.
 
-`blocking` is reserved for the v0.10.0 ralph driver per ROADMAP. Until
+`blocking` is reserved for the future ralph driver. Until
 the driver lands, the field is structurally present but semantically
 single-valued.
 

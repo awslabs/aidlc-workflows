@@ -264,11 +264,11 @@ On affirmation, content is promoted to:
    Atomicity: write `aidlc-project.md` first, then `aidlc-team.md`. On failure,
    emit `PRACTICES_OVERRIDE` and abort without recording PRACTICES_AFFIRMED.
 7. Emit `PRACTICES_AFFIRMED`; update state checkbox; update
-   `Practices Affirmed Timestamp` (v7 state template field, MR 6).
+   `Practices Affirmed Timestamp` (v7 state template field, milestone 6).
 
 ### Notes
 
-- The `replaceSection` helper in `.claude/tools/aidlc-lib.ts` was added in MR 8
+- The `replaceSection` helper in `.claude/tools/aidlc-lib.ts` was added in milestone 8
   specifically to support the team.md cross-row promotion (the existing
   `appendUnderHeading` accumulates duplicates across re-runs).
 - `aidlc-org.md` and `aidlc-team.md` share one Title Case heading set

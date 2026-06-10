@@ -1,7 +1,7 @@
 // covers: function:validScopes, function:loadScopeMetadata, function:loadScopeMapping, function:scalarField, cli:aidlc-utility(detect-scope)
 //
 // t125 — scope files: validScopes() + scope metadata derive from
-// .claude/scopes/aidlc-<name>.md presence (MR 12). Migrated from
+// .claude/scopes/aidlc-<name>.md presence (milestone 12). Migrated from
 // tests/unit/t125-scope-files.sh (TAP plan 10, 13 bun spawns).
 //
 // A scope is authored as one .claude/scopes/aidlc-<name>.md file

@@ -6,7 +6,7 @@
 // preserve half): an explicit `discard --slug <s>` removes the worktree
 // directory, deregisters the worktree from git, and emits a WORKTREE_DISCARDED
 // audit-of-intent row carrying Reason: agent-discard and the Bolt slug; a
-// second discard is idempotent (exits 0 silently per the MR-7 contract,
+// second discard is idempotent (exits 0 silently per the PR-7 contract,
 // aidlc-worktree.ts:470-480); and `info` still resolves the worktree path from
 // the audit (audit-of-intent semantics — info reads the most-recent
 // WORKTREE_CREATED audit block, not the live filesystem, aidlc-worktree.ts
@@ -207,7 +207,7 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
       expect(before).toBe(1); // exactly one WORKTREE_DISCARDED from test 1
 
       const second = wt(p, "discard", ["--slug", "y"]);
-      // a7: exit 0 (idempotent per the MR-7 contract).
+      // a7: exit 0 (idempotent per the PR-7 contract).
       expect(second.status).toBe(0);
       // STRONGER than the .sh: the no-re-emit JSON contract (emitted:null,
       // reason "already-discarded", aidlc-worktree.ts:470-480) ...

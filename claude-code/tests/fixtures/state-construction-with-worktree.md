@@ -1,7 +1,7 @@
 # AI-DLC State Tracking
 
 ## Project Information
-- **Project**: Test feature for MR 11 worktree lifecycle
+- **Project**: Test feature for milestone 11 worktree lifecycle
 - **Project Type**: Greenfield
 - **Scope**: feature
 - **Start Date**: 2026-05-19T00:00:00Z

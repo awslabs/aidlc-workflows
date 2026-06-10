@@ -8,7 +8,7 @@
 // the twin reads the same two files in-process and asserts on their parsed
 // structure. There is no process boundary, no exit code, no stdout, and no LLM
 // here — the subject is a static file-asset contract, so the body imports
-// nothing executable and only reads/parses. (Per MR3 body-derived mechanism:
+// nothing executable and only reads/parses. (Per milestone 3 body-derived mechanism:
 // zero driver calls => mechanism none.)
 //
 // As of the v0.6.0 hooks-move (Fork 2->B), the orchestrator's SKILL.md no

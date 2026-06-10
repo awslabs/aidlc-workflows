@@ -20,7 +20,7 @@
 // absent — this twin removes that environmental escape hatch, which is
 // STRONGER: the assertions always run).
 //
-// Background (.sh header L4-7): v0.3.0 MR 1 stripped digit.dot.digit stage
+// Background (.sh header L4-7): v0.3.0 milestone 1 stripped digit.dot.digit stage
 // identifiers (e.g. "1.1", "3.4–3.7") from the 11 agent files. Stages are
 // identified by slug (e.g. "intent-capture") per SKILL.md's canonical-identifier
 // rule; numbers live only in stage-graph.json for graph-machine use.

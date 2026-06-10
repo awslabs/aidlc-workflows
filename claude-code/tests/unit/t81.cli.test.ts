@@ -11,11 +11,11 @@
 // real audit-file write the .sh greps; both are observed here through the
 // subprocess + the audit.md it writes under --project-dir.
 //
-// WHAT t81 PINS (v0.4.0 MR 13, the bolt-plan-marker-conflict semantic):
-//   MR 13 introduced NO new BOLT_PLAN_OVERRIDDEN event. Instead it reuses the
+// WHAT t81 PINS (v0.4.0 milestone 13, the bolt-plan-marker-conflict semantic):
+//   milestone 13 introduced NO new BOLT_PLAN_OVERRIDDEN event. Instead it reuses the
 //   existing PRACTICES_OVERRIDE event with a discriminator field (Reason).
-//   MR 8 emits PRACTICES_OVERRIDE for write-failure semantics (Reason:
-//   write-failure-*); MR 13 emits it for orchestrator-overrides-bolt-plan-
+//   milestone 8 emits PRACTICES_OVERRIDE for write-failure semantics (Reason:
+//   write-failure-*); milestone 13 emits it for orchestrator-overrides-bolt-plan-
 //   marker semantics (Reason: bolt-plan-marker-conflict, plus Practices
 //   Stance + Bolt-Plan Marker + Bolt slug fields). The contract being pinned
 //   is that handlePracticesEvent (aidlc-state.ts:1006-1071) accepts arbitrary
@@ -28,7 +28,7 @@
 //       + res.status === 0 (STRONGER: .sh discarded $?; we pin clean exit) +
 //       fields_count === 4 (STRONGER: pins the JSON ack's count of the 4
 //       --field pairs the tool parsed).
-//   - .sh Test 2  awk PRACTICES_OVERRIDE block, then 4 greps for the MR 13
+//   - .sh Test 2  awk PRACTICES_OVERRIDE block, then 4 greps for the milestone 13
 //       fields (Reason / Practices Stance / Bolt-Plan Marker / Bolt slug)  ->
 //       Test 2: block-scoped auditField() over the FIRST PRACTICES_OVERRIDE
 //       block asserts each of the 4 field VALUES exactly (STRONGER: exact
@@ -40,8 +40,8 @@
 //   - .sh Test 3  read t28's pinned $TS_COUNT, assert == 66  -> Test 3:
 //       same observable. Reads the canonical event-count list the tool
 //       enforces (VALID_EVENT_TYPES via aidlc-audit.ts) AND cross-checks
-//       t28's pin. This MR's discriminator reuse introduces no new event, so
-//       the framework total stays 66 (v0.6.0 MR 2 baseline). STRONGER: rather
+//       t28's pin. This PR's discriminator reuse introduces no new event, so
+//       the framework total stays 66 (v0.6.0 milestone 2 baseline). STRONGER: rather
 //       than only re-reading t28's literal, we also confirm the live tool's
 //       VALID_EVENT_TYPES set has exactly 66 entries by counting the rows it
 //       rejects/accepts — pinning the actual contract t28 mirrors. To avoid
@@ -196,8 +196,8 @@ function auditFieldAll(file: string, ev: string, key: string): string[] {
   return out;
 }
 
-// The MR 13 override field set the .sh fires (t81-bolt-plan-override.sh:41-47).
-const MR13_FIELDS = [
+// The milestone 13 override field set the .sh fires (t81-bolt-plan-override.sh:41-47).
+const MILESTONE13_FIELDS = [
   "--type",
   "override",
   "--field",
@@ -211,20 +211,20 @@ const MR13_FIELDS = [
 ];
 
 describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override (migrated from t81-bolt-plan-override.sh, plan 4)", () => {
-  // --- Test 1: --type override accepts the MR 13 field set ---
-  test("1: practices-event --type override accepts MR 13 field set (emits PRACTICES_OVERRIDE)", () => {
+  // --- Test 1: --type override accepts the milestone 13 field set ---
+  test("1: practices-event --type override accepts milestone 13 field set (emits PRACTICES_OVERRIDE)", () => {
     const p = proj();
-    const r = practicesEvent(MR13_FIELDS, p);
+    const r = practicesEvent(MILESTONE13_FIELDS, p);
     expect(r.status).toBe(0); // STRONGER: .sh discarded $?; pin clean exit
     expect(r.stdout).toContain('"emitted":"PRACTICES_OVERRIDE"');
     // STRONGER: the JSON ack reports all 4 --field pairs were parsed.
     expect(r.stdout).toContain('"fields_count":4');
   });
 
-  // --- Test 2: audit row carries discriminator Reason + the 3 MR 13 fields ---
-  test("2: PRACTICES_OVERRIDE audit row carries discriminator Reason + MR 13 fields", () => {
+  // --- Test 2: audit row carries discriminator Reason + the 3 milestone 13 fields ---
+  test("2: PRACTICES_OVERRIDE audit row carries discriminator Reason + milestone 13 fields", () => {
     const p = proj();
-    practicesEvent(MR13_FIELDS, p);
+    practicesEvent(MILESTONE13_FIELDS, p);
     const f = auditPath(p);
     // Exact, block-scoped field values (STRONGER than the .sh's 4 substring greps).
     expect(auditField(f, "PRACTICES_OVERRIDE", "Reason")).toBe("bolt-plan-marker-conflict");
@@ -233,15 +233,15 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     expect(auditField(f, "PRACTICES_OVERRIDE", "Bolt slug")).toBe("t81-bolt-1");
   });
 
-  // --- Test 3: t28 audit count unchanged BY THIS MR's discriminator reuse ---
-  test("3: framework event count pinned at 67 (no bump from this MR's discriminator reuse)", () => {
-    // The .sh read t28's pinned $TS_COUNT (== 67). Under MR4, t28 is now a
+  // --- Test 3: t28 audit count unchanged BY THIS PR's discriminator reuse ---
+  test("3: framework event count pinned at 67 (no bump from this PR's discriminator reuse)", () => {
+    // The .sh read t28's pinned $TS_COUNT (== 67). Under milestone 4, t28 is now a
     // .test.ts (no `assert_eq N "$TS_COUNT"` line to grep), so pin the SAME
     // observable against the SOURCE OF TRUTH instead — VALID_EVENT_TYPES in
     // aidlc-audit.ts — which is stronger (it asserts the real count, not a
     // sibling test's transcription of it). bolt-plan-marker-conflict reuses
     // PRACTICES_OVERRIDE (discriminator-field disambiguation) and registers no
-    // new event; the framework total stays at the v0.6.0 Wave 4 MR 16 baseline
+    // new event; the framework total stays at the v0.6.0 Wave 4 milestone 16 baseline
     // of 67 (SWARM_DEGRADED was the last event born live, after the five
     // SWARM_* lifecycle pre-registrations).
     const auditSrc = readFileSync(
@@ -254,11 +254,11 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     expect(count).toBe(67);
   });
 
-  // --- Test 4: MR 8 write-failure path coexists (different Reason value) ---
+  // --- Test 4: milestone 8 write-failure path coexists (different Reason value) ---
   test("4: PRACTICES_OVERRIDE coexists across both Reason discriminators", () => {
     const p = proj();
-    // MR 13 emit first, then the MR 8-style write-failure emit into the SAME project.
-    practicesEvent(MR13_FIELDS, p);
+    // milestone 13 emit first, then the milestone 8-style write-failure emit into the SAME project.
+    practicesEvent(MILESTONE13_FIELDS, p);
     const writeFail = practicesEvent(
       ["--type", "override", "--field", "Reason: write-failure-permission-denied"],
       p,

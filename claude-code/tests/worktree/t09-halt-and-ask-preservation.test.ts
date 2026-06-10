@@ -1,8 +1,8 @@
 // covers: subcommand:aidlc-bolt:fail, subcommand:aidlc-worktree:create, subcommand:aidlc-worktree:info
 //
 // CLI-contract port of tests/worktree/t09-halt-and-ask-preservation.sh (TAP
-// plan 8), mechanism = cli. The .sh pins the v0.4.0 MR 12 halt-and-ask
-// PRESERVATION invariant (ROADMAP.md:137): on a simulated Bolt failure, the
+// plan 8), mechanism = cli. The .sh pins the v0.4.0 milestone 12 halt-and-ask
+// PRESERVATION invariant: on a simulated Bolt failure, the
 // aborted/skipped Bolt's worktree STAYS ON DISK for inspection unless the user
 // explicitly discards. `aidlc-bolt fail` (orchestrator-emitted, code-gen
 // returned an error) is the no-side-effect verb — it emits BOLT_FAILED and
@@ -169,7 +169,7 @@ describe("t09 halt-and-ask preserves the worktree on Bolt failure (migrated from
   }, 30000);
 
   test("preservation: worktree still on disk + git-registered + ZERO WORKTREE_DISCARDED after BOLT_FAILED [.sh A5, A6, A7]", () => {
-    // A5: the directory survives the failure (no auto-discard) — the v0.4.0 MR12
+    // A5: the directory survives the failure (no auto-discard) — the v0.4.0 milestone 12
     // invariant. fail() spawned nothing, so the worktree dir is untouched.
     expect(existsSync(wtDir(p, "x"))).toBe(true);
     // A6 (STRONGER than dir-exists): git STILL registers it as a live worktree.

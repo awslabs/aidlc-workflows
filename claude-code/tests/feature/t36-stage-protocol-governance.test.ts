@@ -9,7 +9,7 @@
 // carries §13 Phase Boundary Verification, names the three valid phase-
 // transition stage pairs, references the verification knowledge file, and
 // has SHED the dead guardrail-learning model (superseded by the §13 Learnings
-// Ritual in stage-protocol.md — v0.5.0 MR 15). The honest covers id is
+// Ritual in stage-protocol.md — v0.5.0 milestone 15). The honest covers id is
 // therefore the structural INVARIANT under test, declared free-form like
 // t12's `invariant:` id (tests/feature/t12-state-fixture-validation.test.ts:1)
 // and t125's invariant ids — invariant ids are descriptive claims, not joined

@@ -2,7 +2,7 @@
 //
 // t01 — the worktree test-harness primitives. Migrated from
 // tests/worktree/t01-helpers.sh (TAP plan 7), which exercised
-// tests/lib/worktree-helpers.sh before downstream worktree MRs consumed it.
+// tests/lib/worktree-helpers.sh before downstream worktree PRs consumed it.
 // In the all-TS suite those bash helpers were ported to TypeScript in
 // tests/harness/fixtures.ts; this twin proves the PORT against the same
 // behavioural contract. The .sh declared no `# covers:` header — its subject

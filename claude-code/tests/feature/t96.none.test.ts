@@ -216,7 +216,7 @@ describe("t96 aidlc-runtime compile — instances[] populator (migrated from t96
   });
 
   // --- 7. memory_entries:null + memory_breakdown:null per BoltInstance ----
-  test("7: MR 11 contract -> every BoltInstance memory_entries:null + memory_breakdown:null", () => {
+  test("7: milestone 11 contract -> every BoltInstance memory_entries:null + memory_breakdown:null", () => {
     const proj = makeProjectWithAudit("audit-3-bolts-parallel.md");
     runCompile(proj);
     const row = codeGen(proj);

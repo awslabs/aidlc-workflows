@@ -95,7 +95,7 @@ The mapping is closer than it sounds.
 | OpenFlow / NETCONF (interface) | `stage-graph.json` — the explicit interface between compile and orchestrator |
 | Telemetry (NetFlow, sFlow) | Audit log, sensor firings, memory.md entries → `aidlc-docs/runtime-graph.json` |
 | Reactive flow install (PACKET_IN) | Learning loop: data plane reports an observation → user confirms → file write into rules/sensors plus a frontmatter edit on the originating stage when a new sensor binding is captured |
-| Proactive route install (BGP advertisement) | Framework MR: ships new stages/rules/sensors before any workflow runs |
+| Proactive route install (BGP advertisement) | Framework PR: ships new stages/rules/sensors before any workflow runs |
 | Topology change → recompute routes | Workflow start → compile reads current source files; subsequent recomputes triggered by next workflow |
 | Pre-installed FIB stable across packet flight | Learning-loop writes during a workflow don't affect the in-flight compiled view; they apply at next workflow start (see §5) |
 | Line-rate forwarding by table lookup | Orchestrator + dispatcher read pre-resolved fields off graph nodes; no resolution walks at runtime |
@@ -120,9 +120,9 @@ recompile at the next workflow start.
 
 | State | Lifecycle | Source on disk | Compiled into | Read by |
 |---|---|---|---|---|
-| Stage DAG, scope routing, artifact production | Framework-versioned (changes via framework MR) | Stage frontmatter (`.claude/aidlc-common/stages/*.md`) | `stage-graph.json` | Orchestrator, doctor, designer |
-| **Rules** (prose, prescriptive) | Mutable; framework MR or learning-loop writes | `.claude/rules/aidlc-<scope>.md` (filename-derived; org/team/project attach to every stage) | `stage-graph.json` per-node `rules_in_context` | Orchestrator (resolved view); Claude Code auto-load reads source for in-context prose |
-| **Sensors** (manifests, verification checks) | Mutable; framework MR or learning-loop writes (manifest authored once; stages import by id) | `.claude/sensors/aidlc-<id>.md` | `stage-graph.json` per-node `sensors_applicable` | Dispatcher reads resolved list at stage entry; PostToolUse fires from it |
+| Stage DAG, scope routing, artifact production | Framework-versioned (changes via framework PR) | Stage frontmatter (`.claude/aidlc-common/stages/*.md`) | `stage-graph.json` | Orchestrator, doctor, designer |
+| **Rules** (prose, prescriptive) | Mutable; framework PR or learning-loop writes | `.claude/rules/aidlc-<scope>.md` (filename-derived; org/team/project attach to every stage) | `stage-graph.json` per-node `rules_in_context` | Orchestrator (resolved view); Claude Code auto-load reads source for in-context prose |
+| **Sensors** (manifests, verification checks) | Mutable; framework PR or learning-loop writes (manifest authored once; stages import by id) | `.claude/sensors/aidlc-<id>.md` | `stage-graph.json` per-node `sensors_applicable` | Dispatcher reads resolved list at stage entry; PostToolUse fires from it |
 | Workflow execution telemetry | Per-workflow, accumulating | `audit.md` · `memory.md` · Bolt forks | `aidlc-docs/runtime-graph.json` | Doctor, gate ritual, future cross-workflow observer |
 | Per-stage observation log | Per-stage-run | `aidlc-docs/<phase>/<stage>/memory.md` | (no compile — read directly) | Gate ritual at this stage's gate |
 

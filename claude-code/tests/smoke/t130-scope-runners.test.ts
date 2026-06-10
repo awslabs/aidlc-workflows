@@ -28,7 +28,7 @@
 //   scope (`refactor`) has no runner dir, (i) the generator emits a runner for a
 //   newly-dropped scope file via the AIDLC_SCOPES_DIR + `--all --out` env seams.
 //
-// MECHANISM = mixed (body-derived, MR3):
+// MECHANISM = mixed (body-derived, milestone 3):
 //   - The structural conformance + curated-subset checks read the SHIPPED
 //     skills/aidlc-<scope>/SKILL.md bytes in process AND import the generator's
 //     exported renderRunner / discoverScopes / FIRST_BATCH to assert the rendered

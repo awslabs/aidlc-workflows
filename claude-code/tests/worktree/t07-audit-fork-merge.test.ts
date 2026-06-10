@@ -421,7 +421,7 @@ describe("t07 Phase B — edge cases", () => {
     }
     const main = readFileSync(auditPath(p), "utf-8");
     // The correlation tag is the ISO 8601 timestamp (isoTimestamp), NOT the
-    // integer Fork Boundary — doctor (MR 15) joins the orphan AUDIT_FORKED row
+    // integer Fork Boundary — doctor (milestone 15) joins the orphan AUDIT_FORKED row
     // to this ERROR_LOGGED by exact-string timestamp match.
     expect(main).toMatch(
       /\[fork-emitted:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\]/,

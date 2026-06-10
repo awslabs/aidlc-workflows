@@ -166,7 +166,7 @@ Session hooks check for `aidlc-docs/aidlc-state.md` in the current directory bef
 
 ## Audit event taxonomy
 
-**67 events**, grouped below into 17 categories (the canonical `audit-format.md` registry splits the same 67 into 18 — the grouping is presentational, the event set is the invariant). Every event has exactly one tool or hook emitter, except for events pre-registered for an upcoming release whose Emitter cell reads `Reserved (v0.4.0 MR N)`, `Reserved (v0.5.0 MR N)`, or `Reserved (v0.6.0 MR N)` — these are skipped by the drift test's forward check until the consumer MR ships the emitter. The drift test `tests/feature/t48-audit-event-emitters.sh` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**67 events**, grouped below into 17 categories (the canonical `audit-format.md` registry splits the same 67 into 18 — the grouping is presentational, the event set is the invariant). Every event has exactly one tool or hook emitter, except for events pre-registered for an upcoming release whose Emitter cell reads `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` — these are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/feature/t48-audit-event-emitters.sh` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -264,7 +264,7 @@ Session hooks check for `aidlc-docs/aidlc-state.md` in the current directory bef
 
 ### Worktree
 
-Pre-registered for v0.4.0; the three `WORKTREE_*` rows ship with `aidlc-worktree.ts` (MR 7); `STATE_*` lands in MR 9 (state fork/merge); `AUDIT_*` lands in MR 10 (audit fork/merge). t48 forward check skips rows whose Emitter cell still reads `Reserved`.
+Pre-registered for v0.4.0; the three `WORKTREE_*` rows ship with `aidlc-worktree.ts` (milestone 7); `STATE_*` lands in milestone 9 (state fork/merge); `AUDIT_*` lands in milestone 10 (audit fork/merge). t48 forward check skips rows whose Emitter cell still reads `Reserved`.
 
 | Event | Emitter | Trigger |
 |---|---|---|
@@ -278,18 +278,18 @@ Pre-registered for v0.4.0; the three `WORKTREE_*` rows ship with `aidlc-worktree
 
 ### Practices
 
-Pre-registered for v0.4.0; emitters land in MR 8 (stage 2.2 practices-discovery) and MR 13 (Construction orchestrator runtime).
+Pre-registered for v0.4.0; emitters land in milestone 8 (stage 2.2 practices-discovery) and milestone 13 (Construction orchestrator runtime).
 
 | Event | Emitter | Trigger |
 |---|---|---|
 | `PRACTICES_DISCOVERED` | `tools/aidlc-state.ts` `practices-event --type discovered` | Brownfield discovery + draft completion; team-practices draft awaiting affirmation at the stage 2.2 gate |
 | `PRACTICES_AFFIRMED` | `tools/aidlc-state.ts` `practices-promote` | Team approved practices; content promoted from `aidlc-docs/inception/practices-discovery/` to `.claude/rules/aidlc-team.md` and `.claude/rules/aidlc-project.md` |
-| `PRACTICES_OVERRIDE` | `tools/aidlc-state.ts` `practices-promote` (MR 8 write-failure path) and `tools/aidlc-state.ts` `practices-event --type override` (MR 13 bolt-plan-marker-conflict path — discriminator-field disambiguation via `Reason` field, no separate event) | Either: cross-row promotion failed during stage 2.2 affirmation (Reason: `write-failure-*`); or walking-skeleton stance from `rules/aidlc-team.md` overrode bolt-plan's marker for the current Bolt (Reason: `bolt-plan-marker-conflict`) |
+| `PRACTICES_OVERRIDE` | `tools/aidlc-state.ts` `practices-promote` (milestone 8 write-failure path) and `tools/aidlc-state.ts` `practices-event --type override` (milestone 13 bolt-plan-marker-conflict path — discriminator-field disambiguation via `Reason` field, no separate event) | Either: cross-row promotion failed during stage 2.2 affirmation (Reason: `write-failure-*`); or walking-skeleton stance from `rules/aidlc-team.md` overrode bolt-plan's marker for the current Bolt (Reason: `bolt-plan-marker-conflict`) |
 | `PRACTICES_SECTION_EMPTY` | `tools/aidlc-state.ts` `practices-event --type empty` | Conductor read a practices section that returned empty; advisory-only, falls back to org defaults |
 
 ### Merge dispatch
 
-Pre-registered for v0.4.0 in MR 1; emitters land in MR 13 via the new `aidlc-bolt dispatch-event` subcommand. The conductor brackets each aidlc-pipeline-deploy-agent dispatch — pre-call INVOKED, post-call RETURNED on successful YAML parse, FALLBACK on timeout / malformed-YAML / low-confidence.
+Pre-registered for v0.4.0 in milestone 1; emitters land in milestone 13 via the new `aidlc-bolt dispatch-event` subcommand. The conductor brackets each aidlc-pipeline-deploy-agent dispatch — pre-call INVOKED, post-call RETURNED on successful YAML parse, FALLBACK on timeout / malformed-YAML / low-confidence.
 
 | Event | Emitter | Trigger |
 |---|---|---|
@@ -299,7 +299,7 @@ Pre-registered for v0.4.0 in MR 1; emitters land in MR 13 via the new `aidlc-bol
 
 ### Sensors
 
-Pre-registered for v0.5.0 in MR 1; emitters land in MR 9 (sensor dispatcher) for the four `SENSOR_*` events and MR 14 (paired-coverage doctor row) for `GUARDRAIL_LOADED`. Coverage is environmental — every Inception/Construction/Operation stage that writes markdown emits at least one `SENSOR_FIRED` row from the registry-default sensors. Advisory-only in v0.5.0; v0.8.0 ralph driver introduces blocking semantics for Construction-phase sensors.
+Pre-registered for v0.5.0 in milestone 1; emitters land in milestone 9 (sensor dispatcher) for the four `SENSOR_*` events and milestone 14 (paired-coverage doctor row) for `GUARDRAIL_LOADED`. Coverage is environmental — every Inception/Construction/Operation stage that writes markdown emits at least one `SENSOR_FIRED` row from the registry-default sensors. Advisory-only in v0.5.0; v0.8.0 ralph driver introduces blocking semantics for Construction-phase sensors.
 
 | Event | Emitter | Trigger |
 |---|---|---|
@@ -311,7 +311,7 @@ Pre-registered for v0.5.0 in MR 1; emitters land in MR 9 (sensor dispatcher) for
 
 ### Learning loop
 
-Pre-registered for v0.5.0 in MR 4; `MEMORY_EMPTY` emitter lands in MR 8 (`aidlc-runtime.ts compile`). The §13 Learnings Ritual writes a per-stage memory.md during execution; on stage approval, the runtime-graph compile reads memory.md and emits `MEMORY_EMPTY` for any stage with zero non-blank entries under the four standard headings. MR 12's learning-gate tool (`aidlc-learnings.ts persist`) emits `RULE_LEARNED` when a kept learning lands as a dated entry in `aidlc-{project,team}-learnings.md`, and `SENSOR_PROPOSED` when a learning installs a sensor binding (manifest + originating stage `sensors:` frontmatter). Doctor reads these rows for diary-discipline observability.
+Pre-registered for v0.5.0 in milestone 4; `MEMORY_EMPTY` emitter lands in milestone 8 (`aidlc-runtime.ts compile`). The §13 Learnings Ritual writes a per-stage memory.md during execution; on stage approval, the runtime-graph compile reads memory.md and emits `MEMORY_EMPTY` for any stage with zero non-blank entries under the four standard headings. milestone 12's learning-gate tool (`aidlc-learnings.ts persist`) emits `RULE_LEARNED` when a kept learning lands as a dated entry in `aidlc-{project,team}-learnings.md`, and `SENSOR_PROPOSED` when a learning installs a sensor binding (manifest + originating stage `sensors:` frontmatter). Doctor reads these rows for diary-discipline observability.
 
 | Event | Emitter | Trigger |
 |---|---|---|
@@ -321,7 +321,7 @@ Pre-registered for v0.5.0 in MR 4; `MEMORY_EMPTY` emitter lands in MR 8 (`aidlc-
 
 ### Swarm
 
-Pre-registered for v0.6.0 in MR 2. All six swarm events now emit from the swarm referee `aidlc-swarm.ts` — the deterministic verdict surface the conductor consults. The referee is stateless: `prepare` forks the per-unit worktrees and emits `SWARM_STARTED` (plus `SWARM_DEGRADED`, born live in Wave 4 MR 16, when the conductor reports a loud downgrade); `finalize` re-verifies the conductor's claimed-converged set and emits the per-Unit pair, the per-failed-Unit baton row, and the batch tally. The `check` subcommand is advisory and emits nothing. The engine is read-only and the conductor never emits audit events, so the deterministic tool owns the whole swarm taxonomy. These rows track the lifecycle of a batch of dependency-linked Units: fan-out at batch start, per-Unit convergence or re-verify failure, return-the-baton handback to the conductor, and batch completion. The conductor handles `invoke-swarm` as an orthogonal directive kind beside the stage `mode` enum — it does NOT activate the reserved `agent-team` mode, which stays reserved. t48 forward check skips rows whose Emitter cell still reads `Reserved`.
+Pre-registered for v0.6.0 in milestone 2. All six swarm events now emit from the swarm referee `aidlc-swarm.ts` — the deterministic verdict surface the conductor consults. The referee is stateless: `prepare` forks the per-unit worktrees and emits `SWARM_STARTED` (plus `SWARM_DEGRADED`, born live in Wave 4 milestone 16, when the conductor reports a loud downgrade); `finalize` re-verifies the conductor's claimed-converged set and emits the per-Unit pair, the per-failed-Unit baton row, and the batch tally. The `check` subcommand is advisory and emits nothing. The engine is read-only and the conductor never emits audit events, so the deterministic tool owns the whole swarm taxonomy. These rows track the lifecycle of a batch of dependency-linked Units: fan-out at batch start, per-Unit convergence or re-verify failure, return-the-baton handback to the conductor, and batch completion. The conductor handles `invoke-swarm` as an orthogonal directive kind beside the stage `mode` enum — it does NOT activate the reserved `agent-team` mode, which stays reserved. t48 forward check skips rows whose Emitter cell still reads `Reserved`.
 
 | Event | Emitter | Trigger |
 |---|---|---|
@@ -332,7 +332,7 @@ Pre-registered for v0.6.0 in MR 2. All six swarm events now emit from the swarm 
 | `SWARM_COMPLETED` | `tools/aidlc-swarm.ts` | All Units in the batch finished (converged or failed); batch closed |
 | `SWARM_DEGRADED` | `tools/aidlc-swarm.ts` | `AIDLC_USE_SWARM=1` was requested but the Workflow tool was unavailable; the conductor ran the subagent floor |
 
-Every event in the taxonomy is either backed by a real emitter or marked `Reserved (v0.4.0 MR N)` / `Reserved (v0.5.0 MR N)` / `Reserved (v0.6.0 MR N)` for a pre-registered upcoming consumer. The drift test enforces both halves — the `Reserved` early-skip applies only while the cell literally contains "Reserved"; consumer MRs replace it with the real emitter file path in the same commit they ship the emit call.
+Every event in the taxonomy is either backed by a real emitter or marked `Reserved (v0.4.0 PR N)` / `Reserved (v0.5.0 PR N)` / `Reserved (v0.6.0 PR N)` for a pre-registered upcoming consumer. The drift test enforces both halves — the `Reserved` early-skip applies only while the cell literally contains "Reserved"; consumer PRs replace it with the real emitter file path in the same commit they ship the emit call.
 
 ---
 
@@ -343,13 +343,13 @@ State-mutating commands emit their audit entries **before** mutating the state f
 1. If audit emission fails (lock timeout, disk error, invalid event type), the tool throws before touching state. The state stays at its previous value; audit.md stays clean.
 2. If state writing fails *after* audit emission, the audit has an "intent" entry but the state didn't move. The drift is visible and diagnosable; `--doctor` surfaces it.
 
-Test 65 in `tests/unit/t17-tool-state.sh` (look for the comment `# --- Test 65: approve is audit-first`) proves this for `approve`: chmod'ing audit.md to read-only forces an audit failure and asserts the state file stays at `[?]` (not `[x]`). The same invariant holds for `gate-start`, `reject`, `revise`, `skip`, `advance`, `complete-workflow`, `reuse-artifact`, `aidlc-bolt.ts set-autonomy`, and `aidlc-state.ts fork` / `aidlc-state.ts merge` (the v0.4.0 MR 9 state fork/merge subcommands — see `tests/unit/t76-state-fork-merge.sh` for the equivalent chmod-the-lock-dir Part A and chmod-the-target-after-emit Part B proofs).
+Test 65 in `tests/unit/t17-tool-state.sh` (look for the comment `# --- Test 65: approve is audit-first`) proves this for `approve`: chmod'ing audit.md to read-only forces an audit failure and asserts the state file stays at `[?]` (not `[x]`). The same invariant holds for `gate-start`, `reject`, `revise`, `skip`, `advance`, `complete-workflow`, `reuse-artifact`, `aidlc-bolt.ts set-autonomy`, and `aidlc-state.ts fork` / `aidlc-state.ts merge` (the v0.4.0 milestone 9 state fork/merge subcommands — see `tests/unit/t76-state-fork-merge.sh` for the equivalent chmod-the-lock-dir Part A and chmod-the-target-after-emit Part B proofs).
 
-State fork/merge are deliberately NOT in the audit-of-intent exception below: re-reading and re-writing a state file is idempotent (unlike `git worktree add`, which leaves the worktree present after a kill-9 between emit and git), so the strict invariant applies cleanly. A failed state write after a successful audit emit becomes a phantom `STATE_FORKED` row that doctor (v0.4.0 MR 15) reconciles against the worktree's `aidlc-docs/aidlc-state.md` existence.
+State fork/merge are deliberately NOT in the audit-of-intent exception below: re-reading and re-writing a state file is idempotent (unlike `git worktree add`, which leaves the worktree present after a kill-9 between emit and git), so the strict invariant applies cleanly. A failed state write after a successful audit emit becomes a phantom `STATE_FORKED` row that doctor (v0.4.0 milestone 15) reconciles against the worktree's `aidlc-docs/aidlc-state.md` existence.
 
 ### Audit-of-intent semantics (`WORKTREE_*`, `AUDIT_*`, and merge-dispatch `MERGE_DISPATCH_INVOKED`)
 
-Audit-of-intent semantics apply to side-effects whose outcome cannot be checked before emission — including disk operations (worktree creation / removal, audit byte-copy) and LLM Task dispatch (aidlc-pipeline-deploy-agent). The emitting tool writes the audit entry first, then performs the side-effect. If the side-effect fails after the emit, the tool calls `emitError` with the slug embedded in the message (`[slug=<slug>]`); the audit-fork / audit-merge handlers additionally tag failures with `[fork-emitted:<timestamp>]` so `--doctor` (v0.4.0 MR 15) can distinguish "intent recorded, side-effect never landed" from earlier failure modes. For `MERGE_DISPATCH_INVOKED`, doctor reconciliation matches orphan INVOKED rows to a missing `MERGE_DISPATCH_RETURNED` or `MERGE_DISPATCH_FALLBACK` partner via slug + timestamp window (no correlation tag needed because the LLM Task call has no disk artifact to sequence against). `appendAuditEntry` records an `ERROR_LOGGED` entry on disk-side-effect failure; doctor reconciles audit drift at observation time.
+Audit-of-intent semantics apply to side-effects whose outcome cannot be checked before emission — including disk operations (worktree creation / removal, audit byte-copy) and LLM Task dispatch (aidlc-pipeline-deploy-agent). The emitting tool writes the audit entry first, then performs the side-effect. If the side-effect fails after the emit, the tool calls `emitError` with the slug embedded in the message (`[slug=<slug>]`); the audit-fork / audit-merge handlers additionally tag failures with `[fork-emitted:<timestamp>]` so `--doctor` (v0.4.0 milestone 15) can distinguish "intent recorded, side-effect never landed" from earlier failure modes. For `MERGE_DISPATCH_INVOKED`, doctor reconciliation matches orphan INVOKED rows to a missing `MERGE_DISPATCH_RETURNED` or `MERGE_DISPATCH_FALLBACK` partner via slug + timestamp window (no correlation tag needed because the LLM Task call has no disk artifact to sequence against). `appendAuditEntry` records an `ERROR_LOGGED` entry on disk-side-effect failure; doctor reconciles audit drift at observation time.
 
 | Event group | Emitter | Side-effect that follows the emit |
 |---|---|---|
@@ -357,7 +357,7 @@ Audit-of-intent semantics apply to side-effects whose outcome cannot be checked 
 | `AUDIT_FORKED`, `AUDIT_MERGED` | `tools/aidlc-audit.ts` | `mkdir -p` + `copyFileSync` of main audit; `appendFileSync` of worktree-audit delta to main audit |
 | `MERGE_DISPATCH_INVOKED` | `tools/aidlc-bolt.ts` `dispatch-event` | `Task(aidlc-pipeline-deploy-agent, ...)` LLM dispatch — the side-effect is the LLM call itself; success is observed via the matching `MERGE_DISPATCH_RETURNED` or `MERGE_DISPATCH_FALLBACK` post-call emit |
 
-This is a deliberate departure from the strict audit-first invariant for stage transitions, motivated by the kill-9 / OS-crash window where neither the rollback emit nor `ERROR_LOGGED` can be guaranteed. The pattern is bounded to the events listed above. `STATE_FORKED` / `STATE_MERGED` (MR 9) deliberately do NOT take this exception — see the previous section for the strict-first rationale (state writes are idempotent, so a failed write surfaces as recoverable drift instead of unrecoverable orphan state). `MERGE_DISPATCH_RETURNED` / `MERGE_DISPATCH_FALLBACK` are post-call emits (audit-of-result, not intent — strict-first) and don't take the exception. All other state-mutating commands stay strict-first per the section above.
+This is a deliberate departure from the strict audit-first invariant for stage transitions, motivated by the kill-9 / OS-crash window where neither the rollback emit nor `ERROR_LOGGED` can be guaranteed. The pattern is bounded to the events listed above. `STATE_FORKED` / `STATE_MERGED` (milestone 9) deliberately do NOT take this exception — see the previous section for the strict-first rationale (state writes are idempotent, so a failed write surfaces as recoverable drift instead of unrecoverable orphan state). `MERGE_DISPATCH_RETURNED` / `MERGE_DISPATCH_FALLBACK` are post-call emits (audit-of-result, not intent — strict-first) and don't take the exception. All other state-mutating commands stay strict-first per the section above.
 
 ### Forbidden patterns
 

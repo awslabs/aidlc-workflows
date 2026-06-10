@@ -1,7 +1,7 @@
 // covers: function:extractMarkdownSection
 //
 // t80 — practices-runtime: extractMarkdownSection edge cases + the
-// practices-event --type empty emit (v0.4.0 MR 13).
+// practices-event --type empty emit (v0.4.0 milestone 13).
 // Technique: example-based.
 //
 // In-process migration of tests/unit/t80-practices-runtime.sh (TAP plan 7).

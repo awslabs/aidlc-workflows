@@ -1299,7 +1299,7 @@ function handleDoctor(projectDir: string): void {
   // Read seams: pairing via loadRules().frontmatter (it is NOT on the
   // graph node); sensor ids via loadGraph() -> sensors_applicable[].id.
   // Manifest ids are bare ("required-sections"); a rule's pairing value is
-  // aidlc-prefixed — strip "aidlc-" before matching (MR7b-frozen join).
+  // aidlc-prefixed — strip "aidlc-" before matching (milestone-7b-frozen join).
   //
   // Emits GUARDRAIL_LOADED once per doctor run (BARE appendAuditEvent, no
   // try/catch — mirrors the HEALTH_CHECKED sibling below; appendAuditEntry
@@ -1307,7 +1307,7 @@ function handleDoctor(projectDir: string): void {
   // failure, which the rest of the codebase lets propagate).
   const pairedRules = loadRules();
   // sensors_applicable is REQUIRED on a compiled graph node, but a
-  // hand-rolled or pre-MR-9 graph JSON can omit it; `?? []` keeps this
+  // hand-rolled or pre-milestone-9 graph JSON can omit it; `?? []` keeps this
   // advisory row from crashing doctor on a malformed/legacy graph (the
   // same defensive posture the cycle/orphan/scope checks take above).
   const sensorIds = new Set(

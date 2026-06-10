@@ -19,7 +19,7 @@
 //
 // Engine-cutover note (verbatim from the .sh header): the original SKILL.md half
 // of this contract (slug-derivation paragraph, two worktree-dispatch carve-out
-// subheadings, "Inspecting a paused Bolt" paragraph, MR-13 prefix-hash +
+// subheadings, "Inspecting a paused Bolt" paragraph, PR-13 prefix-hash +
 // orphan-BOLT_STARTED italic carve-outs — formerly tests 1-5, 13-14) was RETIRED
 // at the engine cutover; that prose moved into the engine, covered by the t118
 // corpus. The halt-and-ask PROSE-SHAPE contract still lives in the three

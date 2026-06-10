@@ -24,7 +24,7 @@
 //
 // Source under test:
 //   dist/claude/.claude/tools/data/scope-grid.json
-//     - the compiled {scope:{stages:{slug:MODE}}} grid (MR 12 transpose of the
+//     - the compiled {scope:{stages:{slug:MODE}}} grid (milestone 12 transpose of the
 //       per-stage `scopes:` frontmatter; replaced scope-mapping.json). refactor
 //       runs code-generation = EXECUTE and practices-discovery = SKIP.
 //   dist/claude/.claude/tools/aidlc-bolt.ts :660 handleDispatchEvent

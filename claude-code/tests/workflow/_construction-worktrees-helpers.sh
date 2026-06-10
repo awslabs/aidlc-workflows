@@ -1,7 +1,7 @@
 #!/bin/bash
-# Helpers for v0.4.0 MR 13 workflow tests t60-t67 (construction-worktrees per scope).
+# Helpers for v0.4.0 milestone 13 workflow tests t60-t67 (construction-worktrees per scope).
 #
-# Each per-scope test (one per Construction-bearing scope) asserts the MR 13
+# Each per-scope test (one per Construction-bearing scope) asserts the milestone 13
 # orchestration contract holds for that scope without running a full `claude -p`
 # end-to-end (which would add ~minutes per test to the workflow tier). The
 # contract is:
@@ -23,14 +23,14 @@
 #      skeleton-off in the fallback list.
 #
 # This avoids the multi-minute `claude -p` round-trip of the original workflow
-# tests (t50 etc.) while still proving MR 13's per-scope contract holds.
+# tests (t50 etc.) while still proving milestone 13's per-scope contract holds.
 
 # Source guard — only meaningful when sourced from per-scope test files.
 : "${AIDLC_SRC:?AIDLC_SRC must be set (source tests/lib/fixtures.sh first)}"
 
 # Sets up an integration project AND runs `aidlc-utility init` for $1 (scope).
 # Returns the project path on stdout. Prefer this over the bare
-# setup_integration_project for MR 13 workflow tests because we need
+# setup_integration_project for milestone 13 workflow tests because we need
 # aidlc-docs/aidlc-state.md to exist (the orchestrator and dispatch-event
 # tools both probe that path).
 setup_construction_project() {
@@ -43,7 +43,7 @@ setup_construction_project() {
 }
 
 # Asserts the compiled scope-grid.json entry for $1 has the expected
-# code-generation mode ("EXECUTE" or "SKIP"). MR 12 retired scope-mapping.json;
+# code-generation mode ("EXECUTE" or "SKIP"). milestone 12 retired scope-mapping.json;
 # the grid (same {scope:{stages}} shape) is the transpose of the per-stage
 # scopes: frontmatter and is the runtime source of truth.
 assert_scope_codegen_mode() {

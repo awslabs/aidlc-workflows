@@ -54,7 +54,7 @@
 // forward-slash helpers, so on native Windows the read-back must use the
 // cygpath-rewritten path — mirrors createTestProject / t90's makeProject).
 // NOTHING is written under tests/fixtures/**; the on-disk audit fixtures under
-// tests/fixtures/v05-mr12-learnings/ (and the one MR11 fixture for case 15)
+// tests/fixtures/v05-mr12-learnings/ (and the one milestone 11 fixture for case 15)
 // are READ ONLY, copied in by reading their bytes and re-writing into the temp
 // dir — exactly as the .sh `cp`'d them. All temp dirs cleaned in afterAll.
 
@@ -84,7 +84,7 @@ const RUNTIME_TS = join(
 );
 const STATE_FIXTURE = join(REPO_ROOT, "tests", "fixtures", "state-construction.md");
 const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures", "v05-mr12-learnings");
-const MR11_DIR = join(
+const MILESTONE11_DIR = join(
   REPO_ROOT,
   "tests",
   "fixtures",
@@ -305,7 +305,7 @@ describe("t98 BoltInstance worktree-scoped firings", () => {
 });
 
 // ============================================================
-// learnings_captured (audit-learnings-captured.md + MR11 failed rollup)
+// learnings_captured (audit-learnings-captured.md + milestone 11 failed rollup)
 // ============================================================
 
 describe("t98 learnings_captured", () => {
@@ -324,7 +324,7 @@ describe("t98 learnings_captured", () => {
   });
 
   test("15: instance-bearing parent (any-failed rollup) learnings_captured = null (invariant)", () => {
-    const projF = makeProjectWithAudit(join(MR11_DIR, "audit-3-bolts-1-failed.md"));
+    const projF = makeProjectWithAudit(join(MILESTONE11_DIR, "audit-3-bolts-1-failed.md"));
     runCompile(projF);
     expect(stage(readGraph(projF), "code-generation").learnings_captured).toBeNull();
   });

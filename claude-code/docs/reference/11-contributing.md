@@ -64,7 +64,7 @@ For the full test strategy, stubs, and how to add new tests, see [reference/09-t
 
 ## Adding a Utility Handler
 
-> **Before adding an audit event**, read [State Machine](12-state-machine.md). The chapter lists every event in the taxonomy, its emitter, and the "same-commit rule" — update the code AND the chapter's tables in the same MR, or the drift test will fail.
+> **Before adding an audit event**, read [State Machine](12-state-machine.md). The chapter lists every event in the taxonomy, its emitter, and the "same-commit rule" — update the code AND the chapter's tables in the same PR, or the drift test will fail.
 
 Utility handlers fall into two categories:
 
@@ -127,7 +127,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 
 7. **Verify plan parity (optional but recommended)** — `AIDLC_GRAPH_RESOLVE=1 bun .claude/tools/aidlc-graph.ts resolve hotfix --stdout` emits the scope's plan; eyeball that the EXECUTE set matches what you tagged.
 
-8. **Update scope-aware documentation** — `docs/guide/04-scopes-and-depth.md` (full scope reference), `docs/guide/12-customization.md` (valid values list and scope table), and `docs/reference/03-orchestrator.md` (scope-to-stage mapping) all enumerate scopes explicitly. Per the documentation policy at the end of this chapter, update them in the same MR.
+8. **Update scope-aware documentation** — `docs/guide/04-scopes-and-depth.md` (full scope reference), `docs/guide/12-customization.md` (valid values list and scope table), and `docs/reference/03-orchestrator.md` (scope-to-stage mapping) all enumerate scopes explicitly. Per the documentation policy at the end of this chapter, update them in the same PR.
 
 9. **Add a scope-routing workflow test** — if the scope has behavior that differs from existing scopes (new phase skipping pattern, new depth combination), add a `tests/workflow/tNN-workflow-<scope>-scope.sh` modeled after `t50-workflow-bugfix-scope.sh` or `t51-workflow-poc-scope.sh`.
 
@@ -143,7 +143,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 ### What does NOT validate automatically
 
 - A `scopes:` tag with a typo'd scope name still compiles — it just produces a grid column nobody asks for, silently dropping that stage from the real scope. `/aidlc --doctor` and a per-scope test are the guardrails.
-- Stage skipping semantics (`PHASE_SKIPPED` events). `tests/feature/t39-per-scope-phase-sequence.sh` hardcodes the 9 known scope names in a `for scope in ...` loop — a new scope is not exercised until that list is extended. Add your new scope to that loop as part of the same MR.
+- Stage skipping semantics (`PHASE_SKIPPED` events). `tests/feature/t39-per-scope-phase-sequence.sh` hardcodes the 9 known scope names in a `for scope in ...` loop — a new scope is not exercised until that list is extended. Add your new scope to that loop as part of the same PR.
 
 ## Adding a Stage
 
@@ -159,7 +159,7 @@ A stage is authored as a Markdown file with YAML frontmatter under `dist/claude/
 
 4. **Verify the stage routes** — drive `bun .claude/tools/aidlc-orchestrate.ts next` over a workflow whose scope includes the stage, and confirm the engine emits a `run-stage` directive naming your slug with the resolved `lead_agent`, gate, `consumes`, and `produces`.
 
-5. **Update scope-aware and stage-aware documentation** — a new stage changes the stage count and the per-scope plans. Update `docs/reference/16-artifact-vocabulary.md` (the non-initialisation stage count), the Harness Engineer Guide's stage chapters, and any scope reference that enumerates the plan. Per the documentation policy at the end of this chapter, do it in the same MR.
+5. **Update scope-aware and stage-aware documentation** — a new stage changes the stage count and the per-scope plans. Update `docs/reference/16-artifact-vocabulary.md` (the non-initialisation stage count), the Harness Engineer Guide's stage chapters, and any scope reference that enumerates the plan. Per the documentation policy at the end of this chapter, do it in the same PR.
 
 6. **Add the test rows** — a new stage adds a row to `tests/README.md` and a matching row to `docs/reference/09-testing.md` (the drift guard `tests/feature/t55-test-suite-drift.sh` check #5 pins the two together). The stage-runner drift guard `tests/unit/t129-stage-runner-drift.sh` asserts the generated runner set equals the compiled stage set.
 
@@ -172,7 +172,7 @@ A stage is authored as a Markdown file with YAML frontmatter under `dist/claude/
 ### What does NOT validate automatically
 
 - **A new frontmatter key the compiler doesn't recognise.** Wanting a key the schema doesn't implement is a framework change: it edits the code that reads the data, so it follows the engine/compile-pipeline path rather than this recipe. The reserved-key namespace in [Stage Definition](15-stage-definition.md) exists so future structural extensions land predictably.
-- **Documentation enumerations.** Stage counts and per-scope plan tables across `docs/` are maintained by hand; update them in the same MR (see Documentation Policy below).
+- **Documentation enumerations.** Stage counts and per-scope plan tables across `docs/` are maintained by hand; update them in the same PR (see Documentation Policy below).
 
 ## Adding an Agent
 
@@ -219,16 +219,8 @@ Agent metadata (display name, example knowledge files) is read from each agent's
 
 - **Stage-graph participation**. Stage frontmatter references agents by slug in its `lead_agent` / `support_agents` fields, and `aidlc-graph.ts compile` carries those into `stage-graph.json`. Adding a new agent without naming it in any stage's frontmatter means the agent exists but never runs. Stage-graph schema validation (`dist/claude/.claude/tools/aidlc-stage-schema.ts`) is wired in: `aidlc-graph.ts compile` validates every stage's frontmatter (and `compile --check` is the CI drift guard), and `/aidlc --doctor` re-runs the same `validateStageFrontmatter` plus a "Graph references" check that every `lead_agent` / `support_agents` slug resolves.
 - **Knowledge file existence**. `examples` is a list of filenames surfaced as suggestions in the scaffolded README — they're not created or validated. Users place the actual content in `aidlc-docs/knowledge/<agent>/`.
-- **Doc tables listing agents**. The Phase Participation matrix at `docs/reference/05-agent-system.md:119-131` and the agent→examples table at `dist/claude/.claude/knowledge/aidlc-shared/knowledge-readme-template.md:16-29` are maintained by hand. Update them in the same MR that adds the agent (see Documentation Policy below).
+- **Doc tables listing agents**. The Phase Participation matrix at `docs/reference/05-agent-system.md:119-131` and the agent→examples table at `dist/claude/.claude/knowledge/aidlc-shared/knowledge-readme-template.md:16-29` are maintained by hand. Update them in the same PR that adds the agent (see Documentation Policy below).
 - **`.claude/agents/<new-agent>.md` body content**. Only the frontmatter is parsed. The body prose (Core Responsibilities, Knowledge Loading sequence, etc.) is read by the agent itself when activated — write it to match the other 11 agent files' structure.
-
-## CI/CD Pipeline
-
-The repository runs scheduled and API-triggered pipelines:
-
-- **AIDA dispatch/resolve** -- The automated issue agent. Its pipeline jobs live in `.gitlab-ci.yml` and the dispatch/resolve scripts under `.gitlab/scripts/`.
-
-**Testing CI changes:** Push to a branch and trigger a manual pipeline run to validate `.gitlab-ci.yml` or script changes before merging.
 
 ## Documentation Policy
 

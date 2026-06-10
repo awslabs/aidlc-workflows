@@ -1,7 +1,7 @@
 // covers: subcommand:aidlc-bolt:dispatch-event, subcommand:aidlc-utility:init
 //
 // Port of tests/workflow/t62-construction-worktrees-mvp.sh (TAP plan 5),
-// mechanism = mixed. The .sh proved the v0.4.0 MR 13 per-scope Construction-
+// mechanism = mixed. The .sh proved the v0.4.0 milestone 13 per-scope Construction-
 // worktrees orchestration contract holds for the `mvp` scope (skeleton-on;
 // practices-discovery EXECUTE) WITHOUT a full `claude -p` round-trip. It did so
 // via three observable surfaces:

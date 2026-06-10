@@ -466,7 +466,7 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
 });
 
 // ============================================================
-// v0.4.0 MR 15 — lib.ts exports + threshold constants (pure, in-process).
+// v0.4.0 milestone 15 — lib.ts exports + threshold constants (pure, in-process).
 // The .sh reached these via `bun -e` imports; we import directly (STRONGER:
 // real return shape / numeric value rather than the stringified-line grep).
 // ============================================================

@@ -1,6 +1,6 @@
 // covers: function:parseMemoryEntries, function:parseMemoryHeadings, subcommand:aidlc-learnings:surface, subcommand:aidlc-learnings:persist
 //
-// t97 — aidlc-learnings.ts primitives (v0.5.0 MR 12). Migrated from
+// t97 — aidlc-learnings.ts primitives (v0.5.0 milestone 12). Migrated from
 // tests/unit/t97-learnings-primitives.sh (TAP plan 32). MIXED file (like
 // t66/t18): the six parseMemoryEntries / parseMemoryHeadings cases are PURE
 // FUNCTION units — they import the parsers from aidlc-lib.ts and run

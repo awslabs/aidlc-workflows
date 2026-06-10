@@ -33,7 +33,7 @@
 //   tests/fixtures/v05-mr3-sensors-dir/malformed-{unknown-kind,empty-applies-to,
 //     missing-id}.md — legacy negative-case fixtures.
 //
-// Schema being frozen (post applies_to removal, MR 7b pull authoring):
+// Schema being frozen (post applies_to removal, milestone 7b pull authoring):
 //   - id matches filename stem (filename↔id contract)
 //   - kind == deterministic (only valid v0.5.0 enum value)
 //   - command points at the per-sensor script (canonical execution shape:

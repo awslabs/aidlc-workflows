@@ -147,7 +147,7 @@ JSON via `loadStageGraph()`.
 
 `aidlc-graph compile --check` re-runs the compile in memory, diffs against
 the checked-in JSON, and exits non-zero if different. CI runs this on every
-MR. Drift is impossible if the check passes.
+change. Drift is impossible if the check passes.
 
 `aidlc-graph` implements this contract. See
 `dist/claude/.claude/tools/aidlc-graph.ts` for the library and CLI

@@ -46,7 +46,7 @@
 //   .sh test 4 (every MD event in TS)                 -> "every audit-format.md event appears in aidlc-audit.ts"
 //   .sh test 5 (EVENT_HEADINGS has every TS event)    -> "EVENT_HEADINGS maps every VALID_EVENT_TYPES member"
 //   .sh test 6 (assert_eq TS_COUNT MD_COUNT)          -> "event counts match across the two files"
-//   .sh test 7 (assert_eq 67 TS_COUNT — baseline pin) -> "VALID_EVENT_TYPES.size === 67 (v0.6.0 Wave 4 MR 16 baseline)"
+//   .sh test 7 (assert_eq 67 TS_COUNT — baseline pin) -> "VALID_EVENT_TYPES.size === 67 (v0.6.0 Wave 4 milestone 16 baseline)"
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -59,7 +59,7 @@ const AUDIT_TS = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md");
 
 // The canonical baseline pinned by .sh test 7. Bump WITH the source when an
-// event is added (e.g. v0.6.0 Wave 4 MR 16: +SWARM_DEGRADED took this to 67).
+// event is added (e.g. v0.6.0 Wave 4 milestone 16: +SWARM_DEGRADED took this to 67).
 const CANONICAL_COUNT = 67;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
@@ -161,8 +161,8 @@ describe("t28 audit event-type sync (migrated from t28-audit-event-sync.sh, plan
   });
 
   // .sh test 7: assert_eq 67 TS_COUNT — the canonical baseline pin, bumped when
-  // events are added. (v0.6.0 Wave 4 MR 16: +SWARM_DEGRADED.)
-  test("VALID_EVENT_TYPES.size === 67 (v0.6.0 Wave 4 MR 16 baseline) [.sh test 7]", () => {
+  // events are added. (v0.6.0 Wave 4 milestone 16: +SWARM_DEGRADED.)
+  test("VALID_EVENT_TYPES.size === 67 (v0.6.0 Wave 4 milestone 16 baseline) [.sh test 7]", () => {
     expect(TS_EVENTS.length).toBe(CANONICAL_COUNT);
   });
 });

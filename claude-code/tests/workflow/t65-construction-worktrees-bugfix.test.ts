@@ -7,7 +7,7 @@
 // scaffolds the v7 state, aidlc-bolt dispatch-event emits the audit row —
 // mechanism cli). Each assertion targets the surface the .sh actually probed.
 //
-// SUBJECT: the v0.4.0 MR 13 Construction-worktrees per-scope contract for the
+// SUBJECT: the v0.4.0 milestone 13 Construction-worktrees per-scope contract for the
 // `bugfix` scope — a skeleton-off (incremental) scope. The four SKILL.md
 // prose-presence checks the original test set carried were RETIRED at the engine
 // cutover (Wave 2): per-Bolt dispatch routing is now an engine concern, not
@@ -17,7 +17,7 @@
 // Source under test:
 //   dist/claude/.claude/tools/data/scope-grid.json
 //     - the compiled transpose of every stage's `scopes:` frontmatter; the
-//       runtime source of truth for per-scope stage mode (MR 12 retired
+//       runtime source of truth for per-scope stage mode (milestone 12 retired
 //       scope-mapping.json). bugfix.stages["code-generation"] === "EXECUTE"
 //       (incremental scopes still build code) and
 //       bugfix.stages["practices-discovery"] === "SKIP" (incremental scopes

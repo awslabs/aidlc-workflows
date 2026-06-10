@@ -19,7 +19,7 @@
 //
 // Source under test:
 //   - dist/claude/.claude/tools/data/scope-grid.json — the compiled grid
-//     (MR 12 retired scope-mapping.json). Shape: { <scope>: { stages:
+//     (milestone 12 retired scope-mapping.json). Shape: { <scope>: { stages:
 //     { <slug>: "EXECUTE"|"SKIP" } } }. Source of truth for routing.
 //   - dist/claude/.claude/tools/data/stage-graph.json — array of stage nodes
 //     carrying { slug, phase, ... }. Phase membership for Section D.
@@ -207,7 +207,7 @@ describe("t30 — committed SKILL.md table is byte-identical to the rendered tra
 });
 
 // =============================================================================
-// Section D — phase-presence semantics preserved from pre-MR-10 t30 (3 asserts)
+// Section D — phase-presence semantics preserved from pre-milestone-10 t30 (3 asserts)
 // =============================================================================
 describe("t30 Section D — scope phase-presence semantics (read JSON directly)", () => {
   test("D1: bugfix executes zero ideation-phase stages [.sh 15]", () => {

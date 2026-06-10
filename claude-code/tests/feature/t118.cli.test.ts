@@ -55,7 +55,7 @@
 //     report contains "Committed advance for"; N2 stage==="state-init".
 //   WALK B gated approve (3): N1 stage==="feasibility" gate===true; STAGE_STARTED
 //     count===1 (no double-advance); N2 stage==="scope-definition".
-//   WALK C classify round-trip (3) — v0.6.0 Wave 2 MR 9, vision §6:452-454,
+//   WALK C classify round-trip (3) — v0.6.0 Wave 2 milestone 9, vision §6:452-454,
 //     .sh:235-260: the skeleton-stance classify round-trip across the report
 //     dispatcher's STANCE branch AND the next decision rule's gate computation:
 //     - .sh step 1 `stage|gate == functional-design|unresolved` -> N1
@@ -424,7 +424,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   // SAME stage with the now-DETERMINED gate (true). This is the THIRD component
   // walk: it exercises the report dispatcher's STANCE branch (records state
   // without committing a transition) AND the next decision rule's gate
-  // computation reading that recorded stance. (v0.6.0 Wave 2 MR 9; vision
+  // computation reading that recorded stance. (v0.6.0 Wave 2 milestone 9; vision
   // §6:452-454; .sh:235-260.)
   test("WALK C (classify): next gate:unresolved -> report --skeleton-stance on (print, no transition) -> next gate:true", () => {
     const p = projWithState("state-construction-bolt1.md");

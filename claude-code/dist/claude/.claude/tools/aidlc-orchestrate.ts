@@ -325,7 +325,7 @@ function resolveScope(
 
 // Derive the memory diary path for a stage (SKILL.md: every stage keeps
 // aidlc-docs/<phase>/<stage>/memory.md). Per-unit Construction stages embed a
-// {unit-name} segment that a later engine MR resolves; until then the bare
+// {unit-name} segment that a later engine change resolves; until then the bare
 // phase/slug form is the faithful, deterministic derivation.
 function memoryPathFor(phase: string, slug: string): string {
   return `aidlc-docs/${phase}/${slug}/memory.md`;

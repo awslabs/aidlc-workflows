@@ -18,7 +18,7 @@
 //   B. dist/claude/.claude/settings.json             — the `hooks` block command
 //        count + the top-level `statusLine` key (1 when present)
 //   C. docs/reference/06-hooks-and-tools.md           — the count-words in the
-//        Wave-3-MR-13 hook-scope sentence:
+//        Wave-3-milestone-13 hook-scope sentence:
 //        "This implementation uses ten hook scripts ... All ten are
 //         **project-wide** ... the other nine via the `hooks` block ..."
 //        (located at line 9 at migration time; matched by phrase, not by line).

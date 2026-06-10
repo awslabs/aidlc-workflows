@@ -1,5 +1,5 @@
 #!/bin/bash
-# t101 (stage): Per-stage memory.md start→approval lifecycle (v0.5.0 MR 13) (8 assertions)
+# t101 (stage): Per-stage memory.md start→approval lifecycle (v0.5.0 milestone 13) (8 assertions)
 # Requires: claude CLI
 #
 # Drives one gated stage (approval-handoff — a lightweight gate stage, per
@@ -149,7 +149,7 @@ fi
 # builds a stage row only from a STAGE_STARTED audit event — a `--stage` jump
 # can skip the intermediates and emit STAGE_JUMPED/STAGE_SKIPPED instead, so a
 # row for the target stage is not guaranteed. When a row DOES exist for the
-# stage, its memory_path must be the derived path (the MR 8 read seam — the
+# stage, its memory_path must be the derived path (the milestone 8 read seam — the
 # populator writes memory_path on every row, aidlc-runtime.ts:320); when no row
 # exists (no STAGE_STARTED for the jumped stage), skip rather than fail.
 if [ "$TIMED_OUT" = "1" ]; then
@@ -163,7 +163,7 @@ else
     ROW_PATH=$(jq -r '.stages[] | select(.stage_slug == "approval-handoff") | .memory_path' "$graph" 2>/dev/null | head -1)
   fi
   if [ -n "$ROW_PATH" ] && [ "$ROW_PATH" != "null" ]; then
-    assert_eq "$ROW_PATH" "aidlc-docs/ideation/approval-handoff/memory.md" "runtime-graph row carries memory_path = derived path (MR 8 read seam)"
+    assert_eq "$ROW_PATH" "aidlc-docs/ideation/approval-handoff/memory.md" "runtime-graph row carries memory_path = derived path (milestone 8 read seam)"
   else
     skip "runtime-graph row carries memory_path (no STAGE_STARTED row for the jumped stage to compile)"
   fi

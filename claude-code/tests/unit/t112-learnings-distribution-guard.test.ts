@@ -1,7 +1,7 @@
 // covers: cli:aidlc-learnings(persist)
 //
 // t112 — isFrameworkDistributionPath guard recognises the RELOCATED framework
-// tree (v0.6.0 MR 0 — aidlc-claude-code/ -> dist/claude/). Migrated from
+// tree (v0.6.0 milestone 0 — aidlc-claude-code/ -> dist/claude/). Migrated from
 // tests/unit/t112-learnings-distribution-guard.sh (TAP plan 3, 3 bun spawns).
 //
 // Mechanism: cli. The guard `isFrameworkDistributionPath` (aidlc-learnings.ts
@@ -29,7 +29,7 @@
 //          edits the seeded stage's `sensors:` frontmatter; only reached on
 //          the accept path.
 //
-// Why this regression guard exists: the v0.6.0 MR 0 repo move changed the
+// Why this regression guard exists: the v0.6.0 milestone 0 repo move changed the
 // framework path segments. If a future refactor breaks the relocated segment
 // recognition, the guard stops firing SILENTLY and a per-project learning loop
 // could scaffold INTO the shipped framework distribution. This pins that the

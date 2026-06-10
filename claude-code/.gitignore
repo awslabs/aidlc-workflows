@@ -13,12 +13,6 @@ dist/claude/todo-app/
 # Test verbose logs
 tests/logs/
 
-# Historical archives
-archive/
-
-# Upstream workflow definitions (cloned reference, read-only)
-aidlc-workflows/
-
 # Claude worktrees
 .claude/worktrees
 

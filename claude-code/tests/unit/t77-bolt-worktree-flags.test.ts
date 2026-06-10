@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-bolt:start, subcommand:aidlc-bolt:complete, subcommand:aidlc-bolt:abort, subcommand:aidlc-bolt:fail
 //
-// t77 — aidlc-bolt.ts v0.4.0 MR 11 worktree-flag lifecycle. Migrated from
+// t77 — aidlc-bolt.ts v0.4.0 milestone 11 worktree-flag lifecycle. Migrated from
 // tests/unit/t77-bolt-worktree-flags.sh (TAP plan 28; no `# covers:` header —
 // covers ids derived from the four subcommands the .sh exercises through the
 // --worktree / --merge / --discard / --slug flags).
@@ -52,8 +52,8 @@
 //   .sh T3  (start --worktree happy exits 0)            -> "start --worktree happy path exits 0 + reports slug"
 //   .sh T4  (stdout forked sequence)                    -> "stdout reports forked:[STATE_FORKED,AUDIT_FORKED,RUNTIME_GRAPH_FORKED]"
 //   .sh T5  (BOLT_STARTED in audit)                     -> "BOLT_STARTED emitted to audit"
-//   .sh T6  (STATE_FORKED in audit)                     -> "STATE_FORKED emitted by the MR 9 fork primitive"
-//   .sh T7  (AUDIT_FORKED in audit)                     -> "AUDIT_FORKED emitted by the MR 10 audit-fork primitive"
+//   .sh T6  (STATE_FORKED in audit)                     -> "STATE_FORKED emitted by the milestone 9 fork primitive"
+//   .sh T7  (AUDIT_FORKED in audit)                     -> "AUDIT_FORKED emitted by the milestone 10 audit-fork primitive"
 //   .sh T8  (BOLT_STARTED precedes STATE_FORKED)        -> "atomicity ordering: BOLT_STARTED precedes STATE_FORKED"
 //   .sh T9  (main Bolt Refs contains slug post-fork)    -> "main Bolt Refs contains the slug after fork"
 //   .sh T10 (worktree state file forked)                -> "forked worktree state file exists"
@@ -114,7 +114,7 @@ function runBolt(args: string[]): Run {
 
 /**
  * Mirror the .sh setup_v7_project helper: a v7 state fixture + the audit
- * sample, optionally pre-creating the worktree dir so the MR 9 fork primitive
+ * sample, optionally pre-creating the worktree dir so the milestone 9 fork primitive
  * does not reject (setup_v7_project's `with_worktree` arg, t77.sh:42-44).
  */
 function setupV7Project(withWorktree?: string): string {
@@ -213,7 +213,7 @@ describe("t77 aidlc-bolt worktree flags — start --worktree (migrated from t77-
     ).toBe(true);
   });
 
-  test("STATE_FORKED emitted by the MR 9 fork primitive [.sh T6]", () => {
+  test("STATE_FORKED emitted by the milestone 9 fork primitive [.sh T6]", () => {
     const proj = track(setupV7Project("happy"));
     runBolt([
       "start", "--name", "Happy", "--batch", "1", "--worktree",
@@ -225,7 +225,7 @@ describe("t77 aidlc-bolt worktree flags — start --worktree (migrated from t77-
     ).toBe(true);
   });
 
-  test("AUDIT_FORKED emitted by the MR 10 audit-fork primitive [.sh T7]", () => {
+  test("AUDIT_FORKED emitted by the milestone 10 audit-fork primitive [.sh T7]", () => {
     const proj = track(setupV7Project("happy"));
     runBolt([
       "start", "--name", "Happy", "--batch", "1", "--worktree",
@@ -476,7 +476,7 @@ describe("t77 — abort", () => {
   });
 });
 
-describe("t77 — fail --slug (MR 12 halt-and-ask correlation)", () => {
+describe("t77 — fail --slug (milestone 12 halt-and-ask correlation)", () => {
   test("fail --slug records the Bolt slug audit field [.sh T23]", () => {
     const proj = track(setupV7Project());
     runBolt([

@@ -3,7 +3,7 @@
 // t67 — Construction worktrees per scope: the security-patch contract.
 // Migrated from tests/workflow/t67-construction-worktrees-security-patch.sh
 // (TAP plan 4). The .sh sourced _construction-worktrees-helpers.sh and proved
-// the v0.4.0 MR 13 per-scope orchestration contract for `security-patch`
+// the v0.4.0 milestone 13 per-scope orchestration contract for `security-patch`
 // WITHOUT a full `claude -p` round-trip. Four distinct behavioural assertions:
 //
 //   .sh L25 assert_scope_codegen_mode "security-patch" "EXECUTE"
@@ -19,7 +19,7 @@
 // Mechanism: MIXED.
 //   - Assertions 1 + 3 are pure structural reads of the compiled
 //     scope-grid.json (the runtime source of truth; scope-mapping.json was
-//     retired in MR 12 — helpers L46-48). Mechanism none: require the JSON and
+//     retired in milestone 12 — helpers L46-48). Mechanism none: require the JSON and
 //     assert the cell. The .sh shelled `bun -e require(...)`; the contract is
 //     the data, so we read it directly with zero process spawn.
 //   - Assertions 2 + 4 are process-boundary contracts: `aidlc-utility.ts init`

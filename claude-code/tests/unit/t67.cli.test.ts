@@ -499,8 +499,8 @@ describe("t67 detect-scope audit + backward-compat + collision (migrated from t6
     expect(auditField(f, "SCOPE_DETECTED", "Matched keywords")).toBe("fix");
   });
 
-  // §12: backward-compat — pre-MR-10 --scope path still emits SCOPE_DETECTED.
-  test("27: --scope (pre-MR-10 path) still emits SCOPE_DETECTED", () => {
+  // §12: backward-compat — pre-milestone-10 --scope path still emits SCOPE_DETECTED.
+  test("27: --scope (pre-milestone-10 path) still emits SCOPE_DETECTED", () => {
     const p = proj();
     const r = util([
       "detect-scope",

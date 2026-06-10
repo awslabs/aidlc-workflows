@@ -112,8 +112,8 @@ describe("t86 stage-protocol §13 + MEMORY_EMPTY + SKILL.md gate wiring (migrate
   // --- .sh test 2 ----------------------------------------------------------
   test("§13 documents all four canonical memory.md headings (bolded) [.sh test 2]", () => {
     const body = read(STAGE_PROTOCOL);
-    // Each heading is a bolded list item. Drift on any breaks MR 8's
-    // parseMemoryHeadings() and MR 12's destination-from-heading mapper.
+    // Each heading is a bolded list item. Drift on any breaks milestone 8's
+    // parseMemoryHeadings() and milestone 12's destination-from-heading mapper.
     for (const h of ["Interpretations", "Deviations", "Tradeoffs", "Open questions"]) {
       expect(body.includes(`**${h}**`)).toBe(true);
     }
@@ -122,7 +122,7 @@ describe("t86 stage-protocol §13 + MEMORY_EMPTY + SKILL.md gate wiring (migrate
   // --- .sh test 3 ----------------------------------------------------------
   test("§13 routes via two-surface learnings + sensors: frontmatter bind, applies_to fossil gone [.sh test 3]", () => {
     const body = read(STAGE_PROTOCOL);
-    // v0.5.0 MR 12 replaced the old applies_to routing model with the two
+    // v0.5.0 milestone 12 replaced the old applies_to routing model with the two
     // learnings surfaces + the sensors:/matches: pull-authoring bind.
     expect(body.includes("aidlc-project-learnings.md")).toBe(true);
     expect(body.includes("aidlc-team-learnings.md")).toBe(true);

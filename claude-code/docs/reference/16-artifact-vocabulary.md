@@ -24,7 +24,7 @@ producing stage in its YAML frontmatter. Other stages reference the same
 identifier in `consumes[]` to declare a read dependency. The identifier is
 a short kebab-case string — no file extension, no folder prefix, no slash.
 
-Concrete example from MR 4's worked example in
+Concrete example from milestone 4's worked example in
 `dist/claude/.claude/aidlc-common/protocols/stage-definition.md`:
 
 ```yaml
@@ -183,8 +183,8 @@ bun dist/claude/.claude/tools/aidlc-graph.ts artifacts
 
 Prints one canonical name per line, alphabetically sorted.
 
-Pre-MR-8 output is empty — stages haven't migrated to YAML yet and
-`produces:` isn't populated. Post-MR-8 the output grows to roughly 118
+Pre-PR-8 output is empty — stages haven't migrated to YAML yet and
+`produces:` isn't populated. Post-PR-8 the output grows to roughly 118
 names across 29 non-initialisation stages.
 
 Pipe through `wc -l` for a count, `grep` for a filter, or `diff` against
@@ -208,7 +208,7 @@ No edit to this chapter required — the registry is derived.
 
 1. Rename it in the producing stage's `produces:` entry.
 2. Rename it in every consuming stage's `consumes[].artifact` entry.
-3. `/aidlc --doctor` (post-MR-11) catches any consumer you forgot to
+3. `/aidlc --doctor` (post-PR-11) catches any consumer you forgot to
    update — the old name becomes a missing-producer error.
 
 Stage-graph CI drift detection (`aidlc-graph compile --check`) catches

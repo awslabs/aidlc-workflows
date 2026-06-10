@@ -625,7 +625,7 @@ export function mechanismOfTestFile(fileName: string): Mechanism {
   if (parts.length >= 2) {
     // The trailing dot-segment is only a mechanism when it IS one (the legacy
     // `.cli`/`.none`/`.sdk`/`.tui` suffix, or `.calibration`). Any OTHER trailing
-    // segment is a DESCRIPTIVE slug, not a mechanism — e.g. once MR6 drops the
+    // segment is a DESCRIPTIVE slug, not a mechanism — e.g. once milestone 6 drops the
     // suffixes, a suffix-free `t200.scope-exclusion.test.ts` must seed `none`,
     // not crash the generator. So recognise a real mechanism segment, else fall
     // through to `none` (the weakest seed — it can never over-claim). The strict

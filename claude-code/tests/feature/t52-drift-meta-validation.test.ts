@@ -21,7 +21,7 @@
 // sandbox copy of dist/claude + docs + tests in a fresh temp dir, mutates ONE
 // file in dist/claude, then runs t48 from inside that sandbox.
 //
-// MR4 UPDATE: t48 is now the bun:test twin
+// milestone 4 UPDATE: t48 is now the bun:test twin
 // (tests/feature/t48-audit-event-emitters.test.ts), not the retired .sh. The
 // twin resolves its scan roots via tests/harness/fixtures.ts REPO_ROOT
 // (= HARNESS_DIR/../.., harness-relative — NOT cwd). So running the twin from

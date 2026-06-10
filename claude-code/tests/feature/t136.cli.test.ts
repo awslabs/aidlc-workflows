@@ -1,6 +1,6 @@
 // covers: audit:GATE_REJECTED, audit:STAGE_REVISING
 //
-// CLI-contract port of tests/feature/t122-revision-loop.sh (renumbered to t136 for MR2; TAP plan 10),
+// CLI-contract port of tests/feature/t122-revision-loop.sh (renumbered to t136 for milestone 2; TAP plan 10),
 // mechanism = cli. The .sh exercises the gate → reject → revise → gate cycle
 // end-to-end on a real bugfix workflow by SHELLING OUT to `bun aidlc-state.ts
 // gate-start|reject|revise|approve ...`. This port preserves that PROCESS

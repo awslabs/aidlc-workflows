@@ -14,7 +14,7 @@
 // Exit-code contract (G5): always exit 0. Sensor verdicts surface
 // through the dispatcher's audit rows (SENSOR_FIRED + paired
 // SENSOR_PASSED|FAILED|BUDGET_OVERRIDE) and detail files. Blocking
-// semantics defer to the future ralph driver per ROADMAP.
+// semantics defer to the future ralph driver.
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -129,7 +129,7 @@ if (testRunMode) {
 // active-stage and graph-read guards. Doctor must distinguish two
 // valid no-SENSOR_FIRED states: (a) healthy hook firing on a stage
 // with empty sensors_applicable like workspace-scaffold, (b) no
-// matches glob hit since last fire. See plan § Cross-MR for the
+// matches glob hit since last fire. See plan § Cross-milestone for the
 // canonical heuristic.
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(

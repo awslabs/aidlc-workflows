@@ -39,7 +39,7 @@
 // a genuinely-drifted sandbox tree (not a happy path that only proves the in-sync
 // case). Both negatives drive the real exit-1 path below.
 //
-// MECHANISM = cli (body-derived, MR3): the SPAWNED shipped tool is load-bearing.
+// MECHANISM = cli (body-derived, milestone 3): the SPAWNED shipped tool is load-bearing.
 //   - aidlc-runner-gen.ts resolves SKILLS_DIR off its OWN module location
 //     (TOOLS_DIR/../skills, :66-67), so an in-process handleWrite()/handleCheck()
 //     would MUTATE the SHIPPED tree. That is exactly why the .sh runs write/check

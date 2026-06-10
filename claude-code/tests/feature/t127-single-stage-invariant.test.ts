@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, function:emitSingleRunStage, function:handleSingleReport
 //
-// t127 — the `--single` stage-runner invariant (v0.6.0 Wave 3 MR 14).
+// t127 — the `--single` stage-runner invariant (v0.6.0 Wave 3 milestone 14).
 // Migrated from tests/feature/t127-single-stage-invariant.sh (TAP plan 16).
 // Mechanism: cli. The whole subject is the engine's PROCESS boundary —
 // `next --stage <slug> --single` / `report --single --stage <slug>` argv,

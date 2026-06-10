@@ -1312,7 +1312,7 @@ const COMMANDS: Record<string, Handler> = {
     // resolve <scope> — emit the active scope's plan (.aidlc-plan.json) to
     // the project dir. The plan is the EXECUTE/SKIP slice for the scope,
     // derived from the compiled grid (the same transpose runtime reads).
-    // Feature-flagged via AIDLC_GRAPH_RESOLVE=1 (see ROADMAP) so it ships
+    // Feature-flagged via AIDLC_GRAPH_RESOLVE=1 so it ships
     // behind a gate until the orchestrator opts into engine-side resolution.
     if (process.env.AIDLC_GRAPH_RESOLVE !== "1") {
       console.error(

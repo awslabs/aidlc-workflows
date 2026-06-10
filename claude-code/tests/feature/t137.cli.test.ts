@@ -1,6 +1,6 @@
 // covers: audit:ERROR_LOGGED
 //
-// CLI-contract port of tests/feature/t123-failure-injection.sh (renumbered to t137 for MR2; TAP plan 8),
+// CLI-contract port of tests/feature/t123-failure-injection.sh (renumbered to t137 for milestone 2; TAP plan 8),
 // mechanism = cli. Equal-or-stronger migration: every .sh assertion that
 // shelled out to `bun aidlc-state.ts <sub> ...` / `bun aidlc-utility.ts init`
 // is preserved by SPAWNING the real CLI via node:child_process spawnSync

@@ -13,7 +13,7 @@
 //     terminates with process.exit(0) (:101-102) — a CLI shell. The edge_block
 //     field + pass flag are only observable on that stdout.
 // Both spawn the real .ts via the BUN runtime (process.execPath) against the
-// dist/ tool path — the same broadened-cli pattern MR3 credits (cf.
+// dist/ tool path — the same broadened-cli pattern milestone 3 credits (cf.
 // tests/integration/t48-runtime-graph-end-to-end.test.ts, tests/feature/t104).
 //
 // Source under test:
@@ -23,7 +23,7 @@
 //          absent/malformed/cyclic; pure data, no Date.now → byte-identical recompile.
 //     :758-761 compile() appends graph.bolt_dag only when computeBoltDag returns
 //          a node, so the absent envelope keeps key order {workflow_id, scope,
-//          started_at, stages} (the pre-MR-15 4-key shape).
+//          started_at, stages} (the pre-milestone-15 4-key shape).
 //   dist/claude/.claude/tools/aidlc-sensor-required-sections.ts
 //     :89-97 filename-gated extension: for unit-of-work-dependency.md, sets
 //          result.edge_block = parseBoltDag().reason (or "ok"); a non-ok block
@@ -40,7 +40,7 @@
 //   .sh 3  second compile byte-identical                      -> "second compile is byte-identical (pure-data parse)"
 //   .sh 4  cyclic → node omitted + stderr 'cyclic'            -> "cyclic edge block: bolt_dag omitted + stderr names 'cyclic'"
 //   .sh 5  malformed (dangling) → omitted + stderr 'malformed' -> "malformed edge block: bolt_dag omitted + stderr names 'malformed'"
-//   .sh 6  absent artifact → 4-key envelope                   -> "absent artifact: envelope keeps the pre-MR-15 4-key shape"
+//   .sh 6  absent artifact → 4-key envelope                   -> "absent artifact: envelope keeps the pre-milestone-15 4-key shape"
 //   .sh 7  sensor valid → pass:true, edge_block:ok            -> "sensor: valid block → pass:true, edge_block:ok"
 //   .sh 8  sensor cyclic → pass:false, edge_block:cyclic      -> "sensor: cyclic block → pass:false, edge_block:cyclic"
 //   .sh 9  sensor absent → pass:false, edge_block:absent      -> "sensor: absent block → pass:false, edge_block:absent"
@@ -265,7 +265,7 @@ describe("t133 Bolt-DAG runtime compile (migrated from t133-bolt-dag-compile.sh,
   }, 30000);
 
   // ---- 6: absent artifact → 4-key envelope ---------------------------------
-  test("absent artifact: envelope keeps the pre-MR-15 4-key shape (no empty node) [.sh test 6]", () => {
+  test("absent artifact: envelope keeps the pre-milestone-15 4-key shape (no empty node) [.sh test 6]", () => {
     const proj = makeProject(); // no unit-of-work-dependency.md written
     runCompile(proj);
     const g = readGraph(proj);

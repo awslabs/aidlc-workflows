@@ -98,7 +98,7 @@ afterEach(() => {
  * Seed a Construction-phase project parked at code-generation (in-flight) with
  * a bolt_dag batch on runtime-graph.json. `autonomy` is the value injected as
  * `Construction Autonomy Mode` (or "" to omit the field). Mirrors the .sh's
- * seed_codegen_project. The compiled batch DAG is the MR 15 shape: one
+ * seed_codegen_project. The compiled batch DAG is the milestone 15 shape: one
  * topological level of units a, b.
  */
 function seedCodegenProject(autonomy: string): string {

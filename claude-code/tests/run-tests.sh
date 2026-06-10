@@ -440,7 +440,7 @@ run_one_file() {
 
 is_legacy_serial_file() {
   case "$1" in
-    # Legacy bash name cannot gain a *.serial.* tag in MR0; it mutates/checks
+    # Legacy bash name cannot gain a *.serial.* tag in milestone 0; it mutates/checks
     # graph fixtures and must not overlap neighbouring feature files under -P.
     t66-graph-library.sh) return 0 ;;
     *) return 1 ;;
@@ -568,7 +568,7 @@ run_tier() {
     # Worktree tests fork temp git repos and add child worktrees inside
     # them. Parallel callers each get their own mktemp dir (no path
     # collisions), but interleaved git registry mutations have not been
-    # exercised under load yet. Pin to serial until a future MR adds
+    # exercised under load yet. Pin to serial until a future PR adds
     # enough worktree tests to make parallelism worth proving safe.
     smoke|unit|worktree) effective_parallel=1 ;;
   esac

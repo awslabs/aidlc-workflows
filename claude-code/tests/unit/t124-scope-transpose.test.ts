@@ -2,7 +2,7 @@
 //
 // t124 — scope-shape transpose: per-stage `scopes:` frontmatter -> the
 // compiled EXECUTE/SKIP grid (scope-grid.json). Migrated from
-// tests/unit/t124-scope-transpose.sh (TAP plan 12). MR 12 moved scope
+// tests/unit/t124-scope-transpose.sh (TAP plan 12). milestone 12 moved scope
 // membership off scope-mapping.json onto each stage's `scopes:` list;
 // `aidlc-graph compile` transposes those lists into scope-grid.json
 // (a PURE transpose — no graph-closure, no predicate), emitted through the

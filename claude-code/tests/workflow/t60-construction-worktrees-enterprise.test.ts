@@ -1,6 +1,6 @@
 // covers: data:scope-grid.json(enterprise), cli:aidlc-bolt(dispatch-event), cli:aidlc-utility(init)
 //
-// t60 — Construction worktrees per scope, ENTERPRISE (v0.4.0 MR 13).
+// t60 — Construction worktrees per scope, ENTERPRISE (v0.4.0 milestone 13).
 // Migrated from tests/workflow/t60-construction-worktrees-enterprise.sh
 // (TAP plan 5; the four SKILL.md prose-presence checks were RETIRED at the
 // engine cutover per _construction-worktrees-helpers.sh, so the .sh already
@@ -16,7 +16,7 @@
 // tool runs (audit.md rows, aidlc-state.md fields); the .sh shelled out to
 // `bun aidlc-bolt.ts ...` / `bun aidlc-utility.ts init ...` exactly so. We
 // preserve that by SPAWNING the real tools via the bun runtime against the .ts
-// paths (the MR3 broadened-cli arm). The grid read is a JSON.parse of the same
+// paths (the milestone 3 broadened-cli arm). The grid read is a JSON.parse of the same
 // shipped file the .sh `require()`d — a structural data check, kept cli-tier
 // because it shares the construction-project fixture with the spawn cases.
 //
@@ -24,7 +24,7 @@
 //   - scope grid: dist/claude/.claude/tools/data/scope-grid.json — enterprise
 //     maps code-generation=EXECUTE and practices-discovery=EXECUTE (read at
 //     test time; the runtime source of truth, the transpose of per-stage
-//     `scopes:` frontmatter — MR 12 retired scope-mapping.json).
+//     `scopes:` frontmatter — milestone 12 retired scope-mapping.json).
 //   - dispatch-event: aidlc-bolt.ts:660 handleDispatchEvent. Three literal
 //     emit cases (t48 emitter-pairing). MERGE_DISPATCH_INVOKED (:670) requires
 //     --practices-excerpt; emits {Bolt slug, Practices section excerpt}.

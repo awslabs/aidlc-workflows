@@ -11,7 +11,7 @@
 // "Pipeline & Deploy Agent" display string, (3) the two CONSUMERS of the
 // loader — `aidlc-utility.ts init` knowledge scaffolding and the
 // `aidlc-statusline.ts` hook — derive their output from that same
-// frontmatter. v0.3.0 Foundation MR 3, #62.
+// frontmatter. v0.3.0 Foundation milestone 3, #62.
 //
 // WHY .none (not .cli): the keystone observable is the PURE function
 // `loadAgents()`, asserted IN-PROCESS by importing and calling it

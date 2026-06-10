@@ -2,7 +2,7 @@
 //
 // CLI-contract port of tests/unit/t118-engine-differential.sh (TAP plan 38),
 // mechanism = cli. The differential corpus — the WAVE CLOSE GATE for the
-// v0.6.0 Wave 1 engine (aidlc-orchestrate.ts next), extended in Wave 2 MR 9
+// v0.6.0 Wave 1 engine (aidlc-orchestrate.ts next), extended in Wave 2 milestone 9
 // with the classified-stance anchor + the no-state workflow-birth trio. It
 // proves the deterministic engine emits, FOR EACH OF THE 9 SCOPES, the same
 // scope-shaped directive the prose orchestrator (skills/aidlc/SKILL.md)
@@ -423,7 +423,7 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
   // per-fingerprint gate:true (diff A) and the init gate:false (anchor above).
   // The FIRST Construction Bolt's gate depends on a practices-derived STANCE the
   // engine cannot compute, so it emits the sentinel string gate:"unresolved" and
-  // defers to the conductor's classify round-trip (v0.6.0 Wave 2 MR 9, vision
+  // defers to the conductor's classify round-trip (v0.6.0 Wave 2 milestone 9, vision
   // §6:452-454). state-construction-bolt1 is a feature workflow parked at Current
   // Stage=functional-design (the first construction EXECUTE stage = the skeleton
   // gate) with no stance recorded, so bare `next` emits the run-stage for it

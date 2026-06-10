@@ -307,7 +307,7 @@ describe("t63 aidlc-graph artifacts — CLI contract (migrated from t63-tool-gra
   });
 
   // ============================================================
-  // Shape regression — every registry name matches MR 5's regex (2 assertions)
+  // Shape regression — every registry name matches milestone 5's regex (2 assertions)
   // ============================================================
 
   test("13: union fixture names all match kebab-case regex", () => {

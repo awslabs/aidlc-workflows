@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-learnings:surface, subcommand:aidlc-learnings:persist, subcommand:aidlc-graph:compile, function:parseSensorManifest
 //
-// t99 (integration) — §13 learning-gate END-TO-END (v0.5.0 MR 12). Migrated
+// t99 (integration) — §13 learning-gate END-TO-END (v0.5.0 milestone 12). Migrated
 // from tests/integration/t99-learnings-gate-flow.sh (TAP plan 16).
 //
 // Mechanism: cli. The body SPAWNS the real tools via the Bun runtime against
@@ -50,7 +50,7 @@
 //     parseSensorManifest (:54) — extracts {id, matches, ...} from manifest YAML.
 //   dist/claude/.claude/aidlc-common/protocols/stage-protocol.md
 //     §13 span "## 13. Learnings Ritual" (:848) → "### Artifact Re-use" (:941):
-//     fossil sweep — zero sensor-protocol.md / applies_to / pre-v3 MR-doctor refs.
+//     fossil sweep — zero sensor-protocol.md / applies_to / pre-v3 PR-doctor refs.
 //
 // Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
 //   .sh assert 1  (Case 1: surface → 3 candidates + 1 parked)        -> "Case 1: surface emits 3 candidates (I/D/T) + 1 parked open question"
@@ -68,7 +68,7 @@
 //   .sh assert 13 (Case 5: concurrent persist → 1 row + 1 line)      -> "Case 5: concurrent persist serialises → exactly one row + one line"
 //   .sh assert 14 (Case 6: recovery → re-write only, exit 0)         -> "Case 6: recovery re-writes the line, skips re-emit, exit 0"
 //   .sh assert 15 (Glue: candidate field contract)                  -> "Glue: candidate carries {id, summary, source_heading, default_scope}"
-//   .sh assert 16 (§13 fossil sweep)                                 -> "§13 rewrite carries zero sensor-protocol.md / applies_to / pre-v3 MR-doctor fossils"
+//   .sh assert 16 (§13 fossil sweep)                                 -> "§13 rewrite carries zero sensor-protocol.md / applies_to / pre-v3 PR-doctor fossils"
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -596,9 +596,9 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
   // ===========================================================================
   // §13 fossil sweep — after the §13 rewrite, the "## 13. Learnings Ritual"
   // span (up to "### Artifact Re-use") must carry ZERO sensor-protocol.md /
-  // applies_to / pre-v3 "MR <N>" doctor-coverage refs. Reads the SHIPPED doc.
+  // applies_to / pre-v3 "PR <N>" doctor-coverage refs. Reads the SHIPPED doc.
   // ===========================================================================
-  test("§13 rewrite carries zero sensor-protocol.md / applies_to / pre-v3 MR-doctor fossils [.sh 16]", () => {
+  test("§13 rewrite carries zero sensor-protocol.md / applies_to / pre-v3 PR-doctor fossils [.sh 16]", () => {
     const sp = join(
       AIDLC_SRC,
       "aidlc-common",
@@ -616,7 +616,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
       if (collecting) section.push(line);
     }
     expect(section.length).toBeGreaterThan(0); // span actually found
-    const fossilRe = /sensor-protocol\.md|applies_to|MR 1[0-9]|MR 9|doctor coverage check/;
+    const fossilRe = /sensor-protocol\.md|applies_to|milestone 1[0-9]|milestone 9|doctor coverage check/;
     const fossils = section.filter((l) => fossilRe.test(l));
     expect(fossils).toEqual([]);
   }, TIMEOUT);

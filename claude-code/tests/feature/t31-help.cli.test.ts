@@ -23,7 +23,7 @@
 // loadScopeMapping() (aidlc-lib.ts:739) over validScopes() (aidlc-lib.ts:783),
 // so stage counts ("All 32 stages" / "7 of 32 stages") are derived from the
 // shipped scope-mapping.json EXECUTE/Total tallies, not hardcoded. This is the
-// exact regression the .sh guards (the 6 stale counts that shipped pre-MR-10).
+// exact regression the .sh guards (the 6 stale counts that shipped pre-milestone-10).
 //
 // NO AUDIT / NO STATE / NO PROJECT DIR: `help` is a pure read-only renderer.
 // It emits no audit event, writes no file, and needs no --project-dir / temp
@@ -163,7 +163,7 @@ describe("t31 aidlc-utility help — CLI contract (migrated from t31-help-text-c
 
   test("bugfix shows compiled '7 of 32 stages' count", () => {
     // execute !== total -> "<execute> of <total> stages"; bugfix tallies 7
-    // EXECUTE of 32 (was the stale "~8 stages" pre-MR-10).
+    // EXECUTE of 32 (was the stale "~8 stages" pre-milestone-10).
     expect(HELP.stdout).toContain("7 of 32 stages");
   });
 

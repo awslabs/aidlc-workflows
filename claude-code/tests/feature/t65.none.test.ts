@@ -397,7 +397,7 @@ describe("t65 parse + schema validation (in-process)", () => {
     expect(agg.totalParsed).toBe(32);
   });
 
-  // .sh #2: "non-init stages validate against MR 5 schema with ctx.agents"
+  // .sh #2: "non-init stages validate against milestone 5 schema with ctx.agents"
   test("non-init stages validate against schema with ctx.agents (no validate errors)", () => {
     expect(agg.validateErrors).toEqual([]);
   });

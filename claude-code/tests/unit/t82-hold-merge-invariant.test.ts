@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-bolt:hold-merge, subcommand:aidlc-bolt:release-merge, subcommand:aidlc-bolt:complete
 //
-// t82 — aidlc-bolt.ts HOLD-MERGE invariant tooling (v0.4.0 MR 13 post-merge
+// t82 — aidlc-bolt.ts HOLD-MERGE invariant tooling (v0.4.0 milestone 13 post-merge
 // fold-in). Migrated from tests/unit/t82-hold-merge-invariant.sh (TAP plan 10).
 //
 // Mechanism: cli. Every assertion is a process-boundary contract:

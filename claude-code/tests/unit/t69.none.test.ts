@@ -32,7 +32,7 @@
 //   1. ".gitignore contains anchored /.aidlc/ entry"        -> describe ".gitignore"
 //   2. "returns an absolute path when projectDir is absolute" -> isAbsolute check
 //   3. "worktreePath(projectDir,'demo') ends with /bolt-demo" -> ends-with check
-//   4. "does not validate or sanitise the slug (MR 2 contract)" -> '/' passthrough
+//   4. "does not validate or sanitise the slug (milestone 2 contract)" -> '/' passthrough
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -69,15 +69,15 @@ describe("worktreePath() (in-process, pure string composer)", () => {
 
   // .sh #3: "worktreePath(projectDir, 'demo') ends with /bolt-demo". Prefix
   //          contract — catches dropping the literal "bolt-", dropping the
-  //          slug, or appending an extra path component. MR 7's
+  //          slug, or appending an extra path component. milestone 7's
   //          `git worktree add <path>` relies on the leaf being bolt-<slug>.
   test("output ends with /bolt-<slug> for a normal slug", () => {
     expect(worktreePath(PROJ, "demo").endsWith("/bolt-demo")).toBe(true);
   });
 
-  // .sh #4: "worktreePath() does not validate or sanitise the slug (MR 2
+  // .sh #4: "worktreePath() does not validate or sanitise the slug (milestone 2
   //          contract)". A slug containing '/' passes through verbatim, pinning
-  //          the "no validation in MR 2" decision (validation deferred to MR 7's
+  //          the "no validation in milestone 2" decision (validation deferred to milestone 7's
   //          aidlc-worktree.ts at create-time). If a future change adds slug
   //          sanitisation here, this fails and forces a conscious decision.
   test("does not validate or sanitise a slug containing '/'", () => {

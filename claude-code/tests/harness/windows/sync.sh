@@ -2,7 +2,7 @@
 #
 # sync.sh  -  copy the current project tree up to the Windows EC2 box via SSM.
 #
-# The box has no git and cannot clone from internal GitLab, so we ship a
+# The box has no git and cannot clone the repository, so we ship a
 # `git archive` of the tree the proven way: tar.gz -> base64 -> chunked SSM
 # Add-Content -> reassemble + `tar -xzf` on the box. This is the local half of
 # the like-for-like Windows setup; the box half is setup.ps1 (npm install) and

@@ -1,7 +1,7 @@
 // covers: cli:aidlc-bolt(complete-merge,abort-discard), cli:aidlc-runtime(compile), cli:aidlc-worktree(create), cli:aidlc-audit(append), function:auditLockDir
 //
 // t49 — Integration: Bolt fork/merge for runtime-graph + parallel instances[]
-// + failure-mode coverage (v0.5.0 MR 11). Migrated from
+// + failure-mode coverage (v0.5.0 milestone 11). Migrated from
 // tests/integration/t49-bolt-sensor-failures.sh (TAP plan 8). The .sh declared
 // NO `# covers:` header; the covers ids above were derived from the units its
 // body exercises end-to-end.
@@ -43,7 +43,7 @@
 // Old TAP -> new test parity (1:1, every .sh `ok` -> a named test()):
 //   .sh (1) instances[].length=3 alphabetical        -> "1: 3-Bolt parallel batch — instances[] = [auth,cart,pay] (alphabetical)"
 //   .sh (2) sensors advisory: SENSOR_FAILED in main   -> "2: sensors advisory — SENSOR_FAILED in main audit yet all 3 instances approved"
-//   .sh (3) instances[].sensor_firings:[] per MR 11   -> "3: MR 11 contract — instances[].sensor_firings:[] despite SENSOR_FAILED in main"
+//   .sh (3) instances[].sensor_firings:[] per milestone 11   -> "3: milestone 11 contract — instances[].sensor_firings:[] despite SENSOR_FAILED in main"
 //   .sh (4) Bolt failure rollup pay:failed parent:failed -> "4: Bolt failure rollup — pay abort --discard => instance pay:failed + parent:failed"
 //   .sh (5) idempotent re-merge errors at state-merge -> "5: idempotent re-merge — second complete --merge errors 'already merged' at state-merge"
 //   .sh (6) lock-acquire failure before fragment-merge -> "6: lock-acquire failure — complete --merge errors before fragment-merge; fragment file survives"
@@ -248,7 +248,7 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
       expect(s.status).toBe(0);
     }
 
-    // Simulate the MR 10 hook + MR 9 dispatcher: a SENSOR_FIRED + SENSOR_FAILED
+    // Simulate the milestone 10 hook + milestone 9 dispatcher: a SENSOR_FIRED + SENSOR_FAILED
     // pair written to pay's WORKTREE audit. Direct-append (deterministic) so we
     // verify the audit-merge + compile propagation, not any sensor predicate.
     const payWt = join(batchProj, ".aidlc", "worktrees", "bolt-pay");
@@ -294,7 +294,7 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     expect(countEvent(batchProj, "SENSOR_FAILED")).toBeGreaterThanOrEqual(1);
   }, TEST_TIMEOUT);
 
-  test("3: MR 11 contract — instances[].sensor_firings:[] despite SENSOR_FAILED in main", () => {
+  test("3: milestone 11 contract — instances[].sensor_firings:[] despite SENSOR_FAILED in main", () => {
     buildBatch();
     const stage = codegenStage(batchGraph);
     const instances = stage.instances ?? [];
