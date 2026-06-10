@@ -778,8 +778,6 @@ These are our core principles to guide our decision making.
 
 - **Reproducible**. Rules should be clear enough that different models produce similar outcomes. We know models behave differently, but the methodology should minimize variance through explicit guidance.
 
-- **Agnostic**. The methodology works with any IDE, agent, or model. We don't tie ourselves to specific tools or vendors.
-
 - **Human in the loop**. Critical decisions require explicit user confirmation. The agent proposes, the human approves.
 
 ---
