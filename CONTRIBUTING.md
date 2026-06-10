@@ -14,7 +14,6 @@ AI-DLC rules live in `aidlc-rules/aws-aidlc-rule-details/`. When contributing:
 
 - **Be reproducible**: Changes should be consistently reproducible either via test case or a series of steps.
 - **Single source of truth**: Don't duplicate content. If guidance applies to multiple stages, put it in `common/` and reference it.
-- **Keep it agnostic**: The core methodology shouldn't assume specific IDEs, agents, or models. Tool-specific files are generated from the source.
 
 ### Directory Structure — Do Not Rename or Move
 

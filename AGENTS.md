@@ -134,7 +134,6 @@ For full remediation and suppression details, see
   public contract — do not rename, move, or reorganize them
 - Do not duplicate content across rules — place shared guidance in `common/` and
   reference it
-- Keep the core methodology IDE/agent/model agnostic
 - Security issues must be reported via
   [AWS vulnerability reporting](http://aws.amazon.com/security/vulnerability-reporting/),
   not public GitHub issues
