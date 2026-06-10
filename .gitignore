@@ -14,3 +14,5 @@ codebuild_build.sh
 
 node_modules/
 dist/
+# claude-code/dist/ is the tracked, shipped framework — not a build output
+!claude-code/dist/

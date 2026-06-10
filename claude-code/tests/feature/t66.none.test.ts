@@ -29,6 +29,8 @@
 //     resolveSensorsForStage declared-order, withAuditLock reentrancy (2).
 //   MUST STAY SPAWN (process.exit / module-load env read / CLI stdout / parallel-process):
 //     plan-identity parity (9 scopes via `state lookup stages-in-scope` byte-exact),
+//     AIDLC_GRAPH_RESOLVE=1 `resolve <scope> --stdout` cutover parity (9 scopes byte-exact
+//       vs mr9-parity fixtures) + the gate (no flag -> exit 1, stderr), env-seam read,
 //     nextInScopeStage walk parity (9 scopes via `lookup next-stage`),
 //     firstInScopeStageOfPhase parity (9 scopes x 5 phases via `lookup first-in-phase`),
 //     AIDLC_STAGE_GRAPH env-override-honoured-by-rewired-stagesInScope,
@@ -447,6 +449,74 @@ describe("t66 plan-identity parity (spawnSync CLI-boundary: 9 scopes)", () => {
       expect(actual).toBe(expected);
     });
   }
+});
+
+// =============================================================================
+// AIDLC_GRAPH_RESOLVE=1 resolve cutover parity — byte-exact for 9 scopes
+// (.sh:407-415, 9 assertions). MUST STAY SPAWN: this is an ENV-GATED CLI
+// subcommand whose entire subject is a process-boundary seam — a FRESH process
+// must (a) read AIDLC_GRAPH_RESOLVE at module/handler time to lift the gate and
+// (b) emit the {slug, phase, action} plan to stdout. resolvePlanForScope() is
+// importable, but the .sh assertion proves the `resolve <scope> --stdout` CLI
+// path (env read + stdout byte-shape), so spawnSync the real tool.
+//
+// v0.6.0 SURFACE NOTE: the .sh framed this as the "MR 12 cutover safety net"
+// proving the frontmatter-derived grid == the LEGACY scope-mapping-derived plan
+// BEFORE scope-mapping.json was retired. scope-mapping.json IS now retired
+// (verified: dist/claude/.claude/tools/data/ has scope-grid.json, no
+// scope-mapping.json; nine .claude/scopes/aidlc-<scope>.md files are the
+// authored source). resolvePlanForScope() (aidlc-graph.ts:762-780) reads
+// loadScopeGrid()[scope] — the compiled grid — so this resolve path now pins the
+// CURRENT shipped surface, and its output still equals the mr9-parity fixtures
+// byte-for-byte (the cutover held). No obsolete-source resurrection: the
+// fixtures are the frozen plan-shape; the live surface is the grid. The output
+// is already 2-space-indented JSON with a trailing newline, so the .sh's
+// JSON.parse + JSON.stringify(parse, null, 2) reformat is an identity
+// round-trip; asserted directly against the trimmed fixture here, plus the raw
+// trailing-newline byte-shape and exit 0.
+// =============================================================================
+
+describe("t66 AIDLC_GRAPH_RESOLVE=1 resolve cutover parity (spawnSync env-gated CLI)", () => {
+  for (const scope of SCOPES) {
+    test(`resolve parity (frontmatter-derived grid == legacy): ${scope} byte-exact`, () => {
+      const res = spawnSync(BUN, [GRAPH_TS, "resolve", scope, "--stdout"], {
+        env: { ...process.env, AIDLC_GRAPH_RESOLVE: "1" },
+        encoding: "utf8",
+      });
+      // Gate lifted -> the resolve handler runs and exits 0 (the .sh ran with
+      // `2>/dev/null`, trusting a clean stdout — assert the exit explicitly,
+      // which is strictly stronger than the .sh's silent assumption).
+      expect(res.status).toBe(0);
+      // resolve --stdout writes `${JSON.stringify(plan, null, 2)}\n` (graph.ts:1328-1331):
+      // already pretty-printed with a trailing newline. The .sh's reformat pipe is an
+      // identity round-trip, so compare the parsed-and-re-pretty-printed stdout to the
+      // fixture (trimmed exactly as the .sh's `$(cat ...)` strips the trailing newline).
+      const actual = JSON.stringify(JSON.parse(res.stdout), null, 2);
+      const expected = readFileSync(join(PARITY_DIR, `${scope}.json`), "utf8").trimEnd();
+      expect(actual).toBe(expected);
+      // STRONGER than the .sh: pin the raw stdout byte-shape too — the handler's
+      // trailing newline must be present (the `--stdout` write contract).
+      expect(res.stdout.endsWith("\n")).toBe(true);
+      expect(res.stdout.trimEnd()).toBe(expected);
+    });
+  }
+
+  // The env gate is the whole reason `resolve` ships behind a flag — prove it
+  // FIRES (the failure event, not just the happy path): without
+  // AIDLC_GRAPH_RESOLVE=1 the handler must exit 1 with the rollout-gate message
+  // on stderr and emit NO plan to stdout. STRONGER than the .sh (which only ever
+  // ran the flag-set happy path, redirecting stderr to /dev/null).
+  test("resolve is gated behind AIDLC_GRAPH_RESOLVE=1 (no flag -> exit 1, stderr, no stdout)", () => {
+    const env = { ...process.env };
+    delete (env as Record<string, string | undefined>).AIDLC_GRAPH_RESOLVE;
+    const res = spawnSync(BUN, [GRAPH_TS, "resolve", "feature", "--stdout"], {
+      env,
+      encoding: "utf8",
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toContain("AIDLC_GRAPH_RESOLVE=1");
+    expect(res.stdout.trim()).toBe("");
+  });
 });
 
 // =============================================================================

@@ -1,9 +1,9 @@
 // covers: subcommand:aidlc-jump:resolve
 //
-// CLI-contract port of tests/feature/t118-engine-differential.sh (TAP plan 24),
+// CLI-contract port of tests/feature/t118-engine-differential.sh (TAP plan 27),
 // mechanism = cli. The differential corpus: cross-component, multi-step
 // next/report sequences across the v0.6.0 engine (aidlc-orchestrate.ts) for the
-// 7 SPECIAL PATHS the prose orchestrator handles today, plus 2 true
+// 7 SPECIAL PATHS the prose orchestrator handles today, plus 3 true
 // cross-component WALKS — with NO MODEL IN THE LOOP. Every step SPAWNS the real
 // engine binary `bun aidlc-orchestrate.ts next|report` (and the sibling tools
 // `bun aidlc-jump.ts resolve` / `bun aidlc-state.ts gate-start`) over a seeded
@@ -55,8 +55,21 @@
 //     report contains "Committed advance for"; N2 stage==="state-init".
 //   WALK B gated approve (3): N1 stage==="feasibility" gate===true; STAGE_STARTED
 //     count===1 (no double-advance); N2 stage==="scope-definition".
+//   WALK C classify round-trip (3) — v0.6.0 Wave 2 MR 9, vision §6:452-454,
+//     .sh:235-260: the skeleton-stance classify round-trip across the report
+//     dispatcher's STANCE branch AND the next decision rule's gate computation:
+//     - .sh step 1 `stage|gate == functional-design|unresolved` -> N1
+//       stage==="functional-design" AND gate==="unresolved" (the STRING, not the
+//       boolean: the engine cannot compute the skeleton gate, so it emits the
+//       gate UNRESOLVED for the conductor to classify).
+//     - .sh step 2 `report --skeleton-stance on` kind==="print" -> the report
+//       dispatcher records the typed stance and commits NO transition (a print,
+//       not done/advance) — STRONGER: also pins the recorded-stance message text.
+//     - .sh step 3 `stage|gate == functional-design|true` -> N2 re-emits the SAME
+//       stage with the now-DETERMINED gate (boolean true). The next decision rule
+//       read the recorded stance; the round-trip closes deterministically.
 //
-// 24 .sh asserts -> 24 expect()-bearing test() cases (the .sh's two-observable
+// 27 .sh asserts -> 27 expect()-bearing test() cases (the .sh's two-observable
 // `assert_eq "a|b"` lines are kept as two expect()s inside one test(), matching
 // the single `ok` line the .sh emitted for each).
 //
@@ -65,8 +78,8 @@
 // (createTestProject, toPortablePath-converted on Windows so audit.md — written
 // by aidlc-state.ts via toPosix(auditFilePath) — round-trips when read back),
 // seeded from the same on-disk fixtures the .sh used (state-mid-ideation.md,
-// state-jumped.md, state-pre-workspace-detection.md). Nothing is written under
-// tests/fixtures/**. All temp dirs cleaned in afterAll.
+// state-jumped.md, state-pre-workspace-detection.md, state-construction-bolt1.md).
+// Nothing is written under tests/fixtures/**. All temp dirs cleaned in afterAll.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -398,5 +411,50 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(eventCount(p, "STAGE_STARTED")).toBe(1);
     const n2 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
     expect(n2.stage).toBe("scope-definition");
+  }, 30000);
+
+  // ============================================================
+  // WALK C: the classify round-trip (next -> report --skeleton-stance -> next).
+  // state-construction-bolt1: feature, Construction Active, Current Stage=
+  // functional-design (the first construction EXECUTE stage = the skeleton gate).
+  // The first Bolt's gate depends on the walking-skeleton STANCE — knowledge the
+  // engine cannot compute — so next emits the gate UNRESOLVED (the string), the
+  // conductor hands the typed stance back via `report --skeleton-stance` (the
+  // test SUPPLIES the stance — no model), and the follow-up next re-emits the
+  // SAME stage with the now-DETERMINED gate (true). This is the THIRD component
+  // walk: it exercises the report dispatcher's STANCE branch (records state
+  // without committing a transition) AND the next decision rule's gate
+  // computation reading that recorded stance. (v0.6.0 Wave 2 MR 9; vision
+  // §6:452-454; .sh:235-260.)
+  test("WALK C (classify): next gate:unresolved -> report --skeleton-stance on (print, no transition) -> next gate:true", () => {
+    const p = projWithState("state-construction-bolt1.md");
+    // Step 1: the next decision rule defers the skeleton gate -> gate is the
+    // STRING "unresolved" (not the boolean), still naming the same EXECUTE stage.
+    const n1 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
+    expect(n1.stage).toBe("functional-design");
+    expect(n1.gate).toBe("unresolved");
+    // Step 2: the report dispatcher's STANCE branch records the typed stance and
+    // commits NO transition — a `print` (not done/advance). STRONGER than the
+    // .sh's `kind == print`: also pin the recorded-stance message so the branch
+    // is proven to be the stance-record path, not a generic print.
+    const r = run(ORCHESTRATE, [
+      "report",
+      "--skeleton-stance",
+      "on",
+      "--project-dir",
+      p,
+    ]);
+    const stance = directive(r);
+    expect(stance.kind).toBe("print");
+    expect(stance.message).toContain('Recorded walking-skeleton stance "on"');
+    // No transition committed by the stance report: still functional-design,
+    // and no STAGE_STARTED/STAGE_COMPLETED rows were appended by the stance step.
+    expect(eventCount(p, "STAGE_COMPLETED")).toBe(0);
+    // Step 3: the next decision rule reads the recorded stance and re-emits the
+    // SAME stage with the now-DETERMINED gate (the boolean true). The round-trip
+    // closes deterministically — no model in the loop.
+    const n2 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
+    expect(n2.stage).toBe("functional-design");
+    expect(n2.gate).toBe(true);
   }, 30000);
 });

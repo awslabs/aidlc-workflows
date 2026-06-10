@@ -1,12 +1,12 @@
 // covers: function:validateDirective
 //
 // t113 — Directive schema + validator. Migrated from the bash TAP test
-// tests/unit/t113-directive-schema.sh (plan 26). The original spawned `bun -e`
+// tests/unit/t113-directive-schema.sh (plan 30). The original spawned `bun -e`
 // once per case, importing validateDirective from aidlc-directive.ts and
 // stringifying the ValidationResult as "VALID" / "INVALID:<errors joined by |>"
 // so bash could grep it. The module is a PURE contract — "no emit, no consume,
 // reads/writes NO state, no I/O" (aidlc-directive.ts:9) — so every one of the
-// 26 behavioural assertions can be exercised in-process by importing and
+// 30 behavioural assertions can be exercised in-process by importing and
 // CALLING validateDirective directly. The .ts file does have an
 // `if (import.meta.main)` CLI self-check (aidlc-directive.ts:396), but the .sh
 // never drives the CLI seam — it always imports validateDirective via `bun -e`.
@@ -269,8 +269,61 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   });
 
   // ============================================================
+  // The classify-round-trip gate sentinel + conductor_persona (4 assertions)
+  // .sh lines 162-173
+  // ============================================================
+  // The engine emits gate:"unresolved" for the one Construction skeleton stage
+  // it cannot pre-classify; the conductor resolves it on the round trip
+  // (aidlc-directive.ts:31, :65, GATE_UNRESOLVED at :37). checkGate (:373-389)
+  // accepts boolean OR the exact sentinel string and rejects every other string
+  // so a typo'd sentinel surfaces loudly rather than being acted on as a
+  // deferred gate. conductor_persona is the optional D-E delivery field
+  // (aidlc-directive.ts:75-80, :100-101), validated by checkOptionalString
+  // (:393-403) — absent is fine, present-and-string is VALID, present-and-non-
+  // string is rejected.
+
+  test('run-stage gate:"unresolved" sentinel -> VALID (classify round-trip)', () => {
+    // .sh line 162-163: the sentinel is the ONLY accepted gate string.
+    expect(errs({ ...runStage(), gate: "unresolved" })).toBe("VALID");
+    expect(validateDirective({ ...runStage(), gate: "unresolved" }).valid).toBe(
+      true,
+    );
+  });
+
+  test('run-stage gate:"maybe" (non-sentinel string) -> rejected', () => {
+    // .sh line 164-166: any OTHER gate-string is rejected with the same
+    // boolean-or-sentinel type error a non-string would produce — a typo'd
+    // sentinel must NOT be silently accepted as a deferred gate.
+    const r = validateDirective({ ...runStage(), gate: "maybe" });
+    expect(r.valid).toBe(false);
+    expect(errs({ ...runStage(), gate: "maybe" })).toContain(
+      'run-stage: gate must be boolean or "unresolved", got string',
+    );
+  });
+
+  test("run-stage conductor_persona string -> VALID (D-E first-next delivery)", () => {
+    // .sh line 169-170: conductor_persona present as a string is accepted.
+    expect(errs({ ...runStage(), conductor_persona: "# Persona" })).toBe(
+      "VALID",
+    );
+    expect(
+      validateDirective({ ...runStage(), conductor_persona: "# Persona" })
+        .valid,
+    ).toBe(true);
+  });
+
+  test("run-stage conductor_persona non-string -> rejected", () => {
+    // .sh line 171-173: present-and-non-string is rejected, naming kind+field.
+    const r = validateDirective({ ...runStage(), conductor_persona: 42 });
+    expect(r.valid).toBe(false);
+    expect(errs({ ...runStage(), conductor_persona: 42 })).toContain(
+      "run-stage: conductor_persona must be string, got number",
+    );
+  });
+
+  // ============================================================
   // mode enum miss on run-stage (1 assertion)
-  // .sh lines 154-155
+  // .sh lines 179-180
   // ============================================================
 
   test("run-stage mode enum miss -> error", () => {
@@ -281,7 +334,7 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   // ============================================================
   // Shape failures — non-object inputs (3 assertions)
-  // .sh lines 161-163
+  // .sh lines 186-188
   // ============================================================
 
   test("null -> shape error", () => {

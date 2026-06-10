@@ -31,12 +31,12 @@
       "render-surface": 6
     },
     "coveredByClass": {
-      "function": 30,
-      "audit": 18,
-      "scope": 5,
-      "stage": 4,
-      "hook": 5,
-      "subcommand": 53,
+      "function": 38,
+      "audit": 25,
+      "scope": 6,
+      "stage": 7,
+      "hook": 10,
+      "subcommand": 62,
       "render-surface": 6
     }
   },
@@ -128,6 +128,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t47-failure-injection.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t34.cli.test.ts",
           "mechanism": "cli"
         }
@@ -195,8 +199,13 @@
       "unitClass": "audit",
       "unitId": "MERGE_DISPATCH_INVOKED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/workflow/t65-construction-worktrees-bugfix.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -212,7 +221,7 @@
       "coveredBy": [
         {
           "file": "tests/workflow/t113.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -243,7 +252,7 @@
       "coveredBy": [
         {
           "file": "tests/workflow/t113.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -479,43 +488,85 @@
       "unitClass": "audit",
       "unitId": "SWARM_BATON_RETURNED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/feature/t135-invoke-swarm.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t134-swarm-referee.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
       "unitId": "SWARM_COMPLETED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/feature/t135-invoke-swarm.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t134-swarm-referee.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
       "unitId": "SWARM_DEGRADED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/worktree/t134-swarm-referee.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
       "unitId": "SWARM_STARTED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/feature/t135-invoke-swarm.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t134-swarm-referee.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
       "unitId": "SWARM_UNIT_CONVERGED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/worktree/t134-swarm-referee.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
       "unitId": "SWARM_UNIT_FAILED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/worktree/t134-swarm-referee.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -542,8 +593,12 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/feature/t54-compaction-and-test-run.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/workflow/t113.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -637,8 +692,13 @@
       "unitClass": "function",
       "unitId": "function:acquireAuditLock",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/feature/t33-hook-concurrency.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -666,7 +726,7 @@
       "coveredBy": [
         {
           "file": "tests/feature/t66.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -687,8 +747,13 @@
       "unitClass": "function",
       "unitId": "function:auditLockDir",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t49-bolt-sensor-failures.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -715,8 +780,13 @@
       "unitClass": "function",
       "unitId": "function:canonicalScopeGridJson",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t124-scope-transpose.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -725,7 +795,7 @@
       "coveredBy": [
         {
           "file": "tests/feature/t66.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -751,7 +821,7 @@
       "coveredBy": [
         {
           "file": "tests/feature/t66.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         },
         {
           "file": "tests/feature/t88.none.test.ts",
@@ -760,6 +830,10 @@
         {
           "file": "tests/integration/t110.none.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t124-scope-transpose.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -771,7 +845,7 @@
       "coveredBy": [
         {
           "file": "tests/feature/t66.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -857,7 +931,7 @@
         },
         {
           "file": "tests/unit/t80.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -876,7 +950,7 @@
       "coveredBy": [
         {
           "file": "tests/feature/t66.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -962,7 +1036,7 @@
         },
         {
           "file": "tests/unit/t61.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -974,7 +1048,7 @@
       "coveredBy": [
         {
           "file": "tests/feature/t66.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -986,7 +1060,7 @@
       "coveredBy": [
         {
           "file": "tests/feature/t66.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1006,6 +1080,10 @@
         {
           "file": "tests/feature/t39-count.none.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t125-scope-files.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1014,8 +1092,13 @@
       "unitClass": "function",
       "unitId": "function:loadScopeMetadata",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t125-scope-files.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1024,7 +1107,7 @@
       "coveredBy": [
         {
           "file": "tests/feature/t66.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1089,8 +1172,13 @@
       "unitClass": "function",
       "unitId": "function:parseBoltDag",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t133-bolt-dag-compile.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1133,6 +1221,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/unit/t100-memory-template-lifecycle.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t88.none.test.ts",
           "mechanism": "none"
         },
@@ -1155,6 +1247,14 @@
       "unitId": "function:parseStageFrontmatter",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/feature/t32-stage-graph-consistency.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/feature/t38-stage-agent-cross-check.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/feature/t43.none.test.ts",
           "mechanism": "none"
@@ -1210,7 +1310,7 @@
       "coveredBy": [
         {
           "file": "tests/feature/t66.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1233,8 +1333,13 @@
       "unitClass": "function",
       "unitId": "function:releaseAuditLock",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/feature/t33-hook-concurrency.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1283,7 +1388,7 @@
       "coveredBy": [
         {
           "file": "tests/feature/t66.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1295,7 +1400,7 @@
       "coveredBy": [
         {
           "file": "tests/feature/t66.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1311,8 +1416,13 @@
       "unitClass": "function",
       "unitId": "function:scalarField",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t125-scope-files.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1387,7 +1497,11 @@
       "coveredBy": [
         {
           "file": "tests/feature/t66.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t124-scope-transpose.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1406,7 +1520,7 @@
       "coveredBy": [
         {
           "file": "tests/feature/t66.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1415,8 +1529,13 @@
       "unitClass": "function",
       "unitId": "function:transposeScopeGrid",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t124-scope-transpose.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1432,7 +1551,7 @@
       "coveredBy": [
         {
           "file": "tests/feature/t66.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1442,6 +1561,10 @@
       "unitId": "function:validScopes",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/unit/t125-scope-files.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t60.cli.test.ts",
           "mechanism": "cli"
@@ -1486,8 +1609,25 @@
       "unitClass": "hook",
       "unitId": "aidlc-audit-logger",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/feature/t131-hooks-settings-fire.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/feature/t33-hook-concurrency.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t07-hook-audit-logger.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t13-hook-input-robustness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "hook",
@@ -1495,8 +1635,16 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/feature/t131-hooks-settings-fire.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t09.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t13-hook-input-robustness.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1507,8 +1655,16 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/feature/t131-hooks-settings-fire.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/feature/t91.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t13-hook-input-robustness.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1517,22 +1673,57 @@
       "unitClass": "hook",
       "unitId": "aidlc-sensor-fire",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/feature/t131-hooks-settings-fire.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/feature/t95-sensor-fire-hook-feature.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t13-hook-input-robustness.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t94-sensor-fire-hook.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "hook",
       "unitId": "aidlc-session-end",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t30-hook-session-end.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "hook",
       "unitId": "aidlc-session-start",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/feature/t40-settings-hook-config.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t10-hook-session-start.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t13-hook-input-robustness.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "hook",
@@ -1540,8 +1731,16 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t11.none.test.ts",
+          "file": "tests/feature/t40-settings-hook-config.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t11.none.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t13-hook-input-robustness.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1550,8 +1749,17 @@
       "unitClass": "hook",
       "unitId": "aidlc-stop",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/feature/t121-stop-hook-enforce.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/feature/t131-hooks-settings-fire.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "hook",
@@ -1559,8 +1767,12 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/feature/t131-hooks-settings-fire.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t29.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1571,8 +1783,16 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/feature/t131-hooks-settings-fire.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t08.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t13-hook-input-robustness.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1655,6 +1875,18 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/feature/t130-scope-runners.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/feature/t30-scope-stage-mapping.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/smoke/t130-scope-runners.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/tui/t-tui-t139-revision-loop-idempotency.serial.tui.test.ts",
           "mechanism": "tui"
         },
@@ -1665,6 +1897,10 @@
         {
           "file": "tests/workflow/t53.test.ts",
           "mechanism": "sdk"
+        },
+        {
+          "file": "tests/workflow/t65-construction-worktrees-bugfix.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1681,6 +1917,14 @@
       "unitId": "feature",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/feature/t130-scope-runners.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/smoke/t130-scope-runners.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/tui/t-tui-t29-env-scope.serial.tui.test.ts",
           "mechanism": "tui"
@@ -1699,8 +1943,17 @@
       "unitClass": "scope",
       "unitId": "mvp",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/feature/t130-scope-runners.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/smoke/t130-scope-runners.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "scope",
@@ -1727,6 +1980,14 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/feature/t130-scope-runners.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/smoke/t130-scope-runners.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/workflow/t138-scope-exclusion-counts.test.ts",
           "mechanism": "sdk"
         }
@@ -1739,6 +2000,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/feature/t30-scope-stage-mapping.test.ts",
+          "mechanism": "none"
+        },
+        {
           "file": "tests/tui/t-tui-t58-workshop-scope.serial.tui.test.ts",
           "mechanism": "tui"
         }
@@ -1749,8 +2014,13 @@
       "unitClass": "stage",
       "unitId": "construction/build-and-test",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t16-phase-rules-structure.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
@@ -1814,8 +2084,13 @@
       "unitClass": "stage",
       "unitId": "ideation/feasibility",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t16-phase-rules-structure.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
@@ -1893,6 +2168,10 @@
         {
           "file": "tests/tui/t-tui-t74-requirements-analysis.serial.tui.test.ts",
           "mechanism": "tui"
+        },
+        {
+          "file": "tests/unit/t16-phase-rules-structure.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -1952,8 +2231,13 @@
       "unitClass": "stage",
       "unitId": "operation/deployment-execution",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t16-phase-rules-structure.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
@@ -2015,22 +2299,45 @@
       "unitClass": "subcommand",
       "unitId": "aidlc-audit audit-fork",
       "minMechanism": "cli",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/worktree/t07-audit-fork-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",
       "unitId": "aidlc-audit audit-merge",
       "minMechanism": "cli",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/worktree/t07-audit-fork-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",
       "unitId": "aidlc-bolt abort",
       "minMechanism": "cli",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/feature/t78-bolt-worktree-lifecycle.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t77-bolt-worktree-flags.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t12-bolt-runtime-graph-fork.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",
@@ -2038,7 +2345,23 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/feature/t78-bolt-worktree-lifecycle.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t33.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t77-bolt-worktree-flags.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t82-hold-merge-invariant.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t12-bolt-runtime-graph-fork.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2052,6 +2375,26 @@
         {
           "file": "tests/unit/t79.cli.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/workflow/t61-construction-worktrees-feature.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/workflow/t62-construction-worktrees-mvp.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/workflow/t64-construction-worktrees-workshop.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/workflow/t65-construction-worktrees-bugfix.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/workflow/t66-construction-worktrees-refactor.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2064,6 +2407,18 @@
         {
           "file": "tests/unit/t33.cli.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t77-bolt-worktree-flags.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t09-halt-and-ask-preservation.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t11-halt-and-ask-retry-correlation.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2072,15 +2427,25 @@
       "unitClass": "subcommand",
       "unitId": "aidlc-bolt hold-merge",
       "minMechanism": "cli",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t82-hold-merge-invariant.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",
       "unitId": "aidlc-bolt release-merge",
       "minMechanism": "cli",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t82-hold-merge-invariant.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",
@@ -2100,7 +2465,23 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/feature/t78-bolt-worktree-lifecycle.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t46-parallel-bolt.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t33.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t77-bolt-worktree-flags.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t12-bolt-runtime-graph-fork.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2122,8 +2503,21 @@
       "unitClass": "subcommand",
       "unitId": "aidlc-graph compile",
       "minMechanism": "cli",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/feature/t128-custom-runner.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t99-learnings-gate-flow.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t124-scope-transpose.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",
@@ -2171,8 +2565,13 @@
       "unitClass": "subcommand",
       "unitId": "aidlc-graph topo",
       "minMechanism": "cli",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/feature/t128-custom-runner.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",
@@ -2186,6 +2585,10 @@
       "unitId": "aidlc-jump execute",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/feature/t54-compaction-and-test-run.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t25.test.ts",
           "mechanism": "sdk"
@@ -2239,6 +2642,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t99-learnings-gate-flow.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t97.cli.test.ts",
           "mechanism": "cli"
         }
@@ -2250,6 +2657,10 @@
       "unitId": "aidlc-learnings surface",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t99-learnings-gate-flow.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t97.cli.test.ts",
           "mechanism": "cli"
@@ -2296,10 +2707,22 @@
         },
         {
           "file": "tests/feature/t96.none.test.ts",
-          "mechanism": "none"
+          "mechanism": "cli"
         },
         {
           "file": "tests/feature/t98.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t48-runtime-graph-end-to-end.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t133-bolt-dag-compile.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t12-bolt-runtime-graph-fork.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2313,6 +2736,10 @@
         {
           "file": "tests/unit/t96.cli.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t12-bolt-runtime-graph-fork.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2324,6 +2751,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t96.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t12-bolt-runtime-graph-fork.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2344,6 +2775,10 @@
         {
           "file": "tests/feature/t106.cli.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/feature/t107-session-skills-readonly.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -2383,14 +2818,27 @@
       "unitClass": "subcommand",
       "unitId": "aidlc-state acknowledge-compaction",
       "minMechanism": "cli",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t47-failure-injection.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",
       "unitId": "aidlc-state advance",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t47-failure-injection.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t100-memory-template-lifecycle.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t17.cli.test.ts",
           "mechanism": "cli"
@@ -2409,6 +2857,10 @@
         },
         {
           "file": "tests/feature/t51.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t100-memory-template-lifecycle.test.ts",
           "mechanism": "cli"
         },
         {
@@ -2487,6 +2939,10 @@
       "unitId": "aidlc-state gate-start",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t47-failure-injection.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t17.cli.test.ts",
           "mechanism": "cli"
@@ -2699,6 +3155,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t83-doctor-orphan-worktree.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t84.cli.test.ts",
           "mechanism": "cli"
         },
@@ -2761,6 +3221,14 @@
         {
           "file": "tests/unit/t27.cli.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/workflow/t62-construction-worktrees-mvp.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/workflow/t65-construction-worktrees-bugfix.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2798,6 +3266,10 @@
       "unitId": "aidlc-utility scope-table",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/feature/t30-scope-stage-mapping.test.ts",
+          "mechanism": "none"
+        },
         {
           "file": "tests/unit/t60.cli.test.ts",
           "mechanism": "cli"
@@ -2852,8 +3324,13 @@
       "unitClass": "subcommand",
       "unitId": "aidlc-utility version",
       "minMechanism": "cli",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t68-version-changelog-sync.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",
@@ -2883,6 +3360,10 @@
         {
           "file": "tests/worktree/t06.cli.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t09-halt-and-ask-preservation.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2895,6 +3376,14 @@
         {
           "file": "tests/worktree/t04.cli.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t10-halt-and-ask-discard.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t12-bolt-runtime-graph-fork.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2906,6 +3395,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t72.cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t09-halt-and-ask-preservation.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t10-halt-and-ask-discard.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/worktree/t11-halt-and-ask-retry-correlation.test.ts",
           "mechanism": "cli"
         }
       ],

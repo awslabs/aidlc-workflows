@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy to settings.local.json (gitignored) for personal overrides. These take precedence over settings.json.",
+  "env": {
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "85",
+    "_comment_AWS_REGION": "Override the Bedrock region (shipped default is us-east-1 in settings.json). Required for Bedrock — Claude Code does not read it from ~/.aws. See docs/guide/01-getting-started.md § AWS Bedrock Setup.",
+    "AWS_REGION": "us-east-1",
+    "_comment_AWS_PROFILE": "Set your AWS SSO/credential profile here (kept out of shared settings.json so it doesn't leak). Uncomment and set if you authenticate via a named profile.",
+    "_comment_AWS_AIDLC_DEFAULT_SCOPE": "Pre-set default scope for /aidlc workflows. Valid: enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, workshop. Applies at workflow init only. See docs/guide/12-customization.md § Per-Project Default Scope.",
+    "AWS_AIDLC_DEFAULT_SCOPE": "workshop"
+  },
+  "model": "opus[1m]"
+}

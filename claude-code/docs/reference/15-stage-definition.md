@@ -199,9 +199,16 @@ stage might lead with `aidlc-product-agent` for requirements work but load
 `aidlc-delivery-agent` as support for capacity reality-checking.
 
 Both fields validate dynamically against `.claude/agents/*.md` via
-`loadAgents()` (introduced in MR 3). No hardcoded enum in the schema —
-adding an agent means dropping its `.md` file in `.claude/agents/` with the
-required frontmatter. See
+`loadAgents()` (introduced in MR 3) — `aidlc-graph.ts compile` passes the
+discovered agent slugs into `validateStageFrontmatter`, so a `lead_agent` or
+`support_agents` value naming an agent with no matching file fails the
+compile loudly (`lead_agent "<name>" has no matching .claude/agents/*.md`)
+rather than surfacing at run time as an unregistered-subagent `Task` error.
+The one exemption is the reserved `orchestrator` pseudo-agent (the conductor
+itself, named as `lead_agent` on the bootstrap initialization stages); it has
+no agent file by design. No hardcoded enum in the schema — adding an agent
+means dropping its `.md` file in `.claude/agents/` with the required
+frontmatter. See
 [Contributing: Adding an Agent](11-contributing.md#adding-an-agent).
 
 ---

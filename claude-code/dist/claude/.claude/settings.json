@@ -1,0 +1,122 @@
+{
+  "companyAnnouncements": [
+    "# AI-DLC — AI-Driven Development Life Cycle\n\nRun `/aidlc` to start or resume a workflow. Describe what to build and scope is auto-detected.\n\n**Phases** (32 stages across 5 phases):\n\n| Phase          | Stages       | Focus                                            |\n|----------------|--------------|--------------------------------------------------|\n| INITIALIZATION | 0.1–0.3 (3)  | Bootstrap state, scaffold dirs, detect workspace |\n| IDEATION       | 1.1–1.7 (7)  | Validate intent, scope, feasibility              |\n| INCEPTION      | 2.1–2.8 (8)  | Practices, requirements, design, planning        |\n| CONSTRUCTION   | 3.1–3.7 (7)  | Build, test, CI — per unit                       |\n| OPERATION      | 4.1–4.7 (7)  | Deploy, observe, optimise                        |\n\n**Stages:**\n\n| Phase        | Stages                                                                                              |\n|--------------|-----------------------------------------------------------------------------------------------------|\n| IDEATION     | IC=Intent Capture · MR=Market Research · FS=Feasibility · SD=Scope Definition                       |\n|              | TF=Team Formation · RM=Rough Mockups · AH=Approval Handoff                                          |\n| INCEPTION    | RE=Reverse Engineering · PD=Practices Discovery · RA=Requirements Analysis · US=User Stories        |\n|              | RF=Refined Mockups · AD=Application Design · UG=Units Generation · DL=Delivery Planning             |\n| CONSTRUCTION | FD=Functional Design · NR=NFR Requirements · ND=NFR Design · ID=Infrastructure Design               |\n|              | CG=Code Generation · BT=Build & Test · CI=CI Pipeline                                               |\n| OPERATION    | DP=Deployment Pipeline · EP=Env Provisioning · DE=Deployment Execution · OS=Observability Setup     |\n|              | IR=Incident Response · PV=Performance Validation · FO=Feedback & Optimization                       |\n\n**Scopes** (INIT 0.1–0.3 always runs):\n\n| Scope          | Depth         | IDEATION       | INCEPTION       | CONSTRUCTION   | OPERATION      |\n|----------------|---------------|----------------|-----------------|----------------|----------------|\n| enterprise     | Comprehensive | all            | all             | all            | all            |\n| feature        | Standard      | all            | all             | all            | all            |\n| mvp            | Standard      | IC, FS, SD, RM | all             | all            | —              |\n| poc            | Minimal       | IC             | RE, RA          | CG, BT         | —              |\n| bugfix         | Minimal       | —              | RE, RA          | CG, BT         | —              |\n| refactor       | Minimal       | —              | RE, RA          | FD, CG, BT     | —              |\n| infra          | Standard      | —              | RA              | NR, ND, ID, CI | DP, EP, DE, OS |\n| security-patch | Minimal       | —              | RE              | NR, CG, BT     | DP, DE         |\n| workshop       | Standard      | —              | all             | all            | all            |\n\n**Workflow**\n\n1. The orchestrator determines scope (from your command or auto-detected from intent).\n2. Stages execute in order, with appropriate agents leading each one.\n3. At every approval gate, you review output and decide whether to approve, revise, or skip.\n4. All artifacts are saved to `aidlc-docs/` for review at any time.\n\n**Tips**\n- Describe your task in plain English — scope is auto-detected\n- Run `/aidlc --status` to check progress at any time\n- Run `/aidlc --stage <id>` or `/aidlc --phase <name>` to jump ahead\n- Run `/aidlc --help` for full usage and examples"
+  ],
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash(bun $CLAUDE_PROJECT_DIR/.claude/tools/*)",
+      "Bash",
+      "Glob",
+      "Grep",
+      "Task",
+      "WebSearch"
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts"
+  },
+  "env": {
+    "AWS_AIDLC_DEFAULT_SCOPE": "workshop",
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "AWS_REGION": "us-east-1",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "us.anthropic.claude-opus-4-8",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "us.anthropic.claude-sonnet-4-6",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+  },
+  "model": "opus[1m]",
+  "effortLevel": "high",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-session-start.ts"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-session-end.ts"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-audit-logger.ts"
+          },
+          {
+            "type": "command",
+            "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-sensor-fire.ts"
+          }
+        ]
+      },
+      {
+        "matcher": "TaskUpdate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-sync-statusline.ts"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-runtime-compile.ts"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-validate-state.ts"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-log-subagent.ts"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-stop.ts"
+          }
+        ]
+      }
+    ]
+  }
+}

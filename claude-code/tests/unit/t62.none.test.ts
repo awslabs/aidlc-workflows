@@ -1,18 +1,21 @@
 // covers: aidlc-stage-schema.ts:validateStageFrontmatter
 //   (the sole exported validator; also exercises the exported constants
 //    VALID_PHASES / VALID_EXECUTIONS / VALID_MODES / VALID_CONDITIONAL_ON
-//    and RESERVED_KEYS indirectly via the error strings they drive)
+//    and RESERVED_KEYS indirectly via the error strings they drive, plus the
+//    RESERVED_AGENT_SLUG export directly — the orchestrator pseudo-agent that
+//    Rule 9 exempts from the agent-registration cross-check)
 //
 // t62 — stage-frontmatter schema validation. Migrated from the bash TAP test
-// tests/unit/t62-stage-schema.sh (plan 59). The original spawned `bun -e`
-// 10 times, importing validateStageFrontmatter and stringifying the result as
-// "VALID" / "INVALID:<errors joined by |>". The tool is a PURE validator —
-// "no I/O, no YAML parsing, no mutation" (aidlc-stage-schema.ts:6-7) — so every
-// one of the 59 behavioural contracts can be asserted in-process by importing
-// and CALLING validateStageFrontmatter directly. There is no CLI arg-parsing
-// or process.exit shell to keep as a spawn seam: the .ts file is a library, not
-// an executable entrypoint (no `import.meta.main` block, grep-verified). So all
-// 59 contracts migrate to in-process expect() calls; zero spawns remain.
+// tests/unit/t62-stage-schema.sh (plan 62). The original spawned `bun -e`
+// importing validateStageFrontmatter (and RESERVED_AGENT_SLUG) and stringifying
+// the result as "VALID" / "INVALID:<errors joined by |>". The tool is a PURE
+// validator — "no I/O, no YAML parsing, no mutation" (aidlc-stage-schema.ts:6-7)
+// — so every one of the 62 behavioural contracts can be asserted in-process by
+// importing and CALLING validateStageFrontmatter directly. There is no CLI
+// arg-parsing or process.exit shell to keep as a spawn seam: the .ts file is a
+// library, not an executable entrypoint (no `import.meta.main` block,
+// grep-verified). So all 62 contracts migrate to in-process expect() calls;
+// zero spawns remain.
 //
 // Mechanism: none (pure function calls, zero subprocess, zero LLM, zero tokens).
 //
@@ -28,6 +31,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  RESERVED_AGENT_SLUG,
   type StageFrontmatter,
   type ValidationContext,
   validateStageFrontmatter,
@@ -406,6 +410,48 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
   test("without ctx.agents -> lead_agent not checked", () => {
     // No ctx → agent-slug lookup skipped, so a ghost lead_agent still validates.
     expect(errs({ ...fixture(), lead_agent: "ghost-agent" })).toBe("VALID");
+  });
+
+  // ============================================================
+  // Reserved orchestrator pseudo-agent exemption (3 assertions)
+  // The conductor session names itself as lead_agent on the bootstrap
+  // initialization stages; it has no .claude/agents/*.md file by design, so
+  // Rule 9 must exempt it even when ctx.agents is supplied. Exercises the
+  // RESERVED_AGENT_SLUG export and the `!== RESERVED_AGENT_SLUG` guards on both
+  // the lead_agent and support_agents arms of Rule 9
+  // (aidlc-stage-schema.ts:75 + :274-295).
+  // ============================================================
+
+  test("RESERVED_AGENT_SLUG export is 'orchestrator'", () => {
+    expect(RESERVED_AGENT_SLUG).toBe("orchestrator");
+  });
+
+  test("lead_agent 'orchestrator' exempt from Rule 9 with ctx.agents", () => {
+    // 'orchestrator' is NOT in ctx.agents, yet a ghost lead_agent would error
+    // here — the exemption is what keeps it VALID.
+    expect(
+      errs(
+        {
+          ...fixture(),
+          lead_agent: RESERVED_AGENT_SLUG,
+          support_agents: [],
+        },
+        { agents: ["aidlc-product-agent"] },
+      ),
+    ).toBe("VALID");
+  });
+
+  test("support_agents 'orchestrator' exempt from Rule 9 with ctx.agents", () => {
+    expect(
+      errs(
+        {
+          ...fixture(),
+          lead_agent: "aidlc-product-agent",
+          support_agents: [RESERVED_AGENT_SLUG],
+        },
+        { agents: ["aidlc-product-agent"] },
+      ),
+    ).toBe("VALID");
   });
 
   // ============================================================

@@ -1,13 +1,14 @@
 // covers: subcommand:aidlc-jump:resolve
 //
-// CLI-contract port of tests/unit/t118-engine-differential.sh (TAP plan 24),
+// CLI-contract port of tests/unit/t118-engine-differential.sh (TAP plan 38),
 // mechanism = cli. The differential corpus — the WAVE CLOSE GATE for the
-// v0.6.0 Wave 1 engine (aidlc-orchestrate.ts next). It proves the deterministic
-// engine emits, FOR EACH OF THE 9 SCOPES, the same scope-shaped directive the
-// prose orchestrator (skills/aidlc/SKILL.md) produces today — WITH NO MODEL IN
-// THE LOOP. It NEVER calls the LLM (the .sh deliberately omits run_claude; the
-// prose-orchestrator workflow tests t50-t59 drive the model — this corpus is
-// their deterministic mirror).
+// v0.6.0 Wave 1 engine (aidlc-orchestrate.ts next), extended in Wave 2 MR 9
+// with the classified-stance anchor + the no-state workflow-birth trio. It
+// proves the deterministic engine emits, FOR EACH OF THE 9 SCOPES, the same
+// scope-shaped directive the prose orchestrator (skills/aidlc/SKILL.md)
+// produces today — WITH NO MODEL IN THE LOOP. It NEVER calls the LLM (the .sh
+// deliberately omits run_claude; the prose-orchestrator workflow tests t50-t59
+// drive the model — this corpus is their deterministic mirror).
 //
 // The covers id is subcommand:aidlc-jump:resolve, not aidlc-orchestrate, BY
 // DESIGN: this corpus exercises the explicit-jump branch of the engine
@@ -59,9 +60,48 @@
 //     diff A, proving gate tracks the human-judgement boundary (init stages
 //     auto-proceed) and NOT the conditional-inclusion axis.
 //
-//   24 .sh asserts -> 24 .sh `ok` lines -> 9 + 7 + 1 = 17 test() cases here
-//   (the 7 diff-B cases each bundle the .sh's 2 ok lines for one scope, one
-//   observable group per case). Total expect() assertions exceed 24.
+//   Classified-stance anchor (1 .sh assert -> 1 test() case):
+//     The .sh diffed "$GATE|$STG" against "unresolved|functional-design" for
+//     the state-construction-bolt1 fixture (a feature workflow parked at Current
+//     Stage=functional-design — the FIRST Construction Bolt's gate, the skeleton
+//     gate — with no stance recorded yet). The third gate value: gate ===
+//     "unresolved" (the STRING sentinel, NOT a boolean), alongside the
+//     per-fingerprint gate:true (diff A) and the init gate:false (anchor above).
+//     The first Construction Bolt's gate depends on a practices-derived STANCE
+//     the engine cannot compute, so it defers to the conductor's classify
+//     round-trip and emits the sentinel (vision §6:452-454). Here: gate ===
+//     "unresolved" AND stage === "functional-design" AND phase ===
+//     "construction" AND kind === "run-stage". STRONGER than the .sh's two-field
+//     diff: the .sh read only gate + stage; we additionally pin phase and kind,
+//     and assert gate is the sentinel STRING (a regression that emitted a boolean
+//     gate here would slip a two-field-only diff but reds the string equality).
+//
+//   No-state workflow-birth trio (4 .sh asserts -> 3 test() cases):
+//     Every diff above seeds state then jumps; these three drive a NO-STATE
+//     invocation (createTestProject makes aidlc-docs/ but NO aidlc-state.md —
+//     same as the .sh's create_test_project), the workflow-birth paths the Wave
+//     2 cutover leans on, which sat outside the close gate (Wave-1 audit findings
+//     2 & 3 slipped through here). The .sh fired 4 ok lines:
+//       (1) `next bugfix` — bare KNOWN-SCOPE positional, NOT freeform: TWO ok
+//           lines — kind === "error" AND message contains "No workflow state
+//           found" (the engine recognises bugfix as the scope, finding 2, and
+//           relays the SAME no-state error `next --scope bugfix` emits; pre-fix
+//           it mis-read the literal scope as prose and emitted an `ask`
+//           defaulting to "feature"). One test() bundles both ok lines.
+//       (2) `next add dark mode toggle` — genuine freeform (<=5-word) intent,
+//           NOT a scope name: kind === "ask" (the control proving the finding-2
+//           fix narrows ONLY known-scope positionals; real prose still defers to
+//           the human via ask). One ok line -> one test().
+//       (3) bare `next`, no state, no target: kind === "error" (no position to
+//           advance from; creating one is init's mutating job). One ok -> one
+//           test().
+//     STRONGER: case (1) additionally pins the message names the bugfix scope it
+//     was read as, and case (3) asserts the verbatim no-state wording too, so a
+//     regression that emitted an error of the WRONG cause reds.
+//
+//   38 .sh asserts -> 38 .sh `ok` lines -> 9 + 7 + 1 + 1 + 3 = 21 test() cases
+//   here (the 7 diff-B cases + the no-state-bugfix case each bundle 2 ok lines
+//   for one observable group). Total expect() assertions exceed 38.
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's create_test_project + seed_state_file +
 // sed_i Scope-swap + cleanup_test_project per emit):
@@ -136,7 +176,11 @@ interface Directive {
   kind?: string;
   stage?: string;
   phase?: string;
-  gate?: boolean;
+  // gate is the human-judgement-boundary axis: a real boolean for ordinary
+  // stages (true=gates / false=bootstrap auto-proceed) OR the string sentinel
+  // "unresolved" for the first Construction Bolt's skeleton gate (the engine
+  // defers the practices-derived stance to the conductor's classify round-trip).
+  gate?: boolean | string;
   message?: string;
   // biome-ignore lint/suspicious/noExplicitAny: directives carry many fields the corpus doesn't read
   [k: string]: any;
@@ -235,6 +279,23 @@ function emitNext(fixtureFile: string): EmitResult {
   tempDirs.push(proj);
   seedStateFile(proj, join(FIXTURES_DIR, fixtureFile));
   const res = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
+    encoding: "utf-8",
+    env: cleanEnv(),
+  });
+  const raw = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+  return { status: res.status ?? -1, directive: parseDirective(res.stdout ?? ""), raw };
+}
+
+// emitNextNoState (t118.sh:289-315): spawn `next [...args]` against a FRESH
+// project that has aidlc-docs/ but NO aidlc-state.md (createTestProject seeds
+// neither) — the no-state workflow-birth paths of the trio. Pass zero args for
+// bare `next`, one for a known-scope positional (`next bugfix`), or several for
+// freeform intent (`next add dark mode toggle`). Mirrors the .sh's bare
+// `bun "$TOOL" next <args> --project-dir "$proj"` over an unseeded project.
+function emitNextNoState(...args: string[]): EmitResult {
+  const proj = createTestProject();
+  tempDirs.push(proj);
+  const res = spawnSync(BUN, [TOOL, "next", ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env: cleanEnv(),
   });
@@ -354,6 +415,80 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       expect(r.directive.stage).toBe("workspace-detection");
       // STRONGER: pin the directive kind too (the .sh read only gate + stage).
       expect(r.directive.kind).toBe("run-stage");
+    });
+  });
+
+  // --- Classified-stance anchor: the skeleton gate emits gate:"unresolved" (1
+  // case) --- (t118.sh:255-274). The THIRD gate value, alongside the
+  // per-fingerprint gate:true (diff A) and the init gate:false (anchor above).
+  // The FIRST Construction Bolt's gate depends on a practices-derived STANCE the
+  // engine cannot compute, so it emits the sentinel string gate:"unresolved" and
+  // defers to the conductor's classify round-trip (v0.6.0 Wave 2 MR 9, vision
+  // §6:452-454). state-construction-bolt1 is a feature workflow parked at Current
+  // Stage=functional-design (the first construction EXECUTE stage = the skeleton
+  // gate) with no stance recorded, so bare `next` emits the run-stage for it
+  // carrying gate:"unresolved" — NOT a boolean. The full classify round-trip is
+  // the feature-tier WALK C; this single-directive anchor pins the engine's emit
+  // of the sentinel itself.
+  describe("classified-stance anchor — skeleton gate -> run-stage gate:\"unresolved\"", () => {
+    test("skeleton-gate stage (functional-design, Bolt 1, no stance) -> run-stage gate:\"unresolved\" (classify-round-trip sentinel)", () => {
+      const r = emitNext("state-construction-bolt1.md");
+      // .sh: assert_eq "$GATE|$STG" "unresolved|functional-design"
+      // STRONGER: gate is the sentinel STRING, asserted as a strict ===
+      // "unresolved" — a regression emitting a boolean gate (true/false) here
+      // would slip the .sh's pipe-joined diff if it rendered the same token, but
+      // reds this strict string equality.
+      expect(r.directive.gate).toBe("unresolved");
+      expect(r.directive.stage).toBe("functional-design");
+      // STRONGER than the .sh's two-field diff: pin phase + kind too.
+      expect(r.directive.phase).toBe("construction");
+      expect(r.directive.kind).toBe("run-stage");
+    });
+  });
+
+  // --- No-state workflow-birth trio (3 cases) --- (t118.sh:276-315). Every diff
+  // above seeds state then jumps; these drive a NO-STATE invocation
+  // (createTestProject makes aidlc-docs/ but NO aidlc-state.md), the
+  // workflow-birth paths the Wave 2 cutover leans on. They sat outside the close
+  // gate, which is how the engine's known-scope / no-state defects (Wave-1 audit
+  // findings 2 & 3) slipped through. Each pins the resolved scope / directive
+  // kind the engine emits for a fresh workspace.
+  describe("no-state workflow-birth trio — fresh workspace, no aidlc-state.md", () => {
+    // (1) Bare KNOWN-SCOPE positional: `next bugfix` — the literal scope name is
+    // NOT freeform intent. The engine recognises it as the scope (finding 2) and
+    // relays the SAME no-state error `next --scope bugfix` emits. Pre-fix this
+    // mis-read the scope as prose and emitted an `ask` defaulting to "feature".
+    test("no-state bare known-scope 'bugfix' -> error (recognised as scope, not freeform) [finding 2]", () => {
+      const r = emitNextNoState("bugfix");
+      // .sh ok #1: assert_eq KIND "error"
+      expect(r.directive.kind).toBe("error");
+      // .sh ok #2: assert_contains MSG "No workflow state found"
+      expect(r.directive.message ?? "").toContain("No workflow state found");
+      // STRONGER: a regression that mis-read bugfix as freeform would emit an
+      // `ask` (the pre-fix bug) — assert it is NOT an ask, pinning finding 2.
+      expect(r.directive.kind).not.toBe("ask");
+    });
+
+    // (2) Freeform (<=5-word) intent: `next add dark mode toggle` — genuine prose,
+    // NOT a scope name. The engine emits an `ask` (scope confirmation, the
+    // read-only stand-in for the conductor's detect-scope + confirm). The control
+    // proving the finding-2 fix narrows ONLY known-scope positionals.
+    test("no-state freeform intent -> ask (scope confirmation; engine never calls AskUserQuestion)", () => {
+      const r = emitNextNoState("add", "dark", "mode", "toggle");
+      // .sh: assert_eq "$(json_field "$OUT" kind)" "ask"
+      expect(r.directive.kind).toBe("ask");
+    });
+
+    // (3) Bare `next`, no state and no target: the engine cannot read a position
+    // to advance from and creating one is init's (mutating) job, so it emits the
+    // no-state error rather than guessing.
+    test("no-state bare next -> error directive (no position to advance from)", () => {
+      const r = emitNextNoState();
+      // .sh: assert_eq "$(json_field "$OUT" kind)" "error"
+      expect(r.directive.kind).toBe("error");
+      // STRONGER: pin the verbatim no-state wording (the .sh read only kind) so a
+      // regression emitting an error of a DIFFERENT cause reds.
+      expect(r.directive.message ?? "").toContain("No workflow state found");
     });
   });
 });

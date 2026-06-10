@@ -1,0 +1,44 @@
+node_modules/
+.claude/settings.local.json
+.env
+.DS_Store
+._*
+
+# Generated AI-DLC artifacts (recreated by workflow runs)
+dist/claude/aidlc-docs/
+
+# Sample/test projects
+dist/claude/todo-app/
+
+# Test verbose logs
+tests/logs/
+
+# Historical archives
+archive/
+
+# Upstream workflow definitions (cloned reference, read-only)
+aidlc-workflows/
+
+# Claude worktrees
+.claude/worktrees
+
+# AIDLC runtime state (Construction worktrees + future runtime artefacts).
+# Anchored to repo root; distinct from .claude/worktrees above which is
+# the framework-development worktree convention.
+/.aidlc/
+
+# Local scratch — explainers, throwaway HTML, etc. (claude writes explainers here)
+tmp/
+
+# Local Claude Code memory (personal project preferences, not checked in)
+CLAUDE.local.md
+
+# Local-only — pins shfmt (pi-lens auto-format) to project style.
+# Not committed; other contributors who do not use pi do not need it.
+.editorconfig
+
+# pi-lens runtime cache / metrics — local-only state written by the
+# pi-lens extension. Match at any depth so every .pi-lens directory in
+# the repo (root, dist/claude/, .claude/tools/, etc.) is ignored.
+**/.pi-lens/
+.pi-lens/

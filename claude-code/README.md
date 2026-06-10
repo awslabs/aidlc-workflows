@@ -2,7 +2,7 @@
 
 A Claude Code-native implementation of the **AI-DLC methodology** (AI-Driven Development Life Cycle). Run a full software-development lifecycle inside Claude Code: 11 domain-expert agents working through a 32-stage workflow, and you approve every gate.
 
-![version](https://img.shields.io/badge/version-0.6.2-blue)
+![version](https://img.shields.io/badge/version-0.6.4-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-required-orange)
 

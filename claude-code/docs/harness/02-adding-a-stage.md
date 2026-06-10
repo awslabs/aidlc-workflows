@@ -234,7 +234,11 @@ the Developer Reference.
   builds the graph — authoring errors fail loud at `compile`, not silently at
   run time. A `lead_agent` or `support_agents` value is checked against the
   actual `.claude/agents/*.md` files via `loadAgents()`; there is no hardcoded
-  agent enum to update.
+  agent enum to update. A stage naming an agent with no matching file fails the
+  compile (`lead_agent "<name>" has no matching .claude/agents/*.md`), so a
+  typo can't ship a graph that 404s at run time. The reserved `orchestrator`
+  slug (the conductor itself, used on the bootstrap initialization stages) is
+  exempt — it has no agent file.
 - **CI drift guard.** `bun .claude/tools/aidlc-graph.ts compile --check` exits
   `0` on a clean tree and exits `1` if any stage YAML was edited without
   recompiling the JSON. CI runs this, so a forgotten `compile` blocks the merge

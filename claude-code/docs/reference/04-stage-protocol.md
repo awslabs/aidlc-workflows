@@ -541,11 +541,15 @@ dynamic per workflow position.
 
 ### Multi-Agent Stages
 
-The conductor invokes the lead agent first, then support agents with the lead's output
-as context. The conductor performs every Task call; agents never spawn subagents.
+The conductor brings in the lead agent first, then each support agent with the lead's
+output as context. *How* it brings them in follows `directive.mode`: on an inline stage
+(every multi-agent stage in the shipped graph) the support agents are personas the
+conductor loads into its own context — not `Task` dispatches. `Task` is reserved for
+`mode: subagent` stages. Either way the conductor performs every delegation; agents
+never spawn subagents.
 
 Example: Feasibility uses `aidlc-architect-agent` (lead) + `aidlc-aws-platform-agent` +
-`aidlc-compliance-agent`.
+`aidlc-compliance-agent`, all inline.
 
 ### The 11 Agents
 

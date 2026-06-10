@@ -50,6 +50,10 @@
 //   .sh 7-11  subcommand surface (5)  -> spawnSync exit/stdout assertions
 //   .sh 12-17 surface (6)             -> spawnSync stdout-JSON assertions
 //   .sh 18-26 persist (9, 13 facts)   -> spawnSync + on-disk grep assertions
+//             (.sh 22 free-text is BLOCK-SCOPED: the field assertions match
+//             the .sh's awk block extraction — fields must be co-located in
+//             the one RULE_LEARNED block, not merely present somewhere in
+//             audit.md — via extractAuditBlock(), equal-or-stronger isolation)
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -242,6 +246,29 @@ function grepCount(p: string, needle: RegExp | string): number {
       : new RegExp(needle.source, needle.flags.includes("g") ? needle.flags : `${needle.flags}g`);
   const lines = readFile(p).split("\n").filter((l) => re.test(l));
   return lines.length;
+}
+
+// Block-scoped extractor — the TS analogue of the .sh's awk:
+//   awk '/Event.*: RULE_LEARNED/{p=1} p; /^---$/{if(p)exit}'
+// Starts capturing at the first line matching the start regex (`Event.*:
+// <EVENT>`), keeps capturing each subsequent line, and STOPS at the next
+// line that is exactly `---`. Returns the captured block (start line through
+// the terminating `---` inclusive), or "" if the start line never appears.
+// This pins assertions to fields co-located WITHIN ONE audit block rather
+// than anywhere in the file — strictly stronger isolation than a whole-file
+// substring check.
+function extractAuditBlock(content: string, startRe: RegExp): string {
+  const lines = content.split("\n");
+  const captured: string[] = [];
+  let inBlock = false;
+  for (const line of lines) {
+    if (!inBlock && startRe.test(line)) inBlock = true;
+    if (inBlock) {
+      captured.push(line);
+      if (line === "---") break;
+    }
+  }
+  return captured.join("\n");
 }
 
 // =====================================================================
@@ -504,12 +531,21 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
 `,
     );
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
-    // .sh extracted the RULE_LEARNED audit block via awk; we read the whole
-    // audit.md and assert both field lines are present in the file (the audit
-    // has exactly one RULE_LEARNED block, so this is the same guarantee).
+    // The .sh extracted the RULE_LEARNED block via awk
+    //   (awk '/Event.*: RULE_LEARNED/{p=1} p; /^---$/{if(p)exit}')
+    // and asserted both field lines WITHIN that block. We mirror that exactly:
+    // capture the block (the `**Event**: RULE_LEARNED` line through the next
+    // `---`) and assert the fields are co-located inside it. This is stronger
+    // isolation than a whole-file substring — a Source/Candidate-ID landing in
+    // some OTHER audit block (e.g. a SENSOR_PROPOSED row, or a future second
+    // RULE_LEARNED) would no longer falsely satisfy the assertion.
     const audit = readFile(join(pd, "aidlc-docs", "audit.md"));
-    expect(audit).toContain("Source**: user_addition");
-    expect(audit).toContain("Candidate-ID**: free_text_1");
+    const ftBlock = extractAuditBlock(audit, /Event.*: RULE_LEARNED/);
+    // Sanity: the block must actually exist (start line found + terminated).
+    expect(ftBlock).toContain("RULE_LEARNED");
+    expect(ftBlock.endsWith("---")).toBe(true);
+    expect(ftBlock).toContain("Source**: user_addition");
+    expect(ftBlock).toContain("Candidate-ID**: free_text_1");
   });
 
   // .sh 23 — idempotent re-run -> no re-emit, no duplicate line. SPAWN TWICE,

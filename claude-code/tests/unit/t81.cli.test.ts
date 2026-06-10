@@ -234,19 +234,24 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
   });
 
   // --- Test 3: t28 audit count unchanged BY THIS MR's discriminator reuse ---
-  test("3: t28 pins event count at 67 (no bump from this MR's discriminator reuse)", () => {
-    // Same observable as the .sh: read t28's pinned $TS_COUNT and assert == 67.
-    // bolt-plan-marker-conflict reuses PRACTICES_OVERRIDE (discriminator-field
-    // disambiguation) and registers no new event; the framework total stays at
-    // the v0.6.0 Wave 4 MR 16 baseline of 67 (SWARM_DEGRADED was the last event
-    // born live, after the five SWARM_* lifecycle pre-registrations).
-    const t28 = join(REPO_ROOT, "tests", "unit", "t28-audit-event-sync.sh");
-    const t28Src = readFileSync(t28, "utf-8");
-    // The .sh extracted the count from the `assert_eq <N> "$TS_COUNT"` line.
-    const m = t28Src.match(/assert_eq\s+(\d+)\s+"\$TS_COUNT"/);
-    expect(m).not.toBeNull();
-    const pinned = m ? Number(m[1]) : -1;
-    expect(pinned).toBe(67);
+  test("3: framework event count pinned at 67 (no bump from this MR's discriminator reuse)", () => {
+    // The .sh read t28's pinned $TS_COUNT (== 67). Under MR4, t28 is now a
+    // .test.ts (no `assert_eq N "$TS_COUNT"` line to grep), so pin the SAME
+    // observable against the SOURCE OF TRUTH instead — VALID_EVENT_TYPES in
+    // aidlc-audit.ts — which is stronger (it asserts the real count, not a
+    // sibling test's transcription of it). bolt-plan-marker-conflict reuses
+    // PRACTICES_OVERRIDE (discriminator-field disambiguation) and registers no
+    // new event; the framework total stays at the v0.6.0 Wave 4 MR 16 baseline
+    // of 67 (SWARM_DEGRADED was the last event born live, after the five
+    // SWARM_* lifecycle pre-registrations).
+    const auditSrc = readFileSync(
+      join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-audit.ts"),
+      "utf-8",
+    );
+    const block = auditSrc.match(/const VALID_EVENT_TYPES = new Set\(\[([\s\S]*?)\]\)/);
+    expect(block).not.toBeNull();
+    const count = (block ? block[1].match(/"[A-Z0-9_]+"/g) : null)?.length ?? -1;
+    expect(count).toBe(67);
   });
 
   // --- Test 4: MR 8 write-failure path coexists (different Reason value) ---

@@ -43,9 +43,14 @@
 //     - two emissions byte-equal (Test 6); row names == alphabetical EXPECTED
 //       "bugfix enterprise feature infra mvp poc refactor security-patch
 //       workshop" (Test 7), parsed by the same `^| <name>` regex the .sh awk'd.
-//   §3 row count == JSON (1 assert) -> Test 8: rows matching `^| <name>` ===
-//       Object.keys(scope-mapping.json).length (read directly, mirroring the
-//       .sh's `bun -e ... Object.keys(m).length`).
+//   §3 row count == scopes/*.md count (1 assert) -> Test 8: the .sh pinned
+//       rows matching `^| <name>` === `ls scopes/aidlc-*.md | wc -l`. v0.6.0
+//       deleted scope-mapping.json; loadScopeMapping() now derives the scope
+//       SET from the .claude/scopes/aidlc-*.md files present (aidlc-lib.ts:836)
+//       + scope-grid.json `.stages`, so that filesystem count is STILL the live
+//       source — the .sh assertion is restored faithfully against it (NOT
+//       obsolete). STRONGER: also pins gridCount === mdCount === rendered rows
+//       === 9 (triangulate the rendered table against BOTH shipped surfaces).
 //   §4 --check clean exit 0 on real SKILL.md (1 assert) -> Test 9: res.status===0
 //       (no AIDLC_SKILL_MD_PATH override -> the shipped SKILL.md).
 //   §5 --check exit 1 on drifted SKILL.md (2 asserts) -> Tests 10-11: copy the
@@ -96,6 +101,7 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -132,6 +138,26 @@ const SCOPE_GRID = join(
   "data",
   "scope-grid.json",
 );
+// CURRENT canonical scope-set surface (v0.6.0): scope-mapping.json was DELETED;
+// loadScopeMapping() now derives the scope SET from the .claude/scopes/*.md
+// files present (aidlc-lib.ts:836 — `for (const name of Object.keys(metadata))`,
+// metadata sourced from loadScopeMetadata over scopes/aidlc-*.md) and merges in
+// scope-grid.json's per-scope `.stages`. So scopes/aidlc-*.md is the live source
+// the .sh's §3 `ls scopes/aidlc-*.md | wc -l` count targeted — NOT obsolete.
+const SCOPES_DIR = join(
+  REPO_ROOT,
+  "dist",
+  "claude",
+  ".claude",
+  "scopes",
+);
+
+/** Count of shipped scope definition files: .claude/scopes/aidlc-*.md. */
+function scopesMdCount(): number {
+  return readdirSync(SCOPES_DIR).filter(
+    (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
+  ).length;
+}
 
 const tempDirs: string[] = [];
 const tempFiles: string[] = [];
@@ -298,14 +324,28 @@ describe("t67 scope-table emission (migrated from t67-scope-table.sh §1-3)", ()
     expect(names.join(" ")).toBe(EXPECTED_ROW_ORDER);
   });
 
-  // --- §3: row count matches scope-grid.json ---
-  test("8: scope-table row count matches scope-grid.json", () => {
+  // --- §3: row count matches the CURRENT shipped scope-set surface ---
+  // The .sh pinned `rowCount === ls scopes/aidlc-*.md | wc -l`. v0.6.0 deleted
+  // scope-mapping.json; loadScopeMapping() now derives the scope SET from the
+  // .claude/scopes/aidlc-*.md files present (aidlc-lib.ts:836) and the per-scope
+  // grid from scope-grid.json. The .sh's filesystem count is therefore STILL the
+  // live source — not obsolete — so we restore it AND triangulate against the
+  // grid (every scopes/*.md scope must carry a grid `.stages` entry) and the
+  // rendered table rows. All three must agree; that is strictly stronger than
+  // the .sh (rows == scopes/*.md only) and than the prior twin (rows == grid).
+  test("8: scope-table row count matches scopes/*.md AND scope-grid.json", () => {
     const rowCount = rowNames(scopeTable().out).length;
-    const jsonCount = Object.keys(
+    const mdCount = scopesMdCount();
+    const gridCount = Object.keys(
       JSON.parse(readFileSync(SCOPE_GRID, "utf-8")),
     ).length;
-    expect(rowCount).toBe(jsonCount);
-    expect(rowCount).toBe(9); // STRONGER: pin the concrete count
+    // .sh §3 assertion (restored against the current shipped source surface):
+    expect(rowCount).toBe(mdCount);
+    // STRONGER: the compiled grid covers exactly the scopes/*.md set …
+    expect(gridCount).toBe(mdCount);
+    expect(rowCount).toBe(gridCount);
+    // … and the concrete count is pinned.
+    expect(rowCount).toBe(9);
   });
 });
 

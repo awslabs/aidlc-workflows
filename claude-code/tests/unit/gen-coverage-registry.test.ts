@@ -29,6 +29,7 @@ import {
   cpSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -46,6 +47,7 @@ import {
   mechanismFromSegment,
   mechanismOfTestFile,
   mechanismRank,
+  mechanismsOf,
   parseCoversHeader,
   parseObjectDispatchKeys,
   parseSwitchDispatchCases,
@@ -567,5 +569,295 @@ describe("committed coverage registry is fresh (the live CI ratchet)", () => {
       );
     }
     expect(chk.status).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. mechanismsOf is BODY-DERIVED (MR3, the Wave-2 keystone).
+//
+// Until MR3, mechanism came from the filename SEGMENT (t17.cli -> cli). MR3
+// makes it the SET read from the drivers the body actually CALLS (refactor doc
+// §2): driveAidlc( -> sdk, a tui-drive.ts spawn -> tui, and a shipped-binary
+// subprocess (claude -p, a bun/node spawn of an aidlc-*.ts tool, or a bash
+// spawn of run-tests.sh) -> cli. These tests pin three properties:
+//
+//   (a) THREE KNOWN-ANSWER FIXTURES — body wins over the segment; the codeView
+//       comment-strip recovers a swallowed spawn; an import is not a drive.
+//   (b) THE none->cli RECLASSIFICATION SET — broadening the cli arm beyond
+//       `claude -p` reclassifies exactly the deterministic tool/hook/runner
+//       spawners. This is the MR3 deliverable; the set is MEASURED off disk and
+//       pinned here so a predicate regression (a missed spawn, or a false
+//       positive flipping an import-only floor test) reds immediately.
+//   (c) HONESTY: derived == recorded — for every committed coverage claim, the
+//       mechanism the registry stored equals mechanismsOf(body) recomputed live,
+//       so the registry can never record a mechanism the body does not drive.
+// ---------------------------------------------------------------------------
+describe("mechanismsOf is body-derived (MR3)", () => {
+  // (a) Known-answer fixtures — each a minimal in-test source string. The
+  // filename argument is chosen to DISAGREE with the body so "body wins" is
+  // unambiguous.
+  test("driveAidlc() in a file NAMED .none derives sdk (body beats segment)", () => {
+    const src = [
+      "// covers: audit:STAGE_STARTED",
+      'import { driveAidlc } from "../harness/sdk-drive.ts";',
+      "test('x', async () => {",
+      '  const r = await driveAidlc("/aidlc bugfix");',
+      "  expect(r).toBeDefined();",
+      "});",
+    ].join("\n");
+    expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["sdk"]);
+  });
+
+  test("a // comment containing /* above a real tool spawn still derives cli", () => {
+    // A leading "// …/*…" line-comment must not interfere with deriving cli from
+    // the spawn below it. NOTE: this case alone does NOT distinguish the current
+    // string-aware codeView from the older indexOf("//") form — both strip this
+    // whole leading-"//" line before any block pass, so both derive cli. The
+    // genuine phantom-block-from-a-string-literal regression is pinned by the
+    // sibling "a /* inside a string literal …" fixture below (which derives none
+    // under the old form and cli under the string-aware strip). This fixture's
+    // job is the narrower one: a //-comment whose text contains "/*" never
+    // suppresses cli derivation.
+    const src = [
+      "// covers: subcommand:aidlc-state:show",
+      'import { spawnSync } from "node:child_process";',
+      "// matches tests/fixtures/**/*.md  (a glob with /* in a // comment)",
+      "const BUN = process.execPath;",
+      'const TOOL = "../../dist/claude/.claude/tools/aidlc-state.ts";',
+      'test("x", () => {',
+      '  const r = spawnSync(BUN, [TOOL, "show"], { encoding: "utf-8" });',
+      "  expect(r.status).toBe(0);",
+      "});",
+    ].join("\n");
+    expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
+  });
+
+  test("a // inside a string literal (a URL) does NOT truncate the real spawn", () => {
+    // codeView strips comments while respecting string literals — so the "//" in
+    // an "https://…" string is NOT treated as a line-comment opener. This fixture
+    // bites the string-aware strip SPECIFICALLY: the URL string and the spawn are
+    // on the SAME physical line, with the URL FIRST. The pre-hardening codeView
+    // (indexOf("//") line-strip) truncated that line at `"https:` — erasing the
+    // spawnSync + tool literal that follow it on the same line — so it derived
+    // none. The string-aware strip keeps the whole line, so the spawn registers
+    // cli. (Verified: this source derives cli under HEAD and none under the old
+    // indexOf form, so it distinguishes the two.)
+    const src = [
+      "// covers: subcommand:aidlc-state:show",
+      'import { spawnSync } from "node:child_process";',
+      "const BUN = process.execPath;",
+      'const u = "https://example.com/aidlc"; const r = spawnSync(BUN, ["../../dist/claude/.claude/tools/aidlc-state.ts", "show"]);',
+      "expect(r.status).toBe(0);",
+    ].join("\n");
+    expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
+  });
+
+  test("a /* inside a string literal does NOT open a phantom block comment", () => {
+    // The string-aware strip leaves "/*" and "*/" INSIDE a string literal alone,
+    // so a glob-like string value cannot open a phantom block comment that
+    // swallows the spawn between it and a later "*/"-bearing string.
+    const src = [
+      "// covers: subcommand:aidlc-state:show",
+      'import { spawnSync } from "node:child_process";',
+      "const BUN = process.execPath;",
+      'const pat = "glob /* not a comment";',
+      'const TOOL = "../../dist/claude/.claude/tools/aidlc-state.ts";',
+      '  const r = spawnSync(BUN, [TOOL, "show"], { encoding: "utf-8" });',
+      'const close = "and */ still not a comment";',
+      "expect(r.status).toBe(0);",
+    ].join("\n");
+    expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
+  });
+
+  test("a suffix-free file with a dotted descriptive slug seeds none (no throw)", () => {
+    // Forward-compat for MR6 (suffix drop): once .none/.cli are gone, a test whose
+    // basename carries a DOT in a descriptive slug (not a mechanism segment) must
+    // fall back to none, never crash the generator. mechanismOfTestFile recognises
+    // only real mechanism segments; any other trailing dot-segment seeds none.
+    const src = '// covers: function:foo\ntest("x", () => { expect(1).toBe(1); });';
+    expect(mechanismsOf("t200.scope-exclusion.test.ts", src)).toEqual(["none"]);
+  });
+
+  test("importing resolveWinNode without a tui-drive.ts spawn does NOT derive tui", () => {
+    // D-TUI-7: resolveWinNode is import-safe. An import line is stripped by
+    // codeView, so a helper imported (but whose driver is never spawned in the
+    // body) must not register tui. With no driver call at all, the body scan is
+    // inconclusive and falls back to the filename segment (here: none).
+    const src = [
+      "// covers: function:resolveWinNode",
+      'import { resolveWinNode } from "../harness/tui-drive.ts";',
+      'test("x", () => {',
+      "  expect(typeof resolveWinNode).toBe('function');",
+      "});",
+    ].join("\n");
+    expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["none"]);
+  });
+
+  // Recursively list every t*.test.ts under tests/ (the level dirs + harness).
+  // Tier-list-independent on purpose: the vision discovers a test by its living
+  // in a directory, so this walk mirrors that rather than hard-coding TEST_TIERS.
+  function allTestTsFiles(root: string): string[] {
+    const out: string[] = [];
+    for (const e of readdirSync(root, { withFileTypes: true })) {
+      const p = join(root, e.name);
+      if (e.isDirectory()) {
+        // Skip the transient run-output + node_modules; everything else is fair game.
+        if (e.name === "logs" || e.name === "node_modules") continue;
+        out.push(...allTestTsFiles(p));
+      } else if (e.name.endsWith(".test.ts")) {
+        out.push(p);
+      }
+    }
+    return out;
+  }
+
+  // (b) The MR3 reclassification set — MEASURED off disk, pinned here. A file is
+  // a none->cli reclassification when its filename segment says `none` but its
+  // body derives `cli` (a deterministic tool/hook/runner subprocess). If the
+  // predicate regresses (misses a spawn, or false-positives an import-only floor
+  // test), this list changes and the test reds — naming exactly which file moved.
+  //
+  // MAINTENANCE (read before you touch this): this pin is a deliberate manual
+  // ratchet. When a later MR adds or rewrites a DETERMINISTIC test that spawns an
+  // aidlc-*.ts tool / a hook / run-tests.sh under the bun-or-node runtime (MR4's
+  // floor rewrites and MR5's .sh->bun ports will do exactly this), that file is a
+  // new none->cli member and this test WILL red. That red is correct — add the
+  // new file's tests/-relative path to this array (the failure message prints the
+  // exact path that moved). Do NOT relax the assertion; the whole point is that a
+  // new spawning test cannot silently change the cli surface without a human edit.
+  const EXPECTED_NONE_TO_CLI = [
+    "feature/t111-session-skills-contract.test.ts",
+    "feature/t112.serial.none.test.ts",
+    "feature/t120-classify-roundtrip.test.ts",
+    "feature/t121-stop-hook-enforce.test.ts",
+    "feature/t127-single-stage-invariant.test.ts",
+    "feature/t128-custom-runner.test.ts",
+    "feature/t130-scope-runners.test.ts",
+    "feature/t131-hooks-settings-fire.test.ts",
+    "feature/t135-invoke-swarm.test.ts",
+    "feature/t33-hook-concurrency.test.ts",
+    "feature/t52-drift-meta-validation.test.ts",
+    "feature/t54-compaction-and-test-run.test.ts",
+    "feature/t66.none.test.ts",
+    "feature/t78-bolt-worktree-lifecycle.test.ts",
+    "feature/t89.none.test.ts",
+    "feature/t91.none.test.ts",
+    "feature/t95-sensor-fire-hook-feature.test.ts",
+    "feature/t96.none.test.ts",
+    "integration/t-custom-harness-compile.test.ts",
+    "integration/t45-revision-loop.test.ts",
+    "integration/t46-parallel-bolt.test.ts",
+    "integration/t47-failure-injection.test.ts",
+    "integration/t48-runtime-graph-end-to-end.test.ts",
+    "integration/t49-bolt-sensor-failures.test.ts",
+    "integration/t99-learnings-gate-flow.test.ts",
+    "smoke/t05-run-tests-parallel.test.ts",
+    "smoke/t130-scope-runners.test.ts",
+    "smoke/t86-stage-protocol-section-13.test.ts",
+    "unit/gen-coverage-registry.test.ts",
+    "unit/t07-hook-audit-logger.test.ts",
+    "unit/t08.none.test.ts",
+    "unit/t09.none.test.ts",
+    "unit/t10-hook-session-start.test.ts",
+    "unit/t100-memory-template-lifecycle.test.ts",
+    "unit/t11.none.test.ts",
+    "unit/t112-learnings-distribution-guard.test.ts",
+    "unit/t114-orchestrate-next.test.ts",
+    "unit/t116-directive-path-resolution.test.ts",
+    "unit/t124-scope-transpose.test.ts",
+    "unit/t125-scope-files.test.ts",
+    "unit/t125.none.test.ts",
+    "unit/t129-stage-runner-drift.test.ts",
+    "unit/t13-hook-input-robustness.test.ts",
+    "unit/t133-bolt-dag-compile.test.ts",
+    "unit/t18.none.test.ts",
+    "unit/t29.none.test.ts",
+    "unit/t30-hook-session-end.test.ts",
+    "unit/t61.none.test.ts",
+    "unit/t68-version-changelog-sync.test.ts",
+    "unit/t77-bolt-worktree-flags.test.ts",
+    "unit/t80.none.test.ts",
+    "unit/t82-hold-merge-invariant.test.ts",
+    "unit/t83-doctor-orphan-worktree.test.ts",
+    "unit/t94-sensor-fire-hook.test.ts",
+    "workflow/t113.none.test.ts",
+    "workflow/t126-emitter-pairing-cofire.test.ts",
+    "workflow/t53.test.ts",
+    "workflow/t60-construction-worktrees-enterprise.test.ts",
+    "workflow/t61-construction-worktrees-feature.test.ts",
+    "workflow/t62-construction-worktrees-mvp.test.ts",
+    "workflow/t63-construction-worktrees-poc.test.ts",
+    "workflow/t64-construction-worktrees-workshop.test.ts",
+    "workflow/t65-construction-worktrees-bugfix.test.ts",
+    "workflow/t66-construction-worktrees-refactor.test.ts",
+    "workflow/t67-construction-worktrees-security-patch.test.ts",
+    "worktree/t07-audit-fork-merge.test.ts",
+    "worktree/t09-halt-and-ask-preservation.test.ts",
+    "worktree/t10-halt-and-ask-discard.test.ts",
+    "worktree/t11-halt-and-ask-retry-correlation.test.ts",
+    "worktree/t12-bolt-runtime-graph-fork.test.ts",
+    "worktree/t134-swarm-referee.test.ts",
+  ];
+
+  test("the none->cli reclassification set is exactly the deterministic spawners", () => {
+    const measured: string[] = [];
+    for (const abs of allTestTsFiles(TESTS_DIR)) {
+      const base = abs.split("/").pop() as string;
+      const seg = mechanismOfTestFile(base);
+      const set = mechanismsOf(base, readFileSync(abs, "utf-8"));
+      if (seg === "none" && set.includes("cli")) {
+        measured.push(abs.slice(TESTS_DIR.length + 1));
+      }
+    }
+    expect(measured.sort()).toEqual([...EXPECTED_NONE_TO_CLI].sort());
+  });
+
+  // (c) HONESTY — derived == recorded over the whole committed registry. Every
+  // coverage claim stored a `mechanism`; recompute mechanismsOf(body) for that
+  // claim's file and assert the stored scalar is a MEMBER of the derived set.
+  // (The registry serialises the set's strongest representative; membership is
+  // the honest invariant — a recorded mechanism the body does not drive is a lie.)
+  test("every recorded coverage mechanism is one the body actually derives", () => {
+    const registry = JSON.parse(
+      readFileSync(join(TESTS_DIR, ".coverage-registry.json"), "utf-8"),
+    );
+    // Collect (file, mechanism) pairs from every unit's coveredBy[].
+    const pairs = new Map<string, Set<string>>(); // file -> recorded mechanisms
+    const collect = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        for (const v of node) collect(v);
+      } else if (node && typeof node === "object") {
+        const o = node as Record<string, unknown>;
+        if (Array.isArray(o.coveredBy)) {
+          for (const c of o.coveredBy as Array<Record<string, unknown>>) {
+            if (typeof c.file === "string" && typeof c.mechanism === "string") {
+              if (!pairs.has(c.file)) pairs.set(c.file, new Set());
+              (pairs.get(c.file) as Set<string>).add(c.mechanism);
+            }
+          }
+        }
+        for (const v of Object.values(o)) collect(v);
+      }
+    };
+    collect(registry);
+
+    const lies: string[] = [];
+    for (const [relFile, recorded] of pairs) {
+      // relFile is repo-root-relative (tests/<tier>/<name>); only .test.ts files
+      // are body-scannable. .sh claims fall back to the segment and are not the
+      // subject of this body-derive honesty check.
+      if (!relFile.endsWith(".test.ts")) continue;
+      const abs = join(REPO_ROOT, relFile);
+      const base = relFile.split("/").pop() as string;
+      // Compare as plain strings: `recorded` holds JSON mechanism strings, and we
+      // assert each is a MEMBER of the body-derived set (also as strings).
+      const derived = new Set<string>(mechanismsOf(base, readFileSync(abs, "utf-8")));
+      for (const m of recorded) {
+        if (!derived.has(m)) {
+          lies.push(`${relFile}: recorded ${m}, body derives {${[...derived].join(",")}}`);
+        }
+      }
+    }
+    expect(lies).toEqual([]);
   });
 });

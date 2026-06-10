@@ -623,7 +623,18 @@ export function mechanismOfTestFile(fileName: string): Mechanism {
     .replace(/\.sh$/, "");
   const parts = stripped.split(".");
   if (parts.length >= 2) {
-    return mechanismFromSegment(parts[parts.length - 1]);
+    // The trailing dot-segment is only a mechanism when it IS one (the legacy
+    // `.cli`/`.none`/`.sdk`/`.tui` suffix, or `.calibration`). Any OTHER trailing
+    // segment is a DESCRIPTIVE slug, not a mechanism — e.g. once MR6 drops the
+    // suffixes, a suffix-free `t200.scope-exclusion.test.ts` must seed `none`,
+    // not crash the generator. So recognise a real mechanism segment, else fall
+    // through to `none` (the weakest seed — it can never over-claim). The strict
+    // throwing form (mechanismFromSegment) stays for callers that demand a known
+    // segment; here the fallback must be total.
+    const seg = parts[parts.length - 1];
+    if ((MECHANISMS as readonly string[]).includes(seg)) return seg as Mechanism;
+    if (seg === "calibration") return "sdk";
+    return "none";
   }
   return "none";
 }
@@ -637,7 +648,10 @@ export function mechanismOfTestFile(fileName: string): Mechanism {
  *  are stripped first) and collect every match (not the first):
  *    - `driveAidlc(` ............ adds `sdk` (the Agent-SDK driver)
  *    - spawns `tui-drive.ts` .... adds `tui` (the painted-terminal driver)
- *    - `claude -p` / `--print` .. adds `cli` (the literal shipped binary)
+ *    - shipped-surface spawn .... adds `cli` (the literal shipped binary): `claude -p`,
+ *                                 a runtime (`BUN`/`process.execPath`/`"bun"`/`"node"`)
+ *                                 spawn whose argv targets an `aidlc-*.ts` tool, or a
+ *                                 `bash`/`execFileSync("bash")` spawn of `run-tests.sh`
  *  Scanning the code view (not the raw source) is what makes "match the CALL /
  *  SPAWN expression, never a bare mention" true: the t118 lesson (it references
  *  `run_claude` only in a comment that says it NEVER calls it) AND D-TUI-7 (only
@@ -665,8 +679,9 @@ export function mechanismsOf(fileName: string, src: string): Mechanism[] {
   if (/\bdriveAidlc\s*\(/.test(code)) found.add("sdk");
   // tui — spawning the painted-terminal driver by its filename (in code, not an import).
   if (/tui-drive\.ts/.test(code)) found.add("tui");
-  // cli — driving the literal shipped binary in print mode.
-  if (/claude\s+-p\b|claude\s+--print\b/.test(code)) found.add("cli");
+  // cli — driving a shipped binary as a subprocess (claude -p, an aidlc-*.ts tool
+  // under the bun/node runtime, or run-tests.sh under bash). See drivesCliSurface.
+  if (drivesCliSurface(code)) found.add("cli");
 
   if (found.size === 0) {
     // Inconclusive body scan → seed from the filename segment (non-breaking).
@@ -674,6 +689,59 @@ export function mechanismsOf(fileName: string, src: string): Mechanism[] {
   }
   // Ladder-order the derived set so serialisation / inspection is deterministic.
   return MECHANISMS.filter((m) => found.has(m));
+}
+
+/** Does this code-view DRIVE the shipped CLI surface as a subprocess? Three ways,
+ *  each a genuine spawn of a literal shipped binary — never a bare mention:
+ *
+ *    1. `claude -p` / `claude --print` — the one live-model preflight surface.
+ *       (A `claude --version` AVAILABILITY GUARD is NOT a drive — it is excluded,
+ *        which is why 16 tui tests that guard on `spawnSync("claude",["--version"])`
+ *        stay {tui} and never spuriously gain {cli}.)
+ *    2. A RUNTIME spawn — `spawnSync`/`spawn`/`execSync`/`execFileSync`/`Bun.spawn*`
+ *       whose runtime is `BUN` / `process.execPath` / a literal `"bun"` or `"node"` —
+ *       whose argv targets an `aidlc-*.ts` tool. The tool is matched whether it is an
+ *       inline string literal (`spawnSync(BUN,["…/aidlc-state.ts"])`) OR a const bound
+ *       to one (`const GRAPH_TS = join(TOOLS_DIR,"aidlc-graph.ts"); spawnSync(BUN,[GRAPH_TS,…])`),
+ *       since the const definition survives in the code view (imports/comments are stripped,
+ *       but a `const X = "…aidlc-*.ts"` is real code).
+ *    3. A `bash` spawn (`spawnSync("bash",…)` / `execFileSync("bash",…)`) of `run-tests.sh`.
+ *
+ *  WHY gate on a real spawn and not a bare `aidlc-*.ts` mention: 12 deterministic floor
+ *  tests reference a tool ONLY through a multi-line `import { … } from "…/aidlc-lib.ts"`
+ *  whose path lands on a CONTINUATION line the import-strip misses — they call the lib
+ *  IN-PROCESS and must stay {none}. Requiring (spawn primitive ∧ runtime ∧ shipped target)
+ *  keeps every such import-only test out of cli. */
+function drivesCliSurface(code: string): boolean {
+  // 1. claude in print mode (NOT --version).
+  if (/claude\s+-p\b|claude\s+--print\b/.test(code)) return true;
+
+  // The shipped targets: an aidlc-*.ts tool, or the run-tests.sh runner — as a
+  // string literal anywhere in the code view (inline arg OR a `const X = "…"` def).
+  const hasAidlcToolLiteral = /["'][^"']*\baidlc-[A-Za-z0-9_-]+\.ts["']/.test(code);
+  const hasRunnerLiteral = /["'][^"']*\brun-tests\.sh["']/.test(code);
+  if (!hasAidlcToolLiteral && !hasRunnerLiteral) return false;
+
+  // 2 + 3. A subprocess primitive must actually appear AND its launcher must be a
+  // runtime / bash — never tmux, git, grep, or the tui driver binary (those are not
+  // the shipped CLI surface). We require a runtime/bash token to co-occur with a
+  // spawn primitive; combined with the shipped-target literal above, that is the
+  // "spawned a shipped binary" signal.
+  const SPAWN_PRIMITIVE =
+    /\b(?:spawnSync|spawn|execSync|execFileSync|Bun\.spawnSync|Bun\.spawn)\s*[({]/;
+  if (!SPAWN_PRIMITIVE.test(code)) return false;
+
+  // runtime launcher (bun/node) — covers `spawnSync(BUN,…)`, `spawnSync(process.execPath,…)`,
+  // `Bun.spawnSync({cmd:["bun",…]})` (t18's object form), and literal `"bun"`/`"node"`.
+  const RUNTIME_LAUNCHER =
+    /\bBUN\b|\bprocess\.execPath\b|["'](?:bun|node)["']/;
+  if (RUNTIME_LAUNCHER.test(code) && hasAidlcToolLiteral) return true;
+
+  // bash launcher driving the runner.
+  const BASH_LAUNCHER = /["']bash["']/;
+  if (BASH_LAUNCHER.test(code) && hasRunnerLiteral) return true;
+
+  return false;
 }
 
 /** A code-only view of a test's source: per line, ES `import` statements, shell
@@ -692,16 +760,81 @@ export function mechanismsOf(fileName: string, src: string): Mechanism[] {
  *  site the mechanism scan needs. Stripping `//` lines first removes that trigger
  *  so the block pass only ever sees genuine block comments. */
 function codeView(src: string): string {
+  // First drop whole `import` statements and shell shebang/comment lines — a
+  // driver named only in an import path or a `#` line is not a driver the test
+  // calls. (Whole-line removal; safe because these never share a line with a
+  // spawn/call expression.)
   const lineStripped = src
     .split("\n")
     .map((line) => {
       if (/^\s*import\b/.test(line)) return ""; // ES import — not a driver call
       if (/^\s*#/.test(line)) return ""; // shell comment / shebang
-      const c = line.indexOf("//"); // strip trailing/full TS line comment
-      return c >= 0 ? line.slice(0, c) : line;
+      return line;
     })
     .join("\n");
-  return lineStripped.replace(/\/\*[\s\S]*?\*\//g, " ");
+  // Then strip `//` line comments and `/* … */` block comments with a single
+  // pass that RESPECTS string literals, so a `//` inside a URL ("https://…") or
+  // a `/*` inside a string ("a glob /* …") never truncates or swallows real
+  // code. This subsumes the earlier line-strip-before-block ordering (a `//`
+  // comment that merely CONTAINS `/*` is consumed as a line comment, so it can
+  // no longer open a phantom block) AND closes the string-literal hole that the
+  // indexOf/regex form had. Regex literals are not lexed (a `/`-delimited regex
+  // containing `//` or `/*` is vanishingly rare in a test body and never carries
+  // a driver token), so they are left as a known, documented non-goal.
+  return stripCommentsRespectingStrings(lineStripped);
+}
+
+/** Remove line comments and block comments from TS/JS source while leaving the
+ *  contents of string literals (single-quote, double-quote, backtick) intact, so
+ *  a comment-opener appearing INSIDE a string (a URL's "//", or a "/*" in a glob)
+ *  never truncates or swallows real code. A small single-pass state machine — not
+ *  a full tokeniser (it does not lex regex literals) — sufficient for the
+ *  mechanism scan, whose tokens (driveAidlc(, tui-drive.ts, spawnSync, BUN,
+ *  claude -p) never live inside a string or a regex. Newlines are preserved so
+ *  downstream line-based patterns still work. */
+function stripCommentsRespectingStrings(src: string): string {
+  let out = "";
+  const n = src.length;
+  let i = 0;
+  while (i < n) {
+    const ch = src[i];
+    const next = i + 1 < n ? src[i + 1] : "";
+    // String literal — copy verbatim through the matching quote, honouring `\` escapes.
+    if (ch === '"' || ch === "'" || ch === "`") {
+      out += ch;
+      i++;
+      while (i < n) {
+        const c = src[i];
+        if (c === "\\") {
+          // Escape: copy the backslash and the next char verbatim.
+          out += c;
+          if (i + 1 < n) out += src[i + 1];
+          i += 2;
+          continue;
+        }
+        out += c;
+        i++;
+        if (c === ch) break; // closing quote of the same kind
+      }
+      continue;
+    }
+    // `//` line comment — drop to end of line (the newline itself is preserved
+    // by the next iteration, so line structure is kept).
+    if (ch === "/" && next === "/") {
+      while (i < n && src[i] !== "\n") i++;
+      continue;
+    }
+    // `/* … */` block comment — drop through the closing `*/`.
+    if (ch === "/" && next === "*") {
+      i += 2;
+      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
 }
 
 /** Parse a `covers:` header out of a test file's leading comment block.

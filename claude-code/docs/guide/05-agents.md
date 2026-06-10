@@ -16,7 +16,7 @@ In human software teams, a mob of 3-5 people covers an entire feature from requi
 
 - **Fewer agents means fewer handoffs.** Every agent boundary is a potential information loss point. When the same aidlc-architect-agent leads both Application Design and Functional Design, it retains context naturally instead of requiring an explicit handoff artifact.
 
-- **Support roles enable collaboration without proliferation.** Rather than creating a "security-reviewer-agent" and a "compliance-reviewer-agent" and a "cost-reviewer-agent," the aidlc-devsecops-agent and aidlc-compliance-agent participate as support agents in stages led by others. The conductor performs every Task call; each agent runs on its own and stays within its own work.
+- **Support roles enable collaboration without proliferation.** Rather than creating a "security-reviewer-agent" and a "compliance-reviewer-agent" and a "cost-reviewer-agent," the aidlc-devsecops-agent and aidlc-compliance-agent participate as support agents in stages led by others. On an inline stage (every multi-agent stage in the shipped graph) the conductor adopts each support agent as a persona in its own context rather than dispatching it as a `Task`; `Task` is reserved for `mode: subagent` stages. Either way the conductor performs every delegation — agents never invoke each other.
 
 - **Knowledge loading is per-agent.** Each agent loads methodology knowledge from `.claude/knowledge/<agent-name>/` and team knowledge from `aidlc-docs/knowledge/<agent-name>/`. Fewer agents means fewer knowledge directories to manage and fewer opportunities for contradictory guidance.
 

@@ -375,7 +375,7 @@ The 6-step process:
 Some stages involve multiple agents: a lead agent and one or more support agents. The coordination pattern is strictly sequential and orchestrator-mediated:
 
 1. Execute the lead agent's work first, producing primary artifacts.
-2. Invoke support agents with the lead's output as context.
+2. Bring in each support agent with the lead's output as context. On an inline stage (every multi-agent stage in the shipped graph) the orchestrator loads the support agent as a persona in its own context rather than dispatching a `Task`; `Task` is reserved for `mode: subagent` stages.
 3. Synthesize all agent outputs into the final stage artifacts.
 4. Agents do NOT invoke each other -- only the orchestrator delegates. Enforced by `disallowedTools: Task` on all agent files.
 
