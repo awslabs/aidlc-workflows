@@ -97,19 +97,27 @@ Part 1 is owned by the orchestrator. The orchestrator MAY dispatch a single disp
   6. Commit
 - [ ] No placeholders: never write "TBD", "add error handling", "similar to Task N", or reference a type/function not defined in some task
 - [ ] Include story traceability references in each task
+- [ ] In each task, list the E2E scenario IDs the task advances
+- [ ] For every scenario, fix its GREEN POINT — the last task after which the scenario must pass — and record it in the mapping table as `green-point: <task-id>`
+- [ ] Do NOT create TDD tasks for authoring the E2E features/steps (that is Part 2 Step 0's job); DO create tasks for the other-layer tests required by the mapping table
 
 ## Step 7: Self-Review the Plan
 - [ ] Coverage: every locked contract and every assigned story maps to at least one task
 - [ ] Placeholder scan: remove any vague step
 - [ ] Type/signature consistency: names, parameters, and return types match across tasks and the locked contracts
+- [ ] E2E coverage: every acceptance criterion of every assigned story appears in the mapping table; every other-layer row has a covering task
+- [ ] Green-point consistency: every scenario has a green point; the referenced task exists; no green point precedes a task the scenario depends on
+- [ ] Gherkin conventions: keywords are English; no `# language:` directive
 - [ ] Apply any enabled extension rules to the plan (e.g., property-based testing injects test-planning requirements). Non-compliance with an enabled, applicable extension rule is a blocking finding.
 
 ## Step 8: Save the Plan
-- [ ] Save the complete plan (Locked Contracts + tasks) as the SINGLE file `aidlc-docs/construction/plans/{unit-name}-code-generation-plan.md`
+- [ ] Save the complete plan (Locked Contracts + Locked E2E Scenarios + E2E Execution Environment + tasks) as the SINGLE file `aidlc-docs/construction/plans/{unit-name}-code-generation-plan.md`
 - [ ] State that this plan is the single source of truth for Code Generation
 
 ## Step 9: GATE 1 - Plan Approval
 - [ ] Summarize the plan for the user (contract highlights, task count, story coverage)
+- [ ] Include the E2E digest: acceptance-criteria count / E2E scenario count / other-layer count (with reasons) / additional-scenario count, plus the environment digest (verified facts vs assumptions)
+- [ ] Call out E2E exclusions, additional scenarios, and environment assumptions as EXPLICIT approval items
 - [ ] Before asking, log the approval prompt with an ISO 8601 timestamp in `audit.md`
 - [ ] Wait for explicit approval of the entire plan; if changes are requested, update and repeat
 - [ ] Record the user's approval response (verbatim) with timestamp in `audit.md`
