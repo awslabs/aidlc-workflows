@@ -129,6 +129,14 @@ Part 1 is owned by the orchestrator. The orchestrator MAY dispatch a single disp
 
 The orchestrator executes the approved plan task-by-task, continuously (do NOT pause to check in between tasks). The only stops are GATE 2 and a `BLOCKED`/`NEEDS_CONTEXT` escalation the orchestrator cannot resolve.
 
+## Step 0: Author the E2E Suite (once, before the task loop)
+Skip this step ONLY in the GATE 1-approved zero-scenario degenerate case.
+- [ ] Dispatch a fresh E2E author subagent using the E2E Author template, providing: the full `Locked E2E Scenarios` text, the `E2E Execution Environment` section, the e2e file locations from the plan's file map, and the relevant locked contracts (screens, routes, `data-testid` conventions)
+- [ ] The subagent materializes the locked text into feature files VERBATIM (no rewording, no omission, no additions), implements steps for all scenarios, and tags EVERY scenario `@draft`
+- [ ] If the environment boots: the subagent runs the suite and confirms every scenario fails FOR THE EXPECTED REASON (missing element / failed assertion — config or syntax errors are the author's own bugs to fix), reported as "observed Red". If it cannot boot: "declared Red" with the reason
+- [ ] Record the per-scenario Red status (observed/declared) in the plan's mapping table; carry any new `data-testid` names the author defined into the context of the tasks that implement those elements
+- [ ] Confirm the subagent committed the suite
+
 ## Step 1: For Each Task - Dispatch the Implementer Subagent
 - [ ] Dispatch a fresh implementer subagent using the Implementer template (see SUBAGENT PROMPT TEMPLATES)
 - [ ] Provide the full task text, the relevant `Locked Contracts` excerpt, and scene-setting context (do NOT have the subagent read the plan file)
