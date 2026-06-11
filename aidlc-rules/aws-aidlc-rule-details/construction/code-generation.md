@@ -161,9 +161,13 @@ Skip this step ONLY in the GATE 1-approved zero-scenario degenerate case.
 - [ ] Immediately mark the task's steps `[x]` in the plan and mark associated stories `[x]`
 - [ ] Update `aidlc-docs/aidlc-state.md` current status
 - [ ] Confirm the implementer committed the task (per-task commit is required)
+- [ ] GREEN-POINT CHECK: if this task is the green point of any scenario(s), remove their `@draft` tag and run the FULL non-draft E2E suite (the orchestrator runs the command directly and keeps only a summary of the output):
+  - All green -> record the green achievement (with task ID) in the plan's mapping table and continue; the scenario joins the regression net from now on
+  - A newly un-drafted scenario is still red -> BDD mismatch; resolve NOW via one of: (a) implementation gap -> re-dispatch the implementer subagent to fix it (spec review again); (b) steps bug -> fix the steps only (changing locked scenario text or weakening assertions is FORBIDDEN); (c) wrong green-point estimate -> re-assign to a later task, log the reason in `audit.md`, restore `@draft`; (d) the locked scenario itself is wrong -> escalate to the user (it is a GATE 1-approved contract)
+  - A previously-green scenario turned red -> regression; fix it before moving to the next task
+- [ ] A declared-Red scenario MUST actually run at its first green point; if the environment still cannot boot, resolve that now as a blocking problem — do NOT defer it via (c)
 - [ ] Brownfield: verify no duplicate files were created (e.g., no `ClassName_modified.java` alongside `ClassName.java`)
-- [ ] If tasks remain, return to Step 1; otherwise continue
-- [ ] After all tasks, dispatch one final reviewer subagent over the whole unit's implementation
+- [ ] If tasks remain, return to Step 1; otherwise proceed to Step 6
 
 ## Step 6: GATE 2 - Present Completion and Get Approval
 
