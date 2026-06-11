@@ -60,14 +60,34 @@ Part 1 is owned by the orchestrator. The orchestrator MAY dispatch a single disp
   - Domain entity fields, types, and constraints
   - Inter-unit / inter-module interfaces and dependency contracts
   - Error contracts (exception type to response mapping)
-- [ ] For ANY field the upstream design left vague or missing, write a blocking question using the `[Answer]:` tag format. DO NOT proceed to Step 4 until every `[Answer]:` is resolved by the user.
+- [ ] For ANY field the upstream design left vague or missing, write a blocking question using the `[Answer]:` tag format. DO NOT proceed to Step 6 until every `[Answer]:` is resolved by the user.
 - [ ] Log each contract question and the user's answer in `audit.md`
 
-## Step 3: Map File Structure
+## Step 3: Lock E2E Scenarios (BDD shift-left)
+- [ ] Derive Gherkin scenarios from the acceptance criteria (Given/When/Then) of ALL stories assigned to this unit, and record the FULL Gherkin text as the SECOND section of the plan, titled `## Locked E2E Scenarios`
+- [ ] Gherkin conventions: keywords in English (`Feature` / `Background` / `Scenario` / `Given` / `When` / `Then` / `And`); step content in the project's working language (e.g., Japanese). Do NOT use the `# language:` directive. Write steps against `data-testid` selectors (see Automation Friendly Code Rules)
+- [ ] Build a FULL-COVERAGE mapping table: one row per acceptance criterion, mapping it to either an E2E scenario ID, or another test layer (API / integration / unit) plus the reason E2E cannot verify it (typical: cookie attributes, authorizer rejection, token non-issuance). Every other-layer row MUST be covered by a task in Step 6
+- [ ] If an acceptance criterion is too vague to turn into a scenario, write a blocking question using the `[Answer]:` tag format — do NOT fill the gap by invention
+- [ ] If you add a scenario with NO corresponding acceptance criterion, mark it "additional scenario (undocumented upstream)" — the user decides at GATE 1 whether to reflect it upstream
+- [ ] Degenerate case: if the unit has no user-facing flow and ALL criteria map to other layers, zero E2E scenarios is legitimate. Keep the mapping table (all rows other-layer, with reasons) and get it approved at GATE 1; Part 2 Step 0, green points, and the E2E completion criteria are then N/A (state the reason in the GATE 2 E2E Coverage Summary)
+
+## Step 4: Lock the E2E Execution Environment
+- [ ] Record a plan section titled `## E2E Execution Environment`. Required for ANY target system:
+  - The E2E run command and what it starts (app, DB, docker-compose topology, inside/outside devcontainer)
+  - VERIFIED FACTS vs ASSUMPTIONS, explicitly separated. Brownfield / increment 2+: actually run the existing E2E suite ONCE during planning and record the baseline evidence (command + result: environment boots, existing scenarios green). Greenfield first unit: mark every item as an assumption and point to the task that builds the environment
+  - Any unknown that affects plan validity (e.g., how the DB starts) becomes an `[Answer]:` blocking question
+- [ ] Add the items that apply to the unit's interface type; write "N/A + one-line reason" for the rest (no blanks, no guessed filler):
+  - Web UI: base URL, HTTPS/certificate handling, browser run prerequisites
+  - API: endpoint base URL, TLS handling
+  - CLI / batch: invocation method, input/output passing (files, stdin/stdout)
+  - If authentication exists: how a logged-in state is established
+  - If persistence exists: how seed data is loaded
+
+## Step 5: Map File Structure
 - [ ] List the exact files to create or modify and the single responsibility of each (never `aidlc-docs/` for application code)
 - [ ] Brownfield: review the existing structure and plan in-place modification
 
-## Step 4: Decompose into Bite-Sized TDD Tasks
+## Step 6: Decompose into Bite-Sized TDD Tasks
 - [ ] Break the work into tasks where each task targets ONE behavior, structured as these checkbox steps:
   1. Write a failing test (include the actual test code; reference the locked contract)
   2. Run the test and confirm it FAILS for the expected reason
@@ -78,17 +98,17 @@ Part 1 is owned by the orchestrator. The orchestrator MAY dispatch a single disp
 - [ ] No placeholders: never write "TBD", "add error handling", "similar to Task N", or reference a type/function not defined in some task
 - [ ] Include story traceability references in each task
 
-## Step 5: Self-Review the Plan
+## Step 7: Self-Review the Plan
 - [ ] Coverage: every locked contract and every assigned story maps to at least one task
 - [ ] Placeholder scan: remove any vague step
 - [ ] Type/signature consistency: names, parameters, and return types match across tasks and the locked contracts
 - [ ] Apply any enabled extension rules to the plan (e.g., property-based testing injects test-planning requirements). Non-compliance with an enabled, applicable extension rule is a blocking finding.
 
-## Step 6: Save the Plan
+## Step 8: Save the Plan
 - [ ] Save the complete plan (Locked Contracts + tasks) as the SINGLE file `aidlc-docs/construction/plans/{unit-name}-code-generation-plan.md`
 - [ ] State that this plan is the single source of truth for Code Generation
 
-## Step 7: GATE 1 - Plan Approval
+## Step 9: GATE 1 - Plan Approval
 - [ ] Summarize the plan for the user (contract highlights, task count, story coverage)
 - [ ] Before asking, log the approval prompt with an ISO 8601 timestamp in `audit.md`
 - [ ] Wait for explicit approval of the entire plan; if changes are requested, update and repeat
