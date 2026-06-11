@@ -36,7 +36,7 @@ Part 1 step renumbering this plan performs: old Step 3 (Map File Structure) → 
 
 - Modify: `aidlc-rules/aws-aidlc-rule-details/construction/code-generation.md` (Overview section, lines ~4-6 and the ASCII diagram ~lines 27-40)
 
-- [ ] **Step 1: Update the two Part bullets in the Overview**
+- [x] **Step 1: Update the two Part bullets in the Overview**
 
 Replace:
 
@@ -52,7 +52,7 @@ with:
 - **Part 2 - Generation**: Author the E2E suite first (every scenario starts Red under a `@draft` tag), then execute the approved plan by dispatching a fresh subagent per task (implement via TDD), with spec-compliance and code-quality reviewer subagents after each task. Each scenario's `@draft` tag is removed at its planned green point, so E2E verification happens DURING generation, not after it.
 ```
 
-- [ ] **Step 2: Update the context-discipline sentence**
+- [x] **Step 2: Update the context-discipline sentence**
 
 Replace:
 
@@ -66,7 +66,7 @@ with:
 **Context discipline (why subagents)**: the orchestrator keeps ONLY the plan (which contains the locked contracts and locked E2E scenarios) in its context.
 ```
 
-- [ ] **Step 3: Replace the PART 1 / PART 2 lines of the ASCII diagram**
+- [x] **Step 3: Replace the PART 1 / PART 2 lines of the ASCII diagram**
 
 Replace:
 
@@ -97,7 +97,7 @@ with:
   update aidlc-state -> next unit / Build & Test   (unit + local E2E already GREEN)
 ```
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 ```bash
 cd aidlc-rules && npx markdownlint-cli2 "aws-aidlc-rule-details/construction/code-generation.md" && grep -c "E2E" aws-aidlc-rule-details/construction/code-generation.md
@@ -105,7 +105,7 @@ cd aidlc-rules && npx markdownlint-cli2 "aws-aidlc-rule-details/construction/cod
 
 Expected: lint passes (exit 0); the grep count is >= 8.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add aidlc-rules/aws-aidlc-rule-details/construction/code-generation.md
@@ -120,7 +120,7 @@ git commit -m "feat(code-gen): BDD overview and architecture diagram"
 
 - Modify: `aidlc-rules/aws-aidlc-rule-details/construction/code-generation.md` (PART 1 section)
 
-- [ ] **Step 1: Fix the forward reference in Step 2**
+- [x] **Step 1: Fix the forward reference in Step 2**
 
 Replace:
 
@@ -134,7 +134,7 @@ with:
 - [ ] For ANY field the upstream design left vague or missing, write a blocking question using the `[Answer]:` tag format. DO NOT proceed to Step 6 until every `[Answer]:` is resolved by the user.
 ```
 
-- [ ] **Step 2: Insert the two new steps before "Map File Structure" and renumber it to Step 5**
+- [x] **Step 2: Insert the two new steps before "Map File Structure" and renumber it to Step 5**
 
 Replace:
 
@@ -168,7 +168,7 @@ with:
 ## Step 5: Map File Structure
 ```
 
-- [ ] **Step 3: Renumber the remaining Part 1 headings**
+- [x] **Step 3: Renumber the remaining Part 1 headings**
 
 Apply these four heading replacements (exact match each):
 
@@ -179,7 +179,7 @@ Apply these four heading replacements (exact match each):
 ## Step 7: GATE 1 - Plan Approval                ->   ## Step 9: GATE 1 - Plan Approval
 ```
 
-- [ ] **Step 4: Verify the Part 1 step sequence**
+- [x] **Step 4: Verify the Part 1 step sequence**
 
 ```bash
 cd aidlc-rules && grep -n "^## Step" aws-aidlc-rule-details/construction/code-generation.md | head -9
@@ -193,7 +193,7 @@ cd aidlc-rules && npx markdownlint-cli2 "aws-aidlc-rule-details/construction/cod
 
 Expected: exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add aidlc-rules/aws-aidlc-rule-details/construction/code-generation.md
@@ -208,7 +208,7 @@ git commit -m "feat(code-gen): lock E2E scenarios and execution environment in P
 
 - Modify: `aidlc-rules/aws-aidlc-rule-details/construction/code-generation.md` (Steps 6, 7, 8, 9 as renumbered by Task 2)
 
-- [ ] **Step 1: Extend Step 6 (Decompose)**
+- [x] **Step 1: Extend Step 6 (Decompose)**
 
 Replace:
 
@@ -225,7 +225,7 @@ with:
 - [ ] Do NOT create TDD tasks for authoring the E2E features/steps (that is Part 2 Step 0's job); DO create tasks for the other-layer tests required by the mapping table
 ```
 
-- [ ] **Step 2: Extend Step 7 (Self-Review)**
+- [x] **Step 2: Extend Step 7 (Self-Review)**
 
 Replace:
 
@@ -242,7 +242,7 @@ with:
 - [ ] Gherkin conventions: keywords are English; no `# language:` directive
 ```
 
-- [ ] **Step 3: Extend Step 8 (Save)**
+- [x] **Step 3: Extend Step 8 (Save)**
 
 Replace:
 
@@ -256,7 +256,7 @@ with:
 - [ ] Save the complete plan (Locked Contracts + Locked E2E Scenarios + E2E Execution Environment + tasks) as the SINGLE file `aidlc-docs/construction/plans/{unit-name}-code-generation-plan.md`
 ```
 
-- [ ] **Step 4: Extend Step 9 (GATE 1)**
+- [x] **Step 4: Extend Step 9 (GATE 1)**
 
 Replace:
 
@@ -272,7 +272,7 @@ with:
 - [ ] Call out E2E exclusions, additional scenarios, and environment assumptions as EXPLICIT approval items
 ```
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
 ```bash
 cd aidlc-rules && npx markdownlint-cli2 "aws-aidlc-rule-details/construction/code-generation.md" && grep -c "green point\|GREEN POINT\|green-point" aws-aidlc-rule-details/construction/code-generation.md
@@ -293,7 +293,7 @@ git commit -m "feat(code-gen): green points, E2E self-review checks, GATE 1 cove
 
 - Modify: `aidlc-rules/aws-aidlc-rule-details/construction/code-generation.md` (top of PART 2)
 
-- [ ] **Step 1: Insert Step 0 before the task loop**
+- [x] **Step 1: Insert Step 0 before the task loop**
 
 Replace:
 
@@ -315,7 +315,7 @@ Skip this step ONLY in the GATE 1-approved zero-scenario degenerate case.
 ## Step 1: For Each Task - Dispatch the Implementer Subagent
 ```
 
-- [ ] **Step 2: Verify and commit**
+- [x] **Step 2: Verify and commit**
 
 ```bash
 cd aidlc-rules && grep -n "^## Step 0" aws-aidlc-rule-details/construction/code-generation.md && npx markdownlint-cli2 "aws-aidlc-rule-details/construction/code-generation.md"
@@ -336,7 +336,7 @@ git commit -m "feat(code-gen): Part 2 Step 0 E2E suite authoring (all scenarios 
 
 - Modify: `aidlc-rules/aws-aidlc-rule-details/construction/code-generation.md` (PART 2 "Step 5: Record Progress and Continue")
 
-- [ ] **Step 1: Replace the Step 5 bullet list**
+- [x] **Step 1: Replace the Step 5 bullet list**
 
 Replace:
 
@@ -366,7 +366,7 @@ with:
 
 (Note: the "final reviewer subagent" bullet moves into the new Step 6 created by Task 6.)
 
-- [ ] **Step 2: Verify and commit**
+- [x] **Step 2: Verify and commit**
 
 ```bash
 cd aidlc-rules && grep -n "GREEN-POINT CHECK" aws-aidlc-rule-details/construction/code-generation.md && npx markdownlint-cli2 "aws-aidlc-rule-details/construction/code-generation.md"
@@ -387,7 +387,7 @@ git commit -m "feat(code-gen): green-point un-draft + non-draft suite run in tas
 
 - Modify: `aidlc-rules/aws-aidlc-rule-details/construction/code-generation.md` (end of PART 2)
 
-- [ ] **Step 1: Insert the new Step 6 and renumber the GATE 2 heading**
+- [x] **Step 1: Insert the new Step 6 and renumber the GATE 2 heading**
 
 Replace:
 
@@ -408,7 +408,7 @@ with:
 ## Step 7: GATE 2 - Present Completion and Get Approval
 ```
 
-- [ ] **Step 2: Renumber the Record Approval heading**
+- [x] **Step 2: Renumber the Record Approval heading**
 
 Replace:
 
@@ -424,7 +424,7 @@ with:
 
 CAUTION: do this AFTER Step 1 of this task (Step 1 creates a second `## Step 7:` heading; this edit's old_string `## Step 7: Record Approval and Update Progress` is still unique because the GATE 2 heading has a different title).
 
-- [ ] **Step 3: Insert the E2E Coverage Summary into the GATE 2 message structure**
+- [x] **Step 3: Insert the E2E Coverage Summary into the GATE 2 message structure**
 
 Replace:
 
@@ -440,7 +440,7 @@ with:
 4. **Formatted Workflow Message** (mandatory): Always end with this exact format:
 ```
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 cd aidlc-rules && grep -n "^## Step" aws-aidlc-rule-details/construction/code-generation.md
@@ -467,7 +467,7 @@ git commit -m "feat(code-gen): E2E completion + refactor phase and GATE 2 covera
 
 - Modify: `aidlc-rules/aws-aidlc-rule-details/construction/code-generation.md` (SUBAGENT PROMPT TEMPLATES section)
 
-- [ ] **Step 1: Insert the template before the Implementer template**
+- [x] **Step 1: Insert the template before the Implementer template**
 
 Replace:
 
@@ -512,7 +512,7 @@ You are authoring the E2E test suite for: [unit name]
 ## Implementer Template
 ````
 
-- [ ] **Step 2: Verify and commit**
+- [x] **Step 2: Verify and commit**
 
 ```bash
 cd aidlc-rules && grep -n "^## .* Template" aws-aidlc-rule-details/construction/code-generation.md && npx markdownlint-cli2 "aws-aidlc-rule-details/construction/code-generation.md"
@@ -533,7 +533,7 @@ git commit -m "feat(code-gen): E2E Author subagent template"
 
 - Modify: `aidlc-rules/aws-aidlc-rule-details/construction/code-generation.md` (Critical Rules and Completion Criteria sections)
 
-- [ ] **Step 1: Add the BDD Rules section after Generation Phase Rules**
+- [x] **Step 1: Add the BDD Rules section after Generation Phase Rules**
 
 Replace:
 
@@ -552,7 +552,7 @@ with:
 ### Extension Rules
 ```
 
-- [ ] **Step 2: Extend the Completion Criteria**
+- [x] **Step 2: Extend the Completion Criteria**
 
 Replace:
 
@@ -580,7 +580,7 @@ with:
 - Final whole-unit reviewer subagent passed
 ```
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 cd aidlc-rules && grep -n "BDD Rules\|DRAFT TAG DISCIPLINE" aws-aidlc-rule-details/construction/code-generation.md && npx markdownlint-cli2 "aws-aidlc-rule-details/construction/code-generation.md"
@@ -601,7 +601,7 @@ git commit -m "feat(code-gen): BDD critical rules and E2E completion criteria"
 
 - Read: `aidlc-rules/aws-aidlc-rule-details/construction/code-generation.md` (full)
 
-- [ ] **Step 1: Step-number invariants**
+- [x] **Step 1: Step-number invariants**
 
 ```bash
 cd aidlc-rules && grep -n "^## Step\|^# PART" aws-aidlc-rule-details/construction/code-generation.md
@@ -609,7 +609,7 @@ cd aidlc-rules && grep -n "^## Step\|^# PART" aws-aidlc-rule-details/constructio
 
 Expected: PART 1 → Steps 1-9 in order; PART 2 → Steps 0-8 in order; no duplicates within a part.
 
-- [ ] **Step 2: No stale cross-references**
+- [x] **Step 2: No stale cross-references**
 
 ```bash
 cd aidlc-rules && grep -n "Step 4 until\|Locked Contracts + tasks)\|after all tasks: final" aws-aidlc-rule-details/construction/code-generation.md
@@ -617,7 +617,7 @@ cd aidlc-rules && grep -n "Step 4 until\|Locked Contracts + tasks)\|after all ta
 
 Expected: ZERO matches (all three patterns were replaced in Tasks 2, 3, and 1/5 respectively).
 
-- [ ] **Step 3: Spec-invariant greps**
+- [x] **Step 3: Spec-invariant greps**
 
 ```bash
 cd aidlc-rules && grep -c "@draft" aws-aidlc-rule-details/construction/code-generation.md && grep -c "Locked E2E Scenarios" aws-aidlc-rule-details/construction/code-generation.md && grep -c "E2E Execution Environment" aws-aidlc-rule-details/construction/code-generation.md
@@ -625,7 +625,7 @@ cd aidlc-rules && grep -c "@draft" aws-aidlc-rule-details/construction/code-gene
 
 Expected: `@draft` >= 6; `Locked E2E Scenarios` >= 4; `E2E Execution Environment` >= 4.
 
-- [ ] **Step 4: Final lint + full read-through**
+- [x] **Step 4: Final lint + full read-through**
 
 ```bash
 cd aidlc-rules && npx markdownlint-cli2 "aws-aidlc-rule-details/construction/code-generation.md"
@@ -633,7 +633,7 @@ cd aidlc-rules && npx markdownlint-cli2 "aws-aidlc-rule-details/construction/cod
 
 Expected: exit 0. Then read the whole file top to bottom once and check against the spec's D1-D8 decision table — every decision must be visible in the text.
 
-- [ ] **Step 5: Commit any fixes**
+- [x] **Step 5: Commit any fixes**
 
 ```bash
 git add aidlc-rules/aws-aidlc-rule-details/construction/code-generation.md
