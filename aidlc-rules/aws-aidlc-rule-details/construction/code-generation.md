@@ -225,6 +225,37 @@ Present the completion message in this structure:
 
 The orchestrator copies a template, fills the bracketed slots, and dispatches it as a fresh subagent. "Dispatch a subagent" maps to your agent's subagent mechanism (e.g., GitHub Copilot CLI or Claude Code subagents / sub-tasks); if none exists, run the template in a fresh session using the plan file as shared state.
 
+## E2E Author Template
+
+```text
+You are authoring the E2E test suite for: [unit name]
+
+## Locked E2E Scenarios
+[paste the FULL locked Gherkin text - this is a contract; do not reword, omit, or add]
+
+## E2E Execution Environment
+[paste the plan's environment section - run command, topology, base URL, seed data, auth precondition]
+
+## Conventions
+- Gherkin keywords in English; step content in the project's working language. Use the locked text VERBATIM as the feature body
+- Selectors use data-testid ({component}-{element-role}); report any new testid names you define
+- Tag EVERY scenario @draft
+
+## Your job
+1. Materialize the locked text verbatim into feature files (locations: [from the plan's file map])
+2. Implement steps for all scenarios
+3. If the environment boots: run the suite and confirm each scenario fails for the EXPECTED reason
+   (missing element / failed assertion). Config and syntax errors are your own bugs - fix them.
+   If it cannot boot: record the reason (declared Red)
+4. Commit and report
+
+## Report format
+- Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
+- Per-scenario Red status table (observed Red (reason) / declared Red (reason))
+- New data-testid names you defined
+- Files created/changed
+```
+
 ## Implementer Template
 
 ```text
