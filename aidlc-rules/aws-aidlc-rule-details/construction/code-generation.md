@@ -362,6 +362,11 @@ You are reviewing code quality. Only run after spec compliance has passed.
 - **STORY TRACEABILITY**: mark stories `[x]` when functionality is implemented
 - **RESPECT DEPENDENCIES**: implement only when unit dependencies are satisfied
 
+### BDD Rules
+- **E2E SCENARIOS ARE CONTRACTS**: feature files must match the locked scenario text. Weakening assertions or deleting scenarios is a contract change and requires user approval
+- **GREEN POINTS ARE CHECKPOINTS**: never skip the suite run at a green point. While a newly un-drafted scenario stays red, do not move to the next task until the mismatch branch (a-d) is resolved
+- **DRAFT TAG DISCIPLINE**: `@draft` is added only in Part 2 Step 0 and removed only at green points. All draft/green checks are scoped to THIS unit's feature files; past units' leftovers are reported, never blocking
+
 ### Extension Rules
 - Apply enabled extension rules in BOTH Part 1 (Planning) and Part 2 (Generation). For example, property-based testing injects test requirements into the plan and into the per-task tests. Check each extension's Enabled status in `aidlc-state.md`. Non-compliance with an enabled, applicable extension rule is a blocking finding; include a compliance summary at GATE 2.
 
@@ -373,9 +378,11 @@ When generating UI code (web, mobile, desktop), ensure elements are automation-f
 - Keep `data-testid` values stable across code changes (only change when element purpose changes)
 
 ## Completion Criteria
-- Locked Contracts section complete with no unresolved `[Answer]:` questions
+- Locked Contracts, Locked E2E Scenarios, and E2E Execution Environment sections complete with no unresolved `[Answer]:` questions
 - All plan tasks marked `[x]`; for each task, its tests were run and are GREEN (the failing state was observed first)
 - All unit stories implemented and traceable
 - Each task committed (per-task commit)
+- All locked E2E scenarios for this unit observed GREEN; zero `@draft` tags remain in this unit's feature files; feature files match the locked text (or the zero-scenario N/A was approved at GATE 1)
+- E2E Coverage Summary presented at GATE 2
 - Final whole-unit reviewer subagent passed
 - Compliance summary for enabled extensions presented at GATE 2
