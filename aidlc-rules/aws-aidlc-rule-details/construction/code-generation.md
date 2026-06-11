@@ -169,7 +169,14 @@ Skip this step ONLY in the GATE 1-approved zero-scenario degenerate case.
 - [ ] Brownfield: verify no duplicate files were created (e.g., no `ClassName_modified.java` alongside `ClassName.java`)
 - [ ] If tasks remain, return to Step 1; otherwise proceed to Step 6
 
-## Step 6: GATE 2 - Present Completion and Get Approval
+## Step 6: After All Tasks - E2E Completion and Refactor
+- [ ] Verify ZERO `@draft` tags remain in THIS unit's feature files (a leftover = an unreached green point; resolve it before GATE 2). `@draft` leftovers in past units' files do NOT block — report them only
+- [ ] Run the full E2E suite: every scenario in this unit's feature files must be GREEN
+- [ ] Dispatch a refactor subagent to clean up the unit's implementation while keeping unit tests AND E2E green; re-run both suites afterwards
+- [ ] Dispatch one final reviewer subagent over the whole unit's implementation, including this check: this unit's feature files still match the locked scenario text (no silent weakening or deletion)
+- [ ] Degenerate case (zero scenarios approved at GATE 1): skip the E2E checks above but still run the refactor subagent and the final reviewer
+
+## Step 7: GATE 2 - Present Completion and Get Approval
 
 Present the completion message in this structure:
 
@@ -185,7 +192,9 @@ Present the completion message in this structure:
    - List tests, documentation, and deployment artifacts with paths
    - Keep factual, no workflow instructions
 
-3. **Formatted Workflow Message** (mandatory): Always end with this exact format:
+3. **E2E Coverage Summary** (mandatory unless the zero-scenario N/A was approved at GATE 1): acceptance-criteria count / E2E scenario count (all observed GREEN) / other-layer count (with their covering tasks) / additional-scenario count. In the N/A case, state the approved reason instead.
+
+4. **Formatted Workflow Message** (mandatory): Always end with this exact format:
 
 ```markdown
 > **📋 <u>**REVIEW REQUIRED:**</u>**  
@@ -205,7 +214,7 @@ Present the completion message in this structure:
 ---
 ```
 
-## Step 7: Record Approval and Update Progress
+## Step 8: Record Approval and Update Progress
 - [ ] Wait for explicit, unambiguous approval; if changes are requested, fix and repeat
 - [ ] Log the approval prompt and the user's verbatim response with ISO 8601 timestamps in `audit.md`
 - [ ] Mark Code Generation complete for this unit in `aidlc-state.md`
