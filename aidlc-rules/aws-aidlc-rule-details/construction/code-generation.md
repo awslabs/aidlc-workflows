@@ -2,8 +2,8 @@
 
 ## Overview
 This stage is executed by an **orchestration session** (the main agent) that preserves the AI-DLC phase contract while delegating the actual work to **disposable subagents**. It generates code for each unit of work through two parts:
-- **Part 1 - Planning**: Lock interface contracts, then produce a bite-sized, test-driven code generation plan.
-- **Part 2 - Generation**: Execute the approved plan by dispatching a fresh subagent per task (implement via TDD), with spec-compliance and code-quality reviewer subagents after each task.
+- **Part 1 - Planning**: Lock interface contracts AND E2E scenarios (the BDD outer loop, derived verbatim-traceably from the stories' acceptance criteria), then produce a bite-sized, test-driven code generation plan.
+- **Part 2 - Generation**: Author the E2E suite first (every scenario starts Red under a `@draft` tag), then execute the approved plan by dispatching a fresh subagent per task (implement via TDD), with spec-compliance and code-quality reviewer subagents after each task. Each scenario's `@draft` tag is removed at its planned green point, so E2E verification happens DURING generation, not after it.
 
 **Note**: For brownfield projects, "generate" means modify existing files when appropriate, not create duplicates.
 
@@ -22,21 +22,24 @@ The orchestration session is responsible ONLY for the AI-DLC interface and coord
 
 Inside that shell, the work is done by **use-once subagents**. The orchestrator constructs exactly the context each subagent needs (full task text + relevant locked-contract excerpt + scene-setting) and never lets a subagent inherit the session history.
 
-**Context discipline (why subagents)**: the orchestrator keeps ONLY the plan (which contains the locked contracts) in its context. Generated code lives in the subagents, not the orchestrator. This prevents context bloat as the unit grows.
+**Context discipline (why subagents)**: the orchestrator keeps ONLY the plan (which contains the locked contracts and locked E2E scenarios) in its context. Generated code lives in the subagents, not the orchestrator. This prevents context bloat as the unit grows.
 
 ```text
 [ ORCHESTRATION SESSION ]  preserves AI-DLC interface; holds only plan + contracts
   upstream design artifacts + aidlc-state.md
         |
         v
-  PART 1   lock contracts -> map files -> bite-sized TDD tasks -> self-review
-        |  (GATE 1: plan approval + audit)
+  PART 1   lock contracts -> lock E2E scenarios (Gherkin + AC mapping + green points)
+           -> lock E2E environment -> map files -> bite-sized TDD tasks -> self-review
+        |  (GATE 1: plan approval incl. E2E coverage, exclusions, environment + audit)
         v
-  PART 2   per task: implementer SA (TDD) -> spec reviewer SA -> quality reviewer SA
-           -> mark [x] + commit ; after all tasks: final whole-unit reviewer SA
-        |  (GATE 2: code approval + audit)
+  PART 2   step 0: E2E author SA -> features/steps, all scenarios @draft, Red recorded
+           per task: implementer SA (TDD) -> spec reviewer SA -> quality reviewer SA
+           -> mark [x] + commit -> [green point?] un-draft + run non-draft E2E suite
+           after all: zero @draft -> all E2E GREEN -> refactor SA -> final reviewer SA
+        |  (GATE 2: code approval + E2E Coverage Summary + audit)
         v
-  update aidlc-state -> next unit / Build & Test   (unit tests already GREEN)
+  update aidlc-state -> next unit / Build & Test   (unit + local E2E already GREEN)
 ```
 
 ---
