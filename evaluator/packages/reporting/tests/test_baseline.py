@@ -274,10 +274,13 @@ class TestReportIntegration:
 
 class TestRealBaseline:
     def test_load_real_golden(self):
-        path = Path(__file__).resolve().parents[3] / "test_cases" / "sci-calc" / "golden.yaml"
+        path = Path(__file__).resolve().parents[3] / "test_cases" / "sci-calc-v2" / "golden.yaml"
         if not path.exists():
             return
         b = load_baseline(path)
-        assert b.tests_passed == 180
-        assert b.contract_passed == 88
-        assert b.qualitative_score == 0.8544
+        # sci-calc-v2/golden.yaml is a median consensus across conforming runs.
+        # Assert the stable structural facts rather than exact medians (which
+        # shift if the baseline is regenerated from a different run set).
+        assert b.contract_passed == b.contract_total == 88
+        assert b.tests_passed == b.tests_total  # 100% unit pass in conforming runs
+        assert 0.0 < b.qualitative_score <= 1.0

@@ -7,8 +7,8 @@ Usage:
 
     # Run evaluation through Cursor
     python run_ide_evaluation.py --ide cursor \
-        --vision test_cases/sci-calc/vision.md \
-        --golden test_cases/sci-calc/golden-aidlc-docs
+        --vision test_cases/sci-calc-v2/vision.md \
+        --golden test_cases/sci-calc-v2/golden-aidlc-docs
 
     # Check prerequisites for an IDE
     python run_ide_evaluation.py --ide kiro --check-only

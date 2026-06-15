@@ -130,7 +130,7 @@ class TestCompareRunsWithRealData:
 
     def test_self_comparison_golden(self):
         golden = (
-            Path(__file__).resolve().parents[3] / "test_cases" / "sci-calc" / "golden-aidlc-docs"
+            Path(__file__).resolve().parents[3] / "test_cases" / "sci-calc-v2" / "golden-aidlc-docs"
         )
         if not golden.is_dir():
             return
@@ -143,7 +143,7 @@ class TestCompareRunsWithRealData:
 
     def test_cross_run_comparison(self):
         golden = (
-            Path(__file__).resolve().parents[3] / "test_cases" / "sci-calc" / "golden-aidlc-docs"
+            Path(__file__).resolve().parents[3] / "test_cases" / "sci-calc-v2" / "golden-aidlc-docs"
         )
         run1_docs = (
             Path(__file__).resolve().parents[3]

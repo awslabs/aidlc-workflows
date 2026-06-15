@@ -2,7 +2,7 @@
 
 Usage:
     python -m qualitative compare \
-        --reference test_cases/sci-calc/golden-aidlc-docs \
+        --reference test_cases/sci-calc-v2/golden-aidlc-docs \
         --candidate runs/20260213T194046-.../aidlc-docs \
         --profile default \
         --output comparison-results.yaml

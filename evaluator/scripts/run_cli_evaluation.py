@@ -7,8 +7,8 @@ Usage:
 
     # Run evaluation through kiro-cli
     python run_cli_evaluation.py --cli kiro-cli \
-        --vision test_cases/sci-calc/vision.md \
-        --golden test_cases/sci-calc/golden-aidlc-docs
+        --vision test_cases/sci-calc-v2/vision.md \
+        --golden test_cases/sci-calc-v2/golden-aidlc-docs
 
     # Check prerequisites for a CLI tool
     python run_cli_evaluation.py --cli kiro-cli --check-only

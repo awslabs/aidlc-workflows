@@ -9,7 +9,7 @@ Usage:
     python run_comparison_report.py
 
     # Specify runs directory and baseline
-    python run_comparison_report.py --runs-dir ./runs --baseline test_cases/sci-calc/golden.yaml
+    python run_comparison_report.py --runs-dir ./runs --baseline test_cases/sci-calc-v2/golden.yaml
 
     # Compare specific models
     python run_comparison_report.py --models nova-pro,sonnet-4-5

@@ -28,20 +28,22 @@ uv run python run.py test
 ./docker/sandbox/build.sh
 
 # Full pipeline: execute AIDLC workflow + evaluate + report (requires Bedrock) with defaults
+# Defaults target the canonical v2 golden master: test_cases/sci-calc-v2/
+# (golden-aidlc-docs/ = qualitative reference, golden.yaml = quantitative baseline).
 uv run python run.py full
 
 # Full pipeline: execute AIDLC workflow + evaluate + report (requires Bedrock)
 uv run python run.py full \
-    --vision test_cases/sci-calc/vision.md \
-    --tech-env test_cases/sci-calc/tech-env.md \
-    --golden test_cases/sci-calc/golden-aidlc-docs \
-    --openapi test_cases/sci-calc/openapi.yaml
+    --vision test_cases/sci-calc-v2/vision.md \
+    --tech-env test_cases/sci-calc-v2/tech-env.md \
+    --golden test_cases/sci-calc-v2/golden-aidlc-docs \
+    --openapi test_cases/sci-calc-v2/openapi.yaml
 
 # Evaluate an existing run (skip execution, just score via Bedrock)
 uv run python run.py full \
     --evaluate-only runs/<run-folder>/aidlc-docs \
-    --golden test_cases/sci-calc/golden-aidlc-docs \
-    --openapi test_cases/sci-calc/openapi.yaml
+    --golden test_cases/sci-calc-v2/golden-aidlc-docs \
+    --openapi test_cases/sci-calc-v2/openapi.yaml
 ```
 
 ## Evaluation Pipeline
@@ -197,10 +199,10 @@ If PMD is not found, duplication analysis is skipped with a note — it does not
 
 ```bash
 uv run python run.py full \
-    --vision test_cases/sci-calc/vision.md \
-    --tech-env test_cases/sci-calc/tech-env.md \
-    --golden test_cases/sci-calc/golden-aidlc-docs \
-    --openapi test_cases/sci-calc/openapi.yaml \
+    --vision test_cases/sci-calc-v2/vision.md \
+    --tech-env test_cases/sci-calc-v2/tech-env.md \
+    --golden test_cases/sci-calc-v2/golden-aidlc-docs \
+    --openapi test_cases/sci-calc-v2/openapi.yaml \
     --config config/default.yaml \
     --profile my-aws-profile \
     --region us-west-2 \
@@ -264,7 +266,7 @@ uv run python run.py compare
 # Compare specific models against golden baseline
 uv run python run.py compare \
     --models nova-pro,sonnet-4-5 \
-    --baseline test_cases/sci-calc/golden.yaml
+    --baseline test_cases/sci-calc-v2/golden.yaml
 ```
 
 This produces `runs/comparison/comparison-report.md` and `runs/comparison/comparison-data.yaml` with side-by-side metrics across all models (unit tests, contract tests, code quality, qualitative scores, token usage, and timing).
@@ -286,13 +288,13 @@ Supported adapters: `claude-code`, `kiro-cli`.
 ```bash
 # Run evaluation through Claude Code
 uv run python run.py cli --cli claude-code \
-    --vision test_cases/sci-calc/vision.md \
-    --golden test_cases/sci-calc/golden-aidlc-docs
+    --vision test_cases/sci-calc-v2/vision.md \
+    --golden test_cases/sci-calc-v2/golden-aidlc-docs
 
 # Run through Kiro CLI with a specific model
 uv run python run.py cli --cli kiro-cli \
-    --vision test_cases/sci-calc/vision.md \
-    --golden test_cases/sci-calc/golden-aidlc-docs \
+    --vision test_cases/sci-calc-v2/vision.md \
+    --golden test_cases/sci-calc-v2/golden-aidlc-docs \
     --model claude-sonnet-4
 
 # Check prerequisites for an adapter
@@ -326,8 +328,8 @@ Experimental adapters: Cursor, Cline, Copilot, Kiro, Windsurf, Antigravity.
 ```bash
 # Run evaluation through Cursor
 uv run python run.py ide --ide cursor \
-    --vision test_cases/sci-calc/vision.md \
-    --golden test_cases/sci-calc/golden-aidlc-docs
+    --vision test_cases/sci-calc-v2/vision.md \
+    --golden test_cases/sci-calc-v2/golden-aidlc-docs
 
 # Check prerequisites for an IDE adapter
 uv run python run.py ide --ide kiro --check-only
@@ -366,17 +368,17 @@ Generate cross-release trend reports that track evaluation metrics over time. Fe
 
 ```bash
 # Generate trend report (requires gh CLI authenticated)
-uv run python run.py trend --baseline test_cases/sci-calc/golden.yaml
+uv run python run.py trend --baseline test_cases/sci-calc-v2/golden.yaml
 
 # HTML only with verbose output
-uv run python run.py trend --baseline test_cases/sci-calc/golden.yaml --format html -v
+uv run python run.py trend --baseline test_cases/sci-calc-v2/golden.yaml --format html -v
 
 # Include local evaluation bundles
-uv run python run.py trend --baseline test_cases/sci-calc/golden.yaml \
+uv run python run.py trend --baseline test_cases/sci-calc-v2/golden.yaml \
     --local-bundle runs/my-run/report.zip
 
 # Gate mode (exit non-zero on regressions)
-uv run python run.py trend --baseline test_cases/sci-calc/golden.yaml --gate
+uv run python run.py trend --baseline test_cases/sci-calc-v2/golden.yaml --gate
 ```
 
 The HTML executive summary displays six metric cards:
@@ -398,8 +400,8 @@ For full execution-level controls you can run `aidlc-runner` directly:
 
 ```bash
 uv run aidlc-runner \
-    --vision test_cases/sci-calc/vision.md \
-    --tech-env test_cases/sci-calc/tech-env.md \
+    --vision test_cases/sci-calc-v2/vision.md \
+    --tech-env test_cases/sci-calc-v2/tech-env.md \
     --config config/default.yaml \
     --aws-profile my-aws-profile \
     --aws-region us-west-2 \

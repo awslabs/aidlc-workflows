@@ -21,14 +21,14 @@ Usage:
 
   # Full pipeline: execute AIDLC workflow + semantic evaluation
   python run_evaluation.py \
-      --vision test_cases/sci-calc/vision.md \
-      --tech-env test_cases/sci-calc/tech-env.md \
-      --golden test_cases/sci-calc/golden-aidlc-docs
+      --vision test_cases/sci-calc-v2/vision.md \
+      --tech-env test_cases/sci-calc-v2/tech-env.md \
+      --golden test_cases/sci-calc-v2/golden-aidlc-docs
 
   # Evaluate an existing run (skip execution, just score)
   python run_evaluation.py \
       --evaluate-only runs/20260213T202730-.../aidlc-docs \
-      --golden test_cases/sci-calc/golden-aidlc-docs
+      --golden test_cases/sci-calc-v2/golden-aidlc-docs
 
   # Run unit tests for all packages
   python run_evaluation.py --test

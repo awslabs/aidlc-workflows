@@ -17,7 +17,7 @@ Available modes:
 
 Usage:
     # Full pipeline evaluation
-    python run.py full --vision test_cases/sci-calc/vision.md
+    python run.py full --vision test_cases/sci-calc-v2/vision.md
 
     # CLI evaluation
     python run.py cli --cli kiro-cli --scenario sci-calc
@@ -38,7 +38,7 @@ Usage:
     python run.py ext-report --runs-dir runs/sci-calc/extension-test
 
     # Generate trend report across releases
-    python run.py trend --baseline test_cases/sci-calc/golden.yaml
+    python run.py trend --baseline test_cases/sci-calc-v2/golden.yaml
 
     # Run tests
     python run.py test

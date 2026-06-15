@@ -1,0 +1,69 @@
+# Quantitative regression baseline for the sci-calc-v2 test case.
+#
+# Provenance: per-metric MEDIAN across 40 conforming evaluation runs
+# (contract pass-rate >= 95%): 30 claude-code + 10 kiro. Using the median over
+# the conforming set makes the baseline robust to the bimodal spec-divergence
+# failures observed in the stability study.
+#
+# NOTE: artifact-count fields (source_files, test_files, total_files,
+# lines_of_code, doc_files) are intentionally 0 — the per-run metrics inflated
+# them by counting .venv/node_modules inside run workspaces, so they are
+# excluded from regression comparison until the collector is fixed.
+# To re-promote from a single run instead: reporting.baseline.promote(run, path).
+run_folder: consensus-median-40-conforming-runs
+promoted_at: ''
+executor_model: global.anthropic.claude-opus-4-6-v1
+simulator_model: mixed-kiro-and-claude
+execution:
+  wall_clock_ms: 2648974
+  total_tokens: 85565
+  input_tokens: 78628
+  output_tokens: 7060
+  handoffs: 244
+  executor:
+    input_tokens: 78628
+    output_tokens: 7060
+    total_tokens: 85565
+  simulator:
+    input_tokens: 0
+    output_tokens: 0
+    total_tokens: 0
+  repeated_context:
+    input_tokens: 0
+    output_tokens: 0
+    total_tokens: 0
+  api_total:
+    input_tokens: 78628
+    output_tokens: 7060
+    total_tokens: 85565
+context_size:
+  max_tokens: 0
+  avg_tokens: 0
+  median_tokens: 0
+artifacts:
+  source_files: 0
+  test_files: 0
+  total_files: 0
+  lines_of_code: 0
+  doc_files: 0
+unit_tests:
+  passed: 114
+  failed: 0
+  total: 114
+  pass_pct: 100.0
+  coverage_pct: 97.0
+contract_tests:
+  passed: 88
+  failed: 0
+  total: 88
+code_quality:
+  lint_errors: 0
+  lint_warnings: 0
+  lint_total: 0
+  security_total: 0
+  security_high: 0
+  duplication_blocks: 0
+qualitative:
+  overall_score: 0.7702
+  inception_score: 0.7532
+  construction_score: 0.615

@@ -596,7 +596,7 @@ test_cases/<case-name>/
   └── scenario.yaml           # Scenario metadata
 ```
 
-Available test cases: `sci-calc` (v1), `sci-calc-v2` (v2, default for kiro/claude runs), `todo-app`, `all-stages`.
+Available test cases: `sci-calc-v2` (the canonical v2 golden master; default for all runs).
 
 ---
 

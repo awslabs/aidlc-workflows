@@ -150,7 +150,7 @@ paths:
 
 def test_load_real_openapi_spec():
     """Validate that the actual sci-calc OpenAPI spec loads correctly."""
-    spec_path = Path(__file__).resolve().parents[3] / "test_cases" / "sci-calc" / "openapi.yaml"
+    spec_path = Path(__file__).resolve().parents[3] / "test_cases" / "sci-calc-v2" / "openapi.yaml"
     if not spec_path.exists():
         return
     spec = load_spec(spec_path)
