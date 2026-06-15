@@ -1,0 +1,22 @@
+# Grype configuration
+# https://github.com/anchore/grype#configuration
+
+# Only fail on high or critical vulnerabilities
+fail-on-severity: high
+
+# Ignore specific CVEs that have been reviewed and accepted.
+#
+# Grype is an SCA scanner (dependencies, not source lines), so there are no
+# inline source-code comments. All suppressions go here.
+#
+# To suppress a finding, add an entry with the CVE and a reason:
+#   - vulnerability: CVE-YYYY-NNNNN
+#     reason: "explanation of why this is acceptable"
+#
+# You can also scope a suppression to a specific package:
+#   - vulnerability: CVE-YYYY-NNNNN
+#     package:
+#       name: "package-name"
+#       version: "1.2.3"
+#     reason: "only affects feature X which we don't use"
+ignore: []
