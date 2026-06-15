@@ -54,7 +54,10 @@ jobs:
         run: uv run vulture packages run.py --min-confidence 80
 
       - name: pip-audit (dependency CVE scan)
-        run: uv run --with pip-audit pip-audit
+        # --skip-editable: the workspace's own packages (aidlc-shared, etc.) are
+        # editable installs not published to PyPI; pip-audit cannot resolve them
+        # and would otherwise exit non-zero. Third-party deps are still audited.
+        run: uv run --with pip-audit pip-audit --skip-editable
 
       - name: Pytest
         run: uv run python -m pytest packages
