@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.10] - 2026-06-16
+
+Brings the five MCP servers to the Kiro distribution (previously Claude-only). They ship in a new `.kiro/settings/mcp.json`; the architect and developer agents opt in via `includeMcpJson: true`, the conductor declares none. Re-copy your `dist/kiro/` to pick it up.
+
+* **New `.kiro/settings/mcp.json`** — `context7` + the four AWS servers (`aws-mcp`, `aws-pricing`, `aws-iac`, `aws-serverless`).
+* **Architect and developer agents gain `includeMcpJson: true`** plus the `@<server>` `tools` entries; the conductor gets none.
+* **Removed the broken `$schema`** from the three Kiro agent JSONs (wrong product, unreachable URL).
+
 ## [0.7.9] - 2026-06-16
 
 Extends the Stop-hook human-wait carve-out (v0.7.8) to the last common case: a **mid-stage clarifying question**. When the conductor asks you something mid-stage, the stage stays `[-]` in-progress — indistinguishable, by checkbox state alone, from a conductor that quit mid-work — so v0.7.8 deliberately left it to the block cap. The hook now reads the stage's `<slug>-questions.md`: when it carries an unanswered `[Answer]:` tag (a question is genuinely pending) the stop is allowed, so the workflow waits for your answer instead of nudging itself (and, as issue #356 saw, self-answering). The carve-out is strictly gated — it never fires under autonomous Construction (`Construction Autonomy Mode: autonomous`), where the loop must keep running unattended — and is positive-confirmation + fail-open like its siblings. Re-copy your `dist/<harness>/` to pick it up.

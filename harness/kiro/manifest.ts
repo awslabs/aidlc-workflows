@@ -51,6 +51,7 @@ const manifest: HarnessManifest = {
     { src: "agents/aidlc-developer-agent.json", dst: "agents/aidlc-developer-agent.json" },
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
     { src: "settings/cli.json", dst: "settings/cli.json" },
+    { src: "settings/mcp.json", dst: "settings/mcp.json" },
   ],
 
   // AGENTS.md renders from the shared skeleton with Kiro's fills, at the project
