@@ -1,0 +1,331 @@
+- id: BR-001
+  statement: "Division and modulo by zero must return DIVISION_BY_ZERO error"
+  category: "validation"
+  applies-to:
+    component-id: CMP-001
+    entity-id: ENT-001
+    api-id: API-001
+  trigger: "divide or modulo operation where b = 0"
+  logic: "IF operation in (divide, modulo) AND b == 0 THEN reject with DIVISION_BY_ZERO"
+  violation: "Return HTTP 400 with error code DIVISION_BY_ZERO"
+  source:
+    requirements:
+      - FR-arithmetic
+    stories:
+      - S-1
+
+- id: BR-002
+  statement: "Square root of negative number must return DOMAIN_ERROR"
+  category: "validation"
+  applies-to:
+    component-id: CMP-002
+    entity-id: ENT-004
+    api-id: API-002
+  trigger: "sqrt operation where a < 0"
+  logic: "IF operation == sqrt AND a < 0 THEN reject with DOMAIN_ERROR"
+  violation: "Return HTTP 400 with error code DOMAIN_ERROR"
+  source:
+    requirements:
+      - FR-powers
+    stories:
+      - S-4
+
+- id: BR-003
+  statement: "Nth root of negative number with even n must return DOMAIN_ERROR"
+  category: "validation"
+  applies-to:
+    component-id: CMP-002
+    entity-id: ENT-005
+    api-id: API-002
+  trigger: "nth_root operation where a < 0 and n is even"
+  logic: "IF operation == nth_root AND a < 0 AND n % 2 == 0 THEN reject with DOMAIN_ERROR"
+  violation: "Return HTTP 400 with error code DOMAIN_ERROR"
+  source:
+    requirements:
+      - FR-powers
+    stories:
+      - S-4
+
+- id: BR-004
+  statement: "Nth root of negative number with odd n is valid and returns negative result"
+  category: "calculation"
+  applies-to:
+    component-id: CMP-002
+    entity-id: ENT-005
+    api-id: API-002
+  trigger: "nth_root operation where a < 0 and n is odd"
+  logic: "IF a < 0 AND n % 2 == 1 THEN result = -(abs(a) ** (1/n))"
+  violation: "N/A — this is a valid computation"
+  source:
+    requirements:
+      - FR-powers
+    stories:
+      - S-4
+
+- id: BR-005
+  statement: "asin and acos require input in range [-1, 1]"
+  category: "validation"
+  applies-to:
+    component-id: CMP-003
+    entity-id: ENT-006
+    api-id: API-003
+  trigger: "asin or acos operation where |a| > 1"
+  logic: "IF operation in (asin, acos) AND (a < -1 OR a > 1) THEN reject with DOMAIN_ERROR"
+  violation: "Return HTTP 400 with error code DOMAIN_ERROR"
+  source:
+    requirements:
+      - FR-trigonometry
+    stories:
+      - S-6
+
+- id: BR-006
+  statement: "acosh requires input >= 1"
+  category: "validation"
+  applies-to:
+    component-id: CMP-003
+    entity-id: ENT-006
+    api-id: API-003
+  trigger: "acosh operation where a < 1"
+  logic: "IF operation == acosh AND a < 1 THEN reject with DOMAIN_ERROR"
+  violation: "Return HTTP 400 with error code DOMAIN_ERROR"
+  source:
+    requirements:
+      - FR-trigonometry
+    stories:
+      - S-7
+
+- id: BR-007
+  statement: "atanh requires input in range (-1, 1) exclusive"
+  category: "validation"
+  applies-to:
+    component-id: CMP-003
+    entity-id: ENT-006
+    api-id: API-003
+  trigger: "atanh operation where |a| >= 1"
+  logic: "IF operation == atanh AND (a <= -1 OR a >= 1) THEN reject with DOMAIN_ERROR"
+  violation: "Return HTTP 400 with error code DOMAIN_ERROR"
+  source:
+    requirements:
+      - FR-trigonometry
+    stories:
+      - S-7
+
+- id: BR-008
+  statement: "Logarithm inputs must be positive"
+  category: "validation"
+  applies-to:
+    component-id: CMP-004
+    entity-id: ENT-008
+    api-id: API-004
+  trigger: "ln, log10, or log2 operation where a <= 0"
+  logic: "IF operation in (ln, log10, log2) AND a <= 0 THEN reject with DOMAIN_ERROR"
+  violation: "Return HTTP 400 with error code DOMAIN_ERROR"
+  source:
+    requirements:
+      - FR-logarithms
+    stories:
+      - S-8
+
+- id: BR-009
+  statement: "Arbitrary-base log requires a > 0, base > 0, and base != 1"
+  category: "validation"
+  applies-to:
+    component-id: CMP-004
+    entity-id: ENT-009
+    api-id: API-004
+  trigger: "log operation with arbitrary base where a <= 0, base <= 0, or base == 1"
+  logic: "IF a <= 0 OR base <= 0 OR base == 1 THEN reject with DOMAIN_ERROR"
+  violation: "Return HTTP 400 with error code DOMAIN_ERROR"
+  source:
+    requirements:
+      - FR-logarithms
+    stories:
+      - S-9
+
+- id: BR-010
+  statement: "Exp overflow must return OVERFLOW error"
+  category: "validation"
+  applies-to:
+    component-id: CMP-004
+    entity-id: ENT-008
+    api-id: API-004
+  trigger: "exp operation when result exceeds representable float range"
+  logic: "IF math.exp(a) raises OverflowError THEN reject with OVERFLOW"
+  violation: "Return HTTP 400 with error code OVERFLOW"
+  source:
+    requirements:
+      - FR-errors
+    stories:
+      - S-21
+
+- id: BR-011
+  statement: "Statistics operations require at least 1 element"
+  category: "validation"
+  applies-to:
+    component-id: CMP-005
+    entity-id: ENT-010
+    api-id: API-005
+  trigger: "Any statistics operation with empty values array"
+  logic: "IF len(values) == 0 THEN reject with INVALID_INPUT"
+  violation: "Return HTTP 422 with error code INVALID_INPUT"
+  source:
+    requirements:
+      - FR-statistics
+    stories:
+      - S-11
+
+- id: BR-012
+  statement: "Sample stdev and variance require at least 2 elements"
+  category: "validation"
+  applies-to:
+    component-id: CMP-005
+    entity-id: ENT-010
+    api-id: API-005
+  trigger: "stdev or variance operation with fewer than 2 elements"
+  logic: "IF operation in (stdev, variance) AND len(values) < 2 THEN reject with INVALID_INPUT"
+  violation: "Return HTTP 422 with error code INVALID_INPUT"
+  source:
+    requirements:
+      - FR-statistics
+    stories:
+      - S-12
+
+- id: BR-013
+  statement: "Mode returns smallest value on ties"
+  category: "calculation"
+  applies-to:
+    component-id: CMP-005
+    entity-id: ENT-010
+    api-id: API-005
+  trigger: "mode operation when multiple values share the highest frequency"
+  logic: "IF multiple modes exist THEN return the smallest numeric value among them"
+  violation: "N/A — calculation rule"
+  source:
+    requirements:
+      - FR-statistics
+    stories:
+      - S-11
+
+- id: BR-014
+  statement: "Conversion units must be valid for the specified category"
+  category: "validation"
+  applies-to:
+    component-id: CMP-006
+    entity-id: ENT-011
+    api-id: API-007
+  trigger: "Conversion request with unrecognized from_unit or to_unit"
+  logic: "IF from_unit or to_unit not in valid units for the category THEN reject with INVALID_INPUT"
+  violation: "Return HTTP 422 with error code INVALID_INPUT"
+  source:
+    requirements:
+      - FR-conversions
+    stories:
+      - S-19
+
+- id: BR-015
+  statement: "Angle unit defaults to radians when not specified"
+  category: "policy"
+  applies-to:
+    component-id: CMP-003
+    entity-id: ENT-006
+    api-id: API-003
+  trigger: "Any trigonometric operation without angle_unit field"
+  logic: "IF angle_unit is absent THEN default to 'radians'"
+  violation: "N/A — default behaviour"
+  source:
+    requirements:
+      - FR-trigonometry
+    stories:
+      - S-5
+
+- id: BR-016
+  statement: "Trigonometric input in degrees must be converted to radians before computation"
+  category: "calculation"
+  applies-to:
+    component-id: CMP-003
+    entity-id: ENT-006
+    api-id: API-003
+  trigger: "sin, cos, or tan operation with angle_unit = degrees"
+  logic: "IF angle_unit == 'degrees' THEN convert input from degrees to radians before applying the trig function"
+  violation: "N/A — calculation rule"
+  source:
+    requirements:
+      - FR-trigonometry
+    stories:
+      - S-5
+
+- id: BR-017
+  statement: "Inverse trig output in degrees mode must convert result from radians to degrees"
+  category: "calculation"
+  applies-to:
+    component-id: CMP-003
+    entity-id: ENT-006
+    api-id: API-003
+  trigger: "asin, acos, atan, or atan2 operation with angle_unit = degrees"
+  logic: "IF angle_unit == 'degrees' THEN compute in radians, then convert result to degrees before returning"
+  violation: "N/A — calculation rule"
+  source:
+    requirements:
+      - FR-trigonometry
+    stories:
+      - S-5
+
+- id: BR-018
+  statement: "Numeric overflow must return OVERFLOW error"
+  category: "validation"
+  applies-to:
+    component-id: CMP-001
+    api-id: API-001
+  trigger: "Any computation that produces +/- infinity from finite inputs"
+  logic: "IF result is +/-inf AND inputs are all finite THEN reject with OVERFLOW"
+  violation: "Return HTTP 400 with error code OVERFLOW"
+  source:
+    requirements:
+      - FR-errors
+    stories:
+      - S-21
+
+- id: BR-019
+  statement: "Unknown endpoints return NOT_FOUND in structured envelope"
+  category: "policy"
+  applies-to:
+    component-id: CMP-008
+    entity-id: ENT-013
+    api-id: API-008
+  trigger: "Request to any path not matching a defined endpoint"
+  logic: "IF path does not match any registered route THEN return NOT_FOUND envelope"
+  violation: "Return HTTP 404 with error code NOT_FOUND"
+  source:
+    requirements:
+      - FR-errors
+    stories:
+      - S-22
+
+- id: BR-020
+  statement: "Invalid request body must return INVALID_INPUT error"
+  category: "validation"
+  applies-to:
+    component-id: CMP-008
+  trigger: "Any POST request with malformed or missing required body fields"
+  logic: "IF request body fails schema validation THEN reject with INVALID_INPUT"
+  violation: "Return HTTP 422 with error code INVALID_INPUT"
+  source:
+    requirements:
+      - FR-errors
+    stories:
+      - S-22
+
+- id: BR-021
+  statement: "Unexpected exceptions must never expose raw stack traces"
+  category: "policy"
+  applies-to:
+    component-id: CMP-008
+    entity-id: ENT-013
+  trigger: "Any unhandled exception in a request handler"
+  logic: "IF an unhandled exception occurs THEN catch, log at ERROR level, and return a generic INTERNAL_ERROR structured response"
+  violation: "Return HTTP 500 with error code INTERNAL_ERROR"
+  source:
+    requirements:
+      - FR-errors
+    stories:
+      - S-22

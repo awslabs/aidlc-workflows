@@ -1,0 +1,204 @@
+- id: BR-001
+  statement: "Division or modulo by zero must be rejected with DIVISION_BY_ZERO error"
+  category: "validation"
+  applies-to:
+    component-id: CMP-001
+    entity-id: ENT-001
+    api-id: API-001
+  trigger: "divide or modulo operation invoked with b == 0"
+  logic: "IF operation in (divide, modulo) AND b == 0 THEN reject"
+  violation: "Return HTTP 400 with error code DIVISION_BY_ZERO"
+  source:
+    requirements: [FR-2]
+    stories: [S-2]
+
+- id: BR-002
+  statement: "Square root of a negative number must be rejected with DOMAIN_ERROR"
+  category: "validation"
+  applies-to:
+    component-id: CMP-002
+    entity-id: ENT-002
+    api-id: API-002
+  trigger: "sqrt operation invoked"
+  logic: "IF operation == sqrt AND a < 0 THEN reject"
+  violation: "Return HTTP 400 with error code DOMAIN_ERROR"
+  source:
+    requirements: [FR-4]
+    stories: [S-4]
+
+- id: BR-003
+  statement: "Nth root of a negative number with even n must be rejected with DOMAIN_ERROR"
+  category: "validation"
+  applies-to:
+    component-id: CMP-002
+    entity-id: ENT-004
+    api-id: API-002
+  trigger: "nth_root operation invoked"
+  logic: "IF operation == nth_root AND a < 0 AND n % 2 == 0 THEN reject"
+  violation: "Return HTTP 400 with error code DOMAIN_ERROR"
+  source:
+    requirements: [FR-4]
+    stories: [S-4]
+
+- id: BR-004
+  statement: "Inverse trig functions must reject inputs outside their domain"
+  category: "validation"
+  applies-to:
+    component-id: CMP-003
+    entity-id: ENT-005
+    api-id: API-003
+  trigger: "asin, acos, acosh, or atanh operation invoked"
+  logic: "IF operation == asin AND (a < -1 OR a > 1) THEN reject; IF operation == acos AND (a < -1 OR a > 1) THEN reject; IF operation == acosh AND a < 1 THEN reject; IF operation == atanh AND (a <= -1 OR a >= 1) THEN reject"
+  violation: "Return HTTP 400 with error code DOMAIN_ERROR"
+  source:
+    requirements: [FR-7]
+    stories: [S-6]
+
+- id: BR-005
+  statement: "Logarithm of non-positive number must be rejected with DOMAIN_ERROR"
+  category: "validation"
+  applies-to:
+    component-id: CMP-004
+    entity-id: ENT-002
+    api-id: API-004
+  trigger: "ln, log10, or log2 operation invoked"
+  logic: "IF a <= 0 THEN reject"
+  violation: "Return HTTP 400 with error code DOMAIN_ERROR"
+  source:
+    requirements: [FR-9]
+    stories: [S-8]
+
+- id: BR-006
+  statement: "Arbitrary-base log must reject invalid base or value"
+  category: "validation"
+  applies-to:
+    component-id: CMP-004
+    entity-id: ENT-007
+    api-id: API-004
+  trigger: "log (arbitrary base) operation invoked"
+  logic: "IF a <= 0 OR base <= 0 OR base == 1 THEN reject"
+  violation: "Return HTTP 400 with error code DOMAIN_ERROR"
+  source:
+    requirements: [FR-9]
+    stories: [S-8]
+
+- id: BR-007
+  statement: "Finite input producing infinite result must be reported as OVERFLOW"
+  category: "constraint"
+  applies-to:
+    component-id: CMP-002
+    entity-id: ENT-003
+  trigger: "Any computation completes"
+  logic: "IF all inputs are finite AND result is infinite (math.isinf(result)) THEN reject"
+  violation: "Return HTTP 400 with error code OVERFLOW"
+  source:
+    requirements: [FR-22]
+    stories: [S-18]
+
+- id: BR-008
+  statement: "Statistics operations must enforce minimum element counts"
+  category: "validation"
+  applies-to:
+    component-id: CMP-005
+    entity-id: ENT-008
+    api-id: API-005
+  trigger: "Any statistics operation invoked"
+  logic: "IF values is empty THEN reject; IF operation in (stdev, variance) AND len(values) < 2 THEN reject"
+  violation: "Return HTTP 422 with error code INVALID_INPUT"
+  source:
+    requirements: [FR-11]
+    stories: [S-10]
+
+- id: BR-009
+  statement: "Conversion unit names must be recognized for the given category"
+  category: "validation"
+  applies-to:
+    component-id: CMP-007
+    entity-id: ENT-009
+    api-id: API-007
+  trigger: "Conversion operation invoked"
+  logic: "IF from_unit NOT IN supported_units[category] OR to_unit NOT IN supported_units[category] THEN reject"
+  violation: "Return HTTP 422 with error code INVALID_INPUT"
+  source:
+    requirements: [FR-16]
+    stories: [S-13]
+
+- id: BR-010
+  statement: "Mode must return the smallest value when there are ties"
+  category: "calculation"
+  applies-to:
+    component-id: CMP-005
+    entity-id: ENT-008
+    api-id: API-005
+  trigger: "mode operation invoked"
+  logic: "IF multiple values share the highest frequency THEN return the smallest among them"
+  violation: "N/A — deterministic behaviour, not a rejection rule"
+  source:
+    requirements: [FR-12]
+    stories: [S-11]
+
+- id: BR-011
+  statement: "Angle unit defaults to radians when not specified"
+  category: "policy"
+  applies-to:
+    component-id: CMP-003
+    entity-id: ENT-005
+    api-id: API-003
+  trigger: "Trigonometric operation invoked without angle_unit"
+  logic: "IF angle_unit is absent THEN treat as radians"
+  violation: "N/A — default behaviour"
+  source:
+    requirements: [FR-6]
+    stories: [S-5]
+
+- id: BR-012
+  statement: "All responses must conform to the standard envelope"
+  category: "policy"
+  applies-to:
+    component-id: CMP-008
+    entity-id: ENT-010
+  trigger: "Any request completes (success or failure)"
+  logic: "Success: {status:ok, operation, inputs, result}. Error: {status:error, operation, inputs, error:{code, message}}"
+  violation: "N/A — structural rule, enforced by response models"
+  source:
+    requirements: [FR-18, FR-19]
+    stories: [S-15]
+
+- id: BR-013
+  statement: "Pydantic validation errors must be translated to the standard error envelope"
+  category: "policy"
+  applies-to:
+    component-id: CMP-008
+    entity-id: ENT-011
+  trigger: "Pydantic raises RequestValidationError"
+  logic: "Override FastAPI's default 422 handler to return {status:error, error:{code:INVALID_INPUT, message:<details>}}"
+  violation: "N/A — handler override"
+  source:
+    requirements: [FR-20]
+    stories: [S-16]
+
+- id: BR-014
+  statement: "Unknown endpoints must return NOT_FOUND in error envelope"
+  category: "policy"
+  applies-to:
+    component-id: CMP-008
+    entity-id: ENT-011
+  trigger: "Request to unregistered path"
+  logic: "Return HTTP 404 with {status:error, error:{code:NOT_FOUND, message:<path not found>}}"
+  violation: "N/A — handler override"
+  source:
+    requirements: [FR-21]
+    stories: [S-17]
+
+- id: BR-015
+  statement: "Unexpected exceptions must never expose stack traces to consumers"
+  category: "policy"
+  applies-to:
+    component-id: CMP-008
+    entity-id: ENT-011
+  trigger: "Unhandled exception during request processing"
+  logic: "Catch all exceptions, log at ERROR level with stack trace, return HTTP 500 with {status:error, error:{code:INTERNAL_ERROR, message:An unexpected error occurred}}"
+  violation: "N/A — global exception handler"
+  source:
+    requirements: [FR-23]
+    stories: [S-19]

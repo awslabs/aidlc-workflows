@@ -1,0 +1,342 @@
+Component:
+  Id: CMP-001
+  Name: "Arithmetic Engine"
+  Behaviour-summary: "Performs basic arithmetic operations on numeric inputs — addition, subtraction, multiplication, division, modulo, absolute value, and negation. Detects and reports division-by-zero conditions."
+  Responsibilities:
+    - "Execute binary arithmetic operations (add, subtract, multiply, divide, modulo)"
+    - "Execute unary arithmetic operations (abs, negate)"
+    - "Detect and signal division-by-zero conditions"
+  Boundaries:
+    - "Does not handle powers, roots, or any non-basic arithmetic"
+    - "Does not handle HTTP concerns or response envelope formatting"
+  Source:
+    Requirements:
+      - FR-arithmetic
+    Stories:
+      - S-1
+      - S-2
+  Dependency: []
+  Dependent-Component:
+    - Component:
+        Id: CMP-008
+        Name: "API Router"
+        Interaction: "API Router dispatches arithmetic operation requests to this engine and receives computed results or domain errors"
+  Entities:
+    ENT-001:
+      Name: "BinaryOperands"
+      Description: "A pair of numeric values for binary arithmetic operations"
+      Attributes:
+        - "a"
+        - "b"
+    ENT-002:
+      Name: "UnaryOperand"
+      Description: "A single numeric value for unary arithmetic operations"
+      Attributes:
+        - "a"
+
+---
+
+Component:
+  Id: CMP-002
+  Name: "Powers Engine"
+  Behaviour-summary: "Computes powers, squares, and roots — power, sqrt, cbrt, nth_root, square — with domain validation for negative inputs under even roots and overflow detection for large exponents."
+  Responsibilities:
+    - "Execute exponentiation (power, square)"
+    - "Execute root extraction (sqrt, cbrt, nth_root)"
+    - "Validate domain constraints (negative input for even root, n=0)"
+    - "Detect overflow (result is infinite from finite input)"
+  Boundaries:
+    - "Does not handle logarithms or exponential function (that's Logarithmic Engine)"
+    - "Does not handle HTTP concerns"
+  Source:
+    Requirements:
+      - FR-powers
+    Stories:
+      - S-3
+      - S-4
+  Dependency: []
+  Dependent-Component:
+    - Component:
+        Id: CMP-008
+        Name: "API Router"
+        Interaction: "API Router dispatches power/root operation requests to this engine and receives results or domain errors"
+  Entities:
+    ENT-003:
+      Name: "PowerOperands"
+      Description: "Base and exponent for power/exponentiation operation"
+      Attributes:
+        - "base"
+        - "exponent"
+    ENT-004:
+      Name: "NthRootOperands"
+      Description: "Value and root degree for nth_root operation"
+      Attributes:
+        - "a"
+        - "n"
+
+---
+
+Component:
+  Id: CMP-003
+  Name: "Trigonometry Engine"
+  Behaviour-summary: "Computes trigonometric and hyperbolic functions with configurable angle units (degrees/radians) and domain validation for inverse functions."
+  Responsibilities:
+    - "Execute standard trig functions (sin, cos, tan)"
+    - "Execute inverse trig functions (asin, acos, atan, atan2)"
+    - "Execute hyperbolic functions (sinh, cosh, tanh, asinh, acosh, atanh)"
+    - "Convert between degrees and radians for input/output based on angle_unit parameter"
+    - "Validate domain constraints (asin/acos: -1<=a<=1, acosh: a>=1, atanh: -1<a<1)"
+  Boundaries:
+    - "Does not handle angle unit conversion as a standalone service (that's Conversions Engine)"
+    - "Does not handle HTTP concerns"
+  Source:
+    Requirements:
+      - FR-trigonometry
+    Stories:
+      - S-5
+      - S-6
+      - S-7
+  Dependency: []
+  Dependent-Component:
+    - Component:
+        Id: CMP-008
+        Name: "API Router"
+        Interaction: "API Router dispatches trigonometry operation requests to this engine and receives results or domain errors"
+  Entities:
+    ENT-005:
+      Name: "TrigOperands"
+      Description: "Angle value with unit specification for trigonometric computation"
+      Attributes:
+        - "a"
+        - "angle_unit"
+    ENT-006:
+      Name: "Atan2Operands"
+      Description: "Two-argument arctangent inputs with angle unit"
+      Attributes:
+        - "y"
+        - "x"
+        - "angle_unit"
+
+---
+
+Component:
+  Id: CMP-004
+  Name: "Logarithmic Engine"
+  Behaviour-summary: "Computes logarithmic and exponential functions — ln, log10, log2, arbitrary-base log, exp — with domain validation for non-positive inputs and invalid bases, and overflow detection for exp."
+  Responsibilities:
+    - "Execute standard logarithms (ln, log10, log2)"
+    - "Execute arbitrary-base logarithm"
+    - "Execute exponential function (exp)"
+    - "Validate domain constraints (a <= 0 for log, base <= 0 or base = 1 for arbitrary log)"
+    - "Detect overflow on exp for large values"
+  Boundaries:
+    - "Does not handle powers or roots (that's Powers Engine)"
+    - "Does not handle HTTP concerns"
+  Source:
+    Requirements:
+      - FR-logarithms
+    Stories:
+      - S-8
+      - S-9
+      - S-10
+  Dependency: []
+  Dependent-Component:
+    - Component:
+        Id: CMP-008
+        Name: "API Router"
+        Interaction: "API Router dispatches logarithmic operation requests to this engine and receives results or domain errors"
+  Entities:
+    ENT-007:
+      Name: "LogOperands"
+      Description: "Value and optional base for logarithmic computation"
+      Attributes:
+        - "a"
+        - "base"
+
+---
+
+Component:
+  Id: CMP-005
+  Name: "Statistics Engine"
+  Behaviour-summary: "Computes descriptive statistics over collections of numeric values — mean, median, mode, stdev, variance, pstdev, pvariance, min, max, sum, count — with minimum element count validation and deterministic mode tie-breaking."
+  Responsibilities:
+    - "Compute central tendency measures (mean, median, mode)"
+    - "Compute dispersion measures (stdev, variance, pstdev, pvariance)"
+    - "Compute aggregation measures (min, max, sum, count)"
+    - "Validate minimum element count per operation (1 for most, 2 for sample stdev/variance)"
+    - "Resolve mode ties (return smallest value)"
+  Boundaries:
+    - "Does not perform inferential statistics, regression, or probability distributions"
+    - "Does not store data — computes on each request"
+  Source:
+    Requirements:
+      - FR-statistics
+    Stories:
+      - S-11
+      - S-12
+  Dependency: []
+  Dependent-Component:
+    - Component:
+        Id: CMP-008
+        Name: "API Router"
+        Interaction: "API Router dispatches statistics operation requests to this engine and receives results or domain errors"
+  Entities:
+    ENT-008:
+      Name: "ValuesInput"
+      Description: "A list of numeric values for statistical computation"
+      Attributes:
+        - "values"
+
+---
+
+Component:
+  Id: CMP-006
+  Name: "Constants Provider"
+  Behaviour-summary: "Serves mathematical constants — pi, e, tau, inf, nan, golden_ratio, sqrt2, ln2, ln10 — both individually by name and as a complete map. Purely a lookup service with no computation."
+  Responsibilities:
+    - "Return individual named constants by name"
+    - "Return all constants as a map"
+    - "Validate constant name existence and return NOT_FOUND for unknown names"
+  Boundaries:
+    - "Does not compute anything — only serves predefined static values"
+    - "Does not handle HTTP concerns"
+  Source:
+    Requirements:
+      - FR-constants
+    Stories:
+      - S-13
+      - S-14
+  Dependency: []
+  Dependent-Component:
+    - Component:
+        Id: CMP-008
+        Name: "API Router"
+        Interaction: "API Router dispatches constant lookup requests to this provider"
+  Entities:
+    ENT-009:
+      Name: "Constant"
+      Description: "A named mathematical constant with its numeric value"
+      Attributes:
+        - "name"
+        - "value"
+
+---
+
+Component:
+  Id: CMP-007
+  Name: "Conversions Engine"
+  Behaviour-summary: "Converts numeric values between units within supported categories — angle, temperature, length, and weight — using defined conversion factors and formulas. Validates that from_unit and to_unit are recognized within the specified category."
+  Responsibilities:
+    - "Convert between angle units (degrees, radians, gradians)"
+    - "Convert between temperature units (celsius, fahrenheit, kelvin)"
+    - "Convert between length units (meters, feet, inches, centimeters, millimeters, kilometers, miles, yards)"
+    - "Convert between weight units (kilograms, pounds, ounces, grams, milligrams, tonnes, stones)"
+    - "Validate unit names within each category"
+    - "Report errors for unsupported unit combinations"
+  Boundaries:
+    - "Does not handle angle conversion for trigonometry (CMP-003 handles its own degree/radian conversion internally)"
+    - "Does not support currency, time, or other non-physical unit categories"
+    - "Does not handle HTTP concerns"
+  Source:
+    Requirements:
+      - FR-conversions
+    Stories:
+      - S-15
+      - S-16
+      - S-17
+      - S-18
+      - S-19
+  Dependency: []
+  Dependent-Component:
+    - Component:
+        Id: CMP-008
+        Name: "API Router"
+        Interaction: "API Router dispatches unit conversion requests to this engine and receives results or validation errors"
+  Entities:
+    ENT-010:
+      Name: "ConversionInput"
+      Description: "A value with source and target units for conversion within a category"
+      Attributes:
+        - "value"
+        - "from_unit"
+        - "to_unit"
+
+---
+
+Component:
+  Id: CMP-008
+  Name: "API Router"
+  Behaviour-summary: "Receives HTTP requests, validates input schemas via Pydantic models, dispatches to the appropriate engine component, and wraps results in the standard success/error response envelope. Handles error translation, unknown endpoint responses, and the health-check endpoint."
+  Responsibilities:
+    - "Define and expose HTTP endpoints per the API specification"
+    - "Validate request bodies via Pydantic schemas"
+    - "Dispatch operations to the correct engine component based on URL path"
+    - "Format success responses into the standard envelope"
+    - "Translate engine exceptions (domain error, division-by-zero, overflow) into structured error responses"
+    - "Override FastAPI's default 422 validation error handler to use the error envelope"
+    - "Handle unknown endpoints (NOT_FOUND)"
+    - "Catch unexpected exceptions and return INTERNAL_ERROR"
+    - "Expose health-check endpoint"
+    - "Serve constants endpoint via Constants Provider"
+  Boundaries:
+    - "Does not contain math computation logic — delegates all computation to engine components"
+    - "Does not own business rules or domain constraints (engines enforce those)"
+    - "Does not handle authentication or rate-limiting"
+  Source:
+    Requirements:
+      - FR-envelope
+      - FR-errors
+      - FR-health
+    Stories:
+      - S-20
+      - S-21
+      - S-22
+      - S-23
+  Dependency:
+    - Component:
+        Id: CMP-001
+        Name: "Arithmetic Engine"
+        Interaction: "Dispatches arithmetic operation requests and receives results"
+    - Component:
+        Id: CMP-002
+        Name: "Powers Engine"
+        Interaction: "Dispatches power/root operation requests and receives results"
+    - Component:
+        Id: CMP-003
+        Name: "Trigonometry Engine"
+        Interaction: "Dispatches trigonometry operation requests and receives results"
+    - Component:
+        Id: CMP-004
+        Name: "Logarithmic Engine"
+        Interaction: "Dispatches logarithmic operation requests and receives results"
+    - Component:
+        Id: CMP-005
+        Name: "Statistics Engine"
+        Interaction: "Dispatches statistics operation requests and receives results"
+    - Component:
+        Id: CMP-006
+        Name: "Constants Provider"
+        Interaction: "Dispatches constant lookup requests and receives results"
+    - Component:
+        Id: CMP-007
+        Name: "Conversions Engine"
+        Interaction: "Dispatches unit conversion requests and receives results"
+  Dependent-Component: []
+  Entities:
+    ENT-011:
+      Name: "SuccessResponse"
+      Description: "Standard success envelope returned to clients for all successful operations"
+      Attributes:
+        - "status"
+        - "operation"
+        - "inputs"
+        - "result"
+    ENT-012:
+      Name: "ErrorResponse"
+      Description: "Standard error envelope returned to clients for all failure cases"
+      Attributes:
+        - "status"
+        - "operation"
+        - "inputs"
+        - "error_code"
+        - "error_message"

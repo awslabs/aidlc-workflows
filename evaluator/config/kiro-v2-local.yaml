@@ -1,0 +1,31 @@
+models:
+  executor:
+    provider: "bedrock"
+    model_id: "global.anthropic.claude-opus-4-6-v1"
+  simulator:
+    provider: "bedrock"
+    model_id: "global.anthropic.claude-opus-4-6-v1"
+
+aidlc:
+  rules_source: "local"
+  # Relative paths resolve against the git root (the evaluator's parent dir).
+  rules_local_path: "kiro"
+  rules_ref: "local"
+  rules_version: "v2"
+
+runs:
+  output_dir: "./runs"
+
+execution:
+  enabled: true
+  command_timeout: 120
+  post_run_tests: true
+  post_run_timeout: 300
+  sandbox:
+    enabled: false
+
+swarm:
+  max_handoffs: 500
+  max_iterations: 500
+  execution_timeout: 21600
+  node_timeout: 3600

@@ -1,0 +1,60 @@
+run_folder: runs/20260227T004722-aidlc-workflows_main
+promoted_at: '2026-02-27T12:00:00+00:00'
+executor_model: global.anthropic.claude-opus-4-6-v1
+simulator_model: global.anthropic.claude-opus-4-6-v1
+execution:
+  wall_clock_ms: 1615170
+  total_tokens: 28262477
+  input_tokens: 28091382
+  output_tokens: 171095
+  handoffs: 3
+  executor:
+    input_tokens: 14043505
+    output_tokens: 85683
+    total_tokens: 14129188
+  simulator:
+    input_tokens: 40914
+    output_tokens: 916
+    total_tokens: 41830
+context_size:
+  max_tokens: 170689
+  avg_tokens: 85880
+  median_tokens: 92422
+artifacts:
+  source_files: 1822
+  test_files: 28
+  total_files: 3168
+  lines_of_code: 718697
+  doc_files: 24
+unit_tests:
+  passed: 101
+  failed: 0
+  total: 101
+  pass_pct: 100.0
+  coverage_pct: null
+contract_tests:
+  passed: 0
+  failed: 0
+  total: 50
+  notes: "Server module path mismatch — openapi.yaml x-app.module needs updating for two-service architecture"
+code_quality:
+  lint_errors: 3
+  lint_warnings: 6
+  lint_total: 9
+  security_total: 1
+  security_high: 0
+stages_executed:
+  - Workspace Detection
+  - Requirements Analysis
+  - User Stories
+  - Workflow Planning
+  - Application Design
+  - Units Generation
+  - Functional Design
+  - NFR Requirements
+  - Code Generation
+  - Build and Test
+stages_skipped:
+  - Reverse Engineering (greenfield)
+  - NFR Design
+  - Infrastructure Design

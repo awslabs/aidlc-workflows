@@ -1,0 +1,295 @@
+- id: ENT-001
+  name: "BinaryArithmeticRequest"
+  component-id: CMP-001
+  component-name: "Arithmetic Engine"
+  description: "Input for binary arithmetic operations (add, subtract, multiply, divide, modulo)"
+  source:
+    requirements: [FR-1]
+    stories: [S-1]
+  attributes:
+    - name: "a"
+      type: "float"
+      required: true
+      constraints: "Must be a finite number"
+    - name: "b"
+      type: "float"
+      required: true
+      constraints: "Must be a finite number"
+  constraints: []
+  relationships: []
+
+---
+
+- id: ENT-002
+  name: "UnaryArithmeticRequest"
+  component-id: CMP-001
+  component-name: "Arithmetic Engine"
+  description: "Input for unary arithmetic operations (abs, negate)"
+  source:
+    requirements: [FR-2]
+    stories: [S-2]
+  attributes:
+    - name: "a"
+      type: "float"
+      required: true
+      constraints: "Must be a finite number"
+  constraints: []
+  relationships: []
+
+---
+
+- id: ENT-003
+  name: "PowerRequest"
+  component-id: CMP-002
+  component-name: "Powers Engine"
+  description: "Input for the power operation"
+  source:
+    requirements: [FR-4]
+    stories: [S-4]
+  attributes:
+    - name: "base"
+      type: "float"
+      required: true
+      constraints: "Any finite float"
+    - name: "exponent"
+      type: "float"
+      required: true
+      constraints: "Any finite float"
+  constraints: []
+  relationships: []
+
+---
+
+- id: ENT-004
+  name: "UnaryPowerRequest"
+  component-id: CMP-002
+  component-name: "Powers Engine"
+  description: "Input for unary power operations (sqrt, cbrt, square)"
+  source:
+    requirements: [FR-5]
+    stories: [S-4]
+  attributes:
+    - name: "a"
+      type: "float"
+      required: true
+      constraints: "Any finite float"
+  constraints: []
+  relationships: []
+
+---
+
+- id: ENT-005
+  name: "NthRootRequest"
+  component-id: CMP-002
+  component-name: "Powers Engine"
+  description: "Input for the nth_root operation"
+  source:
+    requirements: [FR-6]
+    stories: [S-4]
+  attributes:
+    - name: "a"
+      type: "float"
+      required: true
+      constraints: "Any finite float"
+    - name: "n"
+      type: "integer"
+      required: true
+      constraints: "Non-zero integer; must be a positive integer >= 2 for even roots"
+  constraints:
+    - "DOMAIN_ERROR if a < 0 and n is even"
+  relationships: []
+
+---
+
+- id: ENT-006
+  name: "TrigRequest"
+  component-id: CMP-003
+  component-name: "Trigonometry Engine"
+  description: "Input for trigonometric and hyperbolic operations (all except atan2)"
+  source:
+    requirements: [FR-8, FR-10]
+    stories: [S-6]
+  attributes:
+    - name: "a"
+      type: "float"
+      required: true
+      constraints: "Any finite float"
+    - name: "angle_unit"
+      type: "enum"
+      required: false
+      values: ["radians", "degrees"]
+      default: "radians"
+  constraints: []
+  relationships: []
+
+---
+
+- id: ENT-007
+  name: "Atan2Request"
+  component-id: CMP-003
+  component-name: "Trigonometry Engine"
+  description: "Input for the atan2 operation"
+  source:
+    requirements: [FR-9]
+    stories: [S-6]
+  attributes:
+    - name: "y"
+      type: "float"
+      required: true
+    - name: "x"
+      type: "float"
+      required: true
+    - name: "angle_unit"
+      type: "enum"
+      required: false
+      values: ["radians", "degrees"]
+      default: "radians"
+  constraints: []
+  relationships: []
+
+---
+
+- id: ENT-008
+  name: "LogRequest"
+  component-id: CMP-004
+  component-name: "Logarithmic Engine"
+  description: "Input for unary logarithm/exponential operations (ln, log10, log2, exp)"
+  source:
+    requirements: [FR-13, FR-15]
+    stories: [S-9]
+  attributes:
+    - name: "a"
+      type: "float"
+      required: true
+      constraints: "Must be > 0 for logarithm operations"
+  constraints:
+    - "DOMAIN_ERROR if a <= 0 for ln, log10, log2"
+  relationships: []
+
+---
+
+- id: ENT-009
+  name: "LogBaseRequest"
+  component-id: CMP-004
+  component-name: "Logarithmic Engine"
+  description: "Input for logarithm with arbitrary base"
+  source:
+    requirements: [FR-14]
+    stories: [S-9]
+  attributes:
+    - name: "a"
+      type: "float"
+      required: true
+      constraints: "Must be > 0"
+    - name: "base"
+      type: "float"
+      required: true
+      constraints: "Must be > 0 and != 1"
+  constraints:
+    - "DOMAIN_ERROR if a <= 0 or base <= 0 or base == 1"
+  relationships: []
+
+---
+
+- id: ENT-010
+  name: "StatisticsRequest"
+  component-id: CMP-005
+  component-name: "Statistics Engine"
+  description: "Input for all statistics operations"
+  source:
+    requirements: [FR-17]
+    stories: [S-11]
+  attributes:
+    - name: "values"
+      type: "array[float]"
+      required: true
+      min: 1
+      constraints: "Non-empty array of numbers; stdev/variance require at least 2 elements"
+  constraints:
+    - "INVALID_INPUT if values is empty"
+    - "INVALID_INPUT if stdev/variance operation and values has fewer than 2 elements"
+  relationships: []
+
+---
+
+- id: ENT-011
+  name: "ConversionRequest"
+  component-id: CMP-007
+  component-name: "Conversions Engine"
+  description: "Input for unit conversion operations"
+  source:
+    requirements: [FR-22, FR-23, FR-24, FR-25]
+    stories: [S-14]
+  attributes:
+    - name: "value"
+      type: "float"
+      required: true
+    - name: "from_unit"
+      type: "string"
+      required: true
+      constraints: "Must be a recognized unit in the given category"
+    - name: "to_unit"
+      type: "string"
+      required: true
+      constraints: "Must be a recognized unit in the given category"
+  constraints:
+    - "INVALID_INPUT if from_unit or to_unit is not recognized for the category"
+  relationships: []
+
+---
+
+- id: ENT-012
+  name: "SuccessResponse"
+  component-id: CMP-008
+  component-name: "API Layer"
+  description: "Standard success response envelope returned by all operations"
+  source:
+    requirements: [FR-27]
+    stories: [S-16]
+  attributes:
+    - name: "status"
+      type: "string"
+      required: true
+      values: ["ok"]
+    - name: "operation"
+      type: "string"
+      required: true
+      constraints: "Name of the operation performed"
+    - name: "inputs"
+      type: "object"
+      required: true
+      constraints: "Echo of the request inputs"
+    - name: "result"
+      type: "float | object"
+      required: true
+      constraints: "Numeric result, object (for constants map), or special float (inf, nan)"
+  constraints: []
+  relationships: []
+
+---
+
+- id: ENT-013
+  name: "ErrorResponse"
+  component-id: CMP-008
+  component-name: "API Layer"
+  description: "Standard error response envelope returned by all error cases"
+  source:
+    requirements: [FR-28]
+    stories: [S-16]
+  attributes:
+    - name: "status"
+      type: "string"
+      required: true
+      values: ["error"]
+    - name: "operation"
+      type: "string"
+      required: true
+    - name: "inputs"
+      type: "object"
+      required: true
+    - name: "error"
+      type: "object"
+      required: true
+      constraints: "Contains 'code' (string) and 'message' (string)"
+  constraints: []
+  relationships: []

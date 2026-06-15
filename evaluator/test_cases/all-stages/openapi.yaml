@@ -1,0 +1,614 @@
+# BookShelf Community Library API - Contract Test Specification
+#
+# This is a first-class project input, supplied alongside vision.md and
+# tech-env.md.  The contract-test harness reads this spec, discovers every
+# operation, and runs the embedded x-test-cases against the live server.
+#
+# NOTE: Tests run against an in-memory or mocked DynamoDB backend.
+# The app must be importable as bookshelf.app:app and respond on /health.
+# Auth endpoints use a test JWT setup; protected endpoints include a
+# valid Bearer token obtained from /api/v1/auth/login.
+#
+# Security note: This is a test specification with mocked authentication.
+# Global security fields are omitted as auth is handled per-endpoint in tests.
+# checkov:skip=CKV_OPENAPI_4:Test spec - security handled per-endpoint
+# checkov:skip=CKV_OPENAPI_5:Test spec - security handled per-endpoint
+
+openapi: "3.1.0"
+
+info:
+  title: BookShelf Community Library API
+  version: "0.1.0"
+  description: |
+    REST API for community library book catalog, lending, and fee management.
+
+x-app:
+  module: "bookshelf.app:app"
+  framework: fastapi
+  startup_timeout: 15
+
+# ---------------------------------------------------------------------------
+# Test setup helpers
+# ---------------------------------------------------------------------------
+# The contract test harness will call setup endpoints (register + login) before
+# running the main test suite.  x-test-setup defines the bootstrapping sequence.
+
+x-test-setup:
+  - name: "Register admin user"
+    method: POST
+    path: /api/v1/auth/register
+    body:
+      name: "Test Admin"
+      email: "admin@test.com"
+      password: "AdminPass123!"
+      role: "admin"
+    expected_status: 201
+
+  - name: "Register librarian user"
+    method: POST
+    path: /api/v1/auth/register
+    body:
+      name: "Test Librarian"
+      email: "librarian@test.com"
+      password: "LibPass123!"
+      role: "librarian"
+    expected_status: 201
+
+  - name: "Register member user"
+    method: POST
+    path: /api/v1/auth/register
+    body:
+      name: "Test Member"
+      email: "member@test.com"
+      password: "MemPass123!"
+      role: "member"
+    expected_status: 201
+
+  - name: "Login as admin"
+    method: POST
+    path: /api/v1/auth/login
+    body:
+      email: "admin@test.com"
+      password: "AdminPass123!"
+    expected_status: 200
+    save_token_as: "admin_token"
+
+  - name: "Login as librarian"
+    method: POST
+    path: /api/v1/auth/login
+    body:
+      email: "librarian@test.com"
+      password: "LibPass123!"
+    expected_status: 200
+    save_token_as: "librarian_token"
+
+  - name: "Login as member"
+    method: POST
+    path: /api/v1/auth/login
+    body:
+      email: "member@test.com"
+      password: "MemPass123!"
+    expected_status: 200
+    save_token_as: "member_token"
+
+  - name: "Add test book 1 (available)"
+    method: POST
+    path: /api/v1/books
+    auth: "librarian_token"
+    body:
+      title: "Fluent Python"
+      author: "Luciano Ramalho"
+      isbn: "9781492056355"
+      category: "Programming"
+      total_copies: 2
+    expected_status: 201
+    save_id_as: "book1_id"
+
+  - name: "Add test book 2 (single copy)"
+    method: POST
+    path: /api/v1/books
+    auth: "librarian_token"
+    body:
+      title: "Designing Data-Intensive Applications"
+      author: "Martin Kleppmann"
+      isbn: "9781449373320"
+      category: "Engineering"
+      total_copies: 1
+    expected_status: 201
+    save_id_as: "book2_id"
+
+  - name: "Add test book 3 (for deletion test)"
+    method: POST
+    path: /api/v1/books
+    auth: "librarian_token"
+    body:
+      title: "Temporary Book"
+      author: "Test Author"
+      isbn: "9780000000001"
+      category: "Other"
+      total_copies: 1
+    expected_status: 201
+    save_id_as: "book3_id"
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+paths:
+
+  # ── Health ───────────────────────────────────────────────────────────────
+
+  /health:
+    get:
+      operationId: healthCheck
+      summary: Health check
+      x-test-cases:
+        - name: "Health check returns ok"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+  # ── Auth ─────────────────────────────────────────────────────────────────
+
+  /api/v1/auth/register:
+    post:
+      operationId: registerMember
+      summary: Register a new member
+      x-test-cases:
+        - name: "Register new member"
+          body:
+            name: "New User"
+            email: "newuser@test.com"
+            password: "NewPass123!"
+          expected_status: 201
+          expected_body:
+            status: "ok"
+
+        - name: "Register with duplicate email"
+          body:
+            name: "Duplicate"
+            email: "member@test.com"
+            password: "DupPass123!"
+          expected_status: 409
+          expected_body:
+            status: "error"
+
+        - name: "Register with missing fields"
+          body:
+            name: "No Email"
+          expected_status: 422
+
+  /api/v1/auth/login:
+    post:
+      operationId: loginMember
+      summary: Login and receive JWT token
+      x-test-cases:
+        - name: "Login with valid credentials"
+          body:
+            email: "member@test.com"
+            password: "MemPass123!"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+        - name: "Login with wrong password"
+          body:
+            email: "member@test.com"
+            password: "WrongPass!"
+          expected_status: 401
+          expected_body:
+            status: "error"
+
+        - name: "Login with nonexistent email"
+          body:
+            email: "nobody@test.com"
+            password: "Whatever123!"
+          expected_status: 401
+
+  # ── Books (Catalog) ─────────────────────────────────────────────────────
+
+  /api/v1/books:
+    get:
+      operationId: listBooks
+      summary: List all books
+      x-test-cases:
+        - name: "List books returns all books"
+          auth: "member_token"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+        - name: "List books without auth"
+          expected_status: 401
+
+    post:
+      operationId: addBook
+      summary: Add a new book (Librarian/Admin only)
+      x-test-cases:
+        - name: "Add book as librarian"
+          auth: "librarian_token"
+          body:
+            title: "Clean Code"
+            author: "Robert C. Martin"
+            isbn: "9780132350884"
+            category: "Programming"
+            total_copies: 3
+          expected_status: 201
+          expected_body:
+            status: "ok"
+
+        - name: "Add book as member (forbidden)"
+          auth: "member_token"
+          body:
+            title: "Unauthorized Book"
+            author: "Nobody"
+            isbn: "9780000000099"
+            category: "Other"
+            total_copies: 1
+          expected_status: 403
+
+        - name: "Add book with missing title"
+          auth: "librarian_token"
+          body:
+            author: "No Title Author"
+            isbn: "9780000000098"
+            category: "Other"
+            total_copies: 1
+          expected_status: 422
+
+        - name: "Add book with zero copies"
+          auth: "librarian_token"
+          body:
+            title: "Zero Copies"
+            author: "Author"
+            isbn: "9780000000097"
+            category: "Other"
+            total_copies: 0
+          expected_status: 422
+
+  /api/v1/books/search:
+    get:
+      operationId: searchBooks
+      summary: Search books by title or author
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+      x-test-cases:
+        - name: "Search by title"
+          auth: "member_token"
+          query:
+            q: "Fluent"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+        - name: "Search by author"
+          auth: "member_token"
+          query:
+            q: "Kleppmann"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+        - name: "Search with no results"
+          auth: "member_token"
+          query:
+            q: "NonexistentBookTitle12345"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+        - name: "Search by category filter"
+          auth: "member_token"
+          query:
+            q: ""
+            category: "Programming"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+  /api/v1/books/{book_id}:
+    get:
+      operationId: getBook
+      summary: Get book details
+      x-test-cases:
+        - name: "Get existing book"
+          auth: "member_token"
+          path_params:
+            book_id: "{book1_id}"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+        - name: "Get nonexistent book"
+          auth: "member_token"
+          path_params:
+            book_id: "00000000-0000-0000-0000-000000000000"
+          expected_status: 404
+
+    put:
+      operationId: updateBook
+      summary: Update a book (Librarian/Admin only)
+      x-test-cases:
+        - name: "Update book copies as librarian"
+          auth: "librarian_token"
+          path_params:
+            book_id: "{book1_id}"
+          body:
+            total_copies: 3
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+        - name: "Update book as member (forbidden)"
+          auth: "member_token"
+          path_params:
+            book_id: "{book1_id}"
+          body:
+            total_copies: 5
+          expected_status: 403
+
+    delete:
+      operationId: deleteBook
+      summary: Delete a book (Admin only)
+      x-test-cases:
+        - name: "Delete book as admin"
+          auth: "admin_token"
+          path_params:
+            book_id: "{book3_id}"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+        - name: "Delete book as librarian (forbidden)"
+          auth: "librarian_token"
+          path_params:
+            book_id: "{book1_id}"
+          expected_status: 403
+
+        - name: "Delete nonexistent book"
+          auth: "admin_token"
+          path_params:
+            book_id: "00000000-0000-0000-0000-000000000000"
+          expected_status: 404
+
+  # ── Checkouts (Lending) ─────────────────────────────────────────────────
+
+  /api/v1/checkouts:
+    post:
+      operationId: checkoutBook
+      summary: Check out a book
+      x-test-cases:
+        - name: "Checkout available book"
+          auth: "member_token"
+          body:
+            book_id: "{book1_id}"
+          expected_status: 201
+          expected_body:
+            status: "ok"
+
+        - name: "Checkout same book again (still has copies)"
+          auth: "member_token"
+          body:
+            book_id: "{book1_id}"
+          expected_status: 201
+
+        - name: "Checkout without auth"
+          body:
+            book_id: "{book1_id}"
+          expected_status: 401
+
+        - name: "Checkout nonexistent book"
+          auth: "member_token"
+          body:
+            book_id: "00000000-0000-0000-0000-000000000000"
+          expected_status: 404
+
+    get:
+      operationId: listCheckouts
+      summary: List active checkouts for current member
+      x-test-cases:
+        - name: "List own checkouts"
+          auth: "member_token"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+        - name: "List checkouts without auth"
+          expected_status: 401
+
+  /api/v1/checkouts/{checkout_id}/return:
+    post:
+      operationId: returnBook
+      summary: Return a checked-out book
+      x-test-cases:
+        - name: "Return without auth"
+          path_params:
+            checkout_id: "00000000-0000-0000-0000-000000000000"
+          expected_status: 401
+
+  /api/v1/checkouts/{checkout_id}/renew:
+    post:
+      operationId: renewCheckout
+      summary: Renew a checkout (extends due date)
+      x-test-cases:
+        - name: "Renew without auth"
+          path_params:
+            checkout_id: "00000000-0000-0000-0000-000000000000"
+          expected_status: 401
+
+  # ── Holds ────────────────────────────────────────────────────────────────
+
+  /api/v1/holds:
+    post:
+      operationId: placeHold
+      summary: Place a hold on a book
+      x-test-cases:
+        - name: "Place hold on unavailable book"
+          auth: "member_token"
+          body:
+            book_id: "{book2_id}"
+          expected_status: 201
+          expected_body:
+            status: "ok"
+
+        - name: "Place duplicate hold (conflict)"
+          auth: "member_token"
+          body:
+            book_id: "{book2_id}"
+          expected_status: 409
+
+        - name: "Place hold without auth"
+          body:
+            book_id: "{book2_id}"
+          expected_status: 401
+
+    get:
+      operationId: listHolds
+      summary: List active holds for current member
+      x-test-cases:
+        - name: "List own holds"
+          auth: "member_token"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+  /api/v1/holds/{hold_id}:
+    delete:
+      operationId: cancelHold
+      summary: Cancel a hold
+      x-test-cases:
+        - name: "Cancel nonexistent hold"
+          auth: "member_token"
+          path_params:
+            hold_id: "00000000-0000-0000-0000-000000000000"
+          expected_status: 404
+
+  /api/v1/holds/queue/{book_id}:
+    get:
+      operationId: getHoldQueue
+      summary: Get hold queue position for a book
+      x-test-cases:
+        - name: "Get hold queue for book"
+          auth: "member_token"
+          path_params:
+            book_id: "{book2_id}"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+  # ── Fees ─────────────────────────────────────────────────────────────────
+
+  /api/v1/members/{member_id}/fees:
+    get:
+      operationId: getMemberFees
+      summary: Get outstanding fees for a member
+      x-test-cases:
+        - name: "Get own fees (no outstanding)"
+          auth: "member_token"
+          path_params:
+            member_id: "me"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+  /api/v1/members/{member_id}/fees/pay:
+    post:
+      operationId: payFee
+      summary: Record a fee payment
+      x-test-cases:
+        - name: "Pay fee without auth"
+          path_params:
+            member_id: "me"
+          body:
+            amount: 1.00
+          expected_status: 401
+
+  # ── Members ──────────────────────────────────────────────────────────────
+
+  /api/v1/members:
+    get:
+      operationId: listMembers
+      summary: List all members (Admin only)
+      x-test-cases:
+        - name: "List members as admin"
+          auth: "admin_token"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+        - name: "List members as member (forbidden)"
+          auth: "member_token"
+          expected_status: 403
+
+  /api/v1/members/{member_id}:
+    get:
+      operationId: getMember
+      summary: Get member profile
+      x-test-cases:
+        - name: "Get own profile"
+          auth: "member_token"
+          path_params:
+            member_id: "me"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+        - name: "Get member profile as admin"
+          auth: "admin_token"
+          path_params:
+            member_id: "me"
+          expected_status: 200
+
+  # ── Reports ──────────────────────────────────────────────────────────────
+
+  /api/v1/reports/overdue:
+    get:
+      operationId: overdueReport
+      summary: List all overdue checkouts (Librarian/Admin only)
+      x-test-cases:
+        - name: "Get overdue report as librarian"
+          auth: "librarian_token"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+        - name: "Get overdue report as member (forbidden)"
+          auth: "member_token"
+          expected_status: 403
+
+  /api/v1/reports/summary:
+    get:
+      operationId: collectionSummary
+      summary: Get collection summary statistics (Admin only)
+      x-test-cases:
+        - name: "Get summary as admin"
+          auth: "admin_token"
+          expected_status: 200
+          expected_body:
+            status: "ok"
+
+        - name: "Get summary as member (forbidden)"
+          auth: "member_token"
+          expected_status: 403
+
+        - name: "Get summary without auth"
+          expected_status: 401
+
+  # ── 404 Catch-all ───────────────────────────────────────────────────────
+
+  /api/v1/nonexistent:
+    get:
+      operationId: notFound
+      summary: Unknown endpoint returns 404
+      x-test-cases:
+        - name: "Unknown endpoint returns 404"
+          expected_status: 404
