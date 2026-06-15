@@ -5,6 +5,16 @@
 # by sha256 digest and is NOT covered by any Dependabot ecosystem. That digest
 # must be updated manually (monthly cadence). See:
 # docs/ADMINISTRATIVE_GUIDE.md → Updating Pinned Versions → How to update the ClamAV image digest
+#
+# A cooldown is applied to every ecosystem so freshly-published versions are not
+# adopted immediately — this mitigates the window where a compromised/malicious
+# release is live before it is yanked. Longer for majors (higher breakage and
+# supply-chain risk), shorter for patches.
+
+# A cooldown is applied to every ecosystem so freshly-published versions are not
+# adopted immediately — this mitigates the window where a compromised/malicious
+# release is live before it is yanked. Longer for majors (higher breakage and
+# supply-chain risk), shorter for patches.
 
 version: 2
 updates:
@@ -13,6 +23,11 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
     commit-message:
       prefix: "chore(deps)"
       include: "scope"
@@ -26,6 +41,11 @@ updates:
     directory: "/evaluator"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
@@ -40,6 +60,11 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
     commit-message:
       prefix: "chore(deps)"
       include: "scope"
@@ -49,6 +74,11 @@ updates:
     directory: "/evaluator/docker/sandbox"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
     commit-message:
       prefix: "chore(deps)"
       include: "scope"
