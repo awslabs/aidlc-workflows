@@ -18,16 +18,14 @@
 
 version: 2
 updates:
-  # GitHub Actions — SHA-pinned actions across all workflows
+  # GitHub Actions — SHA-pinned actions across all workflows.
+  # (Only default-days is supported for non-semver ecosystems.)
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
     cooldown:
       default-days: 7
-      semver-major-days: 30
-      semver-minor-days: 7
-      semver-patch-days: 3
     commit-message:
       prefix: "chore(deps)"
       include: "scope"
@@ -62,9 +60,6 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
-      semver-major-days: 30
-      semver-minor-days: 7
-      semver-patch-days: 3
     commit-message:
       prefix: "chore(deps)"
       include: "scope"
@@ -76,9 +71,6 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
-      semver-major-days: 30
-      semver-minor-days: 7
-      semver-patch-days: 3
     commit-message:
       prefix: "chore(deps)"
       include: "scope"
