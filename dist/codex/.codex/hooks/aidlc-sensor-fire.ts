@@ -24,6 +24,7 @@ import {
   auditFilePath,
   type ClaudeCodeHookInput,
   getField,
+  hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
   readStateFile,
@@ -46,7 +47,7 @@ const SUBPROCESS_TIMEOUT_MS =
 
 // Health-dir for the heartbeat (sensor-fire.last) + skipped-file
 // (sensor-fire.skipped). Read by the future hook-health doctor.
-const healthDir = join(projectDir, "aidlc-docs", ".aidlc-hooks-health");
+const healthDir = hooksHealthDir(projectDir);
 
 // Step 2 — TTY guard. Hook invoked outside a piped-stdin context (e.g.
 // interactive shell, test harness running under `bash -x`) has no JSON

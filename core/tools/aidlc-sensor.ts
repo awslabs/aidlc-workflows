@@ -43,7 +43,7 @@ import {
 	type SensorFile,
 	templateEligibleArtifacts,
 } from "./aidlc-graph.ts";
-import { errorMessage, isoTimestamp, isPlainObject, resolveProjectDir, withAuditLock } from "./aidlc-lib.ts";
+import { errorMessage, isoTimestamp, isPlainObject, resolveProjectDir, sensorsDir, withAuditLock } from "./aidlc-lib.ts";
 
 // --- Constants ---
 
@@ -304,7 +304,7 @@ function handleFire(args: string[]): void {
 		scriptArgs.push("--templates-dir", templatesDir);
 		scriptArgs.push("--template-eligible", eligible.join(","));
 	}
-	const detailDir = join(projectDir, "aidlc-docs", ".aidlc-sensors", stageSlug);
+	const detailDir = join(sensorsDir(projectDir), stageSlug);
 	const detailPath = join(detailDir, `${id}-${fireId}.md`);
 
 	// --- 1f. Resolve sibling script path + timeout ---

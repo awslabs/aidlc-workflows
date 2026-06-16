@@ -27,6 +27,7 @@ import {
   auditFilePath,
   type ClaudeCodeHookInput,
   errorMessage,
+  hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
   recordHookDrop,
@@ -73,7 +74,7 @@ const auditFile = auditFilePath(projectDir);
 if (!existsSync(auditFile)) process.exit(0);
 
 // 5. Heartbeat — doctor reads this file's mtime to detect silent-hook failure.
-const healthDir = join(projectDir, "aidlc-docs", ".aidlc-hooks-health");
+const healthDir = hooksHealthDir(projectDir);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "runtime-compile.last"), isoTimestamp(), "utf-8");
 

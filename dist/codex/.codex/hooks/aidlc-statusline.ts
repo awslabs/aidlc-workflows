@@ -2,8 +2,7 @@
 // Registered via statusLine setting in settings.json
 // Invoked via: bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { loadAgents, resolveProjectDirFromHook } from "../tools/aidlc-lib.ts";
+import { loadAgents, resolveProjectDirFromHook, stateFilePath } from "../tools/aidlc-lib.ts";
 
 type Input = {
   workspace?: { project_dir?: string };
@@ -196,7 +195,7 @@ async function main(): Promise<void> {
   const ctxInt = typeof ctxRaw === "number" ? Math.round(ctxRaw) : null;
   const right = buildRightSide(modelShort, ctxInt);
 
-  const stateFile = projectDir ? join(projectDir, "aidlc-docs", "aidlc-state.md") : "";
+  const stateFile = projectDir ? stateFilePath(projectDir) : "";
   if (!stateFile || !existsSync(stateFile)) {
     printLine("[AIDLC] ready", right);
     return;

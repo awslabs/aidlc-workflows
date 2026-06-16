@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   errorMessage,
+  hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
   recordHookDrop,
@@ -22,7 +23,7 @@ const projectDir = resolveProjectDirFromHook(import.meta.url);
 if (!existsSync(stateFilePath(projectDir))) process.exit(0);
 
 // Health heartbeat
-const healthDir = join(projectDir, "aidlc-docs", ".aidlc-hooks-health");
+const healthDir = hooksHealthDir(projectDir);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "session-end.last"), isoTimestamp(), "utf-8");
 

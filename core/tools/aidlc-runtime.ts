@@ -24,7 +24,6 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   auditFilePath,
@@ -32,16 +31,21 @@ import {
   findAllEvents,
   getField,
   loadStageGraph,
+  memoryFilePath,
   parseBoltDag,
   parseCheckboxes,
   parseMemoryHeadings,
   parseStateStageSuffixes,
   readStateFile,
+  relativeMemoryPath,
   resolveProjectDir,
+  runtimeGraphPath,
   stateFilePath,
+  unitDependencyPath,
   validateBoltSlug,
   withAuditLock,
   worktreePath,
+  worktreeRuntimeGraphPath,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 
@@ -116,32 +120,11 @@ interface RuntimeGraph {
 }
 
 // --- Path helpers ---
-
-function runtimeGraphPath(projectDir: string): string {
-  return join(projectDir, "aidlc-docs", "runtime-graph.json");
-}
-
-function memoryPath(projectDir: string, phase: string, stageSlug: string): string {
-  return join(projectDir, "aidlc-docs", phase, stageSlug, "memory.md");
-}
-
-// units-generation (2.7) writes the unit dependency artifact here; its fenced
-// edge block is the structured input the Bolt-DAG node is computed from.
-function unitDependencyPath(projectDir: string): string {
-  return join(
-    projectDir,
-    "aidlc-docs",
-    "inception",
-    "units-generation",
-    "unit-of-work-dependency.md"
-  );
-}
-
-// Memory path to record on the row, relative to projectDir, forward slashes
-// regardless of host OS — keeps the schema portable across worktrees.
-function memoryPathForRow(phase: string, stageSlug: string): string {
-  return `aidlc-docs/${phase}/${stageSlug}/memory.md`;
-}
+//
+// The aidlc-docs data-path helpers (runtimeGraphPath, memoryFilePath,
+// unitDependencyPath, relativeMemoryPath, worktreeRuntimeGraphPath) are imported
+// from aidlc-lib.ts — the single chokepoint for the aidlc-docs tree. memoryPath
+// here is memoryFilePath; the per-row relative form is relativeMemoryPath.
 
 // --- Compile ---
 
@@ -288,7 +271,7 @@ function readMemory(
   phase: string,
   stageSlug: string
 ): { memory_entries: number | null; memory_breakdown: MemoryBreakdown | null } {
-  const path = memoryPath(projectDir, phase, stageSlug);
+  const path = memoryFilePath(projectDir, phase, stageSlug);
   if (!existsSync(path)) {
     return { memory_entries: null, memory_breakdown: null };
   }
@@ -382,7 +365,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
       started_at: entry.started_at,
       completed_at: entry.completed_at,
       agent: entry.agent || phaseInfo.agent,
-      memory_path: memoryPathForRow(phaseInfo.phase, slug),
+      memory_path: relativeMemoryPath(phaseInfo.phase, slug),
       memory_entries: memory.memory_entries,
       memory_breakdown: memory.memory_breakdown,
       sensor_firings: [],
@@ -1156,7 +1139,7 @@ function handleFragmentFork(rest: string[], projectDir: string): void {
   }
 
   const wtPath = worktreePath(projectDir, flags.slug);
-  const wtFragmentPath = join(wtPath, "aidlc-docs", "runtime-graph.json");
+  const wtFragmentPath = worktreeRuntimeGraphPath(wtPath);
   const mainPath = runtimeGraphPath(projectDir);
 
   if (!existsSync(wtPath)) {
@@ -1238,7 +1221,7 @@ function handleFragmentMerge(rest: string[], projectDir: string): void {
   }
 
   const wtPath = worktreePath(projectDir, flags.slug);
-  const wtFragmentPath = join(wtPath, "aidlc-docs", "runtime-graph.json");
+  const wtFragmentPath = worktreeRuntimeGraphPath(wtPath);
 
   if (!existsSync(wtFragmentPath)) {
     // Fragment-absent: clean no-op. Covers (a) re-run after a successful

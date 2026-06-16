@@ -270,6 +270,112 @@ export function worktreePath(projectDir: string, boltSlug: string): string {
   return join(projectDir, ".aidlc", "worktrees", `bolt-${boltSlug}`);
 }
 
+// --- aidlc-docs data-path family ----------------------------------------------
+//
+// Single chokepoint for every path under the project's `aidlc-docs/` tree. Each
+// helper below returns the SAME path the inline literals used to build by hand
+// (a pure no-op funnel); routing them all through here means a later re-root of
+// the tree changes one place. The state/audit/worktree helpers above are the
+// load-bearing pair; these cover the rest of the family (runtime graph, hook
+// health, recovery breadcrumb, plan, stop-hook guard, the bare docs dir, and a
+// stage's per-run directory) plus the per-worktree mirror copies.
+//
+// NOT funnelled here (deliberately): the two engine artifact/diary resolvers in
+// aidlc-orchestrate.ts (resolveArtifactPath / memoryPathFor) build RELATIVE,
+// agent-consumed paths from backtick templates and take no projectDir — the
+// absolute, projectDir-keyed shape here is incompatible with them.
+
+// `<projectDir>/aidlc-docs` — the bare tree root (doctor's existence check,
+// the init scaffolder's base dir).
+export function docsDir(projectDir: string): string {
+  return join(projectDir, "aidlc-docs");
+}
+
+// `<projectDir>/aidlc-docs/runtime-graph.json` — the compiled runtime graph.
+export function runtimeGraphPath(projectDir: string): string {
+  return join(projectDir, "aidlc-docs", "runtime-graph.json");
+}
+
+// `<projectDir>/aidlc-docs/.aidlc-hooks-health` — per-hook heartbeat + drop
+// counters surfaced by `--doctor`.
+export function hooksHealthDir(projectDir: string): string {
+  return join(projectDir, "aidlc-docs", ".aidlc-hooks-health");
+}
+
+// `<projectDir>/aidlc-docs/.aidlc-recovery.md` — the validate-state breadcrumb
+// the orchestrator reads on resume.
+export function recoveryFilePath(projectDir: string): string {
+  return join(projectDir, "aidlc-docs", ".aidlc-recovery.md");
+}
+
+// `<projectDir>/aidlc-docs/.aidlc-plan.json` — `aidlc-graph resolve` output.
+export function planFilePath(projectDir: string): string {
+  return join(projectDir, "aidlc-docs", ".aidlc-plan.json");
+}
+
+// `<projectDir>/aidlc-docs/.aidlc-stop-hook` — the Stop hook's durable
+// no-progress guard counter directory.
+export function stopHookDir(projectDir: string): string {
+  return join(projectDir, "aidlc-docs", ".aidlc-stop-hook");
+}
+
+// `<baseDir>/aidlc-docs/.aidlc-sensors` — the sensor detail-output / tsbuildinfo
+// directory. `baseDir` is the project dir for the dispatcher, or a tsconfig
+// anchor for the type-check sensor; callers append a stage slug as needed.
+export function sensorsDir(baseDir: string): string {
+  return join(baseDir, "aidlc-docs", ".aidlc-sensors");
+}
+
+// `<projectDir>/aidlc-docs/<phase>/<slug>` — a stage's per-run artifact
+// directory (the Stop hook scans it for unanswered question files).
+export function stageDir(projectDir: string, phase: string, slug: string): string {
+  return join(projectDir, "aidlc-docs", phase, slug);
+}
+
+// Relative diary path recorded on a runtime-graph row — forward slashes
+// regardless of host OS so the schema stays portable across worktrees. Mirrors
+// the engine's memoryPathFor; kept here so its `aidlc-docs/` prefix funnels
+// with the rest of the family.
+export function relativeMemoryPath(phase: string, stageSlug: string): string {
+  return `aidlc-docs/${phase}/${stageSlug}/memory.md`;
+}
+
+// `<projectDir>/aidlc-docs/<phase>/<stageSlug>/memory.md` — the absolute diary
+// path for a stage.
+export function memoryFilePath(projectDir: string, phase: string, stageSlug: string): string {
+  return join(projectDir, "aidlc-docs", phase, stageSlug, "memory.md");
+}
+
+// `<projectDir>/aidlc-docs/inception/units-generation/unit-of-work-dependency.md`
+// — the fenced edge block the Bolt-DAG node is computed from.
+export function unitDependencyPath(projectDir: string): string {
+  return join(projectDir, "aidlc-docs", "inception", "units-generation", "unit-of-work-dependency.md");
+}
+
+// --- Per-worktree mirror copies -----------------------------------------------
+//
+// A Bolt worktree carries its own `<wtPath>/aidlc-docs/...` mirror of state,
+// audit, and the runtime graph. These take an ALREADY-RESOLVED worktree base
+// dir (the output of worktreePath, or an audit-recorded path), not projectDir,
+// so they keep the `aidlc-docs` leaf relative to that base. A re-root moves the
+// leaf here in lockstep with the main tree.
+
+export function worktreeDocsDir(wtPath: string): string {
+  return join(wtPath, "aidlc-docs");
+}
+
+export function worktreeStateFilePath(wtPath: string): string {
+  return join(wtPath, "aidlc-docs", "aidlc-state.md");
+}
+
+export function worktreeAuditFilePath(wtPath: string): string {
+  return join(wtPath, "aidlc-docs", "audit.md");
+}
+
+export function worktreeRuntimeGraphPath(wtPath: string): string {
+  return join(wtPath, "aidlc-docs", "runtime-graph.json");
+}
+
 // Bolt slug shape: lowercase letter, then lowercase letters / digits / hyphens.
 // Centralised here (previously duplicated as SLUG_RE in aidlc-worktree.ts and
 // SLUG_REGEX in aidlc-audit.ts) so a future tightening lands once. Stage and
@@ -1759,7 +1865,7 @@ export function recordHookDrop(
   reason: string
 ): void {
   try {
-    const healthDir = join(projectDir, "aidlc-docs", ".aidlc-hooks-health");
+    const healthDir = hooksHealthDir(projectDir);
     mkdirSync(healthDir, { recursive: true });
     const dropFile = join(healthDir, `${hookName}.drops`);
     const line = `${isoTimestamp()}\t${reason.replace(/\r?\n/g, " ")}\n`;

@@ -39,7 +39,6 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
@@ -51,6 +50,7 @@ import {
   setFieldStrict,
   setOrInsertField,
   worktreePath,
+  worktreeStateFilePath,
   writeStateFile,
 } from "./aidlc-lib.js";
 
@@ -606,7 +606,7 @@ function handleReleaseMerge(args: string[]): void {
 // file is treated as "not held" — the caller proceeds without refusal).
 function forkedStateFilePath(pd: string, slug: string): string | null {
   const wtPath = worktreePath(pd, slug);
-  const wtStatePath = join(wtPath, "aidlc-docs", "aidlc-state.md");
+  const wtStatePath = worktreeStateFilePath(wtPath);
   if (!existsSync(wtStatePath)) return null;
   return wtStatePath;
 }

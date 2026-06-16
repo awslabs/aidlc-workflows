@@ -13,7 +13,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   auditFilePath,
@@ -22,6 +22,7 @@ import {
   getField,
   resolveProjectDir,
   worktreePath,
+  worktreeStateFilePath,
 } from "./aidlc-lib.js";
 
 // kebab-case slug shape: lowercase letter, then lowercase letters / digits /
@@ -710,7 +711,7 @@ function handleInfo(args: string[]): void {
   // resume-path check is "do not dispatch a merge that's actively held",
   // not "every Bolt has had its hold state explicitly initialised".
   let mergeHeld = false;
-  const wtStatePath = join(pathMatch[1], "aidlc-docs", "aidlc-state.md");
+  const wtStatePath = worktreeStateFilePath(pathMatch[1]);
   if (existsSync(wtStatePath)) {
     const wtContent = readFileSync(wtStatePath, "utf-8");
     mergeHeld = getField(wtContent, "Merge-Held") === "true";

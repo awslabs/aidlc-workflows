@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import {
   acquireAuditLock,
   auditFilePath,
@@ -10,6 +10,7 @@ import {
   releaseAuditLock,
   resolveProjectDir,
   validateBoltSlug,
+  worktreeAuditFilePath,
   worktreePath,
 } from "./aidlc-lib.ts";
 
@@ -362,7 +363,7 @@ function handleAuditFork(args: string[], projectDir: string): void {
 
   const mainAuditPath = auditFilePath(projectDir);
   const wtPath = worktreePath(projectDir, slug);
-  const wtAuditPath = join(wtPath, "aidlc-docs", "audit.md");
+  const wtAuditPath = worktreeAuditFilePath(wtPath);
 
   // Pre-emit guards (fail clean before any audit side-effect).
   if (!existsSync(mainAuditPath)) {
@@ -465,7 +466,7 @@ function handleAuditMerge(args: string[], projectDir: string): void {
 
   const mainAuditPath = auditFilePath(projectDir);
   const wtPath = worktreePath(projectDir, slug);
-  const wtAuditPath = join(wtPath, "aidlc-docs", "audit.md");
+  const wtAuditPath = worktreeAuditFilePath(wtPath);
 
   if (!existsSync(wtAuditPath)) {
     jsonError(`worktree audit not found at ${wtAuditPath}; nothing to merge`);

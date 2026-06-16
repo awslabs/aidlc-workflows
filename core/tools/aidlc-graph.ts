@@ -43,6 +43,7 @@ import {
   mustPop,
   mustShift,
   parseStageFrontmatter,
+  planFilePath,
   resolveProjectDir,
   type ScopeDefinition,
   type StageEntry,
@@ -1438,7 +1439,7 @@ const COMMANDS: Record<string, Handler> = {
     const plan = resolvePlanForScope(scope);
     const pd = resolveProjectDir();
     const outPath =
-      process.env.AIDLC_PLAN_PATH ?? join(pd, "aidlc-docs", ".aidlc-plan.json");
+      process.env.AIDLC_PLAN_PATH ?? planFilePath(pd);
     const planJson = `${JSON.stringify(plan, null, 2)}\n`;
     if (args.includes("--stdout")) {
       process.stdout.write(planJson);

@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 304,
+    "total": 319,
     "enumeratedByClass": {
-      "function": 102,
+      "function": 117,
       "audit": 67,
       "scope": 9,
       "stage": 32,
@@ -885,6 +885,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:docsDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:emitError",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1046,6 +1053,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:hooksHealthDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isClaudeCodeHookInput",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1184,6 +1198,13 @@
     {
       "unitClass": "function",
       "unitId": "function:memoryDirFor",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:memoryFilePath",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -1386,6 +1407,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:planFilePath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:producersOf",
       "minMechanism": "none",
       "coveredBy": [
@@ -1406,6 +1434,20 @@
     {
       "unitClass": "function",
       "unitId": "function:recordHookDrop",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recoveryFilePath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:relativeMemoryPath",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -1512,6 +1554,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:runtimeGraphPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:scalarField",
       "minMechanism": "none",
       "coveredBy": [
@@ -1521,6 +1570,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:sensorsDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -1564,6 +1620,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:stageDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:stageIndex",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1587,6 +1650,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:stopHookDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -1649,6 +1719,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:unitDependencyPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:validateBoltSlug",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1696,6 +1773,20 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:worktreeAuditFilePath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:worktreeDocsDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:worktreePath",
       "minMechanism": "none",
       "coveredBy": [
@@ -1705,6 +1796,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:worktreeRuntimeGraphPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:worktreeStateFilePath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",

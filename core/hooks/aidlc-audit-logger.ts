@@ -12,6 +12,7 @@ import {
   auditFilePath,
   type ClaudeCodeHookInput,
   errorMessage,
+  hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
   recordHookDrop,
@@ -21,7 +22,7 @@ import {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 // Write health heartbeat
-const healthDir = join(projectDir, "aidlc-docs", ".aidlc-hooks-health");
+const healthDir = hooksHealthDir(projectDir);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "audit-logger.last"), isoTimestamp(), "utf-8");
 

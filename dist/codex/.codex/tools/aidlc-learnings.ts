@@ -36,6 +36,7 @@ import { dirname, join } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   appendUnderHeading,
+  auditFilePath,
   errorMessage,
   findAllEvents,
   getField,
@@ -43,6 +44,7 @@ import {
   parseMemoryEntries,
   readStateFile,
   resolveProjectDir,
+  runtimeGraphPath,
   withAuditLock,
   writeFileAtomic,
   harnessDir,
@@ -60,10 +62,6 @@ function fail(message: string, code: 1 | 2): never {
 }
 
 // --- Path helpers ---
-
-function runtimeGraphPath(projectDir: string): string {
-  return join(projectDir, "aidlc-docs", "runtime-graph.json");
-}
 
 function learningsFilePath(projectDir: string, scope: "project" | "team"): string {
   return join(projectDir, harnessDir(), rulesSubdir(), `aidlc-${scope}-learnings.md`);
@@ -420,7 +418,7 @@ function handlePersist(args: string[], projectDir: string): void {
   let lockResult: { rule_learned: number; sensor_proposed: number; bound_stages: string[] };
   try {
     lockResult = withAuditLock(projectDir, () => {
-      const auditPath = join(projectDir, "aidlc-docs", "audit.md");
+      const auditPath = auditFilePath(projectDir);
       const auditContent = existsSync(auditPath) ? readFileSync(auditPath, "utf-8") : "";
 
       // Test-run skip: most-recent audit block Test-Run: true → no writes.

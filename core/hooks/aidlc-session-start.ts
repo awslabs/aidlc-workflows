@@ -25,9 +25,11 @@ import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   errorMessage,
   getField,
+  hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
   recordHookDrop,
+  recoveryFilePath,
   resolveProjectDirFromHook,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
@@ -39,7 +41,7 @@ const stateFile = stateFilePath(projectDir);
 if (!existsSync(stateFile)) process.exit(0);
 
 // Write health heartbeat
-const healthDir = join(projectDir, "aidlc-docs", ".aidlc-hooks-health");
+const healthDir = hooksHealthDir(projectDir);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "session-start.last"), isoTimestamp(), "utf-8");
 
@@ -105,7 +107,7 @@ const agent = getField(content, "Active Agent") ?? "unknown";
 const scope = getField(content, "Scope") ?? "unknown";
 
 // Check for compaction recovery breadcrumb
-const recoveryFile = join(projectDir, "aidlc-docs", ".aidlc-recovery.md");
+const recoveryFile = recoveryFilePath(projectDir);
 const recovery = existsSync(recoveryFile)
   ? "NOTE: A compaction recovery breadcrumb exists at .aidlc-recovery.md — check if state was preserved correctly.\n"
   : "";

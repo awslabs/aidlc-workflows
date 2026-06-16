@@ -73,6 +73,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { sensorsDir } from "./aidlc-lib.ts";
 
 interface ParsedError {
 	file: string;
@@ -268,15 +269,15 @@ function main(): void {
 	// sits beside the consumer project; use tsconfigDir as the project
 	// anchor. The .aidlc-sensors/ dir is gitignored by the framework so
 	// the tsbuildinfo never pollutes commits.
-	const sensorsDir = join(tsconfigDir, "aidlc-docs", ".aidlc-sensors");
+	const sensorsBaseDir = sensorsDir(tsconfigDir);
 	try {
-		mkdirSync(sensorsDir, { recursive: true });
+		mkdirSync(sensorsBaseDir, { recursive: true });
 	} catch {
 		// If we can't mkdir (read-only fs etc.), proceed without
 		// --tsBuildInfoFile by pointing at a tmp path. tsc still works,
 		// just non-incremental on next run.
 	}
-	const tsBuildInfoFile = join(sensorsDir, ".tsbuildinfo");
+	const tsBuildInfoFile = join(sensorsBaseDir, ".tsbuildinfo");
 
 	// Probe tsc availability first. cwd doesn't matter for --version.
 	probeTscAvailable(tsconfigDir);

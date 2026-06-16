@@ -19,12 +19,14 @@ import {
 } from "./aidlc-graph.ts";
 import {
   auditFilePath,
+  docsDir,
   emitError,
   errorMessage,
   escapeRegex,
   findAllEvents,
   findStageBySlug,
   getField,
+  hooksHealthDir,
   isoTimestamp,
   isPackageJson,
   loadAgents,
@@ -47,7 +49,9 @@ import {
   stateFilePath,
   validateBoltSlug,
   validScopes,
+  worktreeAuditFilePath,
   worktreePath,
+  worktreeStateFilePath,
   writeStateFile,
   harnessDir,
   rulesSubdir,
@@ -513,7 +517,7 @@ function handleDoctor(projectDir: string): void {
   if (
     otherTrees.length > 0 &&
     existsSync(join(projectDir, harness, "tools", "aidlc-lib.ts")) &&
-    existsSync(join(projectDir, "aidlc-docs", "aidlc-state.md"))
+    existsSync(stateFilePath(projectDir))
   ) {
     results.push({
       pass: true,
@@ -545,7 +549,7 @@ function handleDoctor(projectDir: string): void {
   }
 
   // 5. aidlc-docs/ exists
-  const aidlcDocsDir = join(projectDir, "aidlc-docs");
+  const aidlcDocsDir = docsDir(projectDir);
   results.push({
     pass: existsSync(aidlcDocsDir),
     label: "aidlc-docs/ directory exists",
@@ -559,7 +563,7 @@ function handleDoctor(projectDir: string): void {
   //   (b) Directory exists but no .last files → hooks registered but have
   //       never fired. Genuine drift; fail.
   //   (c) Directory has .last files → hooks are working; pass with timestamps.
-  const healthDir = join(projectDir, "aidlc-docs", ".aidlc-hooks-health");
+  const healthDir = hooksHealthDir(projectDir);
   const heartbeatEntries: string[] = [];
   const heartbeatDirExists = existsSync(healthDir);
   if (heartbeatDirExists) {
@@ -603,8 +607,8 @@ function handleDoctor(projectDir: string): void {
   // should be in a certain shape (e.g., Status=Completed after WORKFLOW_COMPLETED),
   // verify the state actually matches. Covers the rare case where audit-first
   // succeeded but the state write failed (disk full, permission lost mid-run).
-  const stateMdPath = join(projectDir, "aidlc-docs", "aidlc-state.md");
-  const auditMdPath = join(projectDir, "aidlc-docs", "audit.md");
+  const stateMdPath = stateFilePath(projectDir);
+  const auditMdPath = auditFilePath(projectDir);
   if (existsSync(stateMdPath) && existsSync(auditMdPath)) {
     try {
       const auditContent = readFileSync(auditMdPath, "utf-8");
@@ -904,7 +908,7 @@ function handleDoctor(projectDir: string): void {
         if (!entry.startsWith("bolt-")) continue;
         const slug = entry.slice("bolt-".length);
         if (validateBoltSlug(slug) !== null) continue;
-        const wtStatePath = join(worktreesDir, entry, "aidlc-docs", "aidlc-state.md");
+        const wtStatePath = worktreeStateFilePath(join(worktreesDir, entry));
         if (!existsSync(wtStatePath)) continue;
         observed++;
         if (boltRefs.includes(slug)) continue;
@@ -971,7 +975,7 @@ function handleDoctor(projectDir: string): void {
       // Sub-case (a): no terminal pairing — is the worktree audit on disk?
       // If yes, we're mid-fork (orphan-delta — sub-case b). If no, the fork
       // emitted but disk copy never landed.
-      const wtAudit = join(worktreePath(projectDir, slug), "aidlc-docs", "audit.md");
+      const wtAudit = worktreeAuditFilePath(worktreePath(projectDir, slug));
       if (!existsSync(wtAudit)) {
         forkedDriftDisk.push(slug);
         continue;
@@ -1913,7 +1917,7 @@ function handleInit(projectDir: string, flags: Record<string, string>): void {
   }
 
   const force = flags.force === "true";
-  const docsDir = join(projectDir, "aidlc-docs");
+  const aidlcDocsDir = docsDir(projectDir);
   const sp = stateFilePath(projectDir);
 
   // Guard: refuse quiet re-init on existing state
@@ -1925,7 +1929,7 @@ function handleInit(projectDir: string, flags: Record<string, string>): void {
 
   // Force path: warn on orphan artifacts, remove only the state file
   if (existsSync(sp) && force) {
-    const orphans = existsSync(docsDir) ? findOrphanArtifacts(docsDir) : [];
+    const orphans = existsSync(aidlcDocsDir) ? findOrphanArtifacts(aidlcDocsDir) : [];
     if (orphans.length > 0) {
       process.stderr.write(
         `Warning: non-init artifacts found in aidlc-docs/ (will not be removed):\n`
@@ -1939,7 +1943,7 @@ function handleInit(projectDir: string, flags: Record<string, string>): void {
 
   // ---- Scaffold (stage 0.1) ----
 
-  mkdirSync(docsDir, { recursive: true });
+  mkdirSync(aidlcDocsDir, { recursive: true });
 
   // audit.md: header-only bootstrap on fresh init. WORKFLOW_STARTED is the
   // birth event for the workflow; SESSION_STARTED is owned by the
@@ -1999,7 +2003,7 @@ function handleInit(projectDir: string, flags: Record<string, string>): void {
     const phases = readdirSync(scaffoldSrc);
     for (const phase of phases) {
       const phaseSrc = join(scaffoldSrc, phase);
-      const phaseDst = join(docsDir, phase);
+      const phaseDst = join(aidlcDocsDir, phase);
       mkdirSync(phaseDst, { recursive: true });
       try {
         const stages = readdirSync(phaseSrc);
@@ -2016,7 +2020,7 @@ function handleInit(projectDir: string, flags: Record<string, string>): void {
   }
 
   // Knowledge directories with READMEs
-  const knowledgeDir = join(docsDir, "knowledge");
+  const knowledgeDir = join(aidlcDocsDir, "knowledge");
   mkdirSync(knowledgeDir, { recursive: true });
 
   const topReadmePath = join(knowledgeDir, "README.md");

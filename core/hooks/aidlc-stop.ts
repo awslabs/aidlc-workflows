@@ -71,13 +71,17 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  auditFilePath,
   errorMessage,
   getField,
+  hooksHealthDir,
   isoTimestamp,
   parseCheckboxes,
   recordHookDrop,
   resolveProjectDirFromHook,
+  stageDir,
   stateFilePath,
+  stopHookDir,
   harnessDir,
 } from "../tools/aidlc-lib.ts";
 
@@ -108,7 +112,7 @@ const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 // Write a health heartbeat (mirrors the other hooks' .aidlc-hooks-health beat).
 try {
-  const healthDir = join(projectDir, "aidlc-docs", ".aidlc-hooks-health");
+  const healthDir = hooksHealthDir(projectDir);
   mkdirSync(healthDir, { recursive: true });
   writeFileSync(join(healthDir, "stop.last"), isoTimestamp(), "utf-8");
 } catch {
@@ -150,7 +154,7 @@ interface GuardRecord {
 }
 
 function guardFilePath(): string {
-  return join(projectDir, "aidlc-docs", ".aidlc-stop-hook", "block-count.json");
+  return join(stopHookDir(projectDir), "block-count.json");
 }
 
 // The Current Stage slug from the state file. Factored from the regex the
@@ -170,7 +174,7 @@ function progressSignature(stateContent: string): string {
   const stage = currentStageSlug(stateContent);
   let auditLen = 0;
   try {
-    const auditPath = join(projectDir, "aidlc-docs", "audit.md");
+    const auditPath = auditFilePath(projectDir);
     if (existsSync(auditPath)) {
       auditLen = readFileSync(auditPath, "utf-8").split("\n").length;
     }
@@ -203,7 +207,7 @@ function readGuard(): GuardRecord | null {
 
 function writeGuard(record: GuardRecord): void {
   try {
-    const dir = join(projectDir, "aidlc-docs", ".aidlc-stop-hook");
+    const dir = stopHookDir(projectDir);
     mkdirSync(dir, { recursive: true });
     writeFileSync(guardFilePath(), JSON.stringify(record), "utf-8");
   } catch {
@@ -271,7 +275,7 @@ function decideBlock(stateContent: string, stopHookActive: boolean): boolean {
 // inheriting a stale streak from an earlier, since-resolved hang.
 function resetGuard(): void {
   try {
-    const dir = join(projectDir, "aidlc-docs", ".aidlc-stop-hook");
+    const dir = stopHookDir(projectDir);
     mkdirSync(dir, { recursive: true });
     writeFileSync(guardFilePath(), JSON.stringify({ signature: "", count: 0 }), "utf-8");
   } catch {
@@ -359,18 +363,18 @@ function isHumanWaitStop(stateContent: string): boolean {
 // Construction `{unit}` path segment the engine does not yet resolve).
 function hasPendingQuestion(slug: string, phase: string): boolean {
   if (slug.length === 0 || phase.length === 0) return false;
-  const stageDir = join(projectDir, "aidlc-docs", phase.toLowerCase(), slug);
-  if (!existsSync(stageDir)) return false;
+  const stageDirPath = stageDir(projectDir, phase.toLowerCase(), slug);
+  if (!existsSync(stageDirPath)) return false;
   let files: string[];
   try {
-    files = readdirSync(stageDir).filter((f) => f.endsWith("-questions.md"));
+    files = readdirSync(stageDirPath).filter((f) => f.endsWith("-questions.md"));
   } catch {
     return false;
   }
   for (const f of files) {
     let body: string;
     try {
-      body = readFileSync(join(stageDir, f), "utf-8");
+      body = readFileSync(join(stageDirPath, f), "utf-8");
     } catch {
       continue;
     }

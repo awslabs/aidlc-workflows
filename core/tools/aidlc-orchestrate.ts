@@ -92,6 +92,7 @@ import {
   PHASE_NUMBERS,
   PHASES,
   resolveProjectDir,
+  runtimeGraphPath,
   type StageEntry,
   stateFilePath,
   validScopes,
@@ -497,7 +498,7 @@ function readAutonomyMode(stateContent: string | null): "autonomous" | null {
 // level) or null when there is no graph file or no bolt_dag node. A pure read:
 // an absent graph is a legitimate branch (the swarm simply does not trigger).
 function readBoltDagBatches(projectDir: string): string[][] | null {
-  const path = join(projectDir, "aidlc-docs", "runtime-graph.json");
+  const path = runtimeGraphPath(projectDir);
   if (!existsSync(path)) return null;
   try {
     const graph: unknown = JSON.parse(readFileSync(path, "utf-8"));

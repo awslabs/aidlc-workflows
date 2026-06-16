@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type ClaudeCodeHookInput,
+  hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
   resolveProjectDirFromHook,
@@ -46,7 +47,7 @@ const stateFile = stateFilePath(projectDir);
 if (!existsSync(stateFile)) process.exit(0);
 
 // Health heartbeat
-const healthDir = join(projectDir, "aidlc-docs", ".aidlc-hooks-health");
+const healthDir = hooksHealthDir(projectDir);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "sync-statusline.last"), isoTimestamp(), "utf-8");
 

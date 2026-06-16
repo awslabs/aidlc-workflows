@@ -25,6 +25,7 @@ import {
   parseRefsList,
   parseStateStageSuffixes,
   readStateFile,
+  relativeMemoryPath,
   removeSlug,
   replaceSection,
   resolveProjectDir,
@@ -36,7 +37,9 @@ import {
   stagesInScope,
   validScopes,
   withAuditLock,
+  worktreeDocsDir,
   worktreePath,
+  worktreeStateFilePath,
   writeStateFile,
   harnessDir,
   rulesSubdir,
@@ -579,7 +582,7 @@ function handleAdvance(args: string[]): void {
       completed_count: completedCount,
       next_after: nextAfterNext ? nextAfterNext.slug : null,
       already_completed: alreadyMarkedCompleted,
-      memory_path: `aidlc-docs/${nextStage.phase}/${nextStage.slug}/memory.md`,
+      memory_path: relativeMemoryPath(nextStage.phase, nextStage.slug),
       timestamp,
     })
   );
@@ -1083,7 +1086,7 @@ function handleResume(_args: string[]): void {
   // to surface the compaction-awareness prompt without a fragile shell pipeline.
   let compactionPending = false;
   try {
-    const auditPath = join(pd, "aidlc-docs", "audit.md");
+    const auditPath = auditFilePath(pd);
     if (existsSync(auditPath)) {
       // Read last ~400 lines (enough to cover ~30 events' worth of blocks)
       const raw = readFileSync(auditPath, "utf-8");
@@ -1157,7 +1160,7 @@ function handleAcknowledgeCompaction(args: string[]): void {
   // RECOVERY_COMPLETED events when the orchestrator calls acknowledge unnecessarily.
   let compactionPending = false;
   try {
-    const auditPath = join(pd, "aidlc-docs", "audit.md");
+    const auditPath = auditFilePath(pd);
     if (existsSync(auditPath)) {
       const raw = readFileSync(auditPath, "utf-8");
       const tail = raw.split("\n").slice(-400).join("\n");
@@ -1666,7 +1669,7 @@ function handleFork(args: string[]): void {
   // mkdir BEFORE acquiring the lock. A read-only-fs mkdir failure must not
   // leave a phantom STATE_FORKED row, and acquiring the lock for a doomed
   // operation just delays the failure.
-  const wtDocsDir = join(wtPath, "aidlc-docs");
+  const wtDocsDir = worktreeDocsDir(wtPath);
   try {
     mkdirSync(wtDocsDir, { recursive: true });
   } catch (e) {
@@ -1784,7 +1787,7 @@ function handleMerge(args: string[]): void {
   if (!existsSync(wtPath)) {
     errorWithSlug(slug, `worktree directory does not exist: ${wtPath}.`);
   }
-  const wtStatePath = join(wtPath, "aidlc-docs", "aidlc-state.md");
+  const wtStatePath = worktreeStateFilePath(wtPath);
   if (!existsSync(wtStatePath)) {
     errorWithSlug(slug, `worktree state file does not exist: ${wtStatePath}. Was fork run?`);
   }
