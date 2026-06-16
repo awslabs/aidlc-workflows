@@ -45,6 +45,9 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 - [Cline](#cline)
 - [Claude Code](#claude-code)
 - [GitHub Copilot](#github-copilot)
+- [OpenAI Codex](#openai-codex)
+- [OpenHands](#openhands)
+- [Other Agents](#other-agents)
 
 ---
 
@@ -575,6 +578,142 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
 
 ---
 
+### OpenHands
+
+AI-DLC works with OpenHands using [keyword-triggered skills](https://docs.openhands.dev/overview/skills/keyword). The recommended setup stores the full rules in `.aidlc/` and adds a small skill file that activates only when the user invokes AI-DLC. This keeps OpenHands' always-on `AGENTS.md` context available for repository-specific guidance such as build commands, code style, and architecture notes.
+
+The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+
+> [!NOTE]
+> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
+
+#### Option 1: Keyword-Triggered Skill (Recommended)
+
+**Unix/Linux/macOS:**
+
+```bash
+# 1. Download and extract the latest release (see Common section above)
+
+# 2. Set up the rules directory
+mkdir -p .aidlc
+cp -R ~/Downloads/aidlc-rules .aidlc/
+
+# 3. Create the AI-DLC keyword-triggered skill
+mkdir -p .agents/skills/ai-dlc
+cat > .agents/skills/ai-dlc/SKILL.md << 'EOF'
+---
+name: ai-dlc
+description: Run the AI-DLC workflow for structured software development tasks.
+triggers:
+- AI-DLC
+- AIDLC
+---
+
+When the user invokes AI-DLC (starts with "Using AI-DLC, ..."),
+read and follow `.aidlc/aidlc-rules/aws-aidlc-rules/core-workflow.md`.
+EOF
+
+# 4. Gitignore the rules directory (optional - commit it instead if you want rules pinned)
+echo ".aidlc/" >> .gitignore
+```
+
+**Windows PowerShell:**
+
+```powershell
+# 1. Download and extract the latest release (see Common section above)
+
+# 2. Set up the rules directory
+New-Item -ItemType Directory -Force -Path ".aidlc"
+Copy-Item -Recurse "$env:USERPROFILE\Downloads\aidlc-rules" ".aidlc\"
+
+# 3. Create the AI-DLC keyword-triggered skill
+New-Item -ItemType Directory -Force -Path ".agents\skills\ai-dlc"
+@'
+---
+name: ai-dlc
+description: Run the AI-DLC workflow for structured software development tasks.
+triggers:
+- AI-DLC
+- AIDLC
+---
+
+When the user invokes AI-DLC (starts with "Using AI-DLC, ..."),
+read and follow `.aidlc/aidlc-rules/aws-aidlc-rules/core-workflow.md`.
+'@ | Set-Content ".agents\skills\ai-dlc\SKILL.md"
+
+# 4. Gitignore the rules directory (optional - commit it instead if you want rules pinned)
+Add-Content ".gitignore" ".aidlc/"
+```
+
+#### Option 2: AGENTS.md Trigger (Simple Alternative)
+
+If you prefer to keep setup in `AGENTS.md`, store the full rules in `.aidlc/` as shown in Option 1, then append this lightweight trigger to `AGENTS.md` instead of creating the skill file:
+
+```markdown
+## AI-DLC Workflow
+
+When the user invokes AI-DLC (starts with "Using AI-DLC, ..."),
+read and follow `.aidlc/aidlc-rules/aws-aidlc-rules/core-workflow.md`.
+```
+
+This fallback is still much lighter than copying the full `core-workflow.md` into `AGENTS.md`, which would add the entire AI-DLC workflow to every OpenHands conversation.
+
+> [!NOTE]
+> If you already have an `AGENTS.md` with project-specific content, append the AI-DLC trigger block rather than replacing the file. AI-DLC and your existing project notes coexist in the same `AGENTS.md`.
+
+**Unix/Linux/macOS:**
+
+```bash
+cat >> ./AGENTS.md << 'EOF'
+
+## AI-DLC Workflow
+
+When the user invokes AI-DLC (starts with "Using AI-DLC, ..."),
+read and follow `.aidlc/aidlc-rules/aws-aidlc-rules/core-workflow.md`.
+EOF
+```
+
+**Windows PowerShell:**
+
+```powershell
+@'
+
+## AI-DLC Workflow
+
+When the user invokes AI-DLC (starts with "Using AI-DLC, ..."),
+read and follow `.aidlc/aidlc-rules/aws-aidlc-rules/core-workflow.md`.
+'@ | Add-Content ".\AGENTS.md"
+```
+
+**Verify Setup:**
+
+1. Open a new OpenHands conversation in your project directory.
+2. Say: "Using AI-DLC, analyze the existing codebase." (brownfield) or "Using AI-DLC, I want to build a REST API." (greenfield)
+3. OpenHands should display the AI-DLC welcome message and start the Inception phase.
+
+**Directory Structure (Option 1):**
+
+```text
+<my-project>/
+├── .agents/
+│   └── skills/
+│       └── ai-dlc/
+│           └── SKILL.md
+├── .gitignore
+└── .aidlc/
+    └── aidlc-rules/
+        ├── aws-aidlc-rules/
+        │   └── core-workflow.md
+        └── aws-aidlc-rule-details/
+            ├── common/
+            ├── inception/
+            ├── construction/
+            ├── extensions/
+            └── operations/
+```
+
+---
+
 ### Other Agents
 
 AI-DLC works with any coding agent that supports project-level rules or steering files. The general approach:
@@ -809,7 +948,7 @@ Have one of our supported platforms/tools for Assisted AI Coding installed:
 | Rules not loading            | Check file exists in the correct location for your platform |
 | File encoding issues         | Ensure files are UTF-8 encoded                              |
 | Rules not applied in session | Start a new chat session after file changes                 |
-| Rule details not loading     | Verify `.aidlc-rule-details/` exists with subdirectories    |
+| Rule details not loading     | Verify rule details directory exists with subdirectories    |
 
 ### Platform-Specific Issues
 
@@ -840,6 +979,12 @@ Have one of our supported platforms/tools for Assisted AI Coding installed:
 - Type `/instructions` in the chat input to view active instruction files
 - Check that `.github/copilot-instructions.md` exists in your workspace root
 
+#### OpenHands
+
+- Check that `.agents/skills/ai-dlc/SKILL.md` exists and includes an `AI-DLC` trigger
+- Check that `.aidlc/aidlc-rules/aws-aidlc-rule-details/` exists with subdirectories
+- If using the `AGENTS.md` fallback, start a new conversation after appending the trigger block
+
 ### File Path Issues on Windows
 
 - Use forward slashes `/` in file paths within markdown files
@@ -854,6 +999,12 @@ Have one of our supported platforms/tools for Assisted AI Coding installed:
 ```gitignore
 # These should be version controlled
 CLAUDE.md
+
+# For OpenHands: commit the keyword-triggered skill; gitignore .aidlc/
+.agents/skills/
+
+# For OpenHands AGENTS.md fallback: commit AGENTS.md as a lightweight trigger
+# For OpenAI Codex: commit AGENTS.md containing the full core-workflow.md content
 AGENTS.md
 .amazonq/rules/
 .amazonq/aws-aidlc-rule-details/
@@ -870,6 +1021,9 @@ AGENTS.md
 ```gitignore
 # Local-only settings
 .claude/settings.local.json
+
+# OpenHands local AI-DLC rules; commit .aidlc/ instead if you want rules pinned
+.aidlc/
 ```
 
 ---
@@ -916,9 +1070,17 @@ Set up AI-DLC in this project by doing the following:
    - Cline                    → create `.clinerules/ai-dlc.md`
    - Claude Code              → create `CLAUDE.md`
    - GitHub Copilot           → create `.github/copilot-instructions.md`
+   - OpenHands                → create `.agents/skills/ai-dlc/SKILL.md` with frontmatter:
+                                  ---
+                                  name: ai-dlc
+                                  description: "AI-DLC workflow"
+                                  triggers:
+                                  - AI-DLC
+                                  - AIDLC
+                                  ---
    - Any other agent          → create `AGENTS.md`
 
-3. The file content should be:
+3. After any required frontmatter, the file content should be:
    When the user invokes AI-DLC, read and follow
    `.aidlc/aidlc-rules/aws-aidlc-rules/core-workflow.md` to start the workflow.
 
