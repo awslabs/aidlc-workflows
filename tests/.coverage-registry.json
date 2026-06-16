@@ -1119,6 +1119,10 @@
         {
           "file": "tests/unit/t156-memory-relocation.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t157-workspace-shell-seed.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"

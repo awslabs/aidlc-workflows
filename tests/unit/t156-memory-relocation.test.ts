@@ -144,7 +144,16 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
   test("5: every harness ships the relocated method tree at the workspace root", () => {
     for (const h of ["claude", "kiro", "codex"]) {
       const top = readdirSync(MEM(h)).sort();
-      expect(top, `${h} method top-level`).toEqual(["org.md", "phases", "project.md", "team.md"]);
+      // org/team/project + phases/ are P5's relocated method; templates/ is the
+      // SEED-shipped TPL override floor (empty-but-present via a .gitkeep) — it
+      // is part of the shipped shell, so the method top-level now includes it.
+      expect(top, `${h} method top-level`).toEqual([
+        "org.md",
+        "phases",
+        "project.md",
+        "team.md",
+        "templates",
+      ]);
       expect(readdirSync(join(MEM(h), "phases")).sort()).toEqual([
         "construction.md",
         "ideation.md",

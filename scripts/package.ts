@@ -135,6 +135,20 @@ const HARNESS_DATA = "tools/data/harness.json";
 const MEMORY_SRC = "memory";
 const MEMORY_DST = join("aidlc", "spaces", "default", "memory");
 
+// The active-space CURSOR shipped as part of the workspace shell (SEED). It
+// lives at aidlc/active-space (ABOVE spaces/, not inside memory/) and holds the
+// name of the space the next /aidlc resolves against. Ships pointed at the
+// always-present "default" space so a fresh copy resolves with zero ceremony.
+// NOTE: it is GITIGNORED in the user's workspace (a per-user session cursor,
+// vision 5.1 - teammates legitimately point at different spaces at once), yet
+// dist must SHIP it as part of the shell. The two reconcile: the dist
+// .gitignore ignores aidlc/active-space for the END USER (their first /aidlc
+// cursor-write stays untracked), while OUR repo commits the shipped pointer
+// once (git add -f on the seed commit) - after which it is tracked and the
+// gitignore is moot for that path here, exactly like a shipped default .env.
+const ACTIVE_SPACE_REL = join("aidlc", "active-space");
+const ACTIVE_SPACE_VALUE = "default\n";
+
 // Write tools/data/harness.json from manifest data. Today it carries just the
 // rules-subdir (the one rename the runtime must know per-tree); the object shape
 // leaves room for future per-harness runtime facts. Pretty-printed + trailing
@@ -165,6 +179,22 @@ function emitMemory(outRoot: string, harnessDir: string, rulesRename: string | n
     written.push(outPath);
   }
   return written;
+}
+
+// Emit the active-space CURSOR (aidlc/active-space -> "default") into the dist
+// tree, as part of the workspace shell (SEED). Lives at the dist root beside
+// the harness dir (dist/<name>/aidlc/active-space), OUTSIDE <harnessDir>, like
+// the memory tree and projectRoot harness files. Returns the absolute path it
+// wrote so checkHarness can byte-diff + orphan-scan it. Harness-neutral: same
+// pointer value for every harness (the resolver follows it identically). The
+// dist .gitignore ignores this path for the END USER's workspace; OUR repo
+// commits the shipped pointer via git add -f on the seed commit (see the
+// ACTIVE_SPACE_REL note).
+function emitActiveSpace(outRoot: string): string {
+  const outPath = join(outRoot, ACTIVE_SPACE_REL);
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, ACTIVE_SPACE_VALUE);
+  return outPath;
 }
 
 // Copy the committed compiled-data JSON into the assembled tree so
@@ -244,6 +274,11 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   //     (AIDLC_RULES_DIR points there below), so it has to exist first.
   const memoryDir = join(outRoot, MEMORY_DST);
   outsideHarness.push(...emitMemory(outRoot, harnessDir, m.rulesRename));
+
+  // 2d. Emit the active-space cursor (aidlc/active-space -> "default") — part of
+  //     the shipped shell so a fresh copy resolves the default space with no
+  //     ceremony (SEED). Outside <harnessDir>, like the memory tree.
+  outsideHarness.push(emitActiveSpace(outRoot));
 
   // 3. Compile the stage graph into the assembled tree (writes harness-correct
   //    stage-graph.json + scope-grid.json). compileStageGraph() bootstraps each

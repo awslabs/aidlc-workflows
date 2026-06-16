@@ -22,19 +22,14 @@ const manifest: HarnessManifest = {
   name: "codex",
   harnessDir: ".codex",
 
-  // Core projection: NO session skills (emitted to .agents/skills/ by emit).
-  // Persona .md files ARE core (the conductor reads them as prose; Codex agent
-  // discovery reads only the emitted .toml). The method ("memory") is no longer
-  // projected into .codex/aidlc-rules/ — it relocated to the workspace-root
-  // aidlc/spaces/default/memory/ (emitted by the packager's memory step) and is
-  // reached via the auto-merged root AGENTS.md + the orchestrator's @aidlc/...
-  // prompt-mention (AIDLC_RULES_DIR in config.toml re-points the resolver seam).
-  // rulesRename:"aidlc-rules" stays — it still rewrites the <harness>/rules/
-  // prose mentions other core files carry.
+  // Core projection: rules→aidlc-rules, NO session skills (emitted to
+  // .agents/skills/ by emit). Persona .md files ARE core (the conductor reads
+  // them as prose; Codex agent discovery reads only the emitted .toml).
   coreDirs: [
     { src: "tools", dst: "tools" },
     { src: "aidlc-common", dst: "aidlc-common" },
     { src: "knowledge", dst: "knowledge" },
+    { src: "rules", dst: "aidlc-rules" },
     { src: "sensors", dst: "sensors" },
     { src: "scopes", dst: "scopes" },
     { src: "agents", dst: "agents" },
@@ -45,6 +40,14 @@ const manifest: HarnessManifest = {
   // skill is authored too but is EMITTED into .agents/skills/aidlc/ by emit().
   harnessFiles: [
     { src: "hooks/aidlc-codex-adapter.ts", dst: "hooks/aidlc-codex-adapter.ts" },
+    // Project-root .gitignore (beside .codex/, not inside it) — re-rooted under
+    // aidlc/spaces/* for the workspace layout (SEED): cursors + machine-local
+    // runtime ignored, the shared work (memory/codekb/registry/state/audit
+    // shards/artifacts) committed. Net-new for Codex — it shipped none before.
+    // Authored as dot-gitignore so it does not act as a live ignore inside
+    // harness/codex/. projectRoot routes it to dist/codex/.gitignore + the
+    // --check drift guard.
+    { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
   rulesRename: "aidlc-rules",
