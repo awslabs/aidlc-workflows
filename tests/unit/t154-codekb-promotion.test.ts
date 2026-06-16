@@ -1,0 +1,151 @@
+// covers: file:aidlc-common/stages/inception/reverse-engineering.md, file:aidlc-common/stages/inception/requirements-analysis.md, file:aidlc-common/stages/inception/practices-discovery.md, file:aidlc-common/stages/inception/user-stories.md, file:aidlc-common/stages/construction/nfr-requirements.md
+//
+// t154 — codekb promotion (P0). Deterministic, no-LLM, zero-token structural
+// contract over the SHIPPED stage files: P0 promoted the reverse-engineering
+// stage's outputs from the buried per-workflow path
+// `aidlc-docs/inception/reverse-engineering/` to the durable per-repo code
+// knowledge base `aidlc/codekb/<repo>/`, and re-pointed its verified
+// downstream consumers to read from the new location.
+//
+// Mechanism: none. We read the shipped dist/claude stage .md files in-process
+// (the same AIDLC_SRC tree t05/t87 resolve) and parse frontmatter via the
+// public parseStageFrontmatter (aidlc-lib.ts:1161). No process boundary, no
+// argv/exit/stdout seam, no live agent. The runtime artifact-path RESOLVER
+// (aidlc-orchestrate.ts resolveArtifactPath/resolveConsumePath) is a SEPARATE
+// concern owned by P1 and is NOT exercised here — at P0 the change lives at the
+// stage-document layer (where the RE agent reads its write destination and the
+// consumers read their upstream path).
+//
+// CONTRACT under test:
+//   1. RE stage `outputs:` names `aidlc/codekb/<repo>/` and KEEPS its 9 .md
+//      artifact filenames (the filenames `aidlc-validate outputs` cross-checks
+//      against the body prose, aidlc-validate.ts:51-94 — t45's invariant).
+//   2. RE stage body prose writes its artifacts to `aidlc/codekb/<repo>/`.
+//   3. The freshness/staleness marker `reverse-engineering-timestamp` is
+//      preserved in `produces:` (the marker a shared per-repo codekb needs;
+//      vision §7) and the `condition` still names "rerun for freshness".
+//   4. The TWO frontmatter consumers still declare the `reverse-engineering`
+//      dependency edge under `requires_stage:` (the edge is untouched — only
+//      the read PATH moved), and requirements-analysis's RE-read prose points
+//      at `aidlc/codekb/<repo>/`. (practices-discovery references RE artifacts
+//      BY NAME, not by output path — it carries no RE output-path prose to
+//      re-point, so only its `requires_stage:` edge is asserted.)
+//   5. The TWO prose consumers (user-stories, nfr-requirements) point their
+//      RE-read prose at `aidlc/codekb/<repo>/`.
+//   6. NO stage file retains the old RE output directory literal
+//      `aidlc-docs/inception/reverse-engineering/` anywhere.
+
+import { describe, expect, test } from "bun:test";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { AIDLC_SRC } from "../harness/fixtures.ts";
+import { parseStageFrontmatter } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// AIDLC_SRC === <repo>/dist/claude/.claude — the shipped tree (fixtures.ts:42),
+// the same one t05/t87 read. Assert on the DIST output so a stale dist (a core
+// edit not re-packaged) is caught here as well as by `package.ts --check`.
+const STAGES_DIR = join(AIDLC_SRC, "aidlc-common", "stages");
+
+const NEW_CODEKB_PATH = "aidlc/codekb/<repo>/";
+const OLD_RE_OUTPUT_PATH = "aidlc-docs/inception/reverse-engineering/";
+
+// The 9 RE artifact filenames the stage produces — kept inside the `outputs:`
+// parens so aidlc-validate's filename-vs-body cross-check (t45) still passes.
+const RE_ARTIFACT_FILES = [
+  "business-overview.md",
+  "architecture.md",
+  "code-structure.md",
+  "api-documentation.md",
+  "component-inventory.md",
+  "technology-stack.md",
+  "dependencies.md",
+  "code-quality-assessment.md",
+  "reverse-engineering-timestamp.md",
+];
+
+function stageBody(phase: string, slug: string): string {
+  return readFileSync(join(STAGES_DIR, phase, `${slug}.md`), "utf8");
+}
+
+function stageFrontmatter(phase: string, slug: string): Record<string, unknown> {
+  return parseStageFrontmatter(stageBody(phase, slug)) as Record<string, unknown>;
+}
+
+describe("t154 codekb promotion — RE outputs land at aidlc/codekb/<repo>/ (P0)", () => {
+  // ── 1: RE stage outputs re-pointed, filenames preserved ──────────────────
+  test("reverse-engineering `outputs:` names aidlc/codekb/<repo>/ (not the old buried path)", () => {
+    const fm = stageFrontmatter("inception", "reverse-engineering");
+    const outputs = fm.outputs as string;
+    expect(outputs).toContain(NEW_CODEKB_PATH);
+    expect(outputs).not.toContain(OLD_RE_OUTPUT_PATH);
+  });
+
+  test("reverse-engineering `outputs:` still enumerates all 9 RE artifact filenames", () => {
+    const outputs = stageFrontmatter("inception", "reverse-engineering").outputs as string;
+    for (const f of RE_ARTIFACT_FILES) {
+      expect(outputs, `outputs: missing artifact filename ${f}`).toContain(f);
+    }
+  });
+
+  // ── 2: RE body prose writes to the codekb root ───────────────────────────
+  test("reverse-engineering body prose writes artifacts to aidlc/codekb/<repo>/", () => {
+    const body = stageBody("inception", "reverse-engineering");
+    // "All artifacts written to `aidlc/codekb/<repo>/`" + the review path.
+    expect(body).toContain(`\`${NEW_CODEKB_PATH}\``);
+    expect(body).not.toContain(OLD_RE_OUTPUT_PATH);
+  });
+
+  // ── 3: the freshness marker is preserved as the staleness gate ───────────
+  test("reverse-engineering keeps reverse-engineering-timestamp in produces: and stays a freshness rerun", () => {
+    const fm = stageFrontmatter("inception", "reverse-engineering");
+    expect(fm.produces as string[]).toContain("reverse-engineering-timestamp");
+    expect((fm.condition as string).toLowerCase()).toContain("freshness");
+  });
+
+  // ── 4: frontmatter consumers — edge intact, read path re-pointed ─────────
+  test("requirements-analysis keeps the reverse-engineering requires_stage edge", () => {
+    const fm = stageFrontmatter("inception", "requirements-analysis");
+    expect(fm.requires_stage as string[]).toContain("reverse-engineering");
+  });
+
+  test("requirements-analysis RE-read prose resolves aidlc/codekb/<repo>/ (not the old path)", () => {
+    const body = stageBody("inception", "requirements-analysis");
+    expect(body).toContain(`Read RE artifacts from \`${NEW_CODEKB_PATH}\``);
+    expect(body).not.toContain(OLD_RE_OUTPUT_PATH);
+  });
+
+  test("practices-discovery keeps the reverse-engineering requires_stage edge", () => {
+    const fm = stageFrontmatter("inception", "practices-discovery");
+    expect(fm.requires_stage as string[]).toContain("reverse-engineering");
+  });
+
+  // ── 5: prose consumers re-pointed ────────────────────────────────────────
+  test("user-stories RE-read prose resolves aidlc/codekb/<repo>/ (not the old path)", () => {
+    const body = stageBody("inception", "user-stories");
+    expect(body).toContain(`Read relevant RE artifacts from \`${NEW_CODEKB_PATH}\``);
+    expect(body).not.toContain(OLD_RE_OUTPUT_PATH);
+  });
+
+  test("nfr-requirements RE-read prose resolves aidlc/codekb/<repo>/ (not the old path)", () => {
+    const body = stageBody("construction", "nfr-requirements");
+    expect(body).toContain(`reverse engineering artifacts from \`${NEW_CODEKB_PATH}\``);
+    expect(body).not.toContain(OLD_RE_OUTPUT_PATH);
+  });
+
+  // ── 6: no stage file retains the old RE output directory ─────────────────
+  test("no shipped stage .md retains the old aidlc-docs/inception/reverse-engineering/ output path", () => {
+    const offenders: string[] = [];
+    for (const phase of readdirSync(STAGES_DIR).sort()) {
+      const phaseDir = join(STAGES_DIR, phase);
+      if (!statSync(phaseDir).isDirectory()) continue;
+      for (const entry of readdirSync(phaseDir).sort()) {
+        if (!entry.endsWith(".md")) continue;
+        const path = join(phaseDir, entry);
+        if (readFileSync(path, "utf8").includes(OLD_RE_OUTPUT_PATH)) {
+          offenders.push(`${phase}/${entry}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});

@@ -2,7 +2,7 @@
 
 ## Output Structure
 
-All RE artifacts are created under `aidlc-docs/inception/reverse-engineering/`.
+All RE artifacts are created under `aidlc/codekb/<repo>/` — the durable per-repo code knowledge base shared across intents.
 
 ### Required Artifacts
 

@@ -75,7 +75,7 @@ Load aidlc-architect-agent (lead) persona from `agents/aidlc-architect-agent.md`
 
 ### Step 2: Read Prior Artifacts
 
-Read functional design artifacts from `aidlc-docs/construction/{unit-name}/functional-design/` (if they exist). Read `aidlc-docs/inception/requirements-analysis/requirements.md` and any reverse engineering artifacts from `aidlc-docs/inception/reverse-engineering/`.
+Read functional design artifacts from `aidlc-docs/construction/{unit-name}/functional-design/` (if they exist). Read `aidlc-docs/inception/requirements-analysis/requirements.md` and any reverse engineering artifacts from `aidlc/codekb/<repo>/`.
 
 ### Step 3: Assess NFR Categories
 

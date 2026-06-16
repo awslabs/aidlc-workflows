@@ -33,7 +33,7 @@ scopes:
   - security-patch
   - workshop
 inputs: aidlc-docs/aidlc-state.md
-outputs: "aidlc-docs/inception/reverse-engineering/ (9 artifacts: business-overview.md, architecture.md, code-structure.md, api-documentation.md, component-inventory.md, technology-stack.md, dependencies.md, code-quality-assessment.md, reverse-engineering-timestamp.md)"
+outputs: "aidlc/codekb/<repo>/ (9 artifacts: business-overview.md, architecture.md, code-structure.md, api-documentation.md, component-inventory.md, technology-stack.md, dependencies.md, code-quality-assessment.md, reverse-engineering-timestamp.md)"
 ---
 
 # Reverse Engineering
@@ -84,9 +84,9 @@ Architect synthesizes scan results into 9 artifacts:
 6. **technology-stack.md** — Languages, frameworks, libraries with versions
 7. **dependencies.md** — External dependencies, internal cross-package dependencies
 8. **code-quality-assessment.md** — Test coverage, linting, CI/CD, documentation quality, tech debt
-9. **reverse-engineering-timestamp.md** — Records when reverse engineering was performed (date, commit hash if available, scope of analysis)
+9. **reverse-engineering-timestamp.md** — Records when reverse engineering was performed (date, commit hash if available, scope of analysis). This is the freshness/staleness marker for the per-repo codekb store — a stale timestamp triggers a rerun (see the `condition` frontmatter: "Always rerun for freshness").
 
-All artifacts written to `aidlc-docs/inception/reverse-engineering/`.
+All artifacts written to `aidlc/codekb/<repo>/`, the durable per-repo code knowledge base shared across intents.
 
 ### Step 4: Update State
 
@@ -99,12 +99,12 @@ Update `aidlc-docs/aidlc-state.md`:
 Use stage-protocol.md completion template:
 - Announcement with completion summary
 - Summary of all 9 artifacts produced
-- Review path: `aidlc-docs/inception/reverse-engineering/`
+- Review path: `aidlc/codekb/<repo>/`
 - Structured approval question with options: Approve (continue to Requirements Analysis) / Request Changes
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/inception/reverse-engineering/`.
+This stage's outputs are markdown artefacts under `aidlc/codekb/<repo>/`.
 
 The imported sensors check those outputs:
 

@@ -715,7 +715,7 @@
         "workshop"
       ],
       "inputs": "aidlc-docs/aidlc-state.md",
-      "outputs": "aidlc-docs/inception/reverse-engineering/ (9 artifacts: business-overview.md, architecture.md, code-structure.md, api-documentation.md, component-inventory.md, technology-stack.md, dependencies.md, code-quality-assessment.md, reverse-engineering-timestamp.md)",
+      "outputs": "aidlc/codekb/<repo>/ (9 artifacts: business-overview.md, architecture.md, code-structure.md, api-documentation.md, component-inventory.md, technology-stack.md, dependencies.md, code-quality-assessment.md, reverse-engineering-timestamp.md)",
       "rules_in_context": [
         {
           "path": ".claude/rules/aidlc-org.md",

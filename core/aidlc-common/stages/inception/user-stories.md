@@ -67,7 +67,7 @@ If skipping, update aidlc-state.md with skip reason and proceed to next stage.
 ### Step 3: Load Prior Context
 
 - Read `aidlc-docs/inception/requirements-analysis/requirements.md`
-- If brownfield: Read relevant RE artifacts from `aidlc-docs/inception/reverse-engineering/`
+- If brownfield: Read relevant RE artifacts from `aidlc/codekb/<repo>/`
 
 ---
 
