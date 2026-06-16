@@ -359,6 +359,19 @@ if (kind === "done") {
   allowStop();
 }
 
+// `ask` → the engine is waiting for human input (scope confirmation, gate
+// question, etc.). Allow the agent to end its turn so the user can respond.
+if (kind === "ask") {
+  allowStop();
+}
+
+// Stage is awaiting human approval ([?] state) — the agent presented the gate
+// and should stop to let the user decide. Allow the stop.
+const awaitingMatch = stateContent.match(/\[\?]\s/);
+if (awaitingMatch && kind === "run-stage") {
+  allowStop();
+}
+
 // A directive is PENDING (run-stage / dispatch-subagent / invoke-swarm /
 // present-gate / ask / print / error). Decide whether to block, honouring the
 // recursion bounds. When the bounds say release, LET GO — a stuck loop must
