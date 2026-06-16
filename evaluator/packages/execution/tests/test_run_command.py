@@ -5,8 +5,9 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
+import pytest
 from aidlc_runner.config import ExecutionConfig, RunnerConfig, load_config
-from aidlc_runner.tools.run_command import make_run_command
+from aidlc_runner.tools.run_command import _resolve_safe, make_run_command
 
 
 def _call(run_cmd, command: str, working_directory: str = "workspace") -> str:
@@ -40,6 +41,20 @@ class TestRunCommandSandbox:
         run_cmd = make_run_command(tmp_path)
         result = _call(run_cmd, "ls", "../../")
         assert "Path traversal denied" in result
+
+    def test_sibling_directory_escape_denied(self, tmp_path: Path):
+        # Regression: a sibling dir whose name shares the run folder's prefix
+        # ("run" vs "run-evil") escaped the old str.startswith guard.
+        run_folder = tmp_path / "run"
+        (run_folder / "workspace").mkdir(parents=True)
+        evil = tmp_path / "run-evil"
+        evil.mkdir()
+        (evil / "secret.txt").write_text("top secret")
+
+        run_cmd = make_run_command(run_folder)
+        result = _call(run_cmd, "cat secret.txt", "../run-evil")
+        assert "Path traversal denied" in result
+        assert "top secret" not in result
 
     def test_nonexistent_working_directory(self, tmp_path: Path):
         (tmp_path / "workspace").mkdir()
@@ -166,3 +181,32 @@ class TestExecutionConfig:
         args = parser.parse_args(["--vision", "v.md", "--no-post-tests"])
         overrides = _build_cli_overrides(args)
         assert overrides["execution"]["post_run_tests"] is False
+
+
+class TestResolveSafe:
+    """Direct unit tests for the run-folder boundary guard."""
+
+    def test_legit_child_allowed(self, tmp_path: Path):
+        run = tmp_path / "run"
+        run.mkdir()
+        assert _resolve_safe(run, "workspace/app.py") == (run / "workspace/app.py").resolve()
+
+    def test_run_folder_root_allowed(self, tmp_path: Path):
+        run = tmp_path / "run"
+        run.mkdir()
+        assert _resolve_safe(run, ".") == run.resolve()
+
+    def test_parent_escape_denied(self, tmp_path: Path):
+        run = tmp_path / "run"
+        run.mkdir()
+        with pytest.raises(ValueError, match="Path traversal denied"):
+            _resolve_safe(run, "../../etc/passwd")
+
+    def test_sibling_prefix_escape_denied(self, tmp_path: Path):
+        # The exact bypass the reviewer reported: a sibling dir sharing the
+        # run folder's name prefix passed the old str.startswith check.
+        run = tmp_path / "run"
+        run.mkdir()
+        (tmp_path / "run-evil").mkdir()
+        with pytest.raises(ValueError, match="Path traversal denied"):
+            _resolve_safe(run, "../run-evil/secret.txt")

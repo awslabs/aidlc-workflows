@@ -15,7 +15,9 @@ def _resolve_safe(run_folder: Path, relative_path: str) -> Path:
     """Resolve a relative path within the run folder, preventing traversal."""
     resolved = (run_folder / relative_path).resolve()
     run_resolved = run_folder.resolve()
-    if not str(resolved).startswith(str(run_resolved)):
+    # is_relative_to (not str.startswith) so a sibling dir like
+    # "../run-folder-evil/x" cannot escape the run boundary via prefix match.
+    if not resolved.is_relative_to(run_resolved):
         raise ValueError(f"Path traversal denied: {relative_path}")
     return resolved
 

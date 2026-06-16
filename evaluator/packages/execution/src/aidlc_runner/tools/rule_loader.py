@@ -61,7 +61,9 @@ def make_rule_loader(rules_dir: Path) -> object:
             target = _resolve_v1(rules_dir, rule_path)
 
         resolved = target.resolve()
-        if not str(resolved).startswith(str(rules_dir)):
+        # is_relative_to (not str.startswith) so a sibling dir cannot escape the
+        # rules boundary via prefix match. rules_dir is already resolved above.
+        if not resolved.is_relative_to(rules_dir):
             return f"Error: Path traversal denied: {rule_path}"
 
         if not resolved.exists():
