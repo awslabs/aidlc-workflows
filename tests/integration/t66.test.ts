@@ -1040,7 +1040,9 @@ describe("t66 rules_in_context resolution (in-process + spawnSync seams)", () =>
     const popRules = mkdtempSync(join(tmpdir(), "t66-rules-pop-"));
     const emptyRules = mkdtempSync(join(tmpdir(), "t66-rules-empty-"));
     scratch.push(popRules, emptyRules);
-    writeFileSync(join(popRules, "aidlc-org.md"), "# org rule\n");
+    // Neutral method-file name (P5 relocation: RULE_FILE_REGEX now matches
+    // org/team/project.md, not the old aidlc-<scope>.md).
+    writeFileSync(join(popRules, "org.md"), "# org rule\n");
     const graphA = seedGraphCopy();
     const graphB = seedGraphCopy();
     spawnSync(BUN, [GRAPH_TS, "compile"], {
@@ -1063,9 +1065,9 @@ describe("t66 rules_in_context resolution (in-process + spawnSync seams)", () =>
     scratch.push(rules);
     const graph = seedGraphCopy();
     const env = { ...process.env, AIDLC_RULES_DIR: rules, AIDLC_STAGE_GRAPH: graph };
-    writeFileSync(join(rules, "aidlc-org.md"), "# initial org rule\n");
+    writeFileSync(join(rules, "org.md"), "# initial org rule\n");
     spawnSync(BUN, [GRAPH_TS, "compile"], { env, encoding: "utf8" });
-    writeFileSync(join(rules, "aidlc-team.md"), "# team rule added after compile\n");
+    writeFileSync(join(rules, "team.md"), "# team rule added after compile\n");
     const check = spawnSync(BUN, [GRAPH_TS, "compile", "--check"], { env, encoding: "utf8" });
     expect(check.status).toBe(1);
   });

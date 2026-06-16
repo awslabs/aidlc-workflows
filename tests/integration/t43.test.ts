@@ -217,13 +217,24 @@ describe("ideation stages output to aidlc-docs/ideation/", () => {
 // Tests 9-11: Inception outputs use aidlc-docs/inception/ (.sh:107-116)
 // ============================================================
 describe("inception stages output to aidlc-docs/inception/", () => {
-  for (const slug of ["reverse-engineering", "requirements-analysis", "application-design"]) {
+  // reverse-engineering was PROMOTED out of aidlc-docs/inception/ to the durable
+  // per-repo code knowledge base aidlc/codekb/<repo>/ (P0 codekb promotion), so
+  // it is asserted separately below; the other inception stages still write their
+  // own artifacts under aidlc-docs/inception/.
+  for (const slug of ["requirements-analysis", "application-design"]) {
     test(`${slug} outputs to aidlc-docs/inception/`, () => {
       const v = out(slug);
       expect(v).not.toBeNull();
       expect(v!).toContain("aidlc-docs/inception/");
     });
   }
+
+  test("reverse-engineering outputs to the per-repo codekb (aidlc/codekb/<repo>/), not aidlc-docs/inception/", () => {
+    const v = out("reverse-engineering");
+    expect(v).not.toBeNull();
+    expect(v!).toContain("aidlc/codekb/<repo>/");
+    expect(v!).not.toContain("aidlc-docs/inception/");
+  });
 });
 
 // ============================================================
