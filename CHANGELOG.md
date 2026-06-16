@@ -8,7 +8,7 @@ Brings the five MCP servers to the Kiro distribution (previously Claude-only). T
 
 * **New `.kiro/settings/mcp.json`** — `context7` + the four AWS servers (`aws-mcp`, `aws-pricing`, `aws-iac`, `aws-serverless`).
 * **Architect and developer agents gain `includeMcpJson: true`** plus the `@<server>` `tools` entries; the conductor gets none.
-* **Removed the broken `$schema`** from the three Kiro agent JSONs (wrong product, unreachable URL).
+* **Removed the `$schema`** from the three Kiro agent JSONs. The old schema set `"additionalProperties": false` and defined `useLegacyMcpJson` rather than `includeMcpJson`, so keeping it would make each agent fail validation against its own declared schema once `includeMcpJson` is added; Kiro's current agent-config reference does not list `$schema` as a field.
 
 ## [0.7.9] - 2026-06-16
 
