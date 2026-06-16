@@ -16,10 +16,10 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
-  auditFilePath,
   emitError,
   errorMessage,
   getField,
+  readAllAuditShards,
   resolveProjectDir,
   worktreePath,
   worktreeStateFilePath,
@@ -614,8 +614,9 @@ function handleVerify(args: string[]): void {
   }
 
   const pd = resolveProjectDir(projectDir);
-  const auditPath = auditFilePath(pd);
-  if (!existsSync(auditPath)) {
+  // Read across every per-clone audit shard (single shard in the common case).
+  const audit = readAllAuditShards(pd);
+  if (audit.length === 0) {
     process.stdout.write(
       `${JSON.stringify({
         verified: false,
@@ -627,7 +628,6 @@ function handleVerify(args: string[]): void {
     process.exit(1);
   }
 
-  const audit = readFileSync(auditPath, "utf-8");
   const match = findLatestEvent(audit, flags.event, slug);
   if (!match) {
     process.stdout.write(
@@ -680,15 +680,15 @@ function handleInfo(args: string[]): void {
   const slug = validateSlug(flags.slug);
 
   const pd = resolveProjectDir(projectDir);
-  const auditPath = auditFilePath(pd);
-  if (!existsSync(auditPath)) {
+  // Read across every per-clone audit shard (single shard in the common case).
+  const audit = readAllAuditShards(pd);
+  if (audit.length === 0) {
     process.stderr.write(
       `error: no WORKTREE_CREATED audit entry for slug ${slug} (audit log absent)\n`
     );
     process.exit(1);
   }
 
-  const audit = readFileSync(auditPath, "utf-8");
   const match = findLatestEvent(audit, "WORKTREE_CREATED", slug);
   if (!match) {
     process.stderr.write(

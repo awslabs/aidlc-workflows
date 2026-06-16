@@ -26,7 +26,6 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
-  auditFilePath,
   errorMessage,
   findAllEvents,
   getField,
@@ -36,6 +35,7 @@ import {
   parseCheckboxes,
   parseMemoryHeadings,
   parseStateStageSuffixes,
+  readAllAuditShards,
   readStateFile,
   relativeMemoryPath,
   resolveProjectDir,
@@ -313,7 +313,6 @@ function computeBoltDag(projectDir: string): BoltDag | undefined {
 
 function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   const { projectDir, testRun } = opts;
-  const auditPath = auditFilePath(projectDir);
 
   // Env-misconfig fallback per plan §97-102.
   const statePath = stateFilePath(projectDir);
@@ -323,13 +322,14 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
     );
     return { skipped: "no-state" };
   }
-  if (!existsSync(auditPath)) {
+  // Read across every per-clone audit shard (single shard in the common case).
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) {
     // No audit yet — write an empty graph anchored to state cursor only,
     // mirroring the "fresh init, no transitions" case.
     return writeEmptyGraph(projectDir);
   }
 
-  const audit = readFileSync(auditPath, "utf-8");
   const stateContent = readStateFile(projectDir);
 
   const header = buildWorkflowHeader(audit, stateContent);
@@ -767,7 +767,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   // MEMORY_EMPTY per (slug, gate-completion) tuple, so doctor's rate
   // metric is honest under N-compile-per-workflow re-fires.
   withAuditLock(projectDir, () => {
-    const auditNow = readFileSync(auditPath, "utf-8");
+    const auditNow = readAllAuditShards(projectDir);
     const existingEmpties = findAllEvents(auditNow, "MEMORY_EMPTY");
 
     for (const ze of zeroEntryApprovedStages) {

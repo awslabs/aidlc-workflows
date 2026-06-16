@@ -62,7 +62,7 @@ copies this table verbatim.
 | `requires_stage` | string[] | yes | empty allowed; each entry a known stage slug. Two roles: (1) semantic data dependency; (2) presentation-order edge for stages with no semantic link but a fixed display order. Primary input to computed `display_order` |
 | `scopes` | string[] | optional | each entry a scope name with a matching `.claude/scopes/aidlc-<name>.md` file. Naming a scope marks this stage EXECUTE under that scope; absence marks it SKIP. The per-stage transpose of the scope membership matrix — `aidlc-graph compile` reads every stage's `scopes:` and emits the compiled EXECUTE/SKIP grid (`tools/data/scope-grid.json`). The 3 initialization stages name all scopes (always EXECUTE). Absent and `[]` are treated identically |
 | `inputs` | string | yes | human prose (preserves today's `**Inputs**:` line) |
-| `outputs` | string | yes | human prose (preserves today's `**Outputs**:` line) |
+| `outputs` | string | yes | human prose (preserves today's `**Outputs**:` line). **Non-load-bearing at runtime** — the engine NEVER reads `outputs:` for path resolution; it resolves the node's `produces[]` artifact NAMES against the **active intent's record dir** at emit time (see "Artifact paths are engine-resolved" below). Author `outputs:` as relative artifact NAMES (or `<phase>/<stage>/<name>.md` shapes); do NOT hardcode a workspace root (`aidlc-docs/…` or `aidlc/spaces/…`) — it would read FALSE the moment the record re-roots per intent |
 
 ---
 
@@ -112,12 +112,29 @@ scopes:
   - feature
   - mvp
 inputs: Intent statement, feasibility assessment, constraint register
-outputs: aidlc-docs/ideation/scope-definition/scope-document.md, aidlc-docs/ideation/scope-definition/intent-backlog.md, aidlc-docs/ideation/scope-definition/scope-definition-questions.md
+outputs: scope-document.md, intent-backlog.md, scope-definition-questions.md (under this stage's record dir, engine-resolved)
 ---
 ```
 
 Note: no `display_order` (computed), no `for_each` (stage runs once per
-workflow — field omitted).
+workflow — field omitted). The `outputs:` line names the artifacts as relative
+NAMES, not rooted paths — the engine resolves the root (see below).
+
+---
+
+## Artifact paths are engine-resolved (no stage `.md` hardcodes a root)
+
+A stage emits relative artifact **names** (its `produces[]`); the engine
+resolves them to canonical write paths at directive-emit time, **against the
+active intent's record dir** — `aidlc/spaces/<space>/intents/<slug>-<id8>/<phase>/<stage>/<name>.md`
+(or the flat legacy `aidlc-docs/<phase>/<stage>/<name>.md` for a not-yet-migrated
+project). The resolver is `resolveArtifactPath` / `memoryPathFor` in
+`aidlc-orchestrate.ts`, threaded with the active intent's relative record dir
+(`relativeRecordDir` in `aidlc-lib.ts`). **No stage `.md` hardcodes a workspace
+root** — the `outputs:` frontmatter and any "Create `…/…`" prose are
+human-facing documentation only; the engine hands the conductor the resolved
+`produces[]` path. Treat a rooted path literal in a stage file as a doc bug, not
+a behavior contract.
 
 ---
 

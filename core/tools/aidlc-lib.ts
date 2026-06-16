@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
-import { accessSync, appendFileSync, constants as fsConstants, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { createHash, randomUUID } from "node:crypto";
+import { accessSync, appendFileSync, constants as fsConstants, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 // Type-only import for the lazy-loaded aidlc-graph.ts dependency. The
@@ -258,12 +258,486 @@ export function toPosix(p: string): string {
   return sep === "/" ? p : p.split(sep).join("/");
 }
 
-export function stateFilePath(projectDir: string): string {
-  return join(projectDir, "aidlc-docs", "aidlc-state.md");
+// --- Workspace selectors: space + intent ---------------------------------------
+//
+// The record (state · audit · artifacts · diary) re-roots per INTENT under a
+// per-team SPACE: `aidlc/spaces/<space>/intents/<slug>-<id8>/…`. Two cursors
+// pick the active space/intent, both GITIGNORED (per-user, not shared truth):
+//   - `aidlc/active-space`                            → the active space
+//   - `aidlc/spaces/<space>/intents/active-intent`    → that space's active intent
+//
+// Resolution precedence (vision §5):
+//   space:  explicit arg > active-space pointer > "default" (NEVER errors).
+//   intent: explicit arg > active-intent pointer > lone-intent > flat-legacy.
+//
+// LEGACY FLAT FALLBACK (transitional). A pre-workspace project keeps its state
+// at the flat `aidlc-docs/` root until it is migrated (migrateFlatLayout) or a
+// new intent is born. When NO new-layout intent record resolves, the path
+// helpers below return the flat `aidlc-docs/` location so a flat project (and
+// the large flat-seeded test corpus) keeps working unchanged; new-layout
+// projects (SEED shell + auto-birth + post-migration) resolve per-intent. The
+// flat fallback is the only place an `aidlc-docs` path literal survives in the
+// helpers (plus the migration detector) — P9 retires it with the fixture
+// migration. activeIntent() returning null IS that "no record yet" signal.
+
+export const ACTIVE_SPACE_POINTER = "active-space";
+export const ACTIVE_INTENT_POINTER = "active-intent";
+export const DEFAULT_SPACE = "default";
+
+// `aidlc/` — the harness-neutral workspace roof (memory · codekb · knowledge ·
+// intents live under spaces/<space>/ here; the engine stays in <harness>/).
+function workspaceRoot(projectDir: string): string {
+  return join(projectDir, "aidlc");
 }
 
-export function auditFilePath(projectDir: string): string {
-  return join(projectDir, "aidlc-docs", "audit.md");
+// The active space for this project. Reads the `aidlc/active-space` cursor;
+// defaults to "default". NEVER throws — the default space is always valid even
+// when nothing is on disk yet (the resolver tolerates an absent space dir).
+export function activeSpace(projectDir: string): string {
+  const ptr = join(workspaceRoot(projectDir), ACTIVE_SPACE_POINTER);
+  try {
+    const raw = readFileSync(ptr, "utf-8").trim();
+    if (raw.length > 0) return raw;
+  } catch {
+    // no cursor → default
+  }
+  return DEFAULT_SPACE;
+}
+
+// `aidlc/spaces/<space>/intents` — the intent registry + record root.
+export function intentsDir(projectDir: string, space?: string): string {
+  const sp = space ?? activeSpace(projectDir);
+  return join(workspaceRoot(projectDir), "spaces", sp, "intents");
+}
+
+// Enumerate the intent RECORD directories in a space (each `<slug>-<id8>/`
+// holding an aidlc-state.md). Returns the bare directory names, sorted; [] when
+// the space has no intents dir or no records yet. The intents.json registry is
+// the canonical list for humans/ordering — this on-disk scan is the cheap
+// "does any record exist?" signal the path resolver and migration detector need
+// (it must not depend on the registry being present).
+export function listIntentDirs(projectDir: string, space?: string): string[] {
+  const dir = intentsDir(projectDir, space);
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const records: string[] = [];
+  for (const name of entries) {
+    // A record dir holds aidlc-state.md; skip the active-intent cursor,
+    // intents.json, and any stray files.
+    if (existsSync(join(dir, name, "aidlc-state.md"))) records.push(name);
+  }
+  return records.sort();
+}
+
+// The active intent's RECORD directory NAME (`<slug>-<id8>`) for a space, or
+// null when no new-layout record resolves (→ the caller falls back to the flat
+// legacy layout). Precedence: explicit > active-intent cursor (if it names a
+// real record) > lone intent. Returns null rather than throwing on ambiguity so
+// the path helpers stay total; the verb/handler layer (P4) owns the
+// error/prompt for the >1-intent-no-cursor case.
+export function activeIntent(
+  projectDir: string,
+  space?: string,
+  explicit?: string,
+): string | null {
+  const sp = space ?? activeSpace(projectDir);
+  const dir = intentsDir(projectDir, sp);
+  if (explicit) return explicit;
+  // Cursor: a real record the pointer names.
+  try {
+    const raw = readFileSync(join(dir, ACTIVE_INTENT_POINTER), "utf-8").trim();
+    if (raw.length > 0 && existsSync(join(dir, raw, "aidlc-state.md"))) return raw;
+  } catch {
+    // no cursor → fall through to lone-intent
+  }
+  const records = listIntentDirs(projectDir, sp);
+  if (records.length === 1) return records[0];
+  // 0 records → null (flat fallback); >1 with no cursor → null (the handler
+  // layer prompts; a path helper cannot guess which intent the caller meant).
+  return null;
+}
+
+// The absolute RECORD directory for an intent:
+// `aidlc/spaces/<space>/intents/<slug>-<id8>/`. Returns null when no new-layout
+// intent resolves, signalling the flat-legacy fallback to the path helpers.
+export function recordDir(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): string | null {
+  const sp = space ?? activeSpace(projectDir);
+  const slug = activeIntent(projectDir, sp, intent);
+  if (slug === null) return null;
+  return join(intentsDir(projectDir, sp), slug);
+}
+
+// Relative record-dir prefix for the engine's agent-consumed artifact/diary
+// paths: `aidlc/spaces/<space>/intents/<slug>-<id8>` with forward slashes
+// regardless of host OS (portable across worktrees). Returns null → the engine
+// resolvers fall back to the flat `aidlc-docs` relative prefix. The space +
+// intent come from the active cursors unless passed explicitly; the engine
+// threads the active intent's record-dir name in (it knows projectDir but the
+// resolvers themselves take no projectDir — see aidlc-orchestrate.ts).
+export function relativeRecordDir(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): string | null {
+  const sp = space ?? activeSpace(projectDir);
+  const slug = activeIntent(projectDir, sp, intent);
+  if (slug === null) return null;
+  return `aidlc/spaces/${sp}/intents/${slug}`;
+}
+
+// --- Intent identity: UUIDv7 + slugify ----------------------------------------
+//
+// The canonical intent id is a UUIDv7 (time-ordered, globally unique, merge-safe,
+// stable across a slug rename). The dir name is `<slug>-<id8>` where id8 is the
+// trailing 8 hex of the uuid (a derived disambiguator). A within-space clash
+// resolves by the next-longer prefix of the SAME uuid (id8→id10→…), never a
+// re-mint.
+
+// Generate a UUIDv7: a 48-bit Unix-ms timestamp prefix + version 7 nibble +
+// random/variant tail. Sorting by uuid string is creation order. Uses new Date()
+// for the timestamp (permitted; isoTimestamp does the same) and randomUUID() for
+// the random + variant bits (no Math.random): take the v4 uuid's 32 hex digits,
+// overwrite the first 12 (the timestamp) and the 13th (the version nibble → 7),
+// and keep digits 13..31 (which include the v4 variant nibble) cryptographically
+// sourced.
+export function uuidv7(): string {
+  const hex = randomUUID().replace(/-/g, ""); // 32 hex chars, v4
+  const ms = new Date().getTime();
+  const tsHex = ms.toString(16).padStart(12, "0").slice(-12); // 48 bits = 12 hex
+  const body = `${tsHex}7${hex.slice(13)}`; // ts(12) + version(1) + tail(19)
+  return `${body.slice(0, 8)}-${body.slice(8, 12)}-${body.slice(12, 16)}-${body.slice(16, 20)}-${body.slice(20, 32)}`;
+}
+
+// The id8 disambiguator: trailing 8 hex chars of the uuid (digits only, dashes
+// stripped). Used in the `<slug>-<id8>` dir name.
+export function idSuffix(uuid: string, length = 8): string {
+  const hex = uuid.replace(/-/g, "");
+  return hex.slice(-length);
+}
+
+// Deterministic free-text → SLUG_RE-valid kebab: lowercase; non-alphanumerics →
+// hyphens; collapse + trim hyphens; cap length; ensure a leading letter. Pure +
+// idempotent (slugify(slugify(x)) === slugify(x)). Falls back to "intent" when
+// the input reduces to empty.
+export function slugify(text: string, maxLength = 48): string {
+  let s = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, maxLength)
+    .replace(/-+$/g, "");
+  // Ensure a leading LETTER (SLUG_RE = /^[a-z][a-z0-9-]*$/).
+  if (!/^[a-z]/.test(s)) s = `intent-${s}`.replace(/-+$/g, "");
+  if (s.length === 0) s = "intent";
+  return s;
+}
+
+// --- Flat-layout migration (one-time, lock-guarded, crash-safe) ---------------
+//
+// A pre-workspace project keeps its record at the flat `aidlc-docs/` root. This
+// moves it ONCE into a per-intent record dir under spaces/default/. Two review
+// blockers shaped the design (vision plan P1 migration box):
+//
+//  (1) DETECTION keys on a signal SEED does NOT ship: a flat `aidlc-docs/
+//      aidlc-state.md` present AND no `aidlc/spaces/*/intents/*/aidlc-state.md`
+//      record yet AND no `.migrated` marker. (SEED ships `aidlc/spaces/default/`,
+//      so "no spaces dir" would never fire and would orphan the legacy tree.)
+//  (2) IDEMPOTENCY keys on the `.migrated` marker ALONE (written LAST), never on
+//      `aidlc/spaces/` existence — a crash after the parent mkdir but before the
+//      move completes must re-detect and re-stage from the untouched original.
+//
+// MECHANISM (all inside withAuditLock on the WORKSPACE bucket): mint a UUIDv7;
+// slug from existing state or "default"; (1) stage a COPY of the whole aidlc-docs/
+// tree into a temp dir UNDER the workspace root (same filesystem — NOT tmpdir(),
+// or a cross-device rename degrades to non-atomic); (2) mkdir the intent dir's
+// PARENT chain; (3) ONE atomic rename of the staged tree into the leaf
+// <slug>-<id8>/ (the leaf is created BY this rename); (4) append to intents.json
+// + set active-intent; (5) write the `.migrated` marker LAST. The flat tree is
+// git-rm'd post-move (the data MOVED, not deleted); the source is NEVER rmSync'd.
+
+export const MIGRATED_MARKER = ".migrated";
+
+// The marker path: `aidlc/.migrated` (workspace-level, committed, idempotency key).
+export function migratedMarkerPath(projectDir: string): string {
+  return join(workspaceRoot(projectDir), MIGRATED_MARKER);
+}
+
+// Does this project need a flat→per-intent migration? Detection per blocker (1).
+export function needsFlatMigration(projectDir: string): boolean {
+  // Marker present → already migrated (idempotency key, blocker 2).
+  if (existsSync(migratedMarkerPath(projectDir))) return false;
+  // No flat state → nothing to migrate (a fresh SEED shell, or already moved).
+  // This is the migration DETECTION trigger — the legitimate read of the legacy
+  // flat state path (allowlisted in the grep gate).
+  const flatState = legacyFlatFallback(projectDir, "aidlc-state.md");
+  if (!existsSync(flatState)) return false;
+  // Any new-layout intent RECORD already present → migration ran (or a fresh
+  // born intent exists); do not move a second tree on top of it.
+  if (anyIntentRecordExists(projectDir)) return false;
+  return true;
+}
+
+// True iff any space already holds an intent record (a `<dir>/aidlc-state.md`).
+// Scans aidlc/spaces/*/intents/*/aidlc-state.md WITHOUT relying on the registry.
+export function anyIntentRecordExists(projectDir: string): boolean {
+  const spacesRoot = join(workspaceRoot(projectDir), "spaces");
+  let spaces: string[];
+  try {
+    spaces = readdirSync(spacesRoot);
+  } catch {
+    return false;
+  }
+  for (const sp of spaces) {
+    if (listIntentDirs(projectDir, sp).length > 0) return true;
+  }
+  return false;
+}
+
+// Append an intent to the space's intents.json registry (creating it if absent).
+// MUST be called under the WORKSPACE lock bucket (invariant 2) — the registry is
+// shared workspace-level truth. Each row: {uuid, slug, scope, repos, status}.
+export interface IntentRegistryEntry {
+  uuid: string;
+  slug: string;
+  scope?: string;
+  repos?: string[];
+  status: string;
+}
+
+export function intentsRegistryPath(projectDir: string, space?: string): string {
+  return join(intentsDir(projectDir, space), "intents.json");
+}
+
+export function appendIntentToRegistry(
+  projectDir: string,
+  entry: IntentRegistryEntry,
+  space?: string,
+): void {
+  const path = intentsRegistryPath(projectDir, space);
+  let list: IntentRegistryEntry[] = [];
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (Array.isArray(parsed)) list = parsed as IntentRegistryEntry[];
+  } catch {
+    // absent / malformed → start a fresh list
+  }
+  list.push(entry);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileAtomic(path, `${JSON.stringify(list, null, 2)}\n`);
+}
+
+// Run the flat→per-intent migration if needed. Idempotent. Returns the new
+// intent dir name on a migration, or null when none was needed. The caller owns
+// the git-rm of the flat tree (a tool can shell out to git; lib stays
+// git-agnostic) — migrateFlatLayout returns the moved-from path so the caller
+// can untrack it. NEVER rmSync's the source: the staged COPY is renamed into the
+// leaf, leaving the original aidlc-docs/ for the git-rm step.
+export interface FlatMigrationResult {
+  intentDirName: string;
+  uuid: string;
+  slug: string;
+  movedFrom: string; // the flat aidlc-docs/ path, for the caller's git-rm
+}
+
+export function migrateFlatLayout(projectDir: string): FlatMigrationResult | null {
+  // Whole operation under the WORKSPACE lock bucket (intent omitted → sentinel).
+  return withAuditLock(projectDir, () => {
+    // Re-check inside the lock (another clone may have migrated while we waited).
+    if (!needsFlatMigration(projectDir)) return null;
+
+    const flatRoot = legacyFlatFallback(projectDir);
+    const flatState = legacyFlatFallback(projectDir, "aidlc-state.md");
+
+    // Slug from the existing state's most slug-worthy field, else "default".
+    // Prefer an explicit intent/workflow name, then the human project name; the
+    // bare scope token (feature/bugfix/…) is the last resort before "default".
+    let slug = "default";
+    try {
+      const content = readFileSync(flatState, "utf-8");
+      const name =
+        getField(content, "Workflow") ??
+        getField(content, "Intent") ??
+        getField(content, "Project") ??
+        getField(content, "Scope") ??
+        "";
+      if (name.trim().length > 0) slug = slugify(name);
+    } catch {
+      // unreadable state → keep "default"
+    }
+
+    const uuid = uuidv7();
+    const id8 = idSuffix(uuid);
+    const space = DEFAULT_SPACE;
+    let intentDirName = `${slug}-${id8}`;
+    const intentsRoot = intentsDir(projectDir, space);
+    // Disambiguate a within-space dir clash by the next-longer prefix of the
+    // SAME uuid (never re-mint).
+    for (let len = 8; existsSync(join(intentsRoot, intentDirName)) && len <= 32; len += 2) {
+      intentDirName = `${slug}-${idSuffix(uuid, len)}`;
+    }
+    const leaf = join(intentsRoot, intentDirName);
+
+    // (1) Stage a COPY of the whole flat tree into a temp dir UNDER the workspace
+    // root (same filesystem → the rename in step 3 is atomic, not a cross-device
+    // copy+unlink). A unique per-process staging name avoids a concurrent clash.
+    const staging = join(workspaceRoot(projectDir), `.migrate-staging-${process.pid}-${reapSuffix()}`);
+    try {
+      rmSync(staging, { recursive: true, force: true });
+    } catch {
+      /* no prior staging */
+    }
+    cpSync(flatRoot, staging, { recursive: true });
+
+    // (2) mkdir the intent dir's PARENT chain (the leaf is created by the rename).
+    mkdirSync(intentsRoot, { recursive: true });
+
+    // (3) ONE atomic rename of the staged tree into the leaf. The only "partial"
+    // window is steps 1-2, which produce nothing the detector mistakes for a
+    // completed migration (no aidlc-state.md under intents/ until this rename).
+    renameSync(staging, leaf);
+
+    // (4) Append to intents.json + set the active-intent cursor (workspace bucket).
+    appendIntentToRegistry(
+      projectDir,
+      { uuid, slug, scope: undefined, repos: undefined, status: "in-flight" },
+      space,
+    );
+    try {
+      writeFileSync(join(intentsRoot, ACTIVE_INTENT_POINTER), `${intentDirName}\n`, "utf-8");
+    } catch {
+      /* cursor is per-user/gitignored; best-effort */
+    }
+
+    // (5) Write the `.migrated` marker LAST (the sole idempotency key).
+    mkdirSync(workspaceRoot(projectDir), { recursive: true });
+    writeFileSync(migratedMarkerPath(projectDir), `migrated ${isoTimestamp()} → ${intentDirName}\n`, "utf-8");
+
+    return { intentDirName, uuid, slug, movedFrom: flatRoot };
+  });
+}
+
+// --- Migration-aware resolution: the SINGLE legacy flat-layout fallback --------
+//
+// TRANSITIONAL — remove in P9/Stage D once fixtures migrate; this test flips RED
+// to force removal; see goal-loop-stages.md Stage D checklist.
+// (The "test" is tests/unit/t159-legacy-flat-fallback-bridge.test.ts — a
+// `test.failing` tripwire that goes RED the moment this fallback is deleted.)
+//
+// Resolution is MIGRATION-AWARE, not a permanent dual layout: a path helper
+// resolves the per-intent record dir when a new-layout intent exists (explicit
+// arg, OR aidlc/spaces/<sp>/intents/<dir> present), and resolves the legacy flat
+// `aidlc-docs/` location ONLY in the not-yet-migrated state. That is exactly what
+// a correct PRE-migration helper must do — a flat project has no intent record to
+// resolve until migrateFlatLayout() runs — so the fallback is intentional
+// pre-migration behaviour, not a shim bolted on for tests.
+//
+// EVERY absolute flat fallback funnels through this ONE function, and the two
+// engine relative resolvers funnel through LEGACY_FLAT_RELATIVE_PREFIX, so P9/
+// Stage D retires the entire transitional layer by DELETING this function + the
+// two constants below (the grep-gate allowlist is then these named sites, not
+// scattered literals). The t159 tripwire asserts this fallback exists + is
+// reachable so it cannot silently survive to GA — P9 deletes it and the tripwire
+// goes RED, forcing the fixture migration that retires it.
+export const LEGACY_FLAT_ROOT = "aidlc-docs";
+export const LEGACY_FLAT_RELATIVE_PREFIX = "aidlc-docs";
+
+// Build the legacy flat path `<projectDir>/aidlc-docs/<...segments>`. The ONE
+// absolute pre-migration fallback site. Returns the bare flat root when no
+// segments are given.
+export function legacyFlatFallback(projectDir: string, ...segments: string[]): string {
+  // TRANSITIONAL — remove in P9/Stage D once fixtures migrate; this test flips
+  // RED to force removal; see goal-loop-stages.md Stage D checklist.
+  return join(projectDir, LEGACY_FLAT_ROOT, ...segments);
+}
+
+export function stateFilePath(projectDir: string, intent?: string, space?: string): string {
+  const dir = recordDir(projectDir, intent, space);
+  if (dir === null) return legacyFlatFallback(projectDir, "aidlc-state.md");
+  return join(dir, "aidlc-state.md");
+}
+
+// Per-clone audit SHARD path: `…/intents/<slug>-<id8>/audit/<host>-<pid>.md`.
+// The audit trail is committed (vision §5.1) but each clone writes its OWN
+// shard so git never merge-conflicts concurrent appends (merge=union was proven
+// to corrupt the multi-line blocks). Readers glob `audit/*.md` and merge-sort by
+// timestamp — see auditShards()/readAllAuditShards(). The flat-legacy fallback
+// keeps the single `aidlc-docs/audit.md` (one-clone-per-flat-project world).
+export function auditFilePath(projectDir: string, intent?: string, space?: string): string {
+  const dir = recordDir(projectDir, intent, space);
+  if (dir === null) return legacyFlatFallback(projectDir, "audit.md");
+  return join(dir, "audit", auditShardName());
+}
+
+// This clone's audit shard filename: `<host>-<pid>.md`. Stable within a process
+// (one shard per running clone), sanitised to the slug shape so it never
+// escapes the audit dir. hostname() can carry dots/uppercase; normalise.
+let _auditShardName: string | null = null;
+export function auditShardName(): string {
+  if (_auditShardName !== null) return _auditShardName;
+  const host = hostname()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "host";
+  _auditShardName = `${host}-${process.pid}.md`;
+  return _auditShardName;
+}
+
+// `…/intents/<slug>-<id8>/audit/` — the shard directory. Flat fallback: the
+// flat tree has no audit dir, so callers that enumerate shards there get [].
+export function auditShardDir(projectDir: string, intent?: string, space?: string): string | null {
+  const dir = recordDir(projectDir, intent, space);
+  if (dir === null) return null;
+  return join(dir, "audit");
+}
+
+// Every audit shard path for an intent (sorted), or the single flat
+// `aidlc-docs/audit.md` when no new-layout intent resolves. Readers merge-sort
+// the parsed events across these by **Timestamp**.
+export function auditShards(projectDir: string, intent?: string, space?: string): string[] {
+  const shardDir = auditShardDir(projectDir, intent, space);
+  if (shardDir === null) {
+    const flat = legacyFlatFallback(projectDir, "audit.md");
+    return existsSync(flat) ? [flat] : [];
+  }
+  let entries: string[];
+  try {
+    entries = readdirSync(shardDir);
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((f) => f.endsWith(".md"))
+    .sort()
+    .map((f) => join(shardDir, f));
+}
+
+// Concatenate every audit shard's content for an intent into one buffer the
+// existing block-parsers (findAllEvents / findLatestEvent — both split on
+// `\n---\n`) can walk as if it were one file. Each shard is a self-contained
+// sequence of `\n---\n`-separated blocks, so concatenation preserves block
+// boundaries; cross-shard ordering by timestamp is the parsers' job (they read
+// **Timestamp** per block). Returns "" when no shard exists.
+export function readAllAuditShards(projectDir: string, intent?: string, space?: string): string {
+  const shards = auditShards(projectDir, intent, space);
+  if (shards.length === 0) return "";
+  const parts: string[] = [];
+  for (const path of shards) {
+    try {
+      parts.push(readFileSync(path, "utf-8"));
+    } catch {
+      // a shard vanished between enumerate and read — skip it
+    }
+  }
+  return parts.join("\n");
 }
 
 export function worktreePath(projectDir: string, boltSlug: string): string {
@@ -272,108 +746,143 @@ export function worktreePath(projectDir: string, boltSlug: string): string {
 
 // --- aidlc-docs data-path family ----------------------------------------------
 //
-// Single chokepoint for every path under the project's `aidlc-docs/` tree. Each
-// helper below returns the SAME path the inline literals used to build by hand
-// (a pure no-op funnel); routing them all through here means a later re-root of
-// the tree changes one place. The state/audit/worktree helpers above are the
-// load-bearing pair; these cover the rest of the family (runtime graph, hook
-// health, recovery breadcrumb, plan, stop-hook guard, the bare docs dir, and a
-// stage's per-run directory) plus the per-worktree mirror copies.
+// Single chokepoint for every path under the project's record tree. Resolution
+// is MIGRATION-AWARE (see legacyFlatFallback above): each helper resolves the
+// per-intent RECORD dir (aidlc/spaces/<sp>/intents/<slug>-<id8>/) when a
+// new-layout intent exists, and resolves the legacy flat `aidlc-docs/` root ONLY
+// in the not-yet-migrated state — exactly what a correct pre-migration helper
+// must do, so the whole tree stays on ONE root per intent (state split across
+// two roots is meaningless). The state/audit/worktree helpers above
+// are the load-bearing pair; these cover the rest of the family (runtime graph,
+// hook health, recovery breadcrumb, plan, stop-hook guard, the bare docs dir,
+// and a stage's per-run directory) plus the per-worktree mirror copies.
 //
 // NOT funnelled here (deliberately): the two engine artifact/diary resolvers in
 // aidlc-orchestrate.ts (resolveArtifactPath / memoryPathFor) build RELATIVE,
 // agent-consumed paths from backtick templates and take no projectDir — the
-// absolute, projectDir-keyed shape here is incompatible with them.
+// absolute, projectDir-keyed shape here is incompatible with them. They re-root
+// via relativeRecordDir() threaded from the engine instead.
 
-// `<projectDir>/aidlc-docs` — the bare tree root (doctor's existence check,
-// the init scaffolder's base dir).
-export function docsDir(projectDir: string): string {
-  return join(projectDir, "aidlc-docs");
+// The record-tree ROOT for a project: the per-intent record dir when a new-layout
+// intent resolves, else the flat legacy `aidlc-docs/` root. Every family helper
+// below joins under this so the whole tree moves with the intent in lockstep.
+export function docsRoot(projectDir: string, intent?: string, space?: string): string {
+  const dir = recordDir(projectDir, intent, space);
+  return dir ?? legacyFlatFallback(projectDir);
 }
 
-// `<projectDir>/aidlc-docs/runtime-graph.json` — the compiled runtime graph.
-export function runtimeGraphPath(projectDir: string): string {
-  return join(projectDir, "aidlc-docs", "runtime-graph.json");
+// The bare record-tree root (doctor's existence check, the init scaffolder's
+// base dir).
+export function docsDir(projectDir: string, intent?: string, space?: string): string {
+  return docsRoot(projectDir, intent, space);
 }
 
-// `<projectDir>/aidlc-docs/.aidlc-hooks-health` — per-hook heartbeat + drop
-// counters surfaced by `--doctor`.
-export function hooksHealthDir(projectDir: string): string {
-  return join(projectDir, "aidlc-docs", ".aidlc-hooks-health");
+// `<root>/runtime-graph.json` — the compiled runtime graph.
+export function runtimeGraphPath(projectDir: string, intent?: string, space?: string): string {
+  return join(docsRoot(projectDir, intent, space), "runtime-graph.json");
 }
 
-// `<projectDir>/aidlc-docs/.aidlc-recovery.md` — the validate-state breadcrumb
-// the orchestrator reads on resume.
-export function recoveryFilePath(projectDir: string): string {
-  return join(projectDir, "aidlc-docs", ".aidlc-recovery.md");
+// `<root>/.aidlc-hooks-health` — per-hook heartbeat + drop counters surfaced by
+// `--doctor`.
+export function hooksHealthDir(projectDir: string, intent?: string, space?: string): string {
+  return join(docsRoot(projectDir, intent, space), ".aidlc-hooks-health");
 }
 
-// `<projectDir>/aidlc-docs/.aidlc-plan.json` — `aidlc-graph resolve` output.
-export function planFilePath(projectDir: string): string {
-  return join(projectDir, "aidlc-docs", ".aidlc-plan.json");
+// `<root>/.aidlc-recovery.md` — the validate-state breadcrumb the orchestrator
+// reads on resume.
+export function recoveryFilePath(projectDir: string, intent?: string, space?: string): string {
+  return join(docsRoot(projectDir, intent, space), ".aidlc-recovery.md");
 }
 
-// `<projectDir>/aidlc-docs/.aidlc-stop-hook` — the Stop hook's durable
-// no-progress guard counter directory.
-export function stopHookDir(projectDir: string): string {
-  return join(projectDir, "aidlc-docs", ".aidlc-stop-hook");
+// `<root>/.aidlc-plan.json` — `aidlc-graph resolve` output.
+export function planFilePath(projectDir: string, intent?: string, space?: string): string {
+  return join(docsRoot(projectDir, intent, space), ".aidlc-plan.json");
 }
 
-// `<baseDir>/aidlc-docs/.aidlc-sensors` — the sensor detail-output / tsbuildinfo
-// directory. `baseDir` is the project dir for the dispatcher, or a tsconfig
-// anchor for the type-check sensor; callers append a stage slug as needed.
-export function sensorsDir(baseDir: string): string {
-  return join(baseDir, "aidlc-docs", ".aidlc-sensors");
+// `<root>/.aidlc-stop-hook` — the Stop hook's durable no-progress guard counter
+// directory.
+export function stopHookDir(projectDir: string, intent?: string, space?: string): string {
+  return join(docsRoot(projectDir, intent, space), ".aidlc-stop-hook");
 }
 
-// `<projectDir>/aidlc-docs/<phase>/<slug>` — a stage's per-run artifact
-// directory (the Stop hook scans it for unanswered question files).
-export function stageDir(projectDir: string, phase: string, slug: string): string {
-  return join(projectDir, "aidlc-docs", phase, slug);
+// `<baseDir>/.aidlc-sensors` — the sensor detail-output / tsbuildinfo directory.
+// `baseDir` is the project dir for the dispatcher, or a tsconfig anchor for the
+// type-check sensor; callers append a stage slug as needed. The tsconfig-anchor
+// caller passes a non-projectDir base, so the record-dir resolution is OPT-OUT:
+// only resolve per-intent when the caller passes intent/space context; a bare
+// baseDir keeps the flat `.aidlc-sensors` leaf for the type-check anchor case.
+export function sensorsDir(baseDir: string, intent?: string, space?: string): string {
+  if (intent === undefined && space === undefined) {
+    return join(docsRoot(baseDir), ".aidlc-sensors");
+  }
+  return join(docsRoot(baseDir, intent, space), ".aidlc-sensors");
+}
+
+// `<root>/<phase>/<slug>` — a stage's per-run artifact directory (the Stop hook
+// scans it for unanswered question files).
+export function stageDir(projectDir: string, phase: string, slug: string, intent?: string, space?: string): string {
+  return join(docsRoot(projectDir, intent, space), phase, slug);
 }
 
 // Relative diary path recorded on a runtime-graph row — forward slashes
 // regardless of host OS so the schema stays portable across worktrees. Mirrors
-// the engine's memoryPathFor; kept here so its `aidlc-docs/` prefix funnels
-// with the rest of the family.
-export function relativeMemoryPath(phase: string, stageSlug: string): string {
-  return `aidlc-docs/${phase}/${stageSlug}/memory.md`;
+// the engine's memoryPathFor. `recordPrefix` is the relative per-intent record
+// dir (relativeRecordDir) when one resolves, else null → the flat `aidlc-docs`
+// prefix. Kept here so the prefix decision funnels with the rest of the family.
+export function relativeMemoryPath(phase: string, stageSlug: string, recordPrefix?: string | null): string {
+  const prefix = recordPrefix ?? LEGACY_FLAT_RELATIVE_PREFIX;
+  return `${prefix}/${phase}/${stageSlug}/memory.md`;
 }
 
-// `<projectDir>/aidlc-docs/<phase>/<stageSlug>/memory.md` — the absolute diary
-// path for a stage.
-export function memoryFilePath(projectDir: string, phase: string, stageSlug: string): string {
-  return join(projectDir, "aidlc-docs", phase, stageSlug, "memory.md");
+// `<root>/<phase>/<stageSlug>/memory.md` — the absolute diary path for a stage.
+export function memoryFilePath(projectDir: string, phase: string, stageSlug: string, intent?: string, space?: string): string {
+  return join(docsRoot(projectDir, intent, space), phase, stageSlug, "memory.md");
 }
 
-// `<projectDir>/aidlc-docs/inception/units-generation/unit-of-work-dependency.md`
-// — the fenced edge block the Bolt-DAG node is computed from.
-export function unitDependencyPath(projectDir: string): string {
-  return join(projectDir, "aidlc-docs", "inception", "units-generation", "unit-of-work-dependency.md");
+// `<root>/inception/units-generation/unit-of-work-dependency.md` — the fenced
+// edge block the Bolt-DAG node is computed from.
+export function unitDependencyPath(projectDir: string, intent?: string, space?: string): string {
+  return join(docsRoot(projectDir, intent, space), "inception", "units-generation", "unit-of-work-dependency.md");
 }
 
 // --- Per-worktree mirror copies -----------------------------------------------
 //
-// A Bolt worktree carries its own `<wtPath>/aidlc-docs/...` mirror of state,
-// audit, and the runtime graph. These take an ALREADY-RESOLVED worktree base
-// dir (the output of worktreePath, or an audit-recorded path), not projectDir,
-// so they keep the `aidlc-docs` leaf relative to that base. A re-root moves the
-// leaf here in lockstep with the main tree.
+// A Bolt worktree is a git worktree of the project, so it carries its OWN mirror
+// of the record tree at the SAME relative layout as the main checkout: the
+// per-intent record dir (aidlc/spaces/<sp>/intents/<slug>-<id8>/) when the Bolt
+// forks from a new-layout intent, else the flat legacy `aidlc-docs/` leaf. These
+// take an ALREADY-RESOLVED worktree base dir (the output of worktreePath, or an
+// audit-recorded path), not projectDir, plus an optional `recordPrefix` — the
+// RELATIVE per-intent record dir (relativeRecordDir) the fork inherited from the
+// main intent. When omitted (flat-legacy fork, or a caller without intent
+// context yet — P2 threads it), the leaf stays `aidlc-docs`, preserving today's
+// behaviour. Fork and merge MUST pass the SAME prefix or they read the wrong
+// mirror file.
 
-export function worktreeDocsDir(wtPath: string): string {
-  return join(wtPath, "aidlc-docs");
+function worktreeRecordRoot(wtPath: string, recordPrefix?: string | null): string {
+  const prefix = recordPrefix ?? LEGACY_FLAT_RELATIVE_PREFIX;
+  // recordPrefix is a posix-relative path (forward slashes); split so join
+  // produces native separators under wtPath.
+  return join(wtPath, ...prefix.split("/"));
 }
 
-export function worktreeStateFilePath(wtPath: string): string {
-  return join(wtPath, "aidlc-docs", "aidlc-state.md");
+export function worktreeDocsDir(wtPath: string, recordPrefix?: string | null): string {
+  return worktreeRecordRoot(wtPath, recordPrefix);
 }
 
-export function worktreeAuditFilePath(wtPath: string): string {
-  return join(wtPath, "aidlc-docs", "audit.md");
+export function worktreeStateFilePath(wtPath: string, recordPrefix?: string | null): string {
+  return join(worktreeRecordRoot(wtPath, recordPrefix), "aidlc-state.md");
 }
 
-export function worktreeRuntimeGraphPath(wtPath: string): string {
-  return join(wtPath, "aidlc-docs", "runtime-graph.json");
+export function worktreeAuditFilePath(wtPath: string, recordPrefix?: string | null): string {
+  // A worktree clone writes its own audit shard inside the worktree mirror; the
+  // flat-legacy fork keeps the single audit.md leaf.
+  if (recordPrefix == null) return join(wtPath, LEGACY_FLAT_RELATIVE_PREFIX, "audit.md");
+  return join(worktreeRecordRoot(wtPath, recordPrefix), "audit", auditShardName());
+}
+
+export function worktreeRuntimeGraphPath(wtPath: string, recordPrefix?: string | null): string {
+  return join(worktreeRecordRoot(wtPath, recordPrefix), "runtime-graph.json");
 }
 
 // Bolt slug shape: lowercase letter, then lowercase letters / digits / hyphens.
@@ -546,16 +1055,16 @@ export function validateBoltSlug(slug: string): string | null {
 
 // --- State file I/O ---
 
-export function readStateFile(projectDir: string): string {
-  const path = stateFilePath(projectDir);
+export function readStateFile(projectDir: string, intent?: string, space?: string): string {
+  const path = stateFilePath(projectDir, intent, space);
   if (!existsSync(path)) {
     throw new Error(`State file not found: ${path}`);
   }
   return readFileSync(path, "utf-8");
 }
 
-export function writeStateFile(projectDir: string, content: string): void {
-  const path = stateFilePath(projectDir);
+export function writeStateFile(projectDir: string, content: string, intent?: string, space?: string): void {
+  const path = stateFilePath(projectDir, intent, space);
   // A read-only aidlc-state.md is a deliberate write barrier the state tool
   // must honour (a corrupt/locked workspace must fail loud, not silently
   // advance — see the t47/t77/t137 read-only-state failure-injection tests).
@@ -564,6 +1073,12 @@ export function writeStateFile(projectDir: string, content: string): void {
   // barrier. Preserve the bare-writeFileSync EACCES semantics by refusing up
   // front when the target exists but is not writable.
   if (existsSync(path)) accessSync(path, fsConstants.W_OK);
+  // Ensure the record dir's parent chain exists before the atomic write — a
+  // per-intent record dir's parents (aidlc/spaces/<sp>/intents/<slug>-<id8>/)
+  // may not exist yet on first write; the flat fallback's aidlc-docs/ is created
+  // by the init scaffolder, but mkdir-recursive is idempotent so it's safe for
+  // both layouts.
+  else mkdirSync(dirname(path), { recursive: true });
   // Atomic write (tmp + rename) so a crash mid-write can never leave a
   // half-written state file a concurrent reader would see torn. Lost-update
   // safety for the read-modify-write handlers (withAuditLock wrapping) is a
@@ -747,24 +1262,228 @@ export function countCheckboxes(
   return checkboxes.filter((c) => c.state === state).length;
 }
 
-// --- Audit locking ---
+// --- Audit locking (per-intent, reaper-guarded) -------------------------------
+//
+// The audit lock is a cross-process mutex: a bare mkdir-EEXIST dir in tmpdir().
+// It is keyed PER INTENT so two intents (or two Bolts in different intents) run
+// truly in parallel without false serialization. Two keying invariants (P4's
+// auto-birth depends on them):
+//
+//  (1) intent-OMITTED hashes a RESERVED sentinel `__workspace__` bucket, distinct
+//      from every per-intent bucket, and does NOT resolve activeIntent() (at
+//      birth there is no active intent; resolving would throw or bucket on
+//      "default", and two concurrent first-runs would key different/empty
+//      buckets and both birth). EVERY intents.json mutation takes this workspace
+//      bucket; only intent-scoped state/audit writes take a per-intent bucket.
+//  (2) the composite identity (projectDir + space + intent | sentinel) keys the
+//      lock dir AND the in-process depth/handler maps, or the maps collide
+//      across intents.
+//
+// REAPER: acquire stamps owner PID + start-time into the lock dir (owner.json).
+// A waiter reclaims a lock iff process.kill(pid,0) throws ESRCH (owner gone) OR
+// the stamp's age exceeds a conservative threshold — a live under-threshold
+// holder is NEVER robbed. Reclaim is atomic (rename the dead dir aside, then
+// re-mkdir) so only one waiter wins.
 
-export function auditLockDir(projectDir: string): string {
-  const hash = createHash("md5").update(projectDir).digest("hex").slice(0, 8);
+// The reserved bucket for workspace-level mutations (intents.json, intent birth).
+export const WORKSPACE_LOCK_SENTINEL = "__workspace__";
+
+// Default stale-lock age threshold (ms). A lock whose owner is still alive but
+// whose stamp is older than this is treated as leaked (a wedged holder). Tunable
+// via AIDLC_LOCK_STALE_MS for tests/ops. Conservative by default (10 min) so a
+// genuinely slow-but-live holder is never robbed on liveness alone — the PID
+// liveness check reclaims a dead owner immediately regardless of age.
+export const DEFAULT_LOCK_STALE_MS = 10 * 60 * 1000;
+
+function lockStaleMs(): number {
+  const raw = process.env.AIDLC_LOCK_STALE_MS;
+  if (raw) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return DEFAULT_LOCK_STALE_MS;
+}
+
+// The composite lock IDENTITY string — keys the dir hash AND the in-process
+// maps. intent-omitted → the workspace sentinel (invariant 1). When intent is
+// given, the space is default-resolved (a per-intent lock is meaningless without
+// its space) but activeIntent() is NEVER consulted here.
+export function auditLockIdentity(projectDir: string, intent?: string, space?: string): string {
+  if (intent === undefined) {
+    return `${projectDir}\x00${WORKSPACE_LOCK_SENTINEL}`;
+  }
+  const sp = space ?? activeSpace(projectDir);
+  return `${projectDir}\x00${sp}\x00${intent}`;
+}
+
+export function auditLockDir(projectDir: string, intent?: string, space?: string): string {
+  const identity = auditLockIdentity(projectDir, intent, space);
+  const hash = createHash("md5").update(identity).digest("hex").slice(0, 8);
   return join(tmpdir(), `.aidlc-audit-${hash}.lock`);
+}
+
+// Owner stamp written into the lock dir on acquire. start-time uses the process
+// start epoch when available (a wrapped-around PID reuse is then detectable by a
+// start-time mismatch); falls back to acquire-time. No Math.random / Date.now in
+// the steal SUFFIX (scripts forbid them) — see reapStaleLock.
+interface LockOwner {
+  pid: number;
+  startedAtMs: number;
+}
+
+function ownerStampPath(lockDir: string): string {
+  return join(lockDir, "owner.json");
+}
+
+function writeOwnerStamp(lockDir: string): void {
+  const owner: LockOwner = { pid: process.pid, startedAtMs: lockAcquireEpochMs() };
+  try {
+    writeFileSync(ownerStampPath(lockDir), JSON.stringify(owner), "utf-8");
+  } catch {
+    // Best-effort: a missing stamp degrades the reaper to age-only on the next
+    // waiter (it can't read a PID), never to incorrectness.
+  }
+}
+
+function readOwnerStamp(lockDir: string): LockOwner | null {
+  try {
+    const raw = readFileSync(ownerStampPath(lockDir), "utf-8");
+    const parsed: unknown = JSON.parse(raw);
+    if (isPlainObject(parsed) && typeof parsed.pid === "number" && typeof parsed.startedAtMs === "number") {
+      return { pid: parsed.pid, startedAtMs: parsed.startedAtMs };
+    }
+  } catch {
+    // no stamp / unreadable
+  }
+  return null;
+}
+
+// A monotonic-ish epoch for the owner stamp. performance.timeOrigin + now()
+// gives a wall-clock-equivalent without the bare `Date.now()` the lint forbids;
+// it is used only for AGE comparison (a relative delta), so origin drift is
+// irrelevant — both stamps come from the same clock family across processes
+// because timeOrigin is anchored to the unix epoch by the runtime.
+function lockAcquireEpochMs(): number {
+  return Math.floor(performance.timeOrigin + performance.now());
+}
+
+// Is the lock-owning process still alive? signal 0 probes liveness without
+// delivering a signal: ESRCH ⇒ gone, EPERM ⇒ alive-but-not-ours (still alive),
+// success ⇒ alive. A missing/invalid pid is treated as "not alive" so an
+// unstamped leaked dir is reclaimable on age alone.
+function ownerAlive(owner: LockOwner | null): boolean {
+  if (!owner || !Number.isInteger(owner.pid) || owner.pid <= 0) return false;
+  try {
+    process.kill(owner.pid, 0);
+    return true;
+  } catch (e) {
+    // EPERM ⇒ the process exists but is owned by another user → still alive.
+    return (e as NodeJS.ErrnoException)?.code === "EPERM";
+  }
+}
+
+// A monotonic per-process counter for the steal-rename suffix (no Math.random /
+// Date.now — scripts/forbid). Combined with the PID it is unique enough that two
+// waiters never collide on the same `.dead.<suffix>` name, and only one wins the
+// rename anyway (the second gets ENOENT).
+let _reapCounter = 0;
+function reapSuffix(): string {
+  _reapCounter += 1;
+  return `${process.pid}-${_reapCounter}`;
+}
+
+// Grace window (ms) for an UNSTAMPED lock dir. acquireAuditLock mkdirs the lock
+// dir THEN writes owner.json, so there is a brief window where a live holder's
+// dir has no stamp yet. A waiter must NOT steal an unstamped dir younger than
+// this grace (it is a live process mid-acquire) — only an unstamped dir OLDER
+// than the grace is treated as a genuine leak (e.g. a SIGKILL between mkdir and
+// stamp). Generous relative to the mkdir→write gap, tiny relative to the stale
+// threshold. Tunable via AIDLC_LOCK_UNSTAMPED_GRACE_MS.
+function unstampedGraceMs(): number {
+  const raw = process.env.AIDLC_LOCK_UNSTAMPED_GRACE_MS;
+  if (raw) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 5000;
+}
+
+// The lock dir's own mtime epoch (ms), or null if it can't be stat'd. Used as the
+// age anchor for an UNSTAMPED dir (no owner.json yet / ever). statSync mtime is a
+// wall-clock ms, comparable to lockAcquireEpochMs()'s epoch family.
+function lockDirMtimeMs(lockDir: string): number | null {
+  try {
+    return statSync(lockDir).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+// Reclaim a lock iff it is provably dead (owner gone) OR stale (over-age). A
+// live, under-threshold holder is left alone (returns false). Reclaim is atomic:
+// rename the dead dir aside (only one waiter wins the rename), best-effort remove
+// it, leaving the lock free for the next mkdir. Returns true iff THIS call freed
+// the dir.
+function reapStaleLock(lockDir: string): boolean {
+  const owner = readOwnerStamp(lockDir);
+  if (owner === null) {
+    // UNSTAMPED dir: a live holder mid-acquire (between mkdir and stamp) OR a
+    // process SIGKILL'd in that window. Distinguish by the dir's own age — only
+    // steal one OLDER than the grace window; a fresh unstamped dir is a live
+    // holder about to stamp and MUST NOT be robbed (the C2b concurrent-fork
+    // serialization depends on this).
+    const mtime = lockDirMtimeMs(lockDir);
+    if (mtime === null) return false; // vanished — let the next mkdir try
+    if (lockAcquireEpochMs() - mtime <= unstampedGraceMs()) return false;
+    // else: an old unstamped dir → genuine leak, fall through to steal.
+  } else if (ownerAlive(owner)) {
+    // Live owner: only reclaim if its stamp is over-age (a wedged-but-running
+    // holder). A fresh, live holder is never robbed.
+    if (lockAcquireEpochMs() - owner.startedAtMs <= lockStaleMs()) return false;
+  }
+  // Dead owner, live-but-over-age, or old-unstamped: steal atomically. The rename
+  // is the race arbiter — exactly one concurrent reaper renames the live dir; the
+  // losers get ENOENT and fall back to a normal mkdir retry.
+  const dead = `${lockDir}.dead.${reapSuffix()}`;
+  try {
+    renameSync(lockDir, dead);
+  } catch {
+    return false; // another waiter already reclaimed (or the holder released)
+  }
+  try {
+    rmSync(dead, { recursive: true, force: true });
+  } catch {
+    // leftover .dead dir is harmless (it never collides with the live lock name)
+  }
+  return true;
 }
 
 export function acquireAuditLock(
   projectDir: string,
   maxRetries = 50,
-  retryMs = 100
+  retryMs = 100,
+  intent?: string,
+  space?: string,
 ): boolean {
-  const lockDir = auditLockDir(projectDir);
+  const lockDir = auditLockDir(projectDir, intent, space);
   for (let i = 0; i <= maxRetries; i++) {
     try {
       mkdirSync(lockDir);
+      writeOwnerStamp(lockDir);
       return true;
     } catch {
+      // EEXIST: someone holds it. Before sleeping, try to reap a dead/stale
+      // holder so a SIGKILL'd owner doesn't wedge every waiter for the full
+      // retry budget. If we reap, retry the mkdir immediately (next loop turn).
+      if (reapStaleLock(lockDir)) {
+        try {
+          mkdirSync(lockDir);
+          writeOwnerStamp(lockDir);
+          return true;
+        } catch {
+          // another waiter beat us to the freed dir — fall through to sleep
+        }
+      }
       if (i < maxRetries) {
         Bun.sleepSync(retryMs);
       }
@@ -773,37 +1492,38 @@ export function acquireAuditLock(
   return false;
 }
 
-export function releaseAuditLock(projectDir: string): void {
-  const lockDir = auditLockDir(projectDir);
+export function releaseAuditLock(projectDir: string, intent?: string, space?: string): void {
+  const lockDir = auditLockDir(projectDir, intent, space);
+  const key = auditLockIdentity(projectDir, intent, space);
   try {
-    rmdirSync(lockDir);
+    rmSync(lockDir, { recursive: true, force: true });
   } catch {
     // Lock dir may already be removed
   }
-  const handler = AUDIT_LOCK_EXIT_HANDLERS.get(projectDir);
+  const handler = AUDIT_LOCK_EXIT_HANDLERS.get(key);
   if (handler) {
     process.off("exit", handler);
-    AUDIT_LOCK_EXIT_HANDLERS.delete(projectDir);
+    AUDIT_LOCK_EXIT_HANDLERS.delete(key);
   }
 }
 
-// Tracks per-project exit handlers that release the audit lock if a caller
+// Tracks per-identity exit handlers that release the audit lock if a caller
 // process.exit()s while still holding it. Bun's process.exit skips `finally`
 // blocks, so a tool that wraps locked work in try/finally and then calls
 // errorWithSlug → emitError → process.exit will leak the lock dir without
 // this safety net. Lock acquire registers a handler; release deregisters.
+// Keyed on the COMPOSITE lock identity (projectDir + space + intent | sentinel)
+// so handlers for different intents don't collide (invariant 2).
 const AUDIT_LOCK_EXIT_HANDLERS = new Map<string, () => void>();
 
-// Per-pd reentrancy depth. Same-process nested withAuditLock calls for the
-// same projectDir would otherwise self-deadlock — the inner mkdir hits
+// Per-IDENTITY reentrancy depth. Same-process nested withAuditLock calls for the
+// same lock identity would otherwise self-deadlock — the inner mkdir hits
 // EEXIST against the lock the outer caller already holds, and burns the
-// retry budget (50 × 100ms = 5s) before throwing. A future caller that
-// composes locked operations (e.g., a tool that wraps state mutation in
-// withAuditLock and that mutation later wraps another withAuditLock) would
-// trip this footgun silently. The depth counter makes the primitive
-// reentrant: the outer call performs the OS-level lock acquire/release;
-// inner calls just bump depth and return. Cross-process locking is
-// unaffected — different processes still serialise via mkdir EEXIST.
+// retry budget (50 × 100ms = 5s) before throwing. The depth counter makes the
+// primitive reentrant: the outer call performs the OS-level lock acquire/release;
+// inner calls just bump depth and return. Cross-process locking is unaffected —
+// different processes still serialise via mkdir EEXIST. Keyed on the composite
+// identity so two intents in one process don't share a depth counter.
 const AUDIT_LOCK_DEPTH = new Map<string, number>();
 
 // writeFileAtomic — non-corrupting variant of writeFileSync. Writes to a
@@ -844,49 +1564,113 @@ export function writeFileAtomic(path: string, data: string): void {
 export function withAuditLock<T>(
   projectDir: string,
   fn: () => T extends Promise<unknown> ? never : T,
+  intent?: string,
+  space?: string,
 ): T extends Promise<unknown> ? never : T {
-  const currentDepth = AUDIT_LOCK_DEPTH.get(projectDir) ?? 0;
+  const key = auditLockIdentity(projectDir, intent, space);
+  const currentDepth = AUDIT_LOCK_DEPTH.get(key) ?? 0;
   if (currentDepth === 0) {
-    if (!acquireAuditLock(projectDir)) {
-      throw new Error(`Failed to acquire audit lock for ${projectDir} after retries`);
+    if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
+      throw new Error(`Failed to acquire audit lock for ${key} after retries`);
     }
     // Safety net: if the body calls process.exit (Bun skips `finally` in that
     // case), the on-exit handler releases the lock dir so the project isn't
     // poisoned for ~5s on the next invocation.
     const onExit = () => {
-      const lockDir = auditLockDir(projectDir);
-      try { rmdirSync(lockDir); } catch { /* already removed */ }
+      const lockDir = auditLockDir(projectDir, intent, space);
+      try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* already removed */ }
     };
-    AUDIT_LOCK_EXIT_HANDLERS.set(projectDir, onExit);
+    AUDIT_LOCK_EXIT_HANDLERS.set(key, onExit);
     process.on("exit", onExit);
   }
-  AUDIT_LOCK_DEPTH.set(projectDir, currentDepth + 1);
+  AUDIT_LOCK_DEPTH.set(key, currentDepth + 1);
   try {
     return fn();
   } finally {
-    const depth = AUDIT_LOCK_DEPTH.get(projectDir) ?? 0;
+    const depth = AUDIT_LOCK_DEPTH.get(key) ?? 0;
     if (depth <= 1) {
-      AUDIT_LOCK_DEPTH.delete(projectDir);
-      releaseAuditLock(projectDir);
+      AUDIT_LOCK_DEPTH.delete(key);
+      releaseAuditLock(projectDir, intent, space);
     } else {
-      AUDIT_LOCK_DEPTH.set(projectDir, depth - 1);
+      AUDIT_LOCK_DEPTH.set(key, depth - 1);
     }
   }
 }
 
-// True iff THIS process currently holds the audit lock for `projectDir` via an
-// outer withAuditLock (or a bare acquireAuditLock paired with the exit-handler
-// install). The lock-acquire path registers a per-pd exit handler and the
-// release path removes it (see AUDIT_LOCK_EXIT_HANDLERS), so the handler's
-// presence is the in-lock signal. emitError (below) already branches on this
-// to pick appendAuditEntryUnlocked vs appendAuditEntry; the state tool's
-// emitAudit helper uses it for the same reason — an audit emit issued from
-// inside a held lock MUST use the unlocked variant or it self-deadlocks against
-// the lock it is already holding (appendAuditEntry calls acquireAuditLock,
-// which is NOT reentrant — only withAuditLock's depth counter is — so it would
-// burn the full 50×100ms retry budget and then throw).
-export function holdsAuditLock(projectDir: string): boolean {
-  return AUDIT_LOCK_EXIT_HANDLERS.has(projectDir);
+// True iff THIS process currently holds the audit lock for the given identity
+// (projectDir + intent | sentinel) via an outer withAuditLock (or a bare
+// acquireAuditLock paired with the exit-handler install). The lock-acquire path
+// registers a per-identity exit handler and the release path removes it (see
+// AUDIT_LOCK_EXIT_HANDLERS), so the handler's presence is the in-lock signal.
+// emitError (below) already branches on this to pick appendAuditEntryUnlocked
+// vs appendAuditEntry; the state tool's emitAudit helper uses it for the same
+// reason — an audit emit issued from inside a held lock MUST use the unlocked
+// variant or it self-deadlocks against the lock it is already holding
+// (appendAuditEntry calls acquireAuditLock, which is NOT reentrant — only
+// withAuditLock's depth counter is — so it would burn the full 50×100ms retry
+// budget and then throw).
+export function holdsAuditLock(projectDir: string, intent?: string, space?: string): boolean {
+  return AUDIT_LOCK_EXIT_HANDLERS.has(auditLockIdentity(projectDir, intent, space));
+}
+
+// --- Doctor probe: leaked audit locks ----------------------------------------
+//
+// A leaked lock is a lock dir whose owner is provably dead (ESRCH) OR whose
+// stamp is over the stale threshold. `/aidlc doctor` surfaces it (and, when
+// clear=true, clears it loudly). We can't enumerate tmpdir() hashes back to
+// projects, so we probe the buckets THIS project would use: the workspace
+// sentinel bucket + every intent record across every space (the same identities
+// the writers key on). A leaked lock is reported with its bucket + owner PID.
+
+export interface LeakedLock {
+  bucket: string; // "__workspace__" or "<space>/<intent>"
+  lockDir: string;
+  ownerPid: number | null;
+  reason: "dead-owner" | "over-age" | "unstamped";
+}
+
+// Detect (and optionally clear) leaked locks for this project. `staleMs`
+// defaults to the configured threshold. Returns the leaks found (and cleared,
+// when clear=true). Pure-read when clear=false.
+export function detectLeakedLocks(projectDir: string, clear = false): LeakedLock[] {
+  const leaks: LeakedLock[] = [];
+  const probe = (bucketLabel: string, intent?: string, space?: string): void => {
+    const lockDir = auditLockDir(projectDir, intent, space);
+    if (!existsSync(lockDir)) return;
+    const owner = readOwnerStamp(lockDir);
+    let reason: LeakedLock["reason"] | null = null;
+    if (!owner) {
+      // Unstamped: only a leak if older than the mid-acquire grace window (else
+      // a live process is between mkdir and stamp).
+      const mtime = lockDirMtimeMs(lockDir);
+      if (mtime !== null && lockAcquireEpochMs() - mtime > unstampedGraceMs()) {
+        reason = "unstamped";
+      }
+    } else if (!ownerAlive(owner)) {
+      reason = "dead-owner";
+    } else if (lockAcquireEpochMs() - owner.startedAtMs > lockStaleMs()) {
+      reason = "over-age";
+    }
+    if (reason === null) return; // a live, fresh, stamped lock is legitimately held
+    leaks.push({ bucket: bucketLabel, lockDir, ownerPid: owner?.pid ?? null, reason });
+    if (clear) {
+      try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* already gone */ }
+    }
+  };
+  // Workspace sentinel bucket.
+  probe(WORKSPACE_LOCK_SENTINEL);
+  // Every intent record across every space.
+  const spacesRoot = join(workspaceRoot(projectDir), "spaces");
+  let spaces: string[] = [];
+  try { spaces = readdirSync(spacesRoot); } catch { /* no spaces dir */ }
+  for (const sp of spaces) {
+    for (const intent of listIntentDirs(projectDir, sp)) {
+      probe(`${sp}/${intent}`, intent, sp);
+    }
+  }
+  // The flat-legacy project also keys on the workspace bucket for its writes, so
+  // the sentinel probe above already covers it.
+  return leaks;
 }
 
 // --- Audit event correlation ---
@@ -1923,7 +2707,11 @@ export function emitError(
         // lock is already held by us. Use the unlocked variant directly so
         // the ERROR_LOGGED row lands without the 5s acquire timeout. The
         // exit-handler safety net releases the lock dir on process.exit.
-        if (AUDIT_LOCK_EXIT_HANDLERS.has(projectDir)) {
+        // NOTE: holdsAuditLock keys on the COMPOSITE lock identity (per-intent
+        // keying, P3) — a bare `AUDIT_LOCK_EXIT_HANDLERS.has(projectDir)` would
+        // miss the workspace-bucket / per-intent handler keys and re-introduce
+        // the 5s self-deadlock on every in-transaction error emit.
+        if (holdsAuditLock(projectDir)) {
           audit.appendAuditEntryUnlocked("ERROR_LOGGED", {
             Tool: tool,
             Command: command,

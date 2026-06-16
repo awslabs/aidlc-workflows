@@ -368,6 +368,14 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     // (mkdirSync atomicity).
     const lockDir = auditLockDir(proj);
     mkdirSync(lockDir, { recursive: true });
+    // Stamp the planted lock with a LIVE, FRESH owner (this test-runner process)
+    // so the P3 stale-lock reaper correctly REFUSES to reclaim it — a live,
+    // under-threshold holder is never robbed. Without the stamp, a bare lock dir
+    // ages past the unstamped-grace window during the merge's retry budget and
+    // the reaper steals it (the reaper's whole point), letting the merge succeed
+    // and defeating this lock-acquire-failure case.
+    const nowMs = Math.floor(performance.timeOrigin + performance.now());
+    writeFileSync(join(lockDir, "owner.json"), JSON.stringify({ pid: process.pid, startedAtMs: nowMs }), "utf-8");
 
     let comp: Run;
     try {

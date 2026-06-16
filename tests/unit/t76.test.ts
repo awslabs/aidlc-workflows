@@ -575,10 +575,16 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
       const proj = makeFixture();
       mkWorktreeDir(proj, "timeout");
       expect(state(proj, "fork", "--slug", "timeout").status).toBe(0);
-      // Pre-create the lock dir so emitAudit's acquireAuditLock retries until
-      // the ~5s budget exhausts.
+      // Pre-create the lock dir so acquireAuditLock retries until the ~5s budget
+      // exhausts. Stamp it with a LIVE, FRESH owner (this test-runner process,
+      // alive + under the stale threshold) so the P3 reaper correctly REFUSES to
+      // reclaim it (a live holder is never robbed) — proving a genuinely-held
+      // lock still blocks a waiter. (A bare unstamped dir would be reaped after
+      // the unstamped-grace window, which is the reaper's job, not a timeout.)
       const lockDir = auditLockDir(proj);
       mkdirSync(lockDir, { recursive: true });
+      const nowMs = Math.floor(performance.timeOrigin + performance.now());
+      writeFileSync(join(lockDir, "owner.json"), JSON.stringify({ pid: process.pid, startedAtMs: nowMs }), "utf-8");
       try {
         const r = state(proj, "merge", "--slug", "timeout");
         expect(r.status).not.toBe(0);

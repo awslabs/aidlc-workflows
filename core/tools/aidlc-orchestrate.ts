@@ -87,10 +87,12 @@ import {
   errorMessage,
   firstInScopeStageOfPhase,
   getField,
+  LEGACY_FLAT_RELATIVE_PREFIX,
   nextInScopeStage,
   parseCheckboxes,
   PHASE_NUMBERS,
   PHASES,
+  relativeRecordDir,
   resolveProjectDir,
   runtimeGraphPath,
   type StageEntry,
@@ -346,12 +348,19 @@ function resolveScope(
   return { scope: DEFAULT_SCOPE, source: "default" };
 }
 
-// Derive the memory diary path for a stage (SKILL.md: every stage keeps
-// aidlc-docs/<phase>/<stage>/memory.md). Per-unit Construction stages embed a
-// {unit-name} segment that a later engine change resolves; until then the bare
-// phase/slug form is the faithful, deterministic derivation.
-function memoryPathFor(phase: string, slug: string): string {
-  return `aidlc-docs/${phase}/${slug}/memory.md`;
+// Derive the memory diary path for a stage (SKILL.md: every stage keeps a
+// <record>/<phase>/<stage>/memory.md diary). `recordPrefix` is the RELATIVE
+// per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>) the engine
+// threads in from the active intent (relativeRecordDir), or null → the flat
+// legacy `aidlc-docs` prefix (a pre-workspace project not yet migrated). These
+// are agent-consumed RELATIVE paths the conductor resolves against the workspace
+// root — the engine never opens them — so re-rooting is a pure prefix swap, not
+// a route through the absolute projectDir-keyed state helpers. Per-unit
+// Construction stages embed a {unit-name} segment that a later engine change
+// resolves; until then the bare phase/slug form is the faithful derivation.
+function memoryPathFor(phase: string, slug: string, recordPrefix: string | null): string {
+  const prefix = recordPrefix ?? LEGACY_FLAT_RELATIVE_PREFIX;
+  return `${prefix}/${phase}/${slug}/memory.md`;
 }
 
 // Derive the stage file path from phase + slug (the shipped layout:
@@ -643,11 +652,13 @@ function resolveArtifactPath(
   name: string,
   owner: GraphStage,
   unit: string,
+  recordPrefix: string | null,
 ): string {
+  const prefix = recordPrefix ?? LEGACY_FLAT_RELATIVE_PREFIX;
   if (isPerUnit(owner)) {
-    return `aidlc-docs/construction/${unit}/${owner.slug}/${name}.md`;
+    return `${prefix}/construction/${unit}/${owner.slug}/${name}.md`;
   }
-  return `aidlc-docs/${owner.phase}/${owner.slug}/${name}.md`;
+  return `${prefix}/${owner.phase}/${owner.slug}/${name}.md`;
 }
 
 // Resolve a CONSUMED artifact's path. A consumed artifact lives under the stage
@@ -663,9 +674,10 @@ function resolveConsumePath(
   name: string,
   node: GraphStage,
   unit: string,
+  recordPrefix: string | null,
 ): string {
   const producer = producersOf(name)[0];
-  return resolveArtifactPath(name, producer ?? node, unit);
+  return resolveArtifactPath(name, producer ?? node, unit, recordPrefix);
 }
 
 // Normalise the workflow's Project Type to the lowercase token the graph's
@@ -695,6 +707,7 @@ function resolveConsumes(
   node: GraphStage,
   projectType: "brownfield" | "greenfield" | null,
   unit: string,
+  recordPrefix: string | null,
 ): string[] {
   const paths: string[] = [];
   for (const consume of consumes) {
@@ -705,16 +718,16 @@ function resolveConsumes(
     ) {
       continue;
     }
-    paths.push(resolveConsumePath(consume.artifact, node, unit));
+    paths.push(resolveConsumePath(consume.artifact, node, unit, recordPrefix));
   }
   return paths;
 }
 
 // Resolve a node's produces[] (always bare names, even for per-unit stages) to
 // canonical paths. produces has no conditional_on axis, so every name resolves.
-function resolveProduces(node: GraphStage, unit: string): string[] {
+function resolveProduces(node: GraphStage, unit: string, recordPrefix: string | null): string[] {
   return (node.produces ?? []).map((name) =>
-    resolveArtifactPath(name, node, unit),
+    resolveArtifactPath(name, node, unit, recordPrefix),
   );
 }
 
@@ -768,6 +781,7 @@ function buildRunStageDirective(
   unit: string = UNIT_NAME_PLACEHOLDER,
   scope: string = DEFAULT_SCOPE,
   stateContent: string | null = null,
+  recordPrefix: string | null = null,
 ): RunStageDirective {
   const directive: RunStageDirective = {
     kind: "run-stage",
@@ -781,9 +795,9 @@ function buildRunStageDirective(
     // backstop if a future graph adds agent-team.
     mode: node.mode as RunStageDirective["mode"],
     gate: computeGate(node, scope, stateContent),
-    memory_path: memoryPathFor(node.phase, node.slug),
-    consumes: resolveConsumes(node.consumes ?? [], node, projectType, unit),
-    produces: resolveProduces(node, unit),
+    memory_path: memoryPathFor(node.phase, node.slug, recordPrefix),
+    consumes: resolveConsumes(node.consumes ?? [], node, projectType, unit, recordPrefix),
+    produces: resolveProduces(node, unit, recordPrefix),
     rules_in_context: (node.rules_in_context ?? []).map((r) => r.path),
     sensors_applicable: (node.sensors_applicable ?? []).map((s) => s.id),
     stage_file: stageFileFor(node.phase, node.slug),
@@ -838,6 +852,12 @@ function handleNext(args: string[], projectDir: string | undefined): void {
 
   const pd = resolveProjectDir(projectDir);
   const stateContent = loadStateFileIfPresent(pd);
+  // The active intent's RELATIVE record-dir prefix (aidlc/spaces/<sp>/intents/
+  // <slug>-<id8>), threaded into every run-stage directive so the conductor's
+  // artifact/diary paths resolve under the active intent. null → the flat legacy
+  // `aidlc-docs` prefix (a pre-workspace project not yet migrated/born). Resolved
+  // once here where projectDir is known; the resolvers themselves take no pd.
+  const recordPrefix = relativeRecordDir(pd);
 
   // Branch 3 — --init (SKILL.md:134). Scaffolding the workspace is a mutation,
   // so `next` never performs it; it names the move (print) or relays the guard
@@ -950,7 +970,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    emitSingleRunStage(flags.stage, scope, projectType);
+    emitSingleRunStage(flags.stage, scope, projectType, recordPrefix);
     return;
   }
 
@@ -1177,7 +1197,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // invoke-swarm directive (and returns true) only when all trigger
     // conditions hold; otherwise the normal run-stage emit fires.
     if (!tryEmitSwarm(currentSlug, scope, stateContent, pd)) {
-      emitRunStageForSlug(currentSlug, projectType, scope, stateContent);
+      emitRunStageForSlug(currentSlug, projectType, scope, stateContent, recordPrefix);
     }
     return;
   }
@@ -1200,7 +1220,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // Same swarm guard on the advance path: an eligible per-unit build stage
   // under autonomy fans out as a batch rather than a single run-stage.
   if (!tryEmitSwarm(next.slug, scope, stateContent, pd)) {
-    emitRunStageForSlug(next.slug, projectType, scope, stateContent);
+    emitRunStageForSlug(next.slug, projectType, scope, stateContent, recordPrefix);
   }
 }
 
@@ -1266,6 +1286,7 @@ function emitRunStageForSlug(
   projectType: "brownfield" | "greenfield" | null = null,
   scope: string = DEFAULT_SCOPE,
   stateContent: string | null = null,
+  recordPrefix: string | null = null,
 ): void {
   const node = nodeForSlug(slug);
   if (!node) {
@@ -1275,7 +1296,7 @@ function emitRunStageForSlug(
     });
     return;
   }
-  emit(buildRunStageDirective(node, projectType, UNIT_NAME_PLACEHOLDER, scope, stateContent));
+  emit(buildRunStageDirective(node, projectType, UNIT_NAME_PLACEHOLDER, scope, stateContent, recordPrefix));
 }
 
 // --- --single stage-runner mode ---
@@ -1305,6 +1326,7 @@ function emitSingleRunStage(
   slug: string,
   scope: string,
   projectType: "brownfield" | "greenfield" | null,
+  recordPrefix: string | null = null,
 ): void {
   const node = nodeForSlug(slug);
   if (!node) {
@@ -1335,6 +1357,7 @@ function emitSingleRunStage(
     UNIT_NAME_PLACEHOLDER,
     scope,
     null,
+    recordPrefix,
   );
   if (directive.conductor_persona === undefined) {
     const persona = readConductorPersona();
@@ -1461,8 +1484,9 @@ function emitJumpDirective(
     }
     // No-state jump: pass scope for the gate computation; stateContent stays
     // null (no workflow yet → no skeleton round-trip, no persona delivery —
-    // both correct, this is a degenerate "start here" before init).
-    emitRunStageForSlug(first.slug, projectType, scope, null);
+    // both correct, this is a degenerate "start here" before init). recordPrefix
+    // resolves the active intent's relative dir (null on a fresh workspace).
+    emitRunStageForSlug(first.slug, projectType, scope, null, relativeRecordDir(projectDir));
     return;
   }
 
@@ -1497,7 +1521,7 @@ function emitJumpDirective(
     return;
   }
   // No-state jump: scope feeds the gate; stateContent is null (no workflow yet).
-  emit(buildRunStageDirective(node, projectType, UNIT_NAME_PLACEHOLDER, scope, null));
+  emit(buildRunStageDirective(node, projectType, UNIT_NAME_PLACEHOLDER, scope, null, relativeRecordDir(projectDir)));
 }
 
 // Pull `target_slug` AND `direction` out of `aidlc-jump.ts resolve`'s stdout

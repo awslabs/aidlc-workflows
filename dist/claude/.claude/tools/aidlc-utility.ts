@@ -19,6 +19,8 @@ import {
 } from "./aidlc-graph.ts";
 import {
   auditFilePath,
+  auditShards,
+  detectLeakedLocks,
   docsDir,
   emitError,
   errorMessage,
@@ -39,6 +41,7 @@ import {
   parseCheckboxes,
   parseRefsList,
   parseStageFrontmatter,
+  readAllAuditShards,
   readStateFile,
   resolveProjectDir,
   SLUG_TAG_REGEX,
@@ -608,10 +611,11 @@ function handleDoctor(projectDir: string): void {
   // verify the state actually matches. Covers the rare case where audit-first
   // succeeded but the state write failed (disk full, permission lost mid-run).
   const stateMdPath = stateFilePath(projectDir);
-  const auditMdPath = auditFilePath(projectDir);
-  if (existsSync(stateMdPath) && existsSync(auditMdPath)) {
+  // Read across every per-clone audit shard (single shard in the common case).
+  const auditAllShards = readAllAuditShards(projectDir);
+  if (existsSync(stateMdPath) && auditAllShards.length > 0) {
     try {
-      const auditContent = readFileSync(auditMdPath, "utf-8");
+      const auditContent = auditAllShards;
       const stateContent = readFileSync(stateMdPath, "utf-8");
       // Find last WORKFLOW_COMPLETED event
       const wcIdx = auditContent.lastIndexOf("**Event**: WORKFLOW_COMPLETED");
@@ -633,6 +637,27 @@ function handleDoctor(projectDir: string): void {
     } catch {
       // Drift-check failure is non-fatal for doctor report
     }
+  }
+
+  // Leaked-lock probe (P3 reaper surface) — a wedged audit lock (owner process
+  // dead, or stamp over the stale threshold) blocks every writer on its bucket.
+  // Doctor detects it loudly and CLEARS it (clear=true) so a SIGKILL'd holder
+  // doesn't poison the next run; a live, fresh holder is left alone.
+  try {
+    const leaks = detectLeakedLocks(projectDir, true);
+    if (leaks.length === 0) {
+      results.push({ pass: true, label: "Audit locks: none leaked" });
+    } else {
+      for (const leak of leaks) {
+        results.push({
+          pass: false,
+          label: `Leaked audit lock on bucket "${leak.bucket}" (${leak.reason}${leak.ownerPid !== null ? `, pid ${leak.ownerPid}` : ""}) — cleared`,
+          fix: "the stale lock was cleared automatically; re-run your /aidlc command",
+        });
+      }
+    }
+  } catch {
+    // Lock-probe failure is non-fatal for the doctor report.
   }
 
   // State version check — current template adds Worktree Path, Bolt
@@ -688,7 +713,7 @@ function handleDoctor(projectDir: string): void {
   //     (remote-aware doctor, composes with future designer offline-mode)
   // ===========================================================================
 
-  const auditMd = existsSync(auditMdPath) ? readFileSync(auditMdPath, "utf-8") : "";
+  const auditMd = auditAllShards;
   const stateMd = existsSync(stateMdPath) ? readFileSync(stateMdPath, "utf-8") : "";
   const boltRefs = stateMd
     ? parseRefsList(getField(stateMd, "Bolt Refs") ?? "")
@@ -1513,11 +1538,11 @@ function handleDoctor(projectDir: string): void {
   }
   results.push({ pass: true, label: coverageLabel });
 
-  // Cold-safe gate: only emit audit when audit.md already exists. On a pristine
-  // project (no aidlc-docs/audit.md) doctor prints its health report and
-  // creates NOTHING — it stays a pure read-only diagnostic. On an initialized
-  // project both GUARDRAIL_LOADED and HEALTH_CHECKED emit as before.
-  const auditExists = existsSync(auditFilePath(projectDir));
+  // Cold-safe gate: only emit audit when an audit trail already exists. On a
+  // pristine project (no audit shard / flat audit.md) doctor prints its health
+  // report and creates NOTHING — it stays a pure read-only diagnostic. On an
+  // initialized project both GUARDRAIL_LOADED and HEALTH_CHECKED emit as before.
+  const auditExists = auditShards(projectDir).length > 0;
 
   if (auditExists) {
     appendAuditEvent(projectDir, "GUARDRAIL_LOADED", {

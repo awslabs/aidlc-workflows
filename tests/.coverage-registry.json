@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 319,
+    "total": 350,
     "enumeratedByClass": {
-      "function": 117,
+      "function": 148,
       "audit": 67,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 45,
+      "function": 53,
       "audit": 27,
       "scope": 9,
       "stage": 8,
@@ -722,9 +722,65 @@
         {
           "file": "tests/integration/t33-hook-concurrency.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ACTIVE_INTENT_POINTER",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:ACTIVE_SPACE_POINTER",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:activeIntent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t160-workspace-record-resolution.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:activeSpace",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t160-workspace-record-resolution.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:anyIntentRecordExists",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:appendIntentToRegistry",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -765,6 +821,10 @@
         {
           "file": "tests/unit/t106.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t160-workspace-record-resolution.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -777,9 +837,41 @@
         {
           "file": "tests/integration/t49-bolt-sensor-failures.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:auditLockIdentity",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:auditShardDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:auditShardName",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:auditShards",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -885,7 +977,35 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:DEFAULT_LOCK_STALE_MS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:DEFAULT_SPACE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:detectLeakedLocks",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:docsDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:docsRoot",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -1047,6 +1167,10 @@
         {
           "file": "tests/integration/t145-state-lock-concurrency.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -1054,6 +1178,27 @@
     {
       "unitClass": "function",
       "unitId": "function:hooksHealthDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:idSuffix",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:intentsDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:intentsRegistryPath",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -1088,7 +1233,40 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:LEGACY_FLAT_RELATIVE_PREFIX",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:LEGACY_FLAT_ROOT",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:legacyFlatFallback",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t159-legacy-flat-fallback-bridge.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:listField",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:listIntentDirs",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -1230,6 +1408,32 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:MIGRATED_MARKER",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:migratedMarkerPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:migrateFlatLayout",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t160-workspace-record-resolution.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:mustGet",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1245,6 +1449,13 @@
     {
       "unitClass": "function",
       "unitId": "function:mustShift",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:needsFlatMigration",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -1426,10 +1637,29 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readAllAuditShards",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readStateFile",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:recordDir",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t160-workspace-record-resolution.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1454,12 +1684,28 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:relativeRecordDir",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t160-workspace-record-resolution.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:releaseAuditLock",
       "minMechanism": "none",
       "coveredBy": [
         {
           "file": "tests/integration/t33-hook-concurrency.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -1620,6 +1866,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:slugify",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t160-workspace-record-resolution.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:stageDir",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1646,6 +1904,14 @@
       "coveredBy": [
         {
           "file": "tests/unit/t106.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t159-legacy-flat-fallback-bridge.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t160-workspace-record-resolution.test.ts",
           "mechanism": "none"
         }
       ],
@@ -1726,6 +1992,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:uuidv7",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t160-workspace-record-resolution.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:validateBoltSlug",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1767,9 +2045,20 @@
         {
           "file": "tests/integration/t145-state-lock-concurrency.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t161-per-intent-lock-reaper.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:WORKSPACE_LOCK_SENTINEL",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",

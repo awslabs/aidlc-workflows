@@ -5,7 +5,6 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   appendSlug,
   appendUnderHeading,
-  auditFilePath,
   type CheckboxState,
   countCheckboxes,
   emitError,
@@ -24,6 +23,7 @@ import {
   parseCheckboxes,
   parseRefsList,
   parseStateStageSuffixes,
+  readAllAuditShards,
   readStateFile,
   relativeMemoryPath,
   removeSlug,
@@ -98,9 +98,11 @@ function hasStageAuditEvent(
   eventType: string,
   stageSlug: string
 ): boolean {
-  const path = auditFilePath(projectDir);
-  if (!existsSync(path)) return false;
-  const audit = readFileSync(path, "utf-8");
+  // Read across every per-clone audit shard (one in the common single-clone /
+  // flat-legacy case; the glob-merge matters only when concurrent clones append
+  // to the same intent). readAllAuditShards returns "" when no shard exists.
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) return false;
   const workflowStarts = findAllEvents(audit, "WORKFLOW_STARTED");
   const since = workflowStarts.length > 0
     ? workflowStarts[workflowStarts.length - 1].timestamp
@@ -1086,10 +1088,10 @@ function handleResume(_args: string[]): void {
   // to surface the compaction-awareness prompt without a fragile shell pipeline.
   let compactionPending = false;
   try {
-    const auditPath = auditFilePath(pd);
-    if (existsSync(auditPath)) {
+    // Merge across per-clone audit shards (single shard in the common case).
+    const raw = readAllAuditShards(pd);
+    if (raw.length > 0) {
       // Read last ~400 lines (enough to cover ~30 events' worth of blocks)
-      const raw = readFileSync(auditPath, "utf-8");
       const tailLines = raw.split("\n").slice(-400);
       const tail = tailLines.join("\n");
       // Find the index of the last SESSION_COMPACTED event
@@ -1160,9 +1162,8 @@ function handleAcknowledgeCompaction(args: string[]): void {
   // RECOVERY_COMPLETED events when the orchestrator calls acknowledge unnecessarily.
   let compactionPending = false;
   try {
-    const auditPath = auditFilePath(pd);
-    if (existsSync(auditPath)) {
-      const raw = readFileSync(auditPath, "utf-8");
+    const raw = readAllAuditShards(pd);
+    if (raw.length > 0) {
       const tail = raw.split("\n").slice(-400).join("\n");
       const lastCompactIdx = tail.lastIndexOf("**Event**: SESSION_COMPACTED");
       if (lastCompactIdx !== -1) {

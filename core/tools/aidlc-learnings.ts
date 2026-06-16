@@ -36,12 +36,12 @@ import { dirname, join } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   appendUnderHeading,
-  auditFilePath,
   errorMessage,
   findAllEvents,
   getField,
   isoTimestamp,
   parseMemoryEntries,
+  readAllAuditShards,
   readStateFile,
   resolveProjectDir,
   runtimeGraphPath,
@@ -418,8 +418,8 @@ function handlePersist(args: string[], projectDir: string): void {
   let lockResult: { rule_learned: number; sensor_proposed: number; bound_stages: string[] };
   try {
     lockResult = withAuditLock(projectDir, () => {
-      const auditPath = auditFilePath(projectDir);
-      const auditContent = existsSync(auditPath) ? readFileSync(auditPath, "utf-8") : "";
+      // Read across every per-clone audit shard (single shard in the common case).
+      const auditContent = readAllAuditShards(projectDir);
 
       // Test-run skip: most-recent audit block Test-Run: true → no writes.
       if (auditTestRun(auditContent)) {
