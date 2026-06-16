@@ -762,7 +762,7 @@ Before creating any artifact file, validate:
 - File path matches the expected convention for the stage
 
 ### Template overrides
-Before writing artifact `X`, if a team template resolves at `aidlc/memory/templates/X.md` (keyed by the output filename stem — artifact `X` writes to `X.md`), follow its structure: use its `##` headings as the skeleton to fill. A resolved template is used whole-doc (verbatim structure, no section merge); if none resolves, follow the stage's existing prose. The `required-sections` sensor verifies the output against the SAME template file, so the produced shape and the checked shape cannot drift.
+Before writing artifact `X`, if a team template resolves at `aidlc/spaces/<space>/memory/templates/X.md` (keyed by the output filename stem — artifact `X` writes to `X.md`), follow its structure: use its `##` headings as the skeleton to fill. A resolved template is used whole-doc (verbatim structure, no section merge); if none resolves, follow the stage's existing prose. The `required-sections` sensor verifies the output against the SAME template file, so the produced shape and the checked shape cannot drift.
 
 ### ASCII Diagram Standards
 

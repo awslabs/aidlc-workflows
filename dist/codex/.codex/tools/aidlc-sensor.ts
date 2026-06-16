@@ -39,6 +39,7 @@ import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
 	loadGraph,
 	loadSensors,
+	memoryTemplatesDir,
 	type SensorFile,
 	templateEligibleArtifacts,
 } from "./aidlc-graph.ts";
@@ -291,13 +292,15 @@ function handleFire(args: string[]): void {
 	// markers (the stem==artifact key is unsound for those non-prose files). The
 	// script applies a resolved template only when the output stem ∈ this set.
 	// AIDLC_TEMPLATES_DIR is a test/relocation seam mirroring AIDLC_RULES_DIR;
-	// the default lookup is <projectDir>/aidlc/memory/templates (the §10 source
-	// of truth P5/SEED ships — resolution falls through gracefully when absent).
+	// the default lookup is the workspace method tree's templates/ dir —
+	// <projectDir>/aidlc/spaces/<space>/memory/templates — derived via
+	// memoryTemplatesDir() from the SAME MEMORY_SEGMENTS the rules resolver +
+	// packager emit use, so the sensor's lookup can never drift from where SEED
+	// ships the floor (resolution falls through gracefully when absent).
 	if (id === "required-sections") {
 		const eligible = templateEligibleArtifacts(stageNode.produces ?? []);
 		const templatesDir =
-			process.env.AIDLC_TEMPLATES_DIR ??
-			join(projectDir, "aidlc", "memory", "templates");
+			process.env.AIDLC_TEMPLATES_DIR ?? memoryTemplatesDir(projectDir);
 		scriptArgs.push("--templates-dir", templatesDir);
 		scriptArgs.push("--template-eligible", eligible.join(","));
 	}

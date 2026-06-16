@@ -36,7 +36,7 @@ interface Flags {
 	stage?: string;
 	outputPath?: string;
 	// Absolute path to the templates source-of-truth dir
-	// (aidlc/memory/templates/). Threaded by the dispatcher / fire hook, which
+	// (aidlc/spaces/<space>/memory/templates/). Threaded by the dispatcher / fire hook, which
 	// hold projectDir; the script never resolves projectDir itself. Absent →
 	// no template lookup (graceful third branch: P5/SEED has not shipped the
 	// dir, or the caller is a bare invocation).

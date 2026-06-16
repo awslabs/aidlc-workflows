@@ -41,7 +41,7 @@ The default heading set can be overridden two ways. **Precedence: a resolving
 `templates/<artifact>.md` wins over a `## Sensors`-documented heading set.**
 
 1. **Template-override layer (file-driven, preferred).** A team drops
-   `aidlc/memory/templates/<artifact>.md` (keyed by the output filename stem —
+   `aidlc/spaces/<space>/memory/templates/<artifact>.md` (keyed by the output filename stem —
    artifact `X` writes to `X.md`). When one resolves for the output path, its
    `##` headings become the expected set and the sensor passes iff
    `expected ⊆ output`; the missing headings are precise findings. Whole-doc,

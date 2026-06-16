@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-sensor-required-sections, function:templateEligibleArtifacts
+// covers: subcommand:aidlc-sensor-required-sections, function:templateEligibleArtifacts, function:memoryTemplatesDir
 //
 // t155 — TPL: the template-override layer (one file, two readers).
 //
@@ -47,7 +47,11 @@ import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
 // spawned SENSOR script runs from — so the in-process unit and the cli boundary
 // agree on exactly what ships. AIDLC_SRC = <REPO_ROOT>/dist/claude/.claude, so
 // from tests/unit/ that is ../../dist/claude/.claude/tools/aidlc-graph.ts.
-import { templateEligibleArtifacts } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+import {
+	memoryTemplatesDir,
+	templateEligibleArtifacts,
+} from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+import { existsSync, readdirSync } from "node:fs";
 
 const BUN = process.execPath; // the bun running this test
 const SENSOR = join(AIDLC_SRC, "tools", "aidlc-sensor-required-sections.ts");
@@ -313,5 +317,33 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
       .filter((l) => l.startsWith("## "));
     expect(r.template_expected).toEqual(headingsFromTemplate);
     expect(r.pass).toBe(true);
+  });
+
+  // 8 - REGRESSION (the dispatcher default-path BLOCKER). The dispatcher's
+  // default --templates-dir MUST resolve to the SAME location SEED ships the
+  // templates/ floor. The original bug defaulted to <pd>/aidlc/memory/templates
+  // while SEED ships <pd>/aidlc/spaces/default/memory/templates - a clean miss
+  // that silently disabled every team template at the real runtime path. The
+  // other tests never caught it because they ALWAYS inject an explicit
+  // --templates-dir. These pin the default-path computation (now derived via
+  // memoryTemplatesDir from the same MEMORY_SEGMENTS the rules resolver +
+  // packager use) and cross-check it against where dist actually ships, so the
+  // sensor lookup and the ship location can never drift apart again.
+  test("memoryTemplatesDir resolves under spaces/default/memory (the ship + resolver root)", () => {
+    const td = memoryTemplatesDir("/ws").replace(/\\/g, "/");
+    expect(td).toBe("/ws/aidlc/spaces/default/memory/templates");
+    // NOT the old buggy default the BLOCKER shipped.
+    expect(td).not.toBe("/ws/aidlc/memory/templates");
+  });
+
+  test("the dispatcher default templates dir matches where the packager SHIPS the floor", () => {
+    // AIDLC_SRC = <repo>/dist/claude/.claude; the shipped tree's workspace root
+    // is its parent (<repo>/dist/claude), where aidlc/ is emitted.
+    const shippedWorkspaceRoot = join(AIDLC_SRC, "..");
+    const dispatcherDefault = memoryTemplatesDir(shippedWorkspaceRoot);
+    // The default the dispatcher computes must point at a real shipped dir...
+    expect(existsSync(dispatcherDefault)).toBe(true);
+    // ...the templates/ floor SEED ships (the .gitkeep guarantees it exists).
+    expect(readdirSync(dispatcherDefault)).toContain(".gitkeep");
   });
 });

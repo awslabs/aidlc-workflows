@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 302,
+    "total": 304,
     "enumeratedByClass": {
-      "function": 100,
+      "function": 102,
       "audit": 67,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 44,
+      "function": 45,
       "audit": 27,
       "scope": 9,
       "stage": 8,
@@ -1180,6 +1180,25 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:memoryDirFor",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:memoryTemplatesDir",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t155-template-override.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2811,6 +2830,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t99-learnings-gate-flow.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t158-memory-writer-reader-seam.test.ts",
           "mechanism": "cli"
         },
         {

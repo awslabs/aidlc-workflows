@@ -201,6 +201,25 @@ function memoryDisplayPath(rel: string): string {
   return toPosix(join(...MEMORY_SEGMENTS, rel));
 }
 
+/** The method ("memory") directory under a given workspace root, derived from
+ *  the SAME `MEMORY_SEGMENTS` the resolver + display path use — so the rules
+ *  resolver, the packager's emit, the native includes, and the TPL template
+ *  lookup can never drift to different roots. `<projectDir>/aidlc/spaces/<space>/memory`.
+ *  (The TPL templates dir is this + "templates"; see `memoryTemplatesDir`.) */
+export function memoryDirFor(projectDir: string): string {
+  return join(projectDir, ...MEMORY_SEGMENTS);
+}
+
+/** The TPL template-override source-of-truth dir for a workspace:
+ *  `<projectDir>/aidlc/spaces/<space>/memory/templates` — where SEED ships the
+ *  `templates/` floor and a team drops `<artifact>.md` overrides. Used by the
+ *  `required-sections` sensor dispatcher as the default `--templates-dir`. Kept
+ *  here (not hardcoded in the dispatcher) so it stays byte-aligned with where
+ *  the packager emits and the resolver reads. */
+export function memoryTemplatesDir(projectDir: string): string {
+  return join(projectDir, ...MEMORY_SEGMENTS, "templates");
+}
+
 /** Resolve the sensors directory. AIDLC_SENSORS_DIR env-var seam mirrors
  *  AIDLC_RULES_DIR so t89's fixture-driven import tests can isolate from
  *  the real .claude/sensors/ tree. Evaluated at call time. */

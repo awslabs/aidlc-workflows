@@ -6,7 +6,7 @@
 # skeleton, and the required-sections sensor verifies against the same file
 # (override-before-default, keyed by the output filename stem; see
 # core/tools/aidlc-sensor.ts where the default templates dir is
-# `<projectDir>/aidlc/memory/templates`).
+# `<projectDir>/aidlc/spaces/<space>/memory/templates`, via memoryTemplatesDir()).
 #
 # The framework ships NO default templates — resolution falls through gracefully
 # to the sensor's ≥2-H2 floor when a template is absent. This `.gitkeep` only
