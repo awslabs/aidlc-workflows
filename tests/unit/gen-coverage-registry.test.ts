@@ -808,6 +808,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t144-harness-seam.test.ts",
     "unit/t147-kiro-hook-adapter.test.ts",
     "unit/t149-codex-hook-adapter.test.ts",
+    "unit/t155-template-override.test.ts",
     "unit/t17.test.ts",
     "unit/t18.test.ts",
     "unit/t19.test.ts",

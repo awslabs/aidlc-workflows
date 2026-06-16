@@ -36,7 +36,12 @@ import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve as pathResolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
-import { loadGraph, loadSensors, type SensorFile } from "./aidlc-graph.ts";
+import {
+	loadGraph,
+	loadSensors,
+	type SensorFile,
+	templateEligibleArtifacts,
+} from "./aidlc-graph.ts";
 import { errorMessage, isoTimestamp, isPlainObject, resolveProjectDir, withAuditLock } from "./aidlc-lib.ts";
 
 // --- Constants ---
@@ -276,6 +281,26 @@ function handleFire(args: string[]): void {
 	// --- 3. Pre-compute detail-file path (used only on FAILED) ---
 	// aidlc-docs/.aidlc-sensors/<stage-slug>/<sensor-id>-<fire-id>.md
 	const projectDir = resolveProjectDir();
+
+	// required-sections additionally takes the TPL template seam: the
+	// templates source-of-truth dir + the stage's template-eligible artifact
+	// set. The per-sensor script cannot know the stage's artifact set (it gets
+	// only --stage/--output-path), so the dispatcher threads it from the
+	// stageNode — exactly as --consumes is threaded for upstream-coverage above.
+	// Eligibility = the `produces` artifact names that are NOT questions/timestamp
+	// markers (the stem==artifact key is unsound for those non-prose files). The
+	// script applies a resolved template only when the output stem ∈ this set.
+	// AIDLC_TEMPLATES_DIR is a test/relocation seam mirroring AIDLC_RULES_DIR;
+	// the default lookup is <projectDir>/aidlc/memory/templates (the §10 source
+	// of truth P5/SEED ships — resolution falls through gracefully when absent).
+	if (id === "required-sections") {
+		const eligible = templateEligibleArtifacts(stageNode.produces ?? []);
+		const templatesDir =
+			process.env.AIDLC_TEMPLATES_DIR ??
+			join(projectDir, "aidlc", "memory", "templates");
+		scriptArgs.push("--templates-dir", templatesDir);
+		scriptArgs.push("--template-eligible", eligible.join(","));
+	}
 	const detailDir = join(projectDir, "aidlc-docs", ".aidlc-sensors", stageSlug);
 	const detailPath = join(detailDir, `${id}-${fireId}.md`);
 

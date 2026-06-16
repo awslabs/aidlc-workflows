@@ -610,6 +610,30 @@ export function consumersOf(artifact: string): GraphStage[] {
   );
 }
 
+/** TPL — the subset of a stage's `produces[]` eligible for a template
+ *  override. The template-override layer keys a template off the
+ *  output-filename stem (artifact X → X.md, per resolveArtifactPath's
+ *  `<...>/${name}.md`), but that stem==artifact key is SOUND only for prose
+ *  artifacts: a `*-questions.md` Q&A file or a `*-timestamp.md` marker is
+ *  intentionally not a ≥2-H2 doc, so applying a heading-set template to it
+ *  would yield spurious missing-section findings. The per-sensor
+ *  required-sections script gets only --stage/--output-path and so cannot know
+ *  the stage's artifact set — the dispatcher (aidlc-sensor.ts) and the
+ *  PostToolUse fire hook (aidlc-sensor-fire.ts) both hold the GraphStage and
+ *  thread this filtered set so a resolved template applies ONLY to a
+ *  declared-prose artifact. Lives here so both invocation sites derive it
+ *  identically without importing the dispatcher (whose top-level main() would
+ *  run on import). */
+export function templateEligibleArtifacts(produces: string[]): string[] {
+  return (produces ?? []).filter(
+    (a) =>
+      typeof a === "string" &&
+      a.length > 0 &&
+      !a.endsWith("-questions") &&
+      !a.endsWith("-timestamp")
+  );
+}
+
 /** Topological sort of the given subset using Kahn's algorithm with
  *  numeric-order tiebreak. Operates on arbitrary subsets: full graph,
  *  scope sub-DAG, or synthetic test fixtures. Edges to nodes outside

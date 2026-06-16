@@ -203,6 +203,14 @@ for (const entry of applicableSensors) {
   // matches the upstream dispatcher manifest's `command:` convention.
   // Sync subprocess; user pays wall-clock per Write inside an active
   // stage with applicable sensors. Use --test-run to skip per G2.
+  //
+  // TPL note: this hook invokes the DISPATCHER (aidlc-sensor.ts fire), not the
+  // per-sensor script directly. The dispatcher re-resolves the stageNode by
+  // --stage and owns the template seam — it derives --templates-dir +
+  // --template-eligible (via templateEligibleArtifacts) and threads them to the
+  // required-sections script. So both invocation sites (this hook and a direct
+  // `aidlc-sensor fire`) converge on the dispatcher's single threading point and
+  // stay consistent; the hook passes only --stage/--output-path as before.
   try {
     const result = spawnSync(
       "bun",

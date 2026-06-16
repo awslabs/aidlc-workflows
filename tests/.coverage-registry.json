@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 301,
+    "total": 302,
     "enumeratedByClass": {
-      "function": 99,
+      "function": 100,
       "audit": 67,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 43,
+      "function": 44,
       "audit": 27,
       "scope": 9,
       "stage": 8,
@@ -1572,6 +1572,18 @@
         },
         {
           "file": "tests/unit/t124-scope-transpose.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:templateEligibleArtifacts",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t155-template-override.test.ts",
           "mechanism": "cli"
         }
       ],
