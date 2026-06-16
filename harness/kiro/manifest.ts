@@ -24,13 +24,17 @@ const manifest: HarnessManifest = {
   name: "kiro",
   harnessDir: ".kiro",
 
-  // Same core projection as claude, EXCEPT: rules→steering, and the
-  // orchestrator skill (skills/aidlc/) is authored, not core.
+  // Same core projection as claude, EXCEPT the orchestrator skill (skills/aidlc/)
+  // is authored, not core. The method ("memory") is no longer projected into
+  // .kiro/steering/ — it relocated to the workspace-root aidlc/spaces/default/
+  // memory/ (emitted by the packager's memory step) and Kiro reads it via the
+  // agent JSON `resources` globs (re-pointed to file://aidlc/spaces/default/
+  // memory/**/*.md). rulesRename:"steering" stays — it still rewrites the
+  // <harness>/rules/ prose mentions other core files carry.
   coreDirs: [
     { src: "tools", dst: "tools" },
     { src: "aidlc-common", dst: "aidlc-common" },
     { src: "knowledge", dst: "knowledge" },
-    { src: "rules", dst: "steering" },
     { src: "sensors", dst: "sensors" },
     { src: "scopes", dst: "scopes" },
     { src: "agents", dst: "agents" },

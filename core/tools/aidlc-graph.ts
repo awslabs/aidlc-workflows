@@ -38,7 +38,6 @@ import {
   loadAgents,
   loadScopeMapping,
   harnessDir,
-  rulesSubdir,
   loadStageGraph,
   mustGet,
   mustPop,
@@ -171,11 +170,35 @@ function stageGraphPath(): string {
   return process.env.AIDLC_STAGE_GRAPH ?? join(DATA_DIR, "stage-graph.json");
 }
 
-/** Resolve the rules directory. AIDLC_RULES_DIR env-var seam mirrors
- *  AIDLC_STAGE_GRAPH so t88's fixture-driven inheritance tests can isolate
- *  from the real .claude/rules/ tree. Evaluated at call time. */
+// The relocated method ("memory") is harness-neutral and lives at the
+// WORKSPACE ROOT under aidlc/spaces/<space>/memory/, NOT inside the harness
+// dir — one hand-editable copy, read by every harness via its own native
+// include (Claude @-stub, Kiro resources glob, Codex AGENTS.md/@-mention).
+// `default` is the always-present space; the resolver follows the active-space
+// cursor in a later phase (GA ships pointed at default — the include and this
+// default both resolve there). The segments below are joined under the
+// workspace root so a bare `aidlc/memory/…` means `aidlc/spaces/default/…`.
+const MEMORY_SPACE = "default";
+const MEMORY_SEGMENTS = ["aidlc", "spaces", MEMORY_SPACE, "memory"] as const;
+
+/** Resolve the method ("memory") directory — the single source of truth for
+ *  the layered practices (org/team/project + phases/). AIDLC_RULES_DIR env-var
+ *  seam mirrors AIDLC_STAGE_GRAPH so t88's fixture-driven inheritance tests can
+ *  isolate from the real tree. Evaluated at call time. The default resolves the
+ *  workspace-root aidlc/spaces/default/memory/ relative to this tool's location
+ *  (<ws>/<harness>/tools/ → up two to the workspace root). */
 function rulesDir(): string {
-  return process.env.AIDLC_RULES_DIR ?? join(__FILE_DIR, "..", rulesSubdir());
+  return process.env.AIDLC_RULES_DIR ?? join(__FILE_DIR, "..", "..", ...MEMORY_SEGMENTS);
+}
+
+/** The harness-neutral DISPLAY path baked into each RuleResolution — the
+ *  workspace-relative location of a method file (e.g. "aidlc/spaces/default/
+ *  memory/org.md"). Replaces the old per-harness "<harness>/<rulesSubdir>/<f>"
+ *  display form: the method now lives at the neutral aidlc/ roof, identical on
+ *  every harness, so the baked path is harness-neutral too. `rel` is the file's
+ *  sub-path under memory/ (e.g. "org.md" or "phases/construction.md"). */
+function memoryDisplayPath(rel: string): string {
+  return toPosix(join(...MEMORY_SEGMENTS, rel));
 }
 
 /** Resolve the sensors directory. AIDLC_SENSORS_DIR env-var seam mirrors
@@ -295,14 +318,21 @@ export interface RuleFile {
   headings: Map<string, string>;
 }
 
-// Filename anchor. `team-learnings` and `project-learnings` slots are
-// the future memory-gate surface (two-surface separation locked
-// 2026-05-24). The regex permits them so the future memory-gate work
-// doesn't have to widen the schema. Anything not matching is silently
-// ignored — including user-extension overlays like `team-overrides.md`
-// (no `aidlc-` prefix), per 08-rule-system.md.
+// Filename anchors for the relocated method tree (aidlc/memory/). The layered
+// practice files are top-level (org/team/project, plain neutral names — no
+// `aidlc-` prefix now that they live under the neutral aidlc/ roof); the
+// phase-scoped files are nested under phases/<phase>.md. `team-learnings` and
+// `project-learnings` slots are the future memory-gate surface (two-surface
+// separation locked 2026-05-24) — the regex permits them so the future
+// memory-gate work doesn't have to widen the schema; none ship today. Anything
+// not matching is silently ignored — including user-extension overlays like
+// `team-overrides.md`, per 08-rule-system.md.
 const RULE_FILE_REGEX =
-  /^aidlc-(org|team|team-learnings|project|project-learnings|phase-[a-z][a-z0-9-]*)\.md$/;
+  /^(org|team|team-learnings|project|project-learnings)\.md$/;
+// Phase rule files live in phases/<phase>.md (the flat aidlc-phase-<phase>.md
+// scheme moved under a nested phases/ dir in the aidlc/memory/ relocation).
+const PHASE_RULES_SUBDIR = "phases";
+const PHASE_FILE_REGEX = /^([a-z][a-z0-9-]*)\.md$/;
 
 // Scope-priority for the deterministic sort. learnings sit immediately
 // after their parent tier's substantive file so the resolved chain reads
@@ -384,45 +414,59 @@ export function loadRules(): RuleFile[] {
   const dir = rulesDir();
   if (!existsSync(dir)) return [];
 
-  const matched: RuleFile[] = [];
+  // Each candidate: the absolute on-disk path to read, the display sub-path
+  // (relative to aidlc/memory/, e.g. "org.md" or "phases/construction.md")
+  // baked into the RuleResolution, the resolved scope, and the phase name when
+  // scope === "phase". The method tree is shallow: top-level layered files plus
+  // one nested phases/ dir, so the walk is two explicit reads (no recursion).
+  type Candidate = {
+    rel: string;
+    filePath: string;
+    scope: RuleFile["scope"];
+    phase?: string;
+  };
+  const candidates: Candidate[] = [];
+
+  // 1. Top-level layered files: org/team/project (+ reserved -learnings slots).
   for (const f of readdirSync(dir)) {
     const m = f.match(RULE_FILE_REGEX);
     if (!m) continue;
-
     const scopeKey = m[1];
-    const filePath = join(dir, f);
-    const raw = readFileSync(filePath, "utf-8");
+    let scope: RuleFile["scope"];
+    if (scopeKey === "team-learnings") scope = "team";
+    else if (scopeKey === "project-learnings") scope = "project";
+    else if (scopeKey === "org" || scopeKey === "team" || scopeKey === "project")
+      scope = scopeKey;
+    else continue; // unreachable given the regex, but keep the guard explicit
+    candidates.push({ rel: f, filePath: join(dir, f), scope });
+  }
+
+  // 2. Phase-scoped files nested under phases/<phase>.md.
+  const phasesDir = join(dir, PHASE_RULES_SUBDIR);
+  if (existsSync(phasesDir)) {
+    for (const f of readdirSync(phasesDir)) {
+      const m = f.match(PHASE_FILE_REGEX);
+      if (!m) continue;
+      candidates.push({
+        rel: toPosix(join(PHASE_RULES_SUBDIR, f)),
+        filePath: join(phasesDir, f),
+        scope: "phase",
+        phase: m[1],
+      });
+    }
+  }
+
+  const matched: RuleFile[] = [];
+  for (const c of candidates) {
+    const raw = readFileSync(c.filePath, "utf-8");
     const fm = parseRuleFrontmatter(raw);
-    validateRuleFrontmatter(fm, filePath);
+    validateRuleFrontmatter(fm, c.filePath);
     const headings = parseRuleHeadings(raw);
 
-    let scope: RuleFile["scope"];
-    let phase: string | undefined;
-    if (scopeKey.startsWith("phase-")) {
-      scope = "phase";
-      phase = scopeKey.slice("phase-".length);
-    } else if (scopeKey === "team-learnings") {
-      scope = "team";
-    } else if (scopeKey === "project-learnings") {
-      scope = "project";
-    } else {
-      // scopeKey didn't match any of the named cases above ("phase-*",
-      // "team-learnings", "project-learnings") nor was it a known prefix.
-      // The filename pattern that fed scopeKey is \\.claude/rules/aidlc-(.+)\\.md
-      // — the only legal scopes left are "org" and "team". Verify and assert.
-      if (scopeKey !== "org" && scopeKey !== "team" && scopeKey !== "project") {
-        // Filename was aidlc-<unknown>.md — not a recognised rule scope.
-        // Skip silently to match the previous else-cast behaviour (which
-        // accepted any string).
-        continue;
-      }
-      scope = scopeKey;
-    }
-
     matched.push({
-      path: toPosix(join(harnessDir(), rulesSubdir(), f)),
-      scope,
-      phase,
+      path: memoryDisplayPath(c.rel),
+      scope: c.scope,
+      phase: c.phase,
       frontmatter: fm,
       headings,
     });

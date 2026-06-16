@@ -44,7 +44,7 @@
   },
   "resources": [
     "skill://.kiro/skills/*/SKILL.md",
-    "file://.kiro/steering/*.md",
+    "file://aidlc/spaces/default/memory/**/*.md",
     "file://AGENTS.md"
   ],
   "hooks": {

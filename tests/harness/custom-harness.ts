@@ -568,11 +568,14 @@ sensors_applicable).
   writeFileSync(p, body);
 }
 
-/** Add the custom rule bullet to aidlc-project.md under ## Mandated. The rule
- *  FILE path is already in every stage's rules_in_context (project rules attach
- *  universally); this seeds the unique-marker CONTENT the agent reads. */
+/** Add the custom rule bullet to the project method layer under ## Mandated. The
+ *  rule FILE path is already in every stage's rules_in_context (project rules
+ *  attach universally); this seeds the unique-marker CONTENT the agent reads.
+ *  The method relocated (P5) from <harness>/rules/aidlc-project.md to the
+ *  workspace-root aidlc/spaces/default/memory/project.md (neutral name), so seed
+ *  it there — `claude` is <proj>/.claude, the method sits beside it. */
 function seedProjectRule(claude: string): void {
-  const p = join(claude, "rules", "aidlc-project.md");
+  const p = join(claude, "..", "aidlc", "spaces", "default", "memory", "project.md");
   let text = readFileSync(p, "utf8");
   const bullet = `\n- ${CUSTOM_RULE_MARKER}: every data-migration artefact must cite its origin stage.\n`;
   if (text.includes(CUSTOM_RULE_MARKER)) return; // idempotent

@@ -1378,8 +1378,9 @@ function handleDoctor(projectDir: string): void {
 
   // Rule drift (advisory, always pass:true) — surface team/project
   // (and team/project-learnings) rule files whose `##` headings overlap a
-  // POPULATED heading in aidlc-org.md, quoting the org sentence inline so
-  // the orchestrator-LLM can review for contradiction at observation time.
+  // POPULATED heading in the org layer (aidlc/spaces/default/memory/org.md),
+  // quoting the org sentence inline so the orchestrator-LLM can review for
+  // contradiction at observation time.
   //
   // Three-concerns seam (T2): doctor is a deterministic tool — it detects
   // same-heading structural overlap (byte-reproducible), NOT semantic
@@ -1392,7 +1393,7 @@ function handleDoctor(projectDir: string): void {
   try {
     const rules = loadRules();
     const org = rules.find(
-      (r) => r.scope === "org" && r.path.endsWith("aidlc-org.md")
+      (r) => r.scope === "org" && r.path.endsWith("org.md")
     );
     if (!org) {
       results.push({

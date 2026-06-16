@@ -43,6 +43,13 @@ import { AIDLC_SRC } from "../harness/fixtures.ts";
 // CLAUDE_DIR. Resolve every shipped path relative to it.
 const at = (...parts: string[]): string => join(AIDLC_SRC, ...parts);
 
+// The method ("memory") relocated OUT of the harness dir to the workspace root
+// under aidlc/spaces/default/memory/ (one hand-editable source of truth, read
+// by Claude via the .claude/rules/aidlc.md @-stub). It sits beside .claude/, so
+// resolve it from AIDLC_SRC's parent (the dist/claude/ root).
+const mem = (...parts: string[]): string =>
+  join(AIDLC_SRC, "..", "aidlc", "spaces", "default", "memory", ...parts);
+
 // The 13 domain-expert agents (11 original personas + the two reviewer
 // personas product-lead and architecture-reviewer), in roster order
 // (SKILL.md / CLAUDE.md agent roster order).
@@ -226,9 +233,14 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
     expect(existsSync(at("knowledge", "aidlc-shared", "state-template.md"))).toBe(true);
   });
 
-  test("ships the org and project rule layers [.sh L70-71]", () => {
-    expect(existsSync(at("rules", "aidlc-org.md"))).toBe(true);
-    expect(existsSync(at("rules", "aidlc-project.md"))).toBe(true);
+  test("ships the org and project method layers at aidlc/spaces/default/memory/ [.sh L70-71]", () => {
+    // The method relocated from .claude/rules/aidlc-{org,project}.md to the
+    // workspace-root aidlc/spaces/default/memory/{org,project}.md (neutral names,
+    // one hand-editable copy). The harness reads it via the .claude/rules/aidlc.md
+    // @-stub, which ships in its place.
+    expect(existsSync(mem("org.md"))).toBe(true);
+    expect(existsSync(mem("project.md"))).toBe(true);
+    expect(existsSync(at("rules", "aidlc.md"))).toBe(true);
   });
 
   test("ships the user-facing CLAUDE.md [.sh L74]", () => {
@@ -255,12 +267,12 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
       at("settings.json"), // 60
       at("settings.local.json.example"), // 61
       at("knowledge", "aidlc-shared", "state-template.md"), // 62
-      at("rules", "aidlc-org.md"), // 63
-      at("rules", "aidlc-project.md"), // 64
+      mem("org.md"), // 63 — method relocated to aidlc/spaces/default/memory/
+      mem("project.md"), // 64
       at("CLAUDE.md"), // 65
     ];
     expect(paths.length).toBe(65);
-    // Every one of the 63 must exist — the .sh's full TAP plan, re-proven as a
+    // Every one of the 65 must exist — the .sh's full TAP plan, re-proven as a
     // single set so the count and the existence checks cannot drift apart.
     for (const p of paths) {
       expect(existsSync(p)).toBe(true);

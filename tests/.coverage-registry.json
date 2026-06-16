@@ -1115,6 +1115,10 @@
         {
           "file": "tests/integration/t66.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t156-memory-relocation.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"

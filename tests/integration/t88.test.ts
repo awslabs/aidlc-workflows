@@ -252,7 +252,7 @@ describe("t88 compileStageGraph rules_in_context resolution (migrated from t88-c
     // write that json to a temp graph file (stands in for stage-graph.json on
     // disk), then add a team rule to a WRITABLE rules dir and recompile.
     const rulesDir = mkTemp("aidlc-t88-check-rules-");
-    cpSync(join(FIXTURES, "org-only", "aidlc-org.md"), join(rulesDir, "aidlc-org.md"));
+    cpSync(join(FIXTURES, "org-only", "org.md"), join(rulesDir, "org.md"));
 
     const first = compileWithRulesDir(rulesDir);
     const onDisk = first.json;
@@ -261,7 +261,7 @@ describe("t88 compileStageGraph rules_in_context resolution (migrated from t88-c
 
     // Add a team rule — the resolver must now include it, changing the output.
     writeFileSync(
-      join(rulesDir, "aidlc-team.md"),
+      join(rulesDir, "team.md"),
       "# team rule added after compile\n",
       "utf-8",
     );
@@ -290,7 +290,7 @@ describe("t88 compileStageGraph rules_in_context resolution (migrated from t88-c
     // observed exit 1; in-process we observe the throw + its message.
     const badRules = mkTemp("aidlc-t88-bad-pairing-");
     writeFileSync(
-      join(badRules, "aidlc-org.md"),
+      join(badRules, "org.md"),
       "---\npairing: garbage\n---\n\n# Org rule with invalid pairing\n",
       "utf-8",
     );
@@ -298,7 +298,7 @@ describe("t88 compileStageGraph rules_in_context resolution (migrated from t88-c
     __resetGraphCache();
     expect(() => compileStageGraph()).toThrow(/pairing must be/);
     // STRONGER: the error names the offending file path (compile fails loud).
-    expect(() => compileStageGraph()).toThrow(/aidlc-org\.md/);
+    expect(() => compileStageGraph()).toThrow(/org\.md/);
   });
 
   // --- Case 12: BOM-prefixed frontmatter parses correctly ------------------

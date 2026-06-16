@@ -22,12 +22,16 @@ const manifest: HarnessManifest = {
   harnessDir: ".claude",
 
   // core/<src> → <harnessDir>/<dst>. Claude keeps every core dir name as-is.
-  // rules stays rules/ (kiro renames to steering/, codex to aidlc-rules/).
+  // The method ("memory") is NO LONGER a core dir projected into the harness
+  // tree — it relocated to the workspace-root aidlc/spaces/default/memory/ (one
+  // hand-editable copy, emitted by the packager's memory step), read by Claude
+  // via the .claude/rules/aidlc.md @-stub (a harnessFile). The rulesRename
+  // machinery (steering/aidlc-rules) still rewrites the <harness>/rules/ prose
+  // mentions other core files carry, so it stays.
   coreDirs: [
     { src: "tools", dst: "tools" },
     { src: "aidlc-common", dst: "aidlc-common" },
     { src: "knowledge", dst: "knowledge" },
-    { src: "rules", dst: "rules" },
     { src: "sensors", dst: "sensors" },
     { src: "scopes", dst: "scopes" },
     { src: "agents", dst: "agents" },
@@ -43,6 +47,11 @@ const manifest: HarnessManifest = {
   harnessFiles: [
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
+    // The AIDLC method @-import stub: .claude/rules/aidlc.md pulls the relocated
+    // method (aidlc/spaces/default/memory/*) into Claude's ambient context by
+    // reference (explicit @-imports, no copy). The rules/ dir is no longer a
+    // core projection — this stub is the only file in it.
+    { src: "rules-aidlc.md", dst: "rules/aidlc.md" },
     { src: "settings.json", dst: "settings.json" },
     { src: "settings.local.json.example", dst: "settings.local.json.example" },
     // Project-root install files (beside .claude/, not inside it). A user copies

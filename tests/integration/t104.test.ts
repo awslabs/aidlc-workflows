@@ -144,9 +144,9 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
   // Posture with contradicting content. Drives cases 1, 2, 3.
   // ===========================================================================
   const DRIFT_RULES = {
-    "aidlc-org.md":
+    "org.md":
       "# Org\n\n## Testing Posture\n\nWe require 80% line coverage on every Bolt before merge.\n",
-    "aidlc-team-learnings.md":
+    "team-learnings.md":
       "# Team Learnings\n\n## Testing Posture\n\nThis team skips the coverage floor on spike branches.\n",
   };
 
@@ -163,7 +163,7 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
     // on the SAME rendered drift line, in the tool's `<file> ## <heading> ⇄
     // org "<sentence>"` detail format (aidlc-utility.ts:1273).
     const line = driftLine(r.out);
-    expect(line).toContain("aidlc-team-learnings.md");
+    expect(line).toContain("team-learnings.md");
     expect(line).toContain("Testing Posture");
     expect(line).toContain(
       "We require 80% line coverage on every Bolt before merge.",
@@ -185,9 +185,9 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
   test("4: N=0 fixture → quiet '✓ no overlap' render", () => {
     const r = runDoctor(
       rulesDir({
-        "aidlc-org.md":
+        "org.md":
           "# Org\n\n## Way of Working\n\nWe use trunk-based development.\n",
-        "aidlc-team.md": "# Team\n\n## Code Style\n\nWe prefer tabs.\n",
+        "team.md": "# Team\n\n## Code Style\n\nWe prefer tabs.\n",
       }),
     );
     const line = driftLine(r.out);
@@ -202,7 +202,7 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
   test("5: org-absent fixture → informational pass", () => {
     const r = runDoctor(
       rulesDir({
-        "aidlc-team.md":
+        "team.md":
           "# Team\n\n## Testing Posture\n\nA team-only posture with no org to compare against.\n",
       }),
     );
@@ -222,9 +222,9 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
   test("6: fixture isolation — fixture's posture drives N=1 (read seam honoured)", () => {
     const r = runDoctor(
       rulesDir({
-        "aidlc-org.md":
+        "org.md":
           "# Org\n\n## Testing Posture\n\nUNIQUEFIXTURETOKEN must appear in the quoted drift detail.\n",
-        "aidlc-project.md":
+        "project.md":
           "# Project\n\n## Testing Posture\n\nThis project overrides the posture.\n",
       }),
     );

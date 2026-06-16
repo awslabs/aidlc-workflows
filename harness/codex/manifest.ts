@@ -22,14 +22,19 @@ const manifest: HarnessManifest = {
   name: "codex",
   harnessDir: ".codex",
 
-  // Core projection: rules→aidlc-rules, NO session skills (emitted to
-  // .agents/skills/ by emit). Persona .md files ARE core (the conductor reads
-  // them as prose; Codex agent discovery reads only the emitted .toml).
+  // Core projection: NO session skills (emitted to .agents/skills/ by emit).
+  // Persona .md files ARE core (the conductor reads them as prose; Codex agent
+  // discovery reads only the emitted .toml). The method ("memory") is no longer
+  // projected into .codex/aidlc-rules/ — it relocated to the workspace-root
+  // aidlc/spaces/default/memory/ (emitted by the packager's memory step) and is
+  // reached via the auto-merged root AGENTS.md + the orchestrator's @aidlc/...
+  // prompt-mention (AIDLC_RULES_DIR in config.toml re-points the resolver seam).
+  // rulesRename:"aidlc-rules" stays — it still rewrites the <harness>/rules/
+  // prose mentions other core files carry.
   coreDirs: [
     { src: "tools", dst: "tools" },
     { src: "aidlc-common", dst: "aidlc-common" },
     { src: "knowledge", dst: "knowledge" },
-    { src: "rules", dst: "aidlc-rules" },
     { src: "sensors", dst: "sensors" },
     { src: "scopes", dst: "scopes" },
     { src: "agents", dst: "agents" },

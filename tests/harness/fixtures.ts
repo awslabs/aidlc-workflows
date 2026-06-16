@@ -40,6 +40,12 @@ import { seedCustomHarness } from "./custom-harness.ts";
 const HARNESS_DIR = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = join(HARNESS_DIR, "..", "..");
 export const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
+// The relocated method ("memory") ships at the dist tree ROOT (beside .claude/),
+// at aidlc/spaces/default/memory/. A fixture project must copy this alongside
+// .claude/ so the resolver's default (join(<harness>/tools, "..", "..",
+// aidlc/spaces/default/memory)) finds the rule layers. (NOTE: P5 copies the
+// shipped method tree as-is; P9 owns the full per-intent fixture re-root.)
+export const AIDLC_MEMORY_SRC = join(REPO_ROOT, "dist", "claude", "aidlc");
 export const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures");
 
 const RETRYABLE_RM_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
@@ -298,6 +304,12 @@ export function setupIntegrationProject(
 ): string {
   const proj = createTestProject();
   cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+  // Copy the relocated method tree (aidlc/spaces/default/memory/) to the project
+  // root beside .claude/ — the resolver reads the rule layers from there now
+  // (P5 relocation). Absent in a tree built before P5, so guard it.
+  if (existsSync(AIDLC_MEMORY_SRC)) {
+    cpSync(AIDLC_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
+  }
 
   if (opts.withState) seedStateFile(proj, opts.withState);
   if (opts.withAudit) seedAuditFile(proj);

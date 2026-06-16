@@ -1,3 +1,14 @@
+@.claude/rules/aidlc.md
+
+<!--
+  The @-line above pulls the AIDLC method into Claude's ambient context. It is
+  the first hop of a reference chain (NOT a copy): CLAUDE.md → @.claude/rules/
+  aidlc.md → @../../aidlc/spaces/default/memory/*.md. The method is authored ONCE
+  at the workspace root under aidlc/spaces/default/memory/ (org/team/project +
+  phases/), so edit it there, never in .claude/rules/aidlc.md. Verified resolving
+  (G1 PASS) — see tmp/workspace-vision/at-import-spike/RESULTS.md.
+-->
+
 # Project Name <!-- Replace with your project name -->
 
 This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development. Run `/aidlc` followed by a scope or project description to begin. Run `/aidlc --init` to scaffold the full `aidlc-docs/` directory tree without starting a workflow (`--init --force` overwrites an existing workspace). Run `/aidlc --doctor` to validate your setup. Run `/aidlc --version` to print the framework version. Run `/aidlc --stage <slug>` to jump to a specific stage, `/aidlc --phase <name>` to jump to a phase, `/aidlc --depth <level>` to override depth, `/aidlc --test-strategy <level>` to override test volume, or `/aidlc --test-run` to auto-approve gates for CI/automated runs.
@@ -35,6 +46,10 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 ## Documentation
 
 For full documentation, see `docs/guide/` (User Guide), `docs/harness-engineering/` (Harness Engineer Guide), and `docs/reference/` (Developer Reference); start at `docs/README.md`.
+## AI-DLC Method (imported)
+
+The AI-DLC method — the layered practice files (`org.md`, `team.md`, `project.md`, and the per-phase `phases/<phase>.md`) — is authored once at the workspace root under `aidlc/spaces/default/memory/` and imported into Claude's ambient context by reference (the `@.claude/rules/aidlc.md` import at the top of this file), never copied. That stub `@`-imports each method file from `aidlc/spaces/default/memory/`; Claude resolves the nested chain. Edit the method there — it is the single hand-editable source of truth, identical on every harness. (AI-DLC's own stage resolver reads the same tree directly, so each stage is method-correct without this ambient import.)
+
 ## Session Resumption
 
 On startup, check for `aidlc-docs/aidlc-state.md`. If found, load prior context and offer to resume from last checkpoint.

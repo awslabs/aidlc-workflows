@@ -1,4 +1,4 @@
-// covers: file:rules/aidlc-phase-ideation.md, file:rules/aidlc-phase-inception.md, file:rules/aidlc-phase-construction.md, file:rules/aidlc-phase-operation.md, stage:ideation/feasibility, stage:inception/requirements-analysis, stage:construction/build-and-test, stage:operation/deployment-execution
+// covers: file:memory/phases/ideation.md, file:memory/phases/inception.md, file:memory/phases/construction.md, file:memory/phases/operation.md, stage:ideation/feasibility, stage:inception/requirements-analysis, stage:construction/build-and-test, stage:operation/deployment-execution
 //
 // t16 — shipped phase-rules file STRUCTURE contract. Migrated from
 // tests/unit/t16-phase-rules-structure.sh (TAP plan 12 — 3 distinct
@@ -62,18 +62,20 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
 
-// AIDLC_SRC === <repo>/dist/claude/.claude — the same root the .sh resolved
-// RULES_DIR and STAGES_DIR under.
-const RULES_DIR = join(AIDLC_SRC, "rules");
+// The phase rule files relocated from <harness>/rules/aidlc-phase-<phase>.md to
+// the workspace-root aidlc/spaces/default/memory/phases/<phase>.md (neutral,
+// nested). They sit beside .claude/, so resolve PHASES_DIR from AIDLC_SRC's
+// parent (the dist/claude/ root). STAGES_DIR stays under .claude/.
+const PHASES_DIR = join(AIDLC_SRC, "..", "aidlc", "spaces", "default", "memory", "phases");
 const STAGES_DIR = join(AIDLC_SRC, "aidlc-common", "stages");
 
 // The four non-initialization phases, in the order the .sh's `for phase in
 // ideation inception construction operation` named them. (initialization has
-// no aidlc-phase-initialization.md rule file — the .sh deliberately omits it.)
+// no phases/initialization.md rule file — the .sh deliberately omits it.)
 const PHASES = ["ideation", "inception", "construction", "operation"] as const;
 
 const phaseRuleFile = (phase: string): string =>
-  join(RULES_DIR, `aidlc-phase-${phase}.md`);
+  join(PHASES_DIR, `${phase}.md`);
 
 /** Enumerate the stage slugs that exist on disk for a phase — the same set the
  *  .sh's `for stage_file in "$STAGES_DIR/$phase/"*.md` glob walked. */
@@ -117,7 +119,7 @@ describe("t16 phase-rules file structure (migrated from t16-phase-rules-structur
   test("each phase rule file exists [.sh Part 1 ×4]", () => {
     for (const phase of PHASES) {
       const f = phaseRuleFile(phase);
-      expect(existsSync(f), `missing rules/aidlc-phase-${phase}.md`).toBe(true);
+      expect(existsSync(f), `missing memory/phases/${phase}.md`).toBe(true);
     }
   });
 
@@ -128,9 +130,9 @@ describe("t16 phase-rules file structure (migrated from t16-phase-rules-structur
       // STRONGER than `wc -c > 0`: the byte count on disk AND the read body
       // length must both be positive (no zero-length / whitespace-only file).
       const bytes = statSync(f).size;
-      expect(bytes, `rules/aidlc-phase-${phase}.md is empty`).toBeGreaterThan(0);
+      expect(bytes, `memory/phases/${phase}.md is empty`).toBeGreaterThan(0);
       const body = readFileSync(f, "utf-8");
-      expect(body.trim().length, `rules/aidlc-phase-${phase}.md is whitespace-only`).toBeGreaterThan(0);
+      expect(body.trim().length, `memory/phases/${phase}.md is whitespace-only`).toBeGreaterThan(0);
     }
   });
 
@@ -163,7 +165,7 @@ describe("t16 phase-rules file structure (migrated from t16-phase-rules-structur
       // The core .sh assertion: AT LEAST ONE stage slug is referenced.
       expect(
         hit,
-        `aidlc-phase-${phase}.md references no ${phase} stage slug (checked ${slugs.length} slugs)`,
+        `memory/phases/${phase}.md references no ${phase} stage slug (checked ${slugs.length} slugs)`,
       ).not.toBeNull();
 
       // Strengthening pin: the cited slug for this phase must still be among the
@@ -174,12 +176,12 @@ describe("t16 phase-rules file structure (migrated from t16-phase-rules-structur
       if (exp.word === null) {
         expect(
           body.includes(exp.slug),
-          `aidlc-phase-${phase}.md no longer contains exact slug "${exp.slug}"`,
+          `memory/phases/${phase}.md no longer contains exact slug "${exp.slug}"`,
         ).toBe(true);
       } else {
         expect(
           body.toLowerCase().includes(exp.word.toLowerCase()),
-          `aidlc-phase-${phase}.md no longer contains word "${exp.word}" (from slug ${exp.slug})`,
+          `memory/phases/${phase}.md no longer contains word "${exp.word}" (from slug ${exp.slug})`,
         ).toBe(true);
       }
     }

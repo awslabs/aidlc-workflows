@@ -120,6 +120,21 @@ const COMPILED_DATA = ["tools/data/stage-graph.json", "tools/data/scope-grid.jso
 // without a hardcoded map. Derived from the manifest, written into every tree.
 const HARNESS_DATA = "tools/data/harness.json";
 
+// The relocated method ("memory") — the single hand-editable source of truth
+// for the layered practices (org/team/project + phases/). It is HARNESS-NEUTRAL
+// (identical bytes on every harness — neutral filenames, no {{HARNESS_DIR}}
+// token), so the source dir + the dist destination are constants here, not
+// per-manifest. The authored source already carries the renamed/nested layout
+// (core/rules/aidlc-org.md → core/memory/org.md; flat aidlc-phase-<p>.md →
+// core/memory/phases/<p>.md) — the per-file rename map is realized by that move,
+// so the packager copies the tree verbatim. The destination sits at the
+// WORKSPACE ROOT (beside the harness dir), under the always-present `default`
+// space, so a fresh `dist/<harness>/` copy ships a resolving method tree and the
+// per-harness native include points at it (Claude @-stub, Kiro resources glob,
+// Codex AGENTS.md/@-mention) — one copy, no drift.
+const MEMORY_SRC = "memory";
+const MEMORY_DST = join("aidlc", "spaces", "default", "memory");
+
 // Write tools/data/harness.json from manifest data. Today it carries just the
 // rules-subdir (the one rename the runtime must know per-tree); the object shape
 // leaves room for future per-harness runtime facts. Pretty-printed + trailing
@@ -129,6 +144,27 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
   const dst = join(treeRoot, HARNESS_DATA);
   mkdirSync(dirname(dst), { recursive: true });
   writeFileSync(dst, `${JSON.stringify(data, null, 2)}\n`);
+}
+
+// Emit the method ("memory") tree at the WORKSPACE ROOT of the dist tree
+// (dist/<name>/aidlc/spaces/default/memory/), copying core/memory/ verbatim with
+// the standard .md token transform (a no-op on the neutral method files, which
+// carry no {{HARNESS_DIR}} token). Returns the absolute paths it wrote so
+// checkHarness can byte-diff them (they live OUTSIDE <harnessDir>, like the
+// projectRoot harness files). Same source + destination for every harness — the
+// method is harness-neutral; the per-harness native include is what differs.
+function emitMemory(outRoot: string, harnessDir: string, rulesRename: string | null): string[] {
+  const srcDir = join(CORE_ROOT, MEMORY_SRC);
+  const written: string[] = [];
+  if (!existsSync(srcDir)) return written;
+  for (const file of walk(srcDir)) {
+    const rel = relative(srcDir, file);
+    const outPath = join(outRoot, MEMORY_DST, rel);
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, transform(file, readFileSync(file), harnessDir, rulesRename));
+    written.push(outPath);
+  }
+  return written;
 }
 
 // Copy the committed compiled-data JSON into the assembled tree so
@@ -160,6 +196,9 @@ function seedCompiledData(treeRoot: string, seedFrom: string): void {
 function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): string[] {
   const harnessDir = m.harnessDir;
   const treeRoot = join(outRoot, harnessDir);
+  // Out-of-harness paths the build produced (memory tree + any emit output),
+  // returned for checkHarness's byte-diff of files OUTSIDE <harnessDir>.
+  const outsideHarness: string[] = [];
 
   // 1. Copy core dirs with token substitution + rules rename.
   for (const { src, dst } of m.coreDirs) {
@@ -199,6 +238,13 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
     writeFileSync(outPath, transform(dst, Buffer.from(rendered, "utf-8"), harnessDir, m.rulesRename));
   }
 
+  // 2c. Emit the relocated method ("memory") tree at the workspace root
+  //     (dist/<name>/aidlc/spaces/default/memory/). MUST run before compile —
+  //     the compile step's loadRules resolves rules_in_context from this tree
+  //     (AIDLC_RULES_DIR points there below), so it has to exist first.
+  const memoryDir = join(outRoot, MEMORY_DST);
+  outsideHarness.push(...emitMemory(outRoot, harnessDir, m.rulesRename));
+
   // 3. Compile the stage graph into the assembled tree (writes harness-correct
   //    stage-graph.json + scope-grid.json). compileStageGraph() bootstraps each
   //    stage's number + name from the EXISTING stage-graph.json (the
@@ -208,14 +254,16 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   //    and rewrites harness-correct paths, reproducing the committed JSON
   //    byte-for-byte. The seed is the only authored datum in the compiled file.
   seedCompiledData(treeRoot, seedFrom);
-  // For a renamed-rules harness, point loadRules at the renamed dir via
-  // AIDLC_RULES_DIR so rules_in_context is populated (the rules ship under
-  // steering/ | aidlc-rules/, not rules/). Since the rulesSubdir() seam landed,
-  // compile (run under AIDLC_HARNESS_DIR) already EMITS the renamed segment in
-  // the display path, so renameRulesInCompiledData is now a guarded no-op kept
-  // as a defense-in-depth backstop (it rewrites only if a literal "<dir>/rules/"
-  // ever reappears — e.g. a future code path that bypasses the seam).
-  runTool(treeRoot, ["tools/aidlc-graph.ts", "compile"], m.rulesRename);
+  // Point loadRules at the emitted method tree via AIDLC_RULES_DIR so
+  // rules_in_context is populated at compile time. The method now lives at the
+  // workspace-root aidlc/spaces/default/memory/ (NOT inside <harnessDir>), so
+  // every harness — claude included — needs the seam set; the resolver's own
+  // default would resolve relative to the in-tree tools/ dir, which points at
+  // the same place, but the assembled tmp tree under --check makes the explicit
+  // override the robust choice. The renameRulesInCompiledData backstop still
+  // runs for renamed-rules harnesses to normalize any residual <dir>/rules/
+  // prose-path that a future code path might emit (guarded no-op today).
+  runTool(treeRoot, ["tools/aidlc-graph.ts", "compile"], memoryDir);
   if (m.rulesRename) renameRulesInCompiledData(treeRoot, harnessDir, m.rulesRename);
 
   // 3b. Emit tools/data/harness.json — the runtime's open-set source of truth
@@ -241,24 +289,28 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   //    wrote, so the caller can byte-diff emit-owned files that live OUTSIDE
   //    <harnessDir> (e.g. .agents/skills/, the root AGENTS.md) under --check.
   if (m.emit) {
-    return m.emit({
-      repoRoot: REPO_ROOT,
-      coreRoot: CORE_ROOT,
-      harnessRoot: harnessSrcRoot,
-      distRoot: outRoot,
-      harnessDir,
-      substituteToken: (s: string) => substituteToken(s, harnessDir),
-      check: false,
-    }).written;
+    outsideHarness.push(
+      ...m.emit({
+        repoRoot: REPO_ROOT,
+        coreRoot: CORE_ROOT,
+        harnessRoot: harnessSrcRoot,
+        distRoot: outRoot,
+        harnessDir,
+        substituteToken: (s: string) => substituteToken(s, harnessDir),
+        check: false,
+      }).written,
+    );
   }
-  return [];
+  return outsideHarness;
 }
 
 // Run an in-tree tool (bun <treeRoot>/<rel> ...) with the harness env seams set
 // so the tool resolves the assembled tree and interpolates the right harness dir.
-// When the harness renames its rules dir, AIDLC_RULES_DIR points loadRules at
-// the renamed location so it actually finds the rule files at compile time.
-function runTool(treeRoot: string, args: string[], rulesRename?: string | null): void {
+// `rulesDirAbs` (absolute) points loadRules at the emitted method tree
+// (dist/<name>/aidlc/spaces/default/memory/) so rules_in_context is populated at
+// compile time — every harness needs it now that the method lives at the
+// workspace root, not inside <harnessDir>.
+function runTool(treeRoot: string, args: string[], rulesDirAbs?: string | null): void {
   const toolPath = join(treeRoot, args[0]);
   const rest = args.slice(1);
   const harnessDir = treeRoot.endsWith(".kiro")
@@ -271,7 +323,7 @@ function runTool(treeRoot: string, args: string[], rulesRename?: string | null):
     AIDLC_SRC: treeRoot,
     AIDLC_HARNESS_DIR: harnessDir,
   };
-  if (rulesRename) env.AIDLC_RULES_DIR = join(treeRoot, rulesRename);
+  if (rulesDirAbs) env.AIDLC_RULES_DIR = rulesDirAbs;
   const res = spawnSync("bun", [toolPath, ...rest], {
     cwd: treeRoot,
     env,
@@ -329,6 +381,11 @@ function writeHarness(name: string): void {
     }
     // Clean sweep the harness dir so removed core files don't linger.
     if (existsSync(treeRoot)) rmSync(treeRoot, { recursive: true, force: true });
+    // Also sweep the workspace-root method tree (dist/<name>/aidlc/) so a
+    // removed/renamed memory file (e.g. a dropped phase rule) doesn't linger
+    // beside the freshly emitted one — the harness-dir sweep above misses it.
+    const memoryRoot = join(distDir, "aidlc");
+    if (existsSync(memoryRoot)) rmSync(memoryRoot, { recursive: true, force: true });
     buildTree(m, distDir, seedStash);
     console.log(`[${name}] regenerated dist/${name}/${m.harnessDir}`);
   } finally {
@@ -390,8 +447,13 @@ function checkHarness(name: string): string[] {
       else if (!readFileSync(committedPath).equals(readFileSync(builtPath)))
         problems.push(`DIFFERS: ${name}/${rel}`);
     }
-    // Orphan scan over emit-owned out-of-harness dirs (e.g. dist/<name>/.agents/).
-    for (const sub of [".agents"]) {
+    // Orphan scan over out-of-harness dirs the build owns (codex emit's
+    // .agents/; the method tree at aidlc/). committedEmitSet holds every
+    // out-of-harness file the build produced (emit output + the memory tree), so
+    // a committed file under these roots that the build DIDN'T produce is a
+    // stale orphan — e.g. a removed phase rule still committed under
+    // dist/<name>/aidlc/spaces/default/memory/phases/.
+    for (const sub of [".agents", "aidlc"]) {
       const dir = join(committedDistRoot, sub);
       if (!existsSync(dir)) continue;
       for (const f of walk(dir)) {

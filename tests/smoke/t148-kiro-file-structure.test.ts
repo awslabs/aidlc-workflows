@@ -30,7 +30,6 @@ describe("t148 dist/kiro file structure", () => {
       ["knowledge", 5],
       ["sensors", 4],
       ["scopes", 9],
-      ["steering", 7],
       ["agents", 11],
       ["hooks", 10],
     ] as Array<[string, number]>) {
@@ -38,6 +37,24 @@ describe("t148 dist/kiro file structure", () => {
       expect(existsSync(p)).toBe(true);
       expect(readdirSync(p).length).toBeGreaterThanOrEqual(min);
     }
+  });
+
+  test("ships the method ('memory') tree at the workspace root aidlc/spaces/default/memory/", () => {
+    // The AIDLC method relocated OUT of the harness dir (the old .kiro/steering/
+    // rule layers) to the workspace root under aidlc/spaces/default/memory/ — one
+    // hand-editable source of truth, identical on every harness, read by Kiro via
+    // the agent JSON `resources` globs (file://aidlc/spaces/default/memory/**/*.md).
+    // It sits beside .kiro/, so resolve from KIRO, not K.
+    const mem = (...parts: string[]) =>
+      join(KIRO, "aidlc", "spaces", "default", "memory", ...parts);
+    for (const f of ["org.md", "team.md", "project.md"]) {
+      expect(existsSync(mem(f))).toBe(true);
+    }
+    for (const p of ["ideation", "inception", "construction", "operation"]) {
+      expect(existsSync(mem("phases", `${p}.md`))).toBe(true);
+    }
+    // The old in-harness rules dir must NOT ship (the relocation is complete).
+    expect(existsSync(join(K, "steering"))).toBe(false);
   });
 
   test("authored shell files present", () => {

@@ -79,15 +79,30 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     expect(r.status).toBe(1);
   });
 
-  test("4: D-10 rename — markdown rule layers live at aidlc-rules/, native rules/ is Starlark-only", () => {
-    const aidlcRules = readdirSync(join(CODEX_DST, "aidlc-rules"));
-    expect(aidlcRules).toContain("aidlc-org.md");
-    expect(aidlcRules).toContain("aidlc-team.md");
+  test("4: method relocated to workspace-root aidlc/spaces/default/memory/; native rules/ is Starlark-only", () => {
+    // The AIDLC method ("memory") no longer ships under .codex/aidlc-rules/ (the
+    // old D-10 rename target). It relocated OUT of the harness dir to the
+    // workspace root — one hand-editable copy, neutral filenames, identical
+    // across harnesses. Reached via AGENTS.md auto-merge + AIDLC_RULES_DIR.
+    const memoryDir = join(REPO_ROOT, "dist", "codex", "aidlc", "spaces", "default", "memory");
+    const memoryTop = readdirSync(memoryDir);
+    expect(memoryTop).toContain("org.md");
+    expect(memoryTop).toContain("team.md");
+    expect(memoryTop).toContain("project.md");
+    expect(readdirSync(join(memoryDir, "phases"))).toContain("construction.md");
+    // .codex/aidlc-rules/ is GONE — the method left the harness dir entirely.
+    expect(() => readdirSync(join(CODEX_DST, "aidlc-rules"))).toThrow();
+    // .codex/rules/ remains Codex's native Starlark permission-rules dir.
     const nativeRules = readdirSync(join(CODEX_DST, "rules"));
     expect(nativeRules).toEqual(["default.rules"]);
-    // The compiled graph's rule display paths follow the rename.
+    // The resolver seam re-points at the relocated method (relative to the
+    // workspace root, where codex runs), NOT the old .codex/aidlc-rules.
+    const config = readFileSync(join(CODEX_DST, "config.toml"), "utf-8");
+    expect(config).toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
+    // The compiled graph's rule display paths are harness-neutral now.
     const graph = readFileSync(join(CODEX_DST, "tools", "data", "stage-graph.json"), "utf-8");
-    expect(graph).toContain('".codex/aidlc-rules/aidlc-org.md"');
+    expect(graph).toContain('"aidlc/spaces/default/memory/org.md"');
+    expect(graph).not.toContain(".codex/aidlc-rules/");
     expect(graph).not.toContain('".claude/rules/');
   });
 

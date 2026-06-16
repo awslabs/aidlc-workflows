@@ -218,7 +218,7 @@ function coverageLine(out: string): string {
 // ---------------------------------------------------------------------------
 function seedCoverageRules(rd: string): void {
   writeFileSync(
-    join(rd, "aidlc-org.md"),
+    join(rd, "org.md"),
     `---
 pairing: aidlc-required-sections
 ---
@@ -228,7 +228,7 @@ pairing: aidlc-required-sections
     "utf-8",
   );
   writeFileSync(
-    join(rd, "aidlc-team.md"),
+    join(rd, "team.md"),
     `---
 pairing: aidlc-ghost
 ---
@@ -238,7 +238,7 @@ pairing: aidlc-ghost
     "utf-8",
   );
   writeFileSync(
-    join(rd, "aidlc-project.md"),
+    join(rd, "project.md"),
     `---
 pairing: feedforward-only
 ---
@@ -274,8 +274,11 @@ describe("t105 doctor paired-coverage + GUARDRAIL_LOADED (migrated from t105-doc
   // --- Case 2: unpaired ghost rule surfaces in the detail ---
   test("2: unpaired ghost rule surfaces in the coverage detail", () => {
     const r = ensureCov();
+    // The rule display path is harness-neutral now (the method relocated to
+    // aidlc/spaces/default/memory/), so the unpaired detail names the team
+    // layer by its neutral path.
     expect(r.out).toContain(
-      "unpaired: .claude/rules/aidlc-team.md → aidlc-ghost (no stage binds it)",
+      "unpaired: aidlc/spaces/default/memory/team.md → aidlc-ghost (no stage binds it)",
     );
   });
 
@@ -317,7 +320,7 @@ describe("t105 doctor paired-coverage + GUARDRAIL_LOADED (migrated from t105-doc
   test("6: M-X==0 branch label + still emits GUARDRAIL_LOADED", () => {
     const rd = makeRulesDir();
     writeFileSync(
-      join(rd, "aidlc-org.md"),
+      join(rd, "org.md"),
       "# Org rule with no pairing\n",
       "utf-8",
     );

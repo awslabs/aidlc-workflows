@@ -168,13 +168,15 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
 
       // rule chain attached to BOTH stages by compile (resolveRulesForStage).
       // The fixture pre-seeds rules_in_context: [] — compile fills it. The
-      // PHASE rule (aidlc-phase-inception.md) attaches because the stage's
+      // PHASE rule (phases/inception.md) attaches because the stage's
       // `phase: inception` matches the rule filename — a value NO pre-seed
       // carries, so its presence is airtight proof compile resolved the chain.
+      // The method relocated (P5) to the harness-neutral aidlc/spaces/default/
+      // memory/ tree, so the display paths are neutral.
       for (const node of [head, tail]) {
         const paths = (node?.rules_in_context ?? []).map((r) => r.path);
-        expect(paths).toContain(".claude/rules/aidlc-project.md");
-        expect(paths).toContain(".claude/rules/aidlc-phase-inception.md");
+        expect(paths).toContain("aidlc/spaces/default/memory/project.md");
+        expect(paths).toContain("aidlc/spaces/default/memory/phases/inception.md");
       }
 
       // what each stage produces (compile recomputes produces[] from the YAML
@@ -547,7 +549,7 @@ outputs: none
       const head = graphJson.find((s) => s.slug === SNAPSHOT_STAGE_SLUG);
       const projectRulePath = (head?.rules_in_context ?? [])
         .map((r) => r.path)
-        .find((p) => p.endsWith("aidlc-project.md"));
+        .find((p) => p.endsWith("memory/project.md"));
       // VACUOUS-PASS GUARD: the compiled node really points at a project rule.
       expect(projectRulePath).toBeDefined();
       // follow that resolved path to the file the agent would read at runtime
