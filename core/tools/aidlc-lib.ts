@@ -721,6 +721,42 @@ export function writeSessionIntentUuid(projectDir: string, sessionId: string, uu
   }
 }
 
+// The "current session" marker: a FIXED-name file inside the sessions dir naming
+// the most-recently-active session id. The per-session STAMP above is keyed by
+// session_id (which only the hook sees); a CLI tool like `/aidlc intent <slug>`
+// has no session_id, so it cannot re-stamp the live session's record on its own.
+// This marker is the bridge: the hook writes it on EVERY fire (so it always names
+// the live conversation), and the switch tool reads it to learn which session to
+// re-stamp. Lives beside the per-session records under `aidlc/.aidlc-sessions/`
+// (gitignored — dot-gitignore `aidlc/.aidlc-sessions/`): per-user runtime state.
+export const CURRENT_SESSION_FILE = ".current-session";
+
+function currentSessionPath(projectDir: string): string {
+  return join(sessionsDir(projectDir), CURRENT_SESSION_FILE);
+}
+
+// Read the most-recently-active session id, or null. Best-effort.
+export function readCurrentSessionId(projectDir: string): string | null {
+  try {
+    const raw = readFileSync(currentSessionPath(projectDir), "utf-8").trim();
+    return raw.length > 0 ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+// Record the most-recently-active session id. Best-effort; no-op on a blank id
+// (a TTY/empty hook invocation has no session to record).
+export function writeCurrentSessionId(projectDir: string, sessionId: string): void {
+  if (!sessionId) return;
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(currentSessionPath(projectDir), `${sessionId}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
 // The UUID of the active intent in a space (the cursor's / lone intent's
 // registry row), or null when no new-layout intent resolves (flat-legacy) or
 // the active record has no registry row (an orphan — no stable uuid to stamp).

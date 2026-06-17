@@ -36,6 +36,7 @@ import {
   recoveryFilePath,
   resolveProjectDirFromHook,
   stateFilePath,
+  writeCurrentSessionId,
   writeSessionIntentUuid,
 } from "../tools/aidlc-lib.ts";
 
@@ -86,6 +87,15 @@ if (!process.stdin.isTTY) {
     // stdin read itself failed — treat as startup (no payload available)
   }
 }
+
+// Record the live conversation as the "current session" on EVERY fire (startup /
+// resume / clear / compact) — NOT gated on eventType. The hook is the only place
+// that sees session_id; a CLI switch (`/aidlc intent <slug>`) cannot. This marker
+// lets the switch tool re-stamp the live session's record so a deliberate
+// in-conversation switch doesn't fire a FALSE rebind nag on resume (see the
+// re-stamp in handleIntent, aidlc-utility.ts). Separate file from the per-session
+// stamp below; no-op without a session_id.
+if (sessionId) writeCurrentSessionId(projectDir, sessionId);
 
 // Emit session event. appendAuditEntry creates audit.md if missing, so no
 // audit-existence guard — the state-file guard above is the sole "workflow

@@ -51,6 +51,7 @@ import {
   parseRefsList,
   parseStageFrontmatter,
   readAllAuditShards,
+  readCurrentSessionId,
   readStateFile,
   resolveBirthRepoSet,
   resolveProjectDir,
@@ -70,6 +71,7 @@ import {
   worktreeAuditFilePath,
   worktreePath,
   worktreeStateFilePath,
+  writeSessionIntentUuid,
   writeStateFile,
   harnessDir,
   rulesSubdir,
@@ -2509,6 +2511,21 @@ function handleIntent(projectDir: string, positional: string[], flags: Record<st
     );
   }
   setActiveIntentCursor(projectDir, match.dirName, space);
+  // Re-stamp the LIVE conversation's session→intent record to the switched-to
+  // intent. WHY: the resume-rebind stamp (session-start hook) is keyed by
+  // session_id, which this tool never sees; only the hook does. Without this, a
+  // deliberate in-conversation `/aidlc intent <slug>` switch leaves the session
+  // stamped at the OLD intent, so resuming THIS same conversation fires a FALSE
+  // rebind nag ("was working X, switch back?"). The hook records the live session
+  // in `.current-session` on every fire (it owns session-id capture); we read
+  // that marker here and re-stamp deterministically. Self-switch: the marker
+  // names THIS session → its stamp follows the cursor → no false nag. Foreign
+  // drift (a DIFFERENT session moved the cursor): the marker names that OTHER
+  // session → its stamp moves, not ours → a genuine resume of our session still
+  // offers the rebind. writeSessionIntentUuid no-ops on a blank uuid, so an
+  // orphan (registry-less) record is fail-safe. Best-effort throughout.
+  const sid = readCurrentSessionId(projectDir);
+  if (sid && match.uuid) writeSessionIntentUuid(projectDir, sid, match.uuid);
   process.stdout.write(`Active intent → ${match.dirName} (space: ${space})\n`);
 }
 
