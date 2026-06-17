@@ -26,7 +26,7 @@
 //   - birth print:  aidlc-orchestrate.ts:302/311 — names
 //                   `intent-birth --scope <scope>` and ends "re-run `next` to continue"
 //                   (P4: the retired `init` alias is gone)
-//   - birth summary: `State initialized:` (aidlc-utility.ts handleIntentBirth stdout, :2376)
+//   - birth summary: `State initialized:` (aidlc-utility.ts handleIntentBirth stdout, :2395)
 //   - state fields: State-Version-7 template (aidlc-utility.ts handleIntentBirth)
 //
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock. The

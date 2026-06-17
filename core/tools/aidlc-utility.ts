@@ -2536,11 +2536,15 @@ function handleIntent(projectDir: string, positional: string[], flags: Record<st
 // (use space-create). --json on the bare list emits the structured shape.
 function handleSpace(projectDir: string, positional: string[], flags: Record<string, string>): void {
   const asJson = flags.json === "true";
-  const target = positional[1];
-  if (!target) {
+  const raw = positional[1];
+  if (!raw) {
     printSpaceListing(projectDir, asJson);
     return;
   }
+  // Spaces are STORED under their slug (handleSpaceCreate writes slugify(raw)),
+  // so slugify the switch target before lookup AND before the cursor write —
+  // otherwise `/aidlc space "My Space"` (stored as my-space) would miss.
+  const target = slugify(raw);
   const spaces = listSpaces(projectDir);
   if (!spaces.some((s) => s.name === target)) {
     die(

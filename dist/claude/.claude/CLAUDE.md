@@ -11,7 +11,7 @@
 
 # Project Name <!-- Replace with your project name -->
 
-This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development. Run `/aidlc` followed by a scope or project description to begin. Run `/aidlc --init` to scaffold the full `aidlc-docs/` directory tree without starting a workflow (`--init --force` overwrites an existing workspace). Run `/aidlc --doctor` to validate your setup. Run `/aidlc --version` to print the framework version. Run `/aidlc --stage <slug>` to jump to a specific stage, `/aidlc --phase <name>` to jump to a phase, `/aidlc --depth <level>` to override depth, `/aidlc --test-strategy <level>` to override test volume, or `/aidlc --test-run` to auto-approve gates for CI/automated runs.
+This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development. The workspace shell ships in `.claude/` (no setup command); the engine auto-births the first intent when you describe what to build. Run `/aidlc` followed by a scope or project description to begin. Run `/aidlc --doctor` to validate your setup. Run `/aidlc --version` to print the framework version. Run `/aidlc --stage <slug>` to jump to a specific stage, `/aidlc --phase <name>` to jump to a phase, `/aidlc --depth <level>` to override depth, `/aidlc --test-strategy <level>` to override test volume, or `/aidlc --test-run` to auto-approve gates for CI/automated runs.
 
 ## Prerequisites
 

@@ -196,16 +196,20 @@ no standalone meaning.
 
 ## Steps
 
-1. Birth the intent (run the initialization phase):
+1. Birth the intent (run the initialization phase). Parse the user's
+   \`$ARGUMENTS\`: forward any recognized flags
+   (\`--scope <name>\`/\`--depth <level>\`/\`--test-strategy <level>\`/\`--test-run\`)
+   as-is, and pass any freeform description text via \`--arguments "<text>"\`
+   (\`intent-birth\` reads the description from the \`--arguments\` flag, NOT a
+   positional — forwarding it bare would silently drop it):
 
    \`\`\`bash
-   bun ${harnessDir()}/tools/aidlc-utility.ts intent-birth $ARGUMENTS
+   bun ${harnessDir()}/tools/aidlc-utility.ts intent-birth --scope <name> --arguments "<description>"
    \`\`\`
 
-   Pass \`$ARGUMENTS\` through verbatim — \`--scope <name>\` seeds the initial scope
-   (defaults to \`poc\`), and any freeform text becomes the intent's description.
-   Print the tool's output and stop. This does not advance a stage; run
-   \`/aidlc\` afterwards to continue the workflow.
+   \`--scope\` seeds the initial scope (defaults to \`poc\`); omit \`--arguments\`
+   when the user gave no description. Print the tool's output and stop. This does
+   not advance a stage; run \`/aidlc\` afterwards to continue the workflow.
 `;
 }
 

@@ -359,6 +359,16 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
     expect(activeSpace(proj)).toBe("payments");
   });
 
+  test("space switch slugifies its target (raw multi-word name resolves to the stored slug)", () => {
+    // space-create stores slugify(raw); the switch must slugify too, else a raw
+    // multi-word name would miss ("Unknown space").
+    expect(util(["space-create", "My Space"]).status).toBe(0);
+    expect(slugify("My Space")).toBe("my-space");
+    const r = util(["space", "My Space"]);
+    expect(r.status).toBe(0);
+    expect(activeSpace(proj)).toBe("my-space");
+  });
+
   test("switching intents is a pure cursor write", () => {
     expect(util(["intent-birth", "--scope", "poc"]).status).toBe(0);
     const a = activeIntent(proj) as string;

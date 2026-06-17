@@ -1293,8 +1293,10 @@ export interface RepoResolution {
 
 // Resolve which repo a CONSTRUCTION op targets, decoupling "the repo to operate
 // on" from "the single projectDir":
-//   - no recorded repos (legacy / projectDir-is-the-repo): null → cwd=projectDir
-//     (back-compat; --repo, if given, must name one of zero repos → error).
+//   - no recorded repos (legacy / projectDir-is-the-repo): with no --repo, null
+//     → cwd=projectDir (back-compat); an explicit --repo is HONOURED as a sibling
+//     anchor (cwd = the named sibling dir, repoDir(projectDir, requestedRepo)),
+//     for multi-repo ops on an unrecorded intent — not errored.
 //   - exactly one recorded repo: inferred (the lone repo); --repo optional but, if
 //     given, must match.
 //   - multiple recorded repos: --repo is REQUIRED to disambiguate; it must name one
