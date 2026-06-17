@@ -622,13 +622,15 @@ echo ".aidlc/" >> .gitignore
 ```powershell
 # 1. Download and extract the latest release (see Common section above)
 
+$Utf8NoBom = New-Object System.Text.UTF8Encoding $false
+
 # 2. Set up the rules directory
 New-Item -ItemType Directory -Force -Path ".aidlc"
 Copy-Item -Recurse "$env:USERPROFILE\Downloads\aidlc-rules" ".aidlc\"
 
 # 3. Create the AI-DLC keyword-triggered skill
 New-Item -ItemType Directory -Force -Path ".agents\skills\ai-dlc"
-@'
+[System.IO.File]::WriteAllText(".agents\skills\ai-dlc\SKILL.md", @'
 ---
 name: ai-dlc
 description: Run the AI-DLC workflow for structured software development tasks.
@@ -639,10 +641,10 @@ triggers:
 
 When the user invokes AI-DLC (starts with "Using AI-DLC, ..."),
 read and follow `.aidlc/aidlc-rules/aws-aidlc-rules/core-workflow.md`.
-'@ | Set-Content ".agents\skills\ai-dlc\SKILL.md"
+'@, $Utf8NoBom)
 
 # 4. Gitignore the rules directory (optional - commit it instead if you want rules pinned)
-Add-Content ".gitignore" ".aidlc/"
+[System.IO.File]::AppendAllText(".gitignore", ".aidlc/" + [Environment]::NewLine, $Utf8NoBom)
 ```
 
 #### Option 2: AGENTS.md Trigger (Simple Alternative)
@@ -676,13 +678,15 @@ EOF
 **Windows PowerShell:**
 
 ```powershell
-@'
+$Utf8NoBom = New-Object System.Text.UTF8Encoding $false
+
+[System.IO.File]::AppendAllText(".\AGENTS.md", @'
 
 ## AI-DLC Workflow
 
 When the user invokes AI-DLC (starts with "Using AI-DLC, ..."),
 read and follow `.aidlc/aidlc-rules/aws-aidlc-rules/core-workflow.md`.
-'@ | Add-Content ".\AGENTS.md"
+'@, $Utf8NoBom)
 ```
 
 **Verify Setup:**
@@ -996,7 +1000,7 @@ Have one of our supported platforms/tools for Assisted AI Coding installed:
 
 **Commit to repository:**
 
-```gitignore
+```text
 # These should be version controlled
 CLAUDE.md
 
