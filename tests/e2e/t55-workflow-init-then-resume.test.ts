@@ -71,12 +71,17 @@
 
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
 import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { driveAidlc, readAuditEvents, readStateFile } from "../harness/sdk-drive.ts";
+import {
+  auditDirFor,
+  driveAidlc,
+  readAuditEvents,
+  readStateFile,
+  stateFilePathFor,
+} from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
 // Timeout budget — TWO real turns (init + resume) on Opus/Bedrock; the slowest
@@ -103,8 +108,13 @@ describe("t55 /aidlc --init then --scope bugfix resume continuity (sdk)", () => 
     async () => {
       const proj = setupIntegrationProject({ noAidlcDocs: true });
       try {
-        const statePath = join(proj, "aidlc-docs", "aidlc-state.md");
-        const auditPath = join(proj, "aidlc-docs", "audit.md");
+        // P4: birth writes per-intent — state at the active intent's record dir
+        // (aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md) and audit as
+        // per-clone shards under <record>/audit/, NOT the flat aidlc-docs/. Resolve
+        // both lazily (the cursors only exist after birth) via the record-aware
+        // harness helpers, which fall back to flat for a not-yet-born project.
+        const statePath = () => stateFilePathFor(proj);
+        const auditDir = () => auditDirFor(proj);
 
         // ---- Turn 1: /aidlc --init ----
         const r1 = await driveAidlc("/aidlc --init", {
@@ -114,7 +124,7 @@ describe("t55 /aidlc --init then --scope bugfix resume continuity (sdk)", () => 
         });
 
         // .sh test 1: after init, the state file exists.
-        expect(existsSync(statePath)).toBe(true);
+        expect(existsSync(statePath())).toBe(true);
         const stateAfterInit = readStateFile(proj);
         expect(stateAfterInit).toBeDefined();
 
@@ -140,7 +150,7 @@ describe("t55 /aidlc --init then --scope bugfix resume continuity (sdk)", () => 
         });
 
         // .sh test 3: after resume, the state file still exists.
-        expect(existsSync(statePath)).toBe(true);
+        expect(existsSync(statePath())).toBe(true);
         const stateAfterResume = readStateFile(proj);
         expect(stateAfterResume).toBeDefined();
 
@@ -152,8 +162,9 @@ describe("t55 /aidlc --init then --scope bugfix resume continuity (sdk)", () => 
           expect(stateAfterResume as string).toContain(`[x] ${stage}`);
         }
 
-        // .sh test 6: audit exists after both sessions.
-        expect(existsSync(auditPath)).toBe(true);
+        // .sh test 6: audit exists after both sessions (P4: the per-clone audit
+        // shard dir under the active intent's record).
+        expect(existsSync(auditDir())).toBe(true);
 
         // .sh test 7: the audit grew across the two sessions (the 2nd session
         // appended its events). Typed event-count non-regression — at least as

@@ -1,6 +1,6 @@
 // covers: hook:aidlc-session-start
 //
-// t161 — the P8 RESUME REBIND. A conversation works ONE intent, but the
+// t169 — the P8 RESUME REBIND. A conversation works ONE intent, but the
 // active-intent CURSOR is durable + shared across sessions. So resuming an
 // A-chat after the cursor moved to B would silently inject B's context (vision
 // §3, the central multi-space hazard). The fix is a per-session→intent stamp at
@@ -73,7 +73,7 @@ function fire(p: string, source: string, sessionId: string): FireResult {
   return { exitCode: r.exitCode, context };
 }
 
-describe("t161 session-start resume rebind (mechanism cli — spawned hook + cursor drift)", () => {
+describe("t169 session-start resume rebind (mechanism cli — spawned hook + cursor drift)", () => {
   test("startup stamps the working intent; resume after a cursor move OFFERS a rebind", () => {
     // Two real intents in the default space. birthIntent leaves the cursor on
     // the LAST born (export-bug). Move it to auth-service so the conversation

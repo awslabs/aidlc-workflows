@@ -1,6 +1,6 @@
 // covers: hook:aidlc-statusline
 //
-// t160 — the P8 statusline ORIENTATION PREFIX. The statusline always tells the
+// t168 — the P8 statusline ORIENTATION PREFIX. The statusline always tells the
 // user which world they're in: `[AIDLC] <space> · <intent-slug> · <phase> …`.
 // Two invisibility rules (vision §3 / §11.2) keep it out of the single-team
 // user's face:
@@ -91,7 +91,7 @@ function seedIntent(p: string, slug: string, space: string): void {
   );
 }
 
-describe("t160 statusline orientation prefix (mechanism cli — spawned hook + per-intent seed)", () => {
+describe("t168 statusline orientation prefix (mechanism cli — spawned hook + per-intent seed)", () => {
   test("single space: shows the intent slug but NO space token (invisibility rule)", () => {
     // Default space only (listSpaces().length === 1) → the "<space> ·" segment
     // is suppressed; the intent slug still renders.

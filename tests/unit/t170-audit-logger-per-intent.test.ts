@@ -1,6 +1,6 @@
 // covers: hook:aidlc-audit-logger
 //
-// t162 — the P8 fix to the audit-logger GATE. Pre-workspace-move the hook gated
+// t170 — the P8 fix to the audit-logger GATE. Pre-workspace-move the hook gated
 // artifact logging on `file.includes("aidlc-docs/")` (aidlc-audit-logger.ts:49).
 // After the record re-roots per intent
 // (aidlc/spaces/<space>/intents/<slug>-<id8>/<phase>/<stage>/…), that path no
@@ -105,7 +105,7 @@ function readShards(auditDir: string): string {
     .join("\n");
 }
 
-describe("t162 audit-logger per-intent gate (mechanism cli — spawned hook)", () => {
+describe("t170 audit-logger per-intent gate (mechanism cli — spawned hook)", () => {
   test("logs an ARTIFACT_CREATED for a write under the per-intent record dir", () => {
     const { auditDir, recordRoot } = seedIntentWithShard(proj, "auth-service");
     // A stage artifact under the re-rooted record dir — NOT containing

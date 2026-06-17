@@ -2389,7 +2389,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t162-audit-logger-per-intent.test.ts",
+          "file": "tests/unit/t170-audit-logger-per-intent.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2489,7 +2489,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t161-session-resume-rebind.test.ts",
+          "file": "tests/unit/t169-session-resume-rebind.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2513,7 +2513,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t160-statusline-orientation.test.ts",
+          "file": "tests/unit/t168-statusline-orientation.test.ts",
           "mechanism": "cli"
         }
       ],

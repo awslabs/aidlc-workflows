@@ -35,8 +35,10 @@
 // aidlc-audit block (## heading / **Timestamp**: / **Event**: / fields / `---`).
 //
 // ASSERTION MAP (.sh test -> deterministic SDK surface, equal-or-stronger):
-//   1 audit file exists            -> existsSync(<proj>/aidlc-docs/audit.md).
-//   2 audit > 200 bytes            -> statSync(auditPath).size > 200.
+//   1 audit file exists            -> the per-intent audit shard text is non-empty
+//                                     (P4 shards audit under <record>/audit/; read
+//                                     via readAuditText, NOT flat aidlc-docs/audit.md).
+//   2 audit > 200 bytes            -> the merged audit-shard text length > 200.
 //   3 >= 3 STAGE_COMPLETED entries -> the parsed auditEvents carry >= 3
 //                                     STAGE_COMPLETED (the 3 init stages complete
 //                                     at init; the .sh's assert_gt 2). Stronger:
@@ -71,14 +73,12 @@
 // surfaces a partial DriveResult, not a hang.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
 import { assertAuditEvent } from "../harness/assert.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import { driveAidlc, readAuditEvents } from "../harness/sdk-drive.ts";
+import { driveAidlc, readAuditEvents, readAuditText } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
 // Timeout budget. Explicit init on Opus/Bedrock is a few minutes; honour the
@@ -116,14 +116,17 @@ describe("t54 /aidlc --init --scope bugfix audit completeness (sdk)", () => {
           stopAfterToolResult: STOP_AFTER_INIT,
         });
 
-        // .sh test 1: audit file exists.
-        const auditPath = join(proj, "aidlc-docs", "audit.md");
-        expect(existsSync(auditPath)).toBe(true);
+        // P4: audit is SHARDED per clone under <record>/audit/ (the active
+        // intent's record dir), NOT the flat aidlc-docs/audit.md. readAuditText
+        // resolves the born intent and concatenates its shards.
+        const auditRaw = readAuditText(proj);
 
-        // .sh test 2: audit > 200 bytes.
-        expect(statSync(auditPath).size).toBeGreaterThan(200);
+        // .sh test 1: audit exists (the merged shard text is non-empty).
+        expect(auditRaw.length).toBeGreaterThan(0);
 
-        const auditRaw = readFileSync(auditPath, "utf8");
+        // .sh test 2: audit > 200 bytes (merged shard text length).
+        expect(auditRaw.length).toBeGreaterThan(200);
+
         const events = readAuditEvents(proj) ?? [];
 
         // .sh test 7: the AI-DLC Audit Log header.
