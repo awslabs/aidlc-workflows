@@ -667,6 +667,87 @@ export function setActiveSpaceCursor(projectDir: string, name: string): void {
   }
 }
 
+// --- Per-conversation session→intent record (resume rebind, P8) --------------
+//
+// A conversation (one Claude Code `session_id`) works ONE intent at a time, but
+// the active-intent CURSOR is per-user, durable, and shared across sessions — so
+// resuming an A-chat after the cursor moved to B would otherwise silently inject
+// B's context (the central multi-space hazard, vision §3). The fix is a tiny
+// per-user, machine-local map: at session START stamp the working intent's UUID
+// keyed by session_id; on RESUME, compare the stamped UUID to the live cursor
+// and OFFER a rebind on mismatch. The map lives at `aidlc/.aidlc-sessions/`
+// (gitignored — see dot-gitignore `aidlc/.aidlc-sessions/`): it is per-user
+// runtime state, never shared truth. The intent record itself is the durable,
+// harness-neutral artifact; the session merely enriches the cursor on resume.
+export const SESSIONS_DIR = ".aidlc-sessions";
+
+function sessionsDir(projectDir: string): string {
+  return join(workspaceRoot(projectDir), SESSIONS_DIR);
+}
+
+// The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. The
+// session id is normalised to the slug shape so a host-supplied id can never
+// escape the sessions dir (path traversal / separators); an empty id yields "".
+function sessionRecordPath(projectDir: string, sessionId: string): string {
+  const safe = sessionId.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  if (!safe) return "";
+  return join(sessionsDir(projectDir), safe);
+}
+
+// Read the intent UUID this conversation last stamped, or null. Best-effort.
+export function readSessionIntentUuid(projectDir: string, sessionId: string): string | null {
+  const path = sessionRecordPath(projectDir, sessionId);
+  if (!path) return null;
+  try {
+    const raw = readFileSync(path, "utf-8").trim();
+    return raw.length > 0 ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+// Stamp the intent UUID this conversation is working into its session record.
+// Best-effort (per-user runtime state; a write failure degrades to "no offer on
+// the next resume", never breaks the hook). A blank uuid clears nothing — the
+// caller only stamps when an intent actually resolves.
+export function writeSessionIntentUuid(projectDir: string, sessionId: string, uuid: string): void {
+  const path = sessionRecordPath(projectDir, sessionId);
+  if (!path || !uuid) return;
+  try {
+    mkdirSync(sessionsDir(projectDir), { recursive: true });
+    writeFileSync(path, `${uuid}\n`, "utf-8");
+  } catch {
+    /* per-user runtime state; best-effort */
+  }
+}
+
+// The UUID of the active intent in a space (the cursor's / lone intent's
+// registry row), or null when no new-layout intent resolves (flat-legacy) or
+// the active record has no registry row (an orphan — no stable uuid to stamp).
+export function activeIntentUuid(projectDir: string, space?: string): string | null {
+  const sp = space ?? activeSpace(projectDir);
+  const activeDir = activeIntent(projectDir, sp);
+  if (activeDir === null) return null;
+  const match = listIntents(projectDir, sp).find((i) => i.dirName === activeDir);
+  return match && match.uuid ? match.uuid : null;
+}
+
+// Resolve an intent UUID to its registry row across EVERY space (a conversation
+// may have been working an intent in a different space than the active one).
+// Returns the {space, slug} of the first match, or null when the uuid names no
+// known intent (a stale stamp from a since-deleted intent → no rebind offer).
+export function findIntentByUuid(
+  projectDir: string,
+  uuid: string,
+): { space: string; slug: string } | null {
+  if (!uuid) return null;
+  for (const sp of listSpaces(projectDir)) {
+    const row = readIntentRegistry(projectDir, sp.name).find((e) => e.uuid === uuid);
+    if (row) return { space: sp.name, slug: row.slug };
+  }
+  return null;
+}
+
 // --- Intent birth: the deterministic mutation behind the engine's directive ---
 //
 // birthIntent() is the single deterministic primitive the `intent-birth` tool

@@ -38,6 +38,9 @@ aidlc/spaces/*/intents/active-intent
 # The clone-id token names this clone's audit shard; it MUST stay machine-local
 # (gitignored) or every clone from a commit would share a shard and git-conflict.
 aidlc/.aidlc-clone-id
+# Per-conversation session→intent map (resume rebind, P8): per-user runtime
+# state keyed by Claude Code session_id, never shared truth.
+aidlc/.aidlc-sessions/
 aidlc/spaces/*/intents/*/runtime-graph.json
 aidlc/spaces/*/intents/*/.aidlc-*
 #

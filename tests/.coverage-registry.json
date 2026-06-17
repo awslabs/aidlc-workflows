@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 371,
+    "total": 376,
     "enumeratedByClass": {
-      "function": 165,
+      "function": 170,
       "audit": 67,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 64,
+      "function": 68,
       "audit": 27,
       "scope": 9,
       "stage": 8,
@@ -762,6 +762,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:activeIntentUuid",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t167-session-intent-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:activeSpace",
       "minMechanism": "none",
       "coveredBy": [
@@ -1149,6 +1161,18 @@
         {
           "file": "tests/integration/t66.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:findIntentByUuid",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t167-session-intent-helpers.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -1750,6 +1774,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readSessionIntentUuid",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t167-session-intent-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readStateFile",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1977,6 +2013,13 @@
     {
       "unitClass": "function",
       "unitId": "function:sensorsDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:SESSIONS_DIR",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -2307,6 +2350,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeSessionIntentUuid",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t167-session-intent-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeStateFile",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2331,6 +2386,10 @@
         },
         {
           "file": "tests/unit/t13-hook-input-robustness.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t162-audit-logger-per-intent.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2428,6 +2487,10 @@
         {
           "file": "tests/unit/t13-hook-input-robustness.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t161-session-resume-rebind.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2447,6 +2510,10 @@
         },
         {
           "file": "tests/unit/t13-hook-input-robustness.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t160-statusline-orientation.test.ts",
           "mechanism": "cli"
         }
       ],

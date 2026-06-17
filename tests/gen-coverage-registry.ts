@@ -513,8 +513,11 @@ const RENDER_SURFACE_ANCHORS: ReadonlyArray<{ id: string; anchor: string }> = [
   { id: "statusline-colour", anchor: "function contextColor(" },
   // The right-aligned model/ctx side, padded to terminal width by printLine().
   { id: "statusline-align", anchor: "function printLine(" },
-  // The COMPLETE sentinel branch (full bar at workflow completion).
-  { id: "statusline-complete", anchor: "[AIDLC] COMPLETE" },
+  // The COMPLETE sentinel branch (full bar at workflow completion). The literal
+  // gained the orientation prefix in P8 ([AIDLC] <prefix>COMPLETE <bar>), so the
+  // anchor is the prefix-adjacent "}COMPLETE " token unique to this branch (the
+  // `}` closes the `${prefix}` interpolation in the render template).
+  { id: "statusline-complete", anchor: "}COMPLETE " },
 ];
 
 export function enumerateRenderSurfaces(): Unit[] {
@@ -693,7 +696,7 @@ export function mechanismsOf(fileName: string, src: string): Mechanism[] {
 /** The subset of driver signals that require a usable Claude substrate at run
  *  time. `cli` is intentionally split: spawning `bun aidlc-*.ts` is
  *  deterministic, while `claude -p` / `claude --print` needs live auth. */
-export function claudeDependenciesOf(fileName: string, src: string): ClaudeDependency[] {
+export function claudeDependenciesOf(_fileName: string, src: string): ClaudeDependency[] {
   const code = codeView(src);
   const found = new Set<ClaudeDependency>();
   if (/\bdriveAidlc\s*\(/.test(code)) found.add("sdk");

@@ -23,15 +23,20 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
+  activeIntentUuid,
+  activeSpace,
   errorMessage,
+  findIntentByUuid,
   getField,
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
+  readSessionIntentUuid,
   recordHookDrop,
   recoveryFilePath,
   resolveProjectDirFromHook,
   stateFilePath,
+  writeSessionIntentUuid,
 } from "../tools/aidlc-lib.ts";
 
 const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -57,6 +62,10 @@ writeFileSync(join(healthDir, "session-start.last"), isoTimestamp(), "utf-8");
 //     the audit, so the operator can see something went wrong instead of
 //     silently mislabelling it).
 let source = "startup";
+// The conversation id Claude Code stamps on every hook input. Used to key the
+// per-session→intent record (resume rebind below); "" when absent (a TTY/empty
+// invocation) — the rebind logic no-ops without it.
+let sessionId = "";
 if (!process.stdin.isTTY) {
   try {
     const input = await Bun.stdin.text();
@@ -65,6 +74,7 @@ if (!process.stdin.isTTY) {
         const raw: unknown = JSON.parse(input);
         if (isClaudeCodeHookInput(raw)) {
           source = raw.source ? String(raw.source) : "unknown";
+          if (typeof raw.session_id === "string") sessionId = raw.session_id;
         } else {
           source = "unknown";
         }
@@ -95,6 +105,53 @@ if (eventType) {
   }
 }
 
+// --- Resume rebind (P8) -------------------------------------------------------
+//
+// A conversation works ONE intent; the active-intent cursor is durable + shared
+// across sessions. So resuming an A-chat after the cursor moved to B would
+// inject B's context silently (vision §3, the central multi-space hazard). We
+// fix it with a per-session→intent stamp (aidlc/.aidlc-sessions/<id>):
+//   - On a STARTED-class event, stamp the working intent's UUID for this
+//     session so a later resume can detect a cursor drift.
+//   - On RESUMED, if the stamped UUID differs from the live cursor AND still
+//     names a real intent, OFFER a rebind. The offer is a print directive in
+//     additionalContext — it CORRECTS the per-user cursor on a Yes, it NEVER
+//     rebuilds the session (the session is CLI-owned; the intent is the durable,
+//     harness-neutral record). No session_id (TTY/empty stdin) → no-op.
+const activeSp = activeSpace(projectDir);
+const liveUuid = activeIntentUuid(projectDir, activeSp);
+let rebindOffer = "";
+if (sessionId) {
+  if (eventType === "SESSION_STARTED") {
+    // Stamp the intent this conversation is bound to (only when one resolves —
+    // a flat-legacy / pre-birth project has no uuid to stamp).
+    if (liveUuid) writeSessionIntentUuid(projectDir, sessionId, liveUuid);
+  } else if (source === "resume") {
+    const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
+    // Offer ONLY on a real drift: a stamp exists, it differs from the live
+    // cursor, and it still resolves to a known intent (a stale stamp from a
+    // since-deleted intent names nothing → no offer).
+    if (stampedUuid && stampedUuid !== liveUuid) {
+      const was = findIntentByUuid(projectDir, stampedUuid);
+      if (was) {
+        const live = liveUuid ? findIntentByUuid(projectDir, liveUuid) : null;
+        const liveSlug = live ? live.slug : "(none)";
+        // The cursor verb is `/aidlc intent <slug>` (switches within the active
+        // space). When the stamped intent lives in another space, prefix the
+        // space switch so the rebind command is complete.
+        const switchCmd =
+          was.space === activeSp
+            ? `/aidlc intent ${was.slug}`
+            : `/aidlc space ${was.space} && /aidlc intent ${was.slug}`;
+        rebindOffer =
+          `INTENT REBIND OFFER: This conversation was working ${was.slug}, but the active intent is ${liveSlug}. ` +
+          `Switch back to ${was.slug}? [Y/n] — on Yes, run \`${switchCmd}\` to move the cursor; ` +
+          `on No, keep working ${liveSlug}. This corrects the per-user cursor only; it never rebuilds the conversation.\n`;
+      }
+    }
+  }
+}
+
 // Read and parse state file for context injection
 const content = readFileSync(stateFile, "utf-8");
 
@@ -113,14 +170,14 @@ const recovery = existsSync(recoveryFile)
   : "";
 
 const context = `AIDLC WORKFLOW ACTIVE
-Scope: ${scope}
+${rebindOffer}Scope: ${scope}
 Lifecycle Phase: ${phase}
 Current Stage: ${stage}
 Status: ${status}
 Active Agent: ${agent}
 Last Completed: ${last}
 Next Action: ${next}
-${recovery}On resume: offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Check aidlc-docs/aidlc-state.md for full context.
+${recovery}On resume: offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Check the active intent's aidlc-state.md for full context.
 
 FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
 - The engine binary (\`aidlc-orchestrate.ts\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, you commit with \`report\`, you repeat. You never re-derive routing yourself.

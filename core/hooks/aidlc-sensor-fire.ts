@@ -30,6 +30,7 @@ import {
   readStateFile,
   recordHookDrop,
   resolveProjectDirFromHook,
+  sensorsDir,
   stateFilePath,
   harnessDir,
 } from "../tools/aidlc-lib.ts";
@@ -75,12 +76,19 @@ try {
 const filePath: string = parsed?.tool_input?.file_path ?? "";
 if (!filePath) process.exit(0);
 
-// Step 5 — Recursion guard. Skip writes to the dispatcher's
-// detail-file directory. Dual-separator pattern mirrors
-// aidlc-audit-logger.ts for cross-platform paths. Dispatcher uses
-// direct fs I/O so the loop isn't reachable today; defensive depth
-// for future LLM sensors that may emit findings via Write.
+// Step 5 — Recursion guard. Skip writes to the dispatcher's detail-file
+// directory. Post-workspace-move that dir re-roots per intent
+// (<record>/.aidlc-sensors/ via sensorsDir(projectDir, intent, space)); the
+// active-intent resolution is implicit in sensorsDir's bare projectDir call
+// (it resolves the active record root). Keep the flat `aidlc-docs/.aidlc-sensors/`
+// literal as the transitional flat-legacy fallback (retired in P9). Dispatcher
+// uses direct fs I/O so the loop isn't reachable today; defensive depth for
+// future LLM sensors that may emit findings via Write.
+const sensorsLeaf = sensorsDir(projectDir).replace(/\\/g, "/").replace(/\/$/, "");
+const filePathNorm = filePath.replace(/\\/g, "/");
 if (
+  filePathNorm === sensorsLeaf ||
+  filePathNorm.startsWith(`${sensorsLeaf}/`) ||
   filePath.includes("aidlc-docs/.aidlc-sensors/") ||
   filePath.includes("aidlc-docs\\.aidlc-sensors\\")
 ) {
