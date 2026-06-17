@@ -81,11 +81,13 @@ import {
   validateDirective,
 } from "./aidlc-directive.ts";
 import {
+  activeSpace,
   type CheckboxLine,
   errorMessage,
   firstInScopeStageOfPhase,
   getField,
   LEGACY_FLAT_RELATIVE_PREFIX,
+  listIntents,
   nextInScopeStage,
   parseCheckboxes,
   PHASE_NUMBERS,
@@ -309,6 +311,46 @@ function birthPrintDirective(scope: string, flags: ParsedFlags, description?: st
   if (flags.testRun) cmd.push("--test-run");
   return printDirective(
     `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\` to start the workflow, then re-run \`next\` to continue.`,
+  );
+}
+
+// Guard the birth gate against a DUPLICATE intent on a fresh clone of a
+// multi-intent workspace. A no-state birth arm (Branch 7b / 9a) fires purely on
+// `!stateContent`, but stateContent is empty in TWO different worlds: a truly
+// empty workspace (zero intents → birth is correct), AND a workspace that
+// already holds intents whose active-intent CURSOR is unset. The cursor
+// (`aidlc/spaces/<sp>/intents/active-intent`) is gitignored per-user state, so a
+// fresh clone of a >1-intent workspace lands with records on disk but no cursor
+// → activeIntent() returns null (lib:357-361) → stateContent is empty → the
+// birth gate would mint a SECOND intent over the top of the existing ones
+// (violates the P4 hazard "auto-birth fires only on ZERO intents").
+//
+// This consults the deterministic query layer (listIntents over the active
+// space) and, when intents EXIST but none is flagged active, NAMES the
+// disambiguation move as an `ask` directive that lists the existing intents and
+// asks the human to pick one via `/aidlc intent <slug>` — instead of birthing.
+// Returns null when birth should proceed unchanged (zero intents in the space,
+// or one already resolved active — the latter only when this is reached with an
+// explicit scope/intent that didn't load a cursor'd state). The engine stays
+// read-only: it emits a directive, it does not touch the cursor.
+function intentPickPromptIfRecordsExist(
+  projectDir: string,
+): AskDirective | null {
+  const space = activeSpace(projectDir);
+  const intents = listIntents(projectDir, space);
+  if (intents.length === 0) return null; // zero intents → birth is correct
+  if (intents.some((i) => i.active)) return null; // a cursor already resolves → not a birth path
+  // Records exist but no cursor is set (the fresh-clone / >1-no-cursor case).
+  // NAME the existing intents and ask the human to select one rather than
+  // birthing a duplicate. Order follows listIntents (registry order).
+  const slugs = intents.map((i) => i.slug);
+  const list = slugs.map((s) => `\`${s}\``).join(", ");
+  const spaceLabel = space === "default" ? "" : ` in space "${space}"`;
+  return askDirective(
+    `This workspace already has ${intents.length} intent${intents.length === 1 ? "" : "s"}${spaceLabel} but no active intent is selected ` +
+      `(the active-intent cursor is per-user and not cloned). ` +
+      `Pick one to work on with \`/aidlc intent <slug>\`: ${list}. ` +
+      "Selecting an intent sets the cursor; re-run `next` afterward to continue its workflow.",
   );
 }
 
@@ -1085,6 +1127,14 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     !flags.scope &&
     !flags.resume
   ) {
+    // Don't birth a duplicate over a multi-intent workspace whose cursor is
+    // unset (fresh clone) — prompt the human to pick an existing intent. null →
+    // zero intents → birth as before.
+    const pick = intentPickPromptIfRecordsExist(pd);
+    if (pick) {
+      emit(pick);
+      return;
+    }
     emit(birthPrintDirective(flags.intent, flags));
     return;
   }
@@ -1124,6 +1174,14 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // rather than performing it. `--resume` never births: resuming claims a
   // workflow already exists, so with no state it falls to the 9b error.
   if (!stateContent && source === "flag" && !flags.resume) {
+    // Same fresh-clone guard as Branch 7b: if intents already exist in the
+    // active space with no cursor set, prompt to pick one instead of birthing a
+    // duplicate. null → zero intents → birth as before.
+    const pick = intentPickPromptIfRecordsExist(pd);
+    if (pick) {
+      emit(pick);
+      return;
+    }
     // flags.intent here is freeform feature text typed alongside an explicit
     // --scope (e.g. `/aidlc --scope feature "build the auth service"`) — thread
     // it as the born intent's description; a bare `--scope <s>` carries none.
