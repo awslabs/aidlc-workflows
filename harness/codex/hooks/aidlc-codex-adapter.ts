@@ -240,9 +240,14 @@ function patchedFiles(command: string): Array<{ path: string; tool: "Write" | "E
 switch (target) {
   case "session-start": {
     reconcilePriorSession();
+    // Forward session_id so the core hook's per-session→intent stamp (on
+    // SESSION_STARTED) and resume-rebind OFFER (on source=resume) become
+    // reachable — Codex already carries a real `source`, so with session_id
+    // present the whole P8 rebind path works on Codex.
     const fwd = JSON.stringify({
       hook_event_name: "SessionStart",
       source: codex.source ?? "startup",
+      ...(codex.session_id ? { session_id: codex.session_id } : {}),
     });
     const r = runCore("aidlc-session-start.ts", fwd);
     const wrapped = wrapContext(r.stdout, "SessionStart");

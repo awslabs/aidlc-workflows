@@ -31,10 +31,20 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { birthIntent } from "../../core/tools/aidlc-lib.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CODEX_TREE = join(REPO_ROOT, "dist", "codex", ".codex");
@@ -258,6 +268,61 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       // source=compact emits NO session audit row (PreCompact owns it).
       const audit = readFileSync(join(dir, "aidlc-docs", "audit.md"), "utf-8");
       expect(audit).not.toContain("SESSION_STARTED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("13: session-start FORWARDS session_id — core hook stamps the per-session→intent record (M3 rebind wiring)", () => {
+    // The genuine M3 fix: Codex now forwards session_id alongside its real
+    // `source`, so the core hook's P8 stamp/rebind path is reachable. Proof:
+    // birth an intent (so the live cursor resolves a uuid), fire startup with
+    // the fixture session_id, and assert the per-session stamp file
+    // aidlc/.aidlc-sessions/<session_id> was WRITTEN with that uuid. Without
+    // the forwarded session_id the core hook's `if (sessionId)` block is inert
+    // and no stamp file appears.
+    const dir = scratchProject(true);
+    try {
+      const born = birthIntent(dir, "codex-rebind", "default");
+      const sid = String(FIXTURES.sessionStart.session_id);
+      const r = runAdapter(dir, "session-start", withCwd(FIXTURES.sessionStart, dir));
+      expect(r.code).toBe(0);
+      const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
+      expect(existsSync(stampPath)).toBe(true);
+      expect(readFileSync(stampPath, "utf-8").trim()).toBe(born.uuid);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("14: session-start with source=resume OFFERS a rebind after a cursor drift (full P8 path on Codex)", () => {
+    // The clean win: Codex carries a real `source`, so with session_id wired
+    // the resume-rebind OFFER fires. Seed a drift — stamp the session to intent
+    // A, then move the live cursor to intent B — then fire a resume-shaped
+    // session-start and assert the wrapped additionalContext carries the offer.
+    const dir = scratchProject(true);
+    try {
+      const sid = String(FIXTURES.sessionStart.session_id);
+      const a = birthIntent(dir, "intent-a", "default");
+      // Stamp the session to A via a startup fire (the core hook stamps the
+      // live cursor's uuid — currently A).
+      runAdapter(dir, "session-start", withCwd({ ...FIXTURES.sessionStart, source: "startup" }, dir));
+      const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
+      expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
+      // Move the live cursor to B (the drift the resume must detect).
+      birthIntent(dir, "intent-b", "default");
+      const r = runAdapter(
+        dir,
+        "session-start",
+        withCwd({ ...FIXTURES.sessionStart, source: "resume" }, dir),
+      );
+      expect(r.code).toBe(0);
+      const out = JSON.parse(r.stdout) as {
+        hookSpecificOutput?: { additionalContext?: string };
+      };
+      const ctx = out.hookSpecificOutput?.additionalContext ?? "";
+      expect(ctx).toContain("INTENT REBIND OFFER");
+      expect(ctx).toContain("intent-a");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -70,12 +70,21 @@ function buildForward(): Forward {
 
   switch (target) {
     case "session-start":
-      // agentSpawn carries no source discrimination — every spawn is a
-      // startup from the core hook's perspective; its state-file self-gate
-      // makes this a no-op outside active workflows.
+      // session_id is forwarded when present so the core hook writes its
+      // per-session→intent STAMP (the session→intent record). BUT agentSpawn
+      // carries no source discrimination — every spawn reports as "startup"
+      // from the core hook's perspective (Kiro has no resume signal in this
+      // payload), so SESSION_RESUMED can never fire and the P8 resume-rebind
+      // OFFER is structurally unreachable on Kiro — a documented harness
+      // limitation, not a bug. We never fake a resume source. The state-file
+      // self-gate keeps the whole thing a no-op outside active workflows.
       return {
         hook: "aidlc-session-start.ts",
-        input: { hook_event_name: "SessionStart", source: "startup" },
+        input: {
+          hook_event_name: "SessionStart",
+          source: "startup",
+          ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
+        },
       };
 
     case "audit-and-sensors": {

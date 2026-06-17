@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 376,
+    "total": 379,
     "enumeratedByClass": {
-      "function": 170,
+      "function": 173,
       "audit": 67,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 68,
+      "function": 71,
       "audit": 27,
       "scope": 9,
       "stage": 8,
@@ -778,6 +778,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t171-birth-gate-registry.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t160-workspace-record-resolution.test.ts",
           "mechanism": "none"
         }
@@ -872,8 +876,13 @@
       "unitClass": "function",
       "unitId": "function:auditShardDir",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t172-migration-audit-trail.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -883,6 +892,10 @@
         {
           "file": "tests/integration/t162-per-intent-layout-cli.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t172-migration-audit-trail.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -891,8 +904,13 @@
       "unitClass": "function",
       "unitId": "function:auditShards",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t172-migration-audit-trail.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1011,6 +1029,13 @@
     {
       "unitClass": "function",
       "unitId": "function:countCheckboxes",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CURRENT_SESSION_FILE",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -1374,6 +1399,10 @@
         {
           "file": "tests/integration/t165-intent-birth-p4.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t171-birth-gate-registry.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1546,6 +1575,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t172-migration-audit-trail.test.ts",
           "mechanism": "cli"
         },
         {
@@ -1761,6 +1794,18 @@
     {
       "unitClass": "function",
       "unitId": "function:readAllAuditShards",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t172-migration-audit-trail.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readCurrentSessionId",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -2343,6 +2388,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeCurrentSessionId",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeFileAtomic",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2476,6 +2528,10 @@
       "unitId": "aidlc-session-start",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t173-session-switch-restamp.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/integration/t40-settings-hook-config.test.ts",
           "mechanism": "none"
@@ -4151,6 +4207,14 @@
       "coveredBy": [
         {
           "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t171-birth-gate-registry.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t172-migration-audit-trail.test.ts",
           "mechanism": "cli"
         },
         {

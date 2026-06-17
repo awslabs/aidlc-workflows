@@ -22,10 +22,19 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { birthIntent } from "../../core/tools/aidlc-lib.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
@@ -163,6 +172,65 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     try {
       const r = runAdapter(dir, "runtime-compile", FIXTURES.postToolUse_shell);
       expect(r.code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("10: session-start FORWARDS session_id — core hook stamps the per-session→intent record (M3)", () => {
+    // M3: the Kiro adapter now forwards session_id when present, so the core
+    // hook's per-session→intent STAMP is written (the session→intent record).
+    // Proof: birth an intent (live cursor resolves a uuid), fire session-start
+    // with a session_id in the payload, and assert the stamp file
+    // aidlc/.aidlc-sessions/<session_id> was written with that uuid. Without
+    // the forwarded session_id the core hook's `if (sessionId)` block is inert.
+    const dir = scratchProject(true);
+    try {
+      const born = birthIntent(dir, "kiro-stamp", "default");
+      const sid = "kiro-session-abc123";
+      const r = runAdapter(dir, "session-start", { ...(FIXTURES.agentSpawn as object), session_id: sid });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("AIDLC WORKFLOW ACTIVE");
+      const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
+      expect(existsSync(stampPath)).toBe(true);
+      expect(readFileSync(stampPath, "utf-8").trim()).toBe(born.uuid);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("11: resume-rebind OFFER is structurally unreachable on Kiro — every spawn is forced to source=startup (documented limitation)", () => {
+    // Kiro's agentSpawn carries no resume discrimination: the adapter ALWAYS
+    // forwards source=startup. So even with a genuine cursor drift seeded, a
+    // "resume"-shaped payload can never trigger the core hook's SESSION_RESUMED
+    // path → no INTENT REBIND OFFER. This is a harness limitation, not a bug;
+    // the assertion pins it deterministically (no skip needed). Contrast t149/14
+    // where Codex DOES forward a real source and the offer fires.
+    const dir = scratchProject(true);
+    try {
+      const sid = "kiro-session-drift";
+      const a = birthIntent(dir, "intent-a", "default");
+      // First fire stamps the session to A (the live cursor at this point).
+      const first = runAdapter(dir, "session-start", {
+        ...(FIXTURES.agentSpawn as object),
+        session_id: sid,
+        source: "resume", // even a resume-shaped payload is coerced to startup
+      });
+      expect(first.code).toBe(0);
+      const stampPath = join(dir, "aidlc", ".aidlc-sessions", sid);
+      expect(readFileSync(stampPath, "utf-8").trim()).toBe(a.uuid);
+      // Move the live cursor to B — a genuine drift A→B.
+      birthIntent(dir, "intent-b", "default");
+      // Fire again with a resume-shaped payload. Because Kiro coerces to
+      // startup, the core hook takes the STARTED path (re-stamps to B), never
+      // the RESUMED offer path.
+      const second = runAdapter(dir, "session-start", {
+        ...(FIXTURES.agentSpawn as object),
+        session_id: sid,
+        source: "resume",
+      });
+      expect(second.code).toBe(0);
+      expect(second.stdout).not.toContain("INTENT REBIND OFFER");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
