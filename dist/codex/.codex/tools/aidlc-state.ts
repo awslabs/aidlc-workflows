@@ -37,6 +37,7 @@ import {
   setFieldStrict,
   setOrInsertField,
   stagesInScope,
+  updateIntentStatus,
   validScopes,
   withAuditLock,
   worktreeDocsDir,
@@ -761,6 +762,14 @@ function handleCompleteWorkflow(args: string[]): void {
   }
 
   writeStateFile(pd, content);
+  // Intent status lifecycle: terminal completion flips the active intent's
+  // registry row to "complete". This is the determinism (field write) gated by
+  // the human-confirmed completion that drove complete-workflow here — never an
+  // automatic inference from state, so a crashed run never self-completes. Runs
+  // under the workspace lock already held (every intents.json mutation takes the
+  // sentinel bucket). No-op for the legacy flat record (no registry row).
+  const completedIntentDir = activeIntent(pd);
+  if (completedIntentDir) updateIntentStatus(pd, completedIntentDir, "complete");
   console.log(
     JSON.stringify({
       completed: completedSlug,

@@ -5,9 +5,9 @@ description: >
   development lifecycle. Scopes are defined one file per scope under
   `.claude/scopes/`; run
   `bun .claude/tools/aidlc-utility.ts help` for the authoritative list
-  and descriptions. Utilities: --status, --init, --doctor, --stage,
+  and descriptions. Utilities: --status, --doctor, --stage,
   --phase, --scope, --depth, --test-strategy, --test-run, --version,
-  --help.
+  --help, plus the intent and space verbs.
   Or describe what you want to build and the scope will be auto-detected.
 argument-hint: "[description | --status | --stage <slug|#> | --phase <name|#> | --version | --help]"
 user-invocable: true
@@ -51,7 +51,7 @@ Run the engine binary directly via Bash. If a directive looks malformed or names
 
 | `kind` | What you do |
 |--------|-------------|
-| `print` | Do exactly what `directive.message` says — it is authoritative. Two shapes: (a) **terminal** — the message names a read-only utility (status, help, doctor, version) or a workspace command and ends with "print its output … and stop": run the named tool, print its stdout verbatim, and STOP the loop. (b) **run-then-continue** — the message names a mutating tool (e.g. a scope-change / config-change / jump `execute`, or the workflow-birth `init` the engine names when the user explicitly names a scope on a fresh workspace) and ends with "then re-run `next` to continue": run that tool, then go back to step 1 of the loop. The mutation lives in the named tool, never in `next`; you act on its instruction rather than improvising the routing. |
+| `print` | Do exactly what `directive.message` says — it is authoritative. Two shapes: (a) **terminal** — the message names a read-only utility (status, help, doctor, version) or a workspace command and ends with "print its output … and stop": run the named tool, print its stdout verbatim, and STOP the loop. (b) **run-then-continue** — the message names a mutating tool (e.g. a scope-change / config-change / jump `execute`, or the workflow-birth `intent-birth` the engine names when the user explicitly names a scope on a fresh workspace) and ends with "then re-run `next` to continue": run that tool, then go back to step 1 of the loop. The mutation lives in the named tool, never in `next`; you act on its instruction rather than improvising the routing. |
 | `error` | Print `directive.message` verbatim and STOP. Do not recover, retry, or smooth it over — the message is the user-facing error. |
 | `done` | The workflow (or single-stage run) is complete. Present the completion summary and STOP the loop. |
 | `run-stage` | Load the lead agent's persona file plus any `support_agents`, read `directive.stage_file`, run the stage body, write the `produces` artifacts, and keep the stage diary at `directive.memory_path`. Then **branch on `directive.gate`** (see below). |

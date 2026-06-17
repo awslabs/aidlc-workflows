@@ -86,11 +86,12 @@
 //     `init --scope <scope>`) rather than relaying the old circular no-state
 //     error; the trio's cases:
 //       (1) `next bugfix` — bare KNOWN-SCOPE positional, NOT freeform: kind ===
-//           "print" AND message names `init --scope bugfix` (the engine
+//           "print" AND message names `intent-birth --scope bugfix` (the engine
 //           recognises bugfix as the scope, finding 2, and emits the SAME
 //           workflow-birth print `next --scope bugfix` emits; pre-finding-2 it
 //           mis-read the literal scope as prose and emitted an `ask` defaulting
-//           to "feature"). One test() bundles both observables.
+//           to "feature"). P4: the named birth move is `intent-birth`, not the
+//           retired `init`. One test() bundles both observables.
 //       (2) `next add dark mode toggle` — genuine freeform (<=5-word) intent,
 //           NOT a scope name: kind === "ask" (the control proving the finding-2
 //           fix narrows ONLY known-scope positionals; real prose still defers to
@@ -467,11 +468,12 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     // pre-hardening engine relayed a circular no-state error here that told the
     // user to do exactly what they had just done). Pre-finding-2 this mis-read
     // the scope as prose and emitted an `ask` defaulting to "feature".
-    test("no-state bare known-scope 'bugfix' -> birth print naming init (recognised as scope, not freeform) [finding 2]", () => {
+    test("no-state bare known-scope 'bugfix' -> birth print naming intent-birth (recognised as scope, not freeform) [finding 2]", () => {
       const r = emitNextNoState("bugfix");
       expect(r.directive.kind).toBe("print");
-      // The print names the init move for the EXPLICITLY NAMED scope.
-      expect(r.directive.message ?? "").toContain("init --scope bugfix");
+      // The print names the intent-birth move for the EXPLICITLY NAMED scope
+      // (P4: --init retired; the engine NAMES the deterministic birth handler).
+      expect(r.directive.message ?? "").toContain("intent-birth --scope bugfix");
       // Run-then-continue shape: the conductor births, then re-enters the loop.
       expect(r.directive.message ?? "").toContain("re-run `next` to continue");
       // STRONGER: a regression that mis-read bugfix as freeform would emit an
@@ -503,10 +505,11 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       // STRONGER: pin the verbatim no-state wording (the .sh read only kind) so a
       // regression emitting an error of a DIFFERENT cause reds.
       expect(r.directive.message ?? "").toContain("No workflow state found");
-      // RE-PIN the post-hardening guidance wording exactly: name-a-scope births,
-      // --init scaffolds. A regression back to the circular clause reds here.
+      // RE-PIN the post-P4 guidance wording exactly: describe-what-to-build or
+      // name-a-scope both birth; there is no --init. A regression back to the
+      // circular clause (or a re-introduced --init) reds here.
       expect(r.directive.message ?? "").toContain(
-        "Name a scope to start a workflow (/aidlc --scope <scope>) or scaffold one with /aidlc --init.",
+        'Start one by describing what to build (/aidlc "build the auth service") or by naming a scope (/aidlc --scope <scope>).',
       );
     });
 
@@ -517,8 +520,8 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     test("no-state positional+flag conflict -> birth print names the FLAG's scope", () => {
       const r = emitNextNoState("bugfix", "--scope", "mvp");
       expect(r.directive.kind).toBe("print");
-      expect(r.directive.message ?? "").toContain("init --scope mvp");
-      expect(r.directive.message ?? "").not.toContain("init --scope bugfix");
+      expect(r.directive.message ?? "").toContain("intent-birth --scope mvp");
+      expect(r.directive.message ?? "").not.toContain("intent-birth --scope bugfix");
     });
 
     // (5) --resume never births: resuming is a claim that a workflow already

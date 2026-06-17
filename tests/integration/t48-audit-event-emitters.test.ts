@@ -1,4 +1,4 @@
-// covers: doc:12-state-machine.md(audit-event-taxonomy), doc:audit-format.md(event-registry), data:aidlc-audit.ts(VALID_EVENT_TYPES), function:handleApprove, function:handleReject, function:handleGateStart, function:handleRevise, function:handleSkip, function:handleCompleteWorkflow, function:handleAdvance, function:handleReuseArtifact, function:handleInit
+// covers: doc:12-state-machine.md(audit-event-taxonomy), doc:audit-format.md(event-registry), data:aidlc-audit.ts(VALID_EVENT_TYPES), function:handleApprove, function:handleReject, function:handleGateStart, function:handleRevise, function:handleSkip, function:handleCompleteWorkflow, function:handleAdvance, function:handleReuseArtifact, function:handleIntentBirth
 //
 // t48 — Drift test for the audit event taxonomy: docs vs code.
 // Migrated from tests/integration/t48-audit-event-emitters.sh (TAP plan 16). The
@@ -25,7 +25,7 @@
 //   - dist/claude/.claude/knowledge/aidlc-shared/audit-format.md  (## Event Registry)
 //   - dist/claude/.claude/tools/*.ts + hooks/*.ts  (emission call sites)
 //   - dist/claude/.claude/tools/aidlc-state.ts     (pairing handler bodies)
-//   - dist/claude/.claude/tools/aidlc-utility.ts   (handleInit body)
+//   - dist/claude/.claude/tools/aidlc-utility.ts   (handleIntentBirth body)
 //   - dist/claude/.claude/skills/aidlc/            (forbidden prose-append scan)
 //
 // The four named checks the .sh documents (forward / reverse / tertiary /
@@ -52,7 +52,7 @@
 //   .sh test 11 check_pairing handleCompleteWorkflow  -> "pairing: handleCompleteWorkflow emits PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED"
 //   .sh test 12 check_pairing handleAdvance           -> "pairing: handleAdvance emits STAGE_STARTED"
 //   .sh test 13 check_pairing handleReuseArtifact     -> "pairing: handleReuseArtifact emits ARTIFACT_REUSED"
-//   .sh test 14 check_pairing handleInit              -> "pairing: handleInit emits WORKFLOW_STARTED + PHASE_STARTED + STAGE_STARTED"
+//   .sh test 14 check_pairing handleIntentBirth              -> "pairing: handleIntentBirth emits WORKFLOW_STARTED + PHASE_STARTED + STAGE_STARTED"
 //   .sh test 15 md-md catalog cross-check             -> "md-md: audit-format.md and 12-state-machine.md agree on the event set"
 //   .sh test 16 forbidden prose append calls          -> "no prose aidlc-audit.ts append calls in skills/aidlc/"
 
@@ -327,7 +327,11 @@ describe("t48 audit event-emitter drift (migrated from t48-audit-event-emitters.
     ["handleCompleteWorkflow", STATE_TS, ["PHASE_COMPLETED", "PHASE_VERIFIED", "WORKFLOW_COMPLETED"]], // test 11
     ["handleAdvance", STATE_TS, ["STAGE_STARTED"]], // test 12
     ["handleReuseArtifact", STATE_TS, ["ARTIFACT_REUSED"]], // test 13
-    ["handleInit", UTIL_TS, ["WORKFLOW_STARTED", "PHASE_STARTED", "STAGE_STARTED"]], // test 14
+    // P4: the birth handler was renamed handleInit -> handleIntentBirth (the
+    // user-facing --init is retired; the engine auto-births). The three birth
+    // events still pair off it (WORKFLOW_STARTED + the init PHASE_STARTED + the
+    // workspace-scaffold STAGE_STARTED), now into the born intent's record.
+    ["handleIntentBirth", UTIL_TS, ["WORKFLOW_STARTED", "PHASE_STARTED", "STAGE_STARTED"]], // test 14
   ];
 
   for (const [handler, file, events] of PAIRINGS) {

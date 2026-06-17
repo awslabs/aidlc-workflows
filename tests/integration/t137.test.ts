@@ -84,6 +84,7 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -111,16 +112,21 @@ const tempDirs: string[] = [];
 afterAll(() => {
   for (const d of tempDirs) {
     // Defensive: restore writability before removal in case a case bailed
-    // out after chmod-ing but before its finally ran.
-    try {
-      chmodSync(join(d, "aidlc-docs", "audit.md"), 0o644);
-    } catch {
-      /* file may not exist */
-    }
-    try {
-      chmodSync(join(d, "aidlc-docs", "aidlc-state.md"), 0o644);
-    } catch {
-      /* file may not exist */
+    // out after chmod-ing but before its finally ran. Cover both the per-intent
+    // record locations (P4) and the flat fallback (F3's hand-seeded layout).
+    for (const f of [
+      statePath(d),
+      auditShardPath(d),
+      auditDirOf(d),
+      join(d, "aidlc-docs", "audit.md"),
+      join(d, "aidlc-docs", "aidlc-state.md"),
+    ]) {
+      if (!f) continue;
+      try {
+        chmodSync(f, 0o755);
+      } catch {
+        /* file/dir may not exist */
+      }
     }
     cleanupTestProject(d);
   }
@@ -133,9 +139,54 @@ function proj(): string {
   return p;
 }
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+// P4: intent-birth writes state into the born intent's per-intent record dir
+// (aidlc/spaces/<space>/intents/<slug>-<id8>/) and audit into per-clone SHARDS
+// under <record>/audit/<host>-<pid>.md — not the flat aidlc-docs/ trio. After
+// init the active-intent cursor points at the born record, so the later
+// state-tool calls (gate-start/advance/acknowledge-compaction) read/write THAT
+// record. recordDirOf follows the cursor and falls back to flat for F3 (which
+// hand-seeds a flat corrupted state.md and never births a record).
+function recordDirOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(p, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(p, "aidlc-docs");
+}
+
+const auditDirOf = (p: string): string => join(recordDirOf(p), "audit");
 const statePath = (p: string): string =>
-  join(p, "aidlc-docs", "aidlc-state.md");
+  join(recordDirOf(p), "aidlc-state.md");
+
+/** The single audit shard for a freshly-born record. Returns "" when none. */
+function auditShardPath(p: string): string {
+  const dir = auditDirOf(p);
+  if (!existsSync(dir)) return "";
+  const shard = readdirSync(dir).find((f) => f.endsWith(".md"));
+  return shard ? join(dir, shard) : "";
+}
+
+// Concatenate every audit shard for a content read; fall back to the flat
+// aidlc-docs/audit.md for a seeded-flat / pre-migration project.
+function readAudit(p: string): string {
+  const dir = auditDirOf(p);
+  if (existsSync(dir)) {
+    return readdirSync(dir)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => readFileSync(join(dir, f), "utf-8"))
+      .join("\n");
+  }
+  const flat = join(p, "aidlc-docs", "audit.md");
+  return existsSync(flat) ? readFileSync(flat, "utf-8") : "";
+}
 
 interface CliResult {
   status: number;
@@ -164,31 +215,29 @@ function state(args: string[], p: string): CliResult {
 }
 
 /**
- * Count audit blocks with `**Event**: ERROR_LOGGED`. Mirrors the .sh's
+ * Count audit blocks with `**Event**: ERROR_LOGGED` in audit CONTENT
+ * (shard-concat or flat). Mirrors the .sh's
  * `grep -cE '^\*\*Event\*\*: ERROR_LOGGED'`.
  */
-function errorLoggedCount(file: string): number {
-  if (!existsSync(file)) return 0;
-  return readFileSync(file, "utf-8")
+function errorLoggedCount(content: string): number {
+  return content
     .split("\n")
     .filter((l) => /^\*\*Event\*\*: ERROR_LOGGED$/.test(l)).length;
 }
 
-/** Whole-file presence (unanchored substring, mirrors a bare grep). */
-function fileContains(file: string, needle: string): boolean {
-  if (!existsSync(file)) return false;
-  return readFileSync(file, "utf-8").includes(needle);
+/** Whole-content presence (unanchored substring, mirrors a bare grep). */
+function contentContains(content: string, needle: string): boolean {
+  return content.includes(needle);
 }
 
 /**
- * Value of <key> from the FIRST audit block whose `**Event**:` matches <ev>.
- * Resets at `## ` headings and `---` separators. Used by Test 8's STRONGER
- * Tool-field check. Returns "" when absent.
+ * Value of <key> from the FIRST audit block whose `**Event**:` matches <ev>
+ * in audit CONTENT. Resets at `## ` headings and `---` separators. Used by
+ * Test 8's STRONGER Tool-field check. Returns "" when absent.
  */
-function auditField(file: string, ev: string, key: string): string {
-  if (!existsSync(file)) return "";
+function auditField(content: string, ev: string, key: string): string {
   let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of content.split("\n")) {
     if (line.startsWith("## ") || line === "---") {
       matched = false;
       continue;
@@ -209,26 +258,32 @@ function auditField(file: string, ev: string, key: string): string {
 }
 
 // ============================================================
-// Failure 1: permission-denied on audit.md during a transition.
+// Failure 1: permission-denied on the audit shard during a transition.
 // Audit-first: appendAuditEntry throws before writeStateFile, so the tool
 // exits 1 and aidlc-state.md is unchanged. (.sh Tests 1-2)
+// P4: the audit is the per-clone shard <record>/audit/<host>-<clone>.md; the
+// spawned subprocess resolves the SAME shard (the shard name embeds the stable
+// per-clone token, not the PID — aidlc-lib.ts:955-971), so chmod-ing that one
+// shard read-only denies its append. The original test chmod-ed the flat
+// aidlc-docs/audit.md; here the equivalent target is the born record's shard.
 // ============================================================
 
-describe("t137 F1 — read-only audit.md (audit-first holds)", () => {
+describe("t137 F1 — read-only audit shard (audit-first holds)", () => {
   runIfChmod(
-    "1: acknowledge-compaction exits 1 when audit.md is read-only; 2: state unchanged",
+    "1: acknowledge-compaction exits 1 when the audit shard is read-only; 2: state unchanged",
     () => {
       const p = proj();
       expect(init(p).status).toBe(0); // sanity: scaffolding succeeded
 
-      const audit = auditPath(p);
+      const shard = auditShardPath(p);
+      expect(shard).not.toBe(""); // birth wrote a shard
       const state2 = statePath(p);
 
       // Inject a SESSION_COMPACTED event so acknowledge-compaction has
       // something to act on (mirrors the .sh's cat >> heredoc, lines 50-57).
       writeFileSync(
-        audit,
-        `${readFileSync(audit, "utf-8")}
+        shard,
+        `${readFileSync(shard, "utf-8")}
 ## Session Compacted
 **Timestamp**: 2026-05-03T00:00:00Z
 **Event**: SESSION_COMPACTED
@@ -240,7 +295,7 @@ describe("t137 F1 — read-only audit.md (audit-first holds)", () => {
 
       const stateBefore = readFileSync(state2, "utf-8");
 
-      chmodSync(audit, 0o444);
+      chmodSync(shard, 0o444);
       let r: CliResult;
       try {
         r = state(
@@ -248,7 +303,7 @@ describe("t137 F1 — read-only audit.md (audit-first holds)", () => {
           p,
         );
       } finally {
-        chmodSync(audit, 0o644);
+        chmodSync(shard, 0o644);
       }
 
       // .sh Test 1: assert_eq 1 $rc.
@@ -261,31 +316,36 @@ describe("t137 F1 — read-only audit.md (audit-first holds)", () => {
 });
 
 // ============================================================
-// Failure 2: missing audit.md — ensureAuditFile recovers, gate-start exits 0
-// and the audit file is recreated. (.sh Tests 3-4) — no chmod, always runs.
+// Failure 2: missing audit — ensureAuditFile recovers, gate-start exits 0
+// and the audit shard is recreated. (.sh Tests 3-4) — no chmod, always runs.
+// P4: the audit is now a per-clone shard dir <record>/audit/; removing the
+// whole dir is the equivalent of the original `rm audit.md`. ensureAuditFile
+// re-mkdirs the dir and writes a fresh shard on the next append.
 // ============================================================
 
-describe("t137 F2 — missing audit.md (ensureAuditFile recovers)", () => {
+describe("t137 F2 — missing audit shard (ensureAuditFile recovers)", () => {
   test(
-    "3: gate-start exits 0 when audit.md was missing; 4: audit.md recreated",
+    "3: gate-start exits 0 when the audit was missing; 4: audit shard recreated",
     () => {
       const p = proj();
       expect(init(p).status).toBe(0);
 
-      // Remove audit.md (mirrors the .sh's `rm "$audit"`, line 89).
-      rmSync(auditPath(p));
-      expect(existsSync(auditPath(p))).toBe(false); // precondition
+      // Remove the entire audit shard dir (mirrors the .sh's `rm "$audit"`,
+      // line 89 — the per-clone analog of deleting the flat audit.md).
+      rmSync(auditDirOf(p), { recursive: true, force: true });
+      expect(existsSync(auditDirOf(p))).toBe(false); // precondition
 
       const r = state(["gate-start", "requirements-analysis"], p);
 
       // .sh Test 3: assert_eq 0 $rc — ensureAuditFile recovers, no crash.
       expect(r.status).toBe(0);
-      // .sh Test 4: audit.md recreated on demand.
-      expect(existsSync(auditPath(p))).toBe(true);
-      // STRONGER than the .sh's bare `[ -f ... ]`: the recreated file carries
+      // .sh Test 4: audit recreated on demand.
+      expect(existsSync(auditDirOf(p))).toBe(true);
+      expect(auditShardPath(p)).not.toBe(""); // a shard reappeared
+      // STRONGER than the .sh's bare `[ -f ... ]`: the recreated shard carries
       // the STAGE_AWAITING_APPROVAL row gate-start emits, proving it was
       // rebuilt-and-written, not merely touched.
-      expect(fileContains(auditPath(p), "**Event**: STAGE_AWAITING_APPROVAL")).toBe(
+      expect(contentContains(readAudit(p), "**Event**: STAGE_AWAITING_APPROVAL")).toBe(
         true,
       );
     },
@@ -302,6 +362,8 @@ describe("t137 F3 — corrupted state.md (advance refuses, names Scope)", () => 
   test("5: advance exits 1 on corrupted state; 6: error names Scope", () => {
     const p = proj();
     mkdirSync(join(p, "aidlc-docs"), { recursive: true });
+    // This case NEVER births a record — it hand-seeds a flat corrupted layout,
+    // so recordDirOf falls back to aidlc-docs/ and statePath resolves there.
     // State file valid markdown but missing Scope / Current Stage
     // (mirrors the .sh heredoc, lines 109-114).
     writeFileSync(
@@ -313,9 +375,10 @@ describe("t137 F3 — corrupted state.md (advance refuses, names Scope)", () => 
 `,
       "utf-8",
     );
-    // Copy the SAME fixture the .sh used (read-only source copy).
+    // Copy the SAME fixture the .sh used (read-only source copy) into the flat
+    // aidlc-docs/audit.md — the flat fallback the corrupted seed resolves to.
     writeFileSync(
-      auditPath(p),
+      join(p, "aidlc-docs", "audit.md"),
       readFileSync(join(FIXTURES_DIR, "audit-sample.md"), "utf-8"),
       "utf-8",
     );
@@ -344,11 +407,12 @@ describe("t137 F4 — read-only state.md (ERROR_LOGGED emitted)", () => {
       const p = proj();
       expect(init(p).status).toBe(0);
 
-      const audit = auditPath(p);
+      // P4: state.md is the per-intent record file (statePath); the audit is the
+      // per-clone shard (read via readAudit).
       const state2 = statePath(p);
 
       // Count pre-existing ERROR_LOGGED rows (0 on a clean init).
-      const errorBefore = errorLoggedCount(audit);
+      const errorBefore = errorLoggedCount(readAudit(p));
 
       chmodSync(state2, 0o444);
       let r: CliResult;
@@ -364,12 +428,12 @@ describe("t137 F4 — read-only state.md (ERROR_LOGGED emitted)", () => {
       // .sh Test 8: ERROR_LOGGED count climbed (emitError fired on the
       // state-write failure path; state.md existed so the guard at
       // aidlc-lib.ts:1513 let the row through).
-      const errorAfter = errorLoggedCount(audit);
+      const errorAfter = errorLoggedCount(readAudit(p));
       expect(errorAfter).toBeGreaterThan(errorBefore);
       // STRONGER than the .sh's bare count delta: the new ERROR_LOGGED row
       // came from the state tool's emitError (Tool: "aidlc-state",
       // aidlc-lib.ts:1528-1538 / aidlc-state.ts:1713).
-      expect(auditField(audit, "ERROR_LOGGED", "Tool")).toBe("aidlc-state");
+      expect(auditField(readAudit(p), "ERROR_LOGGED", "Tool")).toBe("aidlc-state");
     },
     30000,
   );

@@ -84,6 +84,26 @@ function stagePath(proj: string, phase: string, slug: string): string {
 function editFile(p: string, fn: (s: string) => string): void {
   writeFileSync(p, fn(readFileSync(p, "utf8")));
 }
+// P4: `init` (→ intent-birth) writes the workflow record per-intent under
+// aidlc/spaces/<space>/intents/<slug>-<id8>/ (state, runtime-graph.json,
+// .aidlc-hooks-health/), NOT the flat aidlc-docs/. Resolve the born record from
+// the active-space + active-intent cursors (flat fallback for a pre-birth/
+// pre-migration project).
+function recordDirOf(proj: string): string {
+  const spaceCursor = join(proj, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf8").trim() || "default"
+    : "default";
+  const intentsDir = join(proj, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(proj, "aidlc-docs");
+}
 
 describe("t-custom-harness-compile (deterministic — harness-engineer edits resolve, errors fail loud)", () => {
   // =========================================================================
@@ -210,8 +230,12 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
   });
 
   // G4b — the custom agent and custom knowledge are real data files in the
-  // copied framework, and init scaffolds the user-owned knowledge README for
-  // that custom agent from the same loadAgents() metadata the statusline uses.
+  // copied framework, and the custom agent's metadata flows through the SAME
+  // loadAgents() loader the statusline uses. (P4: birth no longer scaffolds a
+  // per-agent knowledge README — the workspace shell ships in dist/ via SEED and
+  // birth only ensure-exists the per-intent record dirs — so the discovery proof
+  // is the loader, exercised through the statusline render, not an init-written
+  // README. The agent FILE + custom knowledge FILE checks below are unchanged.)
   test("G4b: custom agent metadata and custom knowledge file are discoverable", () => {
     const proj = setupIntegrationProject({ customHarness: true });
     try {
@@ -232,18 +256,34 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
       expect(existsSync(knowledgeFile)).toBe(true);
       expect(readFileSync(knowledgeFile, "utf8")).toContain(CUSTOM_KNOWLEDGE_MARKER);
 
-      const init = runTool(proj, "aidlc-utility.ts", ["init", "--scope", CUSTOM_SCOPE]);
-      expect(init.status).toBe(0);
-      const readme = join(
-        proj,
-        "aidlc-docs",
-        "knowledge",
-        CUSTOM_AGENT_SLUG,
-        "README.md",
+      // The custom agent's display_name is DISCOVERED via loadAgents() — proven by
+      // the per-project statusline hook, which renders the active-agent's derived
+      // display from the same frontmatter (mirrors t61's statusline proof). Seed a
+      // minimal state naming the custom agent as active, pipe the workspace JSON to
+      // the hook, and assert the derived display renders.
+      // The statusline renders the agent display only for an ACTIVE workflow —
+      // it prints "[AIDLC] ready" unless Lifecycle Phase + Current Stage are
+      // present (aidlc-statusline.ts). Seed the same minimal CONSTRUCTION shape
+      // t61's statusline proof uses. Flat seed (no intent record) → stateFilePath
+      // resolves it via the transitional flat fallback.
+      mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
+      writeFileSync(
+        join(proj, "aidlc-docs", "aidlc-state.md"),
+        `# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: CONSTRUCTION\n- **Current Stage**: ci-pipeline\n- **Active Agent**: ${CUSTOM_AGENT_SLUG}\n- **Status**: Running\n`,
+        "utf8",
       );
-      expect(existsSync(readme)).toBe(true);
-      expect(readFileSync(readme, "utf8")).toContain(CUSTOM_AGENT_DISPLAY);
-      expect(readFileSync(readme, "utf8")).toContain(CUSTOM_KNOWLEDGE_FILE);
+      const sl = spawnSync(
+        "bun",
+        [join(proj, ".claude", "hooks", "aidlc-statusline.ts")],
+        {
+          cwd: proj,
+          encoding: "utf8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+          input: JSON.stringify({ workspace: { project_dir: proj } }),
+        },
+      );
+      const slOut = `${sl.stdout ?? ""}${sl.stderr ?? ""}`;
+      expect(slOut).toContain(CUSTOM_AGENT_DISPLAY);
     } finally {
       cleanupTestProject(proj);
     }
@@ -264,7 +304,9 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
 
       // init routed to the custom head stage (the scope's stage map drove this,
       // not a builtin) — proven in state before the runtime graph is even built.
-      const state = readFileSync(join(proj, "aidlc-docs", "aidlc-state.md"), "utf8");
+      // P4: birth writes per-intent — resolve the born record.
+      const record = recordDirOf(proj);
+      const state = readFileSync(join(record, "aidlc-state.md"), "utf8");
       const current = state.match(/Current Stage\*\*:\s*(.+)/)?.[1]?.trim();
       expect(current).toBe(SNAPSHOT_STAGE_SLUG);
 
@@ -272,7 +314,7 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
       expect(rt.status).toBe(0);
 
       const runtime = JSON.parse(
-        readFileSync(join(proj, "aidlc-docs", "runtime-graph.json"), "utf8"),
+        readFileSync(join(record, "runtime-graph.json"), "utf8"),
       ) as { scope?: string; stages?: Array<{ stage_slug: string }> };
       expect(runtime.scope).toBe(CUSTOM_SCOPE);
 
@@ -523,8 +565,10 @@ outputs: none
       expect(hook.status).toBe(0);
 
       // THE EVIDENCE: a hook-drop was recorded naming the broken sensor + the
-      // dispatcher's missing-script reason (advisory surface, not silent).
-      const dropFile = join(proj, "aidlc-docs", ".aidlc-hooks-health", "sensor-fire.drops");
+      // dispatcher's missing-script reason (advisory surface, not silent). P4:
+      // .aidlc-hooks-health/ resolves under the born intent's record (hooksHealthDir
+      // → docsRoot), so read it from the per-intent record after init.
+      const dropFile = join(recordDirOf(proj), ".aidlc-hooks-health", "sensor-fire.drops");
       expect(existsSync(dropFile)).toBe(true);
       const drops = readFileSync(dropFile, "utf8");
       expect(drops).toContain(CUSTOM_SENSOR_ID);

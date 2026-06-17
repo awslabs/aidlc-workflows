@@ -25,7 +25,10 @@
 //   - bun check label:    "bun installed (required ...)"      (utility.ts:336)
 //   - hook check label:   "<hook>.ts present"                 (utility.ts:356)
 //   - settings label:     "settings.json present"            (utility.ts:365)
-//   - aidlc-docs label:   "aidlc-docs/ directory exists"      (utility.ts:396)
+//   - shell-ready label:  "workspace shell ready"            (utility.ts:597; P4: the
+//                         old "aidlc-docs/ directory exists" row was retired — auto-birth
+//                         needs no scaffolded aidlc-docs/, so doctor checks the SHIPPED SHELL
+//                         (.claude/ + aidlc/spaces/default/memory/) instead)
 //   - footer shape:       "N passed, M failed"               (utility.ts:1371)
 //   - audit event:        "HEALTH_CHECKED"                    (utility.ts:1376)
 //
@@ -40,7 +43,8 @@
 // (HEALTH_CHECKED + growth), and resultEvent. NEVER on assistantText.
 
 import { describe, expect, test } from "bun:test";
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { assertToolResultContains } from "../harness/assert.ts";
 import {
   cleanupTestProject,
@@ -68,7 +72,12 @@ const DOCTOR_HOOK_LABEL = "aidlc-audit-logger.ts present";
 // one does not prove the other.
 const DOCTOR_HOOK_LABEL_2 = "aidlc-session-start.ts present";
 const DOCTOR_SETTINGS_LABEL = "settings.json present";
-const DOCTOR_DOCS_LABEL = "aidlc-docs/ directory exists";
+// P4: the "aidlc-docs/ directory exists" row was retired. Doctor now checks the
+// SHIPPED workspace shell (.claude/ + aidlc/spaces/default/memory/) — the row
+// label substring is "workspace shell ready" (utility.ts:597), and its
+// remediation fix is "copy the workspace shell from `dist/claude/`" (utility.ts:598).
+const DOCTOR_SHELL_LABEL = "workspace shell ready";
+const DOCTOR_SHELL_FIX = "copy the workspace shell from";
 const STOP_AFTER_DOCTOR = { toolName: "Bash", resultIncludes: DOCTOR_HEADER } as const;
 
 describe("t22 /aidlc --doctor (SDK port)", () => {
@@ -154,24 +163,35 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
   );
 
   // -------------------------------------------------------------------------
-  // Without aidlc-docs/. Re-expresses .sh test 10 (already deterministic).
+  // Without the shipped shell. Re-expresses .sh test 10 (already deterministic),
+  // migrated to the P4 readiness row.
   //
-  // When aidlc-docs/ is missing, check #5 fails (utility.ts:392-398) and the
-  // doctor exits non-zero; the orchestrator's tool-failure handler prints the
-  // doctor stdout verbatim. The .sh grepped that prose for the SPECIFIC
-  // failing-check label "aidlc-docs/ directory exists" (deliberately specific
-  // so a loose echo of the command wouldn't match). Here we assert that exact
-  // label against the Bash tool_result — the failing-check label is verbatim
-  // tool stdout, so this is the deterministic equivalent of the .sh grep.
+  // P4 retired the "aidlc-docs/ directory exists" row: with auto-birth there is
+  // no scaffolded aidlc-docs/ to verify. Readiness is the SHIPPED SHELL — the
+  // harness engine dir (.claude/) AND the default space's memory dir
+  // (aidlc/spaces/default/memory/) BOTH present (utility.ts:586-599). The row
+  // PASSes only when both exist; remove the default memory dir so the
+  // shell-ready row FAILS, the doctor exits non-zero, and the orchestrator's
+  // tool-failure handler prints the doctor stdout verbatim. The .sh grepped that
+  // prose for the SPECIFIC failing-check label; here we assert the new
+  // "workspace shell ready" label AND its "copy the workspace shell from"
+  // remediation against the Bash tool_result — the failing-check label is
+  // verbatim tool stdout, so this is the deterministic equivalent of the .sh grep.
   // -------------------------------------------------------------------------
   test(
-    "doctor without aidlc-docs/ surfaces the failing-check label in the tool_result",
+    "doctor without the shipped shell surfaces the failing shell-ready label + remediation in the tool_result",
     async () => {
       const proj = setupIntegrationProject({ noAidlcDocs: true });
       try {
-        const before = readdirSync(proj);
-        // Precondition: aidlc-docs/ truly absent so the check genuinely fails.
-        expect(before).not.toContain("aidlc-docs");
+        // Break the shipped shell so the readiness row FAILS: setupIntegrationProject
+        // always copies .claude/ + aidlc/spaces/default/memory/ (both present →
+        // the row would PASS). Removing the default memory dir leaves the row
+        // failing on a genuinely-incomplete shell (the dist/ copy was partial).
+        const memoryDir = join(proj, "aidlc", "spaces", "default", "memory");
+        rmSync(memoryDir, { recursive: true, force: true });
+        expect(existsSync(memoryDir)).toBe(false);
+        // And aidlc-docs/ is absent too (noAidlcDocs), so nothing masks the failure.
+        expect(readdirSync(proj)).not.toContain("aidlc-docs");
 
         const r = await driveAidlc("/aidlc --doctor", {
           projectDir: proj,
@@ -179,10 +199,12 @@ describe("t22 /aidlc --doctor (SDK port)", () => {
           stopAfterToolResult: STOP_AFTER_DOCTOR,
         });
 
-        // The doctor tool fired AND its verbatim result names the specific
-        // failing check. assertToolResultContains proves Bash fired (no
-        // vacuous pass) — the same guarantee the .sh's specific-label grep gave.
-        assertToolResultContains(r, "Bash", DOCTOR_DOCS_LABEL);
+        // The doctor tool fired AND its verbatim result names the failing
+        // shell-ready check + its remediation. assertToolResultContains proves
+        // Bash fired (no vacuous pass) — the same guarantee the .sh's
+        // specific-label grep gave.
+        assertToolResultContains(r, "Bash", DOCTOR_SHELL_LABEL);
+        assertToolResultContains(r, "Bash", DOCTOR_SHELL_FIX);
 
         // And the report header is present in that same stdout — proving the
         // failing label came from the doctor block, not stray prose.

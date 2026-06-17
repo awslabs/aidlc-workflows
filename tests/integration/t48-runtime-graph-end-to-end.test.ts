@@ -61,7 +61,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -95,8 +95,44 @@ interface RuntimeGraphShape {
 // the (slow) real CLIs. Cleaned in afterAll (mirrors cleanup_test_project).
 let proj = "";
 let firstStage = "";
-let graphPath = "";
-let auditPath = "";
+
+// P4: init births a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/),
+// and aidlc-runtime compile writes runtime-graph.json + audit shards INSIDE that
+// record, not the flat aidlc-docs/. Resolve the record dir from the active-space
+// + active-intent cursors, falling back to the flat layout for a not-yet-born
+// project. The graph/audit CONTENT is unchanged — only the LOCATION moved.
+function recordDirOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(p, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(p, "aidlc-docs");
+}
+const graphPathOf = (p: string): string =>
+  join(recordDirOf(p), "runtime-graph.json");
+const statePathOf = (p: string): string =>
+  join(recordDirOf(p), "aidlc-state.md");
+// Audit is sharded under <record>/audit/<host>-<pid>.md; concat every shard for
+// a content read, falling back to the flat audit.md for a not-yet-born project.
+function readAudit(p: string): string {
+  const auditDir = join(recordDirOf(p), "audit");
+  if (existsSync(auditDir)) {
+    return readdirSync(auditDir)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => readFileSync(join(auditDir, f), "utf-8"))
+      .join("\n");
+  }
+  const flat = join(p, "aidlc-docs", "audit.md");
+  return existsSync(flat) ? readFileSync(flat, "utf-8") : "";
+}
 
 // Captured artefacts across the sequence.
 let graphAfterInit: RuntimeGraphShape; // compile #1 — pre-approve
@@ -124,7 +160,7 @@ function run(
 }
 
 function readGraph(): RuntimeGraphShape {
-  return JSON.parse(readFileSync(graphPath, "utf-8")) as RuntimeGraphShape;
+  return JSON.parse(readFileSync(graphPathOf(proj), "utf-8")) as RuntimeGraphShape;
 }
 
 function rowFor(graph: RuntimeGraphShape, slug: string): RuntimeStageRow | undefined {
@@ -133,8 +169,6 @@ function rowFor(graph: RuntimeGraphShape, slug: string): RuntimeStageRow | undef
 
 beforeAll(() => {
   proj = createTestProject();
-  graphPath = join(proj, "aidlc-docs", "runtime-graph.json");
-  auditPath = join(proj, "aidlc-docs", "audit.md");
 
   // Init the bugfix scope — fastest scope, smallest stage list (.sh:40-42).
   const init = run(
@@ -145,10 +179,8 @@ beforeAll(() => {
   initOk = init.status === 0;
 
   // First in-flight stage from state.md (the [-] row), exactly as .sh:49.
-  const state = readFileSync(
-    join(proj, "aidlc-docs", "aidlc-state.md"),
-    "utf-8",
-  );
+  // P4: state lives in the born intent's record, not the flat aidlc-docs/.
+  const state = readFileSync(statePathOf(proj), "utf-8");
   const inProgress = state
     .split("\n")
     .find((l) => /^- \[-\]/.test(l));
@@ -160,7 +192,7 @@ beforeAll(() => {
   // we use the explicit --project-dir form (resolveProjectDir honours it,
   // aidlc-lib.ts:88) which is the deterministic path.
   run(RUNTIME, ["compile", "--project-dir", proj], { CLAUDE_PROJECT_DIR: proj });
-  compile1Ok = existsSync(graphPath);
+  compile1Ok = existsSync(graphPathOf(proj));
   if (compile1Ok) graphAfterInit = readGraph();
 
   // --- Gate-start -> approve stage 1 (emits GATE_APPROVED + STAGE_COMPLETED
@@ -176,12 +208,13 @@ beforeAll(() => {
   ]);
   run(RUNTIME, ["compile", "--project-dir", proj], { CLAUDE_PROJECT_DIR: proj });
   graphAfterApprove = readGraph();
-  rawBeforeRecompile = readFileSync(graphPath, "utf-8");
-  auditAfterApprove = readFileSync(auditPath, "utf-8");
+  rawBeforeRecompile = readFileSync(graphPathOf(proj), "utf-8");
+  // P4: audit is sharded under the born record's audit/ dir; concat the shards.
+  auditAfterApprove = readAudit(proj);
 
   // --- Idempotency: re-compile, assert byte-equivalent (.sh:103-107). ------
   run(RUNTIME, ["compile", "--project-dir", proj], { CLAUDE_PROJECT_DIR: proj });
-  rawAfterRecompile = readFileSync(graphPath, "utf-8");
+  rawAfterRecompile = readFileSync(graphPathOf(proj), "utf-8");
 });
 
 afterAll(() => {
@@ -192,7 +225,7 @@ describe("t48 runtime-graph compile end-to-end (migrated from t48-runtime-graph-
   test("1: first compile produces runtime-graph.json [.sh test 1]", () => {
     expect(initOk).toBe(true);
     expect(compile1Ok).toBe(true);
-    expect(existsSync(graphPath)).toBe(true);
+    expect(existsSync(graphPathOf(proj))).toBe(true);
   });
 
   test("2: graph carries workflow_id, scope, started_at, stages [.sh test 2]", () => {

@@ -75,7 +75,6 @@
 // value was NOT used as the correlation key.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -86,7 +85,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -94,6 +92,10 @@ import {
   FIXTURES_DIR,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
+// P4: the lock dir is keyed on the COMPOSITE identity (projectDir + intent |
+// __workspace__ sentinel), not bare projectDir — import the real resolver so the
+// planted-lock bucket matches the one audit-merge actually acquires.
+import { auditLockDir as realAuditLockDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const AUDIT_TOOL = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
@@ -217,11 +219,12 @@ function bracketOrderViolation(file: string): string | null {
   return null;
 }
 
-/** auditLockDir (aidlc-lib.ts:512-514): $TMPDIR/.aidlc-audit-<md5(projectDir)[0:8]>.lock */
+/** The lock dir audit-merge acquires. P4: keyed on the composite identity
+ *  (projectDir + intent | __workspace__ sentinel). B6 merges a flat fixture with
+ *  NO --intent/--space, so audit-merge keys the workspace sentinel bucket — which
+ *  is exactly realAuditLockDir(projectDir) with intent omitted. */
 function auditLockDir(projectDir: string): string {
-  const hash = createHash("md5").update(projectDir).digest("hex").slice(0, 8);
-  const base = process.env.TMPDIR || tmpdir();
-  return join(base, `.aidlc-audit-${hash}.lock`);
+  return realAuditLockDir(projectDir);
 }
 
 // ===========================================================================

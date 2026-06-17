@@ -5,8 +5,8 @@ Codex CLI harness (minimum version 0.139.0). Invoke the orchestrator skill with
 `$aidlc` (or `/skills` → aidlc) followed by a scope or project description.
 The deterministic engine, state machine, audit log, and referee are
 byte-identical to every other harness distribution; only the shell differs. Run
-`$aidlc --status` for progress, `$aidlc --help` for usage, `$aidlc --init`
-to scaffold `aidlc-docs/`, `$aidlc --doctor` to validate setup, and
+`$aidlc --status` for progress, `$aidlc --help` for usage, `$aidlc intent`
+to list intents, `$aidlc --doctor` to validate setup, and
 `$aidlc --stage <slug>` / `--phase <name>` / `--depth <level>` /
 `--test-strategy <level>` / `--test-run` for the usual overrides.
 

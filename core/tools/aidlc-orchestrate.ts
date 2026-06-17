@@ -8,11 +8,9 @@
 // The engine reads workflow state (aidlc-docs/aidlc-state.md) and the compiled
 // stage graph (data/stage-graph.json), then emits EXACTLY ONE typed Directive
 // (JSON) to stdout. `next` mutates no workflow state itself (state md5 is
-// unchanged across a `next` call). The one transitive exception is `next --init`
-// over an EXISTING workspace: to relay the canonical guard message verbatim it
-// shells out to the init guard, which appends its own ERROR_LOGGED audit row
-// before dying — the guard tool's own behaviour, mirrored from the prose
-// orchestrator's relay-the-guard path, not a state write by the engine. The
+// unchanged across a `next` call) — including birth: on a fresh workspace it
+// NAMES the deterministic `intent-birth` move via a print directive (the
+// read-only-engine invariant), and the conductor runs that separate tool. The
 // directive's `kind` tells the conductor the single move to make next; the
 // conductor relays human choices
 // and supplies resolved facts, but the engine never originates a deviation,
@@ -232,8 +230,6 @@ interface ParsedFlags {
   depth?: string;
   testStrategy?: string;
   readOnly?: string; // the matched read-only flag, if any
-  init?: boolean; // --init: scaffold the workspace (guard-checked)
-  force?: boolean; // --force: bypass the init/state-exists guard
   resume?: boolean; // --resume: re-enter an existing workflow (resume choice)
   testRun?: boolean; // --test-run: CI/automation mode (rides through to a jump's execute)
   single?: boolean; // --single: run ONE stage under a synthetic workflow id, never touching the main pointer
@@ -243,7 +239,7 @@ interface ParsedFlags {
 
 // Extract the flags the `next` decision rule consumes. --project-dir is pulled
 // out by the caller before this runs; here we read scope/stage/phase/depth/
-// test-strategy, the boolean mode flags (--init/--force/--resume), and detect a
+// test-strategy, the boolean mode flags (--resume/--test-run/--single), and detect a
 // read-only utility flag. Any leading non-flag token is the freeform intent
 // (mirrors `/aidlc <freeform description>`). Mirrors the prose orchestrator's
 // flag extraction — the value of a valued flag is the following argv token.
@@ -256,11 +252,7 @@ function parseNextFlags(args: string[]): ParsedFlags {
       flags.readOnly = a;
       continue;
     }
-    if (a === "--init") {
-      flags.init = true;
-    } else if (a === "--force") {
-      flags.force = true;
-    } else if (a === "--resume") {
+    if (a === "--resume") {
       flags.resume = true;
     } else if (a === "--test-run") {
       flags.testRun = true;
@@ -289,20 +281,29 @@ function parseNextFlags(args: string[]): ParsedFlags {
   return flags;
 }
 
-// The workflow-birth print for an EXPLICITLY NAMED scope on a fresh workspace
-// (no aidlc-docs/aidlc-state.md). A user who names a scope — `next --scope
-// bugfix` or the bare positional `next bugfix` — asked to START a workflow;
-// there is nothing to run until the workspace is scaffolded, and scaffolding
-// is a mutation (init's job), so `next` names the move as a run-then-continue
-// print and the conductor runs it, then re-runs `next` to land on the first
-// stage. Threads --depth / --test-strategy / --test-run onto the named init
-// command (mirrors Branch 3's flag-threading idiom; `aidlc-utility.ts init`
-// accepts all three). Shared by Branch 7b (valid-scope positional) and
-// Branch 9 (explicit --scope flag) so the two explicit-naming shapes emit
-// byte-identical directives. The harness dir is resolved through harnessDir()
-// so the directive names the right tree on every harness (.claude/.kiro/.codex).
-function birthPrintDirective(scope: string, flags: ParsedFlags): PrintDirective {
-  const cmd = [`init --scope ${scope}`];
+// The workflow-birth print for a resolved scope on a fresh workspace (no intent
+// record yet). A user who described what to build — `/aidlc "build the auth
+// service"`, the bare positional `next bugfix`, or `next --scope bugfix` — asked
+// to START a workflow; there is nothing to run until an intent is born, and
+// birth is a mutation, so `next` (read-only) NAMES the move as a
+// run-then-continue print and the conductor runs it, then re-runs `next` to land
+// on the first stage. The named move is the deterministic `intent-birth` handler
+// (mint UUIDv7, create the intent dir, append intents.json, set active-intent,
+// emit WORKFLOW_STARTED/PHASE_STARTED into the new intent's audit) — the
+// read-only-engine invariant is preserved: the routing tool names, a separate
+// deterministic tool mutates, the human's "start a new intent?" judgement gated
+// the get-here. Threads the freeform feature description (--arguments) so the
+// born intent's slug + state Project field carry it, plus --depth /
+// --test-strategy / --test-run. Shared by Branch 7b (valid-scope positional) and
+// Branch 9 (explicit --scope flag) so the explicit-naming shapes emit identical
+// directives. The harness dir is resolved through harnessDir() so the directive
+// names the right tree on every harness (.claude/.kiro/.codex).
+function birthPrintDirective(scope: string, flags: ParsedFlags, description?: string): PrintDirective {
+  const cmd = [`intent-birth --scope ${scope}`];
+  if (description && description.length > 0) {
+    // Shell-quote the freeform description so multi-word intents survive intact.
+    cmd.push(`--arguments ${JSON.stringify(description)}`);
+  }
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.testRun) cmd.push("--test-run");
@@ -859,36 +860,12 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // once here where projectDir is known; the resolvers themselves take no pd.
   const recordPrefix = relativeRecordDir(pd);
 
-  // Branch 3 — --init (SKILL.md:134). Scaffolding the workspace is a mutation,
-  // so `next` never performs it; it names the move (print) or relays the guard
-  // rejection (error). The ONE guard `next` can verify read-only is "state
-  // already exists" — and in exactly that case the `init` tool dies at its own
-  // guard BEFORE writing anything, so we shell out to capture the VERBATIM
-  // `aidlc-state.md already exists at ... Use --force to reinitialize.` message
-  // rather than reconstruct it. With --force, or on a clean workspace, init
-  // would mutate, so we do NOT spawn it — we emit a print naming the command.
-  if (flags.init) {
-    if (stateContent && !flags.force) {
-      const initArgs = ["init", "--project-dir", pd];
-      if (flags.scope) initArgs.push("--scope", flags.scope);
-      const run = runTool("aidlc-utility.ts", initArgs);
-      if (!run.ok) {
-        emit(errorDirective(toolErrorMessage(run)));
-        return;
-      }
-      // Defensive: the guard should have failed above. If the tool somehow
-      // succeeded, fall through to naming the move rather than asserting.
-    }
-    const cmd = ["init"];
-    if (flags.scope) cmd.push(`--scope ${flags.scope}`);
-    if (flags.depth) cmd.push(`--depth ${flags.depth}`);
-    if (flags.force) cmd.push("--force");
-    if (flags.testRun) cmd.push("--test-run");
-    emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\` to scaffold the workspace, then print its output verbatim and stop.`,
-    ));
-    return;
-  }
+  // (Branch 3 — the legacy `--init` flag — retired in P4. There is no longer a
+  // user-facing `/aidlc --init`: the workspace shell ships in dist/ (SEED) and
+  // the first intent is BORN, not scaffolded. Birth flows through the
+  // birthPrintDirective seam below — Branch 7b/9a name the `intent-birth` move
+  // for a resolved scope on a fresh workspace; Branch 8 surfaces the freeform
+  // scope-confirm `ask` first. No `--init`/`--force` flag reaches the engine.)
 
   // Resolve scope by the precedence ladder before any graph lookup.
   const { scope, source } = resolveScope(stateContent, flags);
@@ -1147,7 +1124,10 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // rather than performing it. `--resume` never births: resuming claims a
   // workflow already exists, so with no state it falls to the 9b error.
   if (!stateContent && source === "flag" && !flags.resume) {
-    emit(birthPrintDirective(scope, flags));
+    // flags.intent here is freeform feature text typed alongside an explicit
+    // --scope (e.g. `/aidlc --scope feature "build the auth service"`) — thread
+    // it as the born intent's description; a bare `--scope <s>` carries none.
+    emit(birthPrintDirective(scope, flags, flags.intent));
     return;
   }
   //
@@ -1161,8 +1141,9 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // named scope births).
   if (!stateContent) {
     emit(errorDirective(
-      "No workflow state found (aidlc-docs/aidlc-state.md is absent). " +
-        "Name a scope to start a workflow (/aidlc --scope <scope>) or scaffold one with /aidlc --init.",
+      "No workflow state found (no active intent). " +
+        "Start one by describing what to build (/aidlc \"build the auth service\") " +
+        "or by naming a scope (/aidlc --scope <scope>).",
     ));
     return;
   }
@@ -1320,7 +1301,7 @@ function emitRunStageForSlug(
 // not runnable, relayed with the verbatim skip wording the jump path uses, so the
 // directive stream is identical regardless of entry point).
 const SINGLE_INIT_ERROR =
-  "Cannot run an initialization stage with --single. Initialization is bootstrap (it scaffolds state); run /aidlc --init instead.";
+  "Cannot run an initialization stage with --single. Initialization is bootstrap (it births the intent + state); it runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
 
 function emitSingleRunStage(
   slug: string,
@@ -1403,7 +1384,7 @@ function emitSingleRunStage(
 // (`aidlc-jump.ts resolve` treats init stages as valid targets, returning
 // valid:true), so the engine enforces it here rather than relaying a tool error.
 const INIT_JUMP_ERROR =
-  "Cannot jump to initialization stages. Use /aidlc --init to run the Initialization phase.";
+  "Cannot jump to initialization stages. The Initialization phase runs automatically when you start a workflow (describe what to build, e.g. /aidlc \"build the auth service\").";
 
 function emitJumpDirective(
   flags: ParsedFlags,

@@ -34,7 +34,7 @@
 //   - state:  <projectDir>/aidlc-docs/aidlc-state.md   (aidlc-lib.ts:137)
 //   - audit:  <projectDir>/aidlc-docs/audit.md         (aidlc-lib.ts:141)
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -686,18 +686,71 @@ export function extractToolResultText(content: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// File readers — the SHIPPED paths from aidlc-lib.ts:137 / :141.
-// Exported so tests/assert.ts can re-read after a run if needed.
+// File readers — follow the workspace layout the engine writes.
+//
+// P4 — birth writes per-intent: state lands at
+// aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md and audit at
+// <record>/audit/<host>-<pid>.md (per-clone shards), NOT the flat aidlc-docs/.
+// These readers resolve the active intent's record from the active-space +
+// active-intent cursors, falling back to the flat layout for a not-yet-born
+// (pre-migration) project so the readers stay correct in both worlds.
 // ---------------------------------------------------------------------------
 
-/** Absolute path to the state file the framework writes. (aidlc-lib.ts:137) */
-export function stateFilePathFor(projectDir: string): string {
-  return join(projectDir, "aidlc-docs", "aidlc-state.md");
+/** The active intent's record dir, or the flat aidlc-docs/ when none resolves. */
+export function recordDirFor(projectDir: string): string {
+  const spaceCursor = join(projectDir, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf8").trim() || "default"
+    : "default";
+  const intentsDir = join(projectDir, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(projectDir, "aidlc-docs");
 }
 
-/** Absolute path to the audit log the framework writes. (aidlc-lib.ts:141) */
+/** Absolute path to the state file the framework writes (per-intent record). */
+export function stateFilePathFor(projectDir: string): string {
+  return join(recordDirFor(projectDir), "aidlc-state.md");
+}
+
+/** Absolute path to the audit SHARD DIR the framework writes (per-clone shards). */
+export function auditDirFor(projectDir: string): string {
+  return join(recordDirFor(projectDir), "audit");
+}
+
+/**
+ * Back-compat single-file audit path for live tests that `readFileSync` the
+ * audit log directly. P4 shards audit per clone under <record>/audit/; a
+ * single-process live test produces exactly ONE shard, so return its path (or
+ * the flat aidlc-docs/audit.md when present — a pre-migration project). Prefer
+ * readAuditEvents()/readAuditText() for multi-shard correctness.
+ */
 export function auditFilePathFor(projectDir: string): string {
+  const dir = auditDirFor(projectDir);
+  if (existsSync(dir)) {
+    const shards = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+    if (shards.length > 0) return join(dir, shards[0]);
+  }
+  // Pre-migration flat layout, or no shard yet — the flat audit.md path.
   return join(projectDir, "aidlc-docs", "audit.md");
+}
+
+/** Concatenated text of every audit shard (or "" when none). */
+export function readAuditText(projectDir: string): string {
+  const dir = auditDirFor(projectDir);
+  if (existsSync(dir)) {
+    const shards = readdirSync(dir).filter((f) => f.endsWith(".md"));
+    if (shards.length > 0) {
+      return shards.map((f) => readFileSync(join(dir, f), "utf8")).join("\n");
+    }
+  }
+  const flat = join(projectDir, "aidlc-docs", "audit.md");
+  return existsSync(flat) ? readFileSync(flat, "utf8") : "";
 }
 
 /** Read aidlc-state.md verbatim, or undefined if absent. */
@@ -709,12 +762,15 @@ export function readStateFile(projectDir: string): string | undefined {
 /**
  * Parse the audit log into an ordered list of event-type strings. Each audit
  * block carries a `**Event**: <TYPE>` line (aidlc-audit.ts:246); we extract
- * those in file order. Returns undefined if the audit file is absent.
+ * those across every per-clone shard under <record>/audit/, OR the flat
+ * aidlc-docs/audit.md for a not-yet-born (pre-migration) project. Returns
+ * undefined when no audit exists at all. (P4: audit is sharded per clone, but a
+ * flat legacy/seeded project keeps one audit.md until migration — readAuditText
+ * handles both.)
  */
 export function readAuditEvents(projectDir: string): string[] | undefined {
-  const p = auditFilePathFor(projectDir);
-  if (!existsSync(p)) return undefined;
-  const text = readFileSync(p, "utf8");
+  const text = readAuditText(projectDir);
+  if (text.length === 0) return undefined;
   const events: string[] = [];
   for (const line of text.split("\n")) {
     const m = line.match(/^\*\*Event\*\*:\s*(\S+)/);

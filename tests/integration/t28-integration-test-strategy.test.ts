@@ -46,7 +46,12 @@
 //                              "standard"->"Standard", "minimal"->"Minimal")
 //   - TEST_STRATEGY_CHANGED audit event:  appendAuditEvent (utility.ts:2406), written as
 //                              `**Event**: TEST_STRATEGY_CHANGED` (aidlc-audit.ts:258), parsed by
-//                              readAuditEvents (sdk-drive.ts:478)
+//                              readAuditEvents (sdk-drive.ts)
+//   - P4 layout note:          config-change does NOT migrate the flat seed (only intent-birth
+//                              migrates, aidlc-utility.ts:2022). The withState seed stays at the
+//                              flat aidlc-docs/ layout, so assertStateField (r.stateFile) /
+//                              assertAuditEvent (r.auditEvents) resolve it via sdk-drive's
+//                              per-intent readers' flat fallback — no hardcoded flat path here.
 //   - state-mid-ideation fixture seeds Depth=Standard, Test Strategy=Standard (state-mid-ideation.md:17-18)
 //     and Scope=feature — so --test-strategy minimal CHANGES Standard->Minimal (event fires) while
 //     --depth standard is a no-op (DEPTH_CHANGED does NOT fire).
@@ -124,8 +129,10 @@ describe("t28 /aidlc --test-strategy / --depth config-change (sdk)", () => {
         assertStateField(r, "Test Strategy", STRATEGY_MINIMAL);
 
         // .sh A2: the override logged TEST_STRATEGY_CHANGED. assertAuditEvent
-        // reads the parsed `**Event**:` lines off aidlc-docs/audit.md and fails
-        // loudly if the audit log was never written.
+        // reads the parsed `**Event**:` lines off the audit (P4: per-clone shards
+        // under the resolved record's audit/, via sdk-drive's readAuditEvents —
+        // flat fallback here since config-change does NOT migrate, only
+        // intent-birth does) and fails loudly if the audit log was never written.
         assertAuditEvent(r, STRATEGY_EVENT);
       } finally {
         cleanupTestProject(proj);

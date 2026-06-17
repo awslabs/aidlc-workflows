@@ -97,7 +97,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -118,8 +118,27 @@ const utilityIn = (proj: string): string => toolIn(proj, "aidlc-utility.ts");
 const fixtureScopeFile = (proj: string): string =>
   join(proj, ".claude", "scopes", "aidlc-fixture-scope.md");
 
+// P4: init births a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/)
+// and writes aidlc-state.md there, not the flat aidlc-docs/. Resolve the record
+// dir from the active-space + active-intent cursors, falling back to the flat
+// layout for a seeded-flat project (Test 5 seeds flat state and never inits).
+function recordDirOf(proj: string): string {
+  const spaceCursor = join(proj, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(proj, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(proj, "aidlc-docs");
+}
 const statePath = (proj: string): string =>
-  join(proj, "aidlc-docs", "aidlc-state.md");
+  join(recordDirOf(proj), "aidlc-state.md");
 const auditPath = (proj: string): string =>
   join(proj, "aidlc-docs", "audit.md");
 

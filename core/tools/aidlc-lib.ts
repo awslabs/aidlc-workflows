@@ -534,6 +534,230 @@ export function appendIntentToRegistry(
   writeFileAtomic(path, `${JSON.stringify(list, null, 2)}\n`);
 }
 
+// The `aidlc/spaces` root — the parent of every space dir. Sole helper so the
+// "what spaces exist?" scan and the intent-record scan agree on one location.
+export function spacesRoot(projectDir: string): string {
+  return join(workspaceRoot(projectDir), "spaces");
+}
+
+// Read a space's intents.json registry as a typed list. Returns [] when the
+// file is absent or malformed (same tolerance as appendIntentToRegistry). The
+// canonical "what intents exist" record for humans/ordering/status — the cheap
+// on-disk listIntentDirs() scan is the path-resolver's record-presence signal,
+// but the registry carries the uuid/status/scope/repos a human or the --json
+// consumer needs.
+export function readIntentRegistry(projectDir: string, space?: string): IntentRegistryEntry[] {
+  const path = intentsRegistryPath(projectDir, space);
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (Array.isArray(parsed)) return parsed as IntentRegistryEntry[];
+  } catch {
+    // absent / malformed → empty
+  }
+  return [];
+}
+
+// --- The deterministic query layer: "what exists" (one source, two modes) ----
+//
+// listSpaces()/listIntents() are the single shared readers the verb handlers,
+// the auto-birth gate, the resume-rebind, and the statusline all call (P4
+// query-layer box). Pure reads — they never mutate. A space exists iff its dir
+// is present under aidlc/spaces/; an intent's authoritative row is the
+// registry, joined with the on-disk record presence.
+
+export interface SpaceInfo {
+  name: string;
+  active: boolean;
+}
+
+// Enumerate the spaces (dir names under aidlc/spaces/), sorted, each flagged
+// active per the active-space cursor. "default" is always reported even when no
+// spaces dir exists yet (the resolver treats it as always-valid — activeSpace()
+// returns it), so the listing never claims zero spaces on a fresh shell.
+export function listSpaces(projectDir: string): SpaceInfo[] {
+  const active = activeSpace(projectDir);
+  const names = new Set<string>([DEFAULT_SPACE]);
+  try {
+    for (const name of readdirSync(spacesRoot(projectDir))) {
+      if (statSync(join(spacesRoot(projectDir), name)).isDirectory()) names.add(name);
+    }
+  } catch {
+    // no spaces dir → just the always-present default
+  }
+  return [...names].sort().map((name) => ({ name, active: name === active }));
+}
+
+export interface IntentInfo {
+  uuid: string;
+  slug: string;
+  status: string;
+  scope?: string;
+  repos?: string[];
+  dirName: string | null; // the on-disk <slug>-<id8> record dir, or null if registry-only
+  active: boolean;
+}
+
+// Enumerate a space's intents from the registry, joined with the on-disk record
+// dirs, each flagged active per the active-intent cursor. The registry is the
+// ordering/identity source; the dir-name is matched by the id8 disambiguator
+// suffix so a registry row resolves to its record dir even when the slug was
+// later renamed. A record dir with no registry row (a hand-created or migrated
+// orphan) is appended so the listing never hides an on-disk intent.
+export function listIntents(projectDir: string, space?: string): IntentInfo[] {
+  const sp = space ?? activeSpace(projectDir);
+  const registry = readIntentRegistry(projectDir, sp);
+  const dirs = listIntentDirs(projectDir, sp);
+  // activeIntent() returns the record DIR NAME of the active intent (or null).
+  const activeDir = activeIntent(projectDir, sp);
+  const claimedDirs = new Set<string>();
+  const infos: IntentInfo[] = registry.map((entry) => {
+    // Match the row to its record dir by the `<slug>-<id8...>` shape: same slug
+    // prefix AND the dir's trailing hex is a prefix of the uuid's id-suffix.
+    const dirName =
+      dirs.find((d) => {
+        if (!d.startsWith(`${entry.slug}-`)) return false;
+        const suffix = d.slice(entry.slug.length + 1);
+        return /^[0-9a-f]+$/.test(suffix) && idSuffix(entry.uuid, suffix.length) === suffix;
+      }) ?? null;
+    if (dirName) claimedDirs.add(dirName);
+    return {
+      uuid: entry.uuid,
+      slug: entry.slug,
+      status: entry.status,
+      scope: entry.scope,
+      repos: entry.repos,
+      dirName,
+      active: dirName !== null && dirName === activeDir,
+    };
+  });
+  // On-disk records with no registry row (orphans) — surface them too.
+  for (const d of dirs) {
+    if (claimedDirs.has(d)) continue;
+    infos.push({
+      uuid: "",
+      slug: d.replace(/-[0-9a-f]+$/, ""),
+      status: "unknown",
+      dirName: d,
+      active: d === activeDir,
+    });
+  }
+  return infos;
+}
+
+// Write the active-intent cursor for a space (gitignored per-user pointer).
+// Best-effort: the cursor dir is created if absent; a write failure is swallowed
+// (the cursor is per-user state, never the source of truth — the registry is).
+export function setActiveIntentCursor(projectDir: string, dirName: string, space?: string): void {
+  const dir = intentsDir(projectDir, space);
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ACTIVE_INTENT_POINTER), `${dirName}\n`, "utf-8");
+  } catch {
+    /* per-user cursor; best-effort */
+  }
+}
+
+// Write the active-space cursor (gitignored per-user pointer). Best-effort.
+export function setActiveSpaceCursor(projectDir: string, name: string): void {
+  try {
+    mkdirSync(workspaceRoot(projectDir), { recursive: true });
+    writeFileSync(join(workspaceRoot(projectDir), ACTIVE_SPACE_POINTER), `${name}\n`, "utf-8");
+  } catch {
+    /* per-user cursor; best-effort */
+  }
+}
+
+// --- Intent birth: the deterministic mutation behind the engine's directive ---
+//
+// birthIntent() is the single deterministic primitive the `intent-birth` tool
+// handler calls: mint a UUIDv7, create the record dir, append the registry row,
+// set the active-intent cursor. It does NOT emit audit events or write the
+// aidlc-state.md body (the handler owns those, since they need the scope graph)
+// — it owns only the identity + dir + registry + cursor, the parts that must be
+// crash-safe and clash-free. The CALLER MUST already hold the WORKSPACE lock
+// (invariant 2: every intents.json mutation takes the workspace bucket); a
+// concurrent birth is serialized by that lock, so the within-space dir-clash
+// disambiguation here only ever resolves a same-uuid id8 collision, never a
+// cross-process race.
+export interface BornIntent {
+  uuid: string;
+  slug: string;
+  dirName: string;
+  recordDir: string;
+  space: string;
+}
+
+export function birthIntent(
+  projectDir: string,
+  slug: string,
+  space: string,
+  scope?: string,
+): BornIntent {
+  const uuid = uuidv7();
+  const intentsRoot = intentsDir(projectDir, space);
+  let dirName = `${slug}-${idSuffix(uuid)}`;
+  // Disambiguate a within-space dir clash by the next-longer prefix of the SAME
+  // uuid (never re-mint) — mirrors migrateFlatLayout's disambiguation.
+  for (let len = 8; existsSync(join(intentsRoot, dirName)) && len <= 32; len += 2) {
+    dirName = `${slug}-${idSuffix(uuid, len)}`;
+  }
+  const recordPath = join(intentsRoot, dirName);
+  mkdirSync(recordPath, { recursive: true });
+  // BIND the record so the resolvers recognize it immediately: activeIntent()
+  // only treats a record dir as real once it holds an aidlc-state.md (the cursor
+  // + lone-intent checks both gate on existsSync(<dir>/aidlc-state.md)). Birth
+  // mkdir's the dir, but the full state body is written AFTER birth by the
+  // caller (handleIntentBirth, via the default-resolving writeStateFile). Write
+  // a header-only stub here so the cursor resolves to THIS record between mint
+  // and the full write — without it, activeIntent() returns null and the
+  // post-birth state/audit writes leak to the flat fallback (a bootstrap gap).
+  const statePath = join(recordPath, "aidlc-state.md");
+  if (!existsSync(statePath)) {
+    writeFileSync(statePath, "# AI-DLC State Tracking\n", "utf-8");
+  }
+  appendIntentToRegistry(
+    projectDir,
+    { uuid, slug, scope, repos: undefined, status: "in-flight" },
+    space,
+  );
+  setActiveIntentCursor(projectDir, dirName, space);
+  return { uuid, slug, dirName, recordDir: recordPath, space };
+}
+
+// Flip an intent's registry row to a terminal/other status (e.g. "complete").
+// Matches the row by record DIR NAME (the stable identity the cursor/state use),
+// rewriting intents.json in place. MUST be called under the WORKSPACE lock
+// (invariant 2). Returns true iff a row matched and was updated. No-op (false)
+// when the intent is the legacy flat record (dirName null) or no row matches.
+export function updateIntentStatus(
+  projectDir: string,
+  dirName: string,
+  status: string,
+  space?: string,
+): boolean {
+  const sp = space ?? activeSpace(projectDir);
+  const path = intentsRegistryPath(projectDir, sp);
+  const list = readIntentRegistry(projectDir, sp);
+  let changed = false;
+  for (const entry of list) {
+    // The record dir for a row is `<slug>-<id8...>`; match the active dirName by
+    // the same slug-prefix + id-suffix rule listIntents() uses.
+    if (!dirName.startsWith(`${entry.slug}-`)) continue;
+    const suffix = dirName.slice(entry.slug.length + 1);
+    if (!/^[0-9a-f]+$/.test(suffix) || idSuffix(entry.uuid, suffix.length) !== suffix) continue;
+    if (entry.status !== status) {
+      entry.status = status;
+      changed = true;
+    }
+    break;
+  }
+  if (changed) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileAtomic(path, `${JSON.stringify(list, null, 2)}\n`);
+  }
+  return changed;
+}
+
 // Run the flat→per-intent migration if needed. Idempotent. Returns the new
 // intent dir name on a migration, or null when none was needed. The caller owns
 // the git-rm of the flat tree (a tool can shell out to git; lib stays

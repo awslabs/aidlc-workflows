@@ -74,7 +74,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
@@ -99,9 +99,46 @@ const UTIL_TS = join(
 
 const SLUG = "requirements-analysis";
 
+// P4: intent-birth writes state into the born intent's per-intent record dir
+// (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat aidlc-docs/. After
+// the init in beforeAll the active-intent cursor points at the born record, so
+// every later gate-start/reject/revise/approve (which default-resolve the active
+// intent) reads/writes THAT record — recordDirOf follows the cursor and resolves
+// it for both the init output and the state-machine writes. Falls back to the
+// flat layout for a not-yet-born / seeded-flat project.
+function recordDirOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(p, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(p, "aidlc-docs");
+}
+
 const statePath = (p: string): string =>
-  join(p, "aidlc-docs", "aidlc-state.md");
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+  join(recordDirOf(p), "aidlc-state.md");
+
+// Audit is written as per-clone shards under <record>/audit/<host>-<pid>.md
+// (Stage B). Concatenate every shard for a content read; fall back to the flat
+// aidlc-docs/audit.md for a seeded-flat / pre-migration project.
+function readAudit(p: string): string {
+  const auditDir = join(recordDirOf(p), "audit");
+  if (existsSync(auditDir)) {
+    return readdirSync(auditDir)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => readFileSync(join(auditDir, f), "utf-8"))
+      .join("\n");
+  }
+  const flat = join(p, "aidlc-docs", "audit.md");
+  return existsSync(flat) ? readFileSync(flat, "utf-8") : "";
+}
 
 interface CliResult {
   status: number;
@@ -156,10 +193,8 @@ function checkboxGlyph(p: string, slug: string): string {
  * (`grep -cE '^\*\*Event\*\*: <ev>$'`).
  */
 function auditEventCount(p: string, ev: string): number {
-  const f = auditPath(p);
-  if (!existsSync(f)) return 0;
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
-  return readFileSync(f, "utf-8")
+  return readAudit(p)
     .split("\n")
     .filter((l) => re.test(l)).length;
 }
@@ -170,12 +205,10 @@ function auditEventCount(p: string, ev: string): number {
  * per-block field values for the two covered events.
  */
 function auditBlocks(p: string, ev: string): string[][] {
-  const f = auditPath(p);
-  if (!existsSync(f)) return [];
   const blocks: string[][] = [];
   let cur: string[] = [];
   let matched = false;
-  for (const line of readFileSync(f, "utf-8").split("\n")) {
+  for (const line of readAudit(p).split("\n")) {
     if (line === "---") {
       if (matched) blocks.push(cur);
       cur = [];

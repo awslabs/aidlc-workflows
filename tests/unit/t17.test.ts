@@ -37,7 +37,15 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   cleanupTestProject,
@@ -100,10 +108,54 @@ function runInit(proj: string, scope: string): RunResult {
   return { rc: res.status ?? -1, stdout, stderr, combined: `${stdout}${stderr}` };
 }
 
-const stateMd = (proj: string) => join(proj, "aidlc-docs", "aidlc-state.md");
-const auditMd = (proj: string) => join(proj, "aidlc-docs", "audit.md");
+// P4: intent-birth (which runInit triggers) writes state into the born intent's
+// per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat
+// aidlc-docs/. Resolve the record dir from the active-space + active-intent
+// cursors, falling back to the flat layout for a seeded-flat project (the many
+// seedStateFile cases never call runInit, so they stay flat).
+function recordDirOf(proj: string): string {
+  const spaceCursor = join(proj, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(proj, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(proj, "aidlc-docs");
+}
+const stateMd = (proj: string) => join(recordDirOf(proj), "aidlc-state.md");
+// Audit path for appending: a born record has per-clone shards under
+// <record>/audit/<host>-<clone-id>.md (one shard per test clone). Resolve the
+// existing shard so append/read both hit the file the tool reads; fall back to
+// the flat aidlc-docs/audit.md for a seeded-flat project.
+function auditMd(proj: string): string {
+  const auditDir = join(recordDirOf(proj), "audit");
+  if (existsSync(auditDir)) {
+    const shard = readdirSync(auditDir).find((f) => f.endsWith(".md"));
+    if (shard) return join(auditDir, shard);
+  }
+  return join(proj, "aidlc-docs", "audit.md");
+}
 const readState = (proj: string) => readFileSync(stateMd(proj), "utf-8");
-const readAudit = (proj: string) => readFileSync(auditMd(proj), "utf-8");
+// Concatenate every audit shard under the born record's audit/ dir (Stage B);
+// fall back to the flat aidlc-docs/audit.md for a seeded-flat / pre-migration
+// project. Matches the tool's own readAllAuditShards resolution.
+function readAudit(proj: string): string {
+  const auditDir = join(recordDirOf(proj), "audit");
+  if (existsSync(auditDir)) {
+    return readdirSync(auditDir)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => readFileSync(join(auditDir, f), "utf-8"))
+      .join("\n");
+  }
+  const flat = join(proj, "aidlc-docs", "audit.md");
+  return existsSync(flat) ? readFileSync(flat, "utf-8") : "";
+}
 
 // Count anchored lines `**Event**: <EVENT>` (the .sh's `grep -c "^\*\*Event\*\*: X"`).
 function countEvent(text: string, event: string): number {

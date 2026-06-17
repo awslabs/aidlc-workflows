@@ -1,226 +1,224 @@
-// covers: subcommand:aidlc-utility:init
+// covers: subcommand:aidlc-utility:intent-birth
 //
 // t21b.test.ts — SDK-harness port of tests/integration/t21b-integration-init-idempotent.sh
-// (plan 6). Drives the real `/aidlc --init` (twice) + `/aidlc --init --force`
-// through the Claude Agent SDK and asserts ONLY on deterministic surfaces — the
-// on-disk state-file structure, the parsed audit events, and the verbatim init-CLI
-// stdout in the Bash tool_result — NEVER on assistantText.
+// (plan 6), REWRITTEN for the P4 contract. Drives a SECOND workflow birth on a
+// project that already has one, through the Claude Agent SDK, and asserts ONLY on
+// deterministic surfaces — the on-disk per-intent records, the parsed audit
+// events, and the verbatim birth-CLI stdout in the Bash tool_result — NEVER on
+// assistantText.
 //
-// WHY THIS PORT EXISTS. The .sh asserted the --force / re-init contract entirely
-// by grepping the post-run aidlc-state.md + audit.md on disk (stage-checkbox
-// count, Lifecycle Phase, WORKFLOW_STARTED count, workflow-state-event count).
-// Those are NOT prose-flaky — they read the FILES the deterministic init tool
-// wrote, not the LLM's rendering. But the .sh reached them through a `claude -p`
-// subprocess + run_claude exit semantics; this port reaches the SAME files
-// through driveAidlc, so the assertions become structured reads (readStateField /
-// auditEvents) instead of shell greps. Equal-or-stronger on every line.
+// P4 MIGRATION — the re-init GUARD IS RETIRED. The .sh proved an `--init` /
+// `--force` idempotency contract: a second bare `--init` was REJECTED with
+// "aidlc-state.md already exists ... Use --force to reinitialize", and only
+// `--init --force` could re-init (wiping + re-writing the single flat state).
+// That whole guard is GONE. The user-facing --init/--force are retired; a
+// workspace now holds MANY intents, so a SECOND birth (naming a scope again)
+// SUCCEEDS and mints a SECOND intent record under
+// aidlc/spaces/default/intents/ — there is no "already exists" rejection and no
+// --force. This file is rewritten to the NEW contract: drive a scope twice and
+// prove the second birth adds a distinct, second intent record + a fresh
+// WORKFLOW_STARTED, without clobbering the first. (Mirrors tests/unit/t20.test.ts
+// "17-19" and tests/integration/t165-intent-birth-p4.test.ts new-work-while-active.)
 //
-// NO --test-run. The .sh never used --test-run (init is gate-free: SKILL.md:531
-// routes --init to `aidlc-utility.ts init`, which prints state and STOPS,
-// SKILL.md:54 print-terminal). So this port carries none either — there is no
-// auto-approve to drop. The init rejection on a 2nd bare --init is a deterministic
-// tool guard (aidlc-utility.ts:1746-1749 `die(... Use --force to reinitialize)`);
-// the orchestrator honours it and STOPS, so we assert the BEHAVIORAL consequence:
-// state + workflow-state audit events unchanged.
+// NO --test-run. The birth path is gate-free (it prints state and STOPs), so
+// there is no auto-approve to drop.
 //
-// THE THREE-RUN JOURNEY (verified against the SHIPPED handler):
-//   run 1: `/aidlc --init` on a fresh project -> handleInit scaffolds + writes
-//          aidlc-state.md, emits WORKFLOW_STARTED (utility.ts:1784) + the init
-//          phase events. Baseline captured off disk.
-//   run 2: `/aidlc --init` again, state present, NO --force -> the init tool
-//          die()s with "aidlc-state.md already exists ... Use --force to
-//          reinitialize" (utility.ts:1746-1749). The orchestrator honours the
-//          rejection; state structure + the workflow-state audit stream
-//          (WORKFLOW_/PHASE_/STAGE_/GATE_) are UNCHANGED. (SESSION_* events are
-//          hook-owned per Claude session and tracked separately — the .sh's
-//          exact discrimination, t21b.sh:46-52.)
-//   run 3: `/aidlc --init --force` -> the force path removes the state file
-//          (utility.ts:1761 rmSync) and re-inits: exits 0, re-writes state with
-//          [x] workspace-scaffold, and appends a FRESH WORKFLOW_STARTED without
-//          wiping audit (utility.ts:1782-1787 "Fires on both fresh init and
-//          --force re-init"). So the WORKFLOW_STARTED count GREW.
+// THE TWO-BIRTH JOURNEY (verified against the SHIPPED handler):
+//   birth 1: `/aidlc --scope poc "first thing"` on a fresh workspace -> the engine
+//            NAMES intent-birth, the conductor runs it; handleIntentBirth mints
+//            the first per-intent record + writes its state + emits WORKFLOW_STARTED
+//            (utility.ts:2065) into that record's audit shard. Baseline captured.
+//   birth 2: `/aidlc --scope feature "second thing"` -> a SECOND birth. There is NO
+//            re-init guard (handleIntentBirth has no "already exists" die() — a
+//            second birth just mints another intent). It adds a SECOND record dir
+//            and points the active-intent cursor at it, with its own
+//            WORKFLOW_STARTED. The FIRST record survives untouched.
 //
-// ASSERTION MAP (.sh test -> deterministic SDK surface, equal-or-stronger):
+// ASSERTION MAP (.sh test -> NEW deterministic SDK surface):
 //   1 state structure unchanged after rejected re-init
-//       -> after run 2: the `- [` stage-checkbox count AND the Lifecycle Phase
-//          field are byte-equal to the run-1 baseline (read off disk). The .sh
-//          compared `grep -c '^- ['` + the Lifecycle Phase sed; we compare the
-//          same two structural surfaces.
+//       -> RETIRED contract. The replacement: after birth 2 there are TWO distinct
+//          intent record dirs under spaces/default/intents/ (the first is NOT
+//          clobbered). The second birth's stdout carries no "already exists" /
+//          "--force" rejection (a regression guard on the retired guard).
 //   2 workflow state events unchanged after rejected re-init
-//       -> after run 2: the count of WORKFLOW_/PHASE_/STAGE_/GATE_ audit events
-//          (readAuditEvents, filtered) is byte-equal to the run-1 baseline. The
-//          .sh grepped `^**Event**: (WORKFLOW_|PHASE_|STAGE_|GATE_)`; we filter
-//          the parsed event-type list the same way (SESSION_* excluded — they
-//          fire per claude session, not per workflow state).
+//       -> RETIRED. The replacement: the SECOND birth emits its OWN fresh
+//          WORKFLOW_STARTED in its own audit shard (a new workflow began).
 //   3 third --init --force exits zero
-//       -> the run-3 init Bash tool_result is non-error (is_error === false).
+//       -> the SECOND birth's Bash tool_result is non-error (is_error === false).
 //   4 state file still exists after --force reinit
-//       -> existsSync(<proj>/aidlc-docs/aidlc-state.md) after run 3.
+//       -> both record dirs hold an aidlc-state.md after birth 2.
 //   5 --force reinit produces [x] workspace-scaffold
-//       -> the run-3 state file contains "[x] workspace-scaffold" (init phase
-//          marker always [x], utility.ts:1995-1998).
+//       -> the active (second) record's state contains "[x] workspace-scaffold"
+//          (init phase marker always [x]).
 //   6 audit gained a 2nd WORKFLOW_STARTED on --force (not wiped)
-//       -> count of WORKFLOW_STARTED in parsed auditEvents after run 3 > the
-//          run-1 baseline count (force appends a fresh one, utility.ts:1784;
-//          SESSION_* are NOT --force-driven).
+//       -> the second birth's audit shard carries WORKFLOW_STARTED (its own
+//          workflow start), proving a second workflow truly began.
 //
 // Known-answer literals (read from the SHIPPED handler, not guessed):
-//   - --init dispatch:            SKILL.md:531 -> `bun .claude/tools/aidlc-utility.ts init` via Bash, stdout verbatim
-//   - re-init rejection:          aidlc-utility.ts:1746-1749 (die on existing state, no --force)
-//   - --force removes state:      aidlc-utility.ts:1753-1762 (rmSync of the state file)
-//   - WORKFLOW_STARTED on init AND --force:  aidlc-utility.ts:1782-1787
-//   - State initialized summary:  aidlc-utility.ts:2154 ("State initialized:")
-//   - init-stage [x] markers:     aidlc-utility.ts:1995-1998
+//   - birth dispatch:            engine NAMES `intent-birth --scope <scope>` (aidlc-orchestrate.ts:302)
+//   - NO re-init guard:          handleIntentBirth (aidlc-utility.ts:1986) — no "already exists" die()
+//   - second birth mints a 2nd intent:  birthIntent appends a 2nd registry row + record dir + cursor flip
+//   - WORKFLOW_STARTED on every birth:  aidlc-utility.ts:2065
+//   - State initialized summary: "State initialized:" (aidlc-utility.ts:2376)
+//   - init-stage [x] markers:    "[x] workspace-scaffold" (init phase marker always [x])
 //
-// It SPENDS TOKENS — each driveAidlc drives the real /aidlc on Opus/Bedrock (×3).
-// Generous per-test timeout so a hung canUseTool fails LOUD via bun:test.
+// It SPENDS TOKENS — birth 1 drives the real /aidlc on Opus/Bedrock (×1); birth 2
+// invokes the deterministic intent-birth tool directly (the no-re-init-guard
+// contract is a tool contract, not a live-conductor journey — see the birth-2
+// note below). Generous per-test timeout so a hung canUseTool fails LOUD.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertToolResultContains } from "../harness/assert.ts";
 import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
-import {
-  driveAidlc,
-  readAuditEvents,
-  readStateField,
-  readStateFile,
-} from "../harness/sdk-drive.ts";
+import { driveAidlc, readStateFile } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget — three real --init turns on Opus/Bedrock. The .sh ran under
-// the suite default; honour the AIDLC_TEST_TIMEOUT convention. The driver aborts
-// ~15s before bun's per-test cap so a stuck canUseTool surfaces a partial
-// DriveResult to diagnose rather than an opaque hang. The cap covers all three
-// runs (they share the test).
+// Timeout budget — two real birth turns on Opus/Bedrock. Honour the
+// AIDLC_TEST_TIMEOUT convention. The driver aborts ~15s before bun's per-test cap
+// so a stuck canUseTool surfaces a partial DriveResult to diagnose rather than an
+// opaque hang. The cap covers both runs (they share the test).
 // ---------------------------------------------------------------------------
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "900", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 900) * 1000;
-const DRIVE_TIMEOUT_MS = Math.max(120_000, Math.floor(TEST_TIMEOUT_MS / 3) - 15_000);
+const DRIVE_TIMEOUT_MS = Math.max(120_000, Math.floor(TEST_TIMEOUT_MS / 2) - 15_000);
 
-// Known-answer literals from the SHIPPED init handler (see header for file:line).
-const INIT_STATE_SUMMARY = "State initialized:"; // utility.ts:2154 (fresh + force)
-const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
-const REINIT_REJECTION = "Use --force to reinitialize"; // utility.ts:1748
-const STOP_AFTER_REINIT_REJECTION = {
-  toolName: "Bash",
-  resultIncludes: REINIT_REJECTION,
-} as const;
+// Known-answer literals from the SHIPPED birth handler (see header for file:line).
+const INIT_STATE_SUMMARY = "State initialized:"; // utility.ts:2376
+const STOP_AFTER_BIRTH = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
 const WORKFLOW_STARTED = "WORKFLOW_STARTED";
 
-/** Count `- [` stage-checkbox rows in a state-file string — the deterministic
- *  equivalent of the .sh's `grep -c '^- ['` structural count. */
-function stageRowCount(stateText: string): number {
-  return (stateText.match(/^- \[/gm) ?? []).length;
+const intentsDir = (proj: string, space = "default"): string =>
+  join(proj, "aidlc", "spaces", space, "intents");
+
+/** The intent record dirs (dirs holding an aidlc-state.md) under the default space. */
+function recordDirs(proj: string): string[] {
+  const root = intentsDir(proj);
+  if (!existsSync(root)) return [];
+  return readdirSync(root).filter((d) =>
+    existsSync(join(root, d, "aidlc-state.md")),
+  );
 }
 
-/** Count workflow-state audit events (WORKFLOW_/PHASE_/STAGE_/GATE_) in a parsed
- *  event-type list — the .sh's `grep -cE '^**Event**: (WORKFLOW_|PHASE_|STAGE_|GATE_)'`.
- *  SESSION_* events fire per claude session independent of workflow state, so
- *  they are deliberately EXCLUDED (the .sh's exact discrimination, t21b.sh:46-52). */
-function workflowStateEventCount(events: string[]): number {
-  return events.filter((e) => /^(WORKFLOW_|PHASE_|STAGE_|GATE_)/.test(e)).length;
+/** The active intent's record dir name (the active-intent cursor), or undefined. */
+function activeRecord(proj: string): string | undefined {
+  const cursor = join(intentsDir(proj), "active-intent");
+  if (!existsSync(cursor)) return undefined;
+  const rec = readFileSync(cursor, "utf8").trim();
+  return rec.length > 0 ? rec : undefined;
 }
 
-/** Count occurrences of a specific event type in a parsed event-type list. */
-function countEvent(events: string[], event: string): number {
-  return events.filter((e) => e === event).length;
+/** Concatenated text of every audit shard under a record's audit/ dir. */
+function auditTextOf(proj: string, recordName: string): string {
+  const dir = join(intentsDir(proj), recordName, "audit");
+  if (!existsSync(dir)) return "";
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".md"))
+    .map((f) => readFileSync(join(dir, f), "utf8"))
+    .join("\n");
 }
 
-describe("t21b /aidlc --init idempotency / --force (sdk)", () => {
+describe("t21b /aidlc second-birth (no re-init guard) (sdk)", () => {
   // -------------------------------------------------------------------------
-  // Three sequential runs against ONE fresh project: establish -> rejected
-  // re-init (state/audit unchanged) -> --force (succeeds, fresh WORKFLOW_STARTED
-  // without wiping audit). Every .sh assertion re-expressed on the post-run
-  // state + audit files, read off disk.
+  // Two sequential births against ONE fresh project: birth -> second birth
+  // (SUCCEEDS, mints a distinct second intent without clobbering the first).
+  // Every (retired) .sh assertion re-expressed on the post-run per-intent records
+  // + audit shards, read off disk.
   // -------------------------------------------------------------------------
   test(
-    "second bare --init is rejected (state + workflow events unchanged); --force re-inits and appends a fresh WORKFLOW_STARTED",
+    "a second birth succeeds (no re-init guard), mints a distinct second intent record, and starts a fresh workflow",
     async () => {
       const proj = setupIntegrationProject({ noAidlcDocs: true });
       try {
-        const statePath = join(proj, "aidlc-docs", "aidlc-state.md");
+        // Precondition: empty workspace — no intent records yet.
+        expect(recordDirs(proj).length).toBe(0);
 
-        // ---- run 1: establish state ----
-        const r1 = await driveAidlc("/aidlc --init", {
+        // ---- birth 1: establish the first intent ----
+        const r1 = await driveAidlc('/aidlc --scope poc "first thing"', {
           projectDir: proj,
           timeoutMs: DRIVE_TIMEOUT_MS,
-          stopAfterToolResult: STOP_AFTER_INIT,
+          stopAfterToolResult: STOP_AFTER_BIRTH,
         });
-        // The init CLI fired (no vacuous pass) and the state file landed.
+        // The birth CLI fired (no vacuous pass) and the first record landed.
         assertToolResultContains(r1, "Bash", INIT_STATE_SUMMARY);
-        expect(existsSync(statePath)).toBe(true);
-
-        const stateBaseline = readStateFile(proj);
-        expect(stateBaseline).toBeDefined();
-        const stagesBaseline = stageRowCount(stateBaseline as string);
-        const phaseBaseline = readStateField(stateBaseline as string, "Lifecycle Phase");
-        expect(stagesBaseline).toBeGreaterThan(0);
-        expect(phaseBaseline).toBeDefined();
-
-        const eventsBaseline = readAuditEvents(proj) ?? [];
-        const workflowEventsBaseline = workflowStateEventCount(eventsBaseline);
-        const workflowStartedBaseline = countEvent(eventsBaseline, WORKFLOW_STARTED);
-        expect(workflowStartedBaseline).toBeGreaterThanOrEqual(1);
-
-        // ---- run 2: bare --init again -> rejected (no --force) ----
-        // The init tool die()s "already exists ... Use --force" (utility.ts:1746).
-        // We don't assert the rejection prose (LLM-reworded); we assert the
-        // BEHAVIORAL consequence on disk: state + workflow events unchanged.
-        const r2 = await driveAidlc("/aidlc --init", {
-          projectDir: proj,
-          timeoutMs: DRIVE_TIMEOUT_MS,
-          // Stop at the deterministic tool boundary. Otherwise a live model can
-          // spend extra turns treating the rejected init as a normal resume.
-          stopAfterToolResult: STOP_AFTER_REINIT_REJECTION,
-        });
-        assertToolResultContains(r2, "Bash", REINIT_REJECTION);
-
-        // .sh test 1: state structure unchanged after the rejected re-init.
-        const stateAfterReject = readStateFile(proj);
-        expect(stateAfterReject).toBeDefined();
-        expect(stageRowCount(stateAfterReject as string)).toBe(stagesBaseline);
-        expect(readStateField(stateAfterReject as string, "Lifecycle Phase")).toBe(
-          phaseBaseline as string,
+        const recordsAfter1 = recordDirs(proj);
+        expect(recordsAfter1.length).toBe(1);
+        const firstRecord = activeRecord(proj);
+        expect(firstRecord).toBeDefined();
+        // Birth 1 emitted its WORKFLOW_STARTED into the first record's audit shard.
+        expect(auditTextOf(proj, firstRecord as string)).toContain(
+          `**Event**: ${WORKFLOW_STARTED}`,
         );
 
-        // .sh test 2: workflow-state audit events unchanged after the rejection.
-        const eventsAfterReject = readAuditEvents(proj) ?? [];
-        expect(workflowStateEventCount(eventsAfterReject)).toBe(workflowEventsBaseline);
-
-        // ---- run 3: --init --force -> succeeds, re-inits, fresh WORKFLOW_STARTED ----
-        const r3 = await driveAidlc("/aidlc --init --force", {
-          projectDir: proj,
-          timeoutMs: DRIVE_TIMEOUT_MS,
-          stopAfterToolResult: STOP_AFTER_INIT,
-        });
-
-        // .sh test 3: the --force init exited 0 — the init Bash tool_result is
-        // non-error. assertToolResultContains also proves the tool fired.
-        assertToolResultContains(r3, "Bash", INIT_STATE_SUMMARY);
-        const forceCall = r3.toolResults.find(
-          (t) => t.toolName === "Bash" && t.resultText.includes(INIT_STATE_SUMMARY),
+        // ---- birth 2: a SECOND birth while an intent is ALREADY active ----
+        // New work alongside an active intent is a conductor-mediated decision,
+        // but the deterministic CONTRACT under test (the retired-guard subject of
+        // this port) is that the birth HANDLER itself has NO re-init guard: invoke
+        // it directly, exactly as the conductor would when the human chose "start a
+        // new intent". A second `intent-birth` SUCCEEDS (exit 0), never the old
+        // "Use --force to reinitialize" rejection. (The live conductor's new-work
+        // Y/n offer is exercised by the orchestration journey; here we pin the
+        // tool's no-guard birth, which is what the .sh's --force case really tested.)
+        const r2 = spawnSync(
+          "bun",
+          [
+            join(proj, ".claude", "tools", "aidlc-utility.ts"),
+            "intent-birth",
+            "--scope",
+            "feature",
+            "--arguments",
+            "second thing",
+            "--project-dir",
+            proj,
+          ],
+          { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
         );
-        expect(forceCall?.isError).toBe(false);
+        const birthResultText = `${r2.stdout ?? ""}${r2.stderr ?? ""}`;
 
-        // .sh test 4: state file still exists after the --force reinit.
-        expect(existsSync(statePath)).toBe(true);
-        const stateAfterForce = readStateFile(proj);
-        expect(stateAfterForce).toBeDefined();
+        // The second birth exited 0 (no re-init guard) and printed its summary.
+        expect(r2.status).toBe(0);
+        expect(birthResultText).toContain(INIT_STATE_SUMMARY);
+        // RETIRED-GUARD REGRESSION: NO "already exists" / "--force" rejection.
+        expect(birthResultText).not.toContain("already exists");
+        expect(birthResultText).not.toContain("--force");
 
-        // .sh test 5: the --force reinit re-wrote the state with [x] workspace-scaffold
-        // (the init phase marker is always [x], utility.ts:1995-1998).
-        expect(stateAfterForce as string).toContain("[x] workspace-scaffold");
+        // .sh test 1 (re-expressed): there are now TWO distinct intent record
+        // dirs — the second birth ADDED one without clobbering the first.
+        const recordsAfter2 = recordDirs(proj);
+        expect(recordsAfter2.length).toBe(2);
+        expect(new Set(recordsAfter2).size).toBe(2);
+        // The first record survives among them.
+        expect(recordsAfter2).toContain(firstRecord as string);
 
-        // .sh test 6: the audit GAINED a fresh WORKFLOW_STARTED on --force (not
-        // wiped). Count strictly greater than the run-1 baseline. SESSION_* are
-        // hook-owned and not --force-driven, so the discrimination matches the .sh.
-        const eventsAfterForce = readAuditEvents(proj) ?? [];
-        expect(countEvent(eventsAfterForce, WORKFLOW_STARTED)).toBeGreaterThan(
-          workflowStartedBaseline,
+        // .sh test 4 (re-expressed): both records hold an aidlc-state.md (every
+        // record in recordDirs() does, by construction of the filter — assert it
+        // explicitly for both).
+        for (const rec of recordsAfter2) {
+          expect(existsSync(join(intentsDir(proj), rec, "aidlc-state.md"))).toBe(true);
+        }
+
+        // The active-intent cursor now points at the SECOND (most recent) birth.
+        const secondRecord = activeRecord(proj);
+        expect(secondRecord).toBeDefined();
+        expect(secondRecord).not.toBe(firstRecord);
+
+        // .sh test 5 (re-expressed): the active (second) record's state carries
+        // [x] workspace-scaffold (the init phase marker is always [x]). Read off
+        // the per-intent state via sdk-drive's resolver (active-intent → record).
+        const activeState = readStateFile(proj);
+        expect(activeState).toBeDefined();
+        expect(activeState as string).toContain("[x] workspace-scaffold");
+
+        // .sh test 6 (re-expressed): the SECOND birth started a fresh workflow —
+        // its audit shard carries WORKFLOW_STARTED (a new workflow began, not a
+        // wipe of the first). The first record's WORKFLOW_STARTED still stands.
+        expect(auditTextOf(proj, secondRecord as string)).toContain(
+          `**Event**: ${WORKFLOW_STARTED}`,
         );
       } finally {
         cleanupTestProject(proj);

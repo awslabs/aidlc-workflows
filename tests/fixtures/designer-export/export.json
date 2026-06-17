@@ -6,7 +6,7 @@
       "name": "Workspace Scaffold",
       "phase": "initialization",
       "execution": "ALWAYS",
-      "condition": "Scaffolds aidlc-docs/ directory tree — idempotent (skips existing dirs/files)",
+      "condition": "Ensure-exists the per-intent record and artifact dirs — idempotent (creates on demand, skips existing)",
       "lead_agent": "orchestrator",
       "support_agents": [],
       "mode": "inline",

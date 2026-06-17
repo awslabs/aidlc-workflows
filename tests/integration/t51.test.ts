@@ -53,7 +53,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
@@ -63,8 +63,41 @@ const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const UTIL = join(TOOLS, "aidlc-utility.ts");
 const STATE = join(TOOLS, "aidlc-state.ts");
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
-const statePath = (p: string): string => join(p, "aidlc-docs", "aidlc-state.md");
+// P4: init births a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/);
+// state lands at <record>/aidlc-state.md and audit in per-clone shards under
+// <record>/audit/<host>-<pid>.md, NOT the flat aidlc-docs/. The active-intent
+// cursor follows the born record, so the whole gate-start/approve walk resolves
+// to it. Fall back to flat for a not-yet-born project. The event stream + final
+// checkbox state are unchanged — only the LOCATION moved.
+function recordDirOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(p, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(p, "aidlc-docs");
+}
+const statePath = (p: string): string => join(recordDirOf(p), "aidlc-state.md");
+// Audit is sharded under <record>/audit/<host>-<pid>.md; concat every shard for
+// a content read, falling back to the flat audit.md for a not-yet-born project.
+function readAudit(p: string): string {
+  const auditDir = join(recordDirOf(p), "audit");
+  if (existsSync(auditDir)) {
+    return readdirSync(auditDir)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => readFileSync(join(auditDir, f), "utf-8"))
+      .join("\n");
+  }
+  const flat = join(p, "aidlc-docs", "audit.md");
+  return existsSync(flat) ? readFileSync(flat, "utf-8") : "";
+}
 
 /** init --scope bugfix --test-run (mirrors the .sh bootstrap, L78-79). */
 function runInit(proj: string): void {
@@ -91,20 +124,16 @@ function walkStage(proj: string, slug: string): void {
   }
 }
 
-/** Count audit blocks with `**Event**: <ev>`. Mirrors the .sh count_event grep (L99-101). */
-function countEvent(file: string, ev: string): number {
-  if (!existsSync(file)) return 0;
+/** Count audit blocks with `**Event**: <ev>` in audit CONTENT (shard-concat). Mirrors the .sh count_event grep (L99-101). */
+function countEvent(content: string, ev: string): number {
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
-  return readFileSync(file, "utf-8")
-    .split("\n")
-    .filter((l) => re.test(l)).length;
+  return content.split("\n").filter((l) => re.test(l)).length;
 }
 
-/** Ordered list of event names as they appear in audit.md (header `**Event**: X` rows). */
-function eventStream(file: string): string[] {
-  if (!existsSync(file)) return [];
+/** Ordered list of event names as they appear in audit CONTENT (header `**Event**: X` rows). */
+function eventStream(content: string): string[] {
   const out: string[] = [];
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of content.split("\n")) {
     if (line.startsWith("**Event**: ")) out.push(line.slice("**Event**: ".length));
   }
   return out;
@@ -138,46 +167,46 @@ describe("t51 bugfix event parity — CLI contract (migrated from t51-bugfix-eve
   // ============================================================
 
   test("1: WORKFLOW_STARTED fires once", () => {
-    expect(countEvent(auditPath(PROJ), "WORKFLOW_STARTED")).toBe(1);
+    expect(countEvent(readAudit(PROJ), "WORKFLOW_STARTED")).toBe(1);
   });
 
   test("2: WORKFLOW_COMPLETED fires once", () => {
-    expect(countEvent(auditPath(PROJ), "WORKFLOW_COMPLETED")).toBe(1);
+    expect(countEvent(readAudit(PROJ), "WORKFLOW_COMPLETED")).toBe(1);
   });
 
   test("3: PHASE_STARTED fires 3x (initialization, inception, construction)", () => {
-    expect(countEvent(auditPath(PROJ), "PHASE_STARTED")).toBe(3);
+    expect(countEvent(readAudit(PROJ), "PHASE_STARTED")).toBe(3);
   });
 
   test("4: PHASE_COMPLETED fires 3x", () => {
-    expect(countEvent(auditPath(PROJ), "PHASE_COMPLETED")).toBe(3);
+    expect(countEvent(readAudit(PROJ), "PHASE_COMPLETED")).toBe(3);
   });
 
   test("5: PHASE_VERIFIED fires 3x", () => {
-    expect(countEvent(auditPath(PROJ), "PHASE_VERIFIED")).toBe(3);
+    expect(countEvent(readAudit(PROJ), "PHASE_VERIFIED")).toBe(3);
   });
 
   test("6: PHASE_SKIPPED fires 2x (ideation, operation)", () => {
-    expect(countEvent(auditPath(PROJ), "PHASE_SKIPPED")).toBe(2);
+    expect(countEvent(readAudit(PROJ), "PHASE_SKIPPED")).toBe(2);
   });
 
   test("7: STAGE_STARTED fires 6x (3 init + 3 gated)", () => {
-    expect(countEvent(auditPath(PROJ), "STAGE_STARTED")).toBe(6);
+    expect(countEvent(readAudit(PROJ), "STAGE_STARTED")).toBe(6);
   });
 
   test("8: STAGE_COMPLETED fires 6x", () => {
     // 3 init + 3 approve. On the final stage, approve delegates to
     // complete-workflow, whose alreadyMarkedCompleted guard suppresses the
     // duplicate STAGE_COMPLETED — so the count stays 6, not 7.
-    expect(countEvent(auditPath(PROJ), "STAGE_COMPLETED")).toBe(6);
+    expect(countEvent(readAudit(PROJ), "STAGE_COMPLETED")).toBe(6);
   });
 
   test("9: STAGE_AWAITING_APPROVAL fires 3x", () => {
-    expect(countEvent(auditPath(PROJ), "STAGE_AWAITING_APPROVAL")).toBe(3);
+    expect(countEvent(readAudit(PROJ), "STAGE_AWAITING_APPROVAL")).toBe(3);
   });
 
   test("10: GATE_APPROVED fires 3x", () => {
-    expect(countEvent(auditPath(PROJ), "GATE_APPROVED")).toBe(3);
+    expect(countEvent(readAudit(PROJ), "GATE_APPROVED")).toBe(3);
   });
 
   // ============================================================
@@ -185,17 +214,17 @@ describe("t51 bugfix event parity — CLI contract (migrated from t51-bugfix-eve
   // ============================================================
 
   test("11: WORKFLOW_STARTED is first event", () => {
-    const stream = eventStream(auditPath(PROJ));
+    const stream = eventStream(readAudit(PROJ));
     expect(stream[0]).toBe("WORKFLOW_STARTED");
   });
 
   test("12: WORKFLOW_COMPLETED is last event", () => {
-    const stream = eventStream(auditPath(PROJ));
+    const stream = eventStream(readAudit(PROJ));
     expect(stream[stream.length - 1]).toBe("WORKFLOW_COMPLETED");
   });
 
   test("13: GATE_APPROVED precedes STAGE_COMPLETED for final stage", () => {
-    const stream = eventStream(auditPath(PROJ));
+    const stream = eventStream(readAudit(PROJ));
     // Same observable as the .sh: the LAST GATE_APPROVED occurs before the LAST
     // STAGE_COMPLETED in the audit stream.
     const lastGate = stream.lastIndexOf("GATE_APPROVED");

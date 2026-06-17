@@ -1,33 +1,34 @@
 ---
 name: aidlc-init
 description: >
-  Scaffold an AI-DLC workspace — run the whole Initialization phase
-  (scaffold the aidlc-docs/ tree, detect the workspace, initialise state) in one
-  step, without starting a stage workflow. Packaging over `/aidlc --init`,
-  which works without this skill. Pass `--force` to reinitialise an existing
-  workspace; `--scope <name>` to seed the initial scope (defaults to poc).
-argument-hint: "[--force] [--scope <name>]"
+  Start an AI-DLC workflow — run the whole Initialization phase (mint the
+  intent, detect the workspace, build state) in one step, without typing a
+  stage. The engine normally auto-births the first intent; this is opt-in
+  packaging over that move. Pass `--scope <name>` to seed the initial scope
+  (defaults to poc), or a freeform description of what to build.
+argument-hint: "[--scope <name>] [description]"
 user-invocable: true
 ---
 
-# AI-DLC — initialize a workspace
+# AI-DLC — start a workflow (birth the first intent)
 
-Scaffold a fresh AI-DLC workspace. This is opt-in packaging over
-`/aidlc --init`; the same initialization runs via that flag without this skill.
-Initialization is a PHASE, not a single stage — it scaffolds the `aidlc-docs/`
-directory tree, detects the workspace (greenfield/brownfield), and initialises
-`aidlc-state.md` together, in one deterministic call. There is no per-init-stage
-runner because an init stage has no standalone meaning.
+Start a fresh AI-DLC workflow. The workspace shell ships in `dist/` (no setup
+command), and the engine auto-births the first intent when you describe what to
+build — this skill is opt-in packaging over that birth move. Initialization is a
+PHASE, not a single stage — it mints the intent, detects the workspace
+(greenfield/brownfield), and builds `aidlc-state.md` together, in one
+deterministic call. There is no per-init-stage runner because an init stage has
+no standalone meaning.
 
 ## Steps
 
-1. Run the initialization phase:
+1. Birth the intent (run the initialization phase):
 
    ```bash
-   bun .kiro/tools/aidlc-utility.ts init $ARGUMENTS
+   bun .kiro/tools/aidlc-utility.ts intent-birth $ARGUMENTS
    ```
 
-   Pass `$ARGUMENTS` through verbatim — `--force` reinitialises over an existing
-   `aidlc-state.md`, and `--scope <name>` seeds the initial scope (defaults to
-   `poc`). Print the tool's output and stop. This does not start a stage
-   workflow; run `/aidlc` (or a scope runner) afterwards to begin one.
+   Pass `$ARGUMENTS` through verbatim — `--scope <name>` seeds the initial scope
+   (defaults to `poc`), and any freeform text becomes the intent's description.
+   Print the tool's output and stop. This does not advance a stage; run
+   `/aidlc` afterwards to continue the workflow.

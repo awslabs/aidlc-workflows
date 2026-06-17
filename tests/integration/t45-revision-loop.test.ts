@@ -58,7 +58,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -74,8 +74,44 @@ const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const SLUG = "requirements-analysis";
 
 let proj: string;
-let statePath: string;
-let auditPath: string;
+
+// P4: intent-birth writes state into the born intent's per-intent record dir
+// (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat aidlc-docs/. After
+// the init the active-intent cursor points at the born record, so every later
+// gate-start/reject/revise/approve (default-resolving the active intent)
+// reads/writes THAT record — recordDirOf follows the cursor and resolves it for
+// both the init output and the state-machine writes. Falls back to the flat
+// layout for a not-yet-born / seeded-flat project.
+function recordDirOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(p, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(p, "aidlc-docs");
+}
+
+// Audit is written as per-clone shards under <record>/audit/<host>-<pid>.md
+// (Stage B). Concatenate every shard for a content read; fall back to the flat
+// aidlc-docs/audit.md for a seeded-flat / pre-migration project.
+function readAudit(p: string): string {
+  const auditDir = join(recordDirOf(p), "audit");
+  if (existsSync(auditDir)) {
+    return readdirSync(auditDir)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => readFileSync(join(auditDir, f), "utf-8"))
+      .join("\n");
+  }
+  const flat = join(p, "aidlc-docs", "audit.md");
+  return existsSync(flat) ? readFileSync(flat, "utf-8") : "";
+}
 
 /** Run an aidlc-state.ts subcommand against the project; assert exit 0. */
 function state(args: string[]): void {
@@ -89,7 +125,7 @@ function state(args: string[]): void {
 }
 
 function readState(): string {
-  return readFileSync(statePath, "utf-8");
+  return readFileSync(join(recordDirOf(proj), "aidlc-state.md"), "utf-8");
 }
 
 /** The Revision Count field value (`- **Revision Count**: N`). */
@@ -108,8 +144,7 @@ function checkboxMarker(content: string): string | null {
 
 /** count_event (t45:62-64): rows whose `**Event**: <TYPE>` line is exactly TYPE. */
 function countEvent(event: string): number {
-  const audit = readFileSync(auditPath, "utf-8");
-  return audit
+  return readAudit(proj)
     .split("\n")
     .filter((l) => l === `**Event**: ${event}`).length;
 }
@@ -128,8 +163,6 @@ const snap: {
 beforeAll(() => {
   resetAidlcEnv();
   proj = createTestProject();
-  statePath = join(proj, "aidlc-docs", "aidlc-state.md");
-  auditPath = join(proj, "aidlc-docs", "audit.md");
 
   // Init bugfix scope — leaves requirements-analysis in [-] ready to gate.
   const init = spawnSync(

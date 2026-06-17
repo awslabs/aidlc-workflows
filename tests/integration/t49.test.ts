@@ -83,7 +83,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
@@ -93,9 +93,43 @@ const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const STATE = join(TOOLS, "aidlc-state.ts");
 const UTIL = join(TOOLS, "aidlc-utility.ts");
 
+// P4: init births a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/);
+// state lands at <record>/aidlc-state.md and audit in per-clone shards under
+// <record>/audit/<host>-<pid>.md, NOT the flat aidlc-docs/. The active-intent
+// cursor follows the born record, so every subsequent gate-start/reject/revise/
+// approve/advance default-resolves to it. Fall back to flat for a not-yet-born
+// project. The checkbox markers + audit event stream are unchanged — only the
+// LOCATION moved.
+function recordDirOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(p, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(p, "aidlc-docs");
+}
 const statePath = (p: string): string =>
-  join(p, "aidlc-docs", "aidlc-state.md");
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+  join(recordDirOf(p), "aidlc-state.md");
+// Audit is sharded under <record>/audit/<host>-<pid>.md; concat every shard for
+// a content read, falling back to the flat audit.md for a not-yet-born project.
+function readAudit(p: string): string {
+  const auditDir = join(recordDirOf(p), "audit");
+  if (existsSync(auditDir)) {
+    return readdirSync(auditDir)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => readFileSync(join(auditDir, f), "utf-8"))
+      .join("\n");
+  }
+  const flat = join(p, "aidlc-docs", "audit.md");
+  return existsSync(flat) ? readFileSync(flat, "utf-8") : "";
+}
 
 interface CliResult {
   status: number;
@@ -135,24 +169,20 @@ function getFieldFromContent(content: string, field: string): string {
   return "";
 }
 
-/** Count audit blocks with a bare `**Event**: <ev>` line. Mirrors `grep -c "^\*\*Event\*\*: <ev>"`. */
-function auditEventCount(file: string, ev: string): number {
-  if (!existsSync(file)) return 0;
-  return readFileSync(file, "utf-8")
-    .split("\n")
-    .filter((l) => l === `**Event**: ${ev}`).length;
+/** Count audit blocks with a bare `**Event**: <ev>` line in audit CONTENT (shard-concat). Mirrors `grep -c "^\*\*Event\*\*: <ev>"`. */
+function auditEventCount(content: string, ev: string): number {
+  return content.split("\n").filter((l) => l === `**Event**: ${ev}`).length;
 }
 
 /**
- * Count STAGE_COMPLETED audit blocks whose `**Stage**:` field equals <slug>.
- * Mirrors the .sh's `grep -A 4 "^\*\*Event\*\*: STAGE_COMPLETED" | grep -c
- * "\*\*Stage\*\*: <slug>"` — block-scoped so the 3 initialization-stage
+ * Count STAGE_COMPLETED audit blocks in CONTENT whose `**Stage**:` field equals
+ * <slug>. Mirrors the .sh's `grep -A 4 "^\*\*Event\*\*: STAGE_COMPLETED" | grep
+ * -c "\*\*Stage\*\*: <slug>"` — block-scoped so the 3 initialization-stage
  * STAGE_COMPLETED rows (workspace-scaffold/detection/state-init) don't inflate
  * the count for the requirements-analysis row.
  */
-function stageCompletedCountFor(file: string, slug: string): number {
-  if (!existsSync(file)) return 0;
-  const lines = readFileSync(file, "utf-8").split("\n");
+function stageCompletedCountFor(content: string, slug: string): number {
+  const lines = content.split("\n");
   let count = 0;
   for (let i = 0; i < lines.length; i++) {
     if (lines[i] === "**Event**: STAGE_COMPLETED") {
@@ -169,10 +199,9 @@ function stageCompletedCountFor(file: string, slug: string): number {
   return count;
 }
 
-/** 1-based line number of the FIRST `**Event**: <ev>` line, or -1. Mirrors `grep -n ... | head -1 | cut -d: -f1`. */
-function firstEventLine(file: string, ev: string): number {
-  if (!existsSync(file)) return -1;
-  const lines = readFileSync(file, "utf-8").split("\n");
+/** 1-based line number of the FIRST `**Event**: <ev>` line in CONTENT, or -1. Mirrors `grep -n ... | head -1 | cut -d: -f1`. */
+function firstEventLine(content: string, ev: string): number {
+  const lines = content.split("\n");
   for (let i = 0; i < lines.length; i++) {
     if (lines[i] === `**Event**: ${ev}`) return i + 1;
   }
@@ -180,14 +209,13 @@ function firstEventLine(file: string, ev: string): number {
 }
 
 /**
- * Value of <key> from the FIRST audit block whose `**Event**:` matches <ev>.
- * Resets at `## ` headings and `---` separators; splits `**label**: value` on
- * the literal `**: ` separator. Returns "" when absent.
+ * Value of <key> from the FIRST audit block in CONTENT whose `**Event**:`
+ * matches <ev>. Resets at `## ` headings and `---` separators; splits
+ * `**label**: value` on the literal `**: ` separator. Returns "" when absent.
  */
-function auditField(file: string, ev: string, key: string): string {
-  if (!existsSync(file)) return "";
+function auditField(content: string, ev: string, key: string): string {
   let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of content.split("\n")) {
     if (line.startsWith("## ")) {
       matched = false;
       continue;
@@ -247,11 +275,15 @@ let stateAfterApprove: string;
 
 beforeAll(() => {
   proj = createTestProject();
-  const sp = statePath(proj);
 
   // init --scope bugfix (the .sh's `bun "$UTIL" init --scope bugfix`).
   const init = run(UTIL, ["init", "--scope", "bugfix"], proj);
   expect(init.status).toBe(0);
+  // P4: resolve the state path only AFTER init — birth creates the per-intent
+  // record + active-intent cursor that statePath/recordDirOf follow. Computing
+  // it pre-init would resolve the flat aidlc-docs/ fallback (which never exists
+  // for a born project).
+  const sp = statePath(proj);
   stateAfterInit = readFileSync(sp, "utf-8");
 
   // Step 1: gate-start [-] -> [?]
@@ -344,39 +376,39 @@ describe("t49 aidlc-state lifecycle — approve gate (migrated from t49-state-ma
 
   // .sh Test 8 — STAGE_AWAITING_APPROVAL emitted for gate-start AND revise (> 1)
   test("8: STAGE_AWAITING_APPROVAL emitted twice (gate-start + revise)", () => {
-    const c = auditEventCount(auditPath(proj), "STAGE_AWAITING_APPROVAL");
+    const c = auditEventCount(readAudit(proj), "STAGE_AWAITING_APPROVAL");
     expect(c).toBeGreaterThan(1); // .sh assert_gt "$AWAIT_COUNT" 1
     expect(c).toBe(2); // STRONGER: exact count
   });
 
   // .sh Test 9 — exactly one GATE_REJECTED
   test("9: exactly one GATE_REJECTED", () => {
-    expect(auditEventCount(auditPath(proj), "GATE_REJECTED")).toBe(1);
+    expect(auditEventCount(readAudit(proj), "GATE_REJECTED")).toBe(1);
   });
 
   // .sh Test 10 — exactly one STAGE_REVISING
   test("10: exactly one STAGE_REVISING", () => {
-    expect(auditEventCount(auditPath(proj), "STAGE_REVISING")).toBe(1);
+    expect(auditEventCount(readAudit(proj), "STAGE_REVISING")).toBe(1);
   });
 
   // .sh Test 11 — exactly one GATE_APPROVED for this stage
   test("11: exactly one GATE_APPROVED + records the gate decision", () => {
-    expect(auditEventCount(auditPath(proj), "GATE_APPROVED")).toBe(1);
+    const audit = readAudit(proj);
+    expect(auditEventCount(audit, "GATE_APPROVED")).toBe(1);
     // STRONGER: the approve subcommand recorded the human decision fields.
-    const f = auditPath(proj);
-    expect(auditField(f, "GATE_APPROVED", "Stage")).toBe("requirements-analysis");
-    expect(auditField(f, "GATE_APPROVED", "User Input")).toBe("Accepted with changes");
+    expect(auditField(audit, "GATE_APPROVED", "Stage")).toBe("requirements-analysis");
+    expect(auditField(audit, "GATE_APPROVED", "User Input")).toBe("Accepted with changes");
   });
 
   // .sh Test 12 — exactly one STAGE_COMPLETED for requirements-analysis
   // (approve emits it once; advance replays without re-emitting).
   test("12: exactly one STAGE_COMPLETED for requirements-analysis (no duplicate from advance)", () => {
-    expect(stageCompletedCountFor(auditPath(proj), "requirements-analysis")).toBe(1);
+    expect(stageCompletedCountFor(readAudit(proj), "requirements-analysis")).toBe(1);
   });
 
   // .sh Test 13 — ordering: AWAITING_APPROVAL -> GATE_REJECTED -> STAGE_REVISING
   test("13: ordering STAGE_AWAITING_APPROVAL -> GATE_REJECTED -> STAGE_REVISING", () => {
-    const f = auditPath(proj);
+    const f = readAudit(proj);
     const await1 = firstEventLine(f, "STAGE_AWAITING_APPROVAL");
     const reject1 = firstEventLine(f, "GATE_REJECTED");
     const revising1 = firstEventLine(f, "STAGE_REVISING");
@@ -389,7 +421,7 @@ describe("t49 aidlc-state lifecycle — approve gate (migrated from t49-state-ma
 
   // .sh Test 14 — ordering: GATE_APPROVED follows STAGE_REVISING (loop resolved)
   test("14: ordering GATE_APPROVED follows STAGE_REVISING (revision loop resolved)", () => {
-    const f = auditPath(proj);
+    const f = readAudit(proj);
     const approved1 = firstEventLine(f, "GATE_APPROVED");
     const revising1 = firstEventLine(f, "STAGE_REVISING");
     expect(approved1).toBeGreaterThan(0);

@@ -44,6 +44,12 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC, setupIntegrationProject } from "../harness/fixtures.ts";
+// P4: init BIRTHS a per-intent record; state lives under
+// aidlc/spaces/<space>/intents/<slug>-<id8>/ and audit is SHARDED per clone
+// under <record>/audit/. Read state through the resolved record dir and audit
+// through the shipped merge helper (default-resolves the active intent, falls
+// back to flat aidlc-docs for a not-yet-born project).
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
@@ -83,8 +89,28 @@ afterAll(() => {
   if (PROJ && existsSync(PROJ)) rmSync(PROJ, { recursive: true, force: true });
 });
 
-const auditPath = () => join(PROJ, "aidlc-docs", "audit.md");
-const statePath = () => join(PROJ, "aidlc-docs", "aidlc-state.md");
+// P4: resolve the born intent's record dir from the active-space + active-intent
+// cursors (a record dir is the one holding aidlc-state.md), falling back to the
+// flat aidlc-docs/ layout for a not-yet-born project.
+function recordDirOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(p, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(p, "aidlc-docs");
+}
+
+/** Merged audit-shard text for the born intent (P4 shards audit per clone). */
+const auditText = () => readAllAuditShards(PROJ);
+const statePath = () => join(recordDirOf(PROJ), "aidlc-state.md");
 
 describe("t63 construction-worktrees poc (migrated from t63-construction-worktrees-poc.sh, plan 5)", () => {
   // --- assertion 1: codegen mode (structural / none) ------------------------
@@ -115,7 +141,7 @@ describe("t63 construction-worktrees poc (migrated from t63-construction-worktre
     // The .sh discarded stdout/stderr and grepped audit.md; we additionally
     // pin a clean exit (the emit-only contract: no state mutation, no spawn).
     expect(r.status).toBe(0);
-    const audit = readFileSync(auditPath(), "utf-8");
+    const audit = auditText();
     // STRONGER than the .sh's two independent greps: the event line and the
     // Bolt-slug line must BOTH be present (helpers.sh:108-109), and the slug
     // appears on a "**Bolt slug**: <slug>" field row (aidlc-bolt.ts:675 +
@@ -155,7 +181,7 @@ describe("t63 construction-worktrees poc (migrated from t63-construction-worktre
     // also pin the tool's emitted-event JSON on stdout and the field rows the
     // --field flags carried.
     expect(r.stdout).toContain('"emitted":"PRACTICES_SECTION_EMPTY"');
-    const audit = readFileSync(auditPath(), "utf-8");
+    const audit = auditText();
     expect(audit).toContain("PRACTICES_SECTION_EMPTY");
     expect(audit).toContain("**Section**: Walking Skeleton");
     expect(audit).toContain("**Fallback**: org.md");

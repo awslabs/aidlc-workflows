@@ -135,6 +135,7 @@ import {
   auditFilePathFor,
   driveAidlc,
   readStateField,
+  stateFilePathFor,
 } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
@@ -181,11 +182,11 @@ describe("t26 /aidlc --stage intent-capture backward jump (sdk)", () => {
       try {
         // Precondition: the seed truly starts at CONSTRUCTION / Completed=20, so
         // the jump genuinely crosses backward (no vacuous pass on a pre-seeded
-        // ideation state). Read straight off the seeded file.
-        const seedState = readFileSync(
-          `${proj}/aidlc-docs/aidlc-state.md`,
-          "utf8",
-        );
+        // ideation state). Read straight off the seeded file. P4: the jump tool
+        // does NOT migrate (only intent-birth does, aidlc-utility.ts:2022) — the
+        // seed stays at the flat layout, so stateFilePathFor resolves it via the
+        // flat fallback (no intent born yet).
+        const seedState = readFileSync(stateFilePathFor(proj), "utf8");
         expect(readStateField(seedState, "Lifecycle Phase")).toBe("CONSTRUCTION");
         expect(readStateField(seedState, "Completed")).toBe("20");
         expect(readStateField(seedState, "Current Stage")).toBe(

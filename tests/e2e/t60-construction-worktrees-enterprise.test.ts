@@ -69,13 +69,19 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
+// P4: init BIRTHS a per-intent record; state lives under
+// aidlc/spaces/<space>/intents/<slug>-<id8>/ and audit is SHARDED per clone
+// under <record>/audit/. Read state through the resolved record dir and audit
+// through the shipped merge helper (default-resolves the active intent, falls
+// back to flat aidlc-docs for a not-yet-born project).
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
@@ -125,17 +131,37 @@ function gridStageMode(scope: string, stage: string): string {
   return entry.stages[stage] ?? "UNDEFINED";
 }
 
-function auditPath(proj: string): string {
-  return join(proj, "aidlc-docs", "audit.md");
+// P4: resolve the born intent's record dir from the active-space + active-intent
+// cursors (a record dir is the one holding aidlc-state.md), falling back to the
+// flat aidlc-docs/ layout for a not-yet-born project.
+function recordDirOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(p, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(p, "aidlc-docs");
 }
 
 function statePath(proj: string): string {
-  return join(proj, "aidlc-docs", "aidlc-state.md");
+  return join(recordDirOf(proj), "aidlc-state.md");
+}
+
+/** Merged audit-shard text for the born intent (P4 shards audit per clone). */
+function auditText(proj: string): string {
+  return readAllAuditShards(proj);
 }
 
 /** The `\n---\n`-delimited audit blocks (mirrors t138's block split). */
 function auditBlocks(proj: string): string[] {
-  return readFileSync(auditPath(proj), "utf-8").split(/\n---\n/);
+  return auditText(proj).split(/\n---\n/);
 }
 
 /** The block whose **Event**: line names `event` (first match, file order). */
@@ -246,7 +272,7 @@ describe("t60 Construction worktrees per scope — enterprise (cli)", () => {
 
     // The "brackets the dispatch" contract: RETURNED is the post-call emit, so
     // its block appears AFTER the pre-call INVOKED block in audit.md.
-    const text = readFileSync(auditPath(proj), "utf-8");
+    const text = auditText(proj);
     const invokedIdx = text.indexOf("**Event**: MERGE_DISPATCH_INVOKED");
     const returnedIdx = text.indexOf("**Event**: MERGE_DISPATCH_RETURNED");
     expect(invokedIdx).toBeGreaterThanOrEqual(0);

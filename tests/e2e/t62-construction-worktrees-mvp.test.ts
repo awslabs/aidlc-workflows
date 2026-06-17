@@ -90,6 +90,12 @@ import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+// P4: init BIRTHS a per-intent record; state lives under
+// aidlc/spaces/<space>/intents/<slug>-<id8>/ and audit is SHARDED per clone
+// under <record>/audit/. Read state through the resolved record dir and audit
+// through the shipped merge helper (default-resolves the active intent, falls
+// back to flat aidlc-docs for a not-yet-born project).
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
@@ -143,15 +149,32 @@ function setupConstructionProject(): string {
   return proj;
 }
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
-const statePath = (p: string): string => join(p, "aidlc-docs", "aidlc-state.md");
+// P4: resolve the born intent's record dir from the active-space + active-intent
+// cursors (a record dir is the one holding aidlc-state.md), falling back to the
+// flat aidlc-docs/ layout for a not-yet-born project.
+function recordDirOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(p, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(p, "aidlc-docs");
+}
 
-/** Count audit blocks whose line is exactly `**Event**: <ev>`. */
-function auditEventCount(file: string, ev: string): number {
-  if (!existsSync(file)) return 0;
-  return readFileSync(file, "utf-8")
-    .split("\n")
-    .filter((l) => l === `**Event**: ${ev}`).length;
+/** Merged audit-shard text for the born intent (P4 shards audit per clone). */
+const auditText = (p: string): string => readAllAuditShards(p);
+const statePath = (p: string): string => join(recordDirOf(p), "aidlc-state.md");
+
+/** Count audit blocks whose line is exactly `**Event**: <ev>` in audit TEXT. */
+function auditEventCount(text: string, ev: string): number {
+  return text.split("\n").filter((l) => l === `**Event**: ${ev}`).length;
 }
 
 /**
@@ -159,10 +182,9 @@ function auditEventCount(file: string, ev: string): number {
  * Block-scoped (resets at `## ` headings and `---`). Mirrors the awk-scoped
  * block grep the sibling .cli ports use. Returns "" when absent.
  */
-function auditField(file: string, ev: string, key: string): string {
-  if (!existsSync(file)) return "";
+function auditField(text: string, ev: string, key: string): string {
   let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of text.split("\n")) {
     if (line.startsWith("## ") || line === "---") {
       matched = false;
       continue;
@@ -224,7 +246,7 @@ describe("t62 construction-worktrees mvp (migrated from t62-construction-worktre
     // STRONGER than the .sh (which discarded stdout + grepped file-wide):
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('"emitted":"MERGE_DISPATCH_INVOKED"');
-    const f = auditPath(proj);
+    const f = auditText(proj);
     expect(auditEventCount(f, "MERGE_DISPATCH_INVOKED")).toBe(1);
     // The .sh asserted `Bolt slug.*t-mvp-bolt-1` was present; we read the exact
     // block-scoped field values, including the excerpt the helper threaded.
@@ -255,7 +277,7 @@ describe("t62 construction-worktrees mvp (migrated from t62-construction-worktre
     // STRONGER than the .sh's bare file-wide presence grep:
     expect(r.status).toBe(0);
     expect(r.stdout).toContain('"emitted":"MERGE_DISPATCH_FALLBACK"');
-    const f = auditPath(proj);
+    const f = auditText(proj);
     expect(auditEventCount(f, "MERGE_DISPATCH_FALLBACK")).toBe(1);
     expect(auditField(f, "MERGE_DISPATCH_FALLBACK", "Fallback reason")).toBe(
       "malformed-yaml",

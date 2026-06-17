@@ -55,7 +55,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
@@ -76,9 +76,44 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+// P4: intent-birth (the back-compat target of `init`) writes state into the
+// born intent's per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>/),
+// not the flat aidlc-docs/, and audit into per-clone shards under
+// <record>/audit/<host>-<pid>.md. Resolve the record dir from the active-space +
+// active-intent cursors, falling back to the flat layout for a not-yet-born /
+// seeded-flat project. The PHASE_STARTED/PHASE_SKIPPED rows + `## Phase Progress`
+// content are unchanged — only the LOCATION moved (per-intent, sharded).
+function recordDirOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(p, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(p, "aidlc-docs");
+}
 const statePath = (p: string): string =>
-  join(p, "aidlc-docs", "aidlc-state.md");
+  join(recordDirOf(p), "aidlc-state.md");
+// Audit is written as per-clone shards under <record>/audit/<host>-<pid>.md.
+// Concatenate every shard for a content read; fall back to the flat
+// aidlc-docs/audit.md for a seeded-flat / pre-migration project.
+function readAudit(p: string): string {
+  const auditDir = join(recordDirOf(p), "audit");
+  if (existsSync(auditDir)) {
+    return readdirSync(auditDir)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => readFileSync(join(auditDir, f), "utf-8"))
+      .join("\n");
+  }
+  const flat = join(p, "aidlc-docs", "audit.md");
+  return existsSync(flat) ? readFileSync(flat, "utf-8") : "";
+}
 
 interface InitResult {
   status: number;
@@ -107,29 +142,25 @@ function runInit(scope: string, p: string): InitResult {
 }
 
 /**
- * Count audit blocks with `**Event**: <ev>` at line start. Mirrors the .sh's
- * `grep -cE '^\*\*Event\*\*: <ev>'` (aidlc-audit.ts:258 writes the row at
- * column 0 of its line).
+ * Count audit blocks with `**Event**: <ev>` at line start in audit CONTENT
+ * (shard-concat). Mirrors the .sh's `grep -cE '^\*\*Event\*\*: <ev>'`
+ * (aidlc-audit.ts:258 writes the row at column 0 of its line).
  */
-function auditEventCount(file: string, ev: string): number {
-  if (!existsSync(file)) return 0;
+function auditEventCount(content: string, ev: string): number {
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
-  return readFileSync(file, "utf-8")
-    .split("\n")
-    .filter((l) => re.test(l)).length;
+  return content.split("\n").filter((l) => re.test(l)).length;
 }
 
 /**
- * Collect the `**Phase**: <name>` values from every PHASE_SKIPPED block.
- * Walks the file; resets matched flag at `## ` headings and `---` separators.
- * STRONGER than the .sh's bare count — lets us assert WHICH phases were
- * skipped, not just how many.
+ * Collect the `**Phase**: <name>` values from every PHASE_SKIPPED block in
+ * audit CONTENT (shard-concat). Resets matched flag at `## ` headings and `---`
+ * separators. STRONGER than the .sh's bare count — lets us assert WHICH phases
+ * were skipped, not just how many.
  */
-function skippedPhases(file: string): string[] {
-  if (!existsSync(file)) return [];
+function skippedPhases(content: string): string[] {
   let matched = false;
   const phases: string[] = [];
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of content.split("\n")) {
     if (line.startsWith("## ") || line === "---") {
       matched = false;
       continue;
@@ -214,21 +245,21 @@ describe("t39 aidlc-utility init — per-scope phase sequence (migrated from t39
         expect(init.status).toBe(0);
         // .sh: grep -qE '^\*\*Event\*\*: PHASE_STARTED' (any). STRONGER: at
         // least one PHASE_STARTED fired AND the initialization one specifically
-        // is present in the audit (init always emits it — line 1791).
-        const a = auditPath(proj);
-        expect(auditEventCount(a, "PHASE_STARTED")).toBeGreaterThanOrEqual(1);
-        const audit = readFileSync(a, "utf-8");
+        // is present in the audit (init always emits it — line 1791). P4: read
+        // the born record's audit shards, not the flat audit.md.
+        const audit = readAudit(proj);
+        expect(auditEventCount(audit, "PHASE_STARTED")).toBeGreaterThanOrEqual(1);
         expect(audit).toContain("**Event**: PHASE_STARTED");
         expect(audit).toContain("**Phase**: initialization");
       });
 
       // --- Assertion 2: PHASE_SKIPPED emitted once per excluded phase ---
       test(`2: ${excluded.length} PHASE_SKIPPED events (matches scope-mapping.json)`, () => {
-        const a = auditPath(proj);
+        const audit = readAudit(proj);
         // .sh: grep -cE '^\*\*Event\*\*: PHASE_SKIPPED' === expected count.
-        expect(auditEventCount(a, "PHASE_SKIPPED")).toBe(excluded.length);
+        expect(auditEventCount(audit, "PHASE_SKIPPED")).toBe(excluded.length);
         // STRONGER: assert the EXACT set of skipped phases, not just the count.
-        const skipped = skippedPhases(a).sort();
+        const skipped = skippedPhases(audit).sort();
         expect(skipped).toEqual([...excluded].sort());
       });
 

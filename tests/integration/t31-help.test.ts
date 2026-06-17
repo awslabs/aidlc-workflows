@@ -134,24 +134,35 @@ describe("t31 aidlc-utility help — CLI contract (migrated from t31-help-text-c
 
   // --- All utility commands appear. ---
   // The .sh asserted --status/--init/--doctor/--help (Utilities block) and
-  // --stage/--phase/--scope (jump utilities) and --force. S4 adds
-  // --test-strategy/--version (documented in HELP_TEXT_TAIL, unasserted there).
+  // --stage/--phase/--scope (jump utilities) and --force. S4 added
+  // --test-strategy/--version. P4 RETIRED the user-facing --init/--force (the
+  // engine auto-births; the workspace shell ships in dist/) and added the
+  // intent/space verb families — so the help text drops --init/--force and lists
+  // the verbs instead.
   const UTILITIES = [
     "--status",
-    "--init",
     "--doctor",
     "--help",
-    "--force",
     "--stage",
     "--phase",
     "--scope",
     "--test-strategy", // S4
     "--version", // S4
+    "intent", // P4: the intent verb family
+    "space", // P4: the space verb family
   ] as const;
 
   for (const flag of UTILITIES) {
     test(`help text lists ${flag} utility`, () => {
       expect(HELP.stdout).toContain(flag);
+    });
+  }
+
+  // P4: the retired flags must be ABSENT from help (regression guard — a
+  // re-introduced --init/--force in the help reds here).
+  for (const gone of ["--init", "--force"] as const) {
+    test(`help text does NOT list the retired ${gone}`, () => {
+      expect(HELP.stdout).not.toContain(gone);
     });
   }
 

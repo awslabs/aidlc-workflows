@@ -139,25 +139,6 @@ modelOverride: opus
   writeFileSync(file, body, "utf-8");
 }
 
-interface CliResult {
-  status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
-}
-
-/** Spawn the PER-PROJECT aidlc-utility.ts init. Mirrors `bun "$PROJ/.claude/tools/aidlc-utility.ts" init ...`. */
-function runInit(p: string): CliResult {
-  const tool = join(p, ".claude", "tools", "aidlc-utility.ts");
-  const res = spawnSync(
-    BUN,
-    [tool, "init", "--scope", "poc", "--project-dir", p],
-    { encoding: "utf-8" },
-  );
-  return {
-    status: res.status ?? -1,
-    out: `${res.stdout ?? ""}${res.stderr ?? ""}`,
-  };
-}
-
 /** Spawn the PER-PROJECT statusline hook with the workspace JSON on stdin. Mirrors `echo {...} | bun "$HOOK"`. */
 function runStatusline(p: string): string {
   const hook = join(p, ".claude", "hooks", "aidlc-statusline.ts");
@@ -246,44 +227,48 @@ describe("t61 agent-metadata derived from frontmatter (migrated from t61-agent-m
   });
 
   // ============================================================
-  // Test 3 — init ACCEPTS a well-formed fixture agent: scaffolds
-  // knowledge/fixture-agent/README.md with derived display + examples.
+  // Test 3 — the loader derives a fixture agent's display + examples from its
+  // frontmatter. (P4: the old per-agent knowledge-README scaffolding moved out
+  // of birth — the workspace shell ships in dist/ via SEED, and birth only
+  // ensure-exists the per-intent record dirs. The covered unit is still
+  // loadAgents(); here we prove it captures a dropped-in agent's display_name
+  // AND the whole examples list in-process, the same derivation the README
+  // template consumed.)
   // ============================================================
-  test("3: init scaffolds knowledge/fixture-agent/README.md with derived display name + examples", () => {
-    const p = proj();
-    writeFixtureAgent(p);
-    const r = runInit(p);
-    expect(r.status).toBe(0);
-    const readme = join(
-      p,
-      "aidlc-docs",
-      "knowledge",
-      "fixture-agent",
-      "README.md",
-    );
-    expect(existsSync(readme)).toBe(true);
-    const text = readFileSync(readme, "utf-8");
-    // Derived display heading (loadAgents().display_name flows into the
-    // `# ${display_name} Knowledge` template, aidlc-utility.ts:1882).
-    expect(text).toMatch(/^# Fixture Agent Knowledge$/m);
-    // Examples bullets (listField captured the YAML list).
-    expect(text).toMatch(/^- fixture-one\.md$/m);
-    // STRONGER than the .sh (which only grepped fixture-one): assert the
-    // SECOND bullet too, proving the whole list was captured.
-    expect(text).toMatch(/^- fixture-two\.md$/m);
+  test("3: loadAgents captures display_name + the whole examples list from frontmatter", () => {
+    // The README template consumed `display_name` (the `# ${display_name}
+    // Knowledge` heading) and the full `examples` YAML list. Assert the loader
+    // still derives both from frontmatter — a non-empty display_name and a
+    // multi-item examples list on a shipped agent (the fixture-agent's own
+    // derivation is covered end-to-end by 5b's statusline render).
+    const agents = loadAgents();
+    for (const a of agents) {
+      expect(typeof a.display_name).toBe("string");
+      expect(a.display_name.length).toBeGreaterThan(0);
+      expect(Array.isArray(a.examples)).toBe(true);
+    }
+    const withExamples = agents.find((a) => a.examples.length >= 2);
+    expect(withExamples).toBeDefined();
   });
 
   // ============================================================
-  // Test 4 — init REJECTS a fixture agent missing display_name; the error
-  // cites the file and the field (parseAgentFrontmatter throw, lib.ts:828).
+  // Test 4 — a malformed agent (missing display_name) is REJECTED by the loader.
+  // (P4: birth no longer iterates agents to scaffold knowledge READMEs, so the
+  // rejection no longer fires from birth. The validation lives in the loader;
+  // doctor — which calls loadAgents() — surfaces it. Run the per-project doctor
+  // and assert it errors citing the file + the field.)
   // ============================================================
-  test("4: init rejects fixture-agent.md lacking display_name (error cites file + field)", () => {
+  test("4: doctor rejects fixture-agent.md lacking display_name (error cites file + field)", () => {
     const p = proj();
     writeFixtureAgent(p, "", false);
-    const r = runInit(p);
+    const tool = join(p, ".claude", "tools", "aidlc-utility.ts");
+    const r = spawnSync(BUN, [tool, "doctor", "--project-dir", p], {
+      encoding: "utf-8",
+    });
+    const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
     expect(r.status).not.toBe(0);
-    expect(r.out).toContain("fixture-agent");
-    expect(r.out).toContain("display_name");
+    expect(out).toContain("fixture-agent");
+    expect(out).toContain("display_name");
   });
 
   // ============================================================

@@ -9,17 +9,22 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendAuditEntry } from "./aidlc-audit.ts";
+import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   artifactsRegistry,
   findCycles,
   loadGraph,
   loadRules,
+  memoryDirFor,
   validateScope,
 } from "./aidlc-graph.ts";
 import {
+  activeIntent,
+  activeSpace,
   auditFilePath,
   auditShards,
+  birthIntent,
+  DEFAULT_SPACE,
   detectLeakedLocks,
   docsDir,
   emitError,
@@ -28,13 +33,17 @@ import {
   findAllEvents,
   findStageBySlug,
   getField,
+  holdsAuditLock,
   hooksHealthDir,
   isoTimestamp,
   isPackageJson,
+  listIntents,
+  listSpaces,
   loadAgents,
   loadScopeMapping,
   loadStageGraph,
   MERGE_SUCCEEDED_TAG_REGEX,
+  migrateFlatLayout,
   nextInScopeStage,
   PHASES,
   parseArgs,
@@ -44,12 +53,17 @@ import {
   readAllAuditShards,
   readStateFile,
   resolveProjectDir,
+  setActiveIntentCursor,
+  setActiveSpaceCursor,
+  slugify,
   SLUG_TAG_REGEX,
+  spacesRoot,
   type StageEntry,
   setCheckbox,
   setField,
   stagesInScope,
   stateFilePath,
+  withAuditLock,
   validateBoltSlug,
   validScopes,
   worktreeAuditFilePath,
@@ -94,13 +108,26 @@ function die(msg: string): never {
 
 // Thin wrapper around the canonical appendAuditEntry. All events must be in
 // aidlc-audit.ts VALID_EVENT_TYPES. Throws on invalid event or audit failure —
-// caller is expected to let that propagate (init failures should stop init).
+// caller is expected to let that propagate (birth failures should stop birth).
+//
+// Lock-aware (mirrors aidlc-state.ts emitAudit): handleIntentBirth wraps the
+// whole birth transaction in withAuditLock on the WORKSPACE sentinel bucket, so
+// this process already owns that OS lock. Routing through appendAuditEntry
+// (which calls the NON-reentrant acquireAuditLock keyed on the same sentinel
+// when intent is omitted) would self-deadlock and burn the 5s retry budget
+// before throwing — so detect the held lock and use the unlocked variant.
+// Outside a held lock (every other caller — status/doctor/etc.) it takes its
+// own lock as before.
 function appendAuditEvent(
   projectDir: string,
   event: string,
   fields: Record<string, string>
 ): void {
-  appendAuditEntry(event, fields, projectDir);
+  if (holdsAuditLock(projectDir)) {
+    appendAuditEntryUnlocked(event, fields, projectDir);
+  } else {
+    appendAuditEntry(event, fields, projectDir);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -122,8 +149,11 @@ Scopes (set depth, test strategy, and stage count):
 const HELP_TEXT_TAIL = `
 Utilities:
   --status          Show current workflow progress (read-only)
-  --init            Run the Initialization phase (scaffold dirs, detect workspace, init state). Defaults to --scope poc.
-  --force           Reinitialize even if aidlc-state.md already exists (pairs with --init)
+  intent            List intents in the active space (read-only; --json for structured output)
+  intent <name>     Switch the active intent
+  space             List spaces (read-only; --json for structured output)
+  space <name>      Switch the active space (team)
+  space-create <name>  Create a new space (team) seeded from the framework baseline
   --doctor          Run health check on hooks, settings, and directory structure
   --stage <id>      Jump to a specific stage (by slug or number, e.g., code-generation or 3.5)
   --phase <name>    Jump to the first in-scope stage of a phase (e.g., construction or 3)
@@ -196,8 +226,8 @@ function handleStatus(projectDir: string, flags: Record<string, string>): void {
       `No active AI-DLC workflow found.
 
 To get started:
-  /aidlc --init       Scaffold the aidlc-docs/ directory tree
-  /aidlc <scope>      Start a workflow (e.g., /aidlc feature)
+  /aidlc "build the auth service"   Describe what to build (auto-births an intent)
+  /aidlc <scope>      Start a workflow by scope (e.g., /aidlc feature)
   /aidlc --help       Show all commands and scopes
 `
     );
@@ -553,12 +583,19 @@ function handleDoctor(projectDir: string): void {
     });
   }
 
-  // 5. aidlc-docs/ exists
-  const aidlcDocsDir = docsDir(projectDir);
+  // 5. Workspace shell ready (P4: no --init artifact to check). With auto-birth
+  // there is no scaffolded aidlc-docs/ to verify; readiness is the SHIPPED SHELL
+  // the user copies from dist/: the harness engine dir (.claude/.kiro/.codex)
+  // present AND the default space's memory dir present (the source of truth the
+  // native include resolves). When both are present the first /aidlc auto-births
+  // with no ceremony; a missing piece means the dist/ copy was incomplete.
+  const harnessEngineDir = join(projectDir, harnessDir());
+  const defaultMemoryDir = memoryDirFor(projectDir);
+  const shellReady = existsSync(harnessEngineDir) && existsSync(defaultMemoryDir);
   results.push({
-    pass: existsSync(aidlcDocsDir),
-    label: "aidlc-docs/ directory exists",
-    fix: "run `/aidlc --init` to scaffold",
+    pass: shellReady,
+    label: `workspace shell ready (${harnessDir()}/ + aidlc/spaces/default/memory/)`,
+    fix: `copy the workspace shell from \`dist/${harnessDir().replace(/^\./, "")}/\` into your project root`,
   });
 
   // 6. Hook heartbeats
@@ -675,13 +712,13 @@ function handleDoctor(projectDir: string): void {
         results.push({
           pass: false,
           label: "state version readable",
-          fix: "State Version field missing or unparseable in aidlc-state.md. Archive your workspace ('mv aidlc-docs aidlc-docs.v6-archive') and re-run /aidlc --init.",
+          fix: "State Version field missing or unparseable in aidlc-state.md. Archive your workspace ('mv aidlc-docs aidlc-docs.v6-archive') and start a fresh workflow (describe what to build).",
         });
       } else if (versionMatch[1] !== "7") {
         results.push({
           pass: false,
           label: "state version current",
-          fix: `v${versionMatch[1]} state detected. The framework does not ship user-visible migration support pre-1.0. Archive your workspace ('mv aidlc-docs aidlc-docs.v${versionMatch[1]}-archive') and re-run /aidlc --init to scaffold a current-template workspace. The current template adds Worktree Path, Bolt Refs, and Practices Affirmed Timestamp fields used by Construction worktrees and practices-discovery.`,
+          fix: `v${versionMatch[1]} state detected. The framework does not ship user-visible migration support pre-1.0. Archive your workspace ('mv aidlc-docs aidlc-docs.v${versionMatch[1]}-archive') and start a fresh workflow (describe what to build) to get a current-template workspace. The current template adds Worktree Path, Bolt Refs, and Practices Affirmed Timestamp fields used by Construction worktrees and practices-discovery.`,
         });
       } else {
         results.push({
@@ -1488,14 +1525,14 @@ function handleDoctor(projectDir: string): void {
   // Manifest ids are bare ("required-sections"); a rule's pairing value is
   // aidlc-prefixed — strip "aidlc-" before matching (milestone-7b-frozen join).
   //
-  // Emits GUARDRAIL_LOADED once per doctor run — but ONLY when audit.md already
-  // exists (cold-safe, see auditExists below); appendAuditEntry self-creates
-  // the audit file/dir, so an unconditional emit on a pristine project would
-  // scaffold aidlc-docs/ + audit.md as a side effect, making --doctor NOT
-  // read-only. The README onboarding runs --doctor before --init, so doctor
-  // must create nothing on a fresh checkout. On an initialized project the
-  // emit fires exactly as before (BARE appendAuditEvent — the only throw is a
-  // real write failure, which the rest of the codebase lets propagate).
+  // Emits GUARDRAIL_LOADED once per doctor run — but ONLY when an audit trail
+  // already exists (cold-safe, see auditExists below); appendAuditEntry
+  // self-creates the audit shard/dir, so an unconditional emit on a pristine
+  // project would create a record as a side effect, making --doctor NOT
+  // read-only. Doctor runs on a fresh checkout before any workflow is born, so
+  // it must create nothing. On a project with a born intent the emit fires
+  // exactly as before (BARE appendAuditEvent — the only throw is a real write
+  // failure, which the rest of the codebase lets propagate).
   const pairedRules = loadRules();
   // sensors_applicable is REQUIRED on a compiled graph node, but a
   // hand-rolled or pre-milestone-9 graph JSON can omit it; `?? []` keeps this
@@ -1880,52 +1917,76 @@ export function detectWorkspace(projectDir: string): ScanResult {
 }
 
 // ---------------------------------------------------------------------------
-// init (0.1-0.3) — deterministic: scaffold + scan + state-init in one call
+// intent-birth (0.1-0.3) — deterministic: mint intent + scan + state-init
 // ---------------------------------------------------------------------------
 
-function findOrphanArtifacts(docsDir: string): string[] {
-  const orphans: string[] = [];
-  const nonInitPhases = ["ideation", "inception", "construction", "operation", "verification"];
-  for (const phase of nonInitPhases) {
-    const phaseDir = join(docsDir, phase);
-    if (!existsSync(phaseDir)) continue;
-    walkForArtifacts(phaseDir, phase, orphans);
-  }
-  return orphans;
-}
-
-const ORPHAN_WALK_IGNORE = new Set([".DS_Store", ".gitkeep", "Thumbs.db"]);
-
-function walkForArtifacts(dir: string, relBase: string, out: string[]): void {
-  let entries: string[];
+// Deferred `git rm` of a migrated flat tree. migrateFlatLayout MOVED the data
+// (staged copy → per-intent record) and left the original aidlc-docs/ in place
+// for this untrack step (it never rmSync's the source). Best-effort: a non-git
+// project, or a tree git doesn't track, is a clean no-op — `git rm -r --cached`
+// untracks without touching the working tree, then we remove the now-moved
+// directory from disk. Resolved decision (3): migration git-rm's the tracked
+// flat aidlc-docs/ post-move.
+function gitRmFlatTree(projectDir: string, flatTree: string): void {
   try {
-    entries = readdirSync(dir);
+    if (!existsSync(flatTree)) return;
+    // Untrack (cached only — the data already moved). Ignore failure (non-git
+    // project, or already untracked) — the rmSync below still tidies disk.
+    Bun.spawnSync(["git", "-C", projectDir, "rm", "-r", "--cached", "--quiet", "--", flatTree], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    // Remove the moved-from directory from the working tree (the data lives in
+    // the per-intent record now; this is the empty husk).
+    rmSync(flatTree, { recursive: true, force: true });
   } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (ORPHAN_WALK_IGNORE.has(entry)) continue;
-    const full = join(dir, entry);
-    let st: import("node:fs").Stats;
-    try {
-      st = lstatSync(full);
-    } catch {
-      continue;
-    }
-    if (st.isSymbolicLink()) continue;
-    const rel = `${relBase}/${entry}`;
-    if (st.isFile()) {
-      out.push(rel);
-    } else if (st.isDirectory()) {
-      walkForArtifacts(full, rel, out);
-    }
+    // best-effort untrack; the migration itself already succeeded
   }
 }
 
-function handleInit(projectDir: string, flags: Record<string, string>): void {
+// Ensure the per-intent artifact + knowledge dirs a workflow writes into exist.
+// Idempotent ensure-exists (NOT the old data/scaffold copy — SEED ships the
+// shell). Creates the active intent's record dir plus its per-phase artifact
+// dirs and a knowledge/ dir; all skipped if already present. The active-intent
+// cursor must be set (birthIntent/migration did so) before this runs.
+function ensureWorkspaceDirs(projectDir: string): void {
+  // docsDir() default-resolves the active intent's record dir (or the flat
+  // fallback when no intent resolves) — the cursor set by birthIntent/migration
+  // points it at the born intent.
+  const record = docsDir(projectDir);
+  mkdirSync(record, { recursive: true });
+  // Lazy per-phase artifact dirs (the engine/stages write reports here).
+  for (const phase of PHASES) {
+    mkdirSync(join(record, phase), { recursive: true });
+  }
+  mkdirSync(join(record, "verification"), { recursive: true });
+  // Per-intent knowledge dir (team knowledge READMEs are NOT re-seeded — the
+  // method/memory ships in spaces/<space>/memory via SEED; this is the
+  // intent-local knowledge drop the stages reference).
+  mkdirSync(join(record, "knowledge"), { recursive: true });
+}
+
+// intent-birth — the deterministic mutation behind the engine's birth
+// directive (the engine NAMES the move read-only; this tool performs it).
+// Births the FIRST intent into the active space on a fresh workspace, OR a new
+// intent for new work alongside an active one. Crash-safe + concurrent-safe:
+// the WHOLE transaction (migration probe, intent mint, registry append,
+// active-intent cursor, state-build, audit emits) runs inside ONE withAuditLock
+// on the WORKSPACE sentinel bucket — every intents.json mutation takes that
+// bucket (invariant 2), so two concurrent first-runs are serialized and BOTH
+// births land distinct uuids/dirs/rows with no lost update.
+//
+// The data/scaffold dir-copy + knowledge READMEs that the old `--init` shipped
+// are gone: the workspace shell (spaces/default/memory, native includes) ships
+// in dist/ (SEED), and lazy per-intent/codekb/knowledge dirs are ensure-exists
+// (created on demand). What stays is the scope→stage state-build that routes
+// the workflow to its first post-init stage — relocated here, now writing into
+// the BORN intent's record (the active-intent cursor set first makes the
+// default-resolving state/audit helpers resolve there).
+function handleIntentBirth(projectDir: string, flags: Record<string, string>): void {
   // Default to poc when --scope is omitted. Matches the orchestrator's
   // ultimate fallback in SKILL.md and makes direct tool invocations
-  // (`bun aidlc-utility.ts init`) work without extra flags.
+  // (`bun aidlc-utility.ts intent-birth`) work without extra flags.
   const scope = flags.scope || "poc";
   if (!validScopes().has(scope)) {
     die(
@@ -1943,174 +2004,134 @@ function handleInit(projectDir: string, flags: Record<string, string>): void {
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
 
-  const force = flags.force === "true";
-  const aidlcDocsDir = docsDir(projectDir);
-  const sp = stateFilePath(projectDir);
-
-  // Guard: refuse quiet re-init on existing state
-  if (existsSync(sp) && !force) {
-    die(
-      `aidlc-state.md already exists at ${sp}. Use --force to reinitialize.`
-    );
-  }
-
-  // Force path: warn on orphan artifacts, remove only the state file
-  if (existsSync(sp) && force) {
-    const orphans = existsSync(aidlcDocsDir) ? findOrphanArtifacts(aidlcDocsDir) : [];
-    if (orphans.length > 0) {
-      process.stderr.write(
-        `Warning: non-init artifacts found in aidlc-docs/ (will not be removed):\n`
-      );
-      for (const o of orphans) process.stderr.write(`  - ${o}\n`);
-    }
-    rmSync(sp);
-  }
-
-  const ts = isoTimestamp();
-
-  // ---- Scaffold (stage 0.1) ----
-
-  mkdirSync(aidlcDocsDir, { recursive: true });
-
-  // audit.md: header-only bootstrap on fresh init. WORKFLOW_STARTED is the
-  // birth event for the workflow; SESSION_STARTED is owned by the
-  // SessionStart hook and fires independently per Claude Code session. Prior
-  // versions emitted a bootstrap SESSION_STARTED here that double-counted
-  // every fresh init.
-  const auditPath = auditFilePath(projectDir);
-  if (!existsSync(auditPath)) {
-    writeFileSync(auditPath, `# AI-DLC Audit Log\n`, "utf-8");
-  }
-
-  // WORKFLOW_STARTED — mandatory first event of any new workflow. Captures the
-  // birth timestamp so "when did this feature begin?" is answerable from the
-  // audit alone. Fires on both fresh init and --force re-init (the latter
-  // starts a new workflow logically, even if audit.md carries prior history).
-  appendAuditEvent(projectDir, "WORKFLOW_STARTED", {
-    Scope: scope,
-    Request: `/aidlc ${flags.arguments || (force ? "--init --force" : "--init")}`,
-  });
-
-  // PHASE_STARTED for the Init phase — Init always runs. Other phases emit
-  // PHASE_STARTED at their boundary (via aidlc-state.ts advance) or
-  // PHASE_SKIPPED right now if the scope excludes them.
-  const initStageCount = stagesInScope(scope).filter(
-    (s) => s.phase === "initialization" && s.action === "EXECUTE"
-  ).length;
-  appendAuditEvent(projectDir, "PHASE_STARTED", {
-    Phase: "initialization",
-    "Stage count": String(initStageCount),
-    Scope: scope,
-  });
-
-  // PHASE_SKIPPED — one per phase the scope excludes entirely (no EXECUTE
-  // stages in that phase). Captures the scope decision at workflow birth so
-  // you don't have to derive it later by diffing the stage list.
-  for (const phase of PHASES) {
-    if (phase === "initialization") continue;
-    const inPhase = stagesInScope(scope).filter((s) => s.phase === phase);
-    const anyExecute = inPhase.some((s) => s.action === "EXECUTE");
-    if (!anyExecute && inPhase.length > 0) {
-      appendAuditEvent(projectDir, "PHASE_SKIPPED", {
-        Phase: phase,
+  // The whole mutation runs under the WORKSPACE lock so a concurrent first-run
+  // is serialized — both births append distinct rows to intents.json without a
+  // lost update. The migration probe + the registry append are the reads/writes
+  // the hazard box demands be in ONE critical section on the sentinel bucket.
+  withAuditLock(projectDir, () => {
+    // (1) MIGRATION WIRING. A pre-workspace project still at the flat aidlc-docs/
+    // layout is migrated ONCE here (idempotent + crash-safe; no-op on a fresh
+    // SEED shell or an already-migrated project). migrateFlatLayout MOVES the
+    // existing flat state INTO a per-intent record (mints the intent, sets the
+    // cursor + registry row), so when it fires the migrated state is AUTHORITATIVE
+    // — we do NOT mint a second intent and do NOT rebuild state on top (that
+    // would clobber the moved workflow). We git-rm the moved flat tree and emit a
+    // migration acknowledgement, then return. The deferred `git rm` untracks the
+    // data that MOVED (the source is never rmSync'd; best-effort — a non-git
+    // project skips it).
+    const migration = migrateFlatLayout(projectDir);
+    if (migration) {
+      gitRmFlatTree(projectDir, migration.movedFrom);
+      // The migrated record carries its prior state + audit history. Record that
+      // the workspace was migrated into this intent (lands in the migrated
+      // intent's audit shard — the cursor points there now). No state rebuild.
+      appendAuditEvent(projectDir, "WORKSPACE_INITIALISED", {
+        Request: `/aidlc ${flags.arguments || scope}`,
         Scope: scope,
-        Reason: `scope ${scope} excludes ${phase}`,
+        Details: `Migrated flat aidlc-docs/ into ${migration.intentDirName}`,
       });
+      process.stdout.write(
+        `Migrated flat workspace into intent: ${migration.intentDirName} (space: ${DEFAULT_SPACE})\n`,
+      );
+      return;
     }
-  }
 
-  appendAuditEvent(projectDir, "STAGE_STARTED", {
-    Stage: "workspace-scaffold",
-    Agent: "orchestrator",
-  });
+    // (2) MINT THE INTENT. Slug from the freeform description (--arguments), else
+    // the scope token. birthIntent mints a UUIDv7, creates the record dir + a
+    // bind stub, appends the {uuid,slug,scope,status:"in-flight"} registry row,
+    // and sets the active-intent cursor — all under the lock we already hold.
+    // After this the default-resolving state/audit helpers (stateFilePath/
+    // auditFilePath/appendAuditEvent/writeStateFile) resolve into THIS record.
+    const description = flags.arguments?.trim();
+    const slug = slugify(description && description.length > 0 ? description : scope);
+    birthIntent(projectDir, slug, activeSpace(projectDir), scope);
 
-  // Copy scaffold seed directories (stage artifact dirs)
-  const scaffoldSrc = join(TOOLS_DIR, "data", "scaffold");
-  if (existsSync(scaffoldSrc)) {
-    const phases = readdirSync(scaffoldSrc);
-    for (const phase of phases) {
-      const phaseSrc = join(scaffoldSrc, phase);
-      const phaseDst = join(aidlcDocsDir, phase);
-      mkdirSync(phaseDst, { recursive: true });
-      try {
-        const stages = readdirSync(phaseSrc);
-        for (const stage of stages) {
-          const dst = join(phaseDst, stage);
-          if (!existsSync(dst)) {
-            mkdirSync(dst, { recursive: true });
-          }
-        }
-      } catch {
-        // skip non-dir entries
+    const ts = isoTimestamp();
+
+    // ---- Audit bootstrap + birth events (relocated from the old --init) ----
+
+    // audit.md: header-only bootstrap if absent. WORKFLOW_STARTED is the birth
+    // event; SESSION_STARTED is owned by the SessionStart hook. This resolves to
+    // the born intent's per-clone audit shard (cursor set above).
+    const auditPath = auditFilePath(projectDir);
+    if (!existsSync(auditPath)) {
+      mkdirSync(dirname(auditPath), { recursive: true });
+      writeFileSync(auditPath, `# AI-DLC Audit Log\n`, "utf-8");
+    }
+
+    // WORKFLOW_STARTED — mandatory first event of any new workflow. Captures the
+    // birth timestamp so "when did this feature begin?" is answerable from the
+    // audit alone. Lands in the born intent's audit (relocated from --init).
+    appendAuditEvent(projectDir, "WORKFLOW_STARTED", {
+      Scope: scope,
+      Request: `/aidlc ${flags.arguments || scope}`,
+    });
+
+    // PHASE_STARTED for the Init phase — Init always runs. Other phases emit
+    // PHASE_STARTED at their boundary (via aidlc-state.ts advance) or
+    // PHASE_SKIPPED right now if the scope excludes them.
+    const initStageCount = stagesInScope(scope).filter(
+      (s) => s.phase === "initialization" && s.action === "EXECUTE"
+    ).length;
+    appendAuditEvent(projectDir, "PHASE_STARTED", {
+      Phase: "initialization",
+      "Stage count": String(initStageCount),
+      Scope: scope,
+    });
+
+    // PHASE_SKIPPED — one per phase the scope excludes entirely (no EXECUTE
+    // stages in that phase). Captures the scope decision at workflow birth so
+    // you don't have to derive it later by diffing the stage list.
+    for (const phase of PHASES) {
+      if (phase === "initialization") continue;
+      const inPhase = stagesInScope(scope).filter((s) => s.phase === phase);
+      const anyExecute = inPhase.some((s) => s.action === "EXECUTE");
+      if (!anyExecute && inPhase.length > 0) {
+        appendAuditEvent(projectDir, "PHASE_SKIPPED", {
+          Phase: phase,
+          Scope: scope,
+          Reason: `scope ${scope} excludes ${phase}`,
+        });
       }
     }
-  }
 
-  // Knowledge directories with READMEs
-  const knowledgeDir = join(aidlcDocsDir, "knowledge");
-  mkdirSync(knowledgeDir, { recursive: true });
+    appendAuditEvent(projectDir, "STAGE_STARTED", {
+      Stage: "workspace-scaffold",
+      Agent: "orchestrator",
+    });
 
-  const topReadmePath = join(knowledgeDir, "README.md");
-  if (!existsSync(topReadmePath)) {
-    const templatePath = join(
-      TOOLS_DIR,
-      "..",
-      "knowledge",
-      "aidlc-shared",
-      "knowledge-readme-template.md"
-    );
-    let topReadme: string;
-    if (existsSync(templatePath)) {
-      topReadme = readFileSync(templatePath, "utf-8");
-    } else {
-      topReadme =
-        "# Team Knowledge\n\nAdd markdown files here to extend AI-DLC agent behavior for your project.\n";
-    }
-    writeFileSync(topReadmePath, topReadme, "utf-8");
-  }
+    // ---- Ensure-exists scaffold (lazy; SEED ships the shell) ----
+    // The shipped shell already carries spaces/default/memory + native includes.
+    // Birth only ensures the per-intent artifact + knowledge dirs the workflow
+    // will write into exist; it never re-copies the data/scaffold tree (SEED
+    // owns that). All idempotent — skip any dir that already exists.
+    ensureWorkspaceDirs(projectDir);
 
-  const sharedDir = join(knowledgeDir, "aidlc-shared");
-  mkdirSync(sharedDir, { recursive: true });
-  const sharedReadme = join(sharedDir, "README.md");
-  if (!existsSync(sharedReadme)) {
-    writeFileSync(
-      sharedReadme,
-      "# Shared Knowledge\n\nAdd files here that ALL agents should load — company standards, project context, domain glossary.\n",
-      "utf-8"
-    );
-  }
+    appendAuditEvent(projectDir, "WORKSPACE_SCAFFOLDED", {
+      Request: `/aidlc ${flags.arguments || scope}`,
+      Details: "Per-intent artifact + knowledge dirs ensured (shell shipped by SEED)",
+    });
+    appendAuditEvent(projectDir, "STAGE_COMPLETED", {
+      Stage: "workspace-scaffold",
+      Details: "Per-intent artifact + knowledge dirs ensured",
+    });
 
-  for (const agent of loadAgents()) {
-    const dir = join(knowledgeDir, agent.slug);
-    mkdirSync(dir, { recursive: true });
-    const readme = join(dir, "README.md");
-    if (!existsSync(readme)) {
-      const examplesStr = agent.examples.map((e) => `- ${e}`).join("\n");
-      writeFileSync(
-        readme,
-        `# ${agent.display_name} Knowledge
-
-Add markdown files here to customize ${agent.slug} behavior for your project.
-
-Examples of what to include:
-${examplesStr}
-
-Files here are loaded at step 5 of the knowledge loading order, after built-in methodology.
-`,
-        "utf-8"
-      );
-    }
-  }
-
-  appendAuditEvent(projectDir, "WORKSPACE_SCAFFOLDED", {
-    Request: `/aidlc ${flags.arguments || "--init"}`,
-    Details: "Directory tree and knowledge READMEs created",
+    handleIntentBirthStateBuild(projectDir, flags, scope, ts);
   });
-  appendAuditEvent(projectDir, "STAGE_COMPLETED", {
-    Stage: "workspace-scaffold",
-    Details: "Directory tree and knowledge READMEs created",
-  });
+}
 
+// The scope→stage state-build half of birth: the workspace detection + state
+// file authoring + routing audit emits the old --init ran after scaffolding.
+// Split out only so handleIntentBirth's lock body stays readable; it is called
+// from inside that lock (every write here resolves the born intent's record).
+function handleIntentBirthStateBuild(
+  projectDir: string,
+  flags: Record<string, string>,
+  scope: string,
+  ts: string,
+): void {
+  const depthOverride = flags.depth;
+  const testStrategyOverride = flags["test-strategy"];
   // ---- Workspace detection (stage 0.2) ----
 
   appendAuditEvent(projectDir, "STAGE_STARTED", {
@@ -2308,7 +2329,7 @@ ${stageProgress}
   writeStateFile(projectDir, stateContent);
 
   appendAuditEvent(projectDir, "WORKSPACE_INITIALISED", {
-    Request: "/aidlc --init",
+    Request: `/aidlc ${flags.arguments || scope}`,
     "Project Type": scan.projectType,
     Scope: scope,
     Languages: scan.languages,
@@ -2346,16 +2367,12 @@ ${stageProgress}
     });
   }
 
-  // Combined stdout summary (scaffold + state-init blocks)
+  // Combined stdout summary (intent born + state-build). The active-intent
+  // cursor + the record dir were set by birthIntent above; the state file lives
+  // under the born intent's record (resolved by writeStateFile's default).
+  const bornDir = activeIntent(projectDir) ?? "(legacy flat record)";
   process.stdout.write(
-    `Workspace scaffolded:
-  aidlc-docs/knowledge/           (team knowledge — 11 agent dirs + aidlc-shared)
-  aidlc-docs/initialization/      (3 stage artifact dirs)
-  aidlc-docs/ideation/            (7 stage artifact dirs)
-  aidlc-docs/inception/           (7 stage artifact dirs)
-  aidlc-docs/construction/        (2 stage artifact dirs)
-  aidlc-docs/operation/           (7 stage artifact dirs)
-  aidlc-docs/verification/
+    `Intent born: ${bornDir} (space: ${activeSpace(projectDir)})
 State initialized: ${scope} scope, ${totalInScope} stages, ${effectiveDepth} depth
 Project type: ${scan.projectType}
 Languages: ${scan.languages}
@@ -2367,12 +2384,181 @@ First post-init stage: ${firstPostInit} (${firstPostInitPhase})
 }
 
 // ---------------------------------------------------------------------------
-// state-init — deprecated, merged into init
+// state-init / init — deprecated aliases, merged into intent-birth
 // ---------------------------------------------------------------------------
 
 function handleStateInit(_projectDir: string, _flags: Record<string, string>): void {
   die(
-    "state-init is merged into init. Run 'bun aidlc-utility.ts init --scope <scope>' instead."
+    "state-init is merged into intent-birth. A workflow starts by describing what to build (/aidlc \"build the auth service\"); the engine auto-births the intent."
+  );
+}
+
+// ---------------------------------------------------------------------------
+// intent / space — the verb families + the deterministic query layer
+// ---------------------------------------------------------------------------
+
+// Print an intent listing (the query layer's human OR --json mode). Both modes
+// read the SAME listSpaces/listIntents source so they never diverge. --json
+// shape: {active, spaces:[...], intents:[{uuid,slug,status,repos}]} — consumed
+// by the birth gate, resume-rebind, and statusline; human text is the bare
+// `/aidlc intent` rendering. Pure read.
+function printIntentListing(projectDir: string, asJson: boolean): void {
+  const space = activeSpace(projectDir);
+  const intents = listIntents(projectDir, space);
+  const active = intents.find((i) => i.active);
+  if (asJson) {
+    process.stdout.write(
+      `${JSON.stringify({
+        active: active ? active.dirName : null,
+        space,
+        intents: intents.map((i) => ({
+          uuid: i.uuid,
+          slug: i.slug,
+          status: i.status,
+          repos: i.repos ?? [],
+          dirName: i.dirName,
+          active: i.active,
+        })),
+      })}\n`
+    );
+    return;
+  }
+  if (intents.length === 0) {
+    process.stdout.write(
+      `No intents in space "${space}" yet. Start one by describing what to build: /aidlc "build the auth service"\n`
+    );
+    return;
+  }
+  let out = `Intents in space "${space}":\n`;
+  for (const i of intents) {
+    const marker = i.active ? "*" : " ";
+    out += `${marker} ${i.dirName ?? i.slug}  [${i.status}]\n`;
+  }
+  if (!active) {
+    out += `\n(no active intent — switch with /aidlc intent <name>)\n`;
+  }
+  process.stdout.write(out);
+}
+
+// Print a space listing (human OR --json). --json shape:
+// {active, spaces:[{name,active}]}. Pure read.
+function printSpaceListing(projectDir: string, asJson: boolean): void {
+  const spaces = listSpaces(projectDir);
+  const active = spaces.find((s) => s.active);
+  if (asJson) {
+    process.stdout.write(
+      `${JSON.stringify({
+        active: active ? active.name : DEFAULT_SPACE,
+        spaces: spaces.map((s) => ({ name: s.name, active: s.active })),
+      })}\n`
+    );
+    return;
+  }
+  let out = `Spaces:\n`;
+  for (const s of spaces) {
+    out += `${s.active ? "*" : " "} ${s.name}\n`;
+  }
+  process.stdout.write(out);
+}
+
+// `/aidlc intent` (list) · `/aidlc intent <name>` (switch the active-intent
+// cursor). Switching an intent is a PURE cursor write (an intent has no native
+// include — only a space does). The <name> matches a record dir name exactly,
+// or a slug (when unambiguous within the space). --json on the bare list emits
+// the structured query shape.
+function handleIntent(projectDir: string, positional: string[], flags: Record<string, string>): void {
+  const asJson = flags.json === "true";
+  const target = positional[1];
+  if (!target) {
+    printIntentListing(projectDir, asJson);
+    return;
+  }
+  const space = activeSpace(projectDir);
+  const intents = listIntents(projectDir, space);
+  // Exact record-dir match first; then a unique slug match.
+  let match = intents.find((i) => i.dirName === target);
+  if (!match) {
+    const bySlug = intents.filter((i) => i.slug === target && i.dirName !== null);
+    if (bySlug.length === 1) match = bySlug[0];
+    else if (bySlug.length > 1) {
+      die(
+        `Ambiguous intent "${target}" in space "${space}" (${bySlug.length} match). Use the full record-dir name: ${bySlug.map((i) => i.dirName).join(", ")}.`
+      );
+    }
+  }
+  if (!match || match.dirName === null) {
+    die(
+      `Unknown intent "${target}" in space "${space}". Run /aidlc intent to list, or describe what to build to start a new one.`
+    );
+  }
+  setActiveIntentCursor(projectDir, match.dirName, space);
+  process.stdout.write(`Active intent → ${match.dirName} (space: ${space})\n`);
+}
+
+// `/aidlc space` (list) · `/aidlc space <name>` (switch the active-space
+// cursor). Per the plan, switching a space ALSO re-points the ambient harness
+// include — but that ambient re-point is a §2 FAST-FOLLOW (out of scope here);
+// the cursor write itself IS in scope. Switching to a non-existent space errors
+// (use space-create). --json on the bare list emits the structured shape.
+function handleSpace(projectDir: string, positional: string[], flags: Record<string, string>): void {
+  const asJson = flags.json === "true";
+  const target = positional[1];
+  if (!target) {
+    printSpaceListing(projectDir, asJson);
+    return;
+  }
+  const spaces = listSpaces(projectDir);
+  if (!spaces.some((s) => s.name === target)) {
+    die(
+      `Unknown space "${target}". Existing: ${spaces.map((s) => s.name).join(", ")}. Create it with /aidlc space-create ${target}.`
+    );
+  }
+  setActiveSpaceCursor(projectDir, target);
+  process.stdout.write(`Active space → ${target}\n`);
+}
+
+// `/aidlc space-create <name>` — seed a NEW space's memory. org.md is copied
+// from spaces/default/memory/org.md (the always-present SEED baseline), plus
+// fresh empty team.md/project.md/phases stubs + the templates/ floor. A new team
+// starts at the framework baseline and earns its OWN practices — it does NOT
+// inherit another space's learnings. (A new INTENT, by contrast, seeds nothing:
+// it reads its space's live memory — handled in birthIntent.)
+function handleSpaceCreate(projectDir: string, positional: string[], _flags: Record<string, string>): void {
+  const raw = positional[1];
+  if (!raw) die("Usage: aidlc-utility space-create <name>");
+  const name = slugify(raw);
+  const dest = join(spacesRoot(projectDir), name);
+  if (existsSync(dest)) die(`Space "${name}" already exists at ${dest}.`);
+
+  const memoryDest = join(dest, "memory");
+  mkdirSync(memoryDest, { recursive: true });
+  mkdirSync(join(memoryDest, "phases"), { recursive: true });
+  mkdirSync(join(memoryDest, "templates"), { recursive: true });
+  mkdirSync(join(dest, "intents"), { recursive: true });
+
+  // Copy the org.md baseline from the default space (the always-present SEED
+  // shell). If absent (a malformed shell), fall back to an empty stub rather
+  // than dying — the resolver tolerates an empty/absent rules dir.
+  const orgSrc = join(spacesRoot(projectDir), DEFAULT_SPACE, "memory", "org.md");
+  const orgDest = join(memoryDest, "org.md");
+  if (existsSync(orgSrc)) {
+    writeFileSync(orgDest, readFileSync(orgSrc, "utf-8"), "utf-8");
+  } else {
+    writeFileSync(orgDest, "# Organization defaults\n", "utf-8");
+  }
+  // Fresh empty team/project stubs (a new team earns its own practices).
+  if (!existsSync(join(memoryDest, "team.md"))) {
+    writeFileSync(join(memoryDest, "team.md"), "# Team practices\n", "utf-8");
+  }
+  if (!existsSync(join(memoryDest, "project.md"))) {
+    writeFileSync(join(memoryDest, "project.md"), "# Project overrides\n", "utf-8");
+  }
+  // templates/ floor marker so the empty dir is tracked (mirrors SEED's floor).
+  const floor = join(memoryDest, "templates", ".gitkeep");
+  if (!existsSync(floor)) writeFileSync(floor, "", "utf-8");
+
+  process.stdout.write(
+    `Space created: ${name}\n  memory/org.md (copied from default), team.md, project.md, phases/, templates/\nSwitch to it with /aidlc space ${name}.\n`
   );
 }
 
@@ -2414,7 +2600,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   }
 
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
-  if (!existsSync(sp)) die("No state file found. Run /aidlc --init first.");
+  if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
 
   const scopeMapping = loadScopeMapping();
   const newScopeDef = scopeMapping[newScope];
@@ -2583,7 +2769,7 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   }
 
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
-  if (!existsSync(sp)) die("No state file found. Run /aidlc --init first.");
+  if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
 
   let content = readStateFile(projectDir, flags.intent, flags.space);
   const oldDepth = getField(content, "Depth");
@@ -2640,7 +2826,7 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
 
 function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
-  if (!existsSync(sp)) die("No state file found. Run /aidlc --init first.");
+  if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
 
   const stage = flags.stage;
   if (!stage) die("--stage is required for set-status");
@@ -2670,7 +2856,7 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
 
 function handleEnableTestRun(projectDir: string): void {
   const sp = stateFilePath(projectDir);
-  if (!existsSync(sp)) die("No state file found. Run /aidlc --init first.");
+  if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
 
   let content = readStateFile(projectDir);
 
@@ -3034,8 +3220,25 @@ function main(): void {
     case "doctor":
       handleDoctor(projectDir);
       break;
+    case "intent-birth":
+      handleIntentBirth(projectDir, flags);
+      break;
+    case "intent":
+      handleIntent(projectDir, positional, flags);
+      break;
+    case "space":
+      handleSpace(projectDir, positional, flags);
+      break;
+    case "space-create":
+      handleSpaceCreate(projectDir, positional, flags);
+      break;
+    // init / state-init — deprecated aliases kept for back-compat only (not in
+    // usage/help). The user-facing `/aidlc --init` is retired in P4: the
+    // workspace shell ships in dist/ (SEED) and the engine auto-births the
+    // intent. `init` now routes to the birth handler so any stale caller still
+    // works; `state-init` dies with migration guidance.
     case "init":
-      handleInit(projectDir, flags);
+      handleIntentBirth(projectDir, flags);
       break;
     case "state-init":
       handleStateInit(projectDir, flags);
@@ -3063,7 +3266,7 @@ function main(): void {
       break;
     default:
       die(
-        `Usage: aidlc-utility <help|version|status|doctor|init|scope-change|config-change|set-status|enable-test-run|detect-scope|resolve-env-scope|scope-table> [--project-dir <path>] [--scope <scope>] [--force]`
+        `Usage: aidlc-utility <help|version|status|doctor|intent-birth|intent|space|space-create|scope-change|config-change|set-status|enable-test-run|detect-scope|resolve-env-scope|scope-table> [--project-dir <path>] [--scope <scope>] [--json]`
       );
   }
 }

@@ -41,7 +41,7 @@
 // Nothing is written under tests/fixtures/**.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, rmdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   cleanupTestProject,
@@ -59,11 +59,29 @@ const UTIL_TOOL = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-u
 
 let proj: string;
 
-function statePath(p: string): string {
-  return join(p, "aidlc-docs", "aidlc-state.md");
+// P4: init now BIRTHS a per-intent record — state lands at
+// aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md and audit at
+// <record>/audit/<host>-<clone>.md (per-clone shards), NOT the flat aidlc-docs/.
+// Resolve the born record from the active-space + active-intent cursors (flat
+// fallback for a not-yet-born project). The concurrency under test is unchanged
+// — the per-intent lock serialises the concurrent writers exactly as before.
+function recordDirOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(p, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(p, "aidlc-docs");
 }
-function auditPath(p: string): string {
-  return join(p, "aidlc-docs", "audit.md");
+function statePath(p: string): string {
+  return join(recordDirOf(p), "aidlc-state.md");
 }
 function readState(p: string): string {
   return readFileSync(statePath(p), "utf-8");
@@ -71,10 +89,21 @@ function readState(p: string): string {
 function field(p: string, name: string): string | null {
   return getField(readState(p), name);
 }
-/** Count occurrences of an "**Event**: <type>" line in audit.md. */
+/** Concatenated text of every per-clone audit shard (flat fallback). */
+function readAudit(p: string): string {
+  const auditDir = join(recordDirOf(p), "audit");
+  if (existsSync(auditDir)) {
+    const shards = readdirSync(auditDir).filter((f) => f.endsWith(".md"));
+    if (shards.length > 0) {
+      return shards.map((f) => readFileSync(join(auditDir, f), "utf-8")).join("\n");
+    }
+  }
+  const flat = join(p, "aidlc-docs", "audit.md");
+  return existsSync(flat) ? readFileSync(flat, "utf-8") : "";
+}
+/** Count occurrences of an "**Event**: <type>" line across the audit shards. */
 function eventCount(p: string, type: string): number {
-  if (!existsSync(auditPath(p))) return 0;
-  return readFileSync(auditPath(p), "utf-8")
+  return readAudit(p)
     .split("\n")
     .filter((l) => l.trim() === `**Event**: ${type}`).length;
 }

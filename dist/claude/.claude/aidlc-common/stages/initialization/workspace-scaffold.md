@@ -2,7 +2,7 @@
 slug: workspace-scaffold
 phase: initialization
 execution: ALWAYS
-condition: Scaffolds aidlc-docs/ directory tree — idempotent (skips existing dirs/files)
+condition: Ensure-exists the per-intent record and artifact dirs — idempotent (creates on demand, skips existing)
 lead_agent: orchestrator
 support_agents: []
 mode: inline
@@ -26,7 +26,7 @@ outputs: aidlc-docs/ directory tree (knowledge dirs, stage artifact dirs, verifi
 
 # Workspace Scaffold
 
-Runs deterministically inside `aidlc-utility init`. Kept as reference for audit event semantics.
+Runs deterministically inside `aidlc-utility intent-birth`. The workspace shell ships in `dist/` (the SEED); birth only ensure-exists the per-intent record and artifact dirs (creates them on demand, idempotent). Kept as reference for audit event semantics.
 
 MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
 
@@ -41,9 +41,11 @@ MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
 
 Read the knowledge README template from `.claude/knowledge/aidlc-shared/knowledge-readme-template.md`.
 
-### Step 3: Create Knowledge Directories with READMEs
+### Step 3: Knowledge Directories with READMEs
 
-Idempotent — skip any directories/files that already exist.
+The SEED shell shipped in `dist/` already carries these knowledge dirs and
+READMEs, so birth does NOT copy them — this list stays as reference for what the
+shell provides. Idempotent — skip any directories/files that already exist.
 
 - `aidlc-docs/knowledge/README.md` — top-level README (use template content)
 - `aidlc-docs/knowledge/aidlc-shared/README.md` — "Add files here that ALL agents should load — company standards, project context, domain glossary."
@@ -60,9 +62,9 @@ Idempotent — skip any directories/files that already exist.
   Files here are loaded at step 5 of the knowledge loading order, after built-in methodology.
   ```
 
-### Step 4: Create Stage Artifact Directories
+### Step 4: Ensure Stage Artifact Directories
 
-Create empty stage artifact directories (no READMEs) — idempotent:
+Ensure-exists the empty per-intent stage artifact directories (no READMEs) — idempotent (created on demand):
 
 - `aidlc-docs/initialization/` — workspace-scaffold/, workspace-detection/, state-init/
 - `aidlc-docs/ideation/` — intent-capture/, market-research/, feasibility/, scope-definition/, team-formation/, rough-mockups/, approval-handoff/
@@ -86,8 +88,8 @@ This stage has NO approval gate — it auto-proceeds to the next stage (workspac
 
 ## Sensors
 
-This stage runs deterministic setup logic inside `aidlc-utility init` —
-it scaffolds the `aidlc-docs/` directory tree and emits state events. No
+This stage runs deterministic setup logic inside `aidlc-utility intent-birth` —
+it ensure-exists the per-intent record and artifact dirs and emits state events. No
 agent-authored markdown lands here, so the frontmatter `sensors:` list
 is empty.
 

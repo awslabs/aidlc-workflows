@@ -65,6 +65,7 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
@@ -114,9 +115,36 @@ function init(p: string, ...extra: string[]): CliResult {
   return { status: res.status ?? -1, out: `${stdout}${stderr}`, stderr, stdout };
 }
 
-const statePath = (p: string): string =>
-  join(p, "aidlc-docs", "aidlc-state.md");
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+// P4: intent-birth writes state into the born intent's per-intent record dir
+// (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat aidlc-docs/. Resolve
+// the record dir from the active-space + active-intent cursors, falling back to
+// the flat layout for a not-yet-born project.
+function recordDirOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(p, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(p, "aidlc-docs");
+}
+const statePath = (p: string): string => join(recordDirOf(p), "aidlc-state.md");
+// Audit is written as per-clone shards under <record>/audit/<host>-<pid>.md
+// (Stage B). Concatenate every shard for a content read.
+function readAudit(p: string): string {
+  const auditDir = join(recordDirOf(p), "audit");
+  if (!existsSync(auditDir)) return "";
+  return readdirSync(auditDir)
+    .filter((f) => f.endsWith(".md"))
+    .map((f) => readFileSync(join(auditDir, f), "utf-8"))
+    .join("\n");
+}
 
 /**
  * Exact value of a `- **<key>**: <value>` field from aidlc-state.md. The state
@@ -136,9 +164,7 @@ function stateField(p: string, key: string): string {
 
 /** Count `**Event**: WORKFLOW_STARTED` rows. Mirrors the .sh's `grep -c "^\*\*Event\*\*: WORKFLOW_STARTED"`. */
 function workflowStartedCount(p: string): number {
-  const f = auditPath(p);
-  if (!existsSync(f)) return 0;
-  return readFileSync(f, "utf-8")
+  return readAudit(p)
     .split("\n")
     .filter((l) => l === "**Event**: WORKFLOW_STARTED").length;
 }
@@ -320,44 +346,38 @@ describe("t20 aidlc-utility init — workspace scanner (migrated from t20-unit-w
     expect(stateField(p, "Build System")).toBe("poetry (pyproject.toml)");
   });
 
-  // --- .sh Test 17-21: --force semantics, orphan warning, noise-file filter ---
-  // Single fresh project carried across the re-init sequence, exactly as the
-  // .sh did (one PROJ for the whole 17-21 block).
-  test("17-21: --force re-init, orphan warning, .DS_Store filter", () => {
+  // --- Birth semantics (P4: --force/re-init guard retired) ---
+  // The old --init guarded re-init ("already exists" error; --force to wipe).
+  // P4 retires that: each intent-birth births a NEW intent (the workspace can
+  // hold many), so a second birth succeeds and adds a second intent + a second
+  // WORKFLOW_STARTED — no guard, no --force, no orphan-warning path.
+  test("17-19: a second birth succeeds (new intent), adds a fresh WORKFLOW_STARTED — no re-init guard", () => {
     const p = proj();
 
-    // First init.
+    // First birth.
     const first = init(p);
     expect(first.status).toBe(0);
+    expect(existsSync(statePath(p))).toBe(true);
     const before = workflowStartedCount(p);
 
-    // .sh 17: no-force retry errors (exit non-zero). STRONGER: pin exact code 1
-    // and the diagnostic the tool prints.
-    const retry = init(p);
-    expect(retry.status).toBe(1);
-    expect(retry.out).toContain("already exists");
+    // A second birth is NOT an error (no re-init guard) — it births another
+    // intent in the workspace.
+    const second = init(p);
+    expect(second.status).toBe(0);
+    expect(second.out).not.toContain("already exists");
+    expect(second.out).not.toContain("--force");
 
-    // .sh 18: --force succeeds, state still exists.
-    const forced = init(p, "--force");
-    expect(forced.status).toBe(0);
-    expect(existsSync(statePath(p))).toBe(true);
+    // Two intent record dirs now exist under the default space.
+    const intentsDir = join(p, "aidlc", "spaces", "default", "intents");
+    const records = readdirSync(intentsDir).filter((d) =>
+      existsSync(join(intentsDir, d, "aidlc-state.md")),
+    );
+    expect(records.length).toBe(2);
 
-    // .sh 19: --force adds a fresh WORKFLOW_STARTED (count grows).
+    // The second birth adds a fresh WORKFLOW_STARTED (now keyed to the new
+    // active intent's audit — the count over the active record grew from 0).
     const after = workflowStartedCount(p);
-    expect(after).toBeGreaterThan(before);
-
-    // .sh 20: seed a non-init artifact, run --force, expect orphan warning on stderr.
-    const orphanDir = join(p, "aidlc-docs", "ideation", "intent-capture");
-    mkdirSync(orphanDir, { recursive: true });
-    writeFileSync(join(orphanDir, "intent.md"), "# intent\n", "utf-8");
-    const warned = init(p, "--force");
-    expect(warned.stderr).toContain("non-init artifacts");
-    // STRONGER than the .sh: the seeded artifact's path is listed in the warning.
-    expect(warned.stderr).toContain("ideation/intent-capture/intent.md");
-
-    // .sh 21: .DS_Store (macOS Finder noise) must NOT appear in the warning.
-    writeFileSync(join(orphanDir, ".DS_Store"), "", "utf-8");
-    const filtered = init(p, "--force");
-    expect(filtered.stderr).not.toContain(".DS_Store");
+    expect(after).toBeGreaterThanOrEqual(1);
+    expect(before).toBeGreaterThanOrEqual(1);
   });
 });

@@ -63,7 +63,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -71,6 +71,12 @@ import {
   resetAidlcEnv,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+// P4: init BIRTHS a per-intent record; state lives under
+// aidlc/spaces/<space>/intents/<slug>-<id8>/ and audit is SHARDED per clone
+// under <record>/audit/. Read state through the resolved record dir and audit
+// through the shipped merge helper (default-resolves the active intent, falls
+// back to flat aidlc-docs for a not-yet-born project).
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -85,6 +91,25 @@ interface ScopeGrid {
 const grid: ScopeGrid = JSON.parse(readFileSync(SCOPE_GRID, "utf-8"));
 
 const SCOPE = "bugfix";
+
+// P4: resolve the born intent's record dir from the active-space + active-intent
+// cursors (a record dir is the one holding aidlc-state.md), falling back to the
+// flat aidlc-docs/ layout for a not-yet-born project.
+function recordDirOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(p, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(p, "aidlc-docs");
+}
 
 describe("t65 Construction-worktrees per-scope contract — bugfix (migrated from t65-construction-worktrees-bugfix.sh, plan 4)", () => {
   // ===========================================================================
@@ -160,7 +185,7 @@ describe("t65 Construction-worktrees per-scope contract — bugfix (migrated fro
     // "Bolt slug.*<slug>" line, independently. STRONGER here: assert both land
     // in the SAME audit block (the dispatch-event entry), block-scoping the slug
     // to the event the .sh only matched globally.
-    const audit = readFileSync(join(proj, "aidlc-docs", "audit.md"), "utf-8");
+    const audit = readAllAuditShards(proj);
     const block =
       audit
         .split(/\n(?=## )/)
@@ -174,7 +199,7 @@ describe("t65 Construction-worktrees per-scope contract — bugfix (migrated fro
     // The .sh grepped the init-produced aidlc-state.md for both "Worktree Path"
     // and "Bolt Refs". Read the REAL state file (not a fixture).
     const state = readFileSync(
-      join(proj, "aidlc-docs", "aidlc-state.md"),
+      join(recordDirOf(proj), "aidlc-state.md"),
       "utf-8",
     );
     const lines = state.split("\n");

@@ -63,13 +63,15 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
+// P4: audit is sharded per clone under the born intent's record; read the
+// merged shards via the shipped helper (default-resolves the active intent).
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -102,26 +104,38 @@ function walkStage(slug: string, proj: string): void {
   expect(ap.status).toBe(0);
 }
 
-// The audit line carrying the event type is `**Event**: <TYPE>` on its own
-// line (aidlc-audit.ts:246). Pull them all out, in file order.
-function eventSequence(auditPath: string): string[] {
-  const text = readFileSync(auditPath, "utf-8");
-  const out: string[] = [];
-  for (const line of text.split("\n")) {
-    const m = line.match(/^\*\*Event\*\*: (.+)$/);
-    if (m) out.push(m[1].trim());
-  }
-  return out;
+// Each audit block carries `**Timestamp**: <iso>` + `**Event**: <TYPE>`
+// (aidlc-audit.ts). P4 shards audit per clone, so a multi-spawn drive lands its
+// blocks across several shards; readAllAuditShards concatenates them (block
+// boundaries preserved) but cross-shard order is by clone-id filename, NOT
+// chronology. So parse (timestamp, event) per block and STABLE-sort by timestamp
+// — buffer position is the documented tiebreak for same-second blocks (isoTimestamp
+// is second-precision), which is exactly how the engine's block parsers order. The
+// terminal four (emitted in one complete-workflow process, one shard) stay in
+// their emit order under this sort.
+function eventSequence(proj: string): string[] {
+  const text = readAllAuditShards(proj);
+  const blocks = text.split("\n---\n");
+  const parsed: { ts: string; event: string; pos: number }[] = [];
+  blocks.forEach((block, pos) => {
+    const ev = block.match(/^\*\*Event\*\*: (.+)$/m);
+    if (!ev) return;
+    const tsm = block.match(/^\*\*Timestamp\*\*: (.+)$/m);
+    parsed.push({ ts: tsm ? tsm[1].trim() : "", event: ev[1].trim(), pos });
+  });
+  parsed.sort((a, b) => (a.ts === b.ts ? a.pos - b.pos : a.ts < b.ts ? -1 : 1));
+  return parsed.map((p) => p.event);
 }
 
 function countEvent(seq: string[], type: string): number {
   return seq.filter((e) => e === type).length;
 }
 
-// Drive a complete bugfix workflow once; return the project dir + audit path.
-// Bootstrap via init (emits WORKFLOW_STARTED + init phase + 2x PHASE_SKIPPED and
-// pre-completes the 3 init stages), then walk the remaining EXECUTE stages.
-function driveBugfixToCompletion(): { proj: string; audit: string } {
+// Drive a complete bugfix workflow once; return the project dir (audit is read
+// from the born intent's shards via readAllAuditShards(proj)). Bootstrap via
+// init (emits WORKFLOW_STARTED + init phase + 2x PHASE_SKIPPED and pre-completes
+// the 3 init stages), then walk the remaining EXECUTE stages.
+function driveBugfixToCompletion(): { proj: string } {
   const proj = createTestProject();
   const init = run(
     UTIL,
@@ -137,7 +151,7 @@ function driveBugfixToCompletion(): { proj: string; audit: string } {
   walkStage("code-generation", proj);
   walkStage("build-and-test", proj); // final stage -> handleCompleteWorkflow
 
-  return { proj, audit: join(proj, "aidlc-docs", "audit.md") };
+  return { proj };
 }
 
 const projects: string[] = [];
@@ -156,9 +170,9 @@ describe("complete-workflow terminal-event ordering (bugfix, no claude)", () => 
   let seq: string[];
 
   beforeAll(() => {
-    const { proj, audit } = driveBugfixToCompletion();
+    const { proj } = driveBugfixToCompletion();
     projects.push(proj);
-    seq = eventSequence(audit);
+    seq = eventSequence(proj);
   }, DRIVE_TIMEOUT_MS);
 
   test("the FINAL four events are STAGE_COMPLETED -> PHASE_COMPLETED -> PHASE_VERIFIED -> WORKFLOW_COMPLETED, in that order", () => {
@@ -215,19 +229,17 @@ describe("complete-workflow terminal-event ordering (bugfix, no claude)", () => 
 
 describe("complete-workflow idempotency: re-running the final approve emits no second WORKFLOW_COMPLETED", () => {
   let proj: string;
-  let audit: string;
 
   beforeAll(() => {
     const driven = driveBugfixToCompletion();
     proj = driven.proj;
-    audit = driven.audit;
     projects.push(proj);
   }, DRIVE_TIMEOUT_MS);
 
   test("approve PAST THE END fails (slug already [x]) and emits NO second WORKFLOW_COMPLETED / STAGE_COMPLETED — only an ERROR_LOGGED row", () => {
     // Precondition: the clean walk landed exactly one WORKFLOW_COMPLETED, with
     // it dead-last in the trail.
-    const before = eventSequence(audit);
+    const before = eventSequence(proj);
     expect(countEvent(before, "WORKFLOW_COMPLETED")).toBe(1);
     expect(before[before.length - 1]).toBe("WORKFLOW_COMPLETED");
     const stageCompletedBefore = countEvent(before, "STAGE_COMPLETED");
@@ -249,7 +261,7 @@ describe("complete-workflow idempotency: re-running the final approve emits no s
     // The IDEMPOTENCY contract on the audit FILE: still exactly one
     // WORKFLOW_COMPLETED (no duplicate terminal event) and no extra
     // STAGE_COMPLETED for the final stage.
-    const after = eventSequence(audit);
+    const after = eventSequence(proj);
     expect(countEvent(after, "WORKFLOW_COMPLETED")).toBe(1);
     expect(countEvent(after, "STAGE_COMPLETED")).toBe(stageCompletedBefore);
 

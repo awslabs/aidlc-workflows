@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 351,
+    "total": 363,
     "enumeratedByClass": {
-      "function": 149,
+      "function": 157,
       "audit": 67,
       "scope": 9,
       "stage": 32,
       "hook": 10,
-      "subcommand": 77,
+      "subcommand": 81,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 55,
+      "function": 59,
       "audit": 27,
       "scope": 9,
       "stage": 8,
       "hook": 10,
-      "subcommand": 64,
+      "subcommand": 68,
       "render-surface": 7
     }
   },
@@ -884,6 +884,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:birthIntent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:BOLT_SLUG_MAX_LENGTH",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1294,6 +1306,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:listIntents",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:listSpaces",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:loadAgents",
       "minMechanism": "none",
       "coveredBy": [
@@ -1446,6 +1482,10 @@
       "unitId": "function:migrateFlatLayout",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t160-workspace-record-resolution.test.ts",
           "mechanism": "none"
@@ -1665,6 +1705,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readIntentRegistry",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readStateFile",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1855,6 +1902,20 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:setActiveIntentCursor",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:setActiveSpaceCursor",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:setCheckbox",
       "minMechanism": "none",
       "coveredBy": [
@@ -1899,11 +1960,22 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t160-workspace-record-resolution.test.ts",
           "mechanism": "none"
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:spacesRoot",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2018,6 +2090,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:updateIntentStatus",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3882,14 +3966,6 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t21.test.ts",
-          "mechanism": "sdk"
-        },
-        {
-          "file": "tests/integration/t21b.test.ts",
-          "mechanism": "sdk"
-        },
-        {
           "file": "tests/integration/t39.test.ts",
           "mechanism": "cli"
         },
@@ -3904,6 +3980,38 @@
         {
           "file": "tests/unit/t27.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility intent",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility intent-birth",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t21.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/integration/t21b.test.ts",
+          "mechanism": "sdk"
         }
       ],
       "status": "covered"
@@ -3963,6 +4071,30 @@
       "coveredBy": [
         {
           "file": "tests/unit/t27.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility space",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility space-create",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-birth-p4.test.ts",
           "mechanism": "cli"
         }
       ],
