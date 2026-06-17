@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 350,
+    "total": 351,
     "enumeratedByClass": {
-      "function": 148,
+      "function": 149,
       "audit": 67,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 53,
+      "function": 54,
       "audit": 27,
       "scope": 9,
       "stage": 8,
@@ -863,8 +863,13 @@
       "unitClass": "function",
       "unitId": "function:auditShardName",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t162-per-intent-layout-cli.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -928,6 +933,13 @@
     {
       "unitClass": "function",
       "unitId": "function:CHECKBOX_REVERSE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CLONE_ID_FILE",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -1655,6 +1667,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t162-per-intent-layout-cli.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t160-workspace-record-resolution.test.ts",
           "mechanism": "none"
         }
@@ -1687,6 +1703,10 @@
       "unitId": "function:relativeRecordDir",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t162-per-intent-layout-cli.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t160-workspace-record-resolution.test.ts",
           "mechanism": "none"

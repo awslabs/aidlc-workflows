@@ -35,6 +35,9 @@ aidlc/active-space
 aidlc/spaces/*/intents/active-intent
 #
 # Machine-local runtime / derived — ignored (regenerated per machine).
+# The clone-id token names this clone's audit shard; it MUST stay machine-local
+# (gitignored) or every clone from a commit would share a shard and git-conflict.
+aidlc/.aidlc-clone-id
 aidlc/spaces/*/intents/*/runtime-graph.json
 aidlc/spaces/*/intents/*/.aidlc-*
 #

@@ -1704,6 +1704,10 @@ function handleFork(args: string[]): void {
   //     `finally`, which would otherwise poison the project for ~5s).
   let srcSha: string;
   try {
+    // Lock the SAME per-intent bucket the inner state/audit writes target
+    // (intent+space threaded), NOT the __workspace__ sentinel — without this the
+    // transaction serializes every intent's fork on one workspace lock (the P3
+    // shared-lock cliff) and intent-birth/migration would block unrelated forks.
     srcSha = withAuditLock(pd, () => {
     let mainContent: string;
     try {
@@ -1774,7 +1778,7 @@ function handleFork(args: string[]): void {
     }
 
     return sha;
-    });
+    }, intent, space);
   } catch (e) {
     // Slug-tag any error from the locked block (most commonly: lock-acquire
     // timeout when a peer tool holds the lock across the retry budget).
@@ -1836,6 +1840,10 @@ function handleMerge(args: string[]): void {
   // alphabetical tiebreak, and (c) one merge clobbering another's writes.
   let result: { postMergeSha: string; conflictResolutionField: string };
   try {
+    // Lock the per-intent bucket (intent+space threaded) the inner writes
+    // target — same fix as handleFork: the __workspace__ sentinel would
+    // serialize all intents' merges and let intent-birth block an unrelated
+    // merge (P3 shared-lock cliff).
     result = withAuditLock(pd, () => {
     const mainContent = readStateFile(pd, intent, space);
 
@@ -1908,7 +1916,7 @@ function handleMerge(args: string[]): void {
     writeStateFile(pd, merged, intent, space);
 
     return { postMergeSha, conflictResolutionField };
-    });
+    }, intent, space);
   } catch (e) {
     // Slug-tag any error from the locked block (most commonly: lock-acquire
     // timeout when a peer tool holds the lock across the retry budget).

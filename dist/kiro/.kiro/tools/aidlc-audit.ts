@@ -396,7 +396,10 @@ function handleAuditFork(args: string[], projectDir: string): void {
 
   const mainAuditPath = auditFilePath(projectDir, intent, space);
   const wtPath = worktreePath(projectDir, slug);
-  const wtAuditPath = worktreeAuditFilePath(wtPath, recordPrefix);
+  // Thread the MAIN projectDir so the worktree shard name uses the main clone's
+  // stable token (the fork and merge subprocesses are both spawned from main →
+  // they resolve the SAME worktree shard across PIDs).
+  const wtAuditPath = worktreeAuditFilePath(wtPath, recordPrefix, projectDir);
 
   // Pre-emit guards (fail clean before any audit side-effect).
   if (!existsSync(mainAuditPath)) {
@@ -507,7 +510,8 @@ function handleAuditMerge(args: string[], projectDir: string): void {
 
   const mainAuditPath = auditFilePath(projectDir, intent, space);
   const wtPath = worktreePath(projectDir, slug);
-  const wtAuditPath = worktreeAuditFilePath(wtPath, recordPrefix);
+  // Same MAIN clone-id token the fork used → the SAME worktree shard on merge.
+  const wtAuditPath = worktreeAuditFilePath(wtPath, recordPrefix, projectDir);
 
   if (!existsSync(wtAuditPath)) {
     jsonError(`worktree audit not found at ${wtAuditPath}; nothing to merge`);

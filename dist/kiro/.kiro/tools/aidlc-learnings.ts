@@ -353,11 +353,28 @@ function parseSelectionsFile(path: string): SelectionsFile {
 }
 
 // Most-recent audit block carries Test-Run: true → skip all writes/emits.
+// "Most-recent" is CHRONOLOGICAL, not buffer-order: readAllAuditShards
+// concatenates per-clone shards in FILENAME order, so the last buffer block is
+// the lexically-last shard's tail, NOT necessarily the newest event. Pick the
+// block with the greatest **Timestamp** (ISO-8601 sorts lexicographically; ties
+// break to the later buffer position to keep a single shard's order stable).
 function auditTestRun(auditContent: string): boolean {
   const blocks = auditContent.replace(/\r\n/g, "\n").split(/\n---\n/).filter((b) => b.trim() !== "");
   if (blocks.length === 0) return false;
-  const last = blocks[blocks.length - 1];
-  return /^\*\*Test-Run\*\*:\s*true\s*$/m.test(last);
+  const tsRegex = /^\*\*Timestamp\*\*:\s*(\S+)/m;
+  let newest = "";
+  let newestTs = "";
+  for (const block of blocks) {
+    const m = block.match(tsRegex);
+    const ts = m ? m[1] : "";
+    // >= so that on a timestamp tie the LATER buffer block wins (within one
+    // shard, later position == later append == newer).
+    if (newest === "" || ts >= newestTs) {
+      newest = block;
+      newestTs = ts;
+    }
+  }
+  return /^\*\*Test-Run\*\*:\s*true\s*$/m.test(newest);
 }
 
 // A prior RULE_LEARNED / SENSOR_PROPOSED row for this (Stage, Candidate-ID)?

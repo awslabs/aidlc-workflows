@@ -673,21 +673,76 @@ export function stateFilePath(projectDir: string, intent?: string, space?: strin
 export function auditFilePath(projectDir: string, intent?: string, space?: string): string {
   const dir = recordDir(projectDir, intent, space);
   if (dir === null) return legacyFlatFallback(projectDir, "audit.md");
-  return join(dir, "audit", auditShardName());
+  return join(dir, "audit", auditShardName(projectDir));
 }
 
-// This clone's audit shard filename: `<host>-<pid>.md`. Stable within a process
-// (one shard per running clone), sanitised to the slug shape so it never
-// escapes the audit dir. hostname() can carry dots/uppercase; normalise.
+// The clone-id token file: `aidlc/.aidlc-clone-id`. Workspace-level,
+// machine-local, GITIGNORED (see the `aidlc/.aidlc-*` rule) so it never travels
+// in a commit — that is what makes the token DISTINCT across clones (a fresh
+// checkout has no token file and mints its own). The shard name below embeds
+// this token, so every process IN one clone resolves the SAME shard while two
+// different clones get DIFFERENT shards (no git merge-conflict on concurrent
+// appends — the whole point of per-clone sharding).
+export const CLONE_ID_FILE = ".aidlc-clone-id";
+
+function cloneIdPath(projectDir: string): string {
+  return join(workspaceRoot(projectDir), CLONE_ID_FILE);
+}
+
+// The stable per-CLONE token (not per-process). Read from the gitignored
+// `aidlc/.aidlc-clone-id` file when present; minted (12 hex chars from a v4
+// uuid — no Math.random) and persisted on first use otherwise. Stable WITHIN a
+// clone across processes (the fork subprocess and the merge subprocess both
+// read the same file → the same shard), DISTINCT across clones (each clone
+// mints its own; the file is gitignored so it doesn't travel). A read/mint race
+// between two first-run processes converges on whichever write lands last; both
+// then read that single file on every subsequent call, so the clone settles on
+// ONE token (a transient duplicate shard on the very first concurrent mint is
+// harmless — readers glob `audit/*.md`). Memoized per process. Best-effort: an
+// unwritable workspace degrades to an in-memory token for this process (still
+// stable within the process, still distinct from other clones).
+let _cloneId: string | null = null;
+function cloneId(projectDir: string): string {
+  if (_cloneId !== null) return _cloneId;
+  const path = cloneIdPath(projectDir);
+  try {
+    const raw = readFileSync(path, "utf-8").trim();
+    if (/^[a-z0-9]{1,32}$/.test(raw)) {
+      _cloneId = raw;
+      return _cloneId;
+    }
+  } catch {
+    // no token yet → mint one below
+  }
+  const minted = randomUUID().replace(/-/g, "").slice(0, 12);
+  try {
+    mkdirSync(workspaceRoot(projectDir), { recursive: true });
+    writeFileSync(path, `${minted}\n`, "utf-8");
+    // Re-read so a concurrent first-run mint that landed first wins for ALL
+    // processes in this clone (converge on one on-disk token).
+    const settled = readFileSync(path, "utf-8").trim();
+    _cloneId = /^[a-z0-9]{1,32}$/.test(settled) ? settled : minted;
+  } catch {
+    _cloneId = minted; // unwritable workspace → in-memory token
+  }
+  return _cloneId;
+}
+
+// This clone's audit shard filename: `<host>-<clone-id>.md`. The clone-id token
+// (not the PID) is the cross-clone disambiguator — stable across every process
+// in a clone (so the fork process and the merge process resolve ONE shard) and
+// distinct across clones (so concurrent clones never collide / git-conflict).
+// hostname() is a human-readable hint only; it can carry dots/uppercase, so
+// normalise it to the slug shape it never escapes the audit dir.
 let _auditShardName: string | null = null;
-export function auditShardName(): string {
+export function auditShardName(projectDir: string): string {
   if (_auditShardName !== null) return _auditShardName;
   const host = hostname()
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48) || "host";
-  _auditShardName = `${host}-${process.pid}.md`;
+  _auditShardName = `${host}-${cloneId(projectDir)}.md`;
   return _auditShardName;
 }
 
@@ -874,11 +929,18 @@ export function worktreeStateFilePath(wtPath: string, recordPrefix?: string | nu
   return join(worktreeRecordRoot(wtPath, recordPrefix), "aidlc-state.md");
 }
 
-export function worktreeAuditFilePath(wtPath: string, recordPrefix?: string | null): string {
+export function worktreeAuditFilePath(wtPath: string, recordPrefix?: string | null, projectDir?: string): string {
   // A worktree clone writes its own audit shard inside the worktree mirror; the
   // flat-legacy fork keeps the single audit.md leaf.
   if (recordPrefix == null) return join(wtPath, LEGACY_FLAT_RELATIVE_PREFIX, "audit.md");
-  return join(worktreeRecordRoot(wtPath, recordPrefix), "audit", auditShardName());
+  // The shard name embeds the MAIN clone's stable token (projectDir), NOT the
+  // worktree's own — the fork and merge subprocesses are both spawned from the
+  // main checkout, so threading the main clone-id makes them resolve the SAME
+  // worktree shard across the two PIDs. A git worktree is a separate working dir
+  // and would otherwise mint its own (ungitignored, untracked) clone-id, so the
+  // token MUST come from the main checkout. Fall back to wtPath only when no
+  // projectDir is threaded (legacy callers without main context).
+  return join(worktreeRecordRoot(wtPath, recordPrefix), "audit", auditShardName(projectDir ?? wtPath));
 }
 
 export function worktreeRuntimeGraphPath(wtPath: string, recordPrefix?: string | null): string {
@@ -1419,11 +1481,48 @@ function lockDirMtimeMs(lockDir: string): number | null {
   }
 }
 
+// True iff the lock dir STILL carries the exact owner stamp `judged` to be
+// reclaimable (same pid + startedAtMs). A `null` judged-owner means the dir was
+// judged reclaimable as an OLD UNSTAMPED dir — it still matches only if it is
+// STILL unstamped AND still over the grace window. Any divergence (a different
+// pid, a fresher startedAtMs, a now-present stamp, or a freshly-recreated
+// unstamped dir under grace) means another waiter reaped + re-acquired in the
+// window between the staleness decision and the steal — in which case the dir is
+// a DIFFERENT, possibly-live lock and MUST NOT be robbed (the lost-update race:
+// reaper B reaps, re-mkdirs, and stamps a fresh live lock; reaper C's stale
+// decision must not then steal B's fresh lock).
+function stampUnchangedSince(lockDir: string, judged: LockOwner | null): boolean {
+  const now = readOwnerStamp(lockDir);
+  if (judged === null) {
+    // Was judged as an old-unstamped leak. Re-confirm: still unstamped, still
+    // over grace. A re-created dir (B's fresh mkdir) resets mtime → under grace
+    // → abort; a now-stamped dir → a live re-acquirer → abort.
+    if (now !== null) return false;
+    const mtime = lockDirMtimeMs(lockDir);
+    if (mtime === null) return false; // vanished — nothing to steal
+    return lockAcquireEpochMs() - mtime > unstampedGraceMs();
+  }
+  // Was judged on a concrete stamp (dead, or live-but-over-age). The dir must
+  // still carry the SAME owner identity. A re-acquire by B rewrites owner.json
+  // with B's pid + a fresh startedAtMs → mismatch → abort.
+  if (now === null) return false;
+  return now.pid === judged.pid && now.startedAtMs === judged.startedAtMs;
+}
+
 // Reclaim a lock iff it is provably dead (owner gone) OR stale (over-age). A
 // live, under-threshold holder is left alone (returns false). Reclaim is atomic:
 // rename the dead dir aside (only one waiter wins the rename), best-effort remove
 // it, leaving the lock free for the next mkdir. Returns true iff THIS call freed
 // the dir.
+//
+// MUTUAL-EXCLUSION SAFETY: the staleness DECISION (read stamp, judge dead/over-
+// age) and the steal RENAME are not one OS-atomic operation, so a competing
+// waiter can reap + re-acquire + stamp a FRESH LIVE lock in between. The rename
+// alone would then rob that fresh live holder (two concurrent lock holders →
+// lost update). Guard the rename with stampUnchangedSince(): immediately before
+// renaming, re-read the stamp and abort the steal unless the dir STILL carries
+// the exact owner identity judged stale. This preserves both invariants — a
+// live under-threshold holder is never robbed, and exactly one reaper wins.
 function reapStaleLock(lockDir: string): boolean {
   const owner = readOwnerStamp(lockDir);
   if (owner === null) {
@@ -1441,9 +1540,14 @@ function reapStaleLock(lockDir: string): boolean {
     // holder). A fresh, live holder is never robbed.
     if (lockAcquireEpochMs() - owner.startedAtMs <= lockStaleMs()) return false;
   }
-  // Dead owner, live-but-over-age, or old-unstamped: steal atomically. The rename
-  // is the race arbiter — exactly one concurrent reaper renames the live dir; the
-  // losers get ENOENT and fall back to a normal mkdir retry.
+  // Re-verify the dir STILL carries the stamp we judged stale before stealing.
+  // Closes the decide→rename window: if a competing reaper already reaped + re-
+  // acquired (writing a fresh live stamp), abort rather than rob the new holder.
+  if (!stampUnchangedSince(lockDir, owner)) return false;
+  // Dead owner, live-but-over-age, or old-unstamped — AND still the same dir we
+  // judged: steal atomically. The rename is the race arbiter — exactly one
+  // concurrent reaper renames the live dir; the losers get ENOENT and fall back
+  // to a normal mkdir retry.
   const dead = `${lockDir}.dead.${reapSuffix()}`;
   try {
     renameSync(lockDir, dead);
@@ -1703,21 +1807,44 @@ export function findAllEvents(
   event: string,
   slug?: string,
 ): { timestamp: string; block: string }[] {
-  const results: { timestamp: string; block: string }[] = [];
+  const results: { timestamp: string; block: string; pos: number }[] = [];
   const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
   const eventRegex = new RegExp(`^\\*\\*Event\\*\\*:\\s*${escapeRegex(event)}\\s*$`, "m");
   const slugRegex = slug
     ? new RegExp(`^\\*\\*Bolt slug\\*\\*:\\s*${escapeRegex(slug)}\\s*$`, "m")
     : null;
   const tsRegex = /^\*\*Timestamp\*\*:\s*(\S+)/m;
+  let pos = 0;
   for (const block of blocks) {
-    if (!eventRegex.test(block)) continue;
-    if (slugRegex && !slugRegex.test(block)) continue;
+    if (!eventRegex.test(block)) {
+      pos++;
+      continue;
+    }
+    if (slugRegex && !slugRegex.test(block)) {
+      pos++;
+      continue;
+    }
     const tsMatch = block.match(tsRegex);
-    if (!tsMatch) continue;
-    results.push({ timestamp: tsMatch[1], block });
+    if (!tsMatch) {
+      pos++;
+      continue;
+    }
+    results.push({ timestamp: tsMatch[1], block, pos });
+    pos++;
   }
-  return results;
+  // CHRONOLOGICAL, not buffer-order. readAllAuditShards concatenates per-clone
+  // shards in FILENAME order, so the raw buffer is NOT time-ordered across
+  // shards — a `[len-1]` "newest" reader (buildWorkflowHeader, hasStageAuditEvent)
+  // could otherwise pick an OLDER event from a lexically-later shard. ISO-8601
+  // timestamps sort lexicographically; ties (same-ms events, or a single shard's
+  // already-ordered blocks) break by buffer position to keep the within-shard
+  // order stable. This makes the readAllAuditShards "ordering by timestamp is the
+  // parsers' job" contract TRUE for every findAllEvents consumer.
+  results.sort((a, b) => {
+    if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+    return a.pos - b.pos;
+  });
+  return results.map(({ timestamp, block }) => ({ timestamp, block }));
 }
 
 // --- Data loaders ---

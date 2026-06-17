@@ -155,7 +155,7 @@ describe("t160 path re-root — per-intent layout vs flat fallback", () => {
     expect(relativeRecordDir(proj)).toBe("aidlc/spaces/default/intents/auth-deadbeef");
     expect(stateFilePath(proj)).toBe(join(proj, "aidlc", "spaces", "default", "intents", "auth-deadbeef", "aidlc-state.md"));
     // audit is a per-clone shard under audit/
-    expect(auditFilePath(proj)).toBe(join(proj, "aidlc", "spaces", "default", "intents", "auth-deadbeef", "audit", auditShardName()));
+    expect(auditFilePath(proj)).toBe(join(proj, "aidlc", "spaces", "default", "intents", "auth-deadbeef", "audit", auditShardName(proj)));
   });
 
   test("explicit intent + space arg overrides resolution", () => {
@@ -181,7 +181,7 @@ describe("t160 two-intent isolation", () => {
     expect(authAuditDir).not.toBe(exportAuditDir);
     // Writing into one intent's record leaves the other's tree untouched.
     mkdirSync(authAuditDir, { recursive: true });
-    writeFileSync(join(authAuditDir, auditShardName()), "## X\n**Timestamp**: 2026-01-01T00:00:00Z\n**Event**: STAGE_STARTED\n\n---\n", "utf-8");
+    writeFileSync(join(authAuditDir, auditShardName(proj)), "## X\n**Timestamp**: 2026-01-01T00:00:00Z\n**Event**: STAGE_STARTED\n\n---\n", "utf-8");
     expect(readAllAuditShards(proj, "auth-aaaaaaaa")).toContain("STAGE_STARTED");
     expect(readAllAuditShards(proj, "export-bbbbbbbb")).toBe(""); // untouched
   });

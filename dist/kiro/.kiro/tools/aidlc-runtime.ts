@@ -37,6 +37,7 @@ import {
   parseMemoryHeadings,
   parseStateStageSuffixes,
   readAllAuditShards,
+  activeSpace,
   readStateFile,
   relativeMemoryPath,
   relativeRecordDir,
@@ -173,10 +174,10 @@ function pairStartedCompleted(
   audit: string,
   sinceTimestamp: string
 ): Map<string, PairingEntry> {
-  // findAllEvents returns chronologically (source-position-ordered) blocks.
-  // sinceTimestamp filters out rows from prior workflows on the same
-  // audit log (the `--init --force` re-init case appends without truncating).
-  // Synthetic single-stage rows are excluded regardless of timestamp.
+  // findAllEvents returns blocks chronologically (timestamp-sorted, ties broken
+  // by buffer position). sinceTimestamp filters out rows from prior workflows on
+  // the same audit log (the `--init --force` re-init case appends without
+  // truncating). Synthetic single-stage rows are excluded regardless of timestamp.
   const startedEvents = findAllEvents(audit, "STAGE_STARTED").filter(
     (e) => e.timestamp >= sinceTimestamp && !isSingleStageRow(e.block)
   );
@@ -1153,7 +1154,15 @@ function handleFragmentFork(rest: string[], projectDir: string): void {
   // (null -> flat); wtRecord -> the record-dir NAME the worktree fragment lives
   // under (null -> flat). Resolved on the MAIN side so fork and merge agree.
   const intent = flags.intent;
-  const space = flags.space;
+  // Resolve the SPACE segment ONCE against the MAIN cursor and pass it
+  // EXPLICITLY everywhere below. Without this, the source-absent write path
+  // (writeEmptyGraph -> runtimeGraphPath -> recordDir) would fall through to
+  // activeSpace(wtPath) — the WORKTREE's own cursor — while recordPrefix /
+  // wtFragmentPath interpolate activeSpace(projectDir) (the MAIN cursor). If the
+  // two cursors differ, the empty graph is written under the worktree-space path
+  // but re-read under the main-space path → ENOENT, fragment-fork exits 1 despite
+  // a successful write. One resolved space keeps both sides on the same segment.
+  const space = flags.space ?? activeSpace(projectDir);
   const recordPrefix = relativeRecordDir(projectDir, intent, space);
   const wtRecord = activeIntent(projectDir, space, intent) ?? undefined;
 
