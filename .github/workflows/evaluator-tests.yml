@@ -1,0 +1,63 @@
+name: Evaluator Tests
+
+# Lint, format-check, dead-code-check, dependency-audit, and unit-test the AIDLC
+# evaluation framework. The heavy end-to-end evaluation (run.py full / cli) needs
+# AWS Bedrock and runs in CodeBuild, not here; the default CLI evaluation adapter
+# is kiro-cli (see scripts/run_cli_evaluation.py).
+on:
+  pull_request:
+    branches: ["v2", "main"]
+    paths:
+      - "evaluator/**"
+      - ".github/workflows/evaluator-tests.yml"
+  push:
+    branches: ["v2", "main"]
+    paths:
+      - "evaluator/**"
+      - ".github/workflows/evaluator-tests.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: evaluator
+
+jobs:
+  quality:
+    name: Lint and test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Sync dependencies (with dev tools)
+        run: uv sync --all-extras --dev
+
+      - name: Ruff lint
+        run: uv run ruff check packages run.py scripts
+
+      - name: Ruff format check
+        run: uv run ruff format --check packages run.py scripts
+
+      - name: Vulture dead-code check
+        run: uv run vulture packages run.py --min-confidence 80
+
+      - name: pip-audit (dependency CVE scan)
+        # --skip-editable: the workspace's own packages (aidlc-shared, etc.) are
+        # editable installs not published to PyPI; pip-audit cannot resolve them
+        # and would otherwise exit non-zero. Third-party deps are still audited.
+        run: uv run --with pip-audit pip-audit --skip-editable
+
+      - name: Pytest
+        run: uv run python -m pytest packages

@@ -1,0 +1,90 @@
+# Dependabot version updates
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
+#
+# Note: The ClamAV service container image in security-scanners.yml is pinned
+# by sha256 digest and is NOT covered by any Dependabot ecosystem. That digest
+# must be updated manually (monthly cadence). See:
+# docs/ADMINISTRATIVE_GUIDE.md → Updating Pinned Versions → How to update the ClamAV image digest
+#
+# A cooldown is applied to every ecosystem so freshly-published versions are not
+# adopted immediately — this mitigates the window where a compromised/malicious
+# release is live before it is yanked. Longer for majors (higher breakage and
+# supply-chain risk), shorter for patches.
+
+version: 2
+updates:
+  # npm — the unified v2 TypeScript/bun monorepo (root package.json / bun.lock)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: "scope"
+    groups:
+      npm-deps:
+        patterns:
+          - "*"
+
+  # GitHub Actions — SHA-pinned actions across all workflows.
+  # (Only default-days is supported for non-semver ecosystems.)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  # Python (uv) — evaluator framework dependencies
+  - package-ecosystem: "uv"
+    directory: "/evaluator"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: "scope"
+    groups:
+      evaluator-deps:
+        patterns:
+          - "*"
+
+  # Pre-commit hooks — .pre-commit-config.yaml rev pins
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+
+  # Docker — sandbox Dockerfile base image
+  - package-ecosystem: "docker"
+    directory: "/evaluator/docker/sandbox"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
