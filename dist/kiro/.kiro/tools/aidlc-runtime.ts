@@ -27,6 +27,7 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   errorMessage,
+  activeIntent,
   findAllEvents,
   getField,
   loadStageGraph,
@@ -38,6 +39,7 @@ import {
   readAllAuditShards,
   readStateFile,
   relativeMemoryPath,
+  relativeRecordDir,
   resolveProjectDir,
   runtimeGraphPath,
   stateFilePath,
@@ -806,10 +808,12 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
 // emit, no source-of-truth mutation).
 function writeEmptyGraph(
   projectDir: string,
-  opts?: { acquireLock?: boolean }
+  opts?: { acquireLock?: boolean },
+  intent?: string,
+  space?: string
 ): { written: string } {
   const acquireLock = opts?.acquireLock ?? true;
-  const stateContent = readStateFile(projectDir);
+  const stateContent = readStateFile(projectDir, intent, space);
   const scope = getField(stateContent, "Scope") || "";
   const graph: RuntimeGraph = {
     workflow_id: "",
@@ -818,14 +822,14 @@ function writeEmptyGraph(
     stages: [],
   };
   const writer = () => {
-    writeFileAtomic(runtimeGraphPath(projectDir), `${JSON.stringify(graph, null, 2)}\n`);
+    writeFileAtomic(runtimeGraphPath(projectDir, intent, space), `${JSON.stringify(graph, null, 2)}\n`);
   };
   if (acquireLock) {
-    withAuditLock(projectDir, writer);
+    withAuditLock(projectDir, writer, intent, space);
   } else {
     writer();
   }
-  return { written: runtimeGraphPath(projectDir) };
+  return { written: runtimeGraphPath(projectDir, intent, space) };
 }
 
 // --- Read subcommand ---
@@ -1124,6 +1128,12 @@ function handleFragmentFork(rest: string[], projectDir: string): void {
     if (a === "--slug" && i + 1 < rest.length) {
       flags.slug = rest[i + 1];
       i++;
+    } else if (a === "--intent" && i + 1 < rest.length) {
+      flags.intent = rest[i + 1];
+      i++;
+    } else if (a === "--space" && i + 1 < rest.length) {
+      flags.space = rest[i + 1];
+      i++;
     }
   }
   if (!flags.slug) {
@@ -1138,9 +1148,18 @@ function handleFragmentFork(rest: string[], projectDir: string): void {
     process.exit(1);
   }
 
+  // Pin the worktree runtime-graph mirror AND the main read to ONE intent
+  // (vision §5). recordPrefix -> the worktree mirror's relative record dir
+  // (null -> flat); wtRecord -> the record-dir NAME the worktree fragment lives
+  // under (null -> flat). Resolved on the MAIN side so fork and merge agree.
+  const intent = flags.intent;
+  const space = flags.space;
+  const recordPrefix = relativeRecordDir(projectDir, intent, space);
+  const wtRecord = activeIntent(projectDir, space, intent) ?? undefined;
+
   const wtPath = worktreePath(projectDir, flags.slug);
-  const wtFragmentPath = worktreeRuntimeGraphPath(wtPath);
-  const mainPath = runtimeGraphPath(projectDir);
+  const wtFragmentPath = worktreeRuntimeGraphPath(wtPath, recordPrefix);
+  const mainPath = runtimeGraphPath(projectDir, intent, space);
 
   if (!existsSync(wtPath)) {
     process.stderr.write(
@@ -1168,7 +1187,7 @@ function handleFragmentFork(rest: string[], projectDir: string): void {
     // Source-absent: write empty graph to the worktree path. Pass
     // acquireLock: false because fragment-fork takes no audit lock
     // (decision L9), and the worktree-local path has no concurrent writer.
-    writeEmptyGraph(wtPath, { acquireLock: false });
+    writeEmptyGraph(wtPath, { acquireLock: false }, wtRecord, space);
     // Re-read the just-written bytes so the source-hash reflects the
     // empty-graph fragment exactly.
     const buf = readFileSync(wtFragmentPath);
@@ -1206,6 +1225,12 @@ function handleFragmentMerge(rest: string[], projectDir: string): void {
     if (a === "--slug" && i + 1 < rest.length) {
       flags.slug = rest[i + 1];
       i++;
+    } else if (a === "--intent" && i + 1 < rest.length) {
+      flags.intent = rest[i + 1];
+      i++;
+    } else if (a === "--space" && i + 1 < rest.length) {
+      flags.space = rest[i + 1];
+      i++;
     }
   }
   if (!flags.slug) {
@@ -1220,8 +1245,11 @@ function handleFragmentMerge(rest: string[], projectDir: string): void {
     process.exit(1);
   }
 
+  // Same selector the fork used -> the SAME intent record (vision §5).
+  const recordPrefix = relativeRecordDir(projectDir, flags.intent, flags.space);
+
   const wtPath = worktreePath(projectDir, flags.slug);
-  const wtFragmentPath = worktreeRuntimeGraphPath(wtPath);
+  const wtFragmentPath = worktreeRuntimeGraphPath(wtPath, recordPrefix);
 
   if (!existsSync(wtFragmentPath)) {
     // Fragment-absent: clean no-op. Covers (a) re-run after a successful

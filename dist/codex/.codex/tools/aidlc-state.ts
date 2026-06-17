@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+  activeIntent,
   appendSlug,
   appendUnderHeading,
   type CheckboxState,
@@ -26,6 +27,7 @@ import {
   readAllAuditShards,
   readStateFile,
   relativeMemoryPath,
+  relativeRecordDir,
   removeSlug,
   replaceSection,
   resolveProjectDir,
@@ -1659,6 +1661,21 @@ function handleFork(args: string[]): void {
   const slug = validateSlug(flags.slug);
   const pd = resolveProjectDir(projectDir);
 
+  // The space+intent selector pins this fork to ONE intent end-to-end (vision
+  // §5): --intent <record> / --space <name> override the active cursor;
+  // omitted -> default-resolution (the active cursor / lone intent). The SAME
+  // selector threads main-side state/audit/lock AND the worktree mirror, and
+  // MUST match what merge resolves so they touch one record.
+  const intent = flags.intent;
+  const space = flags.space;
+  // recordPrefix is the worktree mirror's relative record dir (null -> the flat
+  // legacy mirror, today's behaviour); wtRecord is the resolved record-dir NAME
+  // the worktree state file lives under (null -> flat). Resolved on the MAIN
+  // side so fork and merge pin to the same intent regardless of the worktree's
+  // own cursor.
+  const recordPrefix = relativeRecordDir(pd, intent, space);
+  const wtRecord = activeIntent(pd, space, intent) ?? undefined;
+
   // target-dir lets tests point fork at a fixture worktree-parent. Defaults
   // to the project's .aidlc/worktrees/bolt-<slug>/ via worktreePath().
   const wtPath = flags["target-dir"] ?? worktreePath(pd, slug);
@@ -1670,7 +1687,7 @@ function handleFork(args: string[]): void {
   // mkdir BEFORE acquiring the lock. A read-only-fs mkdir failure must not
   // leave a phantom STATE_FORKED row, and acquiring the lock for a doomed
   // operation just delays the failure.
-  const wtDocsDir = worktreeDocsDir(wtPath);
+  const wtDocsDir = worktreeDocsDir(wtPath, recordPrefix);
   try {
     mkdirSync(wtDocsDir, { recursive: true });
   } catch (e) {
@@ -1690,7 +1707,7 @@ function handleFork(args: string[]): void {
     srcSha = withAuditLock(pd, () => {
     let mainContent: string;
     try {
-      mainContent = readStateFile(pd);
+      mainContent = readStateFile(pd, intent, space);
     } catch (e) {
       errorWithSlug(slug, `failed to read main state: ${errorMessage(e)}`);
       return ""; // unreachable
@@ -1724,14 +1741,14 @@ function handleFork(args: string[]): void {
         "Worktree path": wtPath,
         "Source state hash": sha,
         "Target state hash": sha, // fork = byte-identical copy
-      }, pd);
+      }, pd, intent, space);
     } catch (e) {
       errorWithSlug(slug, `audit emission failed: ${errorMessage(e)}`);
     }
 
     // Write main state with updated Bolt Refs.
     try {
-      writeStateFile(pd, mainNow);
+      writeStateFile(pd, mainNow, intent, space);
     } catch (e) {
       errorWithSlug(slug, `failed to write main state with updated Bolt Refs: ${errorMessage(e)}`);
     }
@@ -1748,7 +1765,10 @@ function handleFork(args: string[]): void {
       errorWithSlug(slug, `failed to set Worktree Path on worktree state: ${errorMessage(e)}`);
     }
     try {
-      writeStateFile(wtPath, wtContent);
+      // The worktree mirror lives under the SAME record (wtRecord/space) the
+      // main side resolved — NOT the worktree's own cursor — so fork and merge
+      // read/write one file. wtRecord===undefined -> the flat legacy mirror.
+      writeStateFile(wtPath, wtContent, wtRecord, space);
     } catch (e) {
       errorWithSlug(slug, `failed to write worktree state at ${wtPath}: ${errorMessage(e)}`);
     }
@@ -1784,19 +1804,26 @@ function handleMerge(args: string[]): void {
   const slug = validateSlug(flags.slug);
   const pd = resolveProjectDir(projectDir);
 
+  // Same selector the fork used -> the SAME intent record on both ends (vision
+  // §5). recordPrefix pins the worktree mirror; wtRecord is its record-dir NAME.
+  const intent = flags.intent;
+  const space = flags.space;
+  const recordPrefix = relativeRecordDir(pd, intent, space);
+  const wtRecord = activeIntent(pd, space, intent) ?? undefined;
+
   const wtPath = flags["target-dir"] ?? worktreePath(pd, slug);
   if (!existsSync(wtPath)) {
     errorWithSlug(slug, `worktree directory does not exist: ${wtPath}.`);
   }
-  const wtStatePath = worktreeStateFilePath(wtPath);
+  const wtStatePath = worktreeStateFilePath(wtPath, recordPrefix);
   if (!existsSync(wtStatePath)) {
     errorWithSlug(slug, `worktree state file does not exist: ${wtStatePath}. Was fork run?`);
   }
 
   // Read worktree state outside the lock — its file isn't shared with peers
   // (each Bolt owns its own worktree state file), so it doesn't need the
-  // audit lock for consistency.
-  const wtContent = readStateFile(wtPath);
+  // audit lock for consistency. Read the SAME record the fork wrote.
+  const wtContent = readStateFile(wtPath, wtRecord, space);
   const wtSha = sha256(wtContent);
   const wtCheckboxes = parseCheckboxes(wtContent);
 
@@ -1810,7 +1837,7 @@ function handleMerge(args: string[]): void {
   let result: { postMergeSha: string; conflictResolutionField: string };
   try {
     result = withAuditLock(pd, () => {
-    const mainContent = readStateFile(pd);
+    const mainContent = readStateFile(pd, intent, space);
 
     // Idempotency: if slug is not in main's Bolt Refs, this is a re-run after
     // a prior successful merge (or a never-forked slug). Either way, no work
@@ -1873,12 +1900,12 @@ function handleMerge(args: string[]): void {
         "Source state hash": wtSha,
         "Target state hash": postMergeSha,
         "Conflict resolution": conflictResolutionField,
-      }, pd);
+      }, pd, intent, space);
     } catch (e) {
       errorWithSlug(slug, `audit emission failed: ${errorMessage(e)}`);
     }
 
-    writeStateFile(pd, merged);
+    writeStateFile(pd, merged, intent, space);
 
     return { postMergeSha, conflictResolutionField };
     });

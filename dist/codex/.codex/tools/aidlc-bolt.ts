@@ -45,6 +45,7 @@ import {
   emitError,
   errorMessage,
   getField,
+  relativeRecordDir,
   readStateFile,
   resolveProjectDir,
   setFieldStrict,
@@ -57,9 +58,23 @@ import {
 function emitAudit(
   pd: string,
   eventType: string,
-  fields: Record<string, string>
+  fields: Record<string, string>,
+  intent?: string,
+  space?: string
 ): void {
-  appendAuditEntry(eventType, fields, pd);
+  appendAuditEntry(eventType, fields, pd, intent, space);
+}
+
+// The intent/space SELECTOR re-serialised for a delegated sibling spawn. A Bolt
+// pair (start --worktree / complete --merge) must propagate the SAME selector to
+// every fork/merge primitive so they all target ONE intent end-to-end (vision
+// §5). Returns [] when neither flag is present -> the primitives default-resolve
+// (the active cursor), today's behaviour.
+function selectorArgs(flags: Record<string, string>): string[] {
+  const out: string[] = [];
+  if (flags.intent) out.push("--intent", flags.intent);
+  if (flags.space) out.push("--space", flags.space);
+  return out;
 }
 
 // --- Flag parsing ---
@@ -195,7 +210,7 @@ function handleStart(args: string[]): void {
     if (useWorktree) {
       fields["Bolt slug"] = flags.slug;
     }
-    emitAudit(pd, "BOLT_STARTED", fields);
+    emitAudit(pd, "BOLT_STARTED", fields, flags.intent, flags.space);
   } catch (e) {
     if (useWorktree) {
       failJson("start-worktree", flags.slug, "audit-emit-failed", errorMessage(e));
@@ -224,6 +239,7 @@ function handleStart(args: string[]): void {
     "fork",
     "--slug",
     flags.slug,
+    ...selectorArgs(flags),
   ]);
   if (!stateForkResult.ok) {
     const reason =
@@ -242,6 +258,7 @@ function handleStart(args: string[]): void {
     "audit-fork",
     "--slug",
     flags.slug,
+    ...selectorArgs(flags),
   ]);
   if (!auditForkResult.ok) {
     const reason =
@@ -263,6 +280,7 @@ function handleStart(args: string[]): void {
     "fragment-fork",
     "--slug",
     flags.slug,
+    ...selectorArgs(flags),
   ]);
   if (!fragmentForkResult.ok) {
     const reason =
@@ -334,7 +352,7 @@ function handleComplete(args: string[]): void {
     // mid-AUQ-sequence. Refusal is non-zero exit + stderr; the orchestrator
     // must call `aidlc-bolt release-merge --slug <slug>` once the AUQ
     // sequence resolves before retrying complete --merge.
-    if (isMergeHeld(pd, flags.slug)) {
+    if (isMergeHeld(pd, flags.slug, flags.intent, flags.space)) {
       failJson(
         "complete-merge",
         flags.slug,
@@ -352,7 +370,7 @@ function handleComplete(args: string[]): void {
     if (useMerge) {
       fields["Bolt slug"] = flags.slug;
     }
-    emitAudit(pd, "BOLT_COMPLETED", fields);
+    emitAudit(pd, "BOLT_COMPLETED", fields, flags.intent, flags.space);
   } catch (e) {
     if (useMerge) {
       failJson("complete-merge", flags.slug, "audit-emit-failed", errorMessage(e));
@@ -373,6 +391,7 @@ function handleComplete(args: string[]): void {
     "merge",
     "--slug",
     flags.slug,
+    ...selectorArgs(flags),
   ]);
   if (!stateMergeResult.ok) {
     const reason =
@@ -392,6 +411,7 @@ function handleComplete(args: string[]): void {
     "audit-merge",
     "--slug",
     flags.slug,
+    ...selectorArgs(flags),
   ]);
   if (!auditMergeResult.ok) {
     const reason =
@@ -414,6 +434,7 @@ function handleComplete(args: string[]): void {
     "fragment-merge",
     "--slug",
     flags.slug,
+    ...selectorArgs(flags),
   ]);
   if (!fragmentMergeResult.ok) {
     const reason =
@@ -519,6 +540,7 @@ function handleAbort(args: string[]): void {
       "discard",
       "--slug",
       flags.slug,
+      ...selectorArgs(flags),
     ]);
     if (!result.ok) {
       const reason = result.signal === "SIGTERM" ? "discard-timeout" : "discard-failed";
@@ -542,7 +564,7 @@ function handleAbort(args: string[]): void {
       "Bolt slug": flags.slug,
       "Error summary": `aborted: ${flags.reason}`,
       Reason: "aborted",
-    });
+    }, flags.intent, flags.space);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
@@ -589,7 +611,7 @@ function handleHoldMerge(args: string[]): void {
   const flags = parseFlags(args);
   if (!flags.slug) error("Missing --slug <kebab-slug>");
   const pd = resolveProjectDir(projectDir);
-  setMergeHeld(pd, flags.slug, true);
+  setMergeHeld(pd, flags.slug, true, flags.intent, flags.space);
   console.log(JSON.stringify({ slug: flags.slug, merge_held: true }));
 }
 
@@ -597,30 +619,38 @@ function handleReleaseMerge(args: string[]): void {
   const flags = parseFlags(args);
   if (!flags.slug) error("Missing --slug <kebab-slug>");
   const pd = resolveProjectDir(projectDir);
-  setMergeHeld(pd, flags.slug, false);
+  setMergeHeld(pd, flags.slug, false, flags.intent, flags.space);
   console.log(JSON.stringify({ slug: flags.slug, merge_held: false }));
 }
 
 // Resolve the per-Bolt forked state file path for `slug`. Returns null when
 // the worktree directory or state file is absent (a missing forked state
 // file is treated as "not held" — the caller proceeds without refusal).
-function forkedStateFilePath(pd: string, slug: string): string | null {
+function forkedStateFilePath(
+  pd: string,
+  slug: string,
+  intent?: string,
+  space?: string,
+): string | null {
   const wtPath = worktreePath(pd, slug);
-  const wtStatePath = worktreeStateFilePath(wtPath);
+  // Pin the worktree mirror to the SAME record the state fork wrote (null ->
+  // flat legacy mirror, today's behaviour).
+  const recordPrefix = relativeRecordDir(pd, intent, space);
+  const wtStatePath = worktreeStateFilePath(wtPath, recordPrefix);
   if (!existsSync(wtStatePath)) return null;
   return wtStatePath;
 }
 
-function isMergeHeld(pd: string, slug: string): boolean {
-  const path = forkedStateFilePath(pd, slug);
+function isMergeHeld(pd: string, slug: string, intent?: string, space?: string): boolean {
+  const path = forkedStateFilePath(pd, slug, intent, space);
   if (!path) return false;
   const content = readFileSync(path, "utf-8");
   const value = getField(content, "Merge-Held");
   return value === "true";
 }
 
-function setMergeHeld(pd: string, slug: string, held: boolean): void {
-  const path = forkedStateFilePath(pd, slug);
+function setMergeHeld(pd: string, slug: string, held: boolean, intent?: string, space?: string): void {
+  const path = forkedStateFilePath(pd, slug, intent, space);
   if (!path) {
     error(
       `No per-Bolt forked state file for slug "${slug}" — was \`aidlc-bolt start --worktree --slug ${slug}\` run?`

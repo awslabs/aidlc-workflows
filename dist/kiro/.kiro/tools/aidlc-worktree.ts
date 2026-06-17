@@ -63,9 +63,11 @@ function parseFlags(args: string[]): Record<string, string> {
 function emitAudit(
   pd: string,
   eventType: string,
-  fields: Record<string, string>
+  fields: Record<string, string>,
+  intent?: string,
+  space?: string
 ): string {
-  const result = appendAuditEntry(eventType, fields, pd);
+  const result = appendAuditEntry(eventType, fields, pd, intent, space);
   return result.timestamp;
 }
 
@@ -194,7 +196,7 @@ function handleCreate(args: string[]): void {
       "Worktree path": wtPath,
       "Branch name": branchName,
       "Base branch": flags.base,
-    });
+    }, flags.intent, flags.space);
   } catch (e) {
     errorWithSlug(slug, `Audit emission failed: ${errorMessage(e)}`);
   }
@@ -282,7 +284,7 @@ function handleMerge(args: string[]): void {
       "Worktree path": wtPath,
       "Target branch": flags.target,
       Strategy: strategy,
-    });
+    }, flags.intent, flags.space);
   } catch (e) {
     errorWithSlug(slug, `Audit emission failed: ${errorMessage(e)}`);
   }
@@ -491,7 +493,7 @@ function handleDiscard(args: string[]): void {
       "Bolt slug": slug,
       "Worktree path": wtPath,
       Reason: "agent-discard",
-    });
+    }, flags.intent, flags.space);
   } catch (e) {
     errorWithSlug(slug, `Audit emission failed: ${errorMessage(e)}`);
   }
@@ -615,7 +617,7 @@ function handleVerify(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
   // Read across every per-clone audit shard (single shard in the common case).
-  const audit = readAllAuditShards(pd);
+  const audit = readAllAuditShards(pd, flags.intent, flags.space);
   if (audit.length === 0) {
     process.stdout.write(
       `${JSON.stringify({
@@ -681,7 +683,7 @@ function handleInfo(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
   // Read across every per-clone audit shard (single shard in the common case).
-  const audit = readAllAuditShards(pd);
+  const audit = readAllAuditShards(pd, flags.intent, flags.space);
   if (audit.length === 0) {
     process.stderr.write(
       `error: no WORKTREE_CREATED audit entry for slug ${slug} (audit log absent)\n`

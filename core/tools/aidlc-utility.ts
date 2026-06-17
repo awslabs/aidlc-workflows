@@ -187,8 +187,10 @@ function handleVersion(): void {
 // status
 // ---------------------------------------------------------------------------
 
-function handleStatus(projectDir: string): void {
-  const sp = stateFilePath(projectDir);
+function handleStatus(projectDir: string, flags: Record<string, string>): void {
+  // --intent <record> / --space <name> target a specific intent's status
+  // (vision §5); omitted -> the active record.
+  const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) {
     process.stdout.write(
       `No active AI-DLC workflow found.
@@ -2411,14 +2413,14 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
 
-  const sp = stateFilePath(projectDir);
+  const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die("No state file found. Run /aidlc --init first.");
 
   const scopeMapping = loadScopeMapping();
   const newScopeDef = scopeMapping[newScope];
   if (!newScopeDef) die(`Unknown scope: ${newScope}. Valid scopes: ${Object.keys(scopeMapping).join(", ")}`);
 
-  let content = readStateFile(projectDir);
+  let content = readStateFile(projectDir, flags.intent, flags.space);
   const oldScope = getField(content, "Scope");
   if (!oldScope) die("Cannot read current Scope from state file.");
 
@@ -2529,7 +2531,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   // Update Last Updated timestamp
   content = setField(content, "Last Updated", isoTimestamp());
 
-  writeStateFile(projectDir, content);
+  writeStateFile(projectDir, content, flags.intent, flags.space);
 
   // Append SCOPE_CHANGED audit event
   const oldScopeDef = scopeMapping[oldScope];
@@ -2580,10 +2582,10 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
     if (!newStrategy) die(`Unknown test strategy: "${rawStrategy}". Valid: minimal, standard, comprehensive.`);
   }
 
-  const sp = stateFilePath(projectDir);
+  const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die("No state file found. Run /aidlc --init first.");
 
-  let content = readStateFile(projectDir);
+  let content = readStateFile(projectDir, flags.intent, flags.space);
   const oldDepth = getField(content, "Depth");
   const oldStrategy = getField(content, "Test Strategy");
 
@@ -2600,7 +2602,7 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
     newStrategy !== undefined && newStrategy !== oldStrategy;
   if (depthChanging || strategyChanging) {
     content = setField(content, "Last Updated", isoTimestamp());
-    writeStateFile(projectDir, content);
+    writeStateFile(projectDir, content, flags.intent, flags.space);
   }
 
   if (newDepth !== undefined && newDepth !== oldDepth) {
@@ -2637,7 +2639,7 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
 // ---------------------------------------------------------------------------
 
 function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
-  const sp = stateFilePath(projectDir);
+  const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die("No state file found. Run /aidlc --init first.");
 
   const stage = flags.stage;
@@ -2649,7 +2651,7 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
   const phase = (flags.phase || entry.phase).toUpperCase();
   const agent = flags.agent || entry.lead_agent;
 
-  let content = readStateFile(projectDir);
+  let content = readStateFile(projectDir, flags.intent, flags.space);
   content = setField(content, "Lifecycle Phase", phase);
   content = setField(content, "Current Stage", stage);
   content = setField(content, "Active Agent", agent);
@@ -2657,7 +2659,7 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
   content = setField(content, "Status", "Running");
   content = setField(content, "Last Updated", isoTimestamp());
   content = setCheckbox(content, stage, "in-progress");
-  writeStateFile(projectDir, content);
+  writeStateFile(projectDir, content, flags.intent, flags.space);
 
   process.stdout.write(`${JSON.stringify({ updated: true, phase, stage, agent })}\n`);
 }
@@ -3027,7 +3029,7 @@ function main(): void {
       handleVersion();
       break;
     case "status":
-      handleStatus(projectDir);
+      handleStatus(projectDir, flags);
       break;
     case "doctor":
       handleDoctor(projectDir);
