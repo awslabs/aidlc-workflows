@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.0] - 2026-06-17
+
+### Bug Fixes
+
+- explicitly set tag_name in release workflow (#197)
+- address security scanners follow-up items (#180) (#199)
+- reconcile Units Planning ghost stage with canonical Units Generation (#156)
+- resolve error-severity code scanning alerts (#242)
+- blank-line separate multiple-choice options (#246) (#278)
+- scope per-unit artifact loading to unit dirs (#276)
+- restore AI-Assisted Setup agent prompt lost in merge (#318)
+
+### CI/CD
+
+- exclude noisy semgrep rules that generate false positives (#311)
+
+### Documentation
+
+- add AGENTS.md for cross-agent project guidance (#198)
+- improve contributing guide (#217)
+- clarify Windows zip extraction path for platform setup (#285)
+- fix broken documentation links (#251)
+
+### Features
+
+- detect and flag infrastructure failures in trend reports (#202)
+- add support for codex openai (#153)
+- add aidlc-traceability matrix tool (#236)
+- add AIDLC Design Reviewer tool with monorepo support (#152)
+- adding support for AIDLC v2 alpha (#284)
+- add new resiliency extension (#265)
+
+### Miscellaneous
+
+- bump python-dotenv (#201)
+- add Dependabot configuration for automated dependency updates (#200)
+- bump the uv group across 1 directory with 3 updates (#262)
+- bump the uv group across 1 directory with 2 updates (#270)
+- bump the uv group across 2 directories with 1 update (#287)
+- consolidate dependabot updates into single PR (#381)
+
 ## [0.1.8] - 2026-04-20
 
 ### Bug Fixes
