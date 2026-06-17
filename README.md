@@ -947,12 +947,12 @@ Have one of our supported platforms/tools for Assisted AI Coding installed:
 
 ### General Issues
 
-| Problem                      | Solution                                                                                                 |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Rules not loading            | Check file exists in the correct location for your platform                                              |
-| File encoding issues         | Ensure files are UTF-8 encoded                                                                           |
-| Rules not applied in session | Start a new chat session after file changes                                                              |
-| Rule details not loading     | Verify the platform-specific rule details path, e.g. `.aidlc/aidlc-rules/aws-aidlc-rule-details/` exists |
+| Problem                      | Solution                                                                                                                                     |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rules not loading            | Check file exists in the correct location for your platform                                                                                  |
+| File encoding issues         | Ensure files are UTF-8 encoded                                                                                                               |
+| Rules not applied in session | Start a new chat session after file changes                                                                                                  |
+| Rule details not loading     | Verify the platform-specific rule details path exists, such as `.aidlc-rule-details/` or `.aidlc/aidlc-rules/aws-aidlc-rule-details/`        |
 
 ### Platform-Specific Issues
 
