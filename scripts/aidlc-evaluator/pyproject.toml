@@ -5,7 +5,7 @@ description = "Evaluation and reporting framework for AI-DLC workflows"
 requires-python = ">=3.13"
 dependencies = [
     "pyyaml>=6.0",
-    "boto3>=1.43.18",
+    "boto3>=1.43.24",
     "aidlc-runner",
     "aidlc-qualitative",
     "aidlc-quantitative",
@@ -44,9 +44,9 @@ aidlc-trend-reports = { workspace = true }
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
-    "ruff>=0.15.15",
+    "ruff>=0.15.16",
     "bandit>=1.9.4",
-    "semgrep>=1.164.0",
+    "semgrep>=1.165.0",
 ]
 
 [tool.ruff]

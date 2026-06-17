@@ -26,7 +26,7 @@ jobs:
     env:
       GITLEAKS_VERSION: "8.30.1"
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
       - name: Install gitleaks
@@ -72,7 +72,7 @@ jobs:
     env:
       SEMGREP_VERSION: "1.157.0"
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
       - run: |
@@ -170,7 +170,7 @@ jobs:
       security-events: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/grype/dee8de483dfba5b4e0bc0aa8e4ab2ce52137e490/install.sh | sh -s -- -b /usr/local/bin v0.110.0
           grype --version
@@ -209,7 +209,7 @@ jobs:
     env:
       BANDIT_VERSION: "1.9.4"
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - run: |
           echo "bandit[sarif]==$BANDIT_VERSION" > requirements.txt
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -259,7 +259,7 @@ jobs:
     env:
       CHECKOV_VERSION: "3.2.513"
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - run: |
           echo "checkov==$CHECKOV_VERSION" > requirements.txt
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -319,7 +319,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Wait for ClamAV service
         run: timeout 300 bash -c 'until echo > /dev/tcp/localhost/3310; do sleep 5; done' 2>/dev/null
       - name: Install clamdscan client
