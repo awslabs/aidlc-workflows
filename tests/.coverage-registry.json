@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 363,
+    "total": 371,
     "enumeratedByClass": {
-      "function": 157,
+      "function": 165,
       "audit": 67,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 59,
+      "function": 64,
       "audit": 27,
       "scope": 9,
       "stage": 8,
@@ -1026,6 +1026,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:discoverSiblingRepos",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:docsDir",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1224,6 +1236,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:intentRepos",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:intentsDir",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1245,6 +1269,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isGitRepoDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isoTimestamp",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1260,6 +1291,13 @@
     {
       "unitClass": "function",
       "unitId": "function:isPlainObject",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isValidRepoName",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -1801,6 +1839,49 @@
         {
           "file": "tests/unit/t71.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:REPO_NAME_REGEX",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:repoDir",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveBirthRepoSet",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveConstructionRepo",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4175,6 +4256,10 @@
         {
           "file": "tests/e2e/t09-halt-and-ask-preservation.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4241,6 +4326,10 @@
       "coveredBy": [
         {
           "file": "tests/e2e/t03.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t166-multi-repo-construction.test.ts",
           "mechanism": "cli"
         }
       ],

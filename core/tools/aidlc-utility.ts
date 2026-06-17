@@ -52,6 +52,7 @@ import {
   parseStageFrontmatter,
   readAllAuditShards,
   readStateFile,
+  resolveBirthRepoSet,
   resolveProjectDir,
   setActiveIntentCursor,
   setActiveSpaceCursor,
@@ -2005,6 +2006,18 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
 
+  // Resolve the repo set the intent touches (P7 multi-repo): an explicit
+  // `--repos a,b` wins; absent it, sibling auto-discovery scans the workspace
+  // root's immediate children for a `.git`. An empty result (legacy single-repo /
+  // fresh greenfield) records no repos row — the lone repo is inferred on the
+  // construction path. Validated up front so a bad name fails before any mutation.
+  let repos: string[];
+  try {
+    repos = resolveBirthRepoSet(projectDir, flags.repos);
+  } catch (e) {
+    die(errorMessage(e));
+  }
+
   // The whole mutation runs under the WORKSPACE lock so a concurrent first-run
   // is serialized — both births append distinct rows to intents.json without a
   // lost update. The migration probe + the registry append are the reads/writes
@@ -2045,7 +2058,7 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
     // auditFilePath/appendAuditEvent/writeStateFile) resolve into THIS record.
     const description = flags.arguments?.trim();
     const slug = slugify(description && description.length > 0 ? description : scope);
-    birthIntent(projectDir, slug, activeSpace(projectDir), scope);
+    birthIntent(projectDir, slug, activeSpace(projectDir), scope, repos);
 
     const ts = isoTimestamp();
 
@@ -2066,6 +2079,9 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
     appendAuditEvent(projectDir, "WORKFLOW_STARTED", {
       Scope: scope,
       Request: `/aidlc ${flags.arguments || scope}`,
+      // Record the intent's repo span at birth (P7). Omitted when no repos were
+      // captured (legacy single-repo / fresh greenfield → the lone repo is inferred).
+      ...(repos.length > 0 ? { Repos: repos.join(", ") } : {}),
     });
 
     // PHASE_STARTED for the Init phase — Init always runs. Other phases emit

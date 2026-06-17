@@ -65,15 +65,18 @@ function emitAudit(
   appendAuditEntry(eventType, fields, pd, intent, space);
 }
 
-// The intent/space SELECTOR re-serialised for a delegated sibling spawn. A Bolt
-// pair (start --worktree / complete --merge) must propagate the SAME selector to
-// every fork/merge primitive so they all target ONE intent end-to-end (vision
-// §5). Returns [] when neither flag is present -> the primitives default-resolve
-// (the active cursor), today's behaviour.
+// The intent/space/repo SELECTOR re-serialised for a delegated sibling spawn. A
+// Bolt pair (start --worktree / complete --merge) must propagate the SAME selector
+// to every fork/merge primitive so they all target ONE intent end-to-end (vision
+// §5). The --repo dimension (P7) likewise rides along so a delegated git op
+// (aidlc-worktree discard on abort --discard) anchors to the same sibling repo the
+// fork used. Returns [] when no flag is present -> the primitives default-resolve
+// (the active cursor / inferred lone repo), today's behaviour.
 function selectorArgs(flags: Record<string, string>): string[] {
   const out: string[] = [];
   if (flags.intent) out.push("--intent", flags.intent);
   if (flags.space) out.push("--space", flags.space);
+  if (flags.repo) out.push("--repo", flags.repo);
   return out;
 }
 
@@ -152,9 +155,13 @@ function parseFlags(args: string[]): Record<string, string> {
 // --- Subcommand: start ---
 // Usage: aidlc-bolt start --name <bolt-names> --batch <n>
 //                         [--walking-skeleton true|false]
-//                         [--worktree --slug <kebab-slug>]
+//                         [--worktree --slug <kebab-slug>] [--repo <name>]
 //
 // --name accepts a single bolt name or comma-separated list for a parallel batch.
+//
+// --repo (P7): the sibling repo the Bolt operates in. start does no git itself
+// (the worktree was created by aidlc-worktree create), but --repo rides the
+// selector to every delegated primitive so the whole Bolt pair targets one repo.
 //
 // --worktree: after BOLT_STARTED, delegates to `aidlc-state.ts fork` and
 // `aidlc-audit.ts audit-fork` to fork state and audit into the Bolt's

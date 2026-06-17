@@ -66,6 +66,12 @@ import {
   cleanupTestProject,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+// P4: init BIRTHS a per-intent record; state lives under
+// aidlc/spaces/<space>/intents/<slug>-<id8>/ and audit is SHARDED per clone
+// under <record>/audit/. Read state through the resolved record dir and audit
+// through the shipped merge helper (default-resolves the active intent, falls
+// back to flat aidlc-docs for a not-yet-born project).
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
@@ -99,8 +105,26 @@ afterAll(() => {
   cleanupTestProject(proj);
 });
 
-const statePath = (): string => join(proj, "aidlc-docs", "aidlc-state.md");
-const auditPath = (): string => join(proj, "aidlc-docs", "audit.md");
+// P4: resolve the born intent's record dir from the active-space + active-intent
+// cursors (a record dir is the one holding aidlc-state.md), falling back to the
+// flat aidlc-docs/ layout for a not-yet-born project. Copied verbatim from t63.
+function recordDirOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(p, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(p, "aidlc-docs");
+}
+
+const statePath = (): string => join(recordDirOf(proj), "aidlc-state.md");
 
 /** Run a bolt subcommand against the shared project. Mirrors `bun "$BOLT" ...`. */
 function bolt(args: string[]): { status: number; stdout: string; out: string } {
@@ -115,13 +139,12 @@ function bolt(args: string[]): { status: number; stdout: string; out: string } {
  * Read the value of <key> from the FIRST audit block whose `**Event**:`
  * matches <ev>. Block-scoped (resets at `## ` headings and `---`). Returns ""
  * when absent. STRONGER than the .sh's file-wide grep — pins the field to the
- * right event.
+ * right event. P4: reads the merged per-clone audit shards (readAllAuditShards),
+ * not the retired flat aidlc-docs/audit.md.
  */
 function auditField(ev: string, key: string): string {
-  const file = auditPath();
-  if (!existsSync(file)) return "";
   let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of readAllAuditShards(proj).split("\n")) {
     if (line.startsWith("## ") || line === "---") {
       matched = false;
       continue;
@@ -141,11 +164,9 @@ function auditField(ev: string, key: string): string {
   return "";
 }
 
-/** Count audit blocks with `**Event**: <ev>` (exact-line). */
+/** Count audit blocks with `**Event**: <ev>` (exact-line) across the merged shards. */
 function auditEventCount(ev: string): number {
-  const file = auditPath();
-  if (!existsSync(file)) return 0;
-  return readFileSync(file, "utf-8")
+  return readAllAuditShards(proj)
     .split("\n")
     .filter((l) => l === `**Event**: ${ev}`).length;
 }

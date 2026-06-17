@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:intent-birth, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:birthIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout
+// covers: subcommand:aidlc-utility:intent-birth, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:birthIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:resolveBirthRepoSet, function:discoverSiblingRepos
 //
 // Mechanism: cli (spawned dist tools) + in-process pure-function asserts.
 // P4 — retire the user-facing --init; the engine auto-births the first intent
@@ -120,6 +120,70 @@ describe("t164 auto-birth (intent-birth) on an empty workspace", () => {
     // next is read-only: it must NOT have birthed anything.
     expect(existsSync(intentsDir(proj))).toBe(false);
     expect(existsSync(join(proj, "aidlc-docs", "aidlc-state.md"))).toBe(false);
+  });
+});
+
+// ============================================================
+// P7 — an intent records its repo set at birth (--repos / sibling discovery)
+// ============================================================
+describe("t165 P7 intent repo set captured at birth", () => {
+  // Make a child dir of the workspace look like a git repo (a .git dir is enough
+  // for discoverSiblingRepos, which only probes existsSync(<dir>/.git)).
+  const makeRepo = (p: string, name: string): void => {
+    mkdirSync(join(p, name, ".git"), { recursive: true });
+  };
+
+  test("explicit --repos a,b is recorded (sorted, deduped) in intents.json", () => {
+    const r = util(["intent-birth", "--scope", "feature", "--repos", "repo-b,repo-a,repo-a"]);
+    expect(r.status).toBe(0);
+    const reg = readIntentRegistry(proj);
+    expect(reg.length).toBe(1);
+    // Sorted + deduped by resolveBirthRepoSet.
+    expect(reg[0].repos).toEqual(["repo-a", "repo-b"]);
+    // listIntents surfaces the same set through the query layer.
+    expect(listIntents(proj)[0].repos).toEqual(["repo-a", "repo-b"]);
+  });
+
+  test("explicit --repos wins even when sibling repos are present on disk", () => {
+    makeRepo(proj, "discovered-x");
+    const r = util(["intent-birth", "--scope", "feature", "--repos", "only-this"]);
+    expect(r.status).toBe(0);
+    expect(readIntentRegistry(proj)[0].repos).toEqual(["only-this"]);
+  });
+
+  test("absent --repos, sibling auto-discovery records the .git children", () => {
+    makeRepo(proj, "svc-api");
+    makeRepo(proj, "svc-web");
+    // A non-repo child dir (no .git) is NOT discovered.
+    mkdirSync(join(proj, "docs-only"), { recursive: true });
+    const r = util(["intent-birth", "--scope", "feature"]);
+    expect(r.status).toBe(0);
+    expect(readIntentRegistry(proj)[0].repos).toEqual(["svc-api", "svc-web"]);
+  });
+
+  test("no --repos and no sibling repos → no repos row (legacy single-repo inference)", () => {
+    const r = util(["intent-birth", "--scope", "poc"]);
+    expect(r.status).toBe(0);
+    // An empty set records NO repos row — the lone repo is inferred downstream.
+    expect(readIntentRegistry(proj)[0].repos).toBeUndefined();
+  });
+
+  test("the engine dir and workspace-internal dirs are excluded from discovery", () => {
+    // SEED ships a harness dir + the aidlc roof; neither is a code repo.
+    mkdirSync(join(proj, ".claude", ".git"), { recursive: true });
+    mkdirSync(join(proj, "aidlc", ".git"), { recursive: true });
+    makeRepo(proj, "real-repo");
+    const r = util(["intent-birth", "--scope", "feature"]);
+    expect(r.status).toBe(0);
+    expect(readIntentRegistry(proj)[0].repos).toEqual(["real-repo"]);
+  });
+
+  test("an invalid --repos entry is rejected before any mutation", () => {
+    const r = util(["intent-birth", "--scope", "feature", "--repos", "../escape"]);
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain("Invalid --repos entry");
+    // Nothing was born.
+    expect(existsSync(intentsDir(proj))).toBe(false);
   });
 });
 

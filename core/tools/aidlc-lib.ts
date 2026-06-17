@@ -692,6 +692,7 @@ export function birthIntent(
   slug: string,
   space: string,
   scope?: string,
+  repos?: string[],
 ): BornIntent {
   const uuid = uuidv7();
   const intentsRoot = intentsDir(projectDir, space);
@@ -717,7 +718,11 @@ export function birthIntent(
   }
   appendIntentToRegistry(
     projectDir,
-    { uuid, slug, scope, repos: undefined, status: "in-flight" },
+    // An empty repo set (no --repos, no sibling discovery — the legacy single-repo
+    // or fresh-greenfield case) records NO repos row; the lone repo is inferred on
+    // the construction path (resolveConstructionRepo). Only a non-empty set is
+    // persisted, so existing single-repo + flat-legacy intents stay byte-identical.
+    { uuid, slug, scope, repos: repos && repos.length > 0 ? repos : undefined, status: "in-flight" },
     space,
   );
   setActiveIntentCursor(projectDir, dirName, space);
@@ -1021,6 +1026,176 @@ export function readAllAuditShards(projectDir: string, intent?: string, space?: 
 
 export function worktreePath(projectDir: string, boltSlug: string): string {
   return join(projectDir, ".aidlc", "worktrees", `bolt-${boltSlug}`);
+}
+
+// --- Multi-repo: repos are siblings of the workspace ----------------------------
+//
+// In the workspace model the projectDir is the WORKSPACE roof (`my-workspace/`),
+// which is NOT itself a git repo. Code repos are its immediate children
+// (`my-workspace/repo-a/`, `my-workspace/repo-b/`) — siblings of `aidlc/` and the
+// engine dir (vision §7). An intent records the repos it touches in its
+// intents.json row (`repos`); construction targets a specific one. P7 decouples
+// "the repo to operate on" from "the single projectDir": before P7 the worktree
+// tool ran `git worktree add` in the projectDir's own cwd (assuming projectDir IS
+// the repo); now `--repo <name>` anchors it to the sibling repo dir instead.
+//
+// repoDir resolves the on-disk dir for a repo name; it does NOT validate that the
+// dir exists or is a git repo (the caller does, where the git op runs).
+
+// A repo name is a single path segment (no separators, no `..`) so it can only
+// resolve to an immediate child of the workspace — never escape it.
+export const REPO_NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+export function isValidRepoName(name: string): boolean {
+  return REPO_NAME_REGEX.test(name) && name !== "." && name !== "..";
+}
+
+// The on-disk dir for a sibling repo: an immediate child of the workspace root.
+export function repoDir(projectDir: string, repoName: string): string {
+  return join(projectDir, repoName);
+}
+
+// True iff `dir` looks like a git checkout: it holds a `.git` (a directory for a
+// normal clone, OR a file for a submodule / linked worktree). Workspace-internal
+// dirs that are never code repos are excluded by the discovery scan, not here.
+export function isGitRepoDir(dir: string): boolean {
+  return existsSync(join(dir, ".git"));
+}
+
+// Workspace-internal child dirs that are never code repos — excluded from sibling
+// auto-discovery so the engine dir / the aidlc roof / VCS metadata never count as
+// a repo. The harness dirs are open-set (isHarnessDirName), checked separately.
+const NON_REPO_WORKSPACE_DIRS = new Set([
+  "aidlc",
+  ".git",
+  ".aidlc",
+  "node_modules",
+]);
+
+// Auto-discover the code repos that are immediate children of the workspace root:
+// any child dir holding a `.git`, excluding the workspace's own internal dirs and
+// the harness engine dir. Sorted + deduped. Returns [] when the workspace root is
+// unreadable or holds no sibling repos (the legacy single-repo / fresh-greenfield
+// case — the caller records no repos row and the lone repo is inferred later).
+export function discoverSiblingRepos(projectDir: string): string[] {
+  const found: string[] = [];
+  let entries: string[];
+  try {
+    entries = readdirSync(projectDir);
+  } catch {
+    return [];
+  }
+  for (const name of entries) {
+    if (NON_REPO_WORKSPACE_DIRS.has(name)) continue;
+    if (isHarnessDirName(name)) continue; // .claude / .kiro / .codex
+    const dir = join(projectDir, name);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    if (isGitRepoDir(dir)) found.push(name);
+  }
+  return [...new Set(found)].sort();
+}
+
+// Resolve the repo set for a new intent at birth: an explicit `--repos a,b` set
+// wins (authoritative when the user names them); absent it, sibling auto-discovery
+// supplies the default. Each name is validated. Returns [] when neither yields a
+// repo (→ no repos row → lone-repo inference). Throws on an invalid explicit name.
+export function resolveBirthRepoSet(
+  projectDir: string,
+  explicitReposCsv?: string,
+): string[] {
+  if (explicitReposCsv && explicitReposCsv.trim().length > 0) {
+    const names = explicitReposCsv
+      .split(",")
+      .map((r) => r.trim())
+      .filter((r) => r.length > 0);
+    for (const name of names) {
+      if (!isValidRepoName(name)) {
+        throw new Error(
+          `Invalid --repos entry "${name}": a repo name must be a single path segment matching ${REPO_NAME_REGEX} (no separators or "..").`,
+        );
+      }
+    }
+    return [...new Set(names)].sort();
+  }
+  return discoverSiblingRepos(projectDir);
+}
+
+// The recorded repo set for an intent (its intents.json row's `repos`), or [] when
+// none was recorded (legacy single-repo / projectDir-is-the-repo). The lookup
+// follows the SAME row→record-dir match listIntents() uses, then falls back to the
+// active intent's row when no explicit dirName is given.
+export function intentRepos(
+  projectDir: string,
+  intentDirName?: string | null,
+  space?: string,
+): string[] {
+  const sp = space ?? activeSpace(projectDir);
+  const dirName = intentDirName ?? activeIntent(projectDir, sp);
+  if (!dirName) return [];
+  for (const entry of readIntentRegistry(projectDir, sp)) {
+    if (!dirName.startsWith(`${entry.slug}-`)) continue;
+    const suffix = dirName.slice(entry.slug.length + 1);
+    if (!/^[0-9a-f]+$/.test(suffix) || idSuffix(entry.uuid, suffix.length) !== suffix) continue;
+    return entry.repos ?? [];
+  }
+  return [];
+}
+
+export interface RepoResolution {
+  // The repo NAME to operate on, or null when the intent records NO repos (the
+  // legacy single-repo case → git runs in the projectDir cwd, today's behaviour).
+  repo: string | null;
+  // The cwd the git op must run in: the sibling repo dir when `repo` is set, else
+  // the projectDir (back-compat). The caller passes this as the git invocation cwd.
+  cwd: string;
+}
+
+// Resolve which repo a CONSTRUCTION op targets, decoupling "the repo to operate
+// on" from "the single projectDir":
+//   - no recorded repos (legacy / projectDir-is-the-repo): null → cwd=projectDir
+//     (back-compat; --repo, if given, must name one of zero repos → error).
+//   - exactly one recorded repo: inferred (the lone repo); --repo optional but, if
+//     given, must match.
+//   - multiple recorded repos: --repo is REQUIRED to disambiguate; it must name one
+//     of the set.
+// Throws (string message) on any disambiguation failure so the tool can surface it.
+export function resolveConstructionRepo(
+  projectDir: string,
+  requestedRepo: string | undefined,
+  intentDirName?: string | null,
+  space?: string,
+): RepoResolution {
+  const repos = intentRepos(projectDir, intentDirName, space);
+  if (requestedRepo !== undefined) {
+    if (!isValidRepoName(requestedRepo)) {
+      throw new Error(
+        `Invalid --repo "${requestedRepo}": a repo name must be a single path segment matching ${REPO_NAME_REGEX}.`,
+      );
+    }
+    if (repos.length > 0 && !repos.includes(requestedRepo)) {
+      throw new Error(
+        `--repo "${requestedRepo}" is not in this intent's repo set: ${repos.join(", ")}.`,
+      );
+    }
+    // repos.length === 0 (legacy) AND an explicit --repo: honour it as a sibling
+    // anchor (the caller may be operating multi-repo on an unrecorded intent),
+    // resolving cwd to the named sibling dir.
+    return { repo: requestedRepo, cwd: repoDir(projectDir, requestedRepo) };
+  }
+  if (repos.length === 0) {
+    // Legacy single-repo / projectDir-is-the-repo: run git in projectDir's cwd.
+    return { repo: null, cwd: projectDir };
+  }
+  if (repos.length === 1) {
+    return { repo: repos[0], cwd: repoDir(projectDir, repos[0]) };
+  }
+  throw new Error(
+    `This intent spans ${repos.length} repos (${repos.join(", ")}); pass --repo <name> to disambiguate which to operate on.`,
+  );
 }
 
 // --- aidlc-docs data-path family ----------------------------------------------

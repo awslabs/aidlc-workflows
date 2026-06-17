@@ -63,13 +63,19 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
+// P4: init BIRTHS a per-intent record; state lives under
+// aidlc/spaces/<space>/intents/<slug>-<id8>/ and audit is SHARDED per clone
+// under <record>/audit/. Read state through the resolved record dir and audit
+// through the shipped merge helper (default-resolves the active intent, falls
+// back to flat aidlc-docs for a not-yet-born project).
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
@@ -108,6 +114,25 @@ function setupConstructionProject(scope: string): string {
   );
   expect(res.status).toBe(0);
   return proj;
+}
+
+// P4: resolve the born intent's record dir from the active-space + active-intent
+// cursors (a record dir is the one holding aidlc-state.md), falling back to the
+// flat aidlc-docs/ layout for a not-yet-born project. Copied verbatim from t63.
+function recordDirOf(p: string): string {
+  const spaceCursor = join(p, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf-8").trim() || "default"
+    : "default";
+  const intentsDir = join(p, "aidlc", "spaces", space, "intents");
+  const intentCursor = join(intentsDir, "active-intent");
+  if (existsSync(intentCursor)) {
+    const rec = readFileSync(intentCursor, "utf-8").trim();
+    if (rec && existsSync(join(intentsDir, rec, "aidlc-state.md"))) {
+      return join(intentsDir, rec);
+    }
+  }
+  return join(p, "aidlc-docs");
 }
 
 describe("t67 construction worktrees — security-patch (migrated from t67-construction-worktrees-security-patch.sh, plan 4)", () => {
@@ -152,10 +177,8 @@ describe("t67 construction worktrees — security-patch (migrated from t67-const
     expect(stdout).toEqual({ emitted: "MERGE_DISPATCH_INVOKED", slug });
 
     // The audit row landed in the initialized project (the .sh's two greps).
-    const audit = readFileSync(
-      join(proj, "aidlc-docs", "audit.md"),
-      "utf-8",
-    );
+    // P4: read the merged per-clone audit shards, not the retired flat audit.md.
+    const audit = readAllAuditShards(proj);
     expect(audit.includes("**Event**: MERGE_DISPATCH_INVOKED")).toBe(true);
     // STRONGER: the exact slug line, not the .sh's loose "Bolt slug.*" pattern.
     expect(audit.includes(`**Bolt slug**: ${slug}`)).toBe(true);
@@ -167,7 +190,7 @@ describe("t67 construction worktrees — security-patch (migrated from t67-const
   test("init writes a v7 state carrying Worktree Path + Bolt Refs for security-patch [.sh assert 4]", () => {
     const proj = setupConstructionProject(SCOPE);
     const state = readFileSync(
-      join(proj, "aidlc-docs", "aidlc-state.md"),
+      join(recordDirOf(proj), "aidlc-state.md"),
       "utf-8",
     );
     // The .sh grepped the two field labels independently; assert both on the

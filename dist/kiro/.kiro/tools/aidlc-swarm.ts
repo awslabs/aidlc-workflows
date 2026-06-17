@@ -14,9 +14,12 @@
 //
 // THREE STATELESS SUBCOMMANDS (no iteration counter, no persisted state):
 //   prepare  --batch <n> --units <a,b,c> [--base <branch>] [--concurrency <n>]
-//            [--degraded-from <subagent|ultracode>]
+//            [--degraded-from <subagent|ultracode>] [--repo <name>]
 //       Fork an isolated git worktree per unit (aidlc-worktree create +
 //       aidlc-bolt start --worktree) and emit SWARM_STARTED once for the batch.
+//       --repo (P7) selects the sibling repo the batch's worktrees fork inside (a
+//       multi-repo intent requires it; single-repo infers the lone repo); the
+//       resolved name is forwarded to every aidlc-worktree create + bolt start.
 //       The anti-tamper baseline is each worktree's OWN git fork (HEAD) — nothing
 //       is stored; check/finalize re-derive the pristine bytes with `git diff
 //       --quiet HEAD`. Runs before any worker, so it cannot fold into check.
@@ -72,7 +75,7 @@ import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
-import { parseArgs, resolveProjectDir, worktreePath } from "./aidlc-lib.ts";
+import { parseArgs, resolveConstructionRepo, resolveProjectDir, worktreePath } from "./aidlc-lib.ts";
 
 const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -334,7 +337,22 @@ function handlePrepare(rest: string[]): void {
     fail("--units resolved to an empty list");
   }
 
-  const base = flags.base ?? currentBranch(projectDir);
+  // P7: the construction repo this batch targets. resolveConstructionRepo errors
+  // on a multi-repo intent with no --repo (forwarded as the batch failure), infers
+  // the lone repo for a single-repo intent, and yields cwd=projectDir for a legacy
+  // intent (today's behaviour). The repoCwd is where `--base` is derived from and
+  // is forwarded to every `aidlc-worktree create` so the worktree forks in-repo.
+  let repoCwd: string;
+  let repoName: string | null;
+  try {
+    const resolved = resolveConstructionRepo(projectDir, flags.repo, flags.intent, flags.space);
+    repoCwd = resolved.cwd;
+    repoName = resolved.repo;
+  } catch (e) {
+    fail(e instanceof Error ? e.message : String(e));
+  }
+
+  const base = flags.base ?? currentBranch(repoCwd);
   const concurrency =
     flags.concurrency && /^[1-9][0-9]*$/.test(flags.concurrency)
       ? flags.concurrency
@@ -359,10 +377,14 @@ function handlePrepare(rest: string[]): void {
     worktree_path?: string;
     error?: string;
   }[] = [];
+  // Forward the RESOLVED repo name (not the raw flag) so every sibling primitive
+  // anchors to the same repo — an inferred lone repo is passed explicitly too, so
+  // create/merge/discard never re-resolve to a different repo than prepare chose.
+  const repoArgs = repoName ? ["--repo", repoName] : [];
   for (const unit of units) {
     const created = runTool(
       "aidlc-worktree.ts",
-      ["create", "--slug", unit, "--base", base],
+      ["create", "--slug", unit, "--base", base, ...repoArgs],
       projectDir
     );
     if (!created.ok) {
@@ -386,7 +408,7 @@ function handlePrepare(rest: string[]): void {
     }
     const started = runTool(
       "aidlc-bolt.ts",
-      ["start", "--worktree", "--slug", unit, "--batch", flags.batch, "--name", unit],
+      ["start", "--worktree", "--slug", unit, "--batch", flags.batch, "--name", unit, ...repoArgs],
       projectDir
     );
     if (!started.ok) {

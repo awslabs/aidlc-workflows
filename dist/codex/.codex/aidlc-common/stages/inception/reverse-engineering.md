@@ -49,6 +49,27 @@ Read `aidlc-docs/aidlc-state.md` to confirm:
 
 If project is not brownfield, skip this stage and update aidlc-state.md with skip reason.
 
+#### Resolve the intent's repo set (multi-repo)
+
+This stage runs **per repo** the intent touches. Resolve the repo set from the
+intent's registry row before scanning:
+
+1. Read the active intent's `repos` array from
+   `aidlc/spaces/<active-space>/intents/intents.json` (the row whose `uuid`/`slug`
+   matches the active intent). This is the set captured at intent birth (an explicit
+   `--repos a,b` or sibling auto-discovery).
+2. **Single-repo / unrecorded:** if `repos` is absent, empty, or has exactly one
+   entry, RE runs once against the lone repo — the same flow as before. (An
+   unrecorded set means the workspace root is itself the single repo.)
+3. **Multi-repo:** if `repos` has more than one entry, run Steps 2–3 **once per
+   repo**, scanning that repo's sibling directory (`<workspace>/<repo>/`) and writing
+   its 9 artifacts to `aidlc/codekb/<repo>/`. Each repo's codekb is independent;
+   nothing in one repo's scan blocks another's, so the per-repo scans may run as
+   parallel subagents.
+
+In the steps below, `<repo>` is the repo currently being scanned; repeat for each
+repo in the set.
+
 ### Step 2: Developer Code Scan
 
 Delegate to Task tool with aidlc-developer-agent:
@@ -56,7 +77,8 @@ Delegate to Task tool with aidlc-developer-agent:
 - The agent persona and knowledge are loaded automatically. Do NOT manually inject the persona.
 - Include workspace state from aidlc-state.md as context
 
-Developer scans the entire codebase for:
+Developer scans `<repo>`'s codebase (the sibling dir `<workspace>/<repo>/`; for a
+single-repo intent this is the whole codebase) for:
 - All packages, modules, and their purposes
 - Build systems, configuration, and dependency relationships
 - External and internal APIs (endpoints, contracts, methods)
@@ -98,8 +120,9 @@ Update `aidlc-docs/aidlc-state.md`:
 
 Use stage-protocol.md completion template:
 - Announcement with completion summary
-- Summary of all 9 artifacts produced
-- Review path: `aidlc/codekb/<repo>/`
+- Summary of all 9 artifacts produced **per repo** (for a multi-repo intent, list
+  each repo's `aidlc/codekb/<repo>/` set)
+- Review path: `aidlc/codekb/<repo>/` for each repo in the set
 - Structured approval question with options: Approve (continue to Requirements Analysis) / Request Changes
 
 ## Sensors

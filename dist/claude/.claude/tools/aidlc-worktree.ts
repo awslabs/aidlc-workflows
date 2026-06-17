@@ -21,6 +21,7 @@ import {
   findAllEvents,
   getField,
   readAllAuditShards,
+  resolveConstructionRepo,
   resolveProjectDir,
   worktreePath,
   worktreeStateFilePath,
@@ -102,14 +103,20 @@ function runGit(args: string[], cwd?: string): GitResult {
 // directory whose `.git` is the same as `git rev-parse --git-common-dir`'s
 // parent. macOS symlinks `/var → /private/var`, so canonicalise both sides
 // via `realpathSync` before comparing.
-function assertNotSiblingWorktree(): void {
-  const top = runGit(["rev-parse", "--show-toplevel"]);
+//
+// P7 (multi-repo): the guard is RE-ANCHORED to the TARGET repo's checkout. When
+// `--repo <name>` selects a sibling repo, `repoCwd` is that repo dir and every
+// git probe runs there — so "must run from the main checkout" is evaluated against
+// the sibling repo, not the (non-git) workspace root. Absent `--repo` (legacy
+// single-repo), `repoCwd` is the projectDir and the behaviour is unchanged.
+function assertNotSiblingWorktree(repoCwd?: string): void {
+  const top = runGit(["rev-parse", "--show-toplevel"], repoCwd);
   if (!top.ok) {
     error("Not a git repository (or any of the parent directories).");
   }
   const cwdTop = canonicalise(top.stdout.trim());
 
-  const common = runGit(["rev-parse", "--git-common-dir"]);
+  const common = runGit(["rev-parse", "--git-common-dir"], repoCwd);
   if (!common.ok) {
     error("Cannot resolve git common dir.");
   }
@@ -159,19 +166,45 @@ function validateStrategy(strategy: string | undefined): string {
   return strategy;
 }
 
+// Resolve the cwd every git op in a construction handler must run in (P7). With
+// `--repo <name>` it is the sibling repo dir; absent it the lone recorded repo is
+// inferred (or the projectDir for a legacy single-repo intent). A disambiguation
+// failure (multi-repo intent without --repo, or an out-of-set name) errors before
+// any audit emit. `flags.intent`/`flags.space` select the intent whose repo set is
+// consulted (same selector the audit emit threads).
+function resolveRepoCwd(
+  pd: string,
+  flags: Record<string, string>,
+  slug: string,
+): string {
+  try {
+    return resolveConstructionRepo(pd, flags.repo, flags.intent, flags.space).cwd;
+  } catch (e) {
+    errorWithSlug(slug, errorMessage(e));
+  }
+}
+
 // --- Subcommand: create ---
 //
-// Usage: aidlc-worktree create --slug <slug> --base <branch>
+// Usage: aidlc-worktree create --slug <slug> --base <branch> [--repo <name>]
+//                              [--intent <dir>] [--space <name>]
+//
+// --repo (P7): the sibling repo to fork the worktree inside (a multi-repo intent
+// requires it; a single-repo intent infers the lone repo; a legacy intent with no
+// recorded repos runs in the projectDir, today's behaviour).
 function handleCreate(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
   if (!flags.base) errorWithSlug(slug, "Missing --base <branch>");
 
   const pd = resolveProjectDir(projectDir);
-  assertNotSiblingWorktree();
+  // P7: anchor every git op to the target sibling repo (or the projectDir for a
+  // legacy single-repo intent). The guard is evaluated against that same checkout.
+  const repoCwd = resolveRepoCwd(pd, flags, slug);
+  assertNotSiblingWorktree(repoCwd);
 
   // Pre-audit checks: every failure here exits without emitting.
-  const baseExists = runGit(["rev-parse", "--verify", flags.base]);
+  const baseExists = runGit(["rev-parse", "--verify", flags.base], repoCwd);
   if (!baseExists.ok) {
     errorWithSlug(slug, `Base branch does not exist locally: ${flags.base}`);
   }
@@ -182,7 +215,7 @@ function handleCreate(args: string[]): void {
   }
 
   const branchName = `bolt-${slug}`;
-  const branchExists = runGit(["rev-parse", "--verify", `refs/heads/${branchName}`]);
+  const branchExists = runGit(["rev-parse", "--verify", `refs/heads/${branchName}`], repoCwd);
   if (branchExists.ok) {
     errorWithSlug(slug, `Branch already exists: ${branchName}`);
   }
@@ -202,7 +235,7 @@ function handleCreate(args: string[]): void {
     errorWithSlug(slug, `Audit emission failed: ${errorMessage(e)}`);
   }
 
-  const add = runGit(["worktree", "add", wtPath, "-b", branchName, flags.base]);
+  const add = runGit(["worktree", "add", wtPath, "-b", branchName, flags.base], repoCwd);
   if (!add.ok) {
     errorWithSlug(
       slug,
@@ -226,7 +259,9 @@ function handleCreate(args: string[]): void {
 //
 // Usage:
 //   aidlc-worktree merge --slug <slug> --target <branch> --strategy <squash|merge|rebase>
-//                        [--message <msg>]
+//                        [--message <msg>] [--repo <name>] [--intent <dir>] [--space <name>]
+//
+// --repo (P7): the sibling repo the merge lands in — same resolution as `create`.
 function handleMerge(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
@@ -235,10 +270,14 @@ function handleMerge(args: string[]): void {
   const message = flags.message ?? `Bolt ${slug}`;
 
   const pd = resolveProjectDir(projectDir);
-  assertNotSiblingWorktree();
+  // P7: anchor every git op to the target sibling repo. The merge runs IN that
+  // repo's main checkout (squash/merge/ff/commit/worktree-remove/branch-D); the
+  // rebase still runs in the worktree (wtPath). Legacy single-repo → repoCwd=pd.
+  const repoCwd = resolveRepoCwd(pd, flags, slug);
+  assertNotSiblingWorktree(repoCwd);
 
-  // Defensive HEAD check: the caller must have <target> checked out at cwd.
-  const head = runGit(["rev-parse", "--abbrev-ref", "HEAD"]);
+  // Defensive HEAD check: the caller must have <target> checked out at the repo cwd.
+  const head = runGit(["rev-parse", "--abbrev-ref", "HEAD"], repoCwd);
   if (!head.ok) {
     errorWithSlug(slug, "Cannot resolve HEAD.");
   }
@@ -266,7 +305,7 @@ function handleMerge(args: string[]): void {
   // a corresponding audit row.
   let rebaseRemote = "";
   if (strategy === "rebase") {
-    const remote = runGit(["config", `branch.${flags.target}.remote`]);
+    const remote = runGit(["config", `branch.${flags.target}.remote`], repoCwd);
     if (!remote.ok || !remote.stdout.trim()) {
       errorWithSlug(
         slug,
@@ -302,15 +341,16 @@ function handleMerge(args: string[]): void {
 
   let commitSha = "";
   // conflictCwd records which checkout the conflicting state lives in:
-  // squash/merge run in the main checkout (cwd undefined → caller's cwd),
-  // rebase runs in the worktree (cwd = wtPath). For conflict-file
-  // enumeration, we query `git diff --name-only --diff-filter=U` in the
-  // SAME cwd so the index reflects the real conflict.
-  let conflictCwd: string | undefined ;
+  // squash/merge run in the target repo's main checkout (cwd = repoCwd), rebase
+  // runs in the worktree (cwd = wtPath). For conflict-file enumeration, we query
+  // `git diff --name-only --diff-filter=U` in the SAME cwd so the index reflects
+  // the real conflict. (P7: repoCwd is the sibling repo, or the projectDir for a
+  // legacy single-repo intent — squash/merge default to it now, not the caller's cwd.)
+  let conflictCwd: string | undefined = repoCwd;
   let conflictHit = false;
   switch (strategy) {
     case "squash": {
-      const m = runGit(["merge", "--squash", branchName]);
+      const m = runGit(["merge", "--squash", branchName], repoCwd);
       if (!m.ok) {
         if (isConflict(m)) {
           conflictHit = true;
@@ -321,14 +361,14 @@ function handleMerge(args: string[]): void {
           `git merge --squash failed: ${m.stderr.trim() || `exit ${m.code}`}`
         );
       }
-      const c = runGit(["commit", "--no-edit", "-m", message]);
+      const c = runGit(["commit", "--no-edit", "-m", message], repoCwd);
       if (!c.ok) {
         errorWithSlug(
           slug,
           `git commit failed: ${c.stderr.trim() || `exit ${c.code}`}`
         );
       }
-      commitSha = currentSha();
+      commitSha = currentSha(repoCwd);
       break;
     }
     case "merge": {
@@ -339,7 +379,7 @@ function handleMerge(args: string[]): void {
         "-m",
         `Merge bolt ${slug}`,
         branchName,
-      ]);
+      ], repoCwd);
       if (!m.ok) {
         if (isConflict(m)) {
           conflictHit = true;
@@ -350,7 +390,7 @@ function handleMerge(args: string[]): void {
           `git merge --no-ff failed: ${m.stderr.trim() || `exit ${m.code}`}`
         );
       }
-      commitSha = currentSha();
+      commitSha = currentSha(repoCwd);
       break;
     }
     case "rebase": {
@@ -366,14 +406,14 @@ function handleMerge(args: string[]): void {
           `git rebase failed: ${r.stderr.trim() || `exit ${r.code}`}`
         );
       }
-      const ff = runGit(["merge", "--ff-only", branchName]);
+      const ff = runGit(["merge", "--ff-only", branchName], repoCwd);
       if (!ff.ok) {
         errorWithSlug(
           slug,
           `git merge --ff-only failed: ${ff.stderr.trim() || `exit ${ff.code}`}`
         );
       }
-      commitSha = currentSha();
+      commitSha = currentSha(repoCwd);
       break;
     }
   }
@@ -400,14 +440,14 @@ function handleMerge(args: string[]): void {
   // "merge failed entirely" from "merge landed, cleanup orphan remains"
   // — these need different recovery actions.
   const cleanupTag = `[merge-succeeded:${commitSha}]`;
-  const rm = runGit(["worktree", "remove", wtPath]);
+  const rm = runGit(["worktree", "remove", wtPath], repoCwd);
   if (!rm.ok) {
     errorWithSlug(
       slug,
       `${cleanupTag} worktree remove failed: ${rm.stderr.trim() || `exit ${rm.code}`}`
     );
   }
-  const del = runGit(["branch", "-D", branchName]);
+  const del = runGit(["branch", "-D", branchName], repoCwd);
   if (!del.ok) {
     errorWithSlug(
       slug,
@@ -428,8 +468,8 @@ function handleMerge(args: string[]): void {
   );
 }
 
-function currentSha(): string {
-  const r = runGit(["rev-parse", "HEAD"]);
+function currentSha(cwd?: string): string {
+  const r = runGit(["rev-parse", "HEAD"], cwd);
   return r.ok ? r.stdout.trim() : "";
 }
 
@@ -457,15 +497,19 @@ function listConflictFiles(cwd?: string): string[] {
 
 // --- Subcommand: discard ---
 //
-// Usage: aidlc-worktree discard --slug <slug>
+// Usage: aidlc-worktree discard --slug <slug> [--repo <name>]
+//                               [--intent <dir>] [--space <name>]
 //
-// Idempotent: if neither directory nor branch exists, succeeds silently
+// --repo (P7): the sibling repo the worktree was forked in — same resolution as
+// `create`. Idempotent: if neither directory nor branch exists, succeeds silently
 // without re-emitting audit.
 function handleDiscard(args: string[]): void {
   const flags = parseFlags(args);
   const slug = validateSlug(flags.slug);
   const pd = resolveProjectDir(projectDir);
-  assertNotSiblingWorktree();
+  // P7: anchor every git op to the target sibling repo (or projectDir for legacy).
+  const repoCwd = resolveRepoCwd(pd, flags, slug);
+  assertNotSiblingWorktree(repoCwd);
 
   const wtPath = worktreePath(pd, slug);
   const branchName = `bolt-${slug}`;
@@ -474,7 +518,7 @@ function handleDiscard(args: string[]): void {
     "rev-parse",
     "--verify",
     `refs/heads/${branchName}`,
-  ]).ok;
+  ], repoCwd).ok;
 
   if (!dirExists && !branchExists) {
     console.log(
@@ -500,7 +544,7 @@ function handleDiscard(args: string[]): void {
   }
 
   if (dirExists) {
-    const rm = runGit(["worktree", "remove", "--force", wtPath]);
+    const rm = runGit(["worktree", "remove", "--force", wtPath], repoCwd);
     if (!rm.ok) {
       errorWithSlug(
         slug,
@@ -509,7 +553,7 @@ function handleDiscard(args: string[]): void {
     }
   }
   if (branchExists) {
-    const del = runGit(["branch", "-D", branchName]);
+    const del = runGit(["branch", "-D", branchName], repoCwd);
     if (!del.ok) {
       errorWithSlug(
         slug,
