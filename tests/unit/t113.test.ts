@@ -132,6 +132,15 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     expect(validateDirective(invokeSwarm()).valid).toBe(true);
   });
 
+  // M1: the optional `repo` field (single-recorded-repo case) — the engine
+  // threads the lone sibling repo to the conductor as `prepare --repo`. repo is
+  // optional, so a directive carrying it (well-formed string) must still validate.
+  test("invoke-swarm with optional repo -> VALID", () => {
+    const d = invokeSwarm();
+    d.repo = "repo-a";
+    expect(errs(d)).toBe("VALID");
+  });
+
   test("present-gate well-formed -> VALID", () => {
     expect(validateDirective(presentGate()).valid).toBe(true);
   });

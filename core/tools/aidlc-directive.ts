@@ -120,6 +120,15 @@ export interface DispatchSubagentDirective {
 export interface InvokeSwarmDirective {
   kind: "invoke-swarm";
   units: string[];
+  // repo — OPTIONAL. The sibling repo NAME this batch targets, present only when
+  // the engine can resolve it deterministically: the intent records exactly one
+  // repo (the lone sibling). Absent for a legacy/single-projectDir intent (no
+  // recorded repos — the conductor's `prepare` runs without --repo, today's
+  // behaviour) AND for a multi-repo intent (>1 recorded repos — the engine cannot
+  // autonomously disambiguate which sibling a batch targets; that is the
+  // conductor's knowledge call, so it supplies --repo from the intent's recorded
+  // set). When present, the conductor passes it straight through as `prepare --repo`.
+  repo?: string;
 }
 
 // present-gate — run the stage-protocol §13 learnings ritual, then render the
@@ -221,7 +230,7 @@ const RUN_STAGE_FIELDS = [
 // dispatch-subagent = run-stage fields + `worker`.
 const DISPATCH_SUBAGENT_FIELDS = [...RUN_STAGE_FIELDS, "worker"] as const;
 
-const INVOKE_SWARM_FIELDS = ["kind", "units"] as const;
+const INVOKE_SWARM_FIELDS = ["kind", "units", "repo"] as const;
 const PRESENT_GATE_FIELDS = ["kind", "stage", "phase", "memory_path"] as const;
 const ASK_FIELDS = ["kind", "question"] as const;
 const PRINT_FIELDS = ["kind", "message"] as const;
@@ -292,6 +301,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       break;
     case "invoke-swarm":
       checkStringArray(o, "units", kind, errors);
+      checkOptionalString(o, "repo", kind, errors);
       break;
     case "present-gate":
       checkString(o, "stage", kind, errors);
@@ -522,6 +532,12 @@ if (import.meta.main) {
     {
       kind: "invoke-swarm",
       units: ["auth", "billing", "notifications"],
+    },
+    // invoke-swarm carrying the optional repo (the single-recorded-repo case).
+    {
+      kind: "invoke-swarm",
+      units: ["auth", "billing"],
+      repo: "repo-a",
     },
     {
       kind: "present-gate",

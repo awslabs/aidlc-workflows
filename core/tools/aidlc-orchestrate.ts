@@ -86,6 +86,7 @@ import {
   errorMessage,
   firstInScopeStageOfPhase,
   getField,
+  intentRepos,
   LEGACY_FLAT_RELATIVE_PREFIX,
   listIntents,
   nextInScopeStage,
@@ -1310,7 +1311,24 @@ function tryEmitSwarm(
   if (!batches || batches.length === 0) return false;
   const firstBatch = batches[0];
   if (!Array.isArray(firstBatch) || firstBatch.length === 0) return false;
-  emit({ kind: "invoke-swarm", units: firstBatch });
+  // Thread the construction repo to the conductor when the engine can resolve it
+  // DETERMINISTICALLY (read-only — intentRepos never throws; it returns [] for a
+  // legacy/flat intent). NOT resolveConstructionRepo here: that THROWS on >1, and
+  // the engine must stay non-throwing on the multi-repo path.
+  //   - 0 repos (legacy / projectDir-is-the-repo): emit units UNCHANGED — no repo
+  //     field. `prepare` with no --repo is today's behaviour for this case.
+  //   - 1 repo: emit the lone sibling as `repo`; the conductor passes --repo.
+  //   - >1 repos: emit WITHOUT a repo field. The engine cannot autonomously decide
+  //     which sibling THIS batch targets — that is the conductor's knowledge call
+  //     (the three-concerns tenet). The SKILL.md prose tells it to supply --repo
+  //     from the intent's recorded set; `prepare` errors without it on a multi-repo
+  //     intent, surfacing the choice rather than guessing.
+  const repos = intentRepos(projectDir);
+  if (repos.length === 1) {
+    emit({ kind: "invoke-swarm", units: firstBatch, repo: repos[0] });
+  } else {
+    emit({ kind: "invoke-swarm", units: firstBatch });
+  }
   return true;
 }
 

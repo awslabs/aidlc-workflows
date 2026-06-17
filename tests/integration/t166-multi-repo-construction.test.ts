@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-worktree:create, subcommand:aidlc-worktree:merge, function:resolveConstructionRepo, function:repoDir, function:intentRepos
+// covers: subcommand:aidlc-worktree:create, subcommand:aidlc-worktree:merge, subcommand:aidlc-swarm:prepare, function:resolveConstructionRepo, function:repoDir, function:intentRepos
 //
 // Mechanism: cli (spawned dist tools) + real git. P7 — multi-repo construction:
 // `aidlc-worktree create/merge` thread `--repo <name>` so `git worktree add` and
@@ -33,6 +33,7 @@ import { AIDLC_SRC, cleanupTestProject, createTestProject } from "../harness/fix
 const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const WT_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
+const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -55,6 +56,12 @@ function runUtil(proj: string, ...args: string[]): RunResult {
 /** Spawn aidlc-worktree from the WORKSPACE root (the conductor's cwd — NOT a git repo). */
 function runWorktree(proj: string, ...args: string[]): RunResult {
   const r = spawnSync(BUN, [WT_TOOL, ...args, "--project-dir", proj], { encoding: "utf-8", cwd: proj });
+  return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}`, stdout: r.stdout ?? "" };
+}
+
+/** Spawn aidlc-swarm `prepare` from the WORKSPACE root (the conductor's cwd). */
+function runSwarm(proj: string, ...args: string[]): RunResult {
+  const r = spawnSync(BUN, [SWARM_TOOL, ...args, "--project-dir", proj], { encoding: "utf-8", cwd: proj });
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}`, stdout: r.stdout ?? "" };
 }
 
@@ -220,6 +227,53 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       // The bolt branch lives in the workspace-root repo.
       expect(git(proj, "rev-parse", "--verify", "refs/heads/bolt-legacy").status).toBe(0);
       expect(existsSync(worktreeDir(proj, "legacy"))).toBe(true);
+    });
+  });
+
+  // ===========================================================================
+  // M1 — the SWARM PREPARE path resolves the target sibling repo. `prepare` is
+  // the conductor-facing seam the engine's invoke-swarm directive feeds: it forks
+  // a worktree per unit via `aidlc-worktree create`, so the per-unit bolt branch
+  // is `bolt-<unit>` (verified: aidlc-swarm.ts:387 forwards `--slug <unit>` +
+  // `--repo <resolved>` to create). On a multi-repo intent, prepare WITHOUT --repo
+  // dead-ends (resolveConstructionRepo throws "spans 2 repos") — proving --repo is
+  // what resolves the dead-end M1 fixes the engine side of.
+  // ===========================================================================
+  describe("M1 multi-repo: swarm prepare --repo forks the batch inside the target sibling repo", () => {
+    const proj = freshWorkspace();
+    makeSiblingRepo(proj, "repo-a");
+    makeSiblingRepo(proj, "repo-b");
+    runUtil(proj, "intent-birth", "--scope", "feature", "--repos", "repo-a,repo-b");
+    const prepared = runSwarm(
+      proj, "prepare", "--batch", "1", "--units", "swarmunit", "--base", "main", "--repo", "repo-a",
+    );
+
+    test("prepare --repo repo-a exits 0 and forks the worktree", () => {
+      expect(prepared.status).toBe(0);
+      expect(existsSync(worktreeDir(proj, "swarmunit"))).toBe(true);
+    });
+    test("the bolt branch lives in repo-a's ref namespace, NOT repo-b's", () => {
+      // Only true if prepare resolved --repo and threaded it into create's cwd.
+      expect(hasBoltBranch(proj, "repo-a", "swarmunit")).toBe(true);
+      expect(hasBoltBranch(proj, "repo-b", "swarmunit")).toBe(false);
+    });
+  });
+
+  describe("M1 multi-repo: swarm prepare WITHOUT --repo dead-ends (the bug --repo fixes)", () => {
+    const proj = freshWorkspace();
+    makeSiblingRepo(proj, "repo-a");
+    makeSiblingRepo(proj, "repo-b");
+    runUtil(proj, "intent-birth", "--scope", "feature", "--repos", "repo-a,repo-b");
+    const prepared = runSwarm(proj, "prepare", "--batch", "1", "--units", "orphanunit", "--base", "main");
+
+    test("exits non-zero with a 'spans 2 repos' message", () => {
+      expect(prepared.status).not.toBe(0);
+      expect(prepared.out).toContain("spans 2 repos");
+    });
+    test("no worktree or branch leaked into either repo", () => {
+      expect(existsSync(worktreeDir(proj, "orphanunit"))).toBe(false);
+      expect(hasBoltBranch(proj, "repo-a", "orphanunit")).toBe(false);
+      expect(hasBoltBranch(proj, "repo-b", "orphanunit")).toBe(false);
     });
   });
 });
