@@ -1000,25 +1000,17 @@ Have one of our supported platforms/tools for Assisted AI Coding installed:
 
 **Commit to repository:**
 
-```text
-# These should be version controlled
-CLAUDE.md
-
-# For OpenHands: commit the keyword-triggered AI-DLC skill; gitignore .aidlc/
-.agents/skills/ai-dlc/
-
-# For OpenHands AGENTS.md fallback: commit AGENTS.md as a lightweight trigger
-# For OpenAI Codex: commit AGENTS.md containing the full core-workflow.md content
-AGENTS.md
-.amazonq/rules/
-.amazonq/aws-aidlc-rule-details/
-.kiro/steering/
-.kiro/aws-aidlc-rule-details/
-.cursor/rules/
-.clinerules/
-.github/copilot-instructions.md
-.aidlc-rule-details/
-```
+- `CLAUDE.md`
+- `.agents/skills/ai-dlc/` (OpenHands keyword-triggered AI-DLC skill)
+- `AGENTS.md` (OpenHands fallback lightweight trigger, or OpenAI Codex full `core-workflow.md` content)
+- `.amazonq/rules/`
+- `.amazonq/aws-aidlc-rule-details/`
+- `.kiro/steering/`
+- `.kiro/aws-aidlc-rule-details/`
+- `.cursor/rules/`
+- `.clinerules/`
+- `.github/copilot-instructions.md`
+- `.aidlc-rule-details/`
 
 **Optional - Add to `.gitignore` (if needed):**
 
