@@ -914,6 +914,26 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
     // completed migration (no aidlc-state.md under intents/ until this rename).
     renameSync(staging, leaf);
 
+    // (3a) RELOCATE the flat `audit.md` into the per-clone SHARD layout the
+    // readers glob. The blind copy in step 1 lands the flat `aidlc-docs/audit.md`
+    // FILE at `<leaf>/audit.md`, but auditShards()/readAllAuditShards() read the
+    // `<leaf>/audit/*.md` DIR (auditShardDir), and the flat-fallback fires ONLY
+    // when the record dir is absent — which it never is post-migration. Left as a
+    // top-level file, the pre-migration WORKFLOW_STARTED/STAGE/PHASE history would
+    // be on disk but INVISIBLE to runtime-graph compile, summary/replay, and every
+    // hook. Move it INTO the shard set as `<leaf>/audit/<host>-<clone>.md` so it
+    // joins the shards the readers already merge-sort (honours decision #1: a
+    // per-clone shard, NOT a single committed audit.md + merge=union). Guard the
+    // no-audit case (a flat tree with no audit.md) — skip silently. We move the
+    // COPY inside the leaf; the flat source aidlc-docs/audit.md is untouched, so
+    // the caller's gitRmFlatTree(movedFrom=flatRoot) is unaffected.
+    const migratedFlatAudit = join(leaf, "audit.md");
+    if (existsSync(migratedFlatAudit)) {
+      const shardDir = join(leaf, "audit");
+      mkdirSync(shardDir, { recursive: true });
+      renameSync(migratedFlatAudit, join(shardDir, auditShardName(projectDir)));
+    }
+
     // (4) Append to intents.json + set the active-intent cursor (workspace bucket).
     appendIntentToRegistry(
       projectDir,
