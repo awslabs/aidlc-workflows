@@ -120,16 +120,20 @@ describe("t86 stage-protocol §13 + MEMORY_EMPTY + SKILL.md gate wiring (migrate
   });
 
   // --- .sh test 3 ----------------------------------------------------------
-  test("§13 routes via two-surface learnings + sensors: frontmatter bind, applies_to fossil gone [.sh test 3]", () => {
+  test("§13 routes a learning as a practice into project.md/team.md + sensors: frontmatter bind, applies_to fossil gone [.sh test 3]", () => {
     const body = read(STAGE_PROTOCOL);
-    // v0.5.0 milestone 12 replaced the old applies_to routing model with the two
-    // learnings surfaces + the sensors:/matches: pull-authoring bind.
-    expect(body.includes("aidlc-project-learnings.md")).toBe(true);
-    expect(body.includes("aidlc-team-learnings.md")).toBe(true);
+    // P6 collapsed the two parallel `*-learnings.md` surfaces into the method
+    // files (a learning IS a practice, vision §6): a confirmed learning lands as
+    // a practice line under the routed heading in project.md (default) / team.md.
+    expect(body.includes("project.md")).toBe(true);
+    expect(body.includes("team.md")).toBe(true);
     expect(body.includes("sensors: frontmatter")).toBe(true);
     expect(body.includes("matches:")).toBe(true);
     // The applies_to routing fossil must be fully gone from the protocol.
     expect(body.includes("applies_to")).toBe(false);
+    // The parallel dated-log surface is gone — no `*-learnings.md` destination.
+    expect(body.includes("aidlc-project-learnings.md")).toBe(false);
+    expect(body.includes("aidlc-team-learnings.md")).toBe(false);
   });
 
   // --- .sh test 5 (declared before 4's CLI half for prose grouping) --------

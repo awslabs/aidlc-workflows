@@ -29,8 +29,8 @@
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's per-case mktemp -d rules dir + a fresh
 // mktemp -d project with aidlc-docs/, both rm -rf'd):
-//   - Each case writes its rules fixture (aidlc-org.md / aidlc-team.md /
-//     aidlc-project.md / aidlc-team-learnings.md) into a FRESH temp dir handed
+//   - Each case writes its rules fixture (the relocated method files org.md /
+//     team.md / project.md, neutral names) into a FRESH temp dir handed
 //     to the tool via AIDLC_RULES_DIR. Byte-for-byte the .sh heredocs.
 //   - The project dir is a FRESH temp dir with aidlc-docs/ (toPortablePath so
 //     audit.md the tool may append round-trips on Windows). doctor reads no
@@ -45,10 +45,10 @@
 // several are STRONGER than the original grep):
 //   - .sh case 1  assert_contains OUT "Rule drift: 1 team/project rule(s)
 //       overlap org policy (review for contradiction)"  -> test 1: stdout
-//       contains the same literal headline (N=1, team-learnings drift).
+//       contains the same literal headline (N=1, team.md drift).
 //   - .sh case 2  grep file + "Testing Posture" + the quoted org sentence
 //       -> test 2: STRONGER — asserts the SINGLE rendered drift line carries
-//       all three (file `aidlc-team-learnings.md`, `## Testing Posture`, and
+//       all three (file `team.md`, `## Testing Posture`, and
 //       the exact org sentence) co-located, not merely present somewhere in
 //       stdout.
 //   - .sh case 3  DRIFT_LINE prefixed `^✓` (advisory pass)  -> test 3: the
@@ -93,8 +93,8 @@ function mkTemp(tag: string): string {
 }
 
 /**
- * Build a rules fixture dir from the given filename->body map (the .sh
- * heredocs into aidlc-org.md / aidlc-team-learnings.md / etc.).
+ * Build a rules fixture dir from the given filename->body map (the relocated
+ * method files org.md / team.md / project.md, neutral names).
  */
 function rulesDir(files: Record<string, string>): string {
   const rd = mkTemp("rules");
@@ -140,14 +140,16 @@ function driftLine(out: string): string {
 
 describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-doctor-rule-drift.sh, plan 6)", () => {
   // ===========================================================================
-  // N=1 drift fixture: org ## Testing Posture + team-learnings ## Testing
-  // Posture with contradicting content. Drives cases 1, 2, 3.
+  // N=1 drift fixture: org ## Testing Posture + team ## Testing Posture with
+  // contradicting content. P6: a learning IS a practice (no `*-learnings.md`
+  // slot) — team.md is the team-scoped surface the drift walk reads. Drives
+  // cases 1, 2, 3.
   // ===========================================================================
   const DRIFT_RULES = {
     "org.md":
       "# Org\n\n## Testing Posture\n\nWe require 80% line coverage on every Bolt before merge.\n",
-    "team-learnings.md":
-      "# Team Learnings\n\n## Testing Posture\n\nThis team skips the coverage floor on spike branches.\n",
+    "team.md":
+      "# Team\n\n## Testing Posture\n\nThis team skips the coverage floor on spike branches.\n",
   };
 
   test("1: drift headline renders with N=1", () => {
@@ -163,7 +165,7 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
     // on the SAME rendered drift line, in the tool's `<file> ## <heading> ⇄
     // org "<sentence>"` detail format (aidlc-utility.ts:1273).
     const line = driftLine(r.out);
-    expect(line).toContain("team-learnings.md");
+    expect(line).toContain("team.md");
     expect(line).toContain("Testing Posture");
     expect(line).toContain(
       "We require 80% line coverage on every Bolt before merge.",

@@ -71,6 +71,17 @@ import {
   parseMemoryEntries,
   parseMemoryHeadings,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+
+// P6: a confirmed learning IS a practice (vision §6) — persist appends it
+// under the routed heading in the relocated method files {project,team}.md
+// (aidlc/spaces/<space>/memory/ via memoryDirFor), not a `*-learnings.md` log.
+function projectPractices(pd: string): string {
+  return join(memoryDirFor(pd), "project.md");
+}
+function teamPractices(pd: string): string {
+  return join(memoryDirFor(pd), "team.md");
+}
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(
@@ -439,14 +450,14 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     return p;
   }
 
-  // .sh 18 — learning (project scope) -> RULE_LEARNED + cid marker + file from
-  //          template with rolling-list heading (3 facts).
-  test("project learning -> cid marker, rolling-list heading, RULE_LEARNED audit row", () => {
+  // .sh 18 — learning (project scope) -> RULE_LEARNED + cid marker + practice
+  //          line under the routed heading (ensure-exists) (3 facts).
+  test("project learning -> cid marker, practice under routed heading, RULE_LEARNED audit row", () => {
     const pd = mkproj("p18");
     const sel = writeSel(
       pd,
       `{ "stage_slug": "user-stories", "selections": [
-  { "candidate_id": "c1", "type": "learning", "scope": "project", "heading": "Interpretation", "text": "Reused auth module; saved a rewrite", "source": "orchestrator" } ] }
+  { "candidate_id": "c1", "type": "learning", "scope": "project", "heading": "Corrections", "text": "Reused auth module; saved a rewrite", "source": "orchestrator" } ] }
 `,
     );
     const res = runCli([
@@ -459,23 +470,24 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
       pd,
     ]);
     expect(res.rc).toBe(0);
-    const plf = join(pd, ".claude", "rules", "aidlc-project-learnings.md");
+    const plf = projectPractices(pd);
     expect(readFile(plf)).toContain("cid:user-stories:c1");
-    expect(/^## Learnings/m.test(readFile(plf))).toBe(true);
+    // ensure-exists created the routed heading; the practice landed under it.
+    expect(/^## Corrections/m.test(readFile(plf))).toBe(true);
     expect(/Event.*: RULE_LEARNED/.test(readFile(join(pd, "aidlc-docs", "audit.md")))).toBe(true);
   });
 
-  // .sh 19 — learning (team scope) -> write to aidlc-team-learnings.md
-  test("team learning -> write to aidlc-team-learnings.md", () => {
+  // .sh 19 — learning (team scope) -> write a practice to team.md
+  test("team learning -> write a practice to team.md", () => {
     const pd = mkproj("p19");
     const sel = writeSel(
       pd,
       `{ "stage_slug": "user-stories", "selections": [
-  { "candidate_id": "c2", "type": "learning", "scope": "team", "heading": "Deviation", "text": "Picked TDD over BDD", "source": "orchestrator" } ] }
+  { "candidate_id": "c2", "type": "learning", "scope": "team", "heading": "Testing Posture", "text": "Picked TDD over BDD", "source": "orchestrator" } ] }
 `,
     );
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
-    expect(readFile(join(pd, ".claude", "rules", "aidlc-team-learnings.md"))).toContain(
+    expect(readFile(teamPractices(pd))).toContain(
       "cid:user-stories:c2",
     );
   });
@@ -534,7 +546,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     const sel = writeSel(
       pd,
       `{ "stage_slug": "user-stories", "selections": [
-  { "candidate_id": "free_text_1", "type": "learning", "scope": "project", "heading": "Interpretation", "text": "Surface unknowns earlier", "source": "user_addition" } ] }
+  { "candidate_id": "free_text_1", "type": "learning", "scope": "project", "heading": "Corrections", "text": "Surface unknowns earlier", "source": "user_addition" } ] }
 `,
     );
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
@@ -562,14 +574,14 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     const sel = writeSel(
       pd,
       `{ "stage_slug": "user-stories", "selections": [
-  { "candidate_id": "c1", "type": "learning", "scope": "project", "heading": "Tradeoff", "text": "kept once", "source": "orchestrator" } ] }
+  { "candidate_id": "c1", "type": "learning", "scope": "project", "heading": "Corrections", "text": "kept once", "source": "orchestrator" } ] }
 `,
     );
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
     const rows = grepCount(join(pd, "aidlc-docs", "audit.md"), /Event.*: RULE_LEARNED/);
     const lines = grepCount(
-      join(pd, ".claude", "rules", "aidlc-project-learnings.md"),
+      projectPractices(pd),
       "cid:user-stories:c1",
     );
     expect(`${rows}:${lines}`).toBe("1:1");
@@ -582,12 +594,12 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     const sel = writeSel(
       pd,
       `{ "stage_slug": "user-stories", "selections": [
-  { "candidate_id": "c1", "type": "learning", "scope": "project", "heading": "Deviation", "text": "recover me", "source": "orchestrator" } ] }
+  { "candidate_id": "c1", "type": "learning", "scope": "project", "heading": "Testing Posture", "text": "recover me", "source": "orchestrator" } ] }
 `,
     );
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
     // Delete the file line, KEEP the audit row (mirrors the .sh's grep -v ... mv).
-    const plf = join(pd, ".claude", "rules", "aidlc-project-learnings.md");
+    const plf = projectPractices(pd);
     const kept = readFile(plf)
       .split("\n")
       .filter((l) => !l.includes("cid:user-stories:c1"))
@@ -614,13 +626,13 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     const sel = writeSel(
       pd,
       `{ "stage_slug": "user-stories", "selections": [
-  { "candidate_id": "c1", "type": "learning", "scope": "project", "heading": "Interpretation", "text": "no double append", "source": "orchestrator" } ] }
+  { "candidate_id": "c1", "type": "learning", "scope": "project", "heading": "Corrections", "text": "no double append", "source": "orchestrator" } ] }
 `,
     );
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
     const lines = grepCount(
-      join(pd, ".claude", "rules", "aidlc-project-learnings.md"),
+      projectPractices(pd),
       "cid:user-stories:c1",
     );
     expect(lines).toBe(1);
@@ -645,12 +657,12 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     const sel = writeSel(
       pd,
       `{ "stage_slug": "user-stories", "selections": [
-  { "candidate_id": "c1", "type": "learning", "scope": "project", "heading": "Interpretation", "text": "should not write", "source": "orchestrator" } ] }
+  { "candidate_id": "c1", "type": "learning", "scope": "project", "heading": "Corrections", "text": "should not write", "source": "orchestrator" } ] }
 `,
     );
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
     const rows = grepCount(join(pd, "aidlc-docs", "audit.md"), /Event.*: RULE_LEARNED/);
-    const fileState = existsSync(join(pd, ".claude", "rules", "aidlc-project-learnings.md"))
+    const fileState = existsSync(projectPractices(pd))
       ? "file"
       : "none";
     expect(`${rows}:${fileState}`).toBe("0:none");

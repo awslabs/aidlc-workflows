@@ -30,12 +30,14 @@
 //                        (:228-236). Candidate carries {id "c<n>", source_heading,
 //                        ts, summary, context, default_scope:"project"} (:218-225);
 //                        Open-questions entries are parked, not candidates (:213-216).
-//     persist  (:399) — one withAuditLock body (decide-inside-lock). auditTestRun
-//                        (:352) skips ALL writes when the most-recent audit block
-//                        carries **Test-Run**: true. Writes dated lines under
-//                        "## Learnings" to .claude/rules/aidlc-{project,team}-learnings.md
-//                        (:451-494) keyed by a `cid:<slug>:<id>` marker (:395), emits
-//                        RULE_LEARNED (:475-486). Two-write sensor bind (:500-553):
+//     persist  — one withAuditLock body (decide-inside-lock). auditTestRun
+//                        skips ALL writes when the most-recent audit block
+//                        carries **Test-Run**: true. Appends a practice line under
+//                        the orchestrator-routed heading in the relocated
+//                        {project,team}.md (aidlc/spaces/<space>/memory/ via
+//                        memoryDirFor — a learning IS a practice, vision §6; the
+//                        heading is ensure-exists) keyed by a `cid:<slug>:<id>`
+//                        marker, emits RULE_LEARNED. Two-write sensor bind:
 //                        scaffolds .claude/sensors/aidlc-<id>.md + appends the id to the
 //                        origin stage's `sensors:` frontmatter, emits SENSOR_PROPOSED
 //                        with Destinations: JSON.stringify([origin_stage]) (:536-549).
@@ -83,6 +85,7 @@ import {
 import { join } from "node:path";
 import { AIDLC_SRC, createTestProject, FIXTURES_DIR } from "../harness/fixtures.ts";
 import { parseSensorManifest } from "../../dist/claude/.claude/tools/aidlc-sensor-schema.ts";
+import { memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 
 const BUN = process.execPath; // the bun running this test
 const TOOLS = join(AIDLC_SRC, "tools");
@@ -181,11 +184,15 @@ function countLines(file: string, needle: string): number {
     .filter((l) => l.includes(needle)).length;
 }
 
-function projectLearnings(pd: string): string {
-  return join(pd, ".claude", "rules", "aidlc-project-learnings.md");
+// A confirmed learning is a practice (vision §6): persist appends a practice
+// line into the relocated method file the resolver reads — {project,team}.md
+// under aidlc/spaces/<space>/memory/ (via memoryDirFor()) — not a parallel
+// `*-learnings.md` log.
+function projectPractices(pd: string): string {
+  return join(memoryDirFor(pd), "project.md");
 }
-function teamLearnings(pd: string): string {
-  return join(pd, ".claude", "rules", "aidlc-team-learnings.md");
+function teamPractices(pd: string): string {
+  return join(memoryDirFor(pd), "team.md");
 }
 
 const TIMEOUT = 30000;
@@ -205,7 +212,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     expect(j.parked_open_questions.length).toBe(1);
   }, TIMEOUT);
 
-  test("Case 1: project pick lands in aidlc-project-learnings.md [.sh 2]", () => {
+  test("Case 1: project pick lands as a practice in project.md [.sh 2]", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
     const sel = join(pd, "sel1.json");
@@ -216,7 +223,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
           candidate_id: "c1",
           type: "learning",
           scope: "project",
-          heading: "Interpretation",
+          heading: "Corrections",
           text: "Reused the existing auth module; saved a full rewrite",
           source: "orchestrator",
         },
@@ -224,17 +231,17 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
           candidate_id: "c2",
           type: "learning",
           scope: "team",
-          heading: "Deviation",
+          heading: "Testing Posture",
           text: "Used Given/When/Then for AC; team standardised",
           source: "orchestrator",
         },
       ],
     });
     expect(persist(pd, sel).status).toBe(0);
-    expect(readFileSync(projectLearnings(pd), "utf-8")).toContain("cid:user-stories:c1");
+    expect(readFileSync(projectPractices(pd), "utf-8")).toContain("cid:user-stories:c1");
   }, TIMEOUT);
 
-  test("Case 1: team-scoped pick lands in aidlc-team-learnings.md [.sh 3]", () => {
+  test("Case 1: team-scoped pick lands as a practice in team.md [.sh 3]", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
     const sel = join(pd, "sel1.json");
@@ -245,7 +252,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
           candidate_id: "c1",
           type: "learning",
           scope: "project",
-          heading: "Interpretation",
+          heading: "Corrections",
           text: "Reused the existing auth module; saved a full rewrite",
           source: "orchestrator",
         },
@@ -253,14 +260,14 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
           candidate_id: "c2",
           type: "learning",
           scope: "team",
-          heading: "Deviation",
+          heading: "Testing Posture",
           text: "Used Given/When/Then for AC; team standardised",
           source: "orchestrator",
         },
       ],
     });
     expect(persist(pd, sel).status).toBe(0);
-    expect(readFileSync(teamLearnings(pd), "utf-8")).toContain("cid:user-stories:c2");
+    expect(readFileSync(teamPractices(pd), "utf-8")).toContain("cid:user-stories:c2");
   }, TIMEOUT);
 
   test("Case 1: two RULE_LEARNED audit rows [.sh 4]", () => {
@@ -274,7 +281,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
           candidate_id: "c1",
           type: "learning",
           scope: "project",
-          heading: "Interpretation",
+          heading: "Corrections",
           text: "Reused the existing auth module; saved a full rewrite",
           source: "orchestrator",
         },
@@ -282,7 +289,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
           candidate_id: "c2",
           type: "learning",
           scope: "team",
-          heading: "Deviation",
+          heading: "Testing Posture",
           text: "Used Given/When/Then for AC; team standardised",
           source: "orchestrator",
         },
@@ -331,7 +338,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
           candidate_id: "c1",
           type: "learning",
           scope: "project",
-          heading: "Interpretation",
+          heading: "Corrections",
           text: "should not write",
           source: "orchestrator",
         },
@@ -339,7 +346,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     });
     expect(persist(pd, sel).status).toBe(0);
     // .sh: assert_file_not_exists project-learnings.md.
-    expect(existsSync(projectLearnings(pd))).toBe(false);
+    expect(existsSync(projectPractices(pd))).toBe(false);
     // STRONGER: zero RULE_LEARNED rows emitted either.
     expect(ruleLearnedRows(pd)).toBe(0);
   }, TIMEOUT);
@@ -451,7 +458,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     expect(persist(pd, sel).status).toBe(0);
     // The failure event (a write) MUST NOT fire: zero RULE_LEARNED rows.
     expect(ruleLearnedRows(pd)).toBe(0);
-    expect(existsSync(projectLearnings(pd))).toBe(false);
+    expect(existsSync(projectPractices(pd))).toBe(false);
   }, TIMEOUT);
 
   test("Case 3b: user-escalated entry writes through to the learnings file [.sh 11]", () => {
@@ -465,14 +472,14 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
           candidate_id: "c_escalated",
           type: "learning",
           scope: "project",
-          heading: "Deviation",
+          heading: "Testing Posture",
           text: "This project uses long-lived release branches despite the org trunk-based default",
           source: "user_addition",
         },
       ],
     });
     expect(persist(pd, sel).status).toBe(0);
-    expect(readFileSync(projectLearnings(pd), "utf-8")).toContain("cid:user-stories:c_escalated");
+    expect(readFileSync(projectPractices(pd), "utf-8")).toContain("cid:user-stories:c_escalated");
   }, TIMEOUT);
 
   // ===========================================================================
@@ -489,7 +496,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
           candidate_id: "c1",
           type: "learning",
           scope: "project",
-          heading: "Interpretation",
+          heading: "Corrections",
           text: "kept once",
           source: "orchestrator",
         },
@@ -498,7 +505,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     expect(persist(pd, sel).status).toBe(0);
     expect(persist(pd, sel).status).toBe(0);
     expect(ruleLearnedRows(pd)).toBe(1);
-    expect(countLines(projectLearnings(pd), "cid:user-stories:c1")).toBe(1);
+    expect(countLines(projectPractices(pd), "cid:user-stories:c1")).toBe(1);
   }, TIMEOUT);
 
   // ===========================================================================
@@ -517,7 +524,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
           candidate_id: "c1",
           type: "learning",
           scope: "project",
-          heading: "Tradeoff",
+          heading: "Corrections",
           text: "race-safe write",
           source: "orchestrator",
         },
@@ -535,7 +542,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     });
     await Promise.all([a.exited, b.exited]);
     expect(ruleLearnedRows(pd)).toBe(1);
-    expect(countLines(projectLearnings(pd), "cid:user-stories:c1")).toBe(1);
+    expect(countLines(projectPractices(pd), "cid:user-stories:c1")).toBe(1);
   }, TIMEOUT);
 
   // ===========================================================================
@@ -553,7 +560,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
           candidate_id: "c1",
           type: "learning",
           scope: "project",
-          heading: "Deviation",
+          heading: "Testing Posture",
           text: "recover me",
           source: "orchestrator",
         },
@@ -561,7 +568,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     });
     expect(persist(pd, sel).status).toBe(0);
     // Simulate crash-between-emit-and-write: strip the file line, keep the row.
-    const lf = projectLearnings(pd);
+    const lf = projectPractices(pd);
     const stripped = readFileSync(lf, "utf-8")
       .split("\n")
       .filter((l) => !l.includes("cid:user-stories:c1"))

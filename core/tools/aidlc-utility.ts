@@ -1444,11 +1444,12 @@ function handleDoctor(projectDir: string): void {
     });
   }
 
-  // Rule drift (advisory, always pass:true) — surface team/project
-  // (and team/project-learnings) rule files whose `##` headings overlap a
-  // POPULATED heading in the org layer (aidlc/spaces/default/memory/org.md),
-  // quoting the org sentence inline so the orchestrator-LLM can review for
-  // contradiction at observation time.
+  // Rule drift (advisory, always pass:true) — surface team/project rule files
+  // whose `##` headings overlap a POPULATED heading in the org layer
+  // (aidlc/spaces/default/memory/org.md), quoting the org sentence inline so
+  // the orchestrator-LLM can review for contradiction at observation time. A
+  // learning is a practice (vision §6) — it lands in team.md / project.md, so
+  // those two scopes are the whole team/project surface the walk reads.
   //
   // Three-concerns seam (T2): doctor is a deterministic tool — it detects
   // same-heading structural overlap (byte-reproducible), NOT semantic

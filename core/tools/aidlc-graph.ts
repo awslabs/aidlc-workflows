@@ -321,13 +321,13 @@ const FIELD_ORDER = [
 // Per-stage chain: org → team → project → phase. Pull authoring puts
 // the phase→stage relationship on the stage's existing `phase:`
 // declaration; the resolver attaches the matching aidlc-phase-<name>.md
-// file with no rule-side glob filter. The
-// `aidlc-{team,project}-learnings.md` slots in the filename regex are
-// reserved for the future memory-gate surface; today no learnings files
-// ship.
+// file with no rule-side glob filter. A confirmed learning is a PRACTICE
+// (vision §6): the §13 gate appends it under a topical heading in
+// team.md / project.md directly — there is no parallel `*-learnings.md`
+// surface and no fractional override tier.
 
 export interface RuleFile {
-  path: string;          // ".claude/rules/aidlc-org.md"
+  path: string;          // "aidlc/spaces/default/memory/org.md"
   scope: "org" | "team" | "project" | "phase";
   phase?: string;        // populated only when scope === "phase"
   frontmatter: RuleFrontmatter;
@@ -341,28 +341,23 @@ export interface RuleFile {
 // Filename anchors for the relocated method tree (aidlc/memory/). The layered
 // practice files are top-level (org/team/project, plain neutral names — no
 // `aidlc-` prefix now that they live under the neutral aidlc/ roof); the
-// phase-scoped files are nested under phases/<phase>.md. `team-learnings` and
-// `project-learnings` slots are the future memory-gate surface (two-surface
-// separation locked 2026-05-24) — the regex permits them so the future
-// memory-gate work doesn't have to widen the schema; none ship today. Anything
+// phase-scoped files are nested under phases/<phase>.md. A confirmed learning
+// is a practice (vision §6) — it lands in team.md / project.md directly, so
+// there is no `*-learnings.md` slot and no fractional override tier. Anything
 // not matching is silently ignored — including user-extension overlays like
 // `team-overrides.md`, per 08-rule-system.md.
-const RULE_FILE_REGEX =
-  /^(org|team|team-learnings|project|project-learnings)\.md$/;
+const RULE_FILE_REGEX = /^(org|team|project)\.md$/;
 // Phase rule files live in phases/<phase>.md (the flat aidlc-phase-<phase>.md
 // scheme moved under a nested phases/ dir in the aidlc/memory/ relocation).
 const PHASE_RULES_SUBDIR = "phases";
 const PHASE_FILE_REGEX = /^([a-z][a-z0-9-]*)\.md$/;
 
-// Scope-priority for the deterministic sort. learnings sit immediately
-// after their parent tier's substantive file so the resolved chain reads
-// org → team → team-learnings → project → project-learnings → phase.
+// Scope-priority for the deterministic sort — the resolved chain reads
+// org → team → project → phase (a clean four-layer additive chain).
 const SCOPE_PRIORITY: Record<string, number> = {
   "org": 0,
   "team": 1,
-  "team-learnings": 1.5,
   "project": 2,
-  "project-learnings": 2.5,
   "phase": 3,
 };
 
@@ -447,18 +442,15 @@ export function loadRules(): RuleFile[] {
   };
   const candidates: Candidate[] = [];
 
-  // 1. Top-level layered files: org/team/project (+ reserved -learnings slots).
+  // 1. Top-level layered files: org/team/project (the neutral practice files).
   for (const f of readdirSync(dir)) {
     const m = f.match(RULE_FILE_REGEX);
     if (!m) continue;
     const scopeKey = m[1];
-    let scope: RuleFile["scope"];
-    if (scopeKey === "team-learnings") scope = "team";
-    else if (scopeKey === "project-learnings") scope = "project";
-    else if (scopeKey === "org" || scopeKey === "team" || scopeKey === "project")
-      scope = scopeKey;
-    else continue; // unreachable given the regex, but keep the guard explicit
-    candidates.push({ rel: f, filePath: join(dir, f), scope });
+    if (scopeKey !== "org" && scopeKey !== "team" && scopeKey !== "project") {
+      continue; // unreachable given the regex, but keep the guard explicit
+    }
+    candidates.push({ rel: f, filePath: join(dir, f), scope: scopeKey });
   }
 
   // 2. Phase-scoped files nested under phases/<phase>.md.
@@ -496,17 +488,7 @@ export function loadRules(): RuleFile[] {
   // filesystem-order; non-portable. The sort is the determinism contract
   // that t66's canonical-emitter pin and `--check` rely on.
   matched.sort((a, b) => {
-    const aKey = a.scope === "team" && a.path.includes("team-learnings")
-      ? "team-learnings"
-      : a.scope === "project" && a.path.includes("project-learnings")
-        ? "project-learnings"
-        : a.scope;
-    const bKey = b.scope === "team" && b.path.includes("team-learnings")
-      ? "team-learnings"
-      : b.scope === "project" && b.path.includes("project-learnings")
-        ? "project-learnings"
-        : b.scope;
-    const pri = SCOPE_PRIORITY[aKey] - SCOPE_PRIORITY[bKey];
+    const pri = SCOPE_PRIORITY[a.scope] - SCOPE_PRIORITY[b.scope];
     if (pri !== 0) return pri;
     return a.path.localeCompare(b.path);
   });

@@ -22,8 +22,8 @@
 **Event**: RULE_LEARNED
 **Stage**: user-stories
 **Candidate-ID**: c1
-**Destination**: .claude/rules/aidlc-project-learnings.md
-**Heading**: Deviation
+**Destination**: aidlc/spaces/default/memory/project.md
+**Heading**: ## Testing Posture
 **Source**: orchestrator
 
 ---
@@ -33,8 +33,8 @@
 **Event**: RULE_LEARNED
 **Stage**: user-stories
 **Candidate-ID**: c3
-**Destination**: .claude/rules/aidlc-project-learnings.md
-**Heading**: Tradeoff
+**Destination**: aidlc/spaces/default/memory/project.md
+**Heading**: ## Corrections
 **Source**: orchestrator
 
 ---
@@ -44,8 +44,8 @@
 **Event**: RULE_LEARNED
 **Stage**: user-stories
 **Candidate-ID**: free_text_1
-**Destination**: .claude/rules/aidlc-project-learnings.md
-**Heading**: Interpretation
+**Destination**: aidlc/spaces/default/memory/project.md
+**Heading**: ## Corrections
 **Source**: user_addition
 
 ---

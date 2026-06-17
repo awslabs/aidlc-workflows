@@ -43,13 +43,13 @@
 //   - case 5   .headings populated from AIDLC_RULES_DIR fixture  -> test 5
 //       (proves the read seam: doctor/loadRules reads fixture bodies, not
 //        the shipped rules).
-//   - case 6   org+team-learnings ## Testing Posture overlap -> 1 candidate
+//   - case 6   org+team ## Testing Posture overlap -> 1 candidate
 //       -> test 6 (3 grep conditions preserved as 3 expect().toContain;
 //        STRONGER: also asserts the exact "1 team/project rule(s)" count
 //        string, byte-for-byte, not just substrings).
 //   - case 7   empty org headings -> no overlap (N=0)            -> test 7.
 //   - case 8   team heading absent from org -> no overlap        -> test 8.
-//   - case 9   project-learnings.md participates in drift walk   -> test 9.
+//   - case 9   project.md participates in drift walk             -> test 9.
 //   - case 10  aidlc-required-sections resolves -> 1/1 paired    -> test 10.
 //   - case 11  aidlc-ghost unpaired -> 0/1 + unpaired detail     -> test 11
 //       (3 grep conditions preserved).
@@ -285,20 +285,22 @@ describe("t103 loader primitives (migrated from t103-doctor-rule-drift-coverage.
 // ============================================================
 
 describe("t103 doctor rule-drift (migrated from t103-doctor-rule-drift-coverage.sh, plan 19)", () => {
-  test("case 6: org+team-learnings ## Testing Posture overlap -> 1 candidate", () => {
+  test("case 6: org+team ## Testing Posture overlap -> 1 candidate", () => {
     const rd = rulesDir({
       "org.md":
         "# Org\n\n## Testing Posture\n\nWe require 80% line coverage on every Bolt.\n",
-      "team-learnings.md":
-        "# Team Learnings\n\n## Testing Posture\n\nThis team skips the coverage floor on spike branches.\n",
+      // P6: a learning IS a practice — it lands in team.md (no `*-learnings.md`
+      // slot). team.md is the team-scoped surface the drift walk compares vs org.
+      "team.md":
+        "# Team\n\n## Testing Posture\n\nThis team skips the coverage floor on spike branches.\n",
     });
     const out = runDoctor(rd).out;
     // .sh grepped three substrings; STRONGER — the exact "1 ... overlap" count
     // string is asserted whole, plus the participating file + heading.
     expect(out).toContain("Rule drift: 1 team/project rule(s) overlap org policy");
-    // Display path is now the harness-neutral aidlc/spaces/default/memory/<file>
+    // Display path is the harness-neutral aidlc/spaces/default/memory/<file>
     // (P5 relocation); assert the neutral basename.
-    expect(out).toContain("team-learnings.md");
+    expect(out).toContain("team.md");
     expect(out).toContain("Testing Posture");
   });
 
@@ -327,16 +329,18 @@ describe("t103 doctor rule-drift (migrated from t103-doctor-rule-drift-coverage.
     );
   });
 
-  test("case 9: project-learnings.md participates in the drift walk", () => {
+  test("case 9: project.md participates in the drift walk", () => {
     const rd = rulesDir({
       "org.md": "# Org\n\n## Deployment\n\nWe deploy on merge to staging.\n",
-      "project-learnings.md":
-        "# Project Learnings\n\n## Deployment\n\nThis project deploys only on a manual tag.\n",
+      // P6: a learning IS a practice — it lands in project.md (no
+      // `*-learnings.md` slot). project.md participates in the drift walk.
+      "project.md":
+        "# Project\n\n## Deployment\n\nThis project deploys only on a manual tag.\n",
     });
     const out = runDoctor(rd).out;
     expect(out).toContain("Rule drift: 1 team/project rule(s) overlap org policy");
-    // Display path is now aidlc/spaces/default/memory/<file> (P5 relocation).
-    expect(out).toContain("project-learnings.md");
+    // Display path is aidlc/spaces/default/memory/<file> (P5 relocation).
+    expect(out).toContain("project.md");
   });
 });
 
@@ -412,8 +416,10 @@ describe("t103 doctor determinism", () => {
     const files = {
       "org.md":
         "---\npairing: aidlc-required-sections\n---\n\n# Org\n\n## Testing Posture\n\nWe require 80% line coverage.\n",
-      "team-learnings.md":
-        "# Team Learnings\n\n## Testing Posture\n\nThis team waives the floor on spikes.\n",
+      // P6: a learning IS a practice (no `*-learnings.md` slot) — team.md is the
+      // team-scoped surface the drift walk reads.
+      "team.md":
+        "# Team\n\n## Testing Posture\n\nThis team waives the floor on spikes.\n",
     };
     const rdA = rulesDir(files);
     const rdB = rulesDir(files);

@@ -44,9 +44,8 @@ import {
   worktreePath,
   worktreeStateFilePath,
   writeStateFile,
-  harnessDir,
-  rulesSubdir,
 } from "./aidlc-lib.js";
+import { memoryDirFor } from "./aidlc-graph.ts";
 
 // All valid checkbox states (lib.ts adds [?] awaiting-approval and [R] revising)
 const VALID_CHECKBOX_STATES: CheckboxState[] = [
@@ -1296,29 +1295,30 @@ function handlePracticesEvent(args: string[]): void {
 // practices-promote --team-practices <path> --discovered-rules <path>
 //                   [--affirming-user <name>] [--target-dir <path>]
 //
-// Cross-row promotion of affirmed practices into team-authored harness config.
-// Reads two draft files from aidlc-docs/inception/practices-discovery/ and
-// applies them deterministically to the live .claude/ files:
+// Cross-row promotion of affirmed practices into the team-authored method
+// files. Reads two draft files from aidlc-docs/inception/practices-discovery/
+// and applies them deterministically to the relocated method files the
+// resolver reads (aidlc/spaces/<space>/memory/, neutral names):
 //
-//   .claude/rules/aidlc-team.md ........... replaceSection × 5 (Way of Working,
-//                                            Walking Skeleton, Testing Posture,
-//                                            Deployment, Code Style)
-//   .claude/rules/aidlc-project.md ........ appendUnderHeading × 2 (Mandated,
-//                                            Forbidden), each rule stamped
-//                                            with `(affirmed YYYY-MM-DD)`
+//   memory/team.md ........... replaceSection × 5 (Way of Working,
+//                              Walking Skeleton, Testing Posture,
+//                              Deployment, Code Style)
+//   memory/project.md ........ appendUnderHeading × 2 (Mandated,
+//                              Forbidden), each rule stamped
+//                              with `(affirmed YYYY-MM-DD)`
 //
 // Atomicity:
 //   1. Read both drafts (fail closed before any write).
 //   2. Read both targets (fail closed if either missing).
 //   3. Build new contents in memory.
-//   4. Write aidlc-project.md first (smaller, more constrained).
-//   5. Write aidlc-team.md second.
+//   4. Write project.md first (smaller, more constrained).
+//   5. Write team.md second.
 //   6. On success → emit PRACTICES_AFFIRMED.
 //   7. On any failure → emit PRACTICES_OVERRIDE with the failure reason
 //      and rethrow so the caller halts the gate.
 //
-// Why this exists: when stage prose tells the LLM to write to
-// .claude/rules/, the LLM (running non-interactively under `claude -p`)
+// Why this exists: when stage prose tells the LLM to write to the method
+// files directly, the LLM (running non-interactively under `claude -p`)
 // hallucinates a sensitive-file permission policy that does not actually
 // exist. The orchestrator then halts at "awaiting-approval" and emits
 // PRACTICES_OVERRIDE without ever attempting the write — the workflow
@@ -1341,11 +1341,16 @@ function handlePracticesPromote(args: string[]): void {
   }
 
   const pd = resolveProjectDir(projectDir);
-  // target-dir lets tests point the writes at a fixture .claude/ tree.
-  // Defaults to the project's .claude/ directory.
-  const targetRoot = flags["target-dir"] ?? join(pd, harnessDir());
-  const teamMdPath = join(targetRoot, rulesSubdir(), "aidlc-team.md");
-  const guardrailsPath = join(targetRoot, rulesSubdir(), "aidlc-project.md");
+  // The affirmed practices land in the relocated method files the resolver
+  // reads — team.md / project.md under aidlc/spaces/<space>/memory/ (neutral
+  // names, no `aidlc-` prefix). memoryDirFor() derives the path from the SAME
+  // MEMORY_SEGMENTS loadRules() reads from, so this writer and the reader can
+  // never drift (P5 relocated the reader; P6 closes the seam here). --target-dir
+  // lets tests point the writes at a fixture memory dir; it defaults to the
+  // project's resolved memory dir.
+  const targetRoot = flags["target-dir"] ?? memoryDirFor(pd);
+  const teamMdPath = join(targetRoot, "team.md");
+  const guardrailsPath = join(targetRoot, "project.md");
 
   const today = isoTimestamp().slice(0, 10);
   const sectionsWritten: string[] = [];
@@ -1383,9 +1388,9 @@ function handlePracticesPromote(args: string[]): void {
   }
 
   // Step 2: Read both target files. Fail closed if either is missing.
-  if (!existsSync(teamMdPath)) fail(`aidlc-team.md not found at ${teamMdPath}`);
+  if (!existsSync(teamMdPath)) fail(`team.md not found at ${teamMdPath}`);
   if (!existsSync(guardrailsPath))
-    fail(`aidlc-project.md not found at ${guardrailsPath}`);
+    fail(`project.md not found at ${guardrailsPath}`);
 
   let teamMd: string;
   let guardrailsMd: string;
@@ -1397,8 +1402,8 @@ function handlePracticesPromote(args: string[]): void {
     return;
   }
 
-  // Step 3a: Build new aidlc-team.md by section-replacing each of the five
-  // sections. aidlc-team.md uses Title Case headings; the draft mirrors that
+  // Step 3a: Build new team.md by section-replacing each of the five
+  // sections. team.md uses Title Case headings; the draft mirrors that
   // shape.
   const TEAM_SECTIONS = [
     "## Way of Working",
@@ -1420,7 +1425,7 @@ function handlePracticesPromote(args: string[]): void {
       sectionsWritten.push(heading.slice(3));
     } catch (e) {
       fail(
-        `replaceSection failed on aidlc-team.md for "${heading}": ${errorMessage(e)}`
+        `replaceSection failed on team.md for "${heading}": ${errorMessage(e)}`
       );
       return;
     }
@@ -1476,8 +1481,8 @@ function handlePracticesPromote(args: string[]): void {
     }
   }
 
-  // Step 4 & 5: Write aidlc-project.md first, then aidlc-team.md.
-  // If the project write fails, aidlc-team.md is untouched. If the team write
+  // Step 4 & 5: Write project.md first, then team.md.
+  // If the project write fails, team.md is untouched. If the team write
   // fails after project succeeded, we surface that as PRACTICES_OVERRIDE —
   // the user re-enters the gate; the duplicate-rule case is mitigated because
   // re-running parses the same rule list and appendUnderHeading is idempotent
@@ -1486,14 +1491,14 @@ function handlePracticesPromote(args: string[]): void {
   try {
     writeFileSync(guardrailsPath, newGuardrailsMd, "utf-8");
   } catch (e) {
-    fail(`writing aidlc-project.md failed: ${errorMessage(e)}`);
+    fail(`writing project.md failed: ${errorMessage(e)}`);
     return;
   }
   try {
     writeFileSync(teamMdPath, newTeamMd, "utf-8");
   } catch (e) {
     fail(
-      `writing aidlc-team.md failed AFTER aidlc-project.md was written: ${errorMessage(e)}`
+      `writing team.md failed AFTER project.md was written: ${errorMessage(e)}`
     );
     return;
   }
