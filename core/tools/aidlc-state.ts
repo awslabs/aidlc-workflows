@@ -160,6 +160,21 @@ function parseFlags(args: string[]): Record<string, string> {
 
 let projectDir: string | undefined;
 
+// Active per-intent lock context for the in-transaction error path. handleFork/
+// handleMerge resolve their intent and hold a PER-INTENT audit lock across the
+// whole transaction (withAuditLock(pd, fn, resolvedIntent, space)). When an
+// errorWithSlug fires mid-transaction it routes through error() -> emitError,
+// whose holdsAuditLock probe must key the SAME per-intent bucket the caller
+// holds — a bare holdsAuditLock(pd) keys the __workspace__ sentinel, returns
+// false mid per-intent transaction, and takes emitError's 5s blocking-acquire
+// branch writing ERROR_LOGGED to the wrong bucket. These mirror the resolved
+// intent+space into error() so emitError keys lock==write. Set immediately
+// before the lock, cleared after; on the happy path no error fires and they are
+// harmless. All OTHER handlers lock the sentinel bucket and leave these unset
+// (undefined), so error() keys the sentinel for them — correct.
+let lockIntent: string | undefined;
+let lockSpace: string | undefined;
+
 function main(): void {
   const args = process.argv.slice(2);
 
@@ -1674,7 +1689,24 @@ function handleFork(args: string[]): void {
   // side so fork and merge pin to the same intent regardless of the worktree's
   // own cursor.
   const recordPrefix = relativeRecordDir(pd, intent, space);
-  const wtRecord = activeIntent(pd, space, intent) ?? undefined;
+  // Resolve the intent ONCE, here, BEFORE acquiring the lock. activeIntent maps
+  // an omitted (--intent unset) selector to the active cursor / lone record, so
+  // `resolvedIntent` is the SAME value the per-intent path helpers (readStateFile
+  // / writeStateFile / auditFilePath) resolve internally. Threading the RAW
+  // flags.intent to the lock instead would key the __workspace__ sentinel on the
+  // omitted path while the writes target the resolved per-intent shard — LOCK !=
+  // WRITE, the exact lost-update race the lock exists to prevent (a concurrent
+  // explicit-intent op on the same shard would hold a DIFFERENT lock). So we use
+  // `resolvedIntent` for the wrapping lock AND every main-side read/write/audit
+  // below. `wtRecord` is the same value (kept as a distinct name for the
+  // worktree-mirror write, whose null->flat semantics read clearer there).
+  const resolvedIntent = activeIntent(pd, space, intent) ?? undefined;
+  const wtRecord = resolvedIntent;
+  // Publish the resolved lock context so any errorWithSlug fired inside the
+  // per-intent withAuditLock below routes ERROR_LOGGED to the bucket we hold
+  // (see error()/emitError). Cleared after the transaction.
+  lockIntent = resolvedIntent;
+  lockSpace = space;
 
   // target-dir lets tests point fork at a fixture worktree-parent. Defaults
   // to the project's .aidlc/worktrees/bolt-<slug>/ via worktreePath().
@@ -1705,13 +1737,15 @@ function handleFork(args: string[]): void {
   let srcSha: string;
   try {
     // Lock the SAME per-intent bucket the inner state/audit writes target
-    // (intent+space threaded), NOT the __workspace__ sentinel — without this the
-    // transaction serializes every intent's fork on one workspace lock (the P3
-    // shared-lock cliff) and intent-birth/migration would block unrelated forks.
+    // (resolvedIntent+space threaded), NOT the __workspace__ sentinel — without
+    // this the transaction serializes every intent's fork on one workspace lock
+    // (the P3 shared-lock cliff) and intent-birth/migration would block unrelated
+    // forks. resolvedIntent (not raw flags.intent) makes LOCK == WRITE even when
+    // --intent is omitted (both resolve to the active record).
     srcSha = withAuditLock(pd, () => {
     let mainContent: string;
     try {
-      mainContent = readStateFile(pd, intent, space);
+      mainContent = readStateFile(pd, resolvedIntent, space);
     } catch (e) {
       errorWithSlug(slug, `failed to read main state: ${errorMessage(e)}`);
       return ""; // unreachable
@@ -1745,14 +1779,14 @@ function handleFork(args: string[]): void {
         "Worktree path": wtPath,
         "Source state hash": sha,
         "Target state hash": sha, // fork = byte-identical copy
-      }, pd, intent, space);
+      }, pd, resolvedIntent, space);
     } catch (e) {
       errorWithSlug(slug, `audit emission failed: ${errorMessage(e)}`);
     }
 
     // Write main state with updated Bolt Refs.
     try {
-      writeStateFile(pd, mainNow, intent, space);
+      writeStateFile(pd, mainNow, resolvedIntent, space);
     } catch (e) {
       errorWithSlug(slug, `failed to write main state with updated Bolt Refs: ${errorMessage(e)}`);
     }
@@ -1778,13 +1812,17 @@ function handleFork(args: string[]): void {
     }
 
     return sha;
-    }, intent, space);
+    }, resolvedIntent, space);
   } catch (e) {
     // Slug-tag any error from the locked block (most commonly: lock-acquire
     // timeout when a peer tool holds the lock across the retry budget).
     errorWithSlug(slug, errorMessage(e));
     return; // unreachable
   }
+  // Transaction done — clear the lock context so any subsequent sentinel-locked
+  // emit in this process keys the sentinel, not a stale per-intent bucket.
+  lockIntent = undefined;
+  lockSpace = undefined;
 
   process.stdout.write(
     `${JSON.stringify({
@@ -1813,7 +1851,18 @@ function handleMerge(args: string[]): void {
   const intent = flags.intent;
   const space = flags.space;
   const recordPrefix = relativeRecordDir(pd, intent, space);
-  const wtRecord = activeIntent(pd, space, intent) ?? undefined;
+  // Resolve the intent ONCE before locking (same rationale as handleFork):
+  // activeIntent maps an omitted selector to the active record, so resolvedIntent
+  // == the value the per-intent path helpers resolve internally. Threading it to
+  // the wrapping lock AND every main-side read/write/audit makes LOCK == WRITE
+  // even when --intent is omitted; raw flags.intent would key the sentinel while
+  // the writes hit the per-intent shard (lost-update race). wtRecord is the same
+  // value, named for the worktree-mirror read where null->flat reads clearer.
+  const resolvedIntent = activeIntent(pd, space, intent) ?? undefined;
+  const wtRecord = resolvedIntent;
+  // Publish the lock context for the in-transaction error path (see error()).
+  lockIntent = resolvedIntent;
+  lockSpace = space;
 
   const wtPath = flags["target-dir"] ?? worktreePath(pd, slug);
   if (!existsSync(wtPath)) {
@@ -1840,12 +1889,13 @@ function handleMerge(args: string[]): void {
   // alphabetical tiebreak, and (c) one merge clobbering another's writes.
   let result: { postMergeSha: string; conflictResolutionField: string };
   try {
-    // Lock the per-intent bucket (intent+space threaded) the inner writes
-    // target — same fix as handleFork: the __workspace__ sentinel would
+    // Lock the per-intent bucket (resolvedIntent+space threaded) the inner
+    // writes target — same fix as handleFork: the __workspace__ sentinel would
     // serialize all intents' merges and let intent-birth block an unrelated
-    // merge (P3 shared-lock cliff).
+    // merge (P3 shared-lock cliff). resolvedIntent (not raw flags.intent) makes
+    // LOCK == WRITE on the omitted-intent path.
     result = withAuditLock(pd, () => {
-    const mainContent = readStateFile(pd, intent, space);
+    const mainContent = readStateFile(pd, resolvedIntent, space);
 
     // Idempotency: if slug is not in main's Bolt Refs, this is a re-run after
     // a prior successful merge (or a never-forked slug). Either way, no work
@@ -1908,21 +1958,24 @@ function handleMerge(args: string[]): void {
         "Source state hash": wtSha,
         "Target state hash": postMergeSha,
         "Conflict resolution": conflictResolutionField,
-      }, pd, intent, space);
+      }, pd, resolvedIntent, space);
     } catch (e) {
       errorWithSlug(slug, `audit emission failed: ${errorMessage(e)}`);
     }
 
-    writeStateFile(pd, merged, intent, space);
+    writeStateFile(pd, merged, resolvedIntent, space);
 
     return { postMergeSha, conflictResolutionField };
-    }, intent, space);
+    }, resolvedIntent, space);
   } catch (e) {
     // Slug-tag any error from the locked block (most commonly: lock-acquire
     // timeout when a peer tool holds the lock across the retry budget).
     errorWithSlug(slug, errorMessage(e));
     return; // unreachable
   }
+  // Transaction done — clear the lock context (see handleFork).
+  lockIntent = undefined;
+  lockSpace = undefined;
 
   process.stdout.write(
     `${JSON.stringify({
@@ -1943,5 +1996,10 @@ function error(msg: string): never {
   // fixtures and explicit overrides propagate to ERROR_LOGGED.
   const pd = resolveProjectDir(projectDir);
   const command = `aidlc-state ${process.argv.slice(2).join(" ")}`.trim();
-  emitError(pd, "aidlc-state", command, msg);
+  // Thread the active per-intent lock context (set by fork/merge before their
+  // per-intent withAuditLock) so emitError's holdsAuditLock probe keys the SAME
+  // bucket the caller holds — lock==write on the in-transaction error path.
+  // Unset (undefined) for every sentinel-locked handler -> emitError keys the
+  // sentinel, matching their lock.
+  emitError(pd, "aidlc-state", command, msg, lockIntent, lockSpace);
 }

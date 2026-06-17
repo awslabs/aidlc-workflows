@@ -18,6 +18,7 @@ import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   emitError,
   errorMessage,
+  findAllEvents,
   getField,
   readAllAuditShards,
   resolveProjectDir,
@@ -740,26 +741,21 @@ function findLatestEvent(
   event: string,
   slug: string
 ): AuditMatch | null {
-  // Audit blocks are separated by lines containing only `---`. Each block has
-  // `**Timestamp**: <iso>`, `**Event**: <type>`, `**Bolt slug**: <slug>`.
-  // Walk the file end-to-start so the first match wins.
-  const blocks = audit.split(/\n---\n/);
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    const b = blocks[i];
-    const evMatch = b.match(/^\*\*Event\*\*:\s*(\S+)/m);
-    const slugMatch = b.match(/^\*\*Bolt slug\*\*:\s*(\S+)/m);
-    const tsMatch = b.match(/^\*\*Timestamp\*\*:\s*(\S+)/m);
-    if (
-      evMatch &&
-      slugMatch &&
-      tsMatch &&
-      evMatch[1] === event &&
-      slugMatch[1] === slug
-    ) {
-      return { timestamp: tsMatch[1], block: b };
-    }
-  }
-  return null;
+  // Select the CHRONOLOGICALLY-newest matching block (max **Timestamp**), NOT
+  // the last block by buffer position. The audit string is a readAllAuditShards
+  // glob-merge that concatenates per-clone shards in FILENAME (lexical) order,
+  // so it is NOT time-ordered across shards — a buffer-position "last match
+  // wins" walk could return an OLDER block from a lexically-later shard (e.g.
+  // `worktree verify --max-age-seconds` reporting a fresh worktree STALE, or
+  // `worktree info` returning a stale path/branch). Delegate to findAllEvents,
+  // which CRLF-normalizes before splitting and sorts ascending by ISO-8601
+  // timestamp with a buffer-position tiebreak — the SAME ordering fix the other
+  // readers (findAllEvents / buildWorkflowHeader / hasStageAuditEvent) already
+  // use — then take the last (newest) match. Returns null on no match.
+  const matches = findAllEvents(audit, event, slug);
+  if (matches.length === 0) return null;
+  const newest = matches[matches.length - 1];
+  return { timestamp: newest.timestamp, block: newest.block };
 }
 
 // --- CLI entry point ---

@@ -31,12 +31,12 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 54,
+      "function": 55,
       "audit": 27,
       "scope": 9,
       "stage": 8,
       "hook": 10,
-      "subcommand": 63,
+      "subcommand": 64,
       "render-surface": 7
     }
   },
@@ -720,6 +720,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t163-reaper-steal-race.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/integration/t33-hook-concurrency.test.ts",
           "mechanism": "cli"
         },
@@ -1105,8 +1109,13 @@
       "unitClass": "function",
       "unitId": "function:findAllEvents",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t164-shard-ordering-and-lock-bucket.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2064,6 +2073,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t145-state-lock-concurrency.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t163-reaper-steal-race.test.ts",
           "mechanism": "cli"
         },
         {
@@ -3537,6 +3550,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t164-shard-ordering-and-lock-bucket.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t76.test.ts",
           "mechanism": "cli"
         }
@@ -4068,6 +4085,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t164-shard-ordering-and-lock-bucket.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t72.test.ts",
           "mechanism": "cli"
         }
@@ -4097,8 +4118,13 @@
       "unitClass": "subcommand",
       "unitId": "aidlc-worktree verify",
       "minMechanism": "cli",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t164-shard-ordering-and-lock-bucket.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     }
   ]
 }

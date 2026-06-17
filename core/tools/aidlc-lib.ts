@@ -1481,48 +1481,79 @@ function lockDirMtimeMs(lockDir: string): number | null {
   }
 }
 
-// True iff the lock dir STILL carries the exact owner stamp `judged` to be
-// reclaimable (same pid + startedAtMs). A `null` judged-owner means the dir was
-// judged reclaimable as an OLD UNSTAMPED dir — it still matches only if it is
-// STILL unstamped AND still over the grace window. Any divergence (a different
-// pid, a fresher startedAtMs, a now-present stamp, or a freshly-recreated
-// unstamped dir under grace) means another waiter reaped + re-acquired in the
-// window between the staleness decision and the steal — in which case the dir is
-// a DIFFERENT, possibly-live lock and MUST NOT be robbed (the lost-update race:
-// reaper B reaps, re-mkdirs, and stamps a fresh live lock; reaper C's stale
-// decision must not then steal B's fresh lock).
-function stampUnchangedSince(lockDir: string, judged: LockOwner | null): boolean {
-  const now = readOwnerStamp(lockDir);
+// True iff `dir` carries the exact owner identity `judged` to be reclaimable
+// (same pid + startedAtMs). Called by reapStaleLock on the reaper-PRIVATE moved
+// dir AFTER the CAS rename, to confirm we grabbed the same stale lock we judged
+// — not a fresh live lock a competitor re-acquired in the decide→rename window.
+//
+// A `null` judged-owner means the dir was judged reclaimable as an OLD UNSTAMPED
+// dir. It still matches only if it is STILL unstamped AND still over the grace
+// window. renameSync preserves the inode's mtime, so a genuine old leak keeps
+// its over-grace mtime through the move, whereas a competitor's freshly-mkdir'd
+// re-acquire has a RECENT mtime (under grace) → mismatch → restore. A now-present
+// stamp (a live re-acquirer that already wrote owner.json) likewise mismatches.
+//
+// A concrete judged stamp (dead, or live-but-over-age) matches only if the moved
+// dir still carries the SAME pid + startedAtMs. A re-acquire rewrites owner.json
+// with a different pid / fresher startedAtMs → mismatch → restore.
+function stampMatches(dir: string, judged: LockOwner | null): boolean {
+  const now = readOwnerStamp(dir);
   if (judged === null) {
-    // Was judged as an old-unstamped leak. Re-confirm: still unstamped, still
-    // over grace. A re-created dir (B's fresh mkdir) resets mtime → under grace
-    // → abort; a now-stamped dir → a live re-acquirer → abort.
+    // Old-unstamped leak. Still unstamped + still over grace (mtime preserved by
+    // rename). A re-created dir resets mtime → under grace → mismatch; a now-
+    // stamped dir → a live re-acquirer → mismatch.
     if (now !== null) return false;
-    const mtime = lockDirMtimeMs(lockDir);
+    const mtime = lockDirMtimeMs(dir);
     if (mtime === null) return false; // vanished — nothing to steal
     return lockAcquireEpochMs() - mtime > unstampedGraceMs();
   }
-  // Was judged on a concrete stamp (dead, or live-but-over-age). The dir must
-  // still carry the SAME owner identity. A re-acquire by B rewrites owner.json
-  // with B's pid + a fresh startedAtMs → mismatch → abort.
   if (now === null) return false;
   return now.pid === judged.pid && now.startedAtMs === judged.startedAtMs;
 }
 
 // Reclaim a lock iff it is provably dead (owner gone) OR stale (over-age). A
-// live, under-threshold holder is left alone (returns false). Reclaim is atomic:
-// rename the dead dir aside (only one waiter wins the rename), best-effort remove
-// it, leaving the lock free for the next mkdir. Returns true iff THIS call freed
-// the dir.
+// live, under-threshold holder is left alone (returns false). Returns true iff
+// THIS call freed the dir.
 //
-// MUTUAL-EXCLUSION SAFETY: the staleness DECISION (read stamp, judge dead/over-
-// age) and the steal RENAME are not one OS-atomic operation, so a competing
-// waiter can reap + re-acquire + stamp a FRESH LIVE lock in between. The rename
-// alone would then rob that fresh live holder (two concurrent lock holders →
-// lost update). Guard the rename with stampUnchangedSince(): immediately before
-// renaming, re-read the stamp and abort the steal unless the dir STILL carries
-// the exact owner identity judged stale. This preserves both invariants — a
-// live under-threshold holder is never robbed, and exactly one reaper wins.
+// MUTUAL-EXCLUSION SAFETY (compare-and-swap steal): the staleness DECISION (read
+// stamp, judge dead/over-age) and the steal are not one OS-atomic operation, so
+// a competing waiter can reap + re-mkdir + stamp a FRESH LIVE lock at the same
+// path in between. A "re-read stamp THEN rename" guard shrinks but does NOT
+// eliminate the window — the competitor can still re-acquire between the re-read
+// and the rename, and the rename then robs the fresh live holder (two concurrent
+// holders → lost update). So the steal is a true CAS keyed on the OS-atomic
+// rename:
+//
+//   1. Rename lockDir aside to a reaper-PRIVATE nonce path. renameSync is the
+//      atomic arbiter — exactly one process moves a given dir; the losers get
+//      ENOENT and fall back to a normal mkdir retry. After this we hold the
+//      moved dir EXCLUSIVELY (no other process can see it under the nonce name).
+//   2. Read the owner stamp INSIDE the moved dir and compare against `judged`
+//      (the identity we decided was stale). If it MATCHES, the dir we grabbed is
+//      the same stale lock we judged → legitimate steal → remove it, return true.
+//   3. If it does NOT match, a competitor reaped the stale dir and re-acquired a
+//      FRESH lock at lockDir between our decision and our rename — we just moved
+//      THEIR live lock. Restore it: rename the nonce dir back to lockDir. If that
+//      restore fails (yet another process already re-mkdir'd lockDir in the gap),
+//      the live lock already exists again at lockDir, so just drop our private
+//      copy. Either way we return false WITHOUT having robbed a live holder.
+//
+// This preserves both invariants atomically — a live (fresh, under-threshold)
+// holder is never destroyed, and exactly one reaper ever frees a given stale dir.
+//
+// RESIDUAL (documented, not silently shipped): the only remaining mutual-
+// exclusion gap is the restore in step 3 — between renaming a wrongly-grabbed
+// fresh lock OUT of lockDir and renaming it BACK, a third process can mkdir
+// lockDir (seeing it momentarily empty); the restore then fails EEXIST and two
+// processes briefly believe they hold the lock. This requires THREE specific
+// interleavings in a sub-microsecond rename↔mkdir window (a competitor must
+// re-acquire before our first rename, AND a third process must mkdir between our
+// two renames) — orders of magnitude narrower than the pre-CAS decide→rename
+// window, and the lock protects an idempotent audit-first transaction (re-run
+// safe). A kernel-atomic compare-and-swap on a directory does not exist in
+// portable POSIX (rename + mkdir are separate syscalls), so closing it fully
+// needs a different primitive (e.g. O_EXCL lockfile with fcntl); tracked as a
+// known limitation, acceptable for this phase given the blast radius.
 function reapStaleLock(lockDir: string): boolean {
   const owner = readOwnerStamp(lockDir);
   if (owner === null) {
@@ -1540,20 +1571,30 @@ function reapStaleLock(lockDir: string): boolean {
     // holder). A fresh, live holder is never robbed.
     if (lockAcquireEpochMs() - owner.startedAtMs <= lockStaleMs()) return false;
   }
-  // Re-verify the dir STILL carries the stamp we judged stale before stealing.
-  // Closes the decide→rename window: if a competing reaper already reaped + re-
-  // acquired (writing a fresh live stamp), abort rather than rob the new holder.
-  if (!stampUnchangedSince(lockDir, owner)) return false;
-  // Dead owner, live-but-over-age, or old-unstamped — AND still the same dir we
-  // judged: steal atomically. The rename is the race arbiter — exactly one
-  // concurrent reaper renames the live dir; the losers get ENOENT and fall back
-  // to a normal mkdir retry.
+  // STEP 1 — CAS swap: move the dir to a reaper-private nonce path. This is the
+  // atomic arbiter; only one process wins the rename of a given dir.
   const dead = `${lockDir}.dead.${reapSuffix()}`;
   try {
     renameSync(lockDir, dead);
   } catch {
     return false; // another waiter already reclaimed (or the holder released)
   }
+  // STEP 2 — verify the dir we just grabbed STILL carries the identity judged
+  // stale. stampMatches re-reads owner.json inside the now-private `dead` dir.
+  if (!stampMatches(dead, owner)) {
+    // STEP 3 — we grabbed a FRESH lock a competitor re-acquired in the window.
+    // Restore it so the live holder is not robbed.
+    try {
+      renameSync(dead, lockDir);
+    } catch {
+      // lockDir already re-created by yet another process → the live lock is
+      // back in place; discard our private snapshot.
+      try { rmSync(dead, { recursive: true, force: true }); } catch { /* harmless */ }
+    }
+    return false;
+  }
+  // Legitimate steal: dead owner, live-but-over-age, or old-unstamped — AND the
+  // identity we grabbed matches what we judged. Remove the private dir.
   try {
     rmSync(dead, { recursive: true, force: true });
   } catch {
@@ -2815,7 +2856,9 @@ export function emitError(
   projectDir: string,
   tool: string,
   command: string,
-  msg: string
+  msg: string,
+  intent?: string,
+  space?: string
 ): never {
   if (!_errorEmitInProgress) {
     _errorEmitInProgress = true;
@@ -2838,18 +2881,26 @@ export function emitError(
         // keying, P3) — a bare `AUDIT_LOCK_EXIT_HANDLERS.has(projectDir)` would
         // miss the workspace-bucket / per-intent handler keys and re-introduce
         // the 5s self-deadlock on every in-transaction error emit.
-        if (holdsAuditLock(projectDir)) {
+        //
+        // The caller threads its RESOLVED intent+space (fork/merge hold a
+        // PER-INTENT lock — aidlc-state.ts error()/lockIntent). We MUST probe and
+        // emit on the SAME bucket: a bare holdsAuditLock(projectDir) keys the
+        // __workspace__ sentinel, returns false mid per-intent transaction, takes
+        // the 5s blocking-acquire branch, and writes ERROR_LOGGED to the wrong
+        // shard. Omitted intent/space -> sentinel, which is correct for every
+        // sentinel-locked caller (the common case).
+        if (holdsAuditLock(projectDir, intent, space)) {
           audit.appendAuditEntryUnlocked("ERROR_LOGGED", {
             Tool: tool,
             Command: command,
             Error: msg,
-          }, projectDir);
+          }, projectDir, intent, space);
         } else {
           audit.appendAuditEntry("ERROR_LOGGED", {
             Tool: tool,
             Command: command,
             Error: msg,
-          }, projectDir);
+          }, projectDir, intent, space);
         }
       }
     } catch {
