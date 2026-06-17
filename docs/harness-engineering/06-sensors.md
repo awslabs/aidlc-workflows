@@ -60,12 +60,12 @@ Four manifests ship under `.claude/sensors/`, each prefixed `aidlc-`:
 |----------|----------|--------|
 | `aidlc-required-sections.md` | `aidlc-docs/` markdown output | The output carries the required H2 headings — a generic content-shape check |
 | `aidlc-upstream-coverage.md` | `aidlc-docs/` markdown output | The prose references each upstream artifact the stage declares it consumes |
-| `aidlc-linter.md` | `.ts` / `.js` code output | Wraps your configured linter (ESLint by default) |
-| `aidlc-type-check.md` | `.ts` / `.tsx` code output | Wraps your configured type-checker (`tsc` by default) |
+| `aidlc-linter.md` | `.ts` / `.js` / `.py` code output | Wraps your configured linter (ESLint for TS/JS, ruff for Python) |
+| `aidlc-type-check.md` | `.ts` / `.tsx` / `.py` code output | Wraps your configured type-checker (tsc for TS, mypy or pyright for Python) |
 
 All four are gated by a `matches:` glob (more on that below): the first two
 document-shape checks scope to `**/aidlc-docs/**` (the artifact tree), the two
-code-quality checks to their language globs (`**/*.{ts,js}`, `**/*.{ts,tsx}`).
+code-quality checks to their language globs (`**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}` for the linter, `**/*.{ts,tsx,py,pyi}` for the type-checker).
 Read `aidlc-required-sections.md` end to end before authoring your own — it is
 the smallest of the four and shows the whole shape, frontmatter plus prose body.
 

@@ -2,11 +2,28 @@
 //
 // Owns the linter check itself; the dispatcher (aidlc-sensor.ts) routes a
 // SENSOR fire to this script via the manifest's `command:` field. Self-
-// contained: no imports from sibling tools. Wraps `bunx eslint --format
-// json --max-warnings -1 <path>` and prints the locked stdout JSON shape:
+// contained: no imports from sibling tools. Prints the locked stdout JSON shape:
 //
 //   {"pass": <bool>, "errorCount": <n>, "warningCount": <n>,
 //    "violations": [{file, line, column, rule, severity, message}, ...]}
+//
+// Polyglot dispatch (on --file-path extension):
+//
+// * .ts/.tsx/.js/.jsx/.mjs/.cjs → eslint. Wraps `bunx eslint --format json
+//   --max-warnings -1 <path>` (walk up to the nearest package.json; defer to
+//   eslint's own config discovery; no eslint config → quiet PASS via 127).
+// * .py/.pyi → ruff. Runs `ruff check --output-format=json <path>`. ruff is a
+//   Python tool, not an npm package, so it never rides bunx; it is resolved
+//   side-effect-free as `python -m ruff` (the project's ruff when its venv is
+//   active), falling back to a bare `ruff` on PATH. Walks up to the nearest
+//   pyproject.toml/ruff.toml/.ruff.toml; only runs when the project actually
+//   configures ruff — no ruff config → quiet PASS via 127, mirroring eslint's
+//   no-config behaviour. ruff diagnostics are findings; pass = (#diagnostics == 0).
+// * anything else → exit 127 (unknown language is not a failure → quiet PASS).
+//
+// The "use what the project configures; do nothing otherwise" principle is
+// identical across languages: the script never imposes a default ruleset, it
+// only runs a tool the project opted into, and quiet-passes when none is set.
 //
 // Decisions (see tmp/v05-mr9-plan-draft.md § Per-sensor script contracts
 // → aidlc-sensor-linter.ts):
@@ -117,8 +134,9 @@ function parseArgs(argv: string[]): Args {
 function printHelp(): void {
 	process.stdout.write(
 		`Usage: aidlc-sensor-linter --stage <slug> --file-path <path>\n\n` +
-			`Wraps \`bunx eslint --format json --max-warnings -1 <path>\` and\n` +
-			`prints {pass, errorCount, warningCount, violations[]} JSON to stdout.\n`,
+			`Dispatches on file extension: .ts/.js → eslint, .py → ruff.\n` +
+			`Runs the project's configured linter and prints\n` +
+			`{pass, errorCount, warningCount, violations[]} JSON to stdout.\n`,
 	);
 }
 
@@ -297,6 +315,17 @@ function buildViolations(results: ESLintResult[]): Violation[] {
 
 // --- main -------------------------------------------------------------------
 
+// Language families keyed by file extension (lowercased, leading dot stripped).
+const ESLINT_EXTS = new Set(["ts", "tsx", "js", "jsx", "mjs", "cjs"]);
+const RUFF_EXTS = new Set(["py", "pyi"]);
+
+function extOf(filePath: string): string {
+	const base = filePath.split("/").pop() ?? filePath;
+	const dot = base.lastIndexOf(".");
+	if (dot <= 0) return ""; // no extension, or dotfile with no ext
+	return base.slice(dot + 1).toLowerCase();
+}
+
 function main(): void {
 	const args = parseArgs(process.argv.slice(2));
 
@@ -305,16 +334,33 @@ function main(): void {
 		process.exit(1);
 	}
 
-	const projectRoot =
-		findProjectRoot(args.filePath) ?? dirname(resolve(args.filePath));
+	const ext = extOf(args.filePath);
+	if (ESLINT_EXTS.has(ext)) {
+		runEslintFlow(args.filePath);
+		return;
+	}
+	if (RUFF_EXTS.has(ext)) {
+		runRuffFlow(args.filePath);
+		return;
+	}
+	// Unknown language for this sensor — not a failure. Exit 127 so the
+	// dispatcher's branch b records a quiet PASSED Note=tool-unavailable.
+	process.stderr.write(`unsupported-language: .${ext || "(none)"}\n`);
+	process.exit(127);
+}
+
+// --- eslint flow (TS/JS) ----------------------------------------------------
+
+function runEslintFlow(filePath: string): void {
+	const projectRoot = findProjectRoot(filePath) ?? dirname(resolve(filePath));
 
 	// Probe order: tool first (cheap, ~1s for cached bunx), then config
 	// (~1s for --print-config). Both gates feed dispatcher branch b
 	// (PASSED Note=tool-unavailable) on non-zero.
 	probeEslintAvailable(projectRoot);
-	probeEslintConfig(args.filePath, projectRoot);
+	probeEslintConfig(filePath, projectRoot);
 
-	const { stdout } = runEslint(args.filePath, projectRoot);
+	const { stdout } = runEslint(filePath, projectRoot);
 
 	// eslint exits 1 when violations exist and 0 when clean. With
 	// --max-warnings -1 the warning-exit override is disabled so we never
@@ -348,6 +394,203 @@ function main(): void {
 		warningCount,
 		violations: buildViolations(parsed),
 		// findings_count emitted by the script (sensor-id-agnostic dispatcher).
+		findings_count: errorCount,
+	};
+	process.stdout.write(`${JSON.stringify(out)}\n`);
+	process.exit(0);
+}
+
+// --- ruff flow (Python) -----------------------------------------------------
+//
+// Mirrors the eslint flow structure: walk up to the project manifest, gate on
+// "is ruff actually configured?" (quiet-pass 127 when not), probe availability,
+// run, normalize to the locked SensorOutput shape.
+//
+// ruff JSON (`--output-format=json`) is an array of diagnostics:
+//   {code, message, filename, location:{row,column}, end_location, fix, url, …}
+// `code` may be null (e.g. syntax errors). Every reported diagnostic counts as
+// a finding — ruff has no warning/error split in this shape, so the eslint
+// "warnings don't fail" carve-out does not apply; pass = (#diagnostics == 0).
+
+interface RuffLocation {
+	row?: number;
+	column?: number;
+}
+
+interface RuffDiagnostic {
+	code: string | null;
+	message: string;
+	filename: string;
+	location?: RuffLocation;
+}
+
+// ruff config files that stand alone (no [tool.ruff] table needed). pyproject
+// .toml is handled separately because its presence alone does NOT mean ruff is
+// configured — only a [tool.ruff] table (or one of these files) does.
+const RUFF_CONFIG_FILES = ["ruff.toml", ".ruff.toml"];
+
+// Walk up from --file-path to the nearest dir that anchors a Python project:
+// a pyproject.toml, ruff.toml, or .ruff.toml. Returns that dir, or null.
+function findRuffProject(filePath: string): string | null {
+	const abs = resolve(filePath);
+	let dir = dirname(abs);
+	while (true) {
+		if (existsSync(`${dir}/pyproject.toml`)) return dir;
+		if (RUFF_CONFIG_FILES.some((f) => existsSync(`${dir}/${f}`))) return dir;
+		const parent = dirname(dir);
+		if (parent === dir) return null;
+		dir = parent;
+	}
+}
+
+// ruff invocation. ruff is a Python tool — NOT an npm package — so it cannot
+// ride bunx. resolveRuffCmd resolves a ruff WITHOUT any side effects (a sensor
+// fires on every file write, so it must never install packages or create a
+// venv — which rules out `uv run`/`poetry run`, both of which can provision an
+// environment on first use). Side-effect-free candidates, in decreasing order
+// of project fidelity:
+//   1. `python -m ruff` / `python3 -m ruff` — the ruff importable in whatever
+//      the interpreter resolves to (the project's ruff when its venv is active).
+//      Both `python` and `python3` are tried because many systems (CI images,
+//      Homebrew-only setups, pyenv loaded only in interactive shells) expose
+//      just `python3`; probing `python` alone would silently miss ruff there.
+//      Preferred over the bare binary so a project/venv ruff wins.
+//   2. `ruff` — a bare console script on PATH, last resort.
+// Each candidate is gated on `--version` exit 0, so unavailable forms fall
+// through. null when none answers — null → the flow quiet-passes (127), the
+// same model mypy uses.
+//
+// Returns the argv PREFIX (command + leading args) the other ruff calls append
+// to, or null when ruff is not runnable in this environment.
+function resolveRuffCmd(cwd: string): string[] | null {
+	const candidates: string[][] = [
+		["python", "-m", "ruff"],
+		["python3", "-m", "ruff"],
+		["ruff"],
+	];
+	for (const cand of candidates) {
+		const [cmd, ...prefix] = cand;
+		const probe = spawnSync(cmd, [...prefix, "--version"], {
+			encoding: "utf-8",
+			timeout: 30_000,
+			cwd,
+		});
+		if (probe.status === 0) return cand;
+	}
+	return null;
+}
+
+function spawnRuff(
+	ruffCmd: string[],
+	subArgs: string[],
+	cwd: string,
+): { stdout: string; status: number | null } {
+	const [cmd, ...prefix] = ruffCmd;
+	const result = spawnSync(cmd, [...prefix, ...subArgs], {
+		encoding: "utf-8",
+		timeout: 30_000,
+		cwd,
+	});
+	// encoding: "utf-8" makes stdout a string, but spawnSync's overload union
+	// isn't narrowed by the option alone — coerce with a typeof guard.
+	const stdout = typeof result.stdout === "string" ? result.stdout : "";
+	return { stdout, status: result.status };
+}
+
+// "Is ruff actually configured for this file?" — the use-what's-configured
+// gate, mirroring eslint's --print-config probe. Defer to ruff's OWN discovery
+// rather than hand-parsing TOML: `ruff check --show-settings <path>` exits 0
+// and prints the resolved settings when ruff has a config it will apply, and
+// exits non-zero when there is no configuration to resolve. Non-zero → exit 127
+// (quiet PASS), so a bare pyproject.toml with no [tool.ruff] table behaves like
+// a JS project with no eslint config: the sensor stays silent.
+function probeRuffConfigured(
+	ruffCmd: string[],
+	filePath: string,
+	cwd: string,
+): void {
+	const result = spawnRuff(ruffCmd, ["check", "--show-settings", filePath], cwd);
+	if (result.status === 0) return; // ruff resolved settings → configured
+	process.stderr.write("no-ruff-config\n");
+	process.exit(127);
+}
+
+function runRuff(
+	ruffCmd: string[],
+	filePath: string,
+	cwd: string,
+): { stdout: string; status: number | null } {
+	// --force-exclude makes ruff honour the project's exclude config even when
+	// the file is passed explicitly (otherwise an explicitly-named excluded
+	// file is still checked). --no-cache avoids cache writes into the project.
+	const result = spawnRuff(
+		ruffCmd,
+		[
+			"check",
+			"--output-format=json",
+			"--force-exclude",
+			"--no-cache",
+			filePath,
+		],
+		cwd,
+	);
+	return { stdout: result.stdout ?? "", status: result.status };
+}
+
+function buildRuffViolations(diags: RuffDiagnostic[]): Violation[] {
+	return diags.map((d) => ({
+		file: d.filename ?? "",
+		line: d.location?.row ?? 0,
+		column: d.location?.column ?? 0,
+		rule: d.code ?? "",
+		// ruff's JSON shape carries no severity; every diagnostic is a finding
+		// that fails the check, so report it as an error for the locked shape.
+		severity: "error",
+		message: d.message ?? "",
+	}));
+}
+
+function runRuffFlow(filePath: string): void {
+	const projectRoot = findRuffProject(filePath);
+	if (!projectRoot) {
+		// No pyproject.toml / ruff.toml anywhere above the file → not a ruff
+		// project. Quiet PASS, mirroring "no package.json" for eslint.
+		process.stderr.write("no-python-project\n");
+		process.exit(127);
+	}
+
+	const ruffCmd = resolveRuffCmd(projectRoot);
+	if (!ruffCmd) {
+		// ruff not runnable (not installed as a binary, not importable as a
+		// module, or no python). Quiet PASS, the tool-unavailable contract.
+		process.stderr.write("ruff-unavailable\n");
+		process.exit(127);
+	}
+	probeRuffConfigured(ruffCmd, filePath, projectRoot);
+
+	const { stdout } = runRuff(ruffCmd, filePath, projectRoot);
+
+	// ruff writes the JSON array to stdout on both clean (exit 0) and
+	// violations-present (exit 1) runs, so we parse stdout rather than gate on
+	// the exit code.
+	let parsed: RuffDiagnostic[];
+	try {
+		parsed = JSON.parse(stdout);
+	} catch {
+		process.stderr.write("ruff-bad-output\n");
+		process.exit(1);
+	}
+	if (!Array.isArray(parsed)) {
+		process.stderr.write("ruff-bad-output\n");
+		process.exit(1);
+	}
+
+	const errorCount = parsed.length;
+	const out: SensorOutput = {
+		pass: errorCount === 0,
+		errorCount,
+		warningCount: 0,
+		violations: buildRuffViolations(parsed),
 		findings_count: errorCount,
 	};
 	process.stdout.write(`${JSON.stringify(out)}\n`);

@@ -1,0 +1,14 @@
+# failing-ruff fixture for t92 — ruff (linter) sensor FAILED round-trip.
+#
+# [tool.ruff] enables the linter sensor (the --show-settings probe resolves a
+# config). The F-series (pyflakes) rules are on by default, so the unused
+# import in sample.py (F401) produces exactly one diagnostic — the per-sensor
+# script reports errorCount=1, pass=false, and the dispatcher classifies it as
+# FAILED with Findings count=1.
+[project]
+name = "aidlc-t92-failing-ruff-fixture"
+version = "0.0.0"
+requires-python = ">=3.9"
+
+[tool.ruff]
+line-length = 100

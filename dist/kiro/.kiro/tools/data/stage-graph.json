@@ -1486,12 +1486,12 @@
       {
         "id": "linter",
         "path": ".kiro/sensors/aidlc-linter.md",
-        "matches": "**/*.{ts,js}"
+        "matches": "**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}"
       },
       {
         "id": "type-check",
         "path": ".kiro/sensors/aidlc-type-check.md",
-        "matches": "**/*.{ts,tsx}"
+        "matches": "**/*.{ts,tsx,py,pyi}"
       }
     ]
   },
@@ -1588,12 +1588,12 @@
       {
         "id": "linter",
         "path": ".kiro/sensors/aidlc-linter.md",
-        "matches": "**/*.{ts,js}"
+        "matches": "**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}"
       },
       {
         "id": "type-check",
         "path": ".kiro/sensors/aidlc-type-check.md",
-        "matches": "**/*.{ts,tsx}"
+        "matches": "**/*.{ts,tsx,py,pyi}"
       }
     ]
   },
@@ -1694,12 +1694,12 @@
       {
         "id": "linter",
         "path": ".kiro/sensors/aidlc-linter.md",
-        "matches": "**/*.{ts,js}"
+        "matches": "**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}"
       },
       {
         "id": "type-check",
         "path": ".kiro/sensors/aidlc-type-check.md",
-        "matches": "**/*.{ts,tsx}"
+        "matches": "**/*.{ts,tsx,py,pyi}"
       }
     ]
   },
@@ -1809,12 +1809,12 @@
       {
         "id": "linter",
         "path": ".kiro/sensors/aidlc-linter.md",
-        "matches": "**/*.{ts,js}"
+        "matches": "**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}"
       },
       {
         "id": "type-check",
         "path": ".kiro/sensors/aidlc-type-check.md",
-        "matches": "**/*.{ts,tsx}"
+        "matches": "**/*.{ts,tsx,py,pyi}"
       }
     ]
   },
@@ -1912,12 +1912,12 @@
       {
         "id": "linter",
         "path": ".kiro/sensors/aidlc-linter.md",
-        "matches": "**/*.{ts,js}"
+        "matches": "**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}"
       },
       {
         "id": "type-check",
         "path": ".kiro/sensors/aidlc-type-check.md",
-        "matches": "**/*.{ts,tsx}"
+        "matches": "**/*.{ts,tsx,py,pyi}"
       }
     ]
   },
@@ -2004,7 +2004,7 @@
       {
         "id": "type-check",
         "path": ".kiro/sensors/aidlc-type-check.md",
-        "matches": "**/*.{ts,tsx}"
+        "matches": "**/*.{ts,tsx,py,pyi}"
       }
     ]
   },
@@ -2087,12 +2087,12 @@
       {
         "id": "linter",
         "path": ".kiro/sensors/aidlc-linter.md",
-        "matches": "**/*.{ts,js}"
+        "matches": "**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}"
       },
       {
         "id": "type-check",
         "path": ".kiro/sensors/aidlc-type-check.md",
-        "matches": "**/*.{ts,tsx}"
+        "matches": "**/*.{ts,tsx,py,pyi}"
       }
     ]
   },

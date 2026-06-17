@@ -1,0 +1,13 @@
+# failing-mypy fixture for t92 — mypy (type-check) sensor FAILED round-trip.
+#
+# [tool.mypy] selects mypy for the type-check sensor. sample.py assigns a str
+# to an int-annotated binding, producing one mypy error
+# ([assignment]) so the per-sensor script's error count == 1 and the
+# dispatcher records FAILED with Findings count=1.
+[project]
+name = "aidlc-t92-failing-mypy-fixture"
+version = "0.0.0"
+requires-python = ">=3.9"
+
+[tool.mypy]
+ignore_missing_imports = true

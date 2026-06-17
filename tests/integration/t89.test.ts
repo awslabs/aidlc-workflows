@@ -301,15 +301,15 @@ describe("t89 sensors_applicable resolution (in-process compileStageGraph)", () 
     const beforeGlob = stageBySlug(before.stages, "code-generation").sensors_applicable.find(
       (s) => s.id === "linter",
     )?.matches;
-    expect(beforeGlob).toBe("**/*.{ts,js}");
+    expect(beforeGlob).toBe("**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}");
 
     // Mutate the manifest on disk AFTER the first compile.
     const orig = readFileSync(linterPath, "utf-8");
-    writeFileSync(linterPath, orig.replace('"**/*.{ts,js}"', '"**/post-edit/*.ts"'));
+    writeFileSync(linterPath, orig.replace('"**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}"', '"**/post-edit/*.ts"'));
 
     // The already-emitted snapshot string is unchanged (it is a value, not a
     // live view) — its serialized glob is still the pre-edit value.
-    expect(before.json).toContain('"**/*.{ts,js}"');
+    expect(before.json).toContain('"**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}"');
     expect(before.json).not.toContain('"**/post-edit/*.ts"');
 
     // A fresh compile reflects the edit — proving the snapshot is frozen only
@@ -417,7 +417,7 @@ describe("t89 CLI exit-code shell (Bun.spawnSync env-seam)", () => {
     // Edit the linter manifest's matches glob; --check should now fail.
     const linterPath = join(dir, "aidlc-linter.md");
     const orig = readFileSync(linterPath, "utf-8");
-    writeFileSync(linterPath, orig.replace('"**/*.{ts,js}"', '"**/*.{ts,js,jsx}"'));
+    writeFileSync(linterPath, orig.replace('"**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}"', '"**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi,go}"'));
 
     const check = spawnSync(BUN, [GRAPH_TS, "compile", "--check"], { env, encoding: "utf8" });
     expect(check.status).toBe(1);

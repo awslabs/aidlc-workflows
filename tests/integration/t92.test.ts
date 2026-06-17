@@ -644,6 +644,120 @@ describe("t92 Group C: FAILED real round-trip per sensor", () => {
 });
 
 // ============================================================
+// Group C2 — PASSED + FAILED round-trip per sensor, REAL Python fixtures (4).
+// Mirrors Group B tests 11-12 + Group C tests 15-16 but for Python:
+//   - linter sensor → ruff (python -m ruff / bare ruff)
+//   - type-check sensor → mypy (python -m mypy / bare mypy)
+// Same shape: copy fixture into a temp project, fire the real dispatcher,
+// assert on the audit rows (SENSOR_FIRED/PASSED/FAILED, findings count).
+// ============================================================
+
+/** run_passed_py_real — mirrors runPassedTsReal but fires on sample.py. */
+function runPassedPyReal(
+  id: string,
+  stage: string,
+  fixtureDir: string,
+): {
+  fired: number;
+  passed: number;
+  dur: string;
+  firedId: string;
+  passedId: string;
+  path: string;
+  note: string;
+  detailExists: boolean;
+  subdir: string;
+} {
+  const proj = makeProj();
+  const subdir = basename(fixtureDir);
+  cpSync(fixtureDir, join(proj, subdir), { recursive: true });
+  fire([id, "--stage", stage, "--output-path", join(proj, subdir, "sample.py")], {
+    CLAUDE_PROJECT_DIR: proj,
+  });
+  const f = auditPath(proj);
+  return {
+    fired: auditEventCount(f, "SENSOR_FIRED"),
+    passed: auditEventCount(f, "SENSOR_PASSED"),
+    dur: auditField(f, "SENSOR_PASSED", "Duration ms"),
+    firedId: auditField(f, "SENSOR_FIRED", "Fire id"),
+    passedId: auditField(f, "SENSOR_PASSED", "Fire id"),
+    path: auditField(f, "SENSOR_PASSED", "Output path"),
+    note: auditField(f, "SENSOR_PASSED", "Note"),
+    detailExists: existsSync(join(proj, "aidlc-docs", ".aidlc-sensors")),
+    subdir,
+  };
+}
+
+/** run_failed_py_real — mirrors runFailedTsReal but fires on sample.py. */
+function runFailedPyReal(
+  id: string,
+  stage: string,
+  fixtureDir: string,
+  expectedFindings: string,
+): void {
+  const proj = makeProj();
+  const subdir = basename(fixtureDir);
+  cpSync(fixtureDir, join(proj, subdir), { recursive: true });
+  fire([id, "--stage", stage, "--output-path", join(proj, subdir, "sample.py")], {
+    CLAUDE_PROJECT_DIR: proj,
+  });
+  const f = auditPath(proj);
+  const fired = auditEventCount(f, "SENSOR_FIRED");
+  const failed = auditEventCount(f, "SENSOR_FAILED");
+  const firedId = auditField(f, "SENSOR_FIRED", "Fire id");
+  const failedId = auditField(f, "SENSOR_FAILED", "Fire id");
+  const findings = auditField(f, "SENSOR_FAILED", "Findings count");
+  const detailPath = auditField(f, "SENSOR_FAILED", "Detail path");
+  const path = auditField(f, "SENSOR_FAILED", "Output path");
+  expect(fired).toBe(1);
+  expect(failed).toBe(1);
+  expect(firedId).not.toBe("");
+  expect(firedId).toBe(failedId);
+  expect(findings).toBe(expectedFindings);
+  expect(detailPath).toBe(`aidlc-docs/.aidlc-sensors/${stage}/${id}-${firedId}.md`);
+  expect(existsSync(join(proj, detailPath))).toBe(true);
+  expect(path).toBe(`${subdir}/sample.py`);
+}
+
+describe("t92 Group C2: PASSED + FAILED real round-trip — Python sensors", () => {
+  // ruff spawns the real ruff binary; generous timeout for first cold run.
+  test("11b: linter — passing Python (ruff clean) -> PASSED, relative path, no Note", () => {
+    const r = runPassedPyReal("linter", "code-generation", join(FIXTURES_ROOT, "passing-python"));
+    expect(r.fired).toBe(1);
+    expect(r.passed).toBe(1);
+    expect(r.firedId).not.toBe("");
+    expect(r.firedId).toBe(r.passedId);
+    expect(isInteger(r.dur)).toBe(true);
+    expect(r.detailExists).toBe(false);
+    expect(r.path).toBe(`${r.subdir}/sample.py`);
+    expect(r.note).toBe("");
+  }, 60000);
+
+  // mypy spawns the real mypy binary (manifest timeout_seconds=60); generous headroom.
+  test("12b: type-check — passing Python (mypy clean) -> PASSED, relative path, no Note", () => {
+    const r = runPassedPyReal("type-check", "code-generation", join(FIXTURES_ROOT, "passing-python"));
+    expect(r.fired).toBe(1);
+    expect(r.passed).toBe(1);
+    expect(r.firedId).not.toBe("");
+    expect(r.firedId).toBe(r.passedId);
+    expect(isInteger(r.dur)).toBe(true);
+    expect(r.detailExists).toBe(false);
+    expect(r.path).toBe(`${r.subdir}/sample.py`);
+    expect(r.note).toBe("");
+  }, 90000);
+
+  // Real ruff spawn — failing fixture has unused import (F401).
+  test("15b: linter — failing Python (ruff F401) -> Findings count=1", () => {
+    runFailedPyReal("linter", "code-generation", join(FIXTURES_ROOT, "failing-ruff"), "1");
+  }, 60000);
+
+  // Real mypy spawn — failing fixture has type mismatch.
+  test("16b: type-check — failing Python (mypy assignment error) -> Findings count=1", () => {
+    runFailedPyReal("type-check", "code-generation", join(FIXTURES_ROOT, "failing-mypy"), "1");
+  }, 90000);
+});
+
+// ============================================================
 // Group D — Tool-unavailable (2): per-sensor script exits 127.
 // Dispatcher classifies branch b -> SENSOR_PASSED Note=tool-unavailable.
 // (t92-sensor-fire.sh:507-535)

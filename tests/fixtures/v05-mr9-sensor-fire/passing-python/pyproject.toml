@@ -1,0 +1,17 @@
+# passing-python fixture for t92 — shared by the ruff (linter) and mypy
+# (type-check) Python PASS round-trips, mirroring passing-typescript.
+#
+# [tool.ruff] makes the linter sensor's "is ruff configured?" probe
+# (`ruff check --show-settings`) resolve a config, so the sensor runs rather
+# than quiet-passing. [tool.mypy] selects mypy for the type-check sensor.
+# sample.py is clean under both, so both sensors emit pass=true.
+[project]
+name = "aidlc-t92-passing-python-fixture"
+version = "0.0.0"
+requires-python = ">=3.9"
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+ignore_missing_imports = true

@@ -2,12 +2,32 @@
 //
 // Owns the type-check itself; the dispatcher (aidlc-sensor.ts) routes a
 // SENSOR fire to this script via the manifest's `command:` field. Self-
-// contained: no imports from sibling tools. Wraps `bunx tsc --project
-// <tsconfig> --noEmit --pretty false --incremental --tsBuildInfoFile
-// <path under aidlc-docs/.aidlc-sensors/>` and prints the locked stdout
-// JSON shape:
+// contained: no imports from sibling tools. Prints the locked stdout JSON shape:
 //
 //   {"pass": <bool>, "errors": [{file, line, column, message}, ...]}
+//
+// Polyglot dispatch (on --file-path extension):
+//
+// * .ts/.tsx → tsc. Wraps `bunx tsc --project <tsconfig> --noEmit --pretty
+//   false --incremental` (walk up to the nearest tsconfig.json; project-scoped
+//   check post-filtered to --file-path; no tsconfig → quiet PASS).
+// * .py/.pyi → mypy OR pyright, selected by what the project configures:
+//     - [tool.mypy] in pyproject.toml, or mypy.ini, or setup.cfg [mypy] → mypy
+//       (`mypy --output=json`). mypy is not npm, so it never rides bunx; it is
+//       resolved side-effect-free as `python -m mypy` (the project's mypy when
+//       its venv is active), falling back to a bare `mypy` on PATH; not
+//       installed → quiet PASS via 127.
+//     - [tool.pyright] in pyproject.toml, or pyrightconfig.json(c) → pyright
+//       (`bunx pyright --outputjson` — pyright IS an npm package).
+//     - both configured → mypy wins (more common standard; documented tie-break).
+//     - neither → quiet PASS via 127.
+//   Python checkers report 0-based line/character; we normalise to tsc's
+//   1-based convention so the locked `errors[]` shape is uniform across langs.
+// * anything else → exit 127 (unknown language is not a failure → quiet PASS).
+//
+// The "use what the project configures; do nothing otherwise" principle is
+// identical across languages: the script never imposes a default checker, it
+// only runs the one the project opted into, and quiet-passes when none is set.
 //
 // Decisions (see tmp/v05-mr9-plan-draft.md § Per-sensor script contracts
 // → aidlc-sensor-type-check.ts):
@@ -71,7 +91,7 @@
 //   127 tsc unresolvable
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 interface ParsedError {
@@ -125,8 +145,9 @@ function parseArgs(argv: string[]): Args {
 function printHelp(): void {
 	process.stdout.write(
 		`Usage: aidlc-sensor-type-check --stage <slug> --file-path <path>\n\n` +
-			`Wraps \`bunx tsc --project <tsconfig> --noEmit --pretty false\` and\n` +
-			`prints {pass, errors[]} JSON to stdout (filtered to --file-path).\n`,
+			`Dispatches on file extension: .ts/.tsx → tsc, .py → mypy or pyright\n` +
+			`(whichever the project configures). Prints {pass, errors[]} JSON to\n` +
+			`stdout (filtered to --file-path).\n`,
 	);
 }
 
@@ -248,6 +269,16 @@ function filterToFilePath(
 
 // --- main -------------------------------------------------------------------
 
+const TSC_EXTS = new Set(["ts", "tsx"]);
+const PY_EXTS = new Set(["py", "pyi"]);
+
+function extOf(filePath: string): string {
+	const base = filePath.split("/").pop() ?? filePath;
+	const dot = base.lastIndexOf(".");
+	if (dot <= 0) return "";
+	return base.slice(dot + 1).toLowerCase();
+}
+
 function main(): void {
 	const args = parseArgs(process.argv.slice(2));
 
@@ -256,7 +287,24 @@ function main(): void {
 		process.exit(1);
 	}
 
-	const tsconfigPath = findTsconfig(args.filePath);
+	const ext = extOf(args.filePath);
+	if (TSC_EXTS.has(ext)) {
+		runTscFlow(args.filePath);
+		return;
+	}
+	if (PY_EXTS.has(ext)) {
+		runPyFlow(args.filePath);
+		return;
+	}
+	// Unknown language for this sensor — quiet PASS via dispatcher branch b.
+	process.stderr.write(`unsupported-language: .${ext || "(none)"}\n`);
+	process.exit(127);
+}
+
+// --- tsc flow (TS/TSX) ------------------------------------------------------
+
+function runTscFlow(filePath: string): void {
+	const tsconfigPath = findTsconfig(filePath);
 	if (!tsconfigPath) {
 		process.stderr.write("no-tsconfig-found\n");
 		process.exit(1);
@@ -287,7 +335,7 @@ function main(): void {
 		cwd: tsconfigDir,
 	});
 	const allErrors = parseTscOutput(output);
-	const errors = filterToFilePath(allErrors, args.filePath, tsconfigDir);
+	const errors = filterToFilePath(allErrors, filePath, tsconfigDir);
 
 	// Status gate: tsc exited non-zero but parseTscOutput found ZERO diagnostics
 	// ANYWHERE in the project (a config-load failure — e.g. TS18003 "No inputs
@@ -314,6 +362,330 @@ function main(): void {
 	};
 	process.stdout.write(`${JSON.stringify(out)}\n`);
 	process.exit(0);
+}
+
+// --- Python flow (mypy / pyright) -------------------------------------------
+//
+// Selects the checker the project configured, mirroring the tsc flow's
+// project-scoped check + post-filter to --file-path. Both Python checkers are
+// project-scoped (they follow imports), so the same cross-file known limitation
+// documented for tsc applies: an error a file INTRODUCES in a consumer reports
+// under the consumer's path, not --file-path.
+//
+// mypy `--output=json` emits JSONL: one `{file, line, column, message, hint,
+// code, severity}` object per line. Older mypy (<1.21) and config errors emit
+// plain text; unparseable-line handling falls through to the status gate so a
+// broken run never reports a false clean PASS.
+//
+// pyright `--outputjson` emits a single object with `generalDiagnostics[]`
+// ({file, severity, message, rule?, range:{start:{line,character}, end}}) and a
+// `summary.errorCount`. Line/character are 0-based; we +1 to match tsc.
+
+type PyChecker = "mypy" | "pyright";
+
+interface MypyDiagnostic {
+	file?: string;
+	line?: number;
+	column?: number;
+	message?: string;
+	severity?: string;
+}
+
+interface PyrightRange {
+	start?: { line?: number; character?: number };
+}
+
+interface PyrightDiagnostic {
+	file?: string;
+	severity?: string;
+	message?: string;
+	range?: PyrightRange;
+}
+
+interface PyrightOutput {
+	generalDiagnostics?: PyrightDiagnostic[];
+}
+
+// Walk up to the nearest dir anchoring a Python project (any of the manifests
+// that could declare a checker). Returns that dir, or null.
+const PY_PROJECT_FILES = [
+	"pyproject.toml",
+	"mypy.ini",
+	"setup.cfg",
+	"pyrightconfig.json",
+	"pyrightconfig.jsonc",
+];
+
+function findPyProject(filePath: string): string | null {
+	const abs = resolve(filePath);
+	let dir = dirname(abs);
+	while (true) {
+		if (PY_PROJECT_FILES.some((f) => existsSync(`${dir}/${f}`))) return dir;
+		const parent = dirname(dir);
+		if (parent === dir) return null;
+		dir = parent;
+	}
+}
+
+function readFileSafe(path: string): string {
+	try {
+		return readFileSync(path, "utf-8");
+	} catch {
+		return "";
+	}
+}
+
+// Does any config in projectRoot declare mypy? [tool.mypy] in pyproject.toml,
+// a mypy.ini, or a [mypy] section in setup.cfg.
+function mypyConfigured(projectRoot: string): boolean {
+	if (existsSync(`${projectRoot}/mypy.ini`)) return true;
+	const pyproject = readFileSafe(`${projectRoot}/pyproject.toml`);
+	if (/^\s*\[tool\.mypy\b/m.test(pyproject)) return true;
+	const setupCfg = readFileSafe(`${projectRoot}/setup.cfg`);
+	if (/^\s*\[mypy\b/m.test(setupCfg)) return true;
+	return false;
+}
+
+// Does any config in projectRoot declare pyright? [tool.pyright] in
+// pyproject.toml, or a pyrightconfig.json(c).
+function pyrightConfigured(projectRoot: string): boolean {
+	if (
+		existsSync(`${projectRoot}/pyrightconfig.json`) ||
+		existsSync(`${projectRoot}/pyrightconfig.jsonc`)
+	) {
+		return true;
+	}
+	const pyproject = readFileSafe(`${projectRoot}/pyproject.toml`);
+	return /^\s*\[tool\.pyright\b/m.test(pyproject);
+}
+
+// Pick the configured checker. mypy wins the tie when both are configured
+// (more common standard). null → neither configured → caller quiet-passes.
+function selectPyChecker(projectRoot: string): PyChecker | null {
+	if (mypyConfigured(projectRoot)) return "mypy";
+	if (pyrightConfigured(projectRoot)) return "pyright";
+	return null;
+}
+
+// --- mypy -------------------------------------------------------------------
+
+// mypy invocation. mypy is a Python tool — NOT an npm package — so it cannot
+// ride bunx. resolveMypyCmd resolves a mypy WITHOUT side effects (a sensor
+// fires on every file write, so it must never install packages or create a
+// venv — which rules out `uv run`/`poetry run`). Side-effect-free candidates,
+// in decreasing order of project fidelity:
+//   1. `python -m mypy` / `python3 -m mypy` — the project's mypy when its venv
+//      is the active interpreter. Both `python` and `python3` are tried because
+//      many systems (CI, Homebrew-only, pyenv loaded only in interactive
+//      shells) expose just `python3`; probing `python` alone would silently
+//      miss mypy there. Preferred over the bare binary so a project/venv mypy
+//      wins.
+//   2. `mypy` — a bare console script on PATH, last resort.
+// Each candidate is gated on `--version` exit 0. null when none answers — null
+// → quiet PASS (127), configured-but-absent is tool-unavailable.
+//
+// Returns the argv PREFIX (command + leading args) callers append to, or null
+// when mypy is not runnable in this environment.
+function resolveMypyCmd(cwd: string): string[] | null {
+	const candidates: string[][] = [
+		["python", "-m", "mypy"],
+		["python3", "-m", "mypy"],
+		["mypy"],
+	];
+	for (const cand of candidates) {
+		const [cmd, ...prefix] = cand;
+		const probe = spawnSync(cmd, [...prefix, "--version"], {
+			encoding: "utf-8",
+			timeout: 30_000,
+			cwd,
+		});
+		if (probe.status === 0) return cand;
+	}
+	return null;
+}
+
+function runMypy(
+	mypyCmd: string[],
+	filePath: string,
+	cwd: string,
+): { stdout: string; status: number | null } {
+	const [cmd, ...prefix] = mypyCmd;
+	const result = spawnSync(
+		cmd,
+		[...prefix, "--output=json", "--no-error-summary", filePath],
+		{ encoding: "utf-8", timeout: 60_000, cwd },
+	);
+	const stdout = typeof result.stdout === "string" ? result.stdout : "";
+	return { stdout, status: result.status };
+}
+
+// Parse mypy JSONL. Returns the parsed error-severity diagnostics AND a count
+// of lines that failed to parse as JSON (text syntax/config errors on older
+// mypy). The caller uses parseFailures to avoid a false clean PASS.
+function parseMypyOutput(stdout: string): {
+	errors: ParsedError[];
+	parseFailures: number;
+} {
+	const errors: ParsedError[] = [];
+	let parseFailures = 0;
+	for (const rawLine of stdout.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (line === "") continue;
+		if (!line.startsWith("{")) {
+			parseFailures++;
+			continue;
+		}
+		let diag: MypyDiagnostic;
+		try {
+			diag = JSON.parse(line);
+		} catch {
+			parseFailures++;
+			continue;
+		}
+		if (diag.severity !== "error") continue;
+		errors.push({
+			file: diag.file ?? "",
+			line: diag.line ?? 0,
+			column: diag.column ?? 0,
+			message: diag.message ?? "",
+		});
+	}
+	return { errors, parseFailures };
+}
+
+function runMypyFlow(filePath: string, projectRoot: string): void {
+	const mypyCmd = resolveMypyCmd(projectRoot);
+	if (!mypyCmd) {
+		// mypy not runnable (not installed as a binary, not importable as a
+		// module, or no python). Quiet PASS, the tool-unavailable contract.
+		process.stderr.write("mypy-unavailable\n");
+		process.exit(127);
+	}
+	const { stdout, status } = runMypy(mypyCmd, filePath, projectRoot);
+	const { errors: allErrors, parseFailures } = parseMypyOutput(stdout);
+	const errors = filterToFilePath(allErrors, filePath, projectRoot);
+
+	// Status gate, mirroring tsc: a non-zero exit that produced ZERO parseable
+	// error diagnostics is a broken run (config error, or a syntax error that
+	// older mypy emitted as text — counted in parseFailures). Propagate the exit
+	// so the dispatcher records script-error rather than a false clean PASS.
+	// mypy exits 1 on type errors AND on config/parse failures; reaching here
+	// with no parsed errors means no usable findings, so script-error is right.
+	void parseFailures;
+	if (status !== null && status !== 0 && allErrors.length === 0) {
+		process.exit(status);
+	}
+
+	const out: SensorOutput = {
+		pass: errors.length === 0,
+		errors,
+		findings_count: errors.length,
+	};
+	process.stdout.write(`${JSON.stringify(out)}\n`);
+	process.exit(0);
+}
+
+// --- pyright ----------------------------------------------------------------
+
+function probePyrightAvailable(cwd: string): void {
+	const result = spawnSync("bunx", ["pyright", "--version"], {
+		encoding: "utf-8",
+		timeout: 30_000,
+		cwd,
+	});
+	if (result.status !== 0) {
+		process.stderr.write("pyright-unavailable\n");
+		process.exit(127);
+	}
+}
+
+function runPyright(
+	filePath: string,
+	cwd: string,
+): { stdout: string; status: number | null } {
+	const result = spawnSync(
+		"bunx",
+		["pyright", "--outputjson", "--project", cwd, filePath],
+		{ encoding: "utf-8", timeout: 60_000, cwd },
+	);
+	return { stdout: result.stdout ?? "", status: result.status };
+}
+
+// Parse pyright JSON. Returns error-severity diagnostics, normalised from
+// 0-based line/character to tsc's 1-based convention. parsedOk=false signals a
+// JSON parse failure so the caller can avoid a false clean PASS.
+function parsePyrightOutput(stdout: string): {
+	errors: ParsedError[];
+	parsedOk: boolean;
+} {
+	let parsed: PyrightOutput;
+	try {
+		parsed = JSON.parse(stdout);
+	} catch {
+		return { errors: [], parsedOk: false };
+	}
+	const diags = Array.isArray(parsed.generalDiagnostics)
+		? parsed.generalDiagnostics
+		: [];
+	const errors: ParsedError[] = [];
+	for (const d of diags) {
+		if (d.severity !== "error") continue;
+		const startLine = d.range?.start?.line ?? 0;
+		const startChar = d.range?.start?.character ?? 0;
+		errors.push({
+			file: d.file ?? "",
+			line: startLine + 1, // 0-based → 1-based (match tsc)
+			column: startChar + 1,
+			message: d.message ?? "",
+		});
+	}
+	return { errors, parsedOk: true };
+}
+
+function runPyrightFlow(filePath: string, projectRoot: string): void {
+	probePyrightAvailable(projectRoot);
+	const { stdout, status } = runPyright(filePath, projectRoot);
+	const { errors: allErrors, parsedOk } = parsePyrightOutput(stdout);
+
+	// Bad JSON on a non-zero exit → script-error (avoid false PASS). pyright
+	// exits 1 when it reports errors and 0 when clean; stdout is pure JSON.
+	if (!parsedOk) {
+		if (status !== null && status !== 0) process.exit(status);
+		process.stderr.write("pyright-bad-output\n");
+		process.exit(2);
+	}
+
+	const errors = filterToFilePath(allErrors, filePath, projectRoot);
+	const out: SensorOutput = {
+		pass: errors.length === 0,
+		errors,
+		findings_count: errors.length,
+	};
+	process.stdout.write(`${JSON.stringify(out)}\n`);
+	process.exit(0);
+}
+
+// --- Python dispatch --------------------------------------------------------
+
+function runPyFlow(filePath: string): void {
+	const projectRoot = findPyProject(filePath);
+	if (!projectRoot) {
+		// No Python project manifest above the file → quiet PASS.
+		process.stderr.write("no-python-project\n");
+		process.exit(127);
+	}
+	const checker = selectPyChecker(projectRoot);
+	if (checker === null) {
+		// Project exists but configures no type checker → quiet PASS, mirroring
+		// "no eslint config" / "no tsconfig" behaviour.
+		process.stderr.write("no-python-type-checker-configured\n");
+		process.exit(127);
+	}
+	if (checker === "mypy") {
+		runMypyFlow(filePath, projectRoot);
+		return;
+	}
+	runPyrightFlow(filePath, projectRoot);
 }
 
 if (import.meta.main) main();

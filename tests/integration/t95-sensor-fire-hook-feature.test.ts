@@ -318,8 +318,8 @@ describe("t95 sensor-fire hook — single & multi-entry fire (mechanism cli — 
 
 describe("t95 sensor-fire hook — multi-glob filtering at the stage level (mechanism cli — spawnSync)", () => {
   const CODE_STAGE: SynthSensor[] = [
-    { id: "linter", path: ".claude/sensors/aidlc-linter.md", matches: "**/*.{ts,js}" },
-    { id: "type-check", path: ".claude/sensors/aidlc-type-check.md", matches: "**/*.{ts,tsx}" },
+    { id: "linter", path: ".claude/sensors/aidlc-linter.md", matches: "**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}" },
+    { id: "type-check", path: ".claude/sensors/aidlc-type-check.md", matches: "**/*.{ts,tsx,py,pyi}" },
     { id: "required-sections", path: ".claude/sensors/aidlc-required-sections.md", matches: "**/aidlc-docs/**" },
     { id: "upstream-coverage", path: ".claude/sensors/aidlc-upstream-coverage.md", matches: "**/aidlc-docs/**" },
   ];

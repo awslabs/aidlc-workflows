@@ -176,21 +176,23 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
     expect(hasLine(r.out, "matches: **/aidlc-docs/**")).toBe(true);
   });
 
-  test("7: describe linter includes matches: **/*.{ts,js} and canonical fields", () => {
+  test("7: describe linter includes its matches glob and canonical fields", () => {
     const r = sensor("describe", "linter");
     expect(r.status).toBe(0);
     expect(hasLine(r.out, "id: linter")).toBe(true);
-    expect(hasLine(r.out, "matches: **/*.{ts,js}")).toBe(true);
+    expect(hasLine(r.out, "matches: **/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}")).toBe(
+      true,
+    );
     expect(
       hasLine(r.out, "command: bun .claude/tools/aidlc-sensor-linter.ts"),
     ).toBe(true);
   });
 
-  test("8: describe type-check includes matches: **/*.{ts,tsx} and canonical fields", () => {
+  test("8: describe type-check includes its matches glob and canonical fields", () => {
     const r = sensor("describe", "type-check");
     expect(r.status).toBe(0);
     expect(hasLine(r.out, "id: type-check")).toBe(true);
-    expect(hasLine(r.out, "matches: **/*.{ts,tsx}")).toBe(true);
+    expect(hasLine(r.out, "matches: **/*.{ts,tsx,py,pyi}")).toBe(true);
     expect(
       hasLine(r.out, "command: bun .claude/tools/aidlc-sensor-type-check.ts"),
     ).toBe(true);

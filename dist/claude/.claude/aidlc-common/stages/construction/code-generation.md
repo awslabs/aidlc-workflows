@@ -184,12 +184,13 @@ worktree. Generated code lives at the workspace root (NEVER under
 
 The imported sensors check the code outputs:
 
-- **`linter`** wraps the project's configured linter (eslint by default).
-  Fires on every Write/Edit matching its `matches: "**/*.{ts,js}"` filter.
+- **`linter`** wraps the project's configured linter (eslint for TS/JS, ruff
+  for Python). Fires on every Write/Edit matching its
+  `matches: "**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}"` filter.
   Failure mode: lint violations land as `SENSOR_FAILED` audit rows with
   detail at `aidlc-docs/.aidlc-sensors/code-generation/linter-<iso>.md`.
-- **`type-check`** wraps the project's configured type-checker (tsc by
-  default). Fires on `**/*.{ts,tsx}`. Failure mode: type errors emit
+- **`type-check`** wraps the project's configured type-checker (tsc for TS,
+  mypy or pyright for Python). Fires on `**/*.{ts,tsx,py,pyi}`. Failure mode: type errors emit
   `SENSOR_FAILED` with similar detail.
 
 The two universal markdown-shape sensors (`required-sections`,

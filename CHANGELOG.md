@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.10] - 2026-06-17
+
+The code-quality sensors (`linter`, `type-check`) now support **Python** alongside TS/JS. Both sensors dispatch on file extension: `.py`/`.pyi` files are linted with **ruff** and type-checked with **mypy** or **pyright** (whichever the project configures). The principle is "use what the project configures; do nothing otherwise" — identical to the eslint/tsc behaviour for JS. No config = quiet pass (the sensor stays silent). Test-suite prerequisite: `ruff` and `mypy` must be installed in the test environment for the new integration tests to pass (same as eslint/tsc are required for the TS tests).
+
+* **Linter sensor fires on `.py`/`.pyi`**: resolves ruff side-effect-free (`python -m ruff` → `python3 -m ruff` → bare `ruff`); gates on `ruff check --show-settings` (no ruff config = quiet pass); parses `--output-format=json` into the locked `{pass, errorCount, violations[]}` shape. `uv run` excluded (it can create a `.venv`).
+* **Type-check sensor fires on `.py`/`.pyi`**: selects mypy or pyright from project config (`[tool.mypy]`/`mypy.ini` → mypy; `[tool.pyright]`/`pyrightconfig.json` → pyright; both → mypy wins; neither → quiet pass). mypy resolved the same way as ruff (`python -m` → `python3 -m` → bare binary). pyright via `bunx` (it genuinely is npm). mypy JSONL and pyright JSON parsed + normalised (0-based → 1-based) into the locked `{pass, errors[]}` shape.
+* **Manifest globs widened**: `linter` now matches `**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}`; `type-check` now matches `**/*.{ts,tsx,py,pyi}`.
+* **No dispatcher change, no stage edits**: same two sensor ids, same pull-authoring model. Stages that already import `linter`/`type-check` get Python coverage for free.
+* **4 new integration tests** in t92 (Group C2) mirroring the TS real-fixture round-trips: passing/failing for both ruff and mypy, un-gated.
+
 ## [0.7.9] - 2026-06-16
 
 Extends the Stop-hook human-wait carve-out (v0.7.8) to the last common case: a **mid-stage clarifying question**. When the conductor asks you something mid-stage, the stage stays `[-]` in-progress — indistinguishable, by checkbox state alone, from a conductor that quit mid-work — so v0.7.8 deliberately left it to the block cap. The hook now reads the stage's `<slug>-questions.md`: when it carries an unanswered `[Answer]:` tag (a question is genuinely pending) the stop is allowed, so the workflow waits for your answer instead of nudging itself (and, as issue #356 saw, self-answering). The carve-out is strictly gated — it never fires under autonomous Construction (`Construction Autonomy Mode: autonomous`), where the loop must keep running unattended — and is positive-confirmation + fail-open like its siblings. Re-copy your `dist/<harness>/` to pick it up.

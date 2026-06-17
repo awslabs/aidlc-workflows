@@ -190,8 +190,8 @@ the PostToolUse hook at fire time, not by the resolver at compile time.
 |---|---|
 | `aidlc-required-sections.md` | `**/aidlc-docs/**` |
 | `aidlc-upstream-coverage.md` | `**/aidlc-docs/**` |
-| `aidlc-linter.md` | `**/*.{ts,js}` |
-| `aidlc-type-check.md` | `**/*.{ts,tsx}` |
+| `aidlc-linter.md` | `**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}` |
+| `aidlc-type-check.md` | `**/*.{ts,tsx,py,pyi}` |
 
 `matches` **is** the fire filter — it is not optional in practice. The hook
 compares the path being written against the glob and fires only on a match;
@@ -341,8 +341,8 @@ The four shipped manifests illustrate the variation these defaults
 later evolve into: `aidlc-required-sections.md` and
 `aidlc-upstream-coverage.md` use `timeout_seconds: 5` with
 `matches: "**/aidlc-docs/**"` (they fire on the artifact tree);
-`aidlc-linter.md` uses `30` with `matches: "**/*.{ts,js}"`;
-`aidlc-type-check.md` uses `60` with `matches: "**/*.{ts,tsx}"`.
+`aidlc-linter.md` uses `30` with `matches: "**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}"`;
+`aidlc-type-check.md` uses `60` with `matches: "**/*.{ts,tsx,py,pyi}"`.
 
 ---
 

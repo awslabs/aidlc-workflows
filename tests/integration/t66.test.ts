@@ -1175,7 +1175,7 @@ description: Probe sensor for canonical-emitter test
     // Edit the linter manifest's matches glob; --check should now fail.
     const linterPath = join(sensorsDrift, "aidlc-linter.md");
     const orig = readFileSync(linterPath, "utf8");
-    writeFileSync(linterPath, orig.replace('"**/*.{ts,js}"', '"**/post-edit/*.ts"'));
+    writeFileSync(linterPath, orig.replace('"**/*.{ts,tsx,js,jsx,mjs,cjs,py,pyi}"', '"**/post-edit/*.ts"'));
     const check = spawnSync(BUN, [GRAPH_TS, "compile", "--check"], { env, encoding: "utf8" });
     expect(check.status).toBe(1);
   });
