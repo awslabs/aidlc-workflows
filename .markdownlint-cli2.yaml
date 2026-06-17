@@ -20,6 +20,10 @@ config:
   # Emphasis as heading — bold text used as sub-labels in lists
   MD036: false
 
+  # First-line heading — pointer/import files (e.g. CLAUDE.md is just
+  # "@AGENTS.md") and banner-first docs legitimately don't open with an H1.
+  MD041: false
+
   # ============================================================
   # STYLE SETTINGS
   # ============================================================
