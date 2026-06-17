@@ -60,7 +60,7 @@ One boundary worth internalizing: a stage file is a framework artifact, immutabl
 
 ---
 
-## consumes and produces form the graph
+## consumes and produces from the graph
 
 The dependency graph isn't written anywhere directly — it emerges from the `consumes` and `produces` declarations across every stage. A stage's `produces` list is its forward edges: when another stage asks "who produces `scope-document`?", the answer is whichever stage declares it. A stage's `consumes` list is its backward edges: it can't run until those artifacts exist.
 
