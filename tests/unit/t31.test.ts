@@ -76,12 +76,16 @@
 // are unambiguous). All temp dirs cleaned in afterAll.
 
 import { afterAll, describe, expect, test } from "bun:test";
+import { existsSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
+  intentsDirOf,
+  removeWorkspaceRecord,
+  seedStateFile,
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -94,15 +98,20 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-// P9: the flat aidlc-docs/audit.md is retired. With no per-intent record seeded,
-// aidlc-log's appendAuditEntry resolves (and CREATES) the bare SPACE record
-// root's per-clone shard. The SPAWNED tool mints its own clone-id, so reads glob
-// every shard via readAllAuditShards. The seeded events (DECISION_RECORDED /
-// QUESTION_ANSWERED) are absent from any baseline, so post-fire counts are
-// unambiguous without a seed (the tool creates the trail on first emit).
+// Every emit-success case runs against a workspace with a RESOLVABLE active
+// intent — createTestProject seeds the per-intent record dir + active-intent
+// cursor, but the cursor only resolves once an aidlc-state.md exists in that
+// record (activeIntent gates on the state file, aidlc-lib.ts). So we seed one.
+// aidlc-log refuses to emit when no active workflow resolves (the null-intent
+// guard — see the "no active workflow" describe block below), which is exactly
+// the path aidlc-log is exercised on: orchestrator-called mid-stage, after a
+// workflow exists. With a real active intent the appended shard lands UNDER the
+// per-intent record (…/intents/<record>/audit/<clone>.md), never the bare space
+// root; readAllAuditShards globs every shard and merges by timestamp.
 function proj(): string {
   const p = createTestProject();
   tempDirs.push(p);
+  seedStateFile(p, "state-mid-ideation.md");
   return p;
 }
 
@@ -350,5 +359,74 @@ describe("t31 aidlc-log dispatch", () => {
     const r = log(["bogus"], p);
     expect(r.status).toBe(1);
     expect(r.out).toContain("Unknown subcommand");
+  });
+});
+
+// ============================================================
+// Null-resolved-intent guard: aidlc-log refuses to emit (and never drops a
+// shard into the BARE space record root) when no active workflow resolves.
+//
+// WHY this matters: aidlc-log threads no --intent/--space, so it relies on
+// default resolution. On a fresh shell (no record) or a >1-intent workspace
+// with no active-intent cursor, activeIntent() → null and the path helpers
+// collapse to the bare aidlc/spaces/<space>/intents/ root. An unguarded emit
+// would write a state/audit shard DIRECTLY there, breaking the invariant that
+// no aidlc-state.md / audit/ ever lives in the bare intents root (aidlc-lib.ts).
+// aidlc-log was the lone emitter missing the "no active workflow → clean error"
+// guard every other emitter has (the hooks no-op via existsSync(stateFilePath);
+// handleEnableTestRun dies; emitError gates on the same check). Mirrors that.
+//
+// These cases REMOVE the seeded record (removeWorkspaceRecord, the no-layout
+// option) so no intent resolves at all — the strongest form of the at-risk
+// state. The guard fires identically for the >1-intent-no-cursor case (both
+// resolve to null), so the no-record case is the representative test.
+// ============================================================
+
+describe("t31 aidlc-log null-intent guard", () => {
+  // The bare space record root: aidlc/spaces/default/intents/. A guarded emit
+  // must leave NO aidlc-state.md and NO audit/ dir directly under it.
+  function bareIntentsRootEntries(p: string): string[] {
+    const root = intentsDirOf(p);
+    if (!existsSync(root)) return [];
+    return readdirSync(root);
+  }
+
+  test("g1: decision with no resolvable active intent errors cleanly (exit 1)", () => {
+    const p = proj();
+    removeWorkspaceRecord(p); // tear the record + cursor down — activeIntent → null
+    const r = log(["decision", "--stage", "feasibility", "--decision", "Pick a framework"], p);
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("No active workflow");
+    // The error path emits nothing — no DECISION_RECORDED anywhere.
+    expect(fileContains(readAllAuditShards(p), "DECISION_RECORDED")).toBe(false);
+  });
+
+  test("g2: decision with no resolvable intent drops NO state/audit in the bare intents root", () => {
+    const p = proj();
+    removeWorkspaceRecord(p);
+    log(["decision", "--stage", "feasibility", "--decision", "Pick a framework"], p);
+    const entries = bareIntentsRootEntries(p);
+    // removeWorkspaceRecord rm's the whole intents dir; a guarded emit must not
+    // recreate it with a stray state file or audit shard directly inside it.
+    expect(entries).not.toContain("aidlc-state.md");
+    expect(entries).not.toContain("audit");
+  });
+
+  test("g3: answer with no resolvable active intent errors cleanly (exit 1)", () => {
+    const p = proj();
+    removeWorkspaceRecord(p);
+    const r = log(["answer", "--stage", "feasibility", "--details", "User chose React"], p);
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("No active workflow");
+    expect(fileContains(readAllAuditShards(p), "QUESTION_ANSWERED")).toBe(false);
+  });
+
+  test("g4: answer with no resolvable intent drops NO state/audit in the bare intents root", () => {
+    const p = proj();
+    removeWorkspaceRecord(p);
+    log(["answer", "--stage", "feasibility", "--details", "User chose React"], p);
+    const entries = bareIntentsRootEntries(p);
+    expect(entries).not.toContain("aidlc-state.md");
+    expect(entries).not.toContain("audit");
   });
 });

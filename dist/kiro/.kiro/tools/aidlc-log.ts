@@ -8,12 +8,38 @@
 // to the emitted fields. Under test-run, this replaces the old auto-events
 // (QUESTION_AUTO_ANSWERED, OPTION_AUTO_SELECTED, ACTION_AUTO_CONFIRMED).
 
+import { existsSync } from "node:fs";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   emitError,
   errorMessage,
   resolveProjectDir,
+  stateFilePath,
 } from "./aidlc-lib.js";
+
+// Resolve the project dir AND assert that an active workflow exists before any
+// audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
+// --intent/--space, so it relies on default intent resolution. On a fresh shell
+// (pre-birth) or a >1-intent workspace with no active-intent cursor, that
+// resolution yields null and stateFilePath()/auditFilePath() collapse to the
+// BARE space record root (aidlc/spaces/<space>/intents/). Emitting there would
+// drop an audit shard DIRECTLY into the bare intents root and break the "no
+// aidlc-state.md / no audit/ ever lives directly in the bare intents root"
+// invariant (aidlc-lib.ts). Existence of the resolved state file is the same
+// "is there an active workflow" signal every other emitter guards on — the
+// hooks via `if (!existsSync(stateFilePath(...)))` no-op, emitError() via the
+// same check, handleEnableTestRun() via a die(). aidlc-log is the lone emitter
+// that was missing it; mirror the clean-error idiom (orchestrator-called → a
+// missing workflow is a misuse, not a routine no-op).
+function resolveActiveProjectDir(explicit?: string): string {
+  const pd = resolveProjectDir(explicit);
+  if (!existsSync(stateFilePath(pd))) {
+    error(
+      'No active workflow — refusing to log an interaction event with no resolvable intent. Start a workflow first by describing what to build (/aidlc "build the auth service"), or switch to an intent (/aidlc intent <name>) if several exist.'
+    );
+  }
+  return pd;
+}
 
 function emitAudit(
   pd: string,
@@ -62,7 +88,7 @@ function handleDecision(args: string[]): void {
   if (!flags.stage) error("Missing --stage <slug>");
   if (!flags.decision) error("Missing --decision <text>");
 
-  const pd = resolveProjectDir(projectDir);
+  const pd = resolveActiveProjectDir(projectDir);
   const fields: Record<string, string> = {
     Stage: flags.stage,
     Decision: flags.decision,
@@ -91,7 +117,7 @@ function handleAnswer(args: string[]): void {
   if (!flags.stage) error("Missing --stage <slug>");
   if (!flags.details) error("Missing --details <text>");
 
-  const pd = resolveProjectDir(projectDir);
+  const pd = resolveActiveProjectDir(projectDir);
   const fields: Record<string, string> = {
     Stage: flags.stage,
     Details: flags.details,
