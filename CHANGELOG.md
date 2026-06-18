@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.1] - 2026-06-18
+
+Greens the default-tier test suite (smoke + unit + integration) after the 2.0.0 reviewer-mechanism merge, with no behaviour change to the reviewer feature itself. Three independent, mechanical defects rode in with the merge: the frontmatter emitter dropped the two `reviewer` fields on a round-trip, the version trio was inconsistent, and three agent-count assertions still expected the pre-merge roster of 11. This release reconciles all three so CI is green on a clean 2.0 baseline. No re-copy of `dist/<harness>/` is required for behaviour — the changes are test-correctness, metadata, and the regenerated dist copies of `aidlc-version.ts`. Refs #387.
+
+* **Frontmatter round-trip now carries the reviewer fields.** `emitStageFrontmatter` lists `reviewer` and `reviewer_max_iterations` in its `FIELD_ORDER` (right after `mode`, matching the order the stage files author them), so a parse → emit → parse cycle no longer drops them for reviewer-bearing stages (t65). The emitter has no runtime callers; this is a test-correctness fix.
+* **Agent-count assertions and the designer-export golden reflect the 13-agent roster.** The structure guard and element-count assertions now expect 13 agents, and the export golden fixture was regenerated via the CLI to include the two reviewer personas (t37, t66).
+* **Version trio reconciled** — `aidlc-version.ts`, the latest CHANGELOG heading, and the README badge all agree at 2.0.1 (t68).
+* No new commands or flags; no breaking change for CI or scripts.
+
+## [2.0.0] - 2026-06-18
+
+Adds **LLM-based quality verification** to the workflow: a stage may declare an optional `reviewer:` in its frontmatter, and after the stage body runs the conductor invokes that reviewer sub-agent as an advisory quality gate before the approval gate (stage-protocol.md §12a). The review loop runs up to `reviewer_max_iterations` times (default 2) and is strictly advisory — the human keeps the final say at the approval gate. Two reviewer personas ship with this release, growing the agent roster from 11 to 13. This release also lands the **Kiro IDE** harness (`dist/kiro-ide/`). It back-fills the reviewer-feature changelog entry that the 0.7.12 graph-compile fix did not record. Re-copy your `dist/<harness>/` to pick up the reviewer-bearing stages and, on Kiro IDE, the new distribution.
+
+* **Optional `reviewer:` stage field** — declare a reviewer in a stage's frontmatter and it runs after the stage body as an advisory quality gate; `reviewer_max_iterations` (default 2) caps the review loop. The reviewer never auto-approves — the human approval gate is unchanged.
+* **Two reviewer personas** — `aidlc-product-lead-agent` and `aidlc-architecture-reviewer-agent`, taking the roster from 11 to 13 agents.
+* **New `dist/kiro-ide/` distribution** — the Kiro IDE harness, alongside the existing Claude Code, Kiro CLI, and Codex CLI trees.
+* No breaking change for CI or scripts; reviewer behaviour is opt-in per stage.
+
 ## [0.7.12] - 2026-06-17
 
 Fixes a bug where the **reviewer step never ran**: stages declare a `reviewer:` in their frontmatter, but the graph compiler dropped the field, so the compiled `stage-graph.json` and the `run-stage` directive never carried it. The conductor correctly treats the directive as authoritative (stage-protocol.md §12a — invoke a reviewer only when the directive includes one), so with the field missing it always skipped the review. The compiler now carries `reviewer` and `reviewer_max_iterations` through to the compiled graph (and coerces the iteration cap to a number). Re-copy your `dist/<harness>/` to pick it up; reviewer-bearing stages (requirements-analysis, user-stories, application-design, code-generation, and others) now run their review loop before the approval gate.

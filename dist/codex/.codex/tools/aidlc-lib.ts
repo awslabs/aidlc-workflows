@@ -1444,6 +1444,8 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "lead_agent",
     "support_agents",
     "mode",
+    "reviewer",
+    "reviewer_max_iterations",
     "for_each",
     "produces",
     "consumes",

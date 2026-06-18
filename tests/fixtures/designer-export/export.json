@@ -539,6 +539,8 @@
         "feature",
         "mvp"
       ],
+      "reviewer": "aidlc-product-lead-agent",
+      "reviewer_max_iterations": 2,
       "inputs": "Intent statement, scope definition, intent backlog",
       "outputs": "aidlc-docs/ideation/rough-mockups/wireframes.md, aidlc-docs/ideation/rough-mockups/user-flow.md, aidlc-docs/ideation/rough-mockups/rough-mockups-questions.md",
       "rules_in_context": [
@@ -906,6 +908,8 @@
         "infra",
         "workshop"
       ],
+      "reviewer": "aidlc-product-lead-agent",
+      "reviewer_max_iterations": 2,
       "inputs": "RE artifacts (if brownfield), user's project description (from audit.md)",
       "outputs": "aidlc-docs/inception/requirements-analysis/requirements.md, aidlc-docs/inception/requirements-analysis/requirements-analysis-questions.md",
       "rules_in_context": [
@@ -989,6 +993,8 @@
         "mvp",
         "workshop"
       ],
+      "reviewer": "aidlc-product-lead-agent",
+      "reviewer_max_iterations": 2,
       "inputs": "aidlc-docs/inception/requirements-analysis/requirements.md, RE artifacts (if brownfield)",
       "outputs": "aidlc-docs/inception/user-stories/stories.md, aidlc-docs/inception/user-stories/personas.md, aidlc-docs/inception/user-stories/user-stories-assessment.md",
       "rules_in_context": [
@@ -1076,6 +1082,8 @@
         "mvp",
         "workshop"
       ],
+      "reviewer": "aidlc-product-lead-agent",
+      "reviewer_max_iterations": 2,
       "inputs": "Rough mockups from rough-mockups stage, user stories from user-stories stage, requirements from requirements-analysis stage",
       "outputs": "aidlc-docs/inception/refined-mockups/mockups.md, aidlc-docs/inception/refined-mockups/interaction-spec.md, aidlc-docs/inception/refined-mockups/design-system-mapping.md, aidlc-docs/inception/refined-mockups/accessibility-checklist.md, aidlc-docs/inception/refined-mockups/refined-mockups-questions.md",
       "rules_in_context": [
@@ -1167,6 +1175,8 @@
         "mvp",
         "workshop"
       ],
+      "reviewer": "aidlc-architecture-reviewer-agent",
+      "reviewer_max_iterations": 2,
       "inputs": "aidlc-docs/inception/requirements-analysis/requirements.md, aidlc-docs/inception/user-stories/stories.md (if produced), RE artifacts (if brownfield)",
       "outputs": "aidlc-docs/inception/application-design/components.md, aidlc-docs/inception/application-design/component-methods.md, aidlc-docs/inception/application-design/services.md, aidlc-docs/inception/application-design/component-dependency.md, aidlc-docs/inception/application-design/decisions.md",
       "rules_in_context": [
@@ -1260,6 +1270,8 @@
         "mvp",
         "workshop"
       ],
+      "reviewer": "aidlc-architecture-reviewer-agent",
+      "reviewer_max_iterations": 2,
       "inputs": "aidlc-docs/inception/application-design/ (all design artifacts), aidlc-docs/inception/requirements-analysis/requirements.md, aidlc-docs/inception/user-stories/stories.md (if produced)",
       "outputs": "aidlc-docs/inception/units-generation/unit-of-work.md, aidlc-docs/inception/units-generation/unit-of-work-dependency.md, aidlc-docs/inception/units-generation/unit-of-work-story-map.md",
       "rules_in_context": [
@@ -1453,6 +1465,8 @@
         "refactor",
         "workshop"
       ],
+      "reviewer": "aidlc-architecture-reviewer-agent",
+      "reviewer_max_iterations": 2,
       "inputs": "unit-of-work.md, unit-of-work-story-map.md, requirements.md, application design artifacts",
       "outputs": "aidlc-docs/construction/{unit-name}/functional-design/ (business-logic-model.md, business-rules.md, domain-entities.md, CONDITIONAL: frontend-components.md)",
       "rules_in_context": [
@@ -1555,6 +1569,8 @@
         "security-patch",
         "workshop"
       ],
+      "reviewer": "aidlc-architecture-reviewer-agent",
+      "reviewer_max_iterations": 2,
       "inputs": "functional design artifacts, requirements.md, RE artifacts",
       "outputs": "aidlc-docs/construction/{unit-name}/nfr-requirements/ (performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md)",
       "rules_in_context": [
@@ -1661,6 +1677,8 @@
         "infra",
         "workshop"
       ],
+      "reviewer": "aidlc-architecture-reviewer-agent",
+      "reviewer_max_iterations": 2,
       "inputs": "NFR requirements artifacts, functional design artifacts",
       "outputs": "aidlc-docs/construction/{unit-name}/nfr-design/ (performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md)",
       "rules_in_context": [
@@ -1776,6 +1794,8 @@
         "infra",
         "workshop"
       ],
+      "reviewer": "aidlc-architecture-reviewer-agent",
+      "reviewer_max_iterations": 2,
       "inputs": "NFR design artifacts, application design, functional design",
       "outputs": "aidlc-docs/construction/{unit-name}/infrastructure-design/ (deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, CONDITIONAL: shared-infrastructure.md)",
       "rules_in_context": [
@@ -1889,6 +1909,8 @@
         "security-patch",
         "workshop"
       ],
+      "reviewer": "aidlc-architecture-reviewer-agent",
+      "reviewer_max_iterations": 2,
       "inputs": "ALL prior design artifacts for this unit",
       "outputs": "application code + aidlc-docs/construction/{unit-name}/code-generation/ (code-generation-plan.md, code-summary.md)",
       "rules_in_context": [
@@ -3210,6 +3232,11 @@
       ]
     },
     {
+      "slug": "aidlc-architecture-reviewer-agent",
+      "display_name": "Architecture Reviewer",
+      "examples": []
+    },
+    {
       "slug": "aidlc-aws-platform-agent",
       "display_name": "AWS Platform Agent",
       "examples": [
@@ -3280,6 +3307,11 @@
         "roadmap.md",
         "personas.md"
       ]
+    },
+    {
+      "slug": "aidlc-product-lead-agent",
+      "display_name": "Product Lead",
+      "examples": []
     },
     {
       "slug": "aidlc-quality-agent",

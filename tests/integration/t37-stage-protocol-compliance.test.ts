@@ -51,8 +51,8 @@
 //   .sh stage-protocol loop (32 stages, one ok/not_ok each)
 //        -> "every stage file references stage-protocol" (32 expects, one/stage)
 //        -> STRONGER: "no non-initialization stage omits stage-protocol"
-//   .sh agent knowledge-dir loop (11 agents)
-//        -> "every agent has a knowledge directory" (11 expects, one/agent)
+//   .sh agent knowledge-dir loop (13 agents)
+//        -> "every agent has a knowledge directory" (13 expects, one/agent)
 //   .sh state-template section loop (7 sections)
 //        -> "state template has every required ## section" (7 expects)
 //   .sh fixture mid-ideation section loop (5 sections)
@@ -165,8 +165,8 @@ describe("every agent has a knowledge directory", () => {
     .map((f) => basename(f, ".md"))
     .sort();
 
-  test("there are 11 agent files [structure guard]", () => {
-    expect(agents.length).toBe(11);
+  test("there are 13 agent files [structure guard]", () => {
+    expect(agents.length).toBe(13);
   });
 
   for (const agent of agents) {

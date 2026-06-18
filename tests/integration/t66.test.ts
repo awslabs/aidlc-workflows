@@ -935,7 +935,7 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
   });
 
   // .sh:892-900 — Group B: element counts match live sources (4 assertions)
-  test("export element counts: stages=32, scopes=9, artifacts=122, agents=11", () => {
+  test("export element counts: stages=32, scopes=9, artifacts=122, agents=13", () => {
     const res = spawnSync(BUN, [GRAPH_TS, "export"], { encoding: "utf8" });
     const out = JSON.parse(res.stdout) as {
       stages: unknown[];
@@ -946,7 +946,7 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
     expect(out.stages.length).toBe(32);
     expect(Object.keys(out.scopes).length).toBe(9);
     expect(out.artifacts.length).toBe(122);
-    expect(out.agents.length).toBe(11);
+    expect(out.agents.length).toBe(13);
   });
 
   // .sh:903-904 — Group C: determinism across two invocations
