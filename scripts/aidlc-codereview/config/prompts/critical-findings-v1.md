@@ -16,7 +16,7 @@ they carry high technical risk if implemented incorrectly.
 - Cryptographic calculations, hash comparisons, signature verification
 - Numeric precision bugs: float arithmetic where exactness matters, integer overflow, off-by-one in algorithms
 - Concurrency-sensitive calculations (race conditions in counters, balances, sequences)
-- **Why**: A subtle technical error can silently produces wrong results
+- **Why**: A subtle technical error can silently produce wrong results
 
 ### 2. CONTROL_FLOW — Dangerous Control Flow
 
@@ -83,7 +83,6 @@ Each element must have exactly these fields:
 - Must be a subset of the range `[start_line, end_line]`
 - If the entire block is equally problematic, include all line numbers in the range
 
-```text
 
 ## Severity Escalation
 
