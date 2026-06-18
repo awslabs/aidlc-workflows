@@ -83,7 +83,6 @@ Each element must have exactly these fields:
 - Must be a subset of the range `[start_line, end_line]`
 - If the entire block is equally problematic, include all line numbers in the range
 
-
 ## Severity Escalation
 
 Tool findings that are individually classified as MEDIUM by their respective
