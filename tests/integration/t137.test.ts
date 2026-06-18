@@ -365,7 +365,7 @@ describe("t137 F3 — corrupted state.md (advance refuses, names Scope)", () => 
     const p = proj();
     // P9: the flat aidlc-docs/ fallback is retired. createTestProject seeds the
     // per-intent shell + default-record cursor, so the advance SUBPROCESS
-    // resolves the seeded record (fixture-0000000000000001). Hand-seed the
+    // resolves the seeded record (DEFAULT_RECORD_DIR). Hand-seed the
     // corrupted state INTO that record (seededStateFile) — valid markdown but
     // missing Scope / Current Stage (mirrors the .sh heredoc, lines 109-114) —
     // and the audit into the shard the subprocess resolves (seededAuditShard).

@@ -96,7 +96,7 @@ import {
 import { parseSensorManifest } from "../../dist/claude/.claude/tools/aidlc-sensor-schema.ts";
 import { memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 
-// P9: createTestProject seeds the per-intent record (fixture-0000000000000001)
+// P9: createTestProject seeds the per-intent record (DEFAULT_RECORD_DIR)
 // + active-intent cursor, so the learnings/graph tools resolve THAT record (not
 // the flat aidlc-docs/, retired). State, runtime-graph, the per-stage memory,
 // and the per-clone audit shard all live under it; the runtime-graph memory_path

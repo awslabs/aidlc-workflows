@@ -33,6 +33,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { seedCustomHarness } from "./custom-harness.ts";
 import {
+  DEFAULT_INTENT_UUID,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   FIXTURE_CLONE_ID,
@@ -65,7 +66,7 @@ function seedTuiWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
   writeFileSync(
     join(intentsDir, "intents.json"),
     `${JSON.stringify(
-      [{ uuid: "00000000-0000-7000-8000-000000000001", slug: DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, ""), status: "in-flight" }],
+      [{ uuid: DEFAULT_INTENT_UUID, slug: DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, ""), status: "in-flight" }],
       null,
       2,
     )}\n`,

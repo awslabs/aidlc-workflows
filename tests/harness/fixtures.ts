@@ -51,7 +51,18 @@ export const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 // resolve the seeded paths via seededRecordDir()/seededStateFile() below (or
 // import recordDirFor from sdk-drive.ts) instead of hardcoding aidlc-docs/.
 export const DEFAULT_SPACE = "default";
-export const DEFAULT_RECORD_DIR = "fixture-0000000000000001";
+// The seeded default intent's uuid (canonical UUIDv7 shape). The record dir name
+// is `<slug>-<id8>` where id8 = idSuffix(uuid) = the trailing 16 hex chars (dashes
+// stripped) — the SAME derivation the runtime uses to join an intents.json row to
+// its dir (aidlc-lib.ts idSuffix/listIntents). Deriving DEFAULT_RECORD_DIR from
+// the uuid keeps the row and the dir consistent BY CONSTRUCTION, so the seeded
+// fixture models a layout the runtime can actually produce (a hand-kept suffix had
+// drifted: uuid …8000-000000000001 → idSuffix `8000000000000001`, not the literal
+// `0000000000000001` the dir used, so listIntents()/updateIntentStatus() never
+// matched the row to its dir).
+export const DEFAULT_INTENT_UUID = "00000000-0000-7000-8000-000000000001";
+const DEFAULT_RECORD_ID8 = DEFAULT_INTENT_UUID.replace(/-/g, "").slice(-16);
+export const DEFAULT_RECORD_DIR = `fixture-${DEFAULT_RECORD_ID8}`;
 // A FIXED per-clone audit-shard token seeded into every fixture project's
 // gitignored aidlc/.aidlc-clone-id. Pinning it makes the audit shard a spawned
 // tool resolves (auditShardName = `<host>-<clone>.md`) DETERMINISTIC, so a test
@@ -179,7 +190,7 @@ function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
     `${JSON.stringify(
       [
         {
-          uuid: "00000000-0000-7000-8000-000000000001",
+          uuid: DEFAULT_INTENT_UUID,
           slug: DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, ""),
           status: "in-flight",
         },
