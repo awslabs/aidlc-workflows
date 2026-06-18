@@ -1,0 +1,70 @@
+# AIDLC Design Review Hook Configuration
+# Copy to .claude/review-config.yaml and customize
+#
+# All keys are optional - missing keys use defaults
+# Invalid values are replaced with defaults (warnings logged)
+
+# Enable/disable hook (default: true)
+# Type: boolean
+enabled: true
+
+# Dry run mode - log actions without executing (default: false)
+# Type: boolean
+dry_run: false
+
+# Minimum findings to trigger review (default: 3, range: 1-100)
+# Type: integer
+# If findings count < threshold, review may be skipped
+review_threshold: 3
+
+# Review timeout in seconds (default: 120, range: 10-3600)
+# Type: integer
+# Maximum time for user prompts before defaulting
+timeout_seconds: 120
+
+# Blocking criteria
+# These settings determine when the hook blocks code generation
+blocking:
+  # Block on critical findings (default: true)
+  # Type: boolean
+  on_critical: true
+
+  # Block if >= N high findings (default: 3, range: 0-100)
+  # Type: integer
+  # Set to 0 to disable high-severity blocking
+  on_high_count: 3
+
+  # Maximum acceptable quality score (default: 30, range: 0-1000)
+  # Type: integer
+  # Higher score = worse quality. Block if score > this value.
+  max_quality_score: 30
+
+# Review depth configuration
+# Controls which AI agents are invoked during review
+review:
+  # Enable alternative approaches analysis (default: true)
+  # Type: boolean
+  # Runs a separate AI agent to suggest alternative design approaches
+  # Adds ~60-90 seconds to review time
+  enable_alternatives: true
+
+  # Enable gap analysis (default: true)
+  # Type: boolean
+  # Runs a separate AI agent to identify missing components/scenarios
+  # Adds ~40-60 seconds to review time
+  enable_gap_analysis: true
+
+  # Note: Setting both to false runs critique-only (fast mode, ~10-20s)
+  # Setting both to true runs comprehensive review (~2-3 minutes)
+
+# Batch processing configuration
+# For large projects with many design artifacts
+batch:
+  # Max files per batch (default: 20, range: 1-100)
+  # Type: integer
+  size_files: 20
+
+  # Max bytes per batch (default: 25600 = 25KB, range: 1024-10485760)
+  # Type: integer
+  # Use larger values for projects with large design documents
+  size_bytes: 25600

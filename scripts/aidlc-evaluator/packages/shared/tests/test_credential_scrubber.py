@@ -26,14 +26,14 @@ class TestScrubCredentials:
 
     def test_jwt_token(self):
         """Test JWT token redaction."""
-        text = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        text = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"  # nosemgrep: generic.secrets.security.detected-jwt-token  # gitleaks:allow
         result = scrub_credentials(text)
         assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" not in result
         assert "[REDACTED-JWT-TOKEN]" in result
 
     def test_github_token(self):
         """Test GitHub personal access token redaction."""
-        text = "GITHUB_TOKEN=ghp_1234567890abcdefghijklmnopqrstuv"
+        text = "GITHUB_TOKEN=ghp_1234567890abcdefghijklmnopqrstuv"  # gitleaks:allow
         result = scrub_credentials(text)
         assert "ghp_1234567890abcdefghijklmnopqrstuv" not in result
         assert "[REDACTED-GITHUB-TOKEN]" in result
@@ -60,7 +60,7 @@ class TestScrubCredentials:
 
     def test_api_key_hex(self):
         """Test generic API key redaction (hex format)."""
-        text = "api_key=a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
+        text = "api_key=a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"  # nosemgrep: generic.secrets.security.detected-generic-api-key  # gitleaks:allow
         result = scrub_credentials(text)
         assert "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4" not in result
         assert "[REDACTED-API-KEY]" in result
@@ -70,7 +70,7 @@ class TestScrubCredentials:
         text = """
         AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
         AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-        TOKEN=ghp_1234567890abcdefghijklmnopqrstuv
+        TOKEN=ghp_1234567890abcdefghijklmnopqrstuv  # gitleaks:allow
         """
         result = scrub_credentials(text)
         assert "AKIAIOSFODNN7EXAMPLE" not in result
@@ -104,7 +104,7 @@ class TestScrubDictValues:
     def test_scrub_all_strings(self):
         """Test scrubbing all string values in a dict."""
         data = {
-            "token": "ghp_1234567890abcdefghijklmnopqrstuv",
+            "token": "ghp_1234567890abcdefghijklmnopqrstuv",  # gitleaks:allow
             "count": 42,
             "message": "Hello world",
         }
@@ -116,8 +116,8 @@ class TestScrubDictValues:
     def test_scrub_specific_keys(self):
         """Test scrubbing only targeted keys."""
         data = {
-            "token": "ghp_1234567890abcdefghijklmnopqrstuv",
-            "message": "ghp_1234567890abcdefghijklmnopqrstuv",
+            "token": "ghp_1234567890abcdefghijklmnopqrstuv",  # gitleaks:allow
+            "message": "ghp_1234567890abcdefghijklmnopqrstuv",  # gitleaks:allow
         }
         result = scrub_dict_values(data, keys_to_scrub={"token"})
         assert "ghp_1234567890abcdefghijklmnopqrstuv" not in result["token"]

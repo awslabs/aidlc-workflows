@@ -128,7 +128,7 @@ Evaluate risk level:
 - No new components or methods
 - Pure implementation changes
 
-### 3.3 Design (Units Planning/Generation) - Execute IF:
+### 3.3 Units Generation - Execute IF:
 - New data models or schemas
 - API changes or new endpoints
 - Complex algorithms or business logic
@@ -261,8 +261,7 @@ flowchart TD
         US["User Stories<br/><b>STATUS</b>"]
         WP["Workflow Planning<br/><b>STATUS</b>"]
         AD["Application Design<br/><b>STATUS</b>"]
-        UP["Units Planning<br/><b>STATUS</b>"]
-        UG["Units Generation<br/><b>STATUS</b>"]
+        UG["Units Generation<br/>(Planning + Generation)<br/><b>STATUS</b>"]
     end
     
     subgraph CONSTRUCTION["🟢 CONSTRUCTION PHASE"]
@@ -300,8 +299,6 @@ flowchart TD
 - [x] User Stories (COMPLETED/SKIPPED)
 - [x] Execution Plan (IN PROGRESS)
 - [ ] Application Design - [EXECUTE/SKIP]
-  - **Rationale**: [Why executing or skipping]
-- [ ] Units Planning - [EXECUTE/SKIP]
   - **Rationale**: [Why executing or skipping]
 - [ ] Units Generation - [EXECUTE/SKIP]
   - **Rationale**: [Why executing or skipping]
@@ -367,7 +364,6 @@ Update `aidlc-docs/aidlc-state.md`:
 - [x] User Stories (if applicable)
 - [x] Workflow Planning
 - [ ] Application Design - [EXECUTE/SKIP]
-- [ ] Units Planning - [EXECUTE/SKIP]
 - [ ] Units Generation - [EXECUTE/SKIP]
 
 ### 🟢 CONSTRUCTION PHASE

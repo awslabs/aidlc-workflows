@@ -19,6 +19,8 @@ from trend_reports.gate import check_regressions
 from trend_reports.models import (
     BaselineMetrics,
     GateResult,
+    InfraFailure,
+    InfraFailureReason,
     RunData,
     RunType,
     SemVer,
@@ -33,6 +35,8 @@ from trend_reports.render_yaml import render_trend_yaml
 __all__ = [
     "BaselineMetrics",
     "GateResult",
+    "InfraFailure",
+    "InfraFailureReason",
     "RunData",
     "RunType",
     "SemVer",

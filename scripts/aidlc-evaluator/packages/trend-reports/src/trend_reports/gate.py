@@ -12,6 +12,9 @@ def check_regressions(trend: TrendData) -> GateResult:
     - Contract test pass rate decreased
     - Unit test failures appeared (> 0 when previous had 0)
     - Qualitative overall score decreased by more than 0.02
+
+    If the latest run is an infrastructure failure, the gate passes with
+    an annotation — results from infra-failed runs are unreliable.
     """
     latest, previous = find_latest_and_previous(trend)
     if latest is None or previous is None:
@@ -21,6 +24,36 @@ def check_regressions(trend: TrendData) -> GateResult:
             latest_label=latest.label if latest else "",
             comparison_label=previous.label if previous else "",
         )
+
+    # If the latest run is an infra failure, skip regression checks
+    if latest.infra_failure.is_infra_failure:
+        return GateResult(
+            passed=True,
+            regressions=[],
+            latest_label=latest.label,
+            comparison_label=previous.label,
+            infra_failure_detected=True,
+            infra_failure_summary=(
+                f"Latest run ({latest.label}) was an infrastructure failure: "
+                f"{latest.infra_failure.summary}. "
+                "Regression check skipped — results are unreliable."
+            ),
+        )
+
+    # If the comparison run is an infra failure, find a non-infra alternative
+    if previous.infra_failure.is_infra_failure:
+        previous = _find_non_infra_previous(trend, latest)
+        if previous is None:
+            return GateResult(
+                passed=True,
+                regressions=[],
+                latest_label=latest.label,
+                comparison_label="",
+                infra_failure_detected=True,
+                infra_failure_summary=(
+                    "No non-infra-failure comparison run available. Regression check skipped."
+                ),
+            )
 
     regressions: list[str] = []
 
@@ -50,6 +83,27 @@ def check_regressions(trend: TrendData) -> GateResult:
         latest_label=latest.label,
         comparison_label=previous.label,
     )
+
+
+def _find_non_infra_previous(trend: TrendData, latest: RunData) -> RunData | None:
+    """Find the most recent non-infra-failure run suitable for comparison."""
+    candidates = [r for r in trend.runs if r is not latest]
+
+    if latest.run_type == RunType.RELEASE:
+        for run in reversed(candidates):
+            if run.run_type == RunType.RELEASE and not run.infra_failure.is_infra_failure:
+                return run
+    else:
+        for run in reversed(candidates):
+            if run.run_type == RunType.RELEASE and not run.infra_failure.is_infra_failure:
+                return run
+
+    # Fallback: any non-infra run
+    for run in reversed(candidates):
+        if not run.infra_failure.is_infra_failure:
+            return run
+
+    return None
 
 
 def find_latest_and_previous(

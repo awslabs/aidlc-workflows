@@ -217,6 +217,11 @@ def cmd_trend(
         # 5. Gate
         if gate:
             result = check_regressions(trend)
+            if result.infra_failure_detected:
+                print(
+                    f"Gate WARNING: {result.infra_failure_summary}",
+                    file=sys.stderr,
+                )
             if result.passed:
                 print(
                     f"Gate PASSED: {result.latest_label} vs {result.comparison_label} "

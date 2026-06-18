@@ -1,0 +1,30 @@
+%% Copyright (c) 2026 AIDLC Design Reviewer Contributors
+%% Licensed under the MIT License
+%% See LICENSE file in the project root for full license text
+
+%% System Context Diagram
+%% AIDLC Design Reviewer - High-Level System Context
+
+graph TB
+    User[("👤 User<br/>(Developer/Architect)")]
+    CLI["🖥️ AIDLC Design Reviewer<br/>(Python CLI Application)"]
+    FS[("📁 File System<br/>(Design Documents)")]
+    Bedrock["☁️ Amazon Bedrock<br/>(Claude Models)<br/>• Opus 4.6<br/>• Sonnet 4.6<br/>• Haiku 4.5"]
+    IAM["🔐 AWS IAM<br/>(Authentication)"]
+    CloudWatch["📊 CloudWatch<br/>(Logging/Metrics)"]
+    Guardrails["🛡️ Bedrock Guardrails<br/>(Content Filtering)"]
+
+    User -->|"Run design review"| CLI
+    CLI -->|"Read design docs"| FS
+    CLI -->|"HTTPS/TLS 1.2+"| Bedrock
+    CLI -->|"Authenticate"| IAM
+    CLI -->|"Log events"| CloudWatch
+    CLI -->|"Write reports"| FS
+    Bedrock -->|"Apply filters"| Guardrails
+    Bedrock -->|"Use permissions"| IAM
+
+    style CLI fill:#4A90E2,stroke:#2E5C8A,stroke-width:3px,color:#fff
+    style Bedrock fill:#FF9900,stroke:#CC7A00,stroke-width:2px,color:#fff
+    style IAM fill:#DD344C,stroke:#AA2839,stroke-width:2px,color:#fff
+    style CloudWatch fill:#FF9900,stroke:#CC7A00,stroke-width:2px,color:#fff
+    style Guardrails fill:#7CB342,stroke:#558B2F,stroke-width:2px,color:#fff

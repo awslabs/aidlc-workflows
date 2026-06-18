@@ -2,7 +2,75 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [1.0.0] - 2026-06-17
+
+### Bug Fixes
+
+- explicitly set tag_name in release workflow (#197)
+- address security scanners follow-up items (#180) (#199)
+- reconcile Units Planning ghost stage with canonical Units Generation (#156)
+- resolve error-severity code scanning alerts (#242)
+- blank-line separate multiple-choice options (#246) (#278)
+- scope per-unit artifact loading to unit dirs (#276)
+- restore AI-Assisted Setup agent prompt lost in merge (#318)
+
+### CI/CD
+
+- exclude noisy semgrep rules that generate false positives (#311)
+
+### Documentation
+
+- add AGENTS.md for cross-agent project guidance (#198)
+- improve contributing guide (#217)
+- clarify Windows zip extraction path for platform setup (#285)
+- fix broken documentation links (#251)
+
+### Features
+
+- detect and flag infrastructure failures in trend reports (#202)
+- add support for codex openai (#153)
+- add aidlc-traceability matrix tool (#236)
+- add AIDLC Design Reviewer tool with monorepo support (#152)
+- adding support for AIDLC v2 alpha (#284)
+- add new resiliency extension (#265)
+
+### Miscellaneous
+
+- bump python-dotenv (#201)
+- add Dependabot configuration for automated dependency updates (#200)
+- bump the uv group across 1 directory with 3 updates (#262)
+- bump the uv group across 1 directory with 2 updates (#270)
+- bump the uv group across 2 directories with 1 update (#287)
+- consolidate dependabot updates into single PR (#381)
+
+## [0.1.8] - 2026-04-20
+
+### Bug Fixes
+
+- restore PR head branch detection lost in #172 merge (#173)
+- Modify tag creation process in tag-on-merge workflow (#174)
+- Update CodeBuild action version and add trigger (#175)
+- forks skip codebuild (#178)
+- present extension opt-in prompts in user's conversation language (#177)
+- Minor updates to README (#192)
+
+### CI/CD
+
+- add markdownlint infrastructure (#159)
+
+### Features
+
+- post trend report executive summary as PR comment (#172)
+- add security scanners workflow (#161)
+- agent-driven setup —  drop the manual steps (#109)
+
+### Miscellaneous
+
+- bump cryptography in /scripts/aidlc-evaluator (#179)
+- bump pytest in /scripts/aidlc-evaluator (#184)
+- bump pillow in /scripts/aidlc-evaluator (#183)
+- Fix CodeQL action versions in workflow (#191)
+- bump python-multipart in /scripts/aidlc-evaluator (#186)
 
 ## [0.1.7] - 2026-04-02
 
@@ -19,25 +87,11 @@ All notable changes to this project will be documented in this file.
 - use PR head branch for rules-ref instead of merge ref (#168)
 - write aidlc-rules/VERSION in release PR to trigger CodeBuild (#169)
 
-### CI/CD
-
-- add markdownlint infrastructure (config, CI workflow, pre-commit)
-- fix MD041 in CODE_OF_CONDUCT.md, re-enable rule
-
 ### Documentation
 
 - add developer's guide for running CodeBuild locally (#94)
 - add working-with-aidlc interaction guide and writing-inputs documents (#121)
 - comprehensive documentation review and remediation (#113)
-
-- enforce MD060 aligned table style, fix 1645 violations
-
-## [0.1.6] - 2026-03-05
-
-### Bug Fixes
-
-- codebuild cache and download fix (#93)
-- correct copy-paste error in error-handling.md (#96)
 
 ### Features
 
@@ -59,7 +113,12 @@ All notable changes to this project will be documented in this file.
 - bump pygments in /scripts/aidlc-evaluator (#151)
 - bump aiohttp in /scripts/aidlc-evaluator (#163)
 
-## [0.1.5] - 2026-02-24
+## [0.1.6] - 2026-03-05
+
+### Bug Fixes
+
+- codebuild cache and download fix (#93)
+- correct copy-paste error in error-handling.md (#96)
 
 ### Features
 
@@ -120,3 +179,5 @@ All notable changes to this project will be documented in this file.
 ### Features
 
 - add Kiro CLI support and multi-platform architecture
+
+

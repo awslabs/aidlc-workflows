@@ -23,17 +23,21 @@ Every question must include meaningful options plus "Other" as the last option:
 [Clear, specific question text]
 
 A) [First meaningful option]
+
 B) [Second meaningful option]
+
 [...additional options as needed...]
+
 X) Other (please describe after [Answer]: tag below)
 
 [Answer]: 
 ```
 
-**CRITICAL**: 
+**CRITICAL**:
 - "Other" is MANDATORY as the LAST option for every question
 - Only include meaningful options - don't make up options to fill slots
 - Use as many or as few options as make sense (minimum 2 + Other)
+- **Each option must be separated by a blank line** so strict CommonMark renderers (IntelliJ, PyCharm, etc.) display them on separate lines instead of collapsing them into a single paragraph
 
 ### Complete Example
 
@@ -46,9 +50,13 @@ Please answer the following questions to help clarify the requirements.
 What is the primary user authentication method?
 
 A) Username and password
+
 B) Social media login (Google, Facebook)
+
 C) Single Sign-On (SSO)
+
 D) Multi-factor authentication
+
 E) Other (please describe after [Answer]: tag below)
 
 [Answer]: 
@@ -57,8 +65,11 @@ E) Other (please describe after [Answer]: tag below)
 Will this be a web or mobile application?
 
 A) Web application
+
 B) Mobile application
+
 C) Both web and mobile
+
 D) Other (please describe after [Answer]: tag below)
 
 [Answer]: 
@@ -67,7 +78,9 @@ D) Other (please describe after [Answer]: tag below)
 Is this a new project or existing codebase?
 
 A) New project (greenfield)
+
 B) Existing codebase (brownfield)
+
 C) Other (please describe after [Answer]: tag below)
 
 [Answer]: 
@@ -81,8 +94,11 @@ Users will answer by filling in the letter choice after [Answer]: tag:
 What is the primary user authentication method?
 
 A) Username and password
+
 B) Social media login (Google, Facebook)
+
 C) Single Sign-On (SSO)
+
 D) Multi-factor authentication
 
 [Answer]: C
@@ -117,9 +133,13 @@ After user confirms completion:
 What database technology will be used?
 
 A) Relational (PostgreSQL, MySQL)
+
 B) NoSQL Document (MongoDB, DynamoDB)
+
 C) NoSQL Key-Value (Redis, Memcached)
+
 D) Graph Database (Neo4j, Neptune)
+
 E) Other (please describe after [Answer]: tag below)
 
 [Answer]: 
@@ -131,7 +151,9 @@ E) Other (please describe after [Answer]: tag below)
 What database will you use?
 
 A) Yes
+
 B) No
+
 C) Maybe
 
 [Answer]: 
@@ -224,8 +246,11 @@ These responses are contradictory because [explanation].
 [Specific question to resolve contradiction]
 
 A) [Option that resolves toward first answer]
+
 B) [Option that resolves toward second answer]
+
 C) [Option that provides middle ground]
+
 D) [Option that reframes the question]
 
 [Answer]: 
@@ -237,8 +262,11 @@ Your response to Q[X] ("[Answer]") is ambiguous because [explanation].
 [Specific question to clarify ambiguity]
 
 A) [Clear option 1]
+
 B) [Clear option 2]
+
 C) [Clear option 3]
+
 D) [Clear option 4]
 
 [Answer]: 
@@ -280,7 +308,9 @@ Please answer these clarifying questions before I can proceed with classificatio
 Is this a new project or existing codebase?
 
 A) New project (greenfield)
+
 B) Existing codebase (brownfield)
+
 C) Other (please describe after [Answer]: tag below)
 
 [Answer]: 
@@ -292,8 +322,11 @@ C) Other (please describe after [Answer]: tag below)
 What is the deployment target?
 
 A) Cloud (AWS, Azure, GCP)
+
 B) On-premises servers
+
 C) Hybrid (both cloud and on-premises)
+
 D) Other (please describe after [Answer]: tag below)
 
 [Answer]: 
@@ -305,9 +338,13 @@ D) Other (please describe after [Answer]: tag below)
 What architectural pattern should be used?
 
 A) Monolithic architecture
+
 B) Microservices architecture
+
 C) Serverless architecture
+
 D) Event-driven architecture
+
 E) Other (please describe after [Answer]: tag below)
 
 [Answer]: 

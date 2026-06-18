@@ -12,4 +12,5 @@ description = "Global allowlist"
 paths = [
     '''\.gitleaks-baseline\.json$''',
     '''uv\.lock$''',
+    '''packages/shared/tests/test_credential_scrubber\.py$''',
 ]

@@ -246,7 +246,7 @@ flowchart TD
 | **Triggers**    | `push` to `main`, `push` tags `v*`, `pull_request` to `main` (label-gated, path-filtered), `workflow_dispatch` (dispatched by `tag-on-merge.yml` or manual — select a tag in the UI to trigger a release build) |
 | **Environment** | `codebuild` (protected, manual approval)                                                                                                                                                                        |
 | **Runner**      | `ubuntu-latest`                                                                                                                                                                                                 |
-| **Concurrency** | Groups by `{workflow}-{ref}`, cancels in-progress                                                                                                                                                               |
+| **Concurrency** | Groups by `{workflow}-{event_name}-{ref}`, cancels in-progress                                                                                                                                                  |
 
 **Purpose:** Runs an AWS CodeBuild project, downloads primary and secondary artifacts from S3, caches them in GitHub Actions cache, uploads them as workflow artifacts, and (when triggered from a `v*` tag) attaches them to the GitHub Release.
 
@@ -351,7 +351,7 @@ This job runs when the `rules` label is applied, immediately removing the remind
 | **Triggers**    | `pull_request_target` to `main` (edited, labeled, opened, ready_for_review, reopened, synchronize, unlabeled); `merge_group` (checks_requested) |
 | **Environment** | *(none)*                                                                                                                                        |
 | **Runner**      | `ubuntu-latest`                                                                                                                                 |
-| **Concurrency** | Groups by `{workflow}-{ref}`, cancels in-progress                                                                                               |
+| **Concurrency** | Groups by `{workflow}-{event_name}-{ref}`, cancels in-progress                                                                                  |
 
 **Purpose:** Validates pull requests before merge. Enforces conventional commit PR titles, the contributor acknowledgment statement, merge-halt controls, and a do-not-merge label gate. Also runs as a merge queue check.
 
@@ -422,7 +422,7 @@ Only runs for `pull_request` and `pull_request_target` events. Skipped for bot a
 | **Triggers**    | `push` to `main`, `pull_request` to `main`, `schedule` (daily 03:47 UTC), `workflow_dispatch`  |
 | **Environment** | *(none)*                                                                                       |
 | **Runner**      | `ubuntu-latest`                                                                                |
-| **Concurrency** | Groups by `{workflow}-{ref}`, cancels in-progress                                              |
+| **Concurrency** | Groups by `{workflow}-{event_name}-{ref}`, cancels in-progress                                 |
 
 **Purpose:** Runs six independent security scanners in parallel to detect secrets, vulnerabilities, misconfigurations, and malware. All HIGH and CRITICAL findings must be remediated or have a documented risk acceptance before merge (see [Security Finding Requirements](#security-finding-requirements)).
 
@@ -675,3 +675,11 @@ Pinned versions should be reviewed and updated **at least quarterly**.
   - How to handle breaking changes in scanner tool upgrades
   - Consider automating this with Dependabot or Renovate
 -->
+
+Agent pre-commit checklist (recommended):
+
+- npx markdownlint-cli2 --fix "**/*.md"  # auto-fix markdown lint issues
+- npx markdownlint-cli2 "**/*.md"    # verify no lint errors
+- uv run pytest                            # run tests via uv wrapper
+
+Agents must run the checklist above and ensure all checks pass before committing and pushing changes.

@@ -97,9 +97,9 @@ If the analysis in step 7 reveals ANY ambiguous answers, you MUST:
 - Include complete approval prompt text
 
 ## Step 11: Update Progress
-- Mark Units Planning complete in aidlc-state.md
+- Mark Units Generation Part 1 (Planning) complete in aidlc-state.md
 - Update the "Current Status" section
-- Prepare for transition to Units Generation
+- Prepare for transition to Units Generation Part 2 (Generation)
 
 ---
 

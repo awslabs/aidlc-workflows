@@ -35,7 +35,7 @@
 - User Stories (CONDITIONAL)
 - Workflow Planning (ALWAYS)
 - Application Design (CONDITIONAL)
-- Design - Units Planning/Generation (CONDITIONAL)
+- Units Generation (CONDITIONAL)
 
 **Outputs**: Requirements, user stories, architectural decisions, unit definitions
 
@@ -79,7 +79,7 @@
 - **Reverse Engineering**: Analyzing existing codebase (brownfield projects only)
 - **User Stories**: Creating user stories and personas (includes Story Planning and Story Generation)
 - **Application Design**: Designing application components, methods, business rules, and services
-- **Design**: Designing system components (includes Units Planning, Units Generation, per-unit design)
+- **Units Generation**: Decomposing the system into units of work (includes internal planning and generation sub-steps, plus per-unit design)
 - **Functional Design**: Technology-agnostic business logic design (per-unit)
 - **NFR Requirements**: Determining NFRs and selecting tech stack (per-unit)
 - **NFR Design**: Incorporating NFR patterns and logical components (per-unit)
@@ -120,7 +120,7 @@ A reusable building block within a service or module. Components are classes, fu
 ### When to Use Each Term
 
 **Unit of Work**:
-- During Units Planning and Units Generation stages
+- During the Units Generation stage
 - When discussing system decomposition
 - In planning documents and discussions
 - Example: "How should we decompose this into units of work?"
@@ -149,11 +149,11 @@ A reusable building block within a service or module. Components are classes, fu
 - **Planning**: Creating a plan with questions and checkboxes for execution
 - **Generation**: Executing the plan to create artifacts
 
-Examples:
-- Story Planning → Story Generation
-- Units Planning → Units Generation
-- Unit Design Planning → Unit Design Generation
-- NFR Planning → NFR Generation
+Examples (these are internal sub-steps within a single stage, not separate stages):
+- Story Planning → Story Generation (within User Stories stage)
+- Units Planning → Units Generation (within Units Generation stage)
+- Unit Design Planning → Unit Design Generation (within per-unit design)
+- NFR Planning → NFR Generation (within NFR Requirements stage)
 - Code Generation Part 1 (Planning) → Code Generation Part 2 (Generation)
 
 ### Depth Levels

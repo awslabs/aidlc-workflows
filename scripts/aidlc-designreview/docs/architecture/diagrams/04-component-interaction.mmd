@@ -1,0 +1,44 @@
+%% Copyright (c) 2026 AIDLC Design Reviewer Contributors
+%% Licensed under the MIT License
+%% See LICENSE file in the project root for full license text
+
+%% Component Interaction Diagram
+%% AIDLC Design Reviewer - Key Component Interactions
+
+sequenceDiagram
+    participant User
+    participant CLI as CLI Application
+    participant Orch as Orchestrator
+    participant Val as Validation Unit
+    participant AI as AI Review Unit
+    participant Rep as Reporting Unit
+    participant Bedrock as Amazon Bedrock
+
+    User->>CLI: design-reviewer review ./aidlc-docs
+    CLI->>Orch: initialize(config_path)
+    Orch->>Val: discover_artifacts(path)
+    Val->>Val: scan files
+    Val->>Bedrock: classify files (AI)
+    Bedrock-->>Val: artifact types
+    Val->>Val: load & validate
+    Val-->>Orch: validated artifacts
+
+    Orch->>AI: review_artifacts(artifacts)
+    AI->>Bedrock: critique agent
+    Bedrock-->>AI: quality analysis
+    AI->>Bedrock: alternatives agent
+    Bedrock-->>AI: suggestions
+    AI->>Bedrock: gap agent
+    Bedrock-->>AI: missing elements
+    AI-->>Orch: review results
+
+    Orch->>Rep: generate_report(results)
+    Rep->>Rep: build consolidated report
+    Rep->>Rep: format HTML + Markdown
+    Rep-->>Orch: report paths
+
+    Orch-->>CLI: success + timings
+    CLI-->>User: Reports generated ✅
+
+    Note over Bedrock: All API calls use<br/>temporary credentials<br/>(IAM roles/profiles)
+    Note over AI: 3 parallel agents<br/>with retry logic<br/>and backoff

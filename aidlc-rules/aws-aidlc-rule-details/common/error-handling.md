@@ -110,7 +110,7 @@
 
 **Error**: Cannot generate design artifacts
 - **Cause**: Missing unit information, unclear requirements
-- **Solution**: Return to Units Planning to clarify unit definition
+- **Solution**: Return to Units Generation to clarify unit definition
 - **Workaround**: Generate partial design, mark gaps
 
 ### NFR Implementation Errors
