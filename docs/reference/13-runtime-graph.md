@@ -21,7 +21,8 @@ workflow runs.
 `runtime-graph.json` is execution truth — for the *current* workflow,
 which stages have started, which have approved, what each stage's
 memory.md looks like, what sensors fired. One file per workflow, lives
-at `aidlc-docs/runtime-graph.json`. Same node shape as
+at `<record>/runtime-graph.json` — `<record>/` = the intent's record dir,
+`aidlc/spaces/<space>/intents/<slug>-<id8>/`. Same node shape as
 `stage-graph.json`, populated with telemetry instead of structure.
 
 It exists so consumers (milestone 11's Bolt fork/merge, milestone 12's gate ritual,
@@ -37,7 +38,7 @@ bumping every consumer in the same PR.
 
 ```ts
 interface RuntimeGraph {
-  workflow_id: string;            // ISO timestamp from LATEST WORKFLOW_STARTED audit row (so `--init --force` re-init identifies the live workflow, not the dead one)
+  workflow_id: string;            // ISO timestamp from LATEST WORKFLOW_STARTED audit row (so a re-birthed intent identifies the live workflow, not a dead one)
   scope: string;                  // from state.md "Scope" field
   started_at: string;             // ISO 8601, same row as workflow_id
   stages: RuntimeStage[];         // chronological order by started_at
@@ -54,7 +55,7 @@ interface RuntimeStage {
   started_at: string | null;      // ISO from STAGE_STARTED; null when `instances` is present
   completed_at: string | null;    // ISO from STAGE_COMPLETED; null when pending OR when `instances` is present
   agent: string | null;           // lead_agent; null when `instances` is present
-  memory_path: string;            // aidlc-docs/<phase>/<stage>/memory.md (parent stage path even on instance-bearing rows)
+  memory_path: string;            // <record>/<phase>/<stage>/memory.md (parent stage path even on instance-bearing rows)
   memory_entries: number | null;  // null = no memory.md file OR `instances` is present; else parseMemoryHeadings.total
   memory_breakdown: {             // null when memory_entries is null
     interpretations: number;
@@ -145,8 +146,8 @@ conductor and filters cheaply:
    invocations get past the early exit. `aidlc-runtime.ts` is excluded
    (recursion guard); `aidlc-log.ts` emits only chatty in-stage events;
    `aidlc-worktree.ts` emits only WORKTREE_* events.
-2. **Audit-existence guard** — exit if `audit.md` doesn't exist yet.
-3. **Heartbeat** — write `aidlc-docs/.aidlc-hooks-health/runtime-compile.last`
+2. **Audit-existence guard** — exit if the intent's `audit/` shard doesn't exist yet.
+3. **Heartbeat** — write `<record>/.aidlc-hooks-health/runtime-compile.last`
    for doctor's silent-hook detection.
 4. **Last-3-block tail-read** — split `audit.md` on `\n---\n`, take the
    last 3 entries.
@@ -290,10 +291,10 @@ replaying audit rows after the snapshot's last `completed_at`.
 
 Five recovery sources, in human read order:
 
-1. **Artefact tree** (`aidlc-docs/<phase>/<stage>/`) — what was produced.
-2. **memory.md** (`aidlc-docs/<phase>/<stage>/memory.md`) — what the
+1. **Artefact tree** (`<record>/<phase>/<stage>/`) — what was produced.
+2. **memory.md** (`<record>/<phase>/<stage>/memory.md`) — what the
    conductor chose to capture.
-3. **audit.md** — the canonical event log; what actually happened.
+3. **audit/ shards** — the canonical event log; what actually happened.
 4. **state.md** — the active-stage cursor.
 5. **runtime-graph.json** — the materialised view; faster to query
    than re-walking audit, but always re-derivable from it.
@@ -321,7 +322,7 @@ fragment-fork` (Bolt start) and `fragment-merge` (Bolt complete
 Construction-phase stage's window.
 
 The per-Bolt fragment is dead-on-arrival in v0.5.0 (no v0.5.0 reader
-of `<worktree>/aidlc-docs/runtime-graph.json`). v0.6.0 `--resume`
+of the worktree's record-dir `runtime-graph.json`). v0.6.0 `--resume`
 should treat the fragment as a hint, with main's post-merge
 runtime-graph as canonical, and additionally check for orphaned
 worktrees per `aidlc-bolt.ts` to surface a recovery prompt for those.
@@ -414,7 +415,7 @@ the deterministic anchor.
 ## 11. Fragment lifecycle
 
 The per-Bolt runtime-graph fragment file lives at
-`<worktree>/aidlc-docs/runtime-graph.json`, gitignored, mirroring
+`<worktree>/<record>/runtime-graph.json`, gitignored, mirroring
 main's location. Its lifecycle is:
 
 1. **Fork on Bolt start.** `aidlc-bolt start --worktree --slug <slug>`

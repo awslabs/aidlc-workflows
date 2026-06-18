@@ -48,7 +48,8 @@ stages — `intent-capture` and `feasibility` respectively).
 
 Things that are **not** artifacts in this registry:
 
-- **File paths.** `aidlc-docs/ideation/scope-definition/scope-document.md`
+- **File paths.** `<record>/ideation/scope-definition/scope-document.md`
+  (where `<record>/` is the intent's record dir, `aidlc/spaces/<space>/intents/<slug>-<id8>/`)
   is a filesystem location; the canonical name is `scope-document`. See
   "Filesystem mapping" below.
 - **Filenames.** The on-disk `.md` file and the canonical name don't have
@@ -147,19 +148,19 @@ Artifacts live on disk at paths that are derivable from `(canonical
 name) + (producing stage) + (per-unit flag)`. Two shapes today:
 
 - **Non-per-unit stages (24 of 29):**
-  `aidlc-docs/<phase>/<stage>/<canonical-name>.md`
+  `<record>/<phase>/<stage>/<canonical-name>.md`
   Example: `feasibility-assessment` (produced by the Ideation
   `feasibility` stage) lives at
-  `aidlc-docs/ideation/feasibility/feasibility-assessment.md`.
+  `<record>/ideation/feasibility/feasibility-assessment.md`.
 
 - **Per-unit Construction stages (5 of 29):** `nfr-requirements`,
   `nfr-design`, `functional-design`, `infrastructure-design`, and
   `code-generation`. These emit one copy of each artifact per Unit of
   Work during Construction:
-  `aidlc-docs/construction/{unit-name}/<stage>/<canonical-name>.md`
+  `<record>/construction/{unit-name}/<stage>/<canonical-name>.md`
   Example: `business-logic-model` (produced by `functional-design`) lives
   at
-  `aidlc-docs/construction/{unit-name}/functional-design/business-logic-model.md`.
+  `<record>/construction/{unit-name}/functional-design/business-logic-model.md`.
 
 Per-unit status is declared by the stage's `for_each: unit-of-work`
 frontmatter field — the five Construction stages that run once per Unit carry

@@ -53,7 +53,7 @@ The loop has four user-visible moments: the agent keeps a diary while the stage 
 
 ### The memory.md diary
 
-While a stage runs, the framework keeps a running observation log at `aidlc-docs/<phase>/<stage>/memory.md`. It is created automatically at stage start and maintained for you — never hand-edited. Entries land under four standard headings:
+While a stage runs, the framework keeps a running observation log at `<record>/<phase>/<stage>/memory.md` — under the intent's record dir, `aidlc/spaces/<space>/intents/<slug>-<id8>/`. It is created automatically at stage start and maintained for you — never hand-edited. Entries land under four standard headings:
 
 - **Interpretations** — choices the agent made where the stage prose was ambiguous
 - **Deviations** — places the agent intentionally departed from the stage prose, and why
@@ -106,7 +106,7 @@ Sam runs `/aidlc feature` on the ANZ banking project. The workflow lands on `req
 
 Nothing in the framework predicted this. There's no rule about ANZ-specific terminology and no sensor catching generic-versus-domain term clashes. The agent simply hit an ambiguity.
 
-**1. The diary records it.** The framework appends an entry under `## Interpretations` in `aidlc-docs/inception/requirements-analysis/memory.md`:
+**1. The diary records it.** The framework appends an entry under `## Interpretations` in `<record>/inception/requirements-analysis/memory.md`:
 
 ```
 - 2026-05-21T09:14:32Z — Stakeholder note used "transaction"; interpreted as
@@ -140,7 +140,7 @@ A sensor result is **advisory** in this release. A failing sensor produces an au
 
 ### What you see in the audit log
 
-Sensor activity shows up in `aidlc-docs/audit.md` as `Sensor Fired`, `Sensor Passed`, and `Sensor Failed` rows. A failed row links to a detail file (for example `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<timestamp>.md`) that lists the specific gap — the missing headings, the unreferenced upstream artifact, the lint error. The audit log is covered in [State and Audit](09-state-and-audit.md).
+Sensor activity shows up in the intent's `audit/` shards as `Sensor Fired`, `Sensor Passed`, and `Sensor Failed` rows. A failed row links to a detail file (for example `<record>/.aidlc-sensors/<stage-slug>/required-sections-<timestamp>.md`) that lists the specific gap — the missing headings, the unreferenced upstream artifact, the lint error. The audit log is covered in [State and Audit](09-state-and-audit.md).
 
 ### The four framework sensors
 
@@ -148,8 +148,8 @@ Four sensors ship with the framework:
 
 | Sensor | Fires on | Checks |
 |--------|----------|--------|
-| `required-sections` | Any `aidlc-docs/` markdown output | The output contains the required H2 headings (a generic content-shape check) |
-| `upstream-coverage` | Any `aidlc-docs/` markdown output | The output prose references each upstream artifact the stage declares it consumes |
+| `required-sections` | Any record-dir markdown output | The output contains the required H2 headings (a generic content-shape check) |
+| `upstream-coverage` | Any record-dir markdown output | The output prose references each upstream artifact the stage declares it consumes |
 | `linter` | `.ts` / `.js` code outputs | Wraps your configured linter (ESLint by default) |
 | `type-check` | `.ts` / `.tsx` code outputs | Wraps your configured type-checker (`tsc` by default) |
 
@@ -164,7 +164,7 @@ You can use everything above without thinking about planes. But the underlying d
 A modern router splits its work into three planes, and AI-DLC mirrors the split:
 
 - **Control plane** — the *schema* of what should run. Stage definitions, rules, sensors. In networking terms, this is route computation: given the configuration, decide what applies where. The control plane is allowed to be slow and clever because it runs once.
-- **Data plane** — the *actual runs*. Stage executions, agent invocations, the files in `aidlc-docs/`. In networking terms, this is packet forwarding: fast, repeated, by lookup. The data plane reads the resolved answers; it doesn't re-derive them.
+- **Data plane** — the *actual runs*. Stage executions, agent invocations, the files in the intent's record dir. In networking terms, this is packet forwarding: fast, repeated, by lookup. The data plane reads the resolved answers; it doesn't re-derive them.
 - **Management plane** — the *observe-and-configure* surface. `/aidlc --doctor`, the audit log, `CLAUDE.md`. You configure here and you query here, at human cadence.
 
 The control plane compiles your rules and sensors into a graph **once**, at workflow start. The data plane reads pre-resolved answers off that graph for the rest of the run. That's why a learning captured mid-workflow waits for the next compile: the framework computes the answer at "topology-change time" (workflow start), not at "packet time" (every stage). The result is reproducible runs and clean recovery after a restart.

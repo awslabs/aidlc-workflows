@@ -62,7 +62,7 @@ Runs individual stages in isolation with known workspace + state fixtures. Verif
 
 **What it tests:**
 - Preflight health gate: Claude CLI on PATH, AWS credentials valid, Claude responds (exit 0), response non-empty (preflight)
-- CLI tool utility handlers: --init, --doctor, --status, --stage, --phase (integration)
+- CLI tool utility handlers: intent-birth, --doctor, --status, --stage, --phase (integration)
 - Individual stages with greenfield/brownfield stubs, artifact verification (integration)
 
 **Run:** `bun tests/run-tests.ts --ci`
@@ -228,19 +228,19 @@ Contents:
 
 ### RE Artifacts Fixture: `tests/fixtures/re-artifacts/`
 
-Pre-seeded reverse-engineering output for downstream stage tests. Copied into `$PROJ/aidlc-docs/inception/reverse-engineering/` during setup.
+Pre-seeded reverse-engineering output for downstream stage tests. Copied into the test project's intent record dir at `$PROJ/aidlc/spaces/default/intents/<record>/inception/reverse-engineering/` during setup.
 
 Contents: 4 minimal .md files (architecture-overview, technology-stack, codebase-analysis, integration-points) describing the brownfield-todo app.
 
 ### Inception Artifacts Fixture: `tests/fixtures/inception-artifacts/`
 
-Pre-seeded inception phase output for tests that jump into construction. Copied into `$PROJ/aidlc-docs/inception/{requirements-analysis,application-design,units-generation}/` during setup.
+Pre-seeded inception phase output for tests that jump into construction. Copied into `$PROJ/aidlc/spaces/default/intents/<record>/inception/{requirements-analysis,application-design,units-generation}/` during setup.
 
 Contents: 7 minimal .md files (requirements, components, component-methods, services, component-dependency, unit-of-work, unit-of-work-story-map) describing the Todo app. Unit name: `todo-core`.
 
 ### Construction Artifacts Fixture: `tests/fixtures/construction-artifacts/`
 
-Pre-seeded construction phase output for tests that jump to mid-construction stages (e.g., code-generation). Copied into `$PROJ/aidlc-docs/construction/todo-core/functional-design/` during setup.
+Pre-seeded construction phase output for tests that jump to mid-construction stages (e.g., code-generation). Copied into `$PROJ/aidlc/spaces/default/intents/<record>/construction/todo-core/functional-design/` during setup.
 
 Contents: 1 minimal .md file (functional-design) describing the todo-core unit's component specs and state management.
 

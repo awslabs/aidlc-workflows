@@ -58,7 +58,7 @@ demands. The shipped default lives in the org rule you author at
 - After Bolt 1 ships, the **ladder prompt** fires once: "How should the
   remaining Bolts run?" with two options, continue autonomously or gate every
   Bolt. The chosen answer persists as `Construction Autonomy Mode` in
-  `aidlc-docs/aidlc-state.md`.
+  the intent's `aidlc-state.md` (under its record dir).
 
 You shape this posture the same way you shape any rule, through the
 strict-additive layers from [Rules and the Learning Loop](05-rules-and-the-loop.md):

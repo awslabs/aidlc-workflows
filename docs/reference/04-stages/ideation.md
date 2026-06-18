@@ -16,7 +16,7 @@ CONDITIONAL stages that do not apply to the current scope.
 **Key characteristics of the Ideation phase:**
 
 - Every stage uses inline execution mode (direct conversation with the user).
-- Stages produce artifacts under `aidlc-docs/ideation/<stage-name>/`.
+- Stages produce artifacts under the intent's record dir at `<record>/ideation/<stage-name>/`, where `<record>` is `aidlc/spaces/<space>/intents/<slug>-<id8>/` (the `audit/` shard dir, the per-stage `memory.md`, and the verification reports live under the same record dir).
 - All stages except Stage 1.1 depend on outputs from earlier stages.
 - Stage 1.7 runs a phase boundary verification check before handing off to
   Inception.
@@ -81,15 +81,15 @@ as seed context so the stage does not re-ask "what do you want to build?"
 
 ### Inputs
 
-- User's project description from `$ARGUMENTS` or `audit.md`
-- Existing `aidlc-docs/` artifacts from prior sessions (if any)
+- User's project description from `$ARGUMENTS` or the intent's `audit/` shards
+- Existing `<record>/` artifacts from prior sessions (if any)
 - Guardrails from `.claude/rules/`
 
 ### Steps
 
 1. **Load Agent Personas** -- Load aidlc-product-agent persona and knowledge. Load aidlc-architect-agent persona for technical context perspective.
 2. **Load Prior Context** -- Read user's project description. Check for existing artifacts. Load guardrails.
-3. **Generate Clarifying Questions** -- Create `aidlc-docs/ideation/intent-capture/intent-capture-questions.md` with questions covering business problem, customer, success metrics, initiative trigger, project type. Uses `[Answer]:` tag format with A-E options plus X (Other). Offers tri-mode question flow.
+3. **Generate Clarifying Questions** -- Create `<record>/ideation/intent-capture/intent-capture-questions.md` with questions covering business problem, customer, success metrics, initiative trigger, project type. Uses `[Answer]:` tag format with A-E options plus X (Other). Offers tri-mode question flow.
 4. **Collect and Analyze Answers** -- Confirm all tags filled. Run ambiguity/contradiction analysis.
 5. **Generate Artifacts** -- Produce intent statement and stakeholder map.
 6. **Update State** -- Mark 1.1 as `[x]` completed.
@@ -346,7 +346,7 @@ Phase boundary verification:
 
 | File                                          | Contents                                    |
 |-----------------------------------------------|---------------------------------------------|
-| `aidlc-docs/verification/phase-check-ideation.md` | Ideation-to-Inception traceability check |
+| `<record>/verification/phase-check-ideation.md` | Ideation-to-Inception traceability check |
 
 ### Approval Gate
 

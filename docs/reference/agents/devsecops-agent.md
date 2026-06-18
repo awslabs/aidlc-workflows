@@ -64,9 +64,9 @@ Path: `.claude/knowledge/aidlc-devsecops-agent/`
 
 ### Team (Tier 2)
 
-Path: `aidlc-docs/knowledge/aidlc-devsecops-agent/` (user-managed)
+Path: `aidlc/spaces/<space>/intents/<slug>-<id8>/knowledge/aidlc-devsecops-agent/` (the intent's record dir; user-managed)
 
-Scaffolded by the `--init` command. Populated by the team with project-specific
+Scaffolded into each intent's record dir when the intent is born. Populated by the team with project-specific
 security context such as existing threat models, security policies, approved
 encryption standards, or penetration test findings.
 

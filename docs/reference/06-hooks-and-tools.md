@@ -2,6 +2,8 @@
 
 This chapter documents the hook system architecture, all ten hook scripts, the audit event taxonomy, CLI tool configuration, and the deterministic utility tool.
 
+> **Path convention.** State, audit, and artifacts live under the active intent's **record dir** — `aidlc/spaces/<space>/intents/<slug>-<id8>/`, written `<record>/` below. The audit trail is a directory of per-clone shards under `<record>/audit/`, not a single file.
+
 ---
 
 ## Hook System Architecture
@@ -75,7 +77,7 @@ sequenceDiagram
 
     Note over CC: Stage execution
     CC->>AL: PostToolUse (Write/Edit)
-    AL->>AL: Filter: aidlc-docs/ only, skip audit.md
+    AL->>AL: Filter: record dir only, skip audit/ shards
     AL->>AF: Append ARTIFACT_CREATED or ARTIFACT_UPDATED
 
     Note over CC: Subagent completes
@@ -103,16 +105,16 @@ These six hooks (the audit/sensor/statusline/runtime-compile/state-validation/su
 
 **Source:** `.claude/hooks/aidlc-audit-logger.ts`
 **Trigger:** After every `Write` or `Edit` Claude Code tool call (matcher: `"Write|Edit"`)
-**Purpose:** Auto-log artifact writes to `aidlc-docs/audit.md`
+**Purpose:** Auto-log artifact writes to the intent's `audit/` shards
 
 **Processing steps:**
 
 1. **Project directory resolution:** Resolves `$CLAUDE_PROJECT_DIR` with fallback to script path derivation and CWD detection.
 2. **Health heartbeat:** Writes UTC timestamp to `.aidlc-hooks-health/audit-logger.last`.
 3. **JSON parsing:** Reads stdin, extracts `tool_name` and `tool_input.file_path`.
-4. **Path filtering:** Skips files not under `aidlc-docs/`. Skips `audit.md` itself (avoids recursion).
-5. **Audit file guard:** Exits silently if `audit.md` does not exist (the framework creates it).
-6. **Context extraction:** Strips path prefix up to `aidlc-docs/`, replaces `/` with ` > ` for a breadcrumb (e.g., `inception > requirements-analysis > requirements.md`).
+4. **Path filtering:** Skips files not under the intent's record dir. Skips the `audit/` shards themselves (avoids recursion).
+5. **Audit file guard:** Exits silently if the active intent's `audit/` shard does not exist (the framework creates it).
+6. **Context extraction:** Strips the path prefix up to the record dir, replaces `/` with ` > ` for a breadcrumb (e.g., `inception > requirements-analysis > requirements.md`).
 7. **Atomic locking:** Uses `mkdir`-based lock in the system temp directory (`os.tmpdir()`) with 3-retry loop (100ms delay). The hash isolates locks per project.
 8. **Log entry:** Appends a canonical `ARTIFACT_CREATED` (for Write to a net-new path) or `ARTIFACT_UPDATED` (for Edit, or Write overwriting existing) event via `appendAuditEntry`. Fields: Timestamp, Event, Tool, File, Context.
 
@@ -219,7 +221,7 @@ This is the framework's **first and only flow-altering hook**. Every other hook 
 **Processing steps:**
 
 1. **stdin idiom:** Mirrors `log-subagent.ts` — a TTY means no Claude Code JSON is coming (test/debug), so it allows the stop. Otherwise it reads the Stop-hook JSON, from which it needs only `stop_hook_active`.
-2. **No-op outside AIDLC:** If there is no `aidlc-docs/aidlc-state.md` under the project dir, there is nothing to enforce — it allows the stop. The frontmatter `Stop` matcher already scopes the hook to `/aidlc`; this is defence in depth so a non-AIDLC session is never blocked.
+2. **No-op outside AIDLC:** If there is no active intent's `aidlc-state.md` under the project dir, there is nothing to enforce — it allows the stop. The frontmatter `Stop` matcher already scopes the hook to `/aidlc`; this is defence in depth so a non-AIDLC session is never blocked.
 3. **Compose the engine:** Runs `bun .claude/tools/aidlc-orchestrate.ts next --project-dir <dir>` and parses the directive `kind`. It does not re-derive state — it composes the engine.
 4. **`done` → allow:** If the directive is `done`, the workflow is complete; the hook emits nothing and exits 0 (the precedent non-blocking pattern), then clears the recursion counter.
 5. **Human-wait → allow:** If the directive is pending but the conductor is correctly parked on the human, the hook allows the stop and records a drop rather than spamming the nudge. Three cases qualify: the current stage's checkbox is positively `[?]` awaiting-approval, `[R]` revising, or `[-]` in-progress **with** an unanswered `[Answer]:` tag in its `<slug>-questions.md` (a pending mid-stage clarifying question) — the last suppressed under autonomous Construction. Positive-confirmation only: any other state, no checkbox row, no open question, or a parse error falls through to the block below. See "Human-wait carve-out" below.
@@ -231,7 +233,7 @@ This is the framework's **first and only flow-altering hook**. Every other hook 
 **Recursion guard — a stuck block can never trap the session.** A block that re-fires forever is the one way a hook could trap a turn, so recursion is bounded two ways, both native:
 
 - **`stop_hook_active`** — Claude Code sets this true when the current stop is itself the product of a prior Stop-hook block. The hook reads it as a signal that it is already inside a blocked sequence.
-- **A no-progress counter** — the hook persists a small record under `aidlc-docs/.aidlc-stop-hook/block-count.json`, keyed on the workflow's *progress signature* (Current Stage slug + audit-tail length). A `report` that advances the workflow changes that signature, so the counter resets — a healthy loop is never throttled. When the signature is unchanged across consecutive blocks (no report ran), the counter increments. Once the no-progress streak reaches the ceiling — `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`, default 8 — the hook **releases** the turn (allows the stop), so a stuck loop always lets go.
+- **A no-progress counter** — the hook persists a small record under `<record>/.aidlc-stop-hook/block-count.json` (in the intent's record dir), keyed on the workflow's *progress signature* (Current Stage slug + audit-tail length). A `report` that advances the workflow changes that signature, so the counter resets — a healthy loop is never throttled. When the signature is unchanged across consecutive blocks (no report ran), the counter increments. Once the no-progress streak reaches the ceiling — `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`, default 8 — the hook **releases** the turn (allows the stop), so a stuck loop always lets go.
 
 **Human-wait carve-out — an interactive gate is not punished.** Three cases where the conductor ends its turn *because* it is waiting on the human are handled so the hook never spams the nudge:
 
@@ -284,7 +286,7 @@ Next Action: resume current stage
 **Purpose:** Emit a `SESSION_ENDED` audit event on every graceful Claude Code exit when an active AI-DLC workflow is present.
 
 **Lifecycle:**
-1. **Workflow guard:** Exits silently when `aidlc-docs/aidlc-state.md` does not exist (the canonical "active workflow" marker — same guard as `session-start.ts`). A scaffolded-but-uninitialised workspace with no state file emits nothing.
+1. **Workflow guard:** Exits silently when no active intent's `aidlc-state.md` exists (the canonical "active workflow" marker — same guard as `session-start.ts`). A workspace shell with no born intent emits nothing.
 2. **Audit emission:** Appends `SESSION_ENDED` to `audit.md` via `aidlc-audit.ts`. Pairs with `session-start.ts`'s `SESSION_STARTED` for session lifecycle observability.
 
 ### Status Line: aidlc-statusline.ts
@@ -311,7 +313,7 @@ Special states: `[AIDLC] ready` (no workflow), `[AIDLC] COMPLETE [▓▓▓▓�
 
 ## Audit Event Taxonomy
 
-The audit trail (`aidlc-docs/audit.md`) uses a **67-event taxonomy** defined in `.claude/knowledge/aidlc-shared/audit-format.md`. Every event is tool-owned or hook-owned — the conductor no longer emits events from prose. See [State Machine](12-state-machine.md) for the canonical emitter registry and the audit-first atomicity rules; the summary below is a cross-reference, not the source of truth.
+The audit trail (the intent's `audit/` shards) uses a **67-event taxonomy** defined in `.claude/knowledge/aidlc-shared/audit-format.md`. Every event is tool-owned or hook-owned — the conductor no longer emits events from prose. See [State Machine](12-state-machine.md) for the canonical emitter registry and the audit-first atomicity rules; the summary below is a cross-reference, not the source of truth.
 
 ### Event Categories
 
@@ -363,7 +365,7 @@ Every stage execution must produce exactly two events:
 
 | Source | Events | When |
 |--------|--------|------|
-| `audit-logger.ts` | `ARTIFACT_CREATED` / `ARTIFACT_UPDATED` | Every Write/Edit to `aidlc-docs/` (except `audit.md`) |
+| `audit-logger.ts` | `ARTIFACT_CREATED` / `ARTIFACT_UPDATED` | Every Write/Edit to the intent's record dir (except the `audit/` shards) |
 | `log-subagent.ts` | `SUBAGENT_COMPLETED` | Any subagent stop |
 | `session-start.ts` | `SESSION_STARTED` / `SESSION_RESUMED` | Per Claude Code SessionStart hook input `source` field |
 | `session-end.ts` | `SESSION_ENDED` | Claude Code SessionEnd hook |
@@ -448,7 +450,7 @@ Routes a Sensor invocation: it validates inputs, resolves the manifest and stage
 | `describe <id>` | Print one Sensor's manifest fields (command, default severity, `matches` glob, optional timeout, manifest path) | — |
 | `fire <id> --stage <slug> --output-path <path>` | Fire a Sensor against an output file | `SENSOR_FIRED` then one of `SENSOR_PASSED` / `SENSOR_FAILED` / `SENSOR_BUDGET_OVERRIDE` |
 
-The dispatcher exits non-zero only on its own invocation errors (unknown id, missing flag, `matches` mismatch). A Sensor *outcome* — pass, fail, timeout, or any script error — is advisory: the CLI still exits 0 and always closes the `SENSOR_FIRED` row with a paired terminal row. Failures write a detail file to `aidlc-docs/.aidlc-sensors/<stage>/<id>-<fire-id>.md` race-free (`wx`-flag write + rename). The same dispatcher is driven by the `aidlc-sensor-fire.ts` PostToolUse hook on every matching `Write` / `Edit`.
+The dispatcher exits non-zero only on its own invocation errors (unknown id, missing flag, `matches` mismatch). A Sensor *outcome* — pass, fail, timeout, or any script error — is advisory: the CLI still exits 0 and always closes the `SENSOR_FIRED` row with a paired terminal row. Failures write a detail file to `<record>/.aidlc-sensors/<stage>/<id>-<fire-id>.md` (in the intent's record dir) race-free (`wx`-flag write + rename). The same dispatcher is driven by the `aidlc-sensor-fire.ts` PostToolUse hook on every matching `Write` / `Edit`.
 
 ### `aidlc-learnings.ts` — Learning-gate tool
 
@@ -463,7 +465,7 @@ Both subcommands accept `--project-dir <path>`. Under Test-Run Mode, `surface` r
 
 ### `aidlc-runtime.ts` — Runtime-graph compiler + reader
 
-Materialises `aidlc-docs/runtime-graph.json`, the data-plane mirror of `stage-graph.json`. `compile` walks `audit.md` plus the per-stage `memory.md` files; `read` prints one stage row. The compiler is a pure observer — it never mutates `aidlc-state.md` and never prompts. See [Runtime Graph](13-runtime-graph.md) for the locked schema.
+Materialises the intent's `runtime-graph.json`, the data-plane mirror of `stage-graph.json`. `compile` walks the `audit/` shards plus the per-stage `memory.md` files; `read` prints one stage row. The compiler is a pure observer — it never mutates `aidlc-state.md` and never prompts. See [Runtime Graph](13-runtime-graph.md) for the locked schema.
 
 | Subcommand | Purpose | Emits |
 |------------|---------|-------|
@@ -479,7 +481,7 @@ Re-running `compile` against the same audit produces a byte-equivalent graph. It
 ## Prerequisites
 
 1. **bun** -- Required for all 10 hooks and every CLI tool (`aidlc-utility.ts`, `aidlc-state.ts`, `aidlc-jump.ts`, `aidlc-orchestrate.ts`, `aidlc-audit.ts`, `aidlc-validate.ts`, `aidlc-graph.ts`, `aidlc-sensor.ts`, `aidlc-learnings.ts`, `aidlc-runtime.ts`). Install via `curl -fsSL https://bun.sh/install | bash`. On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 | iex"`. Must be on PATH for non-interactive shells.
-2. **$CLAUDE_PROJECT_DIR** -- Set by Claude Code to the project root. All hooks use it to locate `aidlc-docs/`.
+2. **$CLAUDE_PROJECT_DIR** -- Set by Claude Code to the project root. All hooks use it to locate the `aidlc/` workspace (and the active intent's record dir within it).
 
 No other prerequisites: every hook and tool is TypeScript run via bun, so no `jq`, `sed`, `awk`, Git Bash, or WSL is required on any platform.
 

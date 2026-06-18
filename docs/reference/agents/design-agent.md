@@ -63,9 +63,9 @@ Path: `.claude/knowledge/aidlc-design-agent/`
 
 ### Team (Tier 2)
 
-Path: `aidlc-docs/knowledge/aidlc-design-agent/` (user-managed)
+Path: `aidlc/spaces/<space>/intents/<slug>-<id8>/knowledge/aidlc-design-agent/` (the intent's record dir; user-managed)
 
-Scaffolded by the `--init` command. Populated by the team with project-specific
+Scaffolded into each intent's record dir when the intent is born. Populated by the team with project-specific
 design assets such as existing design systems, brand guidelines, typography
 rules, or component libraries.
 

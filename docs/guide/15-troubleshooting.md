@@ -30,7 +30,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 
 ## Hooks Not Firing
 
-**Symptom**: No entries appearing in `aidlc-docs/audit.md` after file writes, or no subagent completion logs.
+**Symptom**: No entries appearing in the intent's `audit/` shards after file writes, or no subagent completion logs.
 
 ### `bun` not installed or not on PATH
 
@@ -71,10 +71,10 @@ The state file is created during Initialization or when a scope is provided to `
 
 The `validate-state.ts` hook checks for two required sections on every compaction: `## Stage Progress` and `## Current Status`. To manually repair:
 
-1. Open `aidlc-docs/aidlc-state.md`
+1. Open the active intent's `aidlc-state.md` (under `aidlc/spaces/<space>/intents/<slug>-<id8>/`)
 2. Verify these sections exist: Project Information, Scope Configuration, Workspace State, Stage Progress, Current Status, Session Resume Point
 3. Compare against the template at `.claude/knowledge/aidlc-shared/state-template.md`
-4. Restore missing sections from the template, filling in values from `audit.md` history
+4. Restore missing sections from the template, filling in values from the `audit/` shard history
 
 ---
 
@@ -124,7 +124,7 @@ Use `/aidlc --stage <target>` to jump to a different stage. Intervening stages w
 
 ### What is preserved
 
-All `aidlc-docs/` artifacts, `aidlc-state.md`, `audit.md`, and `.aidlc-recovery.md` persist on disk. Only in-memory conversation context and partial in-progress work not yet written to files is lost.
+All record-dir artifacts, `aidlc-state.md`, the `audit/` shards, and `.aidlc-recovery.md` persist on disk. Only in-memory conversation context and partial in-progress work not yet written to files is lost.
 
 ### How to recover
 
@@ -140,15 +140,16 @@ If the recovery breadcrumb warns about a mismatch, choose **Redo current stage**
 
 ## Audit Log Growing Too Large
 
-**Symptom**: `audit.md` has grown to thousands of lines over a long project.
+**Symptom**: this clone's audit shard has grown to thousands of lines over a long project.
 
 ### How to archive
 
 ```bash
-mv aidlc-docs/audit.md aidlc-docs/audit-2026-02.md
+# from the intent's record dir; <host>-<clone>.md is this clone's shard
+mv audit/<host>-<clone>.md audit-archive/<host>-<clone>-2026-02.md
 ```
 
-The next `/aidlc` invocation (or any hook-triggered write) creates a fresh `audit.md`. All audit content is safe to archive — the engine does not read `audit.md` for routing decisions.
+The next `/aidlc` invocation (or any hook-triggered write) creates a fresh shard. All audit content is safe to archive — the engine does not read the `audit/` shards for routing decisions.
 
 ### Git considerations
 
@@ -216,7 +217,7 @@ The `--doctor` utility command validates your setup. Run it whenever something s
 /aidlc --doctor
 ```
 
-It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires — all 10 framework hooks — must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), project structure (`settings.json`), docs scaffold (`aidlc-docs/`), state/audit consistency, hook heartbeats, graph integrity (no cycles, every graph entry has a file), scope validation across all 9 scopes, stage schema + graph references, and keyword overlap across scopes. It also surfaces two advisory rows that always pass (they never change the exit code): **Rule drift** (team/project rules that overlap a populated org-policy heading, flagged for contradiction review) and **Paired sensor coverage** (rules carrying a `pairing:` whose named Sensor resolves to a stage). Exits 0 on full pass, 1 on any failure; the report writes to stdout either way. `--doctor` is **read-only**: on a pristine project (no `aidlc-docs/audit.md` yet) it creates nothing — safe to run before `--init` as the first thing you try when something seems off. On an initialized project it records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
+It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires — all 10 framework hooks — must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency, hook heartbeats, graph integrity (no cycles, every graph entry has a file), scope validation across all 9 scopes, stage schema + graph references, and keyword overlap across scopes. It also surfaces two advisory rows that always pass (they never change the exit code): **Rule drift** (team/project rules that overlap a populated org-policy heading, flagged for contradiction review) and **Paired sensor coverage** (rules carrying a `pairing:` whose named Sensor resolves to a stage). Exits 0 on full pass, 1 on any failure; the report writes to stdout either way. `--doctor` is **read-only**: on a fresh shell with no intent yet it creates nothing — safe to run before the first intent is born, as the first thing you try when something seems off. Once an intent exists it records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
 
 See [CLI Commands](11-cli-commands.md#aidlc---doctor--health-check) for full details on what each check validates and how to fix failures.
 

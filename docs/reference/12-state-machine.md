@@ -2,7 +2,7 @@
 
 This chapter is the canonical reference for AI-DLC's state machines, the audit-event taxonomy, and the rule that connects them — **every state transition has exactly one tool-owned emitter**. Keeping this chapter's tables in sync with the code is enforced by the drift test at `tests/integration/t48-audit-event-emitters.test.ts`. If the doc and the code disagree, t48 fails.
 
-Three nested state machines drive AI-DLC: **workflow**, **phase**, and **stage**. A fourth, independent stream records **session** events emitted by Claude Code hooks. These four streams share one `audit.md` but are owned by different code paths, so it's easiest to read them as separate concerns and remember that their timelines interleave.
+Three nested state machines drive AI-DLC: **workflow**, **phase**, and **stage**. A fourth, independent stream records **session** events emitted by Claude Code hooks. These four streams share the intent's audit trail (the `audit/` shard dir under its record dir, `<record>/` = `aidlc/spaces/<space>/intents/<slug>-<id8>/`) but are owned by different code paths, so it's easiest to read them as separate concerns and remember that their timelines interleave.
 
 > **North-star invariant:** TypeScript owns deterministic bookkeeping; the LLM owns judgment. Every audit emission originates in a tool or hook, keeping LLM prose out of the emit path. If you're reading an MD file and see `aidlc-audit.ts append <EVENT>` as a prose instruction, that is a bug.
 >
@@ -35,7 +35,7 @@ stateDiagram-v2
 
 **Status values:** `Running`, `Completed`.
 
-A workflow starts when `/aidlc --init` runs (or `--init --force` on an existing project) and ends when the last in-scope stage's approval gate closes. Test-run early stops (`/aidlc --stage X --test-run`) also emit `WORKFLOW_COMPLETED` with `Reason=test-run-stopped-at-<target>`. There is no `Paused` status and no `Waiting for Approval` status — approval is a stage-level concern, pause has no UX.
+A workflow starts when the first intent is born (`aidlc-utility intent-birth`, auto-invoked on the first `/aidlc` or via `/aidlc-init`) and ends when the last in-scope stage's approval gate closes. Test-run early stops (`/aidlc --stage X --test-run`) also emit `WORKFLOW_COMPLETED` with `Reason=test-run-stopped-at-<target>`. There is no `Paused` status and no `Waiting for Approval` status — approval is a stage-level concern, pause has no UX.
 
 A workflow's `Running` state persists across Claude Code sessions. You start a workflow on Monday, stop the session, resume on Tuesday — the workflow is still `Running`; the *session* ended and a new one started.
 
@@ -68,16 +68,16 @@ stateDiagram-v2
 
 **Status values:** `Pending`, `Active`, `Verified`, `Skipped`.
 
-Phase state is tracked in the `## Phase Progress` section of `aidlc-state.md`. `--init` stamps `Pending` for every phase, emits `PHASE_SKIPPED` per phase the scope excludes (before any stage starts), then promotes the current phase to `Active`. Phase completion fires both `PHASE_COMPLETED` and `PHASE_VERIFIED` at the phase boundary, then `PHASE_STARTED` for the next one.
+Phase state is tracked in the `## Phase Progress` section of `aidlc-state.md`. Intent birth stamps `Pending` for every phase, emits `PHASE_SKIPPED` per phase the scope excludes (before any stage starts), then promotes the current phase to `Active`. Phase completion fires both `PHASE_COMPLETED` and `PHASE_VERIFIED` at the phase boundary, then `PHASE_STARTED` for the next one.
 
 | Transition | Trigger | Emitter |
 |---|---|---|
-| `Pending → Active` (first phase) | `aidlc-utility init` | `tools/aidlc-utility.ts` |
-| `Pending → Skipped` | `aidlc-utility init` (per scope exclusion) | `tools/aidlc-utility.ts` |
+| `Pending → Active` (first phase) | `aidlc-utility intent-birth` | `tools/aidlc-utility.ts` |
+| `Pending → Skipped` | `aidlc-utility intent-birth` (per scope exclusion) | `tools/aidlc-utility.ts` |
 | `Active → Verified` | `aidlc-state advance` or `complete-workflow` at phase boundary | `tools/aidlc-state.ts` |
 | `Pending → Active` (boundary) | `aidlc-state advance` at phase boundary, or `aidlc-jump execute` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` |
 
-At the init→post-init hand-off, `aidlc-utility init` itself emits `PHASE_COMPLETED + PHASE_VERIFIED + PHASE_STARTED + STAGE_STARTED` after the final init stage so the audit trail captures the transition instead of going silent between `--init` and the first `advance`.
+At the init→post-init hand-off, `aidlc-utility intent-birth` itself emits `PHASE_COMPLETED + PHASE_VERIFIED + PHASE_STARTED + STAGE_STARTED` after the final init stage so the audit trail captures the transition instead of going silent between birth and the first `advance`.
 
 ---
 
@@ -157,7 +157,7 @@ Session events are emitted by Claude Code hooks, not by AI-DLC tools. A session 
 | `SESSION_COMPACTED` | `hooks/aidlc-validate-state.ts` | `PreCompact` — fires at compaction time so it's captured reliably |
 | `SESSION_ENDED` | `hooks/aidlc-session-end.ts` | `SessionEnd` |
 
-Session hooks check for `aidlc-docs/aidlc-state.md` in the current directory before emitting. If the file doesn't exist (no active AI-DLC workflow in the cwd), the hook exits silently without writing to any audit log. Session events exist to annotate an active workflow's timeline — a session in a directory with no workflow has nothing to annotate.
+Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/spaces/<space>/intents/<slug>-<id8>/`) before emitting. If no such file exists (no active AI-DLC workflow in the cwd), the hook exits silently without writing to any audit log. Session events exist to annotate an active workflow's timeline — a session in a directory with no workflow has nothing to annotate.
 
 ### Compaction awareness
 
@@ -173,7 +173,7 @@ Session hooks check for `aidlc-docs/aidlc-state.md` in the current directory bef
 
 | Event | Emitter | Notes |
 |---|---|---|
-| `WORKFLOW_STARTED` | `tools/aidlc-utility.ts` | Mandatory first event on every init; `--init --force` also emits this |
+| `WORKFLOW_STARTED` | `tools/aidlc-utility.ts` | Mandatory first event on every intent birth |
 | `WORKFLOW_COMPLETED` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | `Reason=test-run-stopped-at-<target>` for `--test-run` early stops |
 
 ### Phase lifecycle
@@ -183,7 +183,7 @@ Session hooks check for `aidlc-docs/aidlc-state.md` in the current directory bef
 | `PHASE_STARTED` | `tools/aidlc-utility.ts`, `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | First fire in init; subsequent fires at stage-tool phase boundaries |
 | `PHASE_COMPLETED` | `tools/aidlc-utility.ts`, `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | Paired with `PHASE_VERIFIED` at every boundary |
 | `PHASE_VERIFIED` | `tools/aidlc-utility.ts`, `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | Always paired with `PHASE_COMPLETED` |
-| `PHASE_SKIPPED` | `tools/aidlc-utility.ts` | One per scope-excluded phase, emitted at `--init` |
+| `PHASE_SKIPPED` | `tools/aidlc-utility.ts` | One per scope-excluded phase, emitted at intent birth |
 
 ### Stage lifecycle
 
@@ -284,7 +284,7 @@ Pre-registered for v0.4.0; emitters land in milestone 8 (stage 2.2 practices-dis
 | Event | Emitter | Trigger |
 |---|---|---|
 | `PRACTICES_DISCOVERED` | `tools/aidlc-state.ts` `practices-event --type discovered` | Brownfield discovery + draft completion; team-practices draft awaiting affirmation at the stage 2.2 gate |
-| `PRACTICES_AFFIRMED` | `tools/aidlc-state.ts` `practices-promote` | Team approved practices; content promoted from `aidlc-docs/inception/practices-discovery/` to `.claude/rules/aidlc-team.md` and `.claude/rules/aidlc-project.md` |
+| `PRACTICES_AFFIRMED` | `tools/aidlc-state.ts` `practices-promote` | Team approved practices; content promoted from the intent's `inception/practices-discovery/` to the space memory layer (`aidlc/spaces/<space>/memory/team.md` and `memory/project.md`) |
 | `PRACTICES_OVERRIDE` | `tools/aidlc-state.ts` `practices-promote` (milestone 8 write-failure path) and `tools/aidlc-state.ts` `practices-event --type override` (milestone 13 bolt-plan-marker-conflict path — discriminator-field disambiguation via `Reason` field, no separate event) | Either: cross-row promotion failed during stage 2.2 affirmation (Reason: `write-failure-*`); or walking-skeleton stance from `rules/aidlc-team.md` overrode bolt-plan's marker for the current Bolt (Reason: `bolt-plan-marker-conflict`) |
 | `PRACTICES_SECTION_EMPTY` | `tools/aidlc-state.ts` `practices-event --type empty` | Conductor read a practices section that returned empty; advisory-only, falls back to org defaults |
 
@@ -306,7 +306,7 @@ Pre-registered for v0.5.0 in milestone 1; emitters land in milestone 9 (sensor d
 |---|---|---|
 | `SENSOR_FIRED` | `tools/aidlc-sensor.ts` `fire` | Dispatcher invoked a sensor against a stage output (per PostToolUse Write/Edit match on the sensor's `matches` filter) |
 | `SENSOR_PASSED` | `tools/aidlc-sensor.ts` `fire` | Sensor completed and reported no findings (also covers tool-unavailable and script-error fall-through; `Note` field discriminates) |
-| `SENSOR_FAILED` | `tools/aidlc-sensor.ts` `fire` | Sensor completed and reported findings; detail file written at `aidlc-docs/.aidlc-sensors/<stage-slug>/<sensor-id>-<fire-id>.md` |
+| `SENSOR_FAILED` | `tools/aidlc-sensor.ts` `fire` | Sensor completed and reported findings; detail file written at `<record>/.aidlc-sensors/<stage-slug>/<sensor-id>-<fire-id>.md` (in the intent's record dir) |
 | `SENSOR_BUDGET_OVERRIDE` | `tools/aidlc-sensor.ts` `fire` | Sensor exceeded its configured cap (registry / binding / depth-derived per the three-layer cap model) and was terminated or skipped |
 | `GUARDRAIL_LOADED` | `tools/aidlc-utility.ts` | Guardrail loader resolved the scope-hierarchical guardrail set for the active workflow (org → project → phase → stage); doctor's paired-coverage check reads from this event |
 
@@ -346,7 +346,7 @@ State-mutating commands emit their audit entries **before** mutating the state f
 
 The case `test("65: approve is audit-first ...")` in `tests/unit/t17.test.ts` proves this for `approve`: chmod'ing audit.md to read-only forces an audit failure and asserts the state file stays at `[?]` (not `[x]`). The same invariant holds for `gate-start`, `reject`, `revise`, `skip`, `advance`, `complete-workflow`, `reuse-artifact`, `aidlc-bolt.ts set-autonomy`, and `aidlc-state.ts fork` / `aidlc-state.ts merge` (the v0.4.0 milestone 9 state fork/merge subcommands — see `tests/unit/t76.test.ts` for the equivalent chmod-the-lock-dir Part A and chmod-the-target-after-emit Part B proofs).
 
-State fork/merge are deliberately NOT in the audit-of-intent exception below: re-reading and re-writing a state file is idempotent (unlike `git worktree add`, which leaves the worktree present after a kill-9 between emit and git), so the strict invariant applies cleanly. A failed state write after a successful audit emit becomes a phantom `STATE_FORKED` row that doctor (v0.4.0 milestone 15) reconciles against the worktree's `aidlc-docs/aidlc-state.md` existence.
+State fork/merge are deliberately NOT in the audit-of-intent exception below: re-reading and re-writing a state file is idempotent (unlike `git worktree add`, which leaves the worktree present after a kill-9 between emit and git), so the strict invariant applies cleanly. A failed state write after a successful audit emit becomes a phantom `STATE_FORKED` row that doctor (v0.4.0 milestone 15) reconciles against the worktree's record-dir `aidlc-state.md` existence.
 
 ### Audit-of-intent semantics (`WORKTREE_*`, `AUDIT_*`, and merge-dispatch `MERGE_DISPATCH_INVOKED`)
 

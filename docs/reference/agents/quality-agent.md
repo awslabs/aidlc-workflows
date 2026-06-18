@@ -63,9 +63,9 @@ Path: `.claude/knowledge/aidlc-quality-agent/`
 
 ### Team (Tier 2)
 
-Path: `aidlc-docs/knowledge/aidlc-quality-agent/` (user-managed)
+Path: `aidlc/spaces/<space>/intents/<slug>-<id8>/knowledge/aidlc-quality-agent/` (the intent's record dir; user-managed)
 
-Scaffolded by the `--init` command. Populated by the team with project-specific
+Scaffolded into each intent's record dir when the intent is born. Populated by the team with project-specific
 QA context such as existing test frameworks, coverage targets, performance
 baselines, or quality gate thresholds.
 

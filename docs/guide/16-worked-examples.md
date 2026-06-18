@@ -44,7 +44,7 @@ You respond:
 
 The 3 Initialization stages run as a single deterministic tool call (`aidlc-utility init`) in well under a second, without user interaction:
 
-- **0.1 Workspace Scaffold** — Creates the `aidlc-docs/` directory tree
+- **0.1 Workspace Scaffold** — Auto-births the first intent and creates its record dir at `aidlc/spaces/<space>/intents/<slug>-<id8>/` (written `<record>/` below)
 - **0.2 Workspace Detection** — Rule-based scan identifies Java 17, Spring Boot 3.2, Maven, brownfield project
 - **0.3 State Init** — Initializes `aidlc-state.md` with scope `bugfix`, depth `Minimal`, and the domain stages marked for execution
 
@@ -52,7 +52,7 @@ The 3 Initialization stages run as a single deterministic tool call (`aidlc-util
 
 ### Stage 2.1 — Reverse Engineering
 
-A two-step subagent scans the codebase: first a aidlc-developer-agent code scan, then an aidlc-architect-agent synthesis. Produces 9 artifacts in `aidlc-docs/inception/reverse-engineering/`:
+A two-step subagent scans the codebase: first a aidlc-developer-agent code scan, then an aidlc-architect-agent synthesis. Produces 9 artifacts in `<record>/inception/reverse-engineering/`:
 
 | Artifact | Contents |
 |----------|----------|
@@ -78,7 +78,7 @@ You select **Approve**.
 
 ### Stage 2.3 — Requirements Analysis
 
-The aidlc-product-agent persona loads and creates clarifying questions at `aidlc-docs/inception/requirements-analysis/requirements-analysis-questions.md`:
+The aidlc-product-agent persona loads and creates clarifying questions at `<record>/inception/requirements-analysis/requirements-analysis-questions.md`:
 
 ```markdown
 ## Q1: Bug Severity Classification
@@ -136,16 +136,16 @@ mvn test                 # 89 tests, 0 failures
 mvn verify               # Integration tests pass
 ```
 
-Results captured in `aidlc-docs/construction/build-and-test/test-results.md`: 89 tests passed, 0 failures, coverage increased from 62% to 64%.
+Results captured in `<record>/construction/build-and-test/test-results.md`: 89 tests passed, 0 failures, coverage increased from 62% to 64%.
 
 **Approval gate:** You select **Approve**. Workflow complete.
 
 ### End state
 
 ```
-aidlc-docs/
+aidlc/spaces/default/intents/bugfix-null-display-name-<id8>/
   aidlc-state.md              # All 7 stages marked [x]
-  audit.md                    # Full decision trail
+  audit/                      # Full decision trail (per-clone shards)
   inception/
     reverse-engineering/       # 9 RE artifacts
     requirements-analysis/     # requirements.md + questions

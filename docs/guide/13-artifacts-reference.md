@@ -1,19 +1,24 @@
 # Artifacts Reference
 
-Every AI-DLC workflow produces artifacts in the `aidlc-docs/` directory. This chapter is a complete reference for the directory structure, per-artifact descriptions, lifecycle, and git policy.
+Every AI-DLC workflow produces artifacts under its **intent record dir** —
+`aidlc/spaces/<space>/intents/<slug>-<id8>/` (where `<space>` is `default`
+unless a non-default space is in play, and `<slug>-<id8>` is the intent dir;
+written `<record>/` below). This chapter is a complete reference for the
+directory structure, per-artifact descriptions, lifecycle, and git policy.
 
 ---
 
 ## Directory Tree
 
 ```
-aidlc-docs/
+aidlc/spaces/<space>/intents/<slug>-<id8>/   # one record dir per intent
   aidlc-state.md                    # Workflow state (commit)
-  audit.md                          # Audit trail (gitignore)
+  audit/                            # Audit trail — per-clone shards (commit)
+    <host>-<clone>.md               # this clone's shard; readers glob + merge by timestamp
   .aidlc-recovery.md                # Recovery breadcrumb (gitignore)
   runtime-graph.json                # Execution telemetry view (gitignore)
 
-  knowledge/                        # Team knowledge (commit)
+  knowledge/                        # Team knowledge for this intent (commit)
     README.md
     aidlc-shared/README.md
     aidlc-product-agent/README.md
@@ -84,7 +89,7 @@ aidlc-docs/
 
 **Per-stage memory diary.** Each executed stage also keeps a committed
 `memory.md` alongside its artifacts (e.g.
-`aidlc-docs/inception/requirements-analysis/memory.md`). It is the
+`<record>/inception/requirements-analysis/memory.md`). It is the
 stage's observation diary — auto-created from a template at stage start,
 maintained by the orchestrator during the stage, and read by the §13
 Learnings Ritual at the approval gate. It is never hand-edited. See
@@ -114,7 +119,7 @@ flowchart LR
 
 <!-- Text fallback: Stage creates artifact, reviewed at approval gate, committed to version control, consumed by downstream stages, verified at phase boundary. -->
 
-1. **Created** — The lead agent produces the artifact during stage execution and writes it to the appropriate `aidlc-docs/` subdirectory
+1. **Created** — The lead agent produces the artifact during stage execution and writes it to the appropriate subdirectory of the intent's record dir
 2. **Reviewed** — You review the artifact at the approval gate and either approve or request changes
 3. **Committed** — After approval, the artifact is ready for version control (see git policy below)
 4. **Consumed** — Downstream stages read the artifact as input (see the inputs table below)
@@ -151,7 +156,7 @@ The welcome message is rendered at session start via `companyAnnouncements` in `
 | Stage | Key Artifacts | Condition |
 |-------|--------------|-----------|
 | 2.1 Reverse Engineering | 9 files including `architecture.md`, `code-structure.md`, `technology-stack.md` | Brownfield only |
-| 2.2 Practices Discovery | `team-practices.md`, `discovered-rules.md`, `evidence.md`, `practices-discovery-timestamp.md` (promoted to `.claude/rules/aidlc-team.md` and `aidlc-project.md` on affirmation) | Conditional |
+| 2.2 Practices Discovery | `team-practices.md`, `discovered-rules.md`, `evidence.md`, `practices-discovery-timestamp.md` (promoted to the space memory layer — `aidlc/spaces/<space>/memory/team.md` and `memory/project.md` — on affirmation) | Conditional |
 | 2.3 Requirements Analysis | `requirements.md` | Always |
 | 2.4 User Stories | `stories.md`, `personas.md` | User-facing features |
 | 2.5 Refined Mockups | `mockups.md`, `interaction-spec.md`, `accessibility-checklist.md` | UI projects |
@@ -205,13 +210,18 @@ You can switch modes mid-stage. The question file is always the source of truth.
 
 ## What to Commit vs. Gitignore
 
+The shipped `.gitignore` encodes this split (vision §5.1): the shared work —
+method, registry, state, audit, artifacts — is committed; per-user session
+cursors and machine-local derived state are ignored.
+
 | Commit | Gitignore |
 |--------|-----------|
-| `aidlc-state.md` | `audit.md` (may contain sensitive user input) |
-| All stage artifacts | `.aidlc-recovery.md` (transient hook breadcrumb) |
-| `verification/` phase check results | `runtime-graph.json` (re-derivable from `audit.md`) |
-| `knowledge/` team knowledge files | `.aidlc-hooks-health/` (heartbeat timestamps) |
-| Per-stage `memory.md` diaries | `.aidlc-sensors/` (advisory sensor findings) |
+| `aidlc-state.md` | `aidlc/active-space`, `intents/active-intent` (per-user cursors) |
+| `audit/*.md` (per-clone shards) | `.aidlc-recovery.md` and other `intents/*/.aidlc-*` (transient breadcrumbs) |
+| All stage artifacts | `runtime-graph.json` (re-derivable from the audit shards) |
+| `verification/` phase check results | `aidlc/.aidlc-clone-id` (names this clone's shard; must stay machine-local) |
+| `knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-conversation session→intent map) |
+| Per-stage `memory.md` diaries; space `memory/` layer | `.aidlc-hooks-health/`, `.aidlc-sensors/` (heartbeats, advisory findings) |
 
 ---
 

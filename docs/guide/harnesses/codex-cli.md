@@ -33,8 +33,10 @@ never hand-edit it (the drift guard fails CI).
    ```
 
 2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
-   Integration" **before** starting a workflow — committing
-   `aidlc-docs/audit.md` breaks Construction's audit-fork (it is one-shot).
+   Integration" **before** starting a workflow — the per-clone audit shards
+   under each intent's `audit/` are committed deliberately (each clone writes
+   its own `<host>-<clone>.md`, so concurrent appends never git-conflict), while
+   per-user cursors and machine-local runtime state stay ignored.
 
 3. Trust the project and pre-seed hook trust. Codex never runs untrusted
    hooks (the `--dangerously-bypass-hook-trust` flag does not run them
@@ -60,7 +62,7 @@ never hand-edit it (the drift guard fails CI).
 
 Invoke the orchestrator with `$aidlc` (or `/skills` → aidlc) followed by a
 scope or description — same commands as the Claude harness (`$aidlc --status`,
-`$aidlc --init`, `$aidlc --help`, …). Stage runners are explicit-only:
+`$aidlc --help`, …). Stage runners are explicit-only:
 `$aidlc-application-design`, `$aidlc-bugfix`, etc. (they are excluded from
 implicit skill matching so 37 runner descriptions don't pollute the index).
 

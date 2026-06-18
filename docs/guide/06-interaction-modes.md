@@ -33,7 +33,7 @@ The agent walks you through each question interactively using structured prompts
 
 The agent creates (or opens) the questions file and you edit it directly. Best when you already know what you want and prefer to write it down rather than answer questions.
 
-- The questions file appears in `aidlc-docs/` with blank answer fields
+- The questions file appears in the intent's record dir with blank answer fields
 - You fill in answers at your own pace
 - The agent reads the completed file and proceeds
 

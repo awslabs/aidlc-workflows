@@ -44,13 +44,13 @@ Inception runs serially with the facilitator at the keyboard. Construction is wh
 
 ### Before the session
 
-Launch Claude Code in the project (`cd workshop-project && claude`), then:
+Launch Claude Code in the project (`cd workshop-project && claude`), then birth the first intent with the workshop scope:
 
 ```
-/aidlc --init --scope workshop --project-dir .
+/aidlc --scope workshop
 ```
 
-The init handler stamps `Scope: workshop` and `Default Test Strategy: Minimal` into `aidlc-state.md`. Push the initialised state to the shared remote so participants clone a project that already knows it's a workshop.
+Naming the scope on a fresh workspace births the first intent and stamps `Scope: workshop` and `Default Test Strategy: Minimal` into that intent's `aidlc-state.md`. Push the born intent's state to the shared remote so participants clone a project that already knows it's a workshop.
 
 Per-project default scopes can be set via `AWS_AIDLC_DEFAULT_SCOPE=workshop` in `.claude/settings.json`. With this set, every participant who runs `/aidlc` in a clone gets the workshop routing automatically without remembering the flag — see [Customization § Per-Project Default Scope](12-customization.md#per-project-default-scope).
 
@@ -92,7 +92,7 @@ git clone <shared-remote> participant-clone
 cd participant-clone
 ```
 
-The clone arrives with `aidlc-state.md` already pinned to `Scope: workshop` and the approved Inception artifacts already in `aidlc-docs/`.
+The clone arrives with the intent's `aidlc-state.md` already pinned to `Scope: workshop` and the approved Inception artifacts already in the intent's record dir.
 
 ### 2. Pick and claim a Bolt
 
@@ -270,7 +270,7 @@ Once every Bolt has merged and `bolt-*` branches are deleted, the facilitator sh
 
 1. **Verify `Bolt Refs` is empty** — `bun .claude/tools/aidlc-utility.ts status` (or read `aidlc-state.md`) should show `Bolt Refs: [empty list]`. Any leftover slug indicates a Bolt that didn't merge cleanly; investigate before closing the workshop.
 2. **Inspect any preserved worktrees** — `bun .claude/tools/aidlc-worktree.ts list` shows every preserved `.aidlc/worktrees/bolt-*/` directory. These survived because a participant chose Skip or Abort during halt-and-ask. Decide whether to discard them (`aidlc-worktree discard --slug <slug>`) or keep them for post-workshop debrief.
-3. **Skim the audit log** — `aidlc-docs/audit.md` carries the merged audit entries from every participant's worktree. `MERGE_DISPATCH_FALLBACK` rows are the breadcrumb for "we silently used trunk defaults instead of the team's affirmed branching" — surface these in debrief.
+3. **Skim the audit log** — the intent's `audit/` shards carry the audit entries from every participant's worktree (each clone's shard merges in cleanly, no conflicts). `MERGE_DISPATCH_FALLBACK` rows are the breadcrumb for "we silently used trunk defaults instead of the team's affirmed branching" — surface these in debrief.
 4. **Tag a release if appropriate** — workshop scope completes with all Construction Bolts merged; if the workshop's project is going further, this is a natural tag point. Per the team's affirmed deployment cadence in `rules/aidlc-team.md`, this may auto-trigger a staging deploy.
 
 The framework handles each participant's per-session resume case — see [Resuming a workshop session](#resuming-a-workshop-session) below — useful when a participant's session was killed mid-batch and they're rejoining the workshop late.

@@ -11,7 +11,18 @@ and a delivery plan that governs the Construction phase.
 
 Inception runs stages 2.1 through 2.8 (8 stages) and concludes with a phase
 boundary verification check at Stage 2.8 (Delivery Planning) before handing
-off to Construction. The phase contains a mix of inline and subagent
+off to Construction.
+
+> **Path convention.** Each workflow's artifacts live under its **intent record
+> dir** — `aidlc/spaces/<space>/intents/<slug>-<id8>/` (where `<space>` is
+> `default` unless a non-default space is in play, and `<slug>-<id8>` is the
+> intent directory). Below, `<record>/` is shorthand for that dir; e.g.
+> `<record>/inception/requirements-analysis/requirements.md` expands to
+> `aidlc/spaces/default/intents/<slug>-<id8>/inception/requirements-analysis/requirements.md`.
+> (Projects created before the per-intent layout used a flat tree; the engine
+> migrates them on first run.)
+
+The phase contains a mix of inline and subagent
 execution modes, including a two-step subagent delegation at Stage 2.1
 (aidlc-developer-agent for the code scan, then aidlc-architect-agent for the synthesis)
 and a parallel multi-agent dispatch at Stage 2.2 (Practices Discovery).
@@ -28,9 +39,9 @@ and a parallel multi-agent dispatch at Stage 2.2 (Practices Discovery).
 - Stage 2.2 dispatches four agents in parallel (pipeline-deploy, quality,
   developer, devsecops) for evidence-scan on brownfield, then runs interview
   and affirmation gates. On affirmation, content is promoted from
-  `aidlc-docs/inception/practices-discovery/` to `.claude/rules/aidlc-team.md`
-  and `.claude/rules/aidlc-project.md` — the cross-row
-  promotion that makes this stage structurally distinct from every other stage.
+  `<record>/inception/practices-discovery/` to the space's memory layer —
+  `aidlc/spaces/<space>/memory/team.md` and `aidlc/spaces/<space>/memory/project.md` —
+  the cross-row promotion that makes this stage structurally distinct from every other stage.
 - Stage 2.7 produces `unit-of-work.md`, which defines the units that drive
   the phased construction flow in the Construction phase.
 - Stage 2.8 produces the execution plan that determines which Construction
@@ -100,11 +111,11 @@ artifacts reflect the current state of the codebase, not a stale snapshot.
 
 ### Inputs
 
-- `aidlc-docs/aidlc-state.md` (project type confirmation)
+- `<record>/aidlc-state.md` (project type confirmation)
 
 ### Steps
 
-1. **Check Conditions** -- Read `aidlc-docs/aidlc-state.md` to confirm the
+1. **Check Conditions** -- Read `<record>/aidlc-state.md` to confirm the
    project type is brownfield. If the project is not brownfield, skip this
    stage and update `aidlc-state.md` with skip reason.
 
@@ -137,7 +148,7 @@ artifacts reflect the current state of the codebase, not a stale snapshot.
    Outputs below).
 
 4. **Update State** -- Mark Reverse Engineering as `[x]` completed in
-   `aidlc-docs/aidlc-state.md`. Update current stage and next stage.
+   `<record>/aidlc-state.md`. Update current stage and next stage.
 
 5. **Present Completion & Request Approval** -- Display completion summary
    of all 9 artifacts produced. Standard approval gate: Approve (continue to
@@ -145,7 +156,7 @@ artifacts reflect the current state of the codebase, not a stale snapshot.
 
 ### Outputs
 
-All 9 artifacts written to `aidlc-docs/inception/reverse-engineering/`:
+All 9 artifacts written to `<record>/inception/reverse-engineering/`:
 
 | #  | File                             | Contents                                                    |
 |----|----------------------------------|-------------------------------------------------------------|
@@ -207,7 +218,7 @@ Practices Discovery is the only stage in AI-DLC that writes to both rows of
 the two-axis configuration model. It discovers a team's branching strategy,
 walking-skeleton stance, testing posture, deployment cadence, and code-style
 rules from evidence (brownfield) or via AskUserQuestion using `org.md`
-defaults (greenfield), drafts proposals at `aidlc-docs/inception/practices-discovery/`,
+defaults (greenfield), drafts proposals at `<record>/inception/practices-discovery/`,
 and at an affirmation gate **promotes** the affirmed content into team-authored
 harness config: `.claude/rules/aidlc-team.md` and
 `.claude/rules/aidlc-project.md`. The affirmation gate is
@@ -216,7 +227,7 @@ put words in the team's mouth in its own harness config.
 
 ### Inputs
 
-- `aidlc-docs/aidlc-state.md` (project type)
+- `<record>/aidlc-state.md` (project type)
 - Brownfield only: reverse-engineering's 9 artifacts (business-overview,
   architecture, code-structure, api-documentation, component-inventory,
   technology-stack, dependencies, code-quality-assessment,
@@ -226,7 +237,7 @@ put words in the team's mouth in its own harness config.
 
 ### Outputs
 
-Four artifacts written to `aidlc-docs/inception/practices-discovery/`:
+Four artifacts written to `<record>/inception/practices-discovery/`:
 
 - `team-practices.md` -- descriptive, team-voice prose. Five sections matching
   `aidlc-team.md` headings: Way of Working, Walking Skeleton, Testing Posture,
@@ -311,8 +322,8 @@ large scope with significant unknowns.
 ### Inputs
 
 - Reverse Engineering artifacts from Stage 2.1
-  (`aidlc-docs/inception/reverse-engineering/`), if brownfield
-- User's project description from `aidlc-docs/audit.md`
+  (`<record>/inception/reverse-engineering/`), if brownfield
+- User's project description from the intent's `audit/` shards
 
 ### Steps
 
@@ -321,8 +332,8 @@ large scope with significant unknowns.
    `.claude/knowledge/aidlc-product-agent/`.
 
 2. **Load Prior Context** -- If brownfield: read RE artifacts from
-   `aidlc-docs/inception/reverse-engineering/`. Read user's project
-   description from `aidlc-docs/audit.md`.
+   `<record>/inception/reverse-engineering/`. Read user's project
+   description from the intent's `audit/` shards.
 
 3. **Analyze User Request** -- Assess the request for:
    - **Clarity**: How well-defined is the request?
@@ -356,7 +367,7 @@ large scope with significant unknowns.
 7. **Generate Clarifying Questions** -- PROACTIVE: always generate clarifying
    questions unless requirements are exceptionally clear and complete across
    all six dimensions. Create
-   `aidlc-docs/inception/requirements-analysis/requirements-analysis-questions.md`
+   `<record>/inception/requirements-analysis/requirements-analysis-questions.md`
    using the `[Answer]:` tag format. Include context-appropriate questions with
    A-E options. Every question must end with `X. Other (please specify)` as
    the final option. All `[Answer]:` tags left blank.
@@ -377,7 +388,7 @@ large scope with significant unknowns.
    all ambiguities before proceeding. "When in doubt, ask."
 
 10. **Generate Requirements** -- Create
-    `aidlc-docs/inception/requirements-analysis/requirements.md` containing:
+    `<record>/inception/requirements-analysis/requirements.md` containing:
     - Intent analysis -- what the user is trying to achieve (goals, not just
       features)
     - Functional requirements -- organized by feature area or domain
@@ -388,7 +399,7 @@ large scope with significant unknowns.
     - Open questions -- remaining uncertainties for later stages
 
 11. **Update State** -- Mark Requirements Analysis as `[x]` completed in
-    `aidlc-docs/aidlc-state.md`. Update current and next stage.
+    `<record>/aidlc-state.md`. Update current and next stage.
 
 12. **Present Completion & Request Approval** -- Display completion message
     with :mag: emoji and review path. The approval gate has two variants:
@@ -403,7 +414,7 @@ large scope with significant unknowns.
 
 ### Outputs
 
-All artifacts written to `aidlc-docs/inception/requirements-analysis/`:
+All artifacts written to `<record>/inception/requirements-analysis/`:
 
 | File                                 | Contents                                                |
 |--------------------------------------|---------------------------------------------------------|
@@ -462,8 +473,8 @@ deliberate addition not in the upstream reference, documented in SKILL.md's
 
 ### Inputs
 
-- `aidlc-docs/inception/requirements-analysis/requirements.md`
-- RE artifacts from Stage 2.1 (`aidlc-docs/inception/reverse-engineering/`),
+- `<record>/inception/requirements-analysis/requirements.md`
+- RE artifacts from Stage 2.1 (`<record>/inception/reverse-engineering/`),
   if brownfield
 
 ### Steps
@@ -482,7 +493,7 @@ deliberate addition not in the upstream reference, documented in SKILL.md's
    - **Skip if**: pure refactoring, isolated bug fixes, infrastructure-only,
      developer tooling
 
-   Create `aidlc-docs/inception/user-stories/user-stories-assessment.md`
+   Create `<record>/inception/user-stories/user-stories-assessment.md`
    documenting: decision (Execute or Skip), rationale, factors considered,
    key value areas (if executing) or alternative coverage (if skipping).
 
@@ -490,14 +501,14 @@ deliberate addition not in the upstream reference, documented in SKILL.md's
    stage.
 
 3. **Load Prior Context** -- Read
-   `aidlc-docs/inception/requirements-analysis/requirements.md`. If brownfield,
+   `<record>/inception/requirements-analysis/requirements.md`. If brownfield,
    read relevant RE artifacts from
-   `aidlc-docs/inception/reverse-engineering/`.
+   `<record>/inception/reverse-engineering/`.
 
 **PART 1: Planning**
 
 4. **Create Story Plan with Questions** -- Create
-   `aidlc-docs/inception/user-stories/user-stories-questions.md` containing:
+   `<record>/inception/user-stories/user-stories-questions.md` containing:
    - Persona development approach (who are the users, what are their goals)
    - Story format using INVEST criteria (Independent, Negotiable, Valuable,
      Estimable, Small, Testable)
@@ -531,11 +542,11 @@ deliberate addition not in the upstream reference, documented in SKILL.md's
 8. **Execute Plan -- Generate Stories and Personas** -- Based on the approved
    plan, generate:
 
-   `aidlc-docs/inception/user-stories/personas.md`:
+   `<record>/inception/user-stories/personas.md`:
    - User persona definitions (name, role, goals, pain points, context)
    - Persona relationships and priority ranking
 
-   `aidlc-docs/inception/user-stories/stories.md`:
+   `<record>/inception/user-stories/stories.md`:
    - User stories in standard format: "As a [persona], I want [goal], so that
      [benefit]"
    - Acceptance criteria for each story
@@ -544,7 +555,7 @@ deliberate addition not in the upstream reference, documented in SKILL.md's
    - INVEST compliance notes
 
 9. **Update State** -- Mark User Stories as `[x]` completed in
-   `aidlc-docs/aidlc-state.md`. Update current and next stage.
+   `<record>/aidlc-state.md`. Update current and next stage.
 
 10. **Present Completion & Request Approval** -- Display completion message
     with :books: emoji, summary of personas and stories produced, and review
@@ -553,7 +564,7 @@ deliberate addition not in the upstream reference, documented in SKILL.md's
 
 ### Outputs
 
-All artifacts written to `aidlc-docs/inception/user-stories/`:
+All artifacts written to `<record>/inception/user-stories/`:
 
 | File                           | Contents                                                     |
 |--------------------------------|--------------------------------------------------------------|
@@ -613,11 +624,11 @@ This stage is typically skipped if Stage 1.6 (Rough Mockups) was also skipped.
 
 ### Inputs
 
-- Rough mockups from Stage 1.6 (`aidlc-docs/ideation/rough-mockups/`), if
+- Rough mockups from Stage 1.6 (`<record>/ideation/rough-mockups/`), if
   exists
-- User stories from Stage 2.4 (`aidlc-docs/inception/user-stories/`)
+- User stories from Stage 2.4 (`<record>/inception/user-stories/`)
 - Requirements from Stage 2.3
-  (`aidlc-docs/inception/requirements-analysis/`)
+  (`<record>/inception/requirements-analysis/`)
 
 ### Steps
 
@@ -626,12 +637,12 @@ This stage is typically skipped if Stage 1.6 (Rough Mockups) was also skipped.
    `.claude/knowledge/aidlc-design-agent/`.
 
 2. **Load Prior Context** -- Read rough mockups from
-   `aidlc-docs/ideation/rough-mockups/` (if exists). Read user stories from
-   `aidlc-docs/inception/user-stories/`. Read requirements from
-   `aidlc-docs/inception/requirements-analysis/`.
+   `<record>/ideation/rough-mockups/` (if exists). Read user stories from
+   `<record>/inception/user-stories/`. Read requirements from
+   `<record>/inception/requirements-analysis/`.
 
 3. **Generate Clarifying Questions** -- Create
-   `aidlc-docs/inception/refined-mockups/refined-mockups-questions.md` with
+   `<record>/inception/refined-mockups/refined-mockups-questions.md` with
    questions covering:
    - How each user story should be represented in the UI
    - Interaction patterns needed (modals, inline edits, wizards, progressive
@@ -653,14 +664,14 @@ This stage is typically skipped if Stage 1.6 (Rough Mockups) was also skipped.
    For non-UI initiatives, create API developer experience specification.
 
 6. **Update State** -- Mark 2.5 Refined Mockups as `[x]` completed in
-   `aidlc-docs/aidlc-state.md`.
+   `<record>/aidlc-state.md`.
 
 7. **Present Completion & Request Approval** -- Display completion message
    with :art: emoji. Standard approval gate (Approve / Request Changes).
 
 ### Outputs
 
-All artifacts written to `aidlc-docs/inception/refined-mockups/`:
+All artifacts written to `<record>/inception/refined-mockups/`:
 
 | File                            | Contents                                                    |
 |---------------------------------|-------------------------------------------------------------|
@@ -717,8 +728,8 @@ upstream reference, documented in SKILL.md's "Deliberate Deviations" section.
 
 ### Inputs
 
-- `aidlc-docs/inception/requirements-analysis/requirements.md`
-- `aidlc-docs/inception/user-stories/stories.md` (if produced)
+- `<record>/inception/requirements-analysis/requirements.md`
+- `<record>/inception/user-stories/stories.md` (if produced)
 - RE artifacts from Stage 2.1 (especially `architecture.md`,
   `component-inventory.md`, `dependencies.md`), if brownfield
 
@@ -733,10 +744,10 @@ upstream reference, documented in SKILL.md's "Deliberate Deviations" section.
 2. **Load Prior Context** -- Read requirements, user stories (if produced),
    and RE artifacts (if brownfield, especially architecture.md,
    component-inventory.md, dependencies.md). Scope context comes from
-   `aidlc-docs/aidlc-state.md`.
+   `<record>/aidlc-state.md`.
 
 3. **Create Design Plan with Questions** -- Create
-   `aidlc-docs/inception/application-design/application-design-questions.md`
+   `<record>/inception/application-design/application-design-questions.md`
    with context-appropriate questions using `[Answer]:` tag format covering:
    - Component boundary decisions
    - Architectural style preferences (if not already decided)
@@ -756,7 +767,7 @@ upstream reference, documented in SKILL.md's "Deliberate Deviations" section.
    below).
 
 6. **Update State** -- Mark Application Design as `[x]` completed in
-   `aidlc-docs/aidlc-state.md`. Update current and next stage.
+   `<record>/aidlc-state.md`. Update current and next stage.
 
 7. **Present Completion & Request Approval** -- Display completion message
    with :building_construction: emoji, summary of design artifacts, key
@@ -766,7 +777,7 @@ upstream reference, documented in SKILL.md's "Deliberate Deviations" section.
 
 ### Outputs
 
-All 5 artifacts written to `aidlc-docs/inception/application-design/`:
+All 5 artifacts written to `<record>/inception/application-design/`:
 
 | File                              | Contents                                                  |
 |-----------------------------------|-----------------------------------------------------------|
@@ -848,10 +859,10 @@ actual unit artifacts.
 ### Inputs
 
 - All design artifacts from Stage 2.6
-  (`aidlc-docs/inception/application-design/`: components.md,
+  (`<record>/inception/application-design/`: components.md,
   component-methods.md, services.md, component-dependency.md, decisions.md)
-- `aidlc-docs/inception/requirements-analysis/requirements.md`
-- `aidlc-docs/inception/user-stories/stories.md` (if produced)
+- `<record>/inception/requirements-analysis/requirements.md`
+- `<record>/inception/user-stories/stories.md` (if produced)
 
 ### Steps
 
@@ -865,12 +876,12 @@ actual unit artifacts.
    prioritization.
 
 2. **Load Prior Context** -- Read all artifacts from
-   `aidlc-docs/inception/application-design/` (all 5 files). Read
+   `<record>/inception/application-design/` (all 5 files). Read
    requirements. Read user stories (if produced). Scope context comes from
-   `aidlc-docs/aidlc-state.md`.
+   `<record>/aidlc-state.md`.
 
 3. **Create Decomposition Plan with Questions** -- Create
-   `aidlc-docs/inception/units-generation/units-generation-questions.md` with
+   `<record>/inception/units-generation/units-generation-questions.md` with
    questions using `[Answer]:` tag format covering:
    - Unit boundary strategy (by service, by feature, by domain, by deployment
      target)
@@ -899,7 +910,7 @@ actual unit artifacts.
    generate the 3 output artifacts (see Outputs below).
 
 7. **Update State** -- Mark Units Generation as `[x]` completed in
-   `aidlc-docs/aidlc-state.md`. Update current and next stage. Record unit
+   `<record>/aidlc-state.md`. Update current and next stage. Record unit
    list for the Construction phase phased construction flow.
 
 8. **Present Completion & Request Approval** -- Display completion message
@@ -909,7 +920,7 @@ actual unit artifacts.
 
 ### Outputs
 
-All 3 artifacts written to `aidlc-docs/inception/units-generation/`:
+All 3 artifacts written to `<record>/inception/units-generation/`:
 
 | File                            | Contents                                                    |
 |---------------------------------|-------------------------------------------------------------|
@@ -997,13 +1008,13 @@ decide which AI-DLC stages to run or at what depth -- that is handled by the
 
 All Inception phase artifacts:
 
-- Requirements from Stage 2.3 (`aidlc-docs/inception/requirements-analysis/`)
-- User stories from Stage 2.4 (`aidlc-docs/inception/user-stories/`)
+- Requirements from Stage 2.3 (`<record>/inception/requirements-analysis/`)
+- User stories from Stage 2.4 (`<record>/inception/user-stories/`)
 - Application design from Stage 2.6
-  (`aidlc-docs/inception/application-design/`)
-- Units from Stage 2.7 (`aidlc-docs/inception/units-generation/`)
+  (`<record>/inception/application-design/`)
+- Units from Stage 2.7 (`<record>/inception/units-generation/`)
 - Team formation from Stage 1.5
-  (`aidlc-docs/ideation/team-formation/`), if exists
+  (`<record>/ideation/team-formation/`), if exists
 
 ### Steps
 
@@ -1016,7 +1027,7 @@ All Inception phase artifacts:
    user stories, application design, units, and team formation (if exists).
 
 3. **Generate Clarifying Questions** -- Create
-   `aidlc-docs/inception/delivery-planning/delivery-planning-questions.md`
+   `<record>/inception/delivery-planning/delivery-planning-questions.md`
    with questions covering:
    - Sequencing heuristic: risk-first, value-first, walking-skeleton-first,
      or hybrid
@@ -1039,7 +1050,7 @@ All Inception phase artifacts:
    rationale artifact.
 
 5. **Generate Artifacts** -- Create four artifacts in
-   `aidlc-docs/inception/delivery-planning/`:
+   `<record>/inception/delivery-planning/`:
    - `bolt-plan.md` — the ordered sequence of Bolts; per-Bolt Units of
      Work, walking-skeleton marker, Definition of Done, confidence
      hypothesis, expected demo.
@@ -1056,10 +1067,10 @@ All Inception phase artifacts:
    - Requirements to Stories to Architecture alignment
    - All stories trace to requirements
    - Architecture covers all stories
-   - Write results to `aidlc-docs/verification/phase-check-inception.md`
+   - Write results to `<record>/verification/phase-check-inception.md`
 
 7. **Update State** -- Mark 2.8 Delivery Planning as `[x]` completed in
-   `aidlc-docs/aidlc-state.md`. Update Lifecycle Phase to CONSTRUCTION.
+   `<record>/aidlc-state.md`. Update Lifecycle Phase to CONSTRUCTION.
 
 8. **Present Completion & Request Approval** -- Display completion message
    with :calendar: emoji. Approval gate: Approve (proceed to Construction) /
@@ -1068,7 +1079,7 @@ All Inception phase artifacts:
 
 ### Outputs
 
-All artifacts written to `aidlc-docs/inception/delivery-planning/`:
+All artifacts written to `<record>/inception/delivery-planning/`:
 
 | File                                  | Contents                                                    |
 |---------------------------------------|-------------------------------------------------------------|
@@ -1082,7 +1093,7 @@ Phase boundary verification output:
 
 | File                                            | Contents                                    |
 |-------------------------------------------------|---------------------------------------------|
-| `aidlc-docs/verification/phase-check-inception.md` | Inception-to-Construction traceability check results |
+| `<record>/verification/phase-check-inception.md` | Inception-to-Construction traceability check results |
 
 ### Approval Gate
 
@@ -1150,7 +1161,7 @@ Construction and Operation:
    Operation.
 8. **Phase Boundary Verification** (2.8) -- Inception-to-Construction
    traceability check written to
-   `aidlc-docs/verification/phase-check-inception.md`.
+   `<record>/verification/phase-check-inception.md`.
 
 ### Handoff to Construction
 

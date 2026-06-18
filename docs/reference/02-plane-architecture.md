@@ -83,7 +83,9 @@ slow if its job permits.
 
 ## 3. Mapping to AI-DLC
 
-The mapping is closer than it sounds.
+The mapping is closer than it sounds. (`<record>/` below = the active intent's
+record dir, `aidlc/spaces/<space>/intents/<slug>-<id8>/`; the audit trail is a
+dir of per-clone shards under `<record>/audit/`.)
 
 | Networking | AI-DLC analog |
 |---|---|
@@ -93,7 +95,7 @@ The mapping is closer than it sounds.
 | Routing protocol (BGP / OSPF) | Compile: `aidlc-graph.ts compile` reads stage frontmatter + rules + sensors, resolves each stage's pull imports against the source registries, emits the graph |
 | FIB (forwarding information base) loaded into ASIC | `stage-graph.json` with per-stage `rules_in_context` + `sensors_applicable` resolved at compile time |
 | OpenFlow / NETCONF (interface) | `stage-graph.json` — the explicit interface between compile and orchestrator |
-| Telemetry (NetFlow, sFlow) | Audit log, sensor firings, memory.md entries → `aidlc-docs/runtime-graph.json` |
+| Telemetry (NetFlow, sFlow) | Audit log, sensor firings, memory.md entries → the intent's `runtime-graph.json` |
 | Reactive flow install (PACKET_IN) | Learning loop: data plane reports an observation → user confirms → file write into rules/sensors plus a frontmatter edit on the originating stage when a new sensor binding is captured |
 | Proactive route install (BGP advertisement) | Framework PR: ships new stages/rules/sensors before any workflow runs |
 | Topology change → recompute routes | Workflow start → compile reads current source files; subsequent recomputes triggered by next workflow |
@@ -123,8 +125,8 @@ recompile at the next workflow start.
 | Stage DAG, scope routing, artifact production | Framework-versioned (changes via framework PR) | Stage frontmatter (`.claude/aidlc-common/stages/*.md`) | `stage-graph.json` | Orchestrator, doctor, designer |
 | **Rules** (prose, prescriptive) | Mutable; framework PR or learning-loop writes | `.claude/rules/aidlc-<scope>.md` (filename-derived; org/team/project attach to every stage) | `stage-graph.json` per-node `rules_in_context` | Orchestrator (resolved view); Claude Code auto-load reads source for in-context prose |
 | **Sensors** (manifests, verification checks) | Mutable; framework PR or learning-loop writes (manifest authored once; stages import by id) | `.claude/sensors/aidlc-<id>.md` | `stage-graph.json` per-node `sensors_applicable` | Dispatcher reads resolved list at stage entry; PostToolUse fires from it |
-| Workflow execution telemetry | Per-workflow, accumulating | `audit.md` · `memory.md` · Bolt forks | `aidlc-docs/runtime-graph.json` | Doctor, gate ritual, future cross-workflow observer |
-| Per-stage observation log | Per-stage-run | `aidlc-docs/<phase>/<stage>/memory.md` | (no compile — read directly) | Gate ritual at this stage's gate |
+| Workflow execution telemetry | Per-workflow, accumulating | `audit/` shards · `memory.md` · Bolt forks | `<record>/runtime-graph.json` | Doctor, gate ritual, future cross-workflow observer |
+| Per-stage observation log | Per-stage-run | `<record>/<phase>/<stage>/memory.md` | (no compile — read directly) | Gate ritual at this stage's gate |
 
 Two compiled artefacts, both per-workflow. `stage-graph.json` carries
 the resolved control-plane view: stage DAG, scope routing, artifact
@@ -189,7 +191,7 @@ update cadences:
   `sensors_applicable`); Claude Code's auto-load consumes the source
   rule files in parallel for prose context.
 - **`runtime-graph.json`** — data plane. Per-workflow artefact at
-  `aidlc-docs/runtime-graph.json`. Recompiled (full event-sourced walk of
+  `<record>/runtime-graph.json`. Recompiled (full event-sourced walk of
   the audit log) on every transition-class audit event. Aggregates execution
   telemetry: which stages ran, which
   Bolts forked, which sensors fired, which memory.md files exist. Read
@@ -276,10 +278,10 @@ property of the design's data discipline.
 
 | Source | Records what | Read order |
 |---|---|---|
-| Artefact tree (`aidlc-docs/<phase>/<stage>/*.md`) | The decisions themselves, in finished form | First |
+| Artefact tree (`<record>/<phase>/<stage>/*.md`) | The decisions themselves, in finished form | First |
 | `memory.md` per stage | What got noticed during the decision-making | Second |
-| Audit log (`aidlc-docs/audit.md`) | When each decision happened, who approved | Third |
-| State docs (`aidlc-docs/aidlc-state.md`, per-stage state) | Where in the workflow we are right now | Fourth |
+| Audit log (`<record>/audit/` shards) | When each decision happened, who approved | Third |
+| State docs (`<record>/aidlc-state.md`, per-stage state) | Where in the workflow we are right now | Fourth |
 | `runtime-graph.json` | Cross-stage summary (durations, sensor firings, learnings counts) | Fifth |
 
 The artefacts go first because they're the durable record of what was

@@ -18,7 +18,7 @@ Every command this implementation ships is a skill under `.claude/skills/`. They
 - **`/aidlc`** — the full orchestrator. No flags baked in; it detects your scope (or you describe what you want), then drives every stage in your scope to completion. This is the one you reach for most.
 - **Scope-runners** — `/aidlc-bugfix`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch`. Same full workflow, with a scope fixed and scope detection skipped.
 - **Stage-runners** — `/aidlc-application-design`, `/aidlc-code-generation`, and 27 more. Run one stage in isolation, never touching your main workflow.
-- **`/aidlc-init`** — scaffold a workspace in one step (wraps `/aidlc --init`).
+- **`/aidlc-init`** — birth the first intent (run the whole Initialization phase) in one step; opt-in packaging over the engine's auto-birth.
 - **Session skills** — `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack`. Read-only views over a workflow; covered in [Session Management](10-session-management.md).
 
 Everything a runner does is reachable from `/aidlc` with a flag. The runners are packaging — typing `/aidlc-bugfix` and seeing it in your `/` menu is good ergonomics, nothing more. Delete every runner and the shortcuts go; the capability stays, reachable through `/aidlc` flags.
@@ -88,11 +88,10 @@ Each one packages `/aidlc --stage <slug> --single`:
 
 The `--single` invariant is tool-enforced. A single-stage run records its work under a synthetic workflow id and refuses to write your main workflow's `Current Stage`. If a runner ever tried to advance the main pointer, the engine returns an error instead. The engine guarantees this, so the safety holds even if the docs were wrong.
 
-The three bootstrap **initialization** stages ship no stage-runner — scaffolding half a workspace has no standalone meaning. Instead the whole initialization phase is packaged as one command:
+The three bootstrap **initialization** stages ship no stage-runner — birthing half an intent has no standalone meaning. Instead the whole initialization phase is packaged as one command:
 
 ```
-/aidlc-init                ==  /aidlc --init
-/aidlc-init --force        reinitialise an existing workspace
+/aidlc-init [--scope <name>] [description]   birth the first intent (== running /aidlc on a fresh workspace)
 ```
 
 ---
@@ -104,7 +103,7 @@ The three bootstrap **initialization** stages ship no stage-runner — scaffoldi
 | Orchestrator | `/aidlc` | Full workflow, scope detected | — |
 | Scope-runner | `/aidlc-bugfix`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch` | Full workflow, scope fixed, no detection | `/aidlc --scope <name>` |
 | Stage-runner | `/aidlc-application-design`, `/aidlc-code-generation`, … (29 total) | One stage in isolation, never advances your workflow | `/aidlc --stage <slug> --single` |
-| Init wrapper | `/aidlc-init` | Scaffold a workspace | `/aidlc --init` |
+| Init wrapper | `/aidlc-init` | Birth the first intent (run Initialization) | `/aidlc` on a fresh workspace |
 | Session views | `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack` | Read-only workflow reports | see [Session Management](10-session-management.md) |
 
 There's one stage-runner for every runnable stage in the lifecycle. To see the full set, list your skills directory:
@@ -157,8 +156,8 @@ For the mechanics of writing a stage file, see [Customization](12-customization.
 # One stage, isolated (never advances your workflow)
 /aidlc-code-generation              == /aidlc --stage code-generation --single
 
-# Setup
-/aidlc-init                         == /aidlc --init
+# Birth the first intent (Initialization phase)
+/aidlc-init [--scope <name>]        == /aidlc on a fresh workspace
 
 # Add your own: write a stage/scope file, then
 bun .claude/tools/aidlc-runner-gen.ts write

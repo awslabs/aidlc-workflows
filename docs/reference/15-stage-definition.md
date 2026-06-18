@@ -242,7 +242,7 @@ there rather than duplicating here.
 The example encodes, in structured form, what today's prose describes:
 
 - `requires_stage: [intent-capture]` encodes the prose instruction "Read
-  intent statement from `aidlc-docs/ideation/intent-capture/`". The parser
+  intent statement from the intent's `ideation/intent-capture/` (under its record dir)". The parser
   does not care about the prose — it just sees the graph edge — but human
   readers should keep them in sync.
 - `consumes: [{artifact: intent-statement, required: true}]` says this

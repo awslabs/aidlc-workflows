@@ -145,7 +145,7 @@ Each file carries topical `##` headings (Way of Working, Testing Posture, Deploy
 
 The rule files are not static — the v0.5.0 learning loop turns an in-workflow correction into a standing rule for next time. The division of labor is deliberate: the LLM's only job is to write observations to the stage's `memory.md` diary while the stage runs (Interpretations / Deviations / Tradeoffs / Open questions). Everything else is a deterministic tool or a human decision:
 
-1. **Diary (LLM).** During the stage, observations accumulate in `aidlc-docs/<phase>/<stage>/memory.md`.
+1. **Diary (LLM).** During the stage, observations accumulate in the intent's record dir at `<record>/<phase>/<stage>/memory.md` (`<record>/` = `aidlc/spaces/<space>/intents/<slug>-<id8>/`).
 2. **Surface (tool).** At the approval gate, `aidlc-learnings.ts surface` reads the diary and emits structured candidates — the LLM does not re-parse or classify.
 3. **Confirm (human).** The conductor renders the candidates; you pick which to keep and, for free-text additions, pick the single heading that derives the destination.
 4. **Admission check (knowledge).** Each kept learning is checked against `aidlc-org.md`'s matching section; a contradiction is surfaced for you to revise, skip, or escalate.
@@ -167,20 +167,23 @@ The user-facing walk-through (with a worked example) is in [Rules and the Learni
 |---------|----------|
 | Prerequisites | `bun` (only runtime dependency); `mkdir`-based locking |
 | AI-DLC Structure | Skill, agent, rules, knowledge, and hook locations |
-| Conventions | Artifacts go to `aidlc-docs/`; application code goes to workspace root |
+| Conventions | Artifacts go to the intent's record dir under `aidlc/spaces/<space>/intents/<slug>-<id8>/`; application code goes to workspace root |
 | Session Resumption | Check for `aidlc-state.md` on startup, offer resume options |
 | Git Integration | Commit policy (see below) |
 
 ### Git Integration
 
 ```
-Commit: aidlc-docs/ (all artifacts and state)
+Commit: aidlc/ workspace (memory layer, intents registry, per-intent
+        aidlc-state.md, audit/ shards, and stage artifacts)
 Gitignore:
-  - aidlc-docs/audit.md       (may contain sensitive user input)
-  - .aidlc-recovery.md        (transient hook breadcrumb)
+  - aidlc/active-space, aidlc/spaces/*/intents/active-intent  (per-user cursors)
+  - aidlc/.aidlc-clone-id, aidlc/.aidlc-sessions/             (machine-local)
+  - aidlc/spaces/*/intents/*/runtime-graph.json              (re-derivable)
+  - aidlc/spaces/*/intents/*/.aidlc-*                          (incl. .aidlc-recovery.md)
 ```
 
-`audit.md` is excluded because it may contain tool invocation details, file paths, and user input. `.aidlc-recovery.md` is transient and has no value outside the active session.
+The audit trail is committed as **per-clone shards** (`audit/<host>-<clone>.md`): each clone appends to its own shard, so concurrent appends never git-conflict. Per-user session cursors and machine-local derived state are ignored.
 
 ---
 
@@ -337,7 +340,7 @@ An MCP server appearing in the session is a function of `.mcp.json` plus availab
 | Agents (inline) | `.claude/agents/*.md` | Persona activation | 30 of 32 stages: conductor adopts agent persona |
 | Agents (subagent) | `.claude/agents/*.md` | Task tool delegation | 2 stages (2.1, 3.5): isolated execution |
 | Knowledge (Tier 1) | `.claude/knowledge/` | Persona activation (steps 2-3) | 56 methodology reference files |
-| Knowledge (Tier 2) | `aidlc-docs/knowledge/` | Persona activation (steps 4-5) | Team-managed customization |
+| Knowledge (Tier 2) | each intent's `knowledge/` (record dir) | Persona activation (steps 4-5) | Team-managed customization |
 | Stage protocol | `stage-protocol.md` | Every stage execution | Mandatory behavioral contract |
 | Stage files | `stages/**/*.md` | Engine routing | 32 individual stage definitions |
 | State file | `aidlc-state.md` | Session start + throughout | Persistent workflow state |

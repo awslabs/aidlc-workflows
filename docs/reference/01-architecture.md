@@ -80,7 +80,7 @@ Configuration in this repo partitions along **two orthogonal axes**, not one.
 ### Axis 2 — when is it consumed?
 
 - **Loaded continuously (harness configuration)** — read at session start; available to every stage in every workflow run in this workspace. Lives under `.claude/`.
-- **Per-workflow artefact** — produced by a specific stage as output, read by later stages as input. Lives under `aidlc-docs/`. Re-produced on each workflow run.
+- **Per-workflow artefact** — produced by a specific stage as output, read by later stages as input. Lives under the intent's record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/`, written `<record>/` below). Re-produced on each workflow run.
 
 ### The four quadrants
 
@@ -89,7 +89,7 @@ Crossing the two axes gives four quadrants. Three are populated; one is intentio
 |  | Framework-authored | Team-authored |
 |---|---|---|
 | **Loaded continuously** (harness config) | `.claude/skills/`, `.claude/agents/`, `.claude/knowledge/`, `.claude/rules/aidlc-org.md`, `.claude/rules/aidlc-phase-*.md`, `.claude/scopes/`, `.claude/tools/data/scope-grid.json`, `.claude/tools/data/stage-graph.json` | `.claude/rules/aidlc-team.md`, `.claude/rules/aidlc-project.md` |
-| **Per-workflow artefact** | *(empty by design)* | `aidlc-docs/aidlc-state.md`, `aidlc-docs/audit.md`, `aidlc-docs/<phase>/<stage>/*.md`, `.aidlc/worktrees/bolt-*/` |
+| **Per-workflow artefact** | *(empty by design)* | `<record>/aidlc-state.md`, `<record>/audit/*.md` (per-clone shards), `<record>/<phase>/<stage>/*.md`, `.aidlc/worktrees/bolt-*/` |
 
 The framework doesn't produce per-workflow artefacts because such outputs would have to ship with the distribution — which makes them framework-authored harness config, not per-workflow output. The empty cell is the routing rule's signature, not a gap.
 
@@ -108,8 +108,8 @@ Worked examples:
 - *"ALWAYS use Result<T,E> in service layer; NEVER throw"* — project-specific and loaded continuously (agents read it on every code-gen). Goes to `.claude/rules/aidlc-project.md`.
 - *"Trunk-based development is the recommended branching strategy"* — same for every project (framework opinion) and loaded continuously (read at delivery-planning). Goes to `.claude/rules/aidlc-org.md`.
 - *"The 5 common branching strategies and their trade-offs"* — same for every project (framework reference) and loaded continuously (aidlc-pipeline-deploy-agent reads when discovering branching strategy). Goes to `.claude/knowledge/aidlc-pipeline-deploy-agent/branching-strategies.md`.
-- *"This run's requirements analysis"* — project-specific and per-workflow (each run produces fresh analysis). Goes to `aidlc-docs/inception/requirements-analysis/`.
-- *"Bolt-1's worktree state mid-Construction"* — project-specific and per-workflow (regenerated each Bolt). Goes to `.aidlc/worktrees/bolt-1/aidlc-docs/aidlc-state.md`.
+- *"This run's requirements analysis"* — project-specific and per-workflow (each run produces fresh analysis). Goes to `<record>/inception/requirements-analysis/`.
+- *"Bolt-1's worktree state mid-Construction"* — project-specific and per-workflow (regenerated each Bolt). Goes to the Bolt worktree's copy of the record dir, `.aidlc/worktrees/bolt-1/<record>/aidlc-state.md`.
 
 ### Sub-categories of harness config (top row)
 
@@ -126,15 +126,15 @@ The top row partitions further by **form of content**:
 
 Two cases that look like configuration but aren't:
 
-- **Per-workflow analysis outputs.** Reverse-engineering's 9 brownfield artifacts (`code-structure.md`, `architecture.md`, etc.) describe *this* run's codebase scan. They live in `aidlc-docs/inception/reverse-engineering/`, not in `.claude/`. They re-run on each workflow.
-- **Run-state.** The `aidlc-state.md` file is per-workflow truth-of-now. It belongs in `aidlc-docs/`, not in `.claude/`. Same for `audit.md`.
+- **Per-workflow analysis outputs.** Reverse-engineering's 9 brownfield artifacts (`code-structure.md`, `architecture.md`, etc.) describe *this* run's codebase scan. They live in `<record>/inception/reverse-engineering/`, not in `.claude/`. They re-run on each workflow.
+- **Run-state.** The `aidlc-state.md` file is per-workflow truth-of-now. It belongs in the intent's record dir, not in `.claude/`. Same for the `audit/` shards.
 
 ### Cross-row promotion — the practices-discovery exception
 
 Most stages write to one row. A few stages write to both, with the cross-row write gated by team affirmation. **Practices-discovery (Inception 2.2) is the only stage that does this.** Its outputs are:
 
-- `aidlc-docs/inception/practices-discovery/team-practices.md` — per-workflow audit trail (bottom row).
-- On affirmation, content is copied to `.claude/rules/aidlc-team.md` AND `.claude/rules/aidlc-project.md` — team-authored harness config (top-right cell).
+- `<record>/inception/practices-discovery/team-practices.md` — per-workflow audit trail (bottom row).
+- On affirmation, content is copied to the space memory layer — `aidlc/spaces/<space>/memory/team.md` AND `memory/project.md` — team-authored harness config (top-right cell).
 
 The audit-trail copy proves what was affirmed in this run; the `.claude/` copy becomes the team's standing configuration that every future workflow loads.
 
@@ -404,7 +404,7 @@ dist/claude/.claude/
 
 5. **Stage protocol as shared contract** -- All 32 stages follow `stage-protocol.md` for approval gates, question format (tri-mode: Guide Me / Edit File / Chat), completion messages, state tracking, error recovery, change handling, the §13 Learnings Ritual, and phase boundary verification. This ensures consistent behavior across all stages without repeating instructions in each stage file.
 
-6. **Two-tier knowledge architecture** -- Methodology knowledge ships with the framework in `knowledge/` (shared principles + per-agent methodology). User-managed team knowledge lives in `aidlc-docs/knowledge/` (created on demand at runtime). This separates framework upgrades from team customization.
+6. **Two-tier knowledge architecture** -- Methodology knowledge ships with the framework in `knowledge/` (shared principles + per-agent methodology). User-managed team knowledge lives in each intent's record dir under `knowledge/` (scaffolded when the intent is born). This separates framework upgrades from team customization.
 
 7. **Flat agent files** -- Each agent is a single `.md` file in `agents/` (not a subdirectory with `agent.md` + `knowledge/`). This simplifies the structure and makes agents discoverable. Methodology knowledge lives separately in `knowledge/[agent]/`.
 
@@ -416,7 +416,7 @@ dist/claude/.claude/
 
 11. **Phase boundary verification** -- Traceability checks run automatically at phase transitions (Initialization->Ideation auto-proceed, Ideation->Inception, Inception->Construction, Construction->Operation). This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to `aidlc-docs/audit.md`. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 67-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 67-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

@@ -6,7 +6,7 @@ AI-DLC maintains two persistent files that together provide full traceability fr
 
 ## State File (`aidlc-state.md`)
 
-The state file at `aidlc-docs/aidlc-state.md` is the single source of truth for workflow progress. The engine reads it on every session start to determine what has been completed, what is in progress, and what comes next.
+Each intent has its own state file at `aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md` (under the intent's record dir) — the single source of truth for that intent's workflow progress. The engine reads the active intent's state file on every session start to determine what has been completed, what is in progress, and what comes next.
 
 ### What it contains
 
@@ -73,9 +73,9 @@ stateDiagram-v2
 
 ---
 
-## Audit Trail (`audit.md`)
+## Audit Trail (`audit/`)
 
-The audit trail at `aidlc-docs/audit.md` is an append-only event log. Every significant action during a workflow is recorded with an ISO timestamp, creating a complete history of decisions and events.
+The audit trail lives in the intent's record dir at `aidlc/spaces/<space>/intents/<slug>-<id8>/audit/`. It is an append-only event log written as **per-clone shards** (`<host>-<clone>.md`): each clone appends only to its own shard, so concurrent appends from sibling worktrees never git-conflict. Readers glob `audit/*.md` and merge-sort by ISO timestamp to reconstruct the full chronological history of decisions and events.
 
 ### 67-event taxonomy
 
@@ -110,7 +110,7 @@ event is sufficient.
 ### What gets logged and when
 
 - **Every stage start and completion** is logged with `STAGE_STARTED` and `STAGE_COMPLETED` events
-- **Every file write** to `aidlc-docs/` (except `audit.md` itself) is automatically logged by the audit-logger hook
+- **Every file write** to the intent's record dir (except the `audit/` shards themselves) is automatically logged by the audit-logger hook
 - **Every approval gate decision** (approve, request changes, accept-as-is) is logged
 - **Every question answer** you provide is recorded
 - **Every subagent completion** is logged by the log-subagent hook
@@ -135,11 +135,11 @@ sequenceDiagram
     participant O as Orchestrator
     participant S as Stage Execution
     participant H as Audit Hook
-    participant A as audit.md
+    participant A as audit/ shard
 
     O->>A: Log STAGE_STARTED
     O->>S: Execute stage work
-    S->>S: Write artifact to aidlc-docs/
+    S->>S: Write artifact to the intent's record dir
     S->>H: PostToolUse hook fires
     H->>A: Append ARTIFACT_CREATED or ARTIFACT_UPDATED
     S->>O: Stage work complete
@@ -149,7 +149,7 @@ sequenceDiagram
     O->>A: Log STAGE_COMPLETED
 ```
 
-<!-- Text fallback: Orchestrator logs STAGE_STARTED to audit.md. Stage execution writes artifacts. PostToolUse hook fires and appends an ARTIFACT_CREATED or ARTIFACT_UPDATED event. Stage completes. Orchestrator logs the approval gate options, then the user's decision, then STAGE_COMPLETED. -->
+<!-- Text fallback: Orchestrator logs STAGE_STARTED to this clone's audit/ shard. Stage execution writes artifacts. PostToolUse hook fires and appends an ARTIFACT_CREATED or ARTIFACT_UPDATED event. Stage completes. Orchestrator logs the approval gate options, then the user's decision, then STAGE_COMPLETED. -->
 
 ---
 
@@ -163,9 +163,9 @@ The state file and audit trail serve complementary purposes:
 | **Read by** | Orchestrator (for routing and resume) | Users and auditors (for traceability) |
 | **Update pattern** | Overwritten at each state change | Append-only (never modified) |
 | **Session resume** | Primary source for determining where to continue | Provides the original project description and decision context |
-| **Git policy** | Commit to version control | Gitignore (may contain sensitive user input) |
+| **Git policy** | Commit to version control | Commit (per-clone shards under `audit/`; no merge conflicts) |
 
-The orchestrator uses `aidlc-state.md` for all routing decisions. It does not read `audit.md` for routing. The audit trail is a traceability record that lets you trace every decision from intent through to production.
+The orchestrator uses `aidlc-state.md` for all routing decisions. It does not read the `audit/` shards for routing. The audit trail is a traceability record that lets you trace every decision from intent through to production.
 
 If the state file is corrupted, you can reconstruct it from the audit trail by reviewing `STAGE_STARTED` and `STAGE_COMPLETED` events. See [Troubleshooting](15-troubleshooting.md) for repair instructions.
 
@@ -174,6 +174,6 @@ If the state file is corrupted, you can reconstruct it from the audit trail by r
 ## Next Steps
 
 - [Session Management](10-session-management.md) — How state is used for session resume
-- [Artifacts Reference](13-artifacts-reference.md) — What gets stored in `aidlc-docs/`
+- [Artifacts Reference](13-artifacts-reference.md) — What gets stored in the intent's record dir
 - [Troubleshooting](15-troubleshooting.md) — State corruption repair
 - [Glossary](glossary.md) — Definitions for state file, audit trail, checkpoint, compaction

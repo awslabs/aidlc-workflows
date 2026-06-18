@@ -2,7 +2,7 @@
 
 This document contains all Mermaid diagrams that visualize the AI-DLC (AI-Driven Development Life Cycle) methodology. Each section includes a brief explanation followed by a rendered diagram. These diagrams are derived from the engine and conductor (`aidlc-orchestrate.ts` + `SKILL.md`), stage protocol (`stage-protocol.md`), stage files, and agent definitions.
 
-> **Note:** These diagrams are also embedded inline in their relevant reference chapters. This file serves as a consolidated index of all diagrams in one place.
+> **Note:** These diagrams are also embedded inline in their relevant reference chapters. This file serves as a consolidated index of all diagrams in one place. `<record>/` in the diagrams below = the active intent's record dir, `aidlc/spaces/<space>/intents/<slug>-<id8>/`.
 >
 > - Diagrams 1 and 7: [Architecture](01-architecture.md)
 > - Diagram 8: [Orchestrator](03-orchestrator.md) -- Session Management section
@@ -246,7 +246,7 @@ flowchart TD
 
 ## 6. Agent Collaboration Map
 
-The AI-DLC system uses 11 domain-expert agents. The conductor (SKILL.md) performs each agent invocation as the engine directs; agents never invoke each other directly. Information flows between agents through artifacts stored in `aidlc-docs/`. The diagram below shows the primary information flows between agents, culminating in the feedback loop from aidlc-operations-agent back to aidlc-product-agent.
+The AI-DLC system uses 11 domain-expert agents. The conductor (SKILL.md) performs each agent invocation as the engine directs; agents never invoke each other directly. Information flows between agents through artifacts stored in the intent's record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/`). The diagram below shows the primary information flows between agents, culminating in the feedback loop from aidlc-operations-agent back to aidlc-product-agent.
 
 ```mermaid
 flowchart TD
@@ -350,15 +350,14 @@ flowchart LR
 
 ## 8. Session Resume Flow
 
-When the user invokes `/aidlc`, the orchestrator checks for an existing `aidlc-state.md` file. If found, it offers four resume options. If not found, it starts a new workflow. The orchestrator also checks for `.aidlc-recovery.md` to detect possible state corruption from context compaction.
+When the user invokes `/aidlc`, the orchestrator checks for an active intent's `aidlc-state.md`. If found, it offers four resume options. If not found, it births the first intent. The orchestrator also checks for `.aidlc-recovery.md` to detect possible state corruption from context compaction.
 
 ```mermaid
 flowchart TD
     START(["/aidlc invoked"])
     ARG_CHECK{"Arguments\nprovided?"}
     STATUS_CHECK{"Argument =\n--status?"}
-    INIT_CHECK{"Argument =\n--init?"}
-    STATE_EXISTS{"aidlc-state.md\nexists?"}
+    STATE_EXISTS{"Active intent\nexists?"}
     RECOVERY_CHECK{".aidlc-recovery.md\nexists?"}
     CORRUPTION{"State matches\nrecovery file?"}
     WARN["Warn user about\npossible corruption"]
@@ -370,21 +369,18 @@ flowchart TD
     OPT_FRESH["Start fresh\n(archive existing)"]
 
     STATUS_DISPLAY["Display read-only\nstatus summary"]
-    SCAFFOLD["Scaffold aidlc-docs/\ndirectory tree"]
     SCOPE_DETECT{"Known scope\nor freeform text?"}
     KNOWN_SCOPE["Use explicit scope"]
     FREEFORM["Auto-detect scope\nfrom keywords"]
     CONFIRM_SCOPE["Confirm scope\nwith user"]
-    NEW_WORKFLOW["Create state file,\naudit log, begin\nfirst stage"]
+    BIRTH["Birth the intent:\nmint record dir,\nstate + audit, begin\nfirst stage"]
 
     START --> ARG_CHECK
     ARG_CHECK -->|Yes| STATUS_CHECK
     ARG_CHECK -->|No| STATE_EXISTS
 
     STATUS_CHECK -->|Yes| STATUS_DISPLAY
-    STATUS_CHECK -->|No| INIT_CHECK
-    INIT_CHECK -->|Yes| SCAFFOLD
-    INIT_CHECK -->|No| STATE_EXISTS
+    STATUS_CHECK -->|No| STATE_EXISTS
 
     STATE_EXISTS -->|Yes| RECOVERY_CHECK
     STATE_EXISTS -->|No| SCOPE_DETECT
@@ -399,15 +395,15 @@ flowchart TD
     RESUME_MENU --> OPT_JUMP
     RESUME_MENU --> OPT_FRESH
 
-    OPT_FRESH -->|"archive + confirm"| NEW_WORKFLOW
+    OPT_FRESH -->|"archive + confirm"| BIRTH
 
     SCOPE_DETECT -->|"Known scope"| KNOWN_SCOPE --> CONFIRM_SCOPE
     SCOPE_DETECT -->|"Freeform text"| FREEFORM --> CONFIRM_SCOPE
-    CONFIRM_SCOPE --> NEW_WORKFLOW
+    CONFIRM_SCOPE --> BIRTH
 
     style START fill:#e1bee7,stroke:#7b1fa2
     style RESUME_MENU fill:#bbdefb,stroke:#1565c0
-    style NEW_WORKFLOW fill:#c8e6c9,stroke:#388e3c
+    style BIRTH fill:#c8e6c9,stroke:#388e3c
     style WARN fill:#ffcdd2,stroke:#c62828
 ```
 
@@ -447,11 +443,11 @@ sequenceDiagram
     Note over AM: Agent-specific methodology
     AM-->>O: Agent methodology loaded
 
-    O->>TK: Step 4: Load aidlc-docs/knowledge/aidlc-shared/
+    O->>TK: Step 4: Load <record>/knowledge/aidlc-shared/
     Note over TK: Team shared knowledge (if exists)
     TK-->>O: Team knowledge loaded
 
-    O->>TAK: Step 5: Load aidlc-docs/knowledge/[agent-name]/
+    O->>TAK: Step 5: Load <record>/knowledge/[agent-name]/
     Note over TAK: Team agent-specific knowledge (if exists)
     TAK-->>O: Team agent knowledge loaded
 

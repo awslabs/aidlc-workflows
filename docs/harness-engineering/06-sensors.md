@@ -40,11 +40,11 @@ before you author anything:
   reserved for a future release — see [`default_severity`](#judgment-calls-matches-and-default_severity)
   below.)
 
-Each fire leaves a row in `aidlc-docs/audit.md`. The event names — exact casing
+Each fire leaves a row in the intent's `audit/` shards. The event names — exact casing
 matters when you grep the log — are **`SENSOR_FIRED`** when a sensor starts,
 **`SENSOR_PASSED`** when it clears, and **`SENSOR_FAILED`** when it finds a gap.
 A failed row links to a detail file under
-`aidlc-docs/.aidlc-sensors/<stage-slug>/` that names the specific gap: the
+`<record>/.aidlc-sensors/<stage-slug>/` (in the intent's record dir) that names the specific gap: the
 missing headings, the unreferenced upstream artifact, the lint error. The
 user-facing tour of how this looks during a run is in
 [Rules and the Learning Loop](../guide/08-rules-and-the-learning-loop.md) in the
@@ -58,14 +58,16 @@ Four manifests ship under `.claude/sensors/`, each prefixed `aidlc-`:
 
 | Manifest | Fires on | Checks |
 |----------|----------|--------|
-| `aidlc-required-sections.md` | `aidlc-docs/` markdown output | The output carries the required H2 headings — a generic content-shape check |
-| `aidlc-upstream-coverage.md` | `aidlc-docs/` markdown output | The prose references each upstream artifact the stage declares it consumes |
+| `aidlc-required-sections.md` | record-dir markdown output | The output carries the required H2 headings — a generic content-shape check |
+| `aidlc-upstream-coverage.md` | record-dir markdown output | The prose references each upstream artifact the stage declares it consumes |
 | `aidlc-linter.md` | `.ts` / `.js` code output | Wraps your configured linter (ESLint by default) |
 | `aidlc-type-check.md` | `.ts` / `.tsx` code output | Wraps your configured type-checker (`tsc` by default) |
 
 All four are gated by a `matches:` glob (more on that below): the first two
-document-shape checks scope to `**/aidlc-docs/**` (the artifact tree), the two
-code-quality checks to their language globs (`**/*.{ts,js}`, `**/*.{ts,tsx}`).
+document-shape checks scope to the artifact tree (the shipped manifests carry
+`**/{aidlc-docs,intents}/**` — the per-intent record tree, with the legacy
+`aidlc-docs/` arm kept for a pre-migration project), the two code-quality checks
+to their language globs (`**/*.{ts,js}`, `**/*.{ts,tsx}`).
 Read `aidlc-required-sections.md` end to end before authoring your own — it is
 the smallest of the four and shows the whole shape, frontmatter plus prose body.
 
@@ -169,8 +171,8 @@ filter, and it is effectively required: the hook fires the sensor only when the
 path being written matches it, and an entry with **no** `matches` never fires at
 all. The code-quality sensors set it to code globs (`aidlc-linter.md` uses
 `**/*.{ts,js}`; `aidlc-type-check.md` uses `**/*.{ts,tsx}`) so they fire only on
-code writes and stay quiet on prose; the document-shape sensors scope to
-`**/aidlc-docs/**` so they fire on any artifact written under the docs tree.
+code writes and stay quiet on prose; the document-shape sensors scope to the
+artifact tree so they fire on any markdown artifact a stage writes.
 Decide the file shape your check is meaningful for, and write the narrowest glob
 that covers it. An empty `matches: ""` is rejected at parse time; and since an
 absent glob means the sensor never runs, there is no "fires on everything" mode —

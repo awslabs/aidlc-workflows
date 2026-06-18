@@ -23,7 +23,7 @@ while keeping you in control at every decision point.
 
 - **You decide, AI executes.** Every material decision goes through an approval gate.
 - **Adaptive scope.** Choose a scope or let AI auto-detect from your intent.
-- **Traceable artifacts.** Every stage produces versioned documents in aidlc-docs/.
+- **Traceable artifacts.** Every stage produces versioned documents in the intent's record dir.
 - **11 domain experts.** Specialized agent personas guide each stage.
 ```
 
@@ -31,17 +31,17 @@ while keeping you in control at every decision point.
 
 ## Initialization Phase (Automatic)
 
-The three initialization stages run deterministically inside `aidlc-utility init` — a single tool call that completes in well under a second. You do not interact with initialization; it bootstraps the workspace for the workflow.
+The three initialization stages run deterministically inside `aidlc-utility init` — a single tool call that completes in well under a second. You do not interact with initialization; it auto-births the first intent into the active space and bootstraps its record dir for the workflow.
 
 ### Stage 0.1: Workspace Scaffold
 
-The framework creates the `aidlc-docs/` directory tree:
+The framework births the first intent and creates its record dir at `aidlc/spaces/<space>/intents/<slug>-<id8>/` (the `<space>` is `default` unless you use a named space):
 
 ```
-Workspace scaffolded:
-  aidlc-docs/knowledge/           (team knowledge — 11 agent dirs + shared)
-  aidlc-docs/initialization/      (3 stage artifact dirs)
-  aidlc-docs/ideation/            (7 stage artifact dirs)
+Intent born — record dir scaffolded:
+  aidlc/spaces/default/intents/<slug>-<id8>/knowledge/        (team knowledge — 11 agent dirs + shared)
+  aidlc/spaces/default/intents/<slug>-<id8>/initialization/   (3 stage artifact dirs)
+  aidlc/spaces/default/intents/<slug>-<id8>/ideation/         (7 stage artifact dirs)
   ...
 ```
 
@@ -51,7 +51,7 @@ A deterministic rule-based scanner walks one level deep into the project plus kn
 
 ### Stage 0.3: State Initialization
 
-The orchestrator writes `aidlc-docs/aidlc-state.md` with the full stage plan based on your scope, depth, test strategy, and the scanner's classification. It also analyzes your input and confirms a scope:
+The orchestrator writes the intent's `aidlc-state.md` (under its record dir) with the full stage plan based on your scope, depth, test strategy, and the scanner's classification. It also analyzes your input and confirms a scope:
 
 ```
 ─── Scope Detection ───────────────────────────────────────────────────────────
@@ -105,7 +105,7 @@ After the agent completes its work, you see a completion summary and an approval
 | intent-capture.md | Problem statement, target users, success criteria |
 | intent-capture-questions.md | 5 questions, all answered |
 
-**Review:** `aidlc-docs/ideation/intent-capture/`
+**Review:** `<record>/ideation/intent-capture/` (the intent's record dir)
 
 ▸ How would you like to proceed?
   (1) Approve — Continue to Market Research
@@ -233,19 +233,21 @@ sequenceDiagram
 
 ## Artifacts Produced
 
-By the end of a `feature`-scoped workflow, your `aidlc-docs/` directory contains:
+By the end of a `feature`-scoped workflow, the intent's record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/`) contains:
 
 ```
-aidlc-docs/
+aidlc/spaces/<space>/intents/<slug>-<id8>/
 ├── aidlc-state.md          # Workflow state (all stages marked [x])
-├── audit.md                # Full decision audit trail
+├── audit/                  # Full decision audit trail (per-clone shards, merged by timestamp)
 ├── ideation/               # Intent, market research, scope, mockups
 ├── inception/              # Requirements, stories, design, units
 ├── construction/           # Per-unit code + test artifacts
 ├── operation/              # Deployment, observability, incident plans
 ├── verification/           # Phase boundary verification reports
-└── knowledge/              # Team knowledge (persists across workflows)
+└── knowledge/              # Team knowledge for this intent
 ```
+
+(Team-affirmed practices and learnings live one level up, in the space's memory layer at `aidlc/spaces/<space>/memory/`, where they persist across intents.)
 
 ---
 

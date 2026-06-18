@@ -47,7 +47,7 @@ conductor reasons at full depth out of the box. Override it per session with
 ## Usage
 
 Identical to the Claude Code harness: `/aidlc <description>` starts a
-workflow, `/aidlc --status` reports position, `/aidlc --init`, `--doctor`,
+workflow, `/aidlc --status` reports position, `--doctor`,
 `--stage`, `--phase`, `--depth`, `--test-strategy`, `--test-run` all work, and
 the per-stage (`/aidlc-application-design`) and per-scope (`/aidlc-feature`)
 runner skills are installed.
@@ -66,13 +66,14 @@ runner skills are installed.
 | Welcome message | Rendered at session start from `settings.json` `companyAnnouncements` | None — Kiro has no welcome-render equivalent; the session-start hook injects resume context only |
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped, and the Kiro MCP config mechanism is not yet documented here — Claude-only today in practice |
 
-Everything else — state machine, audit trail, artifacts under `aidlc-docs/`,
-the learnings ritual, sensors, scopes, depth/test-strategy — behaves
-identically, because it IS identical: the same tools run from `.kiro/tools/`.
+Everything else — state machine, audit trail, artifacts under the intent
+record dirs (`aidlc/spaces/<space>/intents/<slug>-<id8>/`), the learnings
+ritual, sensors, scopes, depth/test-strategy — behaves identically, because it
+IS identical: the same tools run from `.kiro/tools/`.
 
-A project's `aidlc-docs/` is harness-neutral. Moving a project between
+A project's `aidlc/` workspace is harness-neutral. Moving a project between
 harnesses (or running both side by side) is supported-but-untested; `/aidlc
---doctor` will warn if it detects both trees with an active workflow.
+--doctor` will warn if it detects a conflicting harness setup with an active workflow.
 
 ## For framework developers
 

@@ -71,7 +71,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Session Management](10-session-management.md) | Resume, redo, jump, recovery, and session reporting skills |
 | [CLI Commands](11-cli-commands.md) | Complete flag reference with examples |
 | [Customization](12-customization.md) | Settings, scope config, agent tuning |
-| [Artifacts Reference](13-artifacts-reference.md) | The `aidlc-docs/` directory explained |
+| [Artifacts Reference](13-artifacts-reference.md) | The per-intent record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/`) explained |
 | [Troubleshooting](15-troubleshooting.md) | Symptom-based problem solving |
 | [Worked Examples](16-worked-examples.md) | Full bugfix and feature walkthroughs |
 | [Skills and Runner Commands](17-skills.md) | The `/aidlc-*` stage- and scope-runner commands and the author-your-own-runner path |

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] - 2026-06-18
+
+Moves AI-DLC from a single flat `aidlc-docs/` record to a per-intent **workspace** layout: a project root holds `aidlc/spaces/<space>/intents/<slug>-<id8>/`, so many intents (and non-default spaces) live side by side without colliding. **Upgrade:** re-copy your `dist/<harness>/` shell into the project — it ships the workspace pre-scaffolded, so there is no more `/aidlc --init` (the engine auto-births the first intent on your first `/aidlc`). A project still on the old flat `aidlc-docs/` layout is migrated automatically and crash-safely on first run (copy → atomic rename into the per-intent record; the tracked flat tree is git-rm'd post-move; idempotent on a `.migrated` marker). The audit trail is now **committed as per-clone shards** (`intents/<id>/audit/<host>-<clone>.md`) rather than a single `audit.md`, so concurrent clones never merge-conflict the trail; readers glob and merge by timestamp. A confirmed learning now lands as a **practice** in the relocated `aidlc/spaces/<space>/memory/` (the `*-learnings.md` files are gone).
+
+* `/aidlc --init` is **retired** — the shipped shell scaffolds the workspace and the first intent auto-births; `--force`/state-wipe is gone. Re-copy `dist/<harness>/`.
+* New intent + space verbs: `/aidlc intent` (list/switch), `/aidlc space` (list/switch), `/aidlc space-create <name>`, `/aidlc intent-birth`; a `--json` query layer on the list handlers.
+* `--repo`/`--repos` make an intent multi-repo: the repo set is captured at birth and Construction worktrees fork against the right sibling repo.
+* The record tree, audit shards, `intents.json`, memory, and codekb are committed; the per-user cursors (`active-space`, `active-intent`) and machine-local runtime are gitignored.
+* CI/scripts: the flat `aidlc-docs/` path no longer resolves for new projects — resolve state/audit/artifacts under `aidlc/spaces/<space>/intents/<slug>-<id8>/` (the migration keys on `aidlc-docs/aidlc-state.md` as its sole detection trigger).
+
 ## [2.0.2] - 2026-06-18
 
 Validates the stage `reviewer:` / `reviewer_max_iterations` frontmatter fields, which were carried through schema → graph → directive by the 2.0.0 reviewer mechanism but never checked. A malformed cap, a non-positive-integer cap, a cap declared with no reviewer, or a `reviewer:` naming an agent with no `.claude/agents/*.md` file all passed validation before and surfaced only as a runtime failure or a silently-disabled review loop; they now fail validation/compile loudly and deterministically. This is a behaviour change at authoring time only — the reviewer's runtime behaviour is unchanged. Re-copy your `dist/<harness>/` to pick up the regenerated tools. Refs #389.

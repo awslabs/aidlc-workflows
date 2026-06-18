@@ -6,6 +6,8 @@ This chapter documents the workflow behaviour from the conductor's side — entr
 
 > **Ownership note.** Throughout this chapter, the behaviours described — argument resolution, scope detection, jump validation, resume branching — are computed by the **engine** on each `next` and delivered to the conductor as a directive. Where older prose said "the orchestrator does X," read it as "the engine decides X and emits a directive; the conductor carries it out." The decision logic is deterministic tool code, never SKILL.md prose.
 
+> **Path convention.** Each intent's state, audit trail, and artifacts live under its **record dir** — `aidlc/spaces/<space>/intents/<slug>-<id8>/`, written `<record>/` below. The audit trail is a directory of per-clone shards under `<record>/audit/`, not a single file.
+
 ---
 
 ## Table of Contents
@@ -32,7 +34,7 @@ The conductor passes `$ARGUMENTS` to the engine's first `next` verbatim — it n
 
 When the argument matches one of the 9 known scopes (`enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `workshop`):
 
-An explicitly named scope on a fresh workspace (no `aidlc-docs/aidlc-state.md`) **births the workflow**: the engine's `next` emits a run-then-continue `print` directive naming `aidlc-utility.ts init --scope <scope>` (threading any `--depth` / `--test-strategy` / `--test-run` flags onto the named command); the conductor runs it and re-runs `next` to land on the first stage. Both naming shapes — the bare positional (`/aidlc bugfix`) and the explicit flag (`/aidlc --scope bugfix`) — emit the identical birth print. A bare `/aidlc` with no explicitly named scope does NOT birth (an env- or default-resolved scope is not a birth signal); it emits the no-state error directing the user to name a scope or run `/aidlc --init`.
+An explicitly named scope on a fresh workspace (no intent yet — no `aidlc-state.md` under `aidlc/spaces/*/intents/*/`) **births the first intent**: the engine's `next` emits a run-then-continue `print` directive naming `aidlc-utility.ts intent-birth --scope <scope>` (threading any `--depth` / `--test-strategy` / `--test-run` flags onto the named command); the conductor runs it and re-runs `next` to land on the first stage. Both naming shapes — the bare positional (`/aidlc bugfix`) and the explicit flag (`/aidlc --scope bugfix`) — emit the identical birth print. Describing what to build (`/aidlc "build the auth service"`) also births. A bare `/aidlc` with no explicitly named scope and no description does NOT birth (an env- or default-resolved scope is not a birth signal); it emits the no-state error directing the user to describe what to build or name a scope.
 
 1. Reads guardrails from `.claude/rules/`.
 2. Asks the user "What would you like to build?"
@@ -63,7 +65,7 @@ When the argument is freeform text (not a known scope keyword):
 
 Read-only command that inspects the current workflow without advancing it:
 
-1. Reads `aidlc-docs/aidlc-state.md`.
+1. Reads the active intent's `aidlc-state.md` (under `aidlc/spaces/<space>/intents/<slug>-<id8>/`).
 2. Displays: current phase, current stage, completion percentage, pending decisions, and active agent.
 3. If verification is needed, runs the phase boundary check per stage-protocol-governance.md section 13.
 4. Does NOT advance the workflow -- strictly read-only.
@@ -100,23 +102,23 @@ Overrides the depth level (minimal, standard, comprehensive). When used alone, u
 
 Overrides the test volume strategy (minimal, standard, comprehensive) independently of depth. Defaults to the current depth when not specified. Allows combinations like `--depth standard --test-strategy minimal` for full artifacts with minimal testing. Logs a `TEST_STRATEGY_CHANGED` audit event for standalone changes.
 
-### `/aidlc --init` -- Scaffold Docs Directory
+### Intent birth -- the Initialization phase
 
-Runs the three Initialization stages (workspace-scaffold, workspace-detection, state-init) deterministically inside `aidlc-utility init`. Produces a fresh workspace with state initialised, scope routing applied, and the workflow positioned at the first post-Initialization stage:
+There is no separate scaffold command (the earlier `init` flag was retired; the workspace shell ships pre-built in `dist/<harness>/`). The three Initialization stages (workspace-scaffold, workspace-detection, state-init) run deterministically inside `aidlc-utility intent-birth` — auto-invoked on the first `/aidlc` (or `/aidlc <description>`), or explicitly via the `/aidlc-init` packaging. Birth mints the intent's record dir at `aidlc/spaces/<space>/intents/<slug>-<id8>/` with state initialised, scope routing applied, and the workflow positioned at the first post-Initialization stage:
 
 1. Reads the knowledge README template from `.claude/knowledge/aidlc-shared/knowledge-readme-template.md`.
-2. Creates the directory tree (idempotent -- skips existing directories/files): knowledge directories with READMEs, stage artifact directories (empty), and verification directory.
-3. Scans the workspace and writes `aidlc-state.md` with the actual phase (e.g., `IDEATION` for `--scope feature`), the resolved scope, and the stage plan derived from the compiled scope grid (`scope-grid.json`, the transpose of each stage's `scopes:` frontmatter).
+2. Creates the record dir tree (idempotent -- skips existing directories/files): knowledge directories with READMEs, the `audit/` shard dir, stage artifact directories (empty), and verification directory.
+3. Scans the workspace and writes the intent's `aidlc-state.md` with the actual phase (e.g., `IDEATION` for `--scope feature`), the resolved scope, and the stage plan derived from the compiled scope grid (`scope-grid.json`, the transpose of each stage's `scopes:` frontmatter).
 4. Emits the full event sequence: `WORKFLOW_STARTED`, `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED`, `PHASE_STARTED` for the first executing phase, `STAGE_STARTED` + `STAGE_COMPLETED` for each Initialization stage, plus `PHASE_SKIPPED` events for any phases the scope skips.
-5. Without `--force`, exits with a clear error if `aidlc-docs/` already exists. With `--force`, rewrites `aidlc-state.md` and warns about unrelated files.
-6. Does NOT start a workflow conversation -- exits after the deterministic Initialization completes. The user invokes `/aidlc` again (or `/aidlc <description>`) to begin the first post-Initialization stage interactively.
+5. Auto-births only on a workspace with zero intents; with intents already present and no active cursor, the engine prompts the user to pick one (`/aidlc intent <slug>`) rather than birthing a duplicate. There is no re-init flag.
+6. When birth was reached via the auto-birth print, the conductor re-runs `next` and continues into the first post-Initialization stage; the explicit `/aidlc-init` packaging stops after Initialization so the user invokes `/aidlc` again to begin interactively.
 
 ### Resume (State File Exists)
 
-When `aidlc-docs/aidlc-state.md` exists and the user invokes `/aidlc`, the engine's `next` detects the existing state, runs the resume/recovery guard, and emits an `ask` directive carrying the resume-options question. The conductor renders it via `AskUserQuestion` and feeds the choice back on `report --user-input`. The conductor does not branch on state-file existence itself; the guard logic below runs in the engine:
+When the active intent's `aidlc-state.md` exists and the user invokes `/aidlc`, the engine's `next` detects the existing state, runs the resume/recovery guard, and emits an `ask` directive carrying the resume-options question. The conductor renders it via `AskUserQuestion` and feeds the choice back on `report --user-input`. The conductor does not branch on state-file existence itself; the guard logic below runs in the engine:
 
 1. The engine reads the state file and prepares a status summary.
-2. It checks for `.aidlc-recovery.md`. If it exists, it compares its "Current stage" field with `aidlc-state.md` to detect possible compaction-related state corruption.
+2. It checks for `.aidlc-recovery.md` (in the intent's record dir). If it exists, it compares its "Current stage" field with `aidlc-state.md` to detect possible compaction-related state corruption.
 3. It emits the `ask` directive with the resume options; the conductor renders them via `AskUserQuestion`.
 4. On the answer, the conductor recreates stage-level tasks matching the current workflow state.
 
@@ -133,8 +135,7 @@ flowchart TD
     START(["/aidlc invoked"])
     ARG_CHECK{"Arguments\nprovided?"}
     STATUS_CHECK{"Argument =\n--status?"}
-    INIT_CHECK{"Argument =\n--init?"}
-    STATE_EXISTS{"aidlc-state.md\nexists?"}
+    STATE_EXISTS{"Active intent\nexists?"}
     RECOVERY_CHECK{".aidlc-recovery.md\nexists?"}
     CORRUPTION{"State matches\nrecovery file?"}
     WARN["Warn user about\npossible corruption"]
@@ -146,21 +147,18 @@ flowchart TD
     OPT_FRESH["Start fresh\n(archive existing)"]
 
     STATUS_DISPLAY["Display read-only\nstatus summary"]
-    SCAFFOLD["Scaffold aidlc-docs/\ndirectory tree"]
     SCOPE_DETECT{"Known scope\nor freeform text?"}
     KNOWN_SCOPE["Use explicit scope"]
     FREEFORM["Auto-detect scope\nfrom keywords"]
     CONFIRM_SCOPE["Confirm scope\nwith user"]
-    NEW_WORKFLOW["Create state file,\naudit log, begin\nfirst stage"]
+    BIRTH["Birth the intent:\nmint record dir,\nstate + audit, begin\nfirst stage"]
 
     START --> ARG_CHECK
     ARG_CHECK -->|Yes| STATUS_CHECK
     ARG_CHECK -->|No| STATE_EXISTS
 
     STATUS_CHECK -->|Yes| STATUS_DISPLAY
-    STATUS_CHECK -->|No| INIT_CHECK
-    INIT_CHECK -->|Yes| SCAFFOLD
-    INIT_CHECK -->|No| STATE_EXISTS
+    STATUS_CHECK -->|No| STATE_EXISTS
 
     STATE_EXISTS -->|Yes| RECOVERY_CHECK
     STATE_EXISTS -->|No| SCOPE_DETECT
@@ -175,21 +173,21 @@ flowchart TD
     RESUME_MENU --> OPT_JUMP
     RESUME_MENU --> OPT_FRESH
 
-    OPT_FRESH -->|"archive + confirm"| NEW_WORKFLOW
+    OPT_FRESH -->|"archive + confirm"| BIRTH
 
     SCOPE_DETECT -->|"Known scope"| KNOWN_SCOPE --> CONFIRM_SCOPE
     SCOPE_DETECT -->|"Freeform text"| FREEFORM --> CONFIRM_SCOPE
-    CONFIRM_SCOPE --> NEW_WORKFLOW
+    CONFIRM_SCOPE --> BIRTH
 
     style START fill:#e1bee7,stroke:#7b1fa2
     style RESUME_MENU fill:#bbdefb,stroke:#1565c0
-    style NEW_WORKFLOW fill:#c8e6c9,stroke:#388e3c
+    style BIRTH fill:#c8e6c9,stroke:#388e3c
     style WARN fill:#ffcdd2,stroke:#c62828
 ```
 
 ### State File Schema
 
-The state file at `aidlc-docs/aidlc-state.md` is created from the template at `.claude/knowledge/aidlc-shared/state-template.md`. It uses State Version 7 and contains:
+The state file at `aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md` (the intent's record dir) is created from the template at `.claude/knowledge/aidlc-shared/state-template.md`. It uses State Version 7 and contains:
 
 | Section | Contents |
 |---------|----------|
@@ -214,7 +212,7 @@ The Construction phase section is special: it runs Bolt by Bolt (see [Constructi
 
 ### Recovery Breadcrumb
 
-The recovery breadcrumb (`aidlc-docs/.aidlc-recovery.md`) is written by the `validate-state.ts` PreCompact hook. It records a snapshot of the workflow's last known-good state before context compaction occurs.
+The recovery breadcrumb (`.aidlc-recovery.md` in the intent's record dir) is written by the `validate-state.ts` PreCompact hook. It records a snapshot of the workflow's last known-good state before context compaction occurs.
 
 On session resume, the orchestrator compares the breadcrumb's "Current stage" with the state file's "Current Stage". If they differ, it warns the user that compaction may have caused state corruption. This is important because PreCompact hooks are informational-only and cannot block compaction.
 
@@ -228,15 +226,15 @@ When a state file is detected, the orchestrator presents four options:
 
 **3. Jump to stage** -- Presents the full stage list for the user to select. Warns about invalidation of downstream artifacts.
 
-**4. Start fresh** -- Archives existing work and begins a new workflow. Renames `aidlc-docs/` to `aidlc-docs-archive-[timestamp]/` after explicit confirmation.
+**4. Start fresh** -- Archives the active intent's record dir under `aidlc/spaces/<space>/intents/` after explicit confirmation, then births a new intent.
 
 ### Session Resume Context Loading
 
 | Phase / Stage Type | Context Loaded |
 |---|---|
 | INITIALIZATION (0.1-0.3) | Guardrails only (workspace not yet detected) |
-| IDEATION (1.1-1.7) | `aidlc-docs/ideation/` artifacts completed so far + guardrails |
-| INCEPTION -- RE stages | `aidlc-docs/inception/reverse-engineering/` + ideation artifacts |
+| IDEATION (1.1-1.7) | `<record>/ideation/` artifacts completed so far + guardrails |
+| INCEPTION -- RE stages | `<record>/inception/reverse-engineering/` + ideation artifacts |
 | INCEPTION -- Requirements stages | RE artifacts (if performed) + requirements artifacts |
 | INCEPTION -- Design stages | Requirements + user stories + application design artifacts |
 | INCEPTION -- Delivery Planning | All inception artifacts |
@@ -392,7 +390,7 @@ Reverse Engineering has an **always-rerun policy**: it is always re-executed for
 
 ### Construction Execution <a id="construction-execution"></a>
 
-Construction (stages 3.1–3.7) deviates from the standard stage-by-stage inline execution model. Instead, the orchestrator runs it **Bolt by Bolt**, driven by `aidlc-docs/inception/delivery-planning/bolt-plan.md` (Bolt sequence + walking-skeleton marker) and `aidlc-docs/inception/units-generation/unit-of-work-dependency.md` (DAG).
+Construction (stages 3.1–3.7) deviates from the standard stage-by-stage inline execution model. Instead, the orchestrator runs it **Bolt by Bolt**, driven by `<record>/inception/delivery-planning/bolt-plan.md` (Bolt sequence + walking-skeleton marker) and `<record>/inception/units-generation/unit-of-work-dependency.md` (DAG).
 
 Per-Bolt structure:
 
@@ -592,7 +590,7 @@ When a Claude Code Task tool call fails:
 If `aidlc-state.md` exists but cannot be parsed:
 
 1. Create a backup (`aidlc-state.md.bak`).
-2. Scan `aidlc-docs/` for artifact evidence to determine which stages actually completed.
+2. Scan the intent's record dir for artifact evidence to determine which stages actually completed.
 3. Rebuild the state file from artifact evidence.
 4. Inform the user: "State file was corrupted. Rebuilt from artifacts. Please verify."
 
@@ -684,8 +682,8 @@ The framework hooks are registered project-wide in `settings.json` (the v0.6.0 h
 
 - **Matcher**: `Write|Edit`
 - **Trigger**: Every Write or Edit Claude Code tool call during the skill session.
-- **Behavior**: Filters to `aidlc-docs/` paths only. Skips `audit.md` itself (avoids recursion). Emits a canonical `ARTIFACT_CREATED` (Write to net-new path) or `ARTIFACT_UPDATED` (Edit, or Write overwriting existing) event via `appendAuditEntry`. Uses `mkdir`-based locking via `lib.ts`.
-- **Exits silently** if `audit.md` does not exist.
+- **Behavior**: Filters to the intent's record-dir paths only. Skips the `audit/` shards themselves (avoids recursion). Emits a canonical `ARTIFACT_CREATED` (Write to net-new path) or `ARTIFACT_UPDATED` (Edit, or Write overwriting existing) event via `appendAuditEntry`. Uses `mkdir`-based locking via `lib.ts`.
+- **Exits silently** if the active intent's `audit/` shard does not exist.
 
 ### PreCompact: validate-state.ts
 

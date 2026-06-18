@@ -119,7 +119,7 @@ harness-engineer view is what the loop produces and where it lands:
 
 1. **The diary records during the stage.** The conductor (the live `/aidlc`
    session running the active stage) keeps an observation
-   log at `aidlc-docs/<phase>/<stage>/memory.md`, with entries under four
+   log at `<record>/<phase>/<stage>/memory.md` (under the intent's record dir, `aidlc/spaces/<space>/intents/<slug>-<id8>/`), with entries under four
    headings — Interpretations, Deviations, Tradeoffs, Open questions. It is
    auto-created and maintained for you; never hand-edit it. Writing the diary is
    the *only* job the language model has in this loop — everything after the stage

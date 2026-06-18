@@ -3,7 +3,7 @@
 A workflow may span multiple harness sessions. AI-DLC persists all progress to disk so you can resume, redo, jump, or start fresh at any time.
 
 > **Harness note.** Session resume works on every harness (the state lives in
-> `aidlc-docs/`, not the harness). Session *lifecycle events* differ: Claude Code
+> the intent's record dir, not the harness). Session *lifecycle events* differ: Claude Code
 > emits `SESSION_STARTED/RESUMED/ENDED` and `SESSION_COMPACTED`; Kiro emits only
 > `SESSION_STARTED`; Codex infers `SESSION_ENDED` and adds a post-compaction
 > mission re-inject. See [Running on other harnesses](harnesses/README.md).
@@ -12,7 +12,7 @@ A workflow may span multiple harness sessions. AI-DLC persists all progress to d
 
 ## Resume Flow
 
-When you run `/aidlc` and `aidlc-docs/aidlc-state.md` exists from a previous session, AI-DLC presents a status summary and offers four resume options.
+When you run `/aidlc` and the active intent's `aidlc-state.md` (under its record dir) exists from a previous session, AI-DLC presents a status summary and offers four resume options.
 
 ```mermaid
 flowchart TD
@@ -58,13 +58,13 @@ flowchart TD
 | **Resume from last checkpoint** | Continue from the in-progress or next pending stage. Task sidebar is rebuilt from the state file. | All artifacts, state, audit trail | In-memory conversation context from the prior session |
 | **Redo current stage** | Delete the current stage's artifact directory, reset its checkbox to `[ ]`, and re-execute from scratch. | All other artifacts and state | Current stage's artifacts and partial work |
 | **Jump to stage** | Skip to a specific stage. Warns about skipped stages and potential downstream artifact invalidation. | All existing artifacts | Stages between current and target are marked `[S]` (skipped) |
-| **Start fresh** | Archive existing `aidlc-docs/` to `aidlc-docs-archive-[timestamp]/` (requires your confirmation), then start a new workflow. | Archived copy of all prior artifacts | Active workflow state (new state file created) |
+| **Start fresh** | Archive the active intent's record dir under `aidlc/spaces/<space>/intents/` (requires your confirmation), then birth a new intent. | Archived copy of all prior artifacts | Active workflow state (a new intent + state file is created) |
 
 ---
 
 ## Recovery Breadcrumb
 
-Before Claude Code compacts conversation context, the `validate-state.ts` hook writes a hidden recovery file at `aidlc-docs/.aidlc-recovery.md`. This file contains:
+Before Claude Code compacts conversation context, the `validate-state.ts` hook writes a hidden recovery file at `.aidlc-recovery.md` in the active intent's record dir. This file contains:
 
 - Timestamp of the last validation
 - Current stage name (extracted from `aidlc-state.md`)
@@ -82,9 +82,9 @@ Claude Code automatically summarizes earlier conversation context when the conte
 
 | Preserved | Lost |
 |-----------|------|
-| All `aidlc-docs/` artifacts (files on disk) | In-memory conversation context (prior discussion) |
+| All record-dir artifacts (files on disk) | In-memory conversation context (prior discussion) |
 | `aidlc-state.md` (stage progress, scope, project info) | Partial in-progress work not yet written to files |
-| `audit.md` (full history of decisions and actions) | Task IDs (rebuilt from state file on resume) |
+| `audit/` shards (full history of decisions and actions) | Task IDs (rebuilt from state file on resume) |
 | `.aidlc-recovery.md` (stage checkpoint) | Agent persona context (reloaded from agent files) |
 
 ### How to recover after compaction

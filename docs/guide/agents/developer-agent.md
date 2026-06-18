@@ -27,7 +27,7 @@ Workspace Detection (0.2) used to be led by the aidlc-developer-agent as a subag
 
 During Code Generation, the aidlc-developer-agent runs as a subagent — you will not interact with it directly. You see a progress indicator and then the results when it completes. The orchestrator first presents a code generation plan for your approval, then the subagent implements each step.
 
-Application code is written directly to the workspace root (not into `aidlc-docs/`). The `code-summary.md` artifact in `aidlc-docs/` documents what was created or modified.
+Application code is written directly to the workspace root (not into the intent's record dir). The `code-summary.md` artifact in the intent's record dir documents what was created or modified.
 
 ## How It Collaborates
 

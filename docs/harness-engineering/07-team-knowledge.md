@@ -27,11 +27,14 @@ in `aidlc-shared/`. **Leave it alone.** These files are overwritten on every
 framework upgrade. Anything you add there disappears the next time the team
 pulls a new version.
 
-**Tier 2 — team knowledge** is yours. It lives under `aidlc-docs/knowledge/` in
-your project, alongside the artifacts a workflow produces. It holds your
-company-specific standards, policies, and conventions. The framework never
-overwrites it, and it persists across every workflow. This is the directory you
-populate.
+**Tier 2 — team knowledge** is yours. It lives under each intent's record dir at
+`aidlc/spaces/<space>/intents/<slug>-<id8>/knowledge/`, alongside the artifacts
+that intent's workflow produces. It holds your company-specific standards,
+policies, and conventions. The framework never overwrites it, and it is
+scaffolded into the record dir when the intent is born. This is the directory you
+populate. (Cross-intent practices that should follow the whole team — not one
+intent — live in the space's memory layer at `aidlc/spaces/<space>/memory/`
+instead.)
 
 The two-tier split is the same data-versus-code line the rest of this guide
 rests on, applied to knowledge: the framework owns its methodology, you own
@@ -44,19 +47,21 @@ full directory shapes for both tiers are in
 ## Team-wide versus agent-specific placement
 
 Tier 2 mirrors the agent layout: a `aidlc-shared/` directory plus one directory
-per agent. Where you drop a file decides which agents load it.
+per agent, all under the intent's record dir (`<record>/` below =
+`aidlc/spaces/<space>/intents/<slug>-<id8>/`). Where you drop a file decides
+which agents load it.
 
 | Placement | Loaded by | Use it for |
 |-----------|-----------|------------|
-| `aidlc-docs/knowledge/aidlc-shared/` | **every** agent, on every stage | cross-cutting standards — naming conventions, commit format, the project's domain glossary |
-| `aidlc-docs/knowledge/<agent>-agent/` | **only** that agent, only when it's the active lead | domain context for one role — architecture patterns for the architect, security policy for devsecops |
+| `<record>/knowledge/aidlc-shared/` | **every** agent, on every stage | cross-cutting standards — naming conventions, commit format, the project's domain glossary |
+| `<record>/knowledge/<agent>-agent/` | **only** that agent, only when it's the active lead | domain context for one role — architecture patterns for the architect, security policy for devsecops |
 
 The directory name must match the agent slug exactly — `aidlc-architect-agent/`,
 not `architect/`. A typo in the directory name is the most common reason a
 file is silently ignored: the framework walks the agent's own directory by
-name, finds nothing, and moves on without an error. (This is why scaffolding
-with `--init`, below, is worth the one command — it creates every directory with
-the right name.)
+name, finds nothing, and moves on without an error. (This is why the engine
+scaffolds every directory with the right name when the intent is born — see
+below — so you add files into directories that already exist.)
 
 Reach for `aidlc-shared/` only when a standard genuinely applies across all 11
 agents. A pattern that matters to the architect and no one else belongs in
@@ -81,8 +86,8 @@ loads context in a fixed six-step order, and your Tier 2 files come in at steps
 1. Rules — the resolved `.claude/rules/` chain (loaded first)
 2. Tier 1 shared methodology — `.claude/knowledge/aidlc-shared/`
 3. Tier 1 agent methodology — `.claude/knowledge/<agent>-agent/`
-4. **Tier 2 team shared** — `aidlc-docs/knowledge/aidlc-shared/`
-5. **Tier 2 team agent-specific** — `aidlc-docs/knowledge/<agent>-agent/`
+4. **Tier 2 team shared** — `<record>/knowledge/aidlc-shared/`
+5. **Tier 2 team agent-specific** — `<record>/knowledge/<agent>-agent/`
 6. Prior stage artifacts — outputs the current stage declares it consumes
 
 Steps 4 and 5 only fire if the directories exist and contain files, which is
@@ -124,7 +129,7 @@ when reviewing, it's knowledge.
 | Example: API Gateway standards, a domain glossary | Example: "Never log PII", "All data access goes through the repository layer" |
 
 So a document describing how your team designs APIs is knowledge: drop it in
-`aidlc-docs/knowledge/aidlc-architect-agent/`. A non-negotiable like "every
+`<record>/knowledge/aidlc-architect-agent/`. A non-negotiable like "every
 architecture decision must record at least two alternatives" is a rule: it
 belongs in `.claude/rules/`, where the framework will hold the agent to it. For
 authoring rules across the layer chain and letting the learning loop promote
@@ -135,20 +140,17 @@ more examples.
 
 ---
 
-## Scaffolding with `/aidlc --init`
+## Where the Tier 2 tree comes from
 
-Before hand-creating any `aidlc-docs/knowledge/` directories, run:
-
-```
-/aidlc --init
-```
-
-This builds the full Tier 2 tree — `aidlc-shared/` plus one directory per agent —
-and seeds each with a README that explains what to add and gives
-agent-specific examples. The READMEs are generated from a template that ships in
-Tier 1; you never write them by hand. Scaffolding first prevents the typo'd
-directory name that causes files to be silently skipped, because every
-directory is created with the slug the loader expects.
+You don't hand-create the `<record>/knowledge/` directories or run a scaffold
+command. When the intent is born — on the first `/aidlc` (or when you describe
+what to build) — the engine builds the full Tier 2 tree under that intent's
+record dir (`aidlc-shared/` plus one directory per agent) and seeds each with a
+README that explains what to add and gives agent-specific examples. The READMEs
+are generated from a template that ships in Tier 1; you never write them by
+hand. Because the engine creates every directory with the slug the loader
+expects, you avoid the typo'd directory name that causes files to be silently
+skipped — add your files into the directories that appear.
 
 The READMEs also restate the no-naming-convention rule: any `.md` file in a
 directory is loaded. Descriptive, one-topic-per-file names
@@ -160,7 +162,7 @@ generates these READMEs is documented in
 A note on the boundary with the rest of this guide: the agent directories you
 populate here are the same ones an agent declares in its persona file. When you
 [add an agent](03-adding-an-agent.md), its Tier 2 knowledge directory is
-`aidlc-docs/knowledge/<new-agent-slug>/` — scaffolded the same way, loaded at
+`<record>/knowledge/<new-agent-slug>/` — scaffolded the same way, loaded at
 the same steps 4 and 5. The mental model from the
 [overview](00-overview.md) holds: the stage names the agent and the agent
 reads the knowledge, and you shape all of it by editing data rather than

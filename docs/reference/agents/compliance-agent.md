@@ -66,9 +66,9 @@ Path: `.claude/knowledge/aidlc-compliance-agent/`
 
 ### Team (Tier 2)
 
-Path: `aidlc-docs/knowledge/aidlc-compliance-agent/` (user-managed)
+Path: `aidlc/spaces/<space>/intents/<slug>-<id8>/knowledge/aidlc-compliance-agent/` (the intent's record dir; user-managed)
 
-Scaffolded by the `--init` command. Populated by the team with project-specific
+Scaffolded into each intent's record dir when the intent is born. Populated by the team with project-specific
 compliance context such as existing compliance matrices, audit findings, data
 classification schemes, or regulatory interpretations.
 

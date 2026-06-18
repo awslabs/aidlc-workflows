@@ -15,6 +15,15 @@ units are built.
 All stages follow `stage-protocol.md` for approval gates, question format,
 completion messages, and state tracking.
 
+> **Path convention.** Each workflow's artifacts live under its **intent record
+> dir** — `aidlc/spaces/<space>/intents/<slug>-<id8>/` (where `<space>` is
+> `default` unless a non-default space is in play, and `<slug>-<id8>` is the
+> intent directory). Below, `<record>/` is shorthand for that dir; e.g.
+> `<record>/construction/{unit-name}/functional-design/` expands to
+> `aidlc/spaces/default/intents/<slug>-<id8>/construction/{unit-name}/functional-design/`.
+> (Projects created before the per-intent layout used a flat tree; the engine
+> migrates them on first run.)
+
 ---
 
 ## Bolt-by-Bolt Construction
@@ -99,7 +108,7 @@ SKILL.md §CONSTRUCTION Flow for the canonical specification.
 | support_agents    | aidlc-developer-agent                                                                                   |
 | mode              | inline                                                                                            |
 | Inputs            | unit-of-work.md, unit-of-work-story-map.md, requirements.md, application design artifacts         |
-| Outputs           | `aidlc-docs/construction/{unit-name}/functional-design/` -- business-logic-model.md, business-rules.md, domain-entities.md, CONDITIONAL: frontend-components.md |
+| Outputs           | `<record>/construction/{unit-name}/functional-design/` -- business-logic-model.md, business-rules.md, domain-entities.md, CONDITIONAL: frontend-components.md |
 
 ### Purpose
 
@@ -109,10 +118,10 @@ feasibility input.
 
 ### Inputs
 
-- Unit definition from `aidlc-docs/inception/units-generation/unit-of-work.md`
-- Assigned stories from `aidlc-docs/inception/units-generation/unit-of-work-story-map.md`
-- Requirements from `aidlc-docs/inception/requirements-analysis/requirements.md`
-- Application design artifacts from `aidlc-docs/inception/application-design/`
+- Unit definition from `<record>/inception/units-generation/unit-of-work.md`
+- Assigned stories from `<record>/inception/units-generation/unit-of-work-story-map.md`
+- Requirements from `<record>/inception/requirements-analysis/requirements.md`
+- Application design artifacts from `<record>/inception/application-design/`
 
 ### Steps
 
@@ -125,7 +134,7 @@ feasibility input.
 
 3. **Create Functional Design Plan** -- Analyze the unit's scope and create a
    questions file at
-   `aidlc-docs/construction/{unit-name}/functional-design/functional-design-questions.md`
+   `<record>/construction/{unit-name}/functional-design/functional-design-questions.md`
    with context-appropriate questions using `[Answer]:` tags. Focus areas:
    - Business logic workflows and algorithms
    - Domain models and entity relationships
@@ -148,7 +157,7 @@ feasibility input.
      proceeding
 
 5. **Generate Artifacts** -- Generate the following in
-   `aidlc-docs/construction/{unit-name}/functional-design/`:
+   `<record>/construction/{unit-name}/functional-design/`:
    - **business-logic-model.md**: Detailed algorithms, workflows, data
      transformations, processing sequences, and decision trees for the unit's
      business logic
@@ -160,7 +169,7 @@ feasibility input.
      frontend/UI): Component hierarchy, props/state design, interaction flows,
      form validation rules, API integration points
 
-6. **Update State** -- Update `aidlc-docs/aidlc-state.md`: mark Functional
+6. **Update State** -- Update `<record>/aidlc-state.md`: mark Functional
    Design for {unit-name} as `[x]` completed and update "Current Status".
 
 7. **Completion** -- Present completion message and approval gate.
@@ -181,7 +190,7 @@ Strictly 2-option: Approve / Request Changes.
 ### Notes
 
 - The questions file is co-located with stage artifacts at
-  `aidlc-docs/construction/{unit-name}/functional-design/functional-design-questions.md`.
+  `<record>/construction/{unit-name}/functional-design/functional-design-questions.md`.
 - frontend-components.md is only produced when the unit includes frontend/UI
   work.
 - All questions use the tri-mode interaction flow (Guide me / I'll edit the
@@ -204,7 +213,7 @@ Strictly 2-option: Approve / Request Changes.
 | support_agents    | aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-quality-agent                                       |
 | mode              | inline                                                                                            |
 | Inputs            | functional design artifacts, requirements.md, RE artifacts                                        |
-| Outputs           | `aidlc-docs/construction/{unit-name}/nfr-requirements/` -- performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md |
+| Outputs           | `<record>/construction/{unit-name}/nfr-requirements/` -- performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md |
 
 ### Purpose
 
@@ -217,10 +226,10 @@ providing testability and measurability input.
 ### Inputs
 
 - Functional design artifacts from
-  `aidlc-docs/construction/{unit-name}/functional-design/` (if they exist)
-- Requirements from `aidlc-docs/inception/requirements-analysis/requirements.md`
+  `<record>/construction/{unit-name}/functional-design/` (if they exist)
+- Requirements from `<record>/inception/requirements-analysis/requirements.md`
 - Reverse engineering artifacts from
-  `aidlc-docs/inception/reverse-engineering/` (if they exist)
+  `<record>/inception/reverse-engineering/` (if they exist)
 
 ### Steps
 
@@ -243,7 +252,7 @@ providing testability and measurability input.
    - **Observability**: Monitoring, logging, alerting, tracing requirements
 
 4. **Generate Questions** -- Create a questions file at
-   `aidlc-docs/construction/{unit-name}/nfr-requirements/nfr-requirements-questions.md`
+   `<record>/construction/{unit-name}/nfr-requirements/nfr-requirements-questions.md`
    for unclear NFR areas using `[Answer]:` tags. Focus on quantifiable targets
    and specific constraints.
 
@@ -256,7 +265,7 @@ providing testability and measurability input.
      proceeding
 
 6. **Generate Artifacts** -- Generate the following in
-   `aidlc-docs/construction/{unit-name}/nfr-requirements/`:
+   `<record>/construction/{unit-name}/nfr-requirements/`:
    - **performance-requirements.md**: Response time targets, throughput
      requirements, latency budgets, resource constraints, benchmarks
    - **security-requirements.md**: Authentication requirements, authorization
@@ -269,7 +278,7 @@ providing testability and measurability input.
      languages, frameworks, databases, infrastructure tools, and justification
      for each choice
 
-7. **Update State** -- Update `aidlc-docs/aidlc-state.md`: mark NFR
+7. **Update State** -- Update `<record>/aidlc-state.md`: mark NFR
    Requirements for {unit-name} as `[x]` completed and update "Current Status".
 
 8. **Completion** -- Present completion message and approval gate.
@@ -315,7 +324,7 @@ tech-stack-decisions.md for technology selection rationale.
 | support_agents    | aidlc-aws-platform-agent                                                                                |
 | mode              | inline                                                                                            |
 | Inputs            | NFR requirements artifacts, functional design artifacts                                           |
-| Outputs           | `aidlc-docs/construction/{unit-name}/nfr-design/` -- performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md |
+| Outputs           | `<record>/construction/{unit-name}/nfr-design/` -- performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md |
 
 ### Purpose
 
@@ -325,10 +334,10 @@ infrastructure and platform input.
 
 ### Inputs
 
-- NFR requirements from `aidlc-docs/construction/{unit-name}/nfr-requirements/`
+- NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/`
 - Functional design artifacts from
-  `aidlc-docs/construction/{unit-name}/functional-design/` (if they exist)
-- Application design from `aidlc-docs/inception/application-design/` for
+  `<record>/construction/{unit-name}/functional-design/` (if they exist)
+- Application design from `<record>/inception/application-design/` for
   architectural context
 
 ### Steps
@@ -341,7 +350,7 @@ infrastructure and platform input.
    artifacts (if they exist), and application design for architectural context.
 
 3. **Generate Design Questions** -- Create a questions file at
-   `aidlc-docs/construction/{unit-name}/nfr-design/nfr-design-questions.md`
+   `<record>/construction/{unit-name}/nfr-design/nfr-design-questions.md`
    with context-appropriate questions using `[Answer]:` tags. Focus areas:
    - Resilience patterns (circuit breakers, bulkheads, fallback strategies)
    - Scalability patterns (horizontal vs vertical, data partitioning, caching
@@ -373,7 +382,7 @@ infrastructure and platform input.
      checks, graceful degradation, failover strategies, data replication
 
 6. **Generate Artifacts** -- Generate the following in
-   `aidlc-docs/construction/{unit-name}/nfr-design/`:
+   `<record>/construction/{unit-name}/nfr-design/`:
    - **performance-design.md**: Caching architecture, optimization strategies,
      resource pooling, async patterns, performance budgets
    - **security-design.md**: Authentication/authorization architecture,
@@ -390,7 +399,7 @@ infrastructure and platform input.
      decisions with Infrastructure Design by providing a component-level view
      of where NFR patterns apply.
 
-7. **Update State** -- Update `aidlc-docs/aidlc-state.md`: mark NFR Design
+7. **Update State** -- Update `<record>/aidlc-state.md`: mark NFR Design
    for {unit-name} as `[x]` completed and update "Current Status".
 
 8. **Completion** -- Present completion message and approval gate.
@@ -435,7 +444,7 @@ by mapping where NFR patterns apply at the component level.
 | support_agents    | aidlc-devsecops-agent, aidlc-compliance-agent                                                           |
 | mode              | inline                                                                                            |
 | Inputs            | NFR design artifacts, application design, functional design                                       |
-| Outputs           | `aidlc-docs/construction/{unit-name}/infrastructure-design/` -- deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, CONDITIONAL: shared-infrastructure.md |
+| Outputs           | `<record>/construction/{unit-name}/infrastructure-design/` -- deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, CONDITIONAL: shared-infrastructure.md |
 
 ### Purpose
 
@@ -446,12 +455,12 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
 
 ### Inputs
 
-- NFR design from `aidlc-docs/construction/{unit-name}/nfr-design/` (if exists)
+- NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
 - Functional design from
-  `aidlc-docs/construction/{unit-name}/functional-design/` (if exists)
-- Application design from `aidlc-docs/inception/application-design/`
+  `<record>/construction/{unit-name}/functional-design/` (if exists)
+- Application design from `<record>/inception/application-design/`
 - NFR requirements from
-  `aidlc-docs/construction/{unit-name}/nfr-requirements/` (if exists)
+  `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
 
 ### Steps
 
@@ -463,7 +472,7 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
    NFR design, functional design, application design, NFR requirements.
 
 3. **Generate Infrastructure Questions** -- Create a questions file at
-   `aidlc-docs/construction/{unit-name}/infrastructure-design/infrastructure-design-questions.md`
+   `<record>/construction/{unit-name}/infrastructure-design/infrastructure-design-questions.md`
    with context-appropriate questions using `[Answer]:` tags. Focus areas:
    - Deployment strategy (containerized, serverless, hybrid, multi-region)
    - Compute/storage/networking (sizing, topology, latency requirements)
@@ -495,7 +504,7 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
      management
 
 6. **Generate Artifacts** -- Generate the following in
-   `aidlc-docs/construction/{unit-name}/infrastructure-design/`:
+   `<record>/construction/{unit-name}/infrastructure-design/`:
    - **deployment-architecture.md**: Compute resources, networking, storage,
      environment definitions, infrastructure-as-code approach, resource sizing
    - **infrastructure-services.md**: Database design, caching layer, messaging
@@ -511,7 +520,7 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
      message queues, shared networking, cross-unit service discovery, resource
      ownership and access boundaries
 
-7. **Update State** -- Update `aidlc-docs/aidlc-state.md`: mark
+7. **Update State** -- Update `<record>/aidlc-state.md`: mark
    Infrastructure Design for {unit-name} as `[x]` completed and update
    "Current Status".
 
@@ -557,18 +566,18 @@ share infrastructure resources.
 | support_agents    | (none -- focused implementation)                                                                  |
 | mode              | subagent (Task tool subagent_type: aidlc-developer-agent)                                               |
 | Inputs            | ALL prior design artifacts for this unit                                                          |
-| Outputs           | application code (workspace root) + `aidlc-docs/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-summary.md |
+| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-summary.md |
 
 ### Purpose
 
 Generate all application code, tests, and configuration for a single unit of
 work. This is the only stage that always executes for every unit regardless of
 the execution plan. Code is written to the workspace root, never to
-`aidlc-docs/`.
+`<record>/`.
 
 ### Critical Rules
 
-- Application code goes to workspace root, NEVER to `aidlc-docs/`
+- Application code goes to workspace root, NEVER to `<record>/`
 - Brownfield: modify files in-place. NEVER create duplicates like
   `ClassName_modified.java`
 - Add `data-testid` attributes to interactive UI elements for test automation
@@ -576,17 +585,17 @@ the execution plan. Code is written to the workspace root, never to
 ### Inputs
 
 - Functional design from
-  `aidlc-docs/construction/{unit-name}/functional-design/` (if exists)
+  `<record>/construction/{unit-name}/functional-design/` (if exists)
 - NFR requirements from
-  `aidlc-docs/construction/{unit-name}/nfr-requirements/` (if exists)
-- NFR design from `aidlc-docs/construction/{unit-name}/nfr-design/` (if exists)
+  `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
+- NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
 - Infrastructure design from
-  `aidlc-docs/construction/{unit-name}/infrastructure-design/` (if exists)
-- Application design from `aidlc-docs/inception/application-design/`
+  `<record>/construction/{unit-name}/infrastructure-design/` (if exists)
+- Application design from `<record>/inception/application-design/`
 - Unit definition from
-  `aidlc-docs/inception/units-generation/unit-of-work.md`
+  `<record>/inception/units-generation/unit-of-work.md`
 - Story map from
-  `aidlc-docs/inception/units-generation/unit-of-work-story-map.md`
+  `<record>/inception/units-generation/unit-of-work-story-map.md`
 
 ### Steps
 
@@ -599,7 +608,7 @@ This stage has a **two-part structure**: planning followed by generation.
    design, application design, unit definition, story map).
 
 2. **Create Code Generation Plan** -- Create a detailed plan at
-   `aidlc-docs/construction/{unit-name}/code-generation/code-generation-plan.md`
+   `<record>/construction/{unit-name}/code-generation/code-generation-plan.md`
    with checkboxes for each implementation step. Include story-to-code-step
    traceability -- map each plan step back to the user story it implements.
 
@@ -671,14 +680,14 @@ This stage has a **two-part structure**: planning followed by generation.
    configuration artifacts in the workspace.
 
 5. **Generate Code Summary** -- After subagent completes, create
-   `aidlc-docs/construction/{unit-name}/code-generation/code-summary.md`
+   `<record>/construction/{unit-name}/code-generation/code-summary.md`
    documenting:
    - Files created/modified
    - Key implementation decisions
    - Test coverage summary
    - Any deviations from the plan
 
-6. **Update State** -- Update `aidlc-docs/aidlc-state.md`: mark Code
+6. **Update State** -- Update `<record>/aidlc-state.md`: mark Code
    Generation for {unit-name} as `[x]` completed and update "Current Status".
 
 7. **Completion** -- Present completion message and approval gate.
@@ -733,7 +742,7 @@ Strictly 2-option: Approve / Request Changes.
 | support_agents    | aidlc-devsecops-agent                                                                                   |
 | mode              | inline                                                                                            |
 | Inputs            | ALL code generation outputs across all units                                                      |
-| Outputs           | `aidlc-docs/construction/build-and-test/` -- build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, plus conditional test instruction files |
+| Outputs           | `<record>/construction/build-and-test/` -- build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, plus conditional test instruction files |
 
 ### Purpose
 
@@ -745,7 +754,7 @@ testing expertise.
 ### Inputs
 
 - Code generation outputs across all units from
-  `aidlc-docs/construction/*/code-generation/code-summary.md`
+  `<record>/construction/*/code-generation/code-summary.md`
 - NFR requirements across units (if they exist) for performance and security
   testing needs
 
@@ -759,7 +768,7 @@ testing expertise.
    security testing needs. Catalog all test types required.
 
 3. **Generate Build Instructions** -- Create
-   `aidlc-docs/construction/build-and-test/build-instructions.md`:
+   `<record>/construction/build-and-test/build-instructions.md`:
    - Dependency installation steps
    - Environment setup (env vars, config files, local services)
    - Build commands (compile, bundle, transpile)
@@ -767,7 +776,7 @@ testing expertise.
    - Troubleshooting common build issues
 
 4. **Generate Unit Test Instructions** -- Create
-   `aidlc-docs/construction/build-and-test/unit-test-instructions.md`:
+   `<record>/construction/build-and-test/unit-test-instructions.md`:
    - Test framework setup and configuration
    - How to run unit tests (commands, flags, filters)
    - Expected test coverage targets
@@ -775,7 +784,7 @@ testing expertise.
    - Test data management
 
 5. **Generate Integration Test Instructions** -- Create
-   `aidlc-docs/construction/build-and-test/integration-test-instructions.md`:
+   `<record>/construction/build-and-test/integration-test-instructions.md`:
    - Test environment prerequisites (databases, services, queues)
    - How to run integration tests
    - Cross-unit interaction testing
@@ -809,10 +818,10 @@ testing expertise.
    - **accessibility-test-instructions.md**: For user-facing interfaces --
      WCAG compliance, screen reader testing, keyboard navigation
 
-   All files go in `aidlc-docs/construction/build-and-test/`.
+   All files go in `<record>/construction/build-and-test/`.
 
 9. **Generate Build and Test Summary** -- Create
-   `aidlc-docs/construction/build-and-test/build-and-test-summary.md`:
+   `<record>/construction/build-and-test/build-and-test-summary.md`:
    - Overall build status and prerequisites
    - Test type inventory (which test types were generated)
    - Coverage expectations per unit
@@ -829,7 +838,7 @@ testing expertise.
     c. **Integration tests** (if applicable): Run integration test commands.
        Capture results.
     d. **Report results**: Create or update
-       `aidlc-docs/construction/build-and-test/test-results.md` with:
+       `<record>/construction/build-and-test/test-results.md` with:
        - Build status (success/failure + output)
        - Test results (total, passed, failed, skipped)
        - Failure details (test name, assertion, stack trace)
@@ -847,7 +856,7 @@ testing expertise.
     **On success:** Update the Build and Test Summary with actual results (not
     just instructions).
 
-11. **Update State** -- Update `aidlc-docs/aidlc-state.md`: mark Build and
+11. **Update State** -- Update `<record>/aidlc-state.md`: mark Build and
     Test as `[x]` completed and update "Current Status". Mark CONSTRUCTION
     phase as complete.
 
@@ -910,7 +919,7 @@ Strictly 2-option: Approve / Request Changes.
 | support_agents    | (none)                                                                                            |
 | mode              | inline                                                                                            |
 | Inputs            | Code generation output from Stage 3.5, build/test results from Stage 3.6                         |
-| Outputs           | `aidlc-docs/construction/ci-pipeline/` -- ci-config.md, quality-gates.md, ci-pipeline-questions.md |
+| Outputs           | `<record>/construction/ci-pipeline/` -- ci-config.md, quality-gates.md, ci-pipeline-questions.md |
 
 ### Purpose
 
@@ -920,8 +929,8 @@ leads with no support agents.
 
 ### Inputs
 
-- Build/test results from `aidlc-docs/construction/build-and-test/`
-- Infrastructure design from `aidlc-docs/construction/infrastructure-design/`
+- Build/test results from `<record>/construction/build-and-test/`
+- Infrastructure design from `<record>/construction/infrastructure-design/`
   (if exists)
 - Workspace profile for existing CI configuration
 
@@ -934,7 +943,7 @@ leads with no support agents.
    (if exists), and workspace profile for existing CI configuration.
 
 3. **Generate Clarifying Questions** -- Create
-   `aidlc-docs/construction/ci-pipeline/ci-pipeline-questions.md` with
+   `<record>/construction/ci-pipeline/ci-pipeline-questions.md` with
    questions:
    - What CI tool is in use (CodePipeline, CodeBuild, GitHub Actions,
      Jenkins)?
@@ -956,10 +965,10 @@ leads with no support agents.
    - Architecture-to-code-to-tests alignment
    - All code traces to design
    - Test coverage against acceptance criteria
-   - Write results to `aidlc-docs/verification/phase-check-construction.md`
+   - Write results to `<record>/verification/phase-check-construction.md`
 
 7. **Update State** -- Mark 3.7 CI Pipeline as `[x]` completed in
-   `aidlc-docs/aidlc-state.md`.
+   `<record>/aidlc-state.md`.
 
 8. **Completion** -- Present completion message and approval gate.
 
@@ -981,7 +990,7 @@ Strictly 2-option: Approve / Request Changes.
   phase. It performs the Construction-to-Operation phase boundary verification
   check (per stage-protocol-governance.md section 13), validating that architecture traces
   to code and code traces to tests. Results are written to
-  `aidlc-docs/verification/phase-check-construction.md`.
+  `<record>/verification/phase-check-construction.md`.
 - **Conditional execution**: This stage is skipped if the project already has
   an adequate CI pipeline. The execution plan from Delivery Planning determines
   whether it runs.

@@ -2,13 +2,13 @@
 
 ## Phase Overview
 
-The Initialization phase is the first of five phases in the AI-DLC workflow. It runs stages 0.1 through 0.3, bootstrapping the workspace with state files, directory scaffolding, workspace classification, and routing configuration.
+The Initialization phase is the first of five phases in the AI-DLC workflow. It runs stages 0.1 through 0.3, **birthing the intent** — minting its record dir at `aidlc/spaces/<space>/intents/<slug>-<id8>/` (written `<record>/` below) with state files, directory scaffolding, workspace classification, and routing configuration. There is no separate scaffold command: the workspace shell ships pre-built in `dist/<harness>/`, and the engine auto-births the first intent on the first `/aidlc` (or when you describe what to build).
 
 All 3 stages in this phase execute for EVERY scope — there are no conditional stages. All stages auto-proceed with no approval gates.
 
 The welcome message is rendered at session start via the `companyAnnouncements` entry in `settings.json`. It is not a stage — no stage file, no audit event, no checkbox.
 
-All three stages run inside a single deterministic `bun .claude/tools/aidlc-utility.ts init --scope <scope>` call that completes in well under a second. The conductor creates 3 tasks in the sidebar (Workspace Scaffold, Workspace Detection, State Init) for observability, then marks them all completed once the tool returns.
+All three stages run inside a single deterministic `bun .claude/tools/aidlc-utility.ts intent-birth --scope <scope>` call that completes in well under a second. The conductor creates 3 tasks in the sidebar (Workspace Scaffold, Workspace Detection, State Init) for observability, then marks them all completed once the tool returns.
 
 ## Scope-Driven Stage Inclusion
 
@@ -47,11 +47,11 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 | Mode | Auto-proceed (no approval gate) |
 
 ### Steps
-1. Create `aidlc-docs/` directory if needed
+1. Create `<record>/` directory if needed
 2. Load knowledge README template
 3. Create knowledge directories with agent-specific READMEs
 4. Create stage artifact directories for all 5 phases
-5. Create `aidlc-docs/audit.md` header + emit `WORKFLOW_STARTED`
+5. Create the intent's `audit/` shard dir header + emit `WORKFLOW_STARTED`
 6. Append `STAGE_STARTED` + `WORKSPACE_SCAFFOLDED` + `STAGE_COMPLETED` events
 
 ### Inputs
@@ -59,14 +59,14 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 - Knowledge README template from `.claude/knowledge/aidlc-shared/`
 
 ### Outputs
-- `aidlc-docs/knowledge/` tree with per-agent READMEs
-- `aidlc-docs/initialization/`, `ideation/`, `inception/`, `construction/`, `operation/` with stage subdirectories
-- `aidlc-docs/verification/`
-- `aidlc-docs/audit.md` (header + session + scaffold events)
+- `<record>/knowledge/` tree with per-agent READMEs
+- `<record>/initialization/`, `ideation/`, `inception/`, `construction/`, `operation/` with stage subdirectories
+- `<record>/verification/`
+- the intent's `audit/` shard dir (header + session + scaffold events)
 
 ### Notes
 - Idempotent — skips directories and files that already exist
-- Runs inside `aidlc-utility init`, not via LLM
+- Runs inside `aidlc-utility intent-birth`, not via LLM
 
 ---
 
@@ -99,9 +99,9 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 - `WORKSPACE_SCANNED` audit event capturing the scan result
 
 ### Notes
-- Runs as a deterministic scanner inside `aidlc-utility init`. No LLM subagent dispatch.
+- Runs as a deterministic scanner inside `aidlc-utility intent-birth`. No LLM subagent dispatch.
 - Symbolic links are not followed (cycle protection via `lstatSync`)
-- Excludes `.claude/`, `aidlc-docs/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`
+- Excludes `.claude/`, `<record>/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`
 - `package.json` with only `devDependencies` is treated as tooling/scaffolding and does not alone cause brownfield classification
 
 ---
@@ -122,7 +122,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 1. Read state template
 2. Apply scope mapping + depth + test strategy
 3. For greenfield, mark `reverse-engineering` SKIP
-4. Write full `aidlc-docs/aidlc-state.md` with the first post-init stage set to `[-]`
+4. Write full `<record>/aidlc-state.md` with the first post-init stage set to `[-]`
 5. Append `STAGE_STARTED` + `WORKSPACE_INITIALISED` + `STAGE_COMPLETED` events
 
 ### Inputs
@@ -132,22 +132,25 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 - State template from `.claude/knowledge/aidlc-shared/state-template.md`
 
 ### Outputs
-- `aidlc-docs/aidlc-state.md` (fully populated)
+- `<record>/aidlc-state.md` (fully populated)
 - `WORKSPACE_INITIALISED` audit event
 
 ### Notes
 - Brownfield projects route to reverse-engineering (Stage 2.1)
 - Greenfield projects route to the first non-initialization stage (intent-capture for feature/poc; requirements-analysis for bugfix/refactor; practices-discovery for workshop, since workshop skips all of Ideation and reverse-engineering is downgraded to SKIP on greenfield)
-- When invoked from `/aidlc --init`, the orchestrator stops after this stage
-- When invoked from workflow start (`/aidlc <scope>`), the orchestrator continues into the first post-init stage
+- When invoked from `/aidlc-init` (the explicit birth packaging), the orchestrator stops after this stage
+- When invoked from workflow start (`/aidlc <scope>` or describing what to build), the orchestrator continues into the first post-init stage
 
 ---
 
-## `--force` re-initialization
+## Re-initialization
 
-`/aidlc --init --force` rewrites `aidlc-state.md` in-place. The existing `audit.md` is preserved; the init-sequence events (`WORKFLOW_STARTED`, `WORKSPACE_SCAFFOLDED`, etc.) are re-emitted to the same audit log. If any non-init artifacts exist under `aidlc-docs/ideation/`, `inception/`, `construction/`, `operation/`, or `verification/`, the tool prints a warning listing them — they're preserved on disk, not removed.
-
-Without `--force`, re-running `/aidlc --init` on a project that already has `aidlc-state.md` exits non-zero with a helpful message.
+There is no re-init flag. Birthing the first intent runs once per intent; the
+workspace shell itself ships pre-built and is never re-scaffolded. To start over,
+birth a new intent (each gets its own `<record>/`), or — for a clean slate —
+archive the active intent's record dir under `aidlc/spaces/<space>/intents/` and
+let the engine birth a fresh one. A second `/aidlc` over an existing intent
+resumes it rather than re-initialising.
 
 ## Notes
 

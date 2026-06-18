@@ -9,6 +9,12 @@ Section references (e.g., "Protocol Section 1") map to the source file.
 > [Stage Definition](15-stage-definition.md). This chapter covers runtime
 > execution behaviour.
 
+> **Path convention.** Artifacts, state, and the audit trail live under the
+> active intent's **record dir** — `aidlc/spaces/<space>/intents/<slug>-<id8>/`,
+> written `<record>/` below. The audit trail is a directory of per-clone shards
+> at `<record>/audit/<host>-<clone>.md` (readers glob and merge by timestamp),
+> not a single file.
+
 ---
 
 ## Protocol File Structure
@@ -211,7 +217,7 @@ Every stage ends with this 5-part structure, in order. All parts mandatory.
 ### Part 0: Audit Logging
 
 Before showing the completion message:
-1. Append to `aidlc-docs/audit.md`: stage name, work summary, artifacts
+1. Append to `<record>/audit/` (per-clone shards): stage name, work summary, artifacts
 2. After receiving approval response, append user's choice with fresh timestamp
 
 ### Part 1: Announcement
@@ -239,7 +245,7 @@ Structured bullet-point summary of what was produced:
 ### Part 3: Review + Approval
 
 ```markdown
-**Review:** `aidlc-docs/[path to artifacts]`
+**Review:** `<record>/[path to artifacts]`
 ```
 
 Followed by the `AskUserQuestion` approval gate (see Approval Gates section).
@@ -267,7 +273,7 @@ and ambiguity detection.
 
 ### Tri-Mode System
 
-**Step 1: Create the questions file** in the appropriate `aidlc-docs/`
+**Step 1: Create the questions file** in the appropriate `<record>/`
 directory using `[Answer]:` tag format with options A-E. Every question must
 end with `X. Other (please specify)` -- no exceptions. All `[Answer]:` tags
 start blank. Multi-select questions add "(select all that apply)" to the
@@ -371,7 +377,7 @@ ask targeted follow-up. Do NOT proceed until resolved.
 ### Plan and Question File Location
 
 Files are co-located with stage artifacts, not centralized. Example:
-`aidlc-docs/inception/user-stories/user-stories-questions.md`. All inputs,
+`<record>/inception/user-stories/user-stories-questions.md`. All inputs,
 questions, and outputs for a stage live in the same directory.
 
 ---
@@ -431,7 +437,7 @@ Never date-only. One Bash call per audit entry -- never reuse timestamps.
 
 ### Audit Log Formats
 
-`aidlc-docs/audit.md` rules: always append (never overwrite); "User Input"
+`<record>/audit/` (per-clone shards) rules: always append (never overwrite); "User Input"
 field must be COMPLETE and UNMODIFIED; log prompts BEFORE showing; log
 responses AFTER receiving; create with `# AI-DLC Audit Log` header if missing;
 backup if corrupted; retry once if Edit fails (hooks may modify between
@@ -575,7 +581,7 @@ existence, then offers to resume from the last incomplete stage.
 | Phase/Stage Group | Context to Load |
 |-------------------|----------------|
 | **Initialization (0.1-0.3)** | Workspace filesystem; `aidlc-state.md` |
-| **Ideation (1.1-1.7)** | `aidlc-docs/ideation/` artifacts; guardrails |
+| **Ideation (1.1-1.7)** | `<record>/ideation/` artifacts; guardrails |
 | **Inception -- RE** | RE artifacts; ideation scope/feasibility |
 | **Inception -- Requirements** | RE artifacts (if performed); requirements-analysis docs |
 | **Inception -- Design** | Requirements; user stories; application-design docs |
@@ -604,7 +610,7 @@ breadcrumb with state file to detect compaction-related corruption.
 
 If `aidlc-state.md` exists but cannot be parsed:
 1. Backup to `aidlc-state.md.bak`
-2. Scan `aidlc-docs/` for artifacts to determine actual completion:
+2. Scan `<record>/` for artifacts to determine actual completion:
    - RE analysis files -> RE stages complete
    - Requirement docs -> requirements complete
    - Design docs -> design complete
@@ -690,8 +696,8 @@ integration):
 ### Archive Before Change
 
 Before any major change overwriting artifacts:
-1. Create `aidlc-docs/archive/` if needed
-2. Copy affected artifacts to `aidlc-docs/archive/[ISO-date]-[stage-name]/`
+1. Create `<record>/archive/` if needed
+2. Copy affected artifacts to `<record>/archive/[ISO-date]-[stage-name]/`
 3. Proceed. No prior work permanently lost.
 
 ---
@@ -761,7 +767,7 @@ brief analysis, skip optional stages:
 | **Component** | Logical building block within a module (class, function group, UI component) |
 | **Planning** | Stages producing markdown artifacts (analysis, questions, design) |
 | **Generation** | Stages producing executable code (Code Generation, Build and Test) |
-| **Artifact** | A versioned markdown file in `aidlc-docs/` recording a decision, design, or analysis |
+| **Artifact** | A versioned markdown file in `<record>/` recording a decision, design, or analysis |
 | **Guardrail** | A learned behavioral rule stored in `.claude/rules/` |
 | **Approval Gate** | Structured prompt where user approves or requests changes |
 | **Inline Stage** | Stage executing directly in the orchestrator conversation |
@@ -908,7 +914,7 @@ Ritual, which is `stage-protocol.md` Section 13)*
 
 1. Read methodology from `.claude/knowledge/aidlc-shared/verification.md`
 2. Run phase-specific traceability checks
-3. Write results to `aidlc-docs/verification/[phase-boundary]-verification.md`
+3. Write results to `<record>/verification/[phase-boundary]-verification.md`
 4. If failed: present issues (missing links, orphaned artifacts,
    inconsistencies) before proceeding
 5. Log `PHASE_VERIFIED` to `audit.md`

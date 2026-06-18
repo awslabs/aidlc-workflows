@@ -15,8 +15,7 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 |---------|-------------|
 | `/aidlc [scope]` | Start a new workflow with an explicit scope |
 | `/aidlc [description]` | Start a new workflow; scope is auto-detected from your description |
-| `/aidlc` | Resume an existing workflow (if state file exists) or start new |
-| `/aidlc --init` | Scaffold the `aidlc-docs/` directory without starting a workflow |
+| `/aidlc` | Resume an existing workflow (if an intent exists) or birth the first intent and start new |
 | `/aidlc --status` | Display a read-only status summary |
 | `/aidlc --doctor` | Run a health check on your setup |
 | `/aidlc --stage <slug\|#>` | Jump to a specific stage |
@@ -39,7 +38,7 @@ flowchart TD
 
     Q1{"Start a new\nworkflow?"}
     Q2{"Check or manage\nan existing workflow?"}
-    Q3{"Set up the\nproject?"}
+    Q3{"Verify the\nproject?"}
 
     A1["/aidlc feature"]
     A2["/aidlc Build a payments API"]
@@ -47,7 +46,6 @@ flowchart TD
     A4["/aidlc --status"]
     A5["/aidlc --stage code-generation"]
     A6["/aidlc --phase construction"]
-    A7["/aidlc --init"]
     A8["/aidlc --doctor"]
 
     START --> Q1
@@ -60,13 +58,12 @@ flowchart TD
     Q2 -->|"See progress"| A4
     Q2 -->|"Jump to a stage"| A5
     Q2 -->|"Jump to a phase"| A6
-    Q3 -->|"Scaffold directories"| A7
     Q3 -->|"Verify setup"| A8
 
     style START fill:#e1bee7,stroke:#7b1fa2
 ```
 
-<!-- Text fallback: Starting a new workflow: use /aidlc feature (known scope) or /aidlc Build a payments API (auto-detect). Managing an existing workflow: /aidlc (resume), /aidlc --status (view progress), /aidlc --stage (jump to stage), /aidlc --phase (jump to phase). Setup: /aidlc --init (scaffold), /aidlc --doctor (health check). -->
+<!-- Text fallback: Starting a new workflow: use /aidlc feature (known scope) or /aidlc Build a payments API (auto-detect; the first intent auto-births). Managing an existing workflow: /aidlc (resume), /aidlc --status (view progress), /aidlc --stage (jump to stage), /aidlc --phase (jump to phase). Verify setup: /aidlc --doctor (health check). -->
 
 ---
 
@@ -140,21 +137,26 @@ If no state file exists, the framework treats this as a new workflow and asks fo
 
 ---
 
-### `/aidlc --init` — Scaffold directories
+### Initialization — automatic, no command
 
-Create the `aidlc-docs/` directory tree without starting a workflow.
+There is no scaffold command. The shipped `dist/<harness>/` workspace shell
+arrives pre-built (the `.claude/` engine plus `aidlc/spaces/default/memory/`),
+and the engine **auto-births** the first intent on your first `/aidlc` (or when
+you describe what to build). Birth runs the three Initialization stages
+(Workspace Scaffold, Workspace Detection, State Init) as a single deterministic
+tool call: it creates the intent's record dir at
+`aidlc/spaces/<space>/intents/<slug>-<id8>/` (knowledge directories with README
+files, the `audit/` shard dir, the per-phase artifact dirs), runs a rule-based
+workspace scan, and writes that intent's `aidlc-state.md` with the scope plan.
+It logs the init-sequence events (`WORKFLOW_STARTED`, `WORKSPACE_SCAFFOLDED`,
+`WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED`, plus per-stage
+`STAGE_STARTED`/`STAGE_COMPLETED`). Naming a scope (`/aidlc --scope feature`)
+seeds the initial scope; absent one it defaults to `poc`. To add team knowledge
+or guardrails before the first run, edit the shipped `aidlc/spaces/default/memory/`
+files; per-intent knowledge appears under the intent's record dir once it exists.
 
-**Syntax:**
-
-```
-/aidlc --init [--scope <scope>] [--depth <level>] [--test-strategy <level>] [--force]
-```
-
-**Behavior:** Runs the three Initialization stages (Workspace Scaffold, Workspace Detection, State Init) as a single deterministic tool call. Scaffolds the full directory tree with knowledge directories and README files, runs a rule-based workspace scan, and writes `aidlc-state.md` with the scope plan. Logs the init-sequence events (`WORKFLOW_STARTED`, `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED`, plus per-stage `STAGE_STARTED`/`STAGE_COMPLETED`). Does not start any domain stages. `--scope` defaults to `poc` when omitted; `--force` rewrites an existing `aidlc-state.md` and re-emits the init events into the existing `audit.md`.
-
-The welcome message is rendered at session start via the `companyAnnouncements` entry in `settings.json` — it is not part of `--init`.
-
-**Use case:** Prepare the project for team knowledge files and guardrails before starting the first workflow, or reset state after a failed workflow with `--force`.
+The welcome message is rendered at session start via the `companyAnnouncements`
+entry in `settings.json`.
 
 ---
 
@@ -168,13 +170,13 @@ Display current workflow progress without modifying anything.
 /aidlc --status
 ```
 
-**Behavior:** Reads `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, and the stage progress list. If no workflow is active, reports that no workflow is in progress.
+**Behavior:** Reads the active intent's `aidlc-state.md` and displays: current phase, current stage, completed/total stage count, scope, depth, and the stage progress list. If no workflow is active, reports that no workflow is in progress.
 
 ---
 
 ### `/aidlc --doctor` — Health check
 
-Validate that all of this implementation's prerequisites, configuration, and stage-graph integrity are in place. Exits 0 on full pass, 1 on any failure; the full report writes to stdout in both cases so the orchestrator surfaces it either way. `--doctor` is **read-only** — on a pristine project (no `aidlc-docs/audit.md`) it creates no files, so it is safe to run before `--init`; on an initialized project it records a `HEALTH_CHECKED` audit row.
+Validate that all of this implementation's prerequisites, configuration, and stage-graph integrity are in place. Exits 0 on full pass, 1 on any failure; the full report writes to stdout in both cases so the orchestrator surfaces it either way. `--doctor` is **read-only** — on a fresh shell with no intent yet (no `audit/` shards) it creates no files, so it is safe to run before the first intent is born; once an intent exists it records a `HEALTH_CHECKED` audit row.
 
 **Syntax:**
 
@@ -189,10 +191,10 @@ Validate that all of this implementation's prerequisites, configuration, and sta
 | Prerequisites | `bun` is installed and on PATH |
 | Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 10 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
-| Docs scaffold | `aidlc-docs/` directory is present (run `/aidlc --init` if missing) |
+| Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
 | Env scope | `AWS_AIDLC_DEFAULT_SCOPE` (if set) names a valid scope |
 | Hook heartbeats | `.aidlc-hooks-health/` contains recent timestamps from hook executions |
-| State drift | `aidlc-state.md` matches the last `WORKFLOW_COMPLETED` in the audit |
+| State drift | the active intent's `aidlc-state.md` matches the last `WORKFLOW_COMPLETED` in the audit |
 | Cycle detection | `stage-graph.json` has no cycles |
 | Orphan stage files | Every slug in the graph has a matching `<phase>/<slug>.md` on disk |
 | Scope validation | All 9 scopes (from `.claude/scopes/*.md`) walk cleanly (advisories for scope-truncation gaps are expected) |
@@ -215,7 +217,7 @@ Validate that all of this implementation's prerequisites, configuration, and sta
 ✓ aidlc-statusline.ts present
 ✓ settings.json present
 ✓ AWS_AIDLC_DEFAULT_SCOPE (unset — no project default)
-✓ aidlc-docs/ directory exists
+✓ workspace shell ready (.claude/ + aidlc/spaces/default/memory/)
 ✓ Hook heartbeats: not yet fired (first workflow stage will populate)
 ✓ State matches last audit event (no drift)
 ✓ Cycle detection: 0 cycles
@@ -418,14 +420,14 @@ Sensors are deterministic checks that run after every `Write` or `Edit` to a sta
 | `describe <id>` | Print one Sensor's full manifest (command, default severity, `matches` glob, timeout) |
 | `fire <id> --stage <slug> --output-path <path>` | Run a Sensor against a file and emit a `SENSOR_FIRED` row plus its paired result row |
 
-A manual fire emits a `SENSOR_FIRED` audit row, then exactly one terminal row: `SENSOR_PASSED`, `SENSOR_FAILED`, or `SENSOR_BUDGET_OVERRIDE`. A failure writes a detail file under `aidlc-docs/.aidlc-sensors/<stage>/`. Sensors are advisory — a Sensor failure is never a tool failure, so the command still exits 0. The four Sensors that ship with the framework are `required-sections`, `upstream-coverage`, `linter`, and `type-check`.
+A manual fire emits a `SENSOR_FIRED` audit row, then exactly one terminal row: `SENSOR_PASSED`, `SENSOR_FAILED`, or `SENSOR_BUDGET_OVERRIDE`. A failure writes a detail file under `<record>/.aidlc-sensors/<stage>/` (in the intent's record dir). Sensors are advisory — a Sensor failure is never a tool failure, so the command still exits 0. The four Sensors that ship with the framework are `required-sections`, `upstream-coverage`, `linter`, and `type-check`.
 
 ```
 bun .claude/tools/aidlc-sensor.ts list
 bun .claude/tools/aidlc-sensor.ts describe required-sections
 bun .claude/tools/aidlc-sensor.ts fire required-sections \
   --stage requirements-analysis \
-  --output-path aidlc-docs/inception/requirements-analysis/requirements.md
+  --output-path aidlc/spaces/default/intents/<slug>-<id8>/inception/requirements-analysis/requirements.md
 ```
 
 ### `aidlc-learnings` — the learning-gate tool
@@ -435,17 +437,17 @@ This is the deterministic half of the §13 learning gate. After a stage is appro
 | Subcommand | What it does |
 |------------|--------------|
 | `surface --slug <stage-slug>` | Read the just-approved stage's `memory.md` and print structured candidates (Interpretations, Deviations, Tradeoffs) plus any parked open questions. Read-only |
-| `persist --slug <stage-slug> --selections-json <path>` | Write the confirmed learnings to `aidlc-project-learnings.md` / `aidlc-team-learnings.md` (and, for a Sensor-binding learning, scaffold and bind a project-tier Sensor), emitting `RULE_LEARNED` / `SENSOR_PROPOSED` |
+| `persist --slug <stage-slug> --selections-json <path>` | Write the confirmed learnings (a confirmed learning is a practice) to the space memory layer — `aidlc/spaces/<space>/memory/project.md` / `memory/team.md` (and, for a Sensor-binding learning, scaffold and bind a project-tier Sensor), emitting `RULE_LEARNED` / `SENSOR_PROPOSED` |
 
 Both steps are skipped under `--test-run`. Confirmed learnings apply on the next workflow, not the current one.
 
 ### `aidlc-runtime` — read the runtime graph
 
-The runtime graph (`aidlc-docs/runtime-graph.json`) is the data-plane record of what actually happened this workflow: which stages ran, how full each `memory.md` diary got, which Sensors fired, what each returned. It is the runtime mirror of the structural `stage-graph.json`. The framework recompiles it after every stage transition; this tool lets you trigger a compile or read one stage's row.
+The runtime graph (`runtime-graph.json` in the intent's record dir) is the data-plane record of what actually happened this workflow: which stages ran, how full each `memory.md` diary got, which Sensors fired, what each returned. It is the runtime mirror of the structural `stage-graph.json`. The framework recompiles it after every stage transition; this tool lets you trigger a compile or read one stage's row.
 
 | Subcommand | What it does |
 |------------|--------------|
-| `compile` | Walk `audit.md` and the per-stage `memory.md` files and rewrite `runtime-graph.json`. Fired automatically by a hook on every transition |
+| `compile` | Walk the `audit/` shards and the per-stage `memory.md` files and rewrite `runtime-graph.json`. Fired automatically by a hook on every transition |
 | `read <stage-slug>` | Print one stage's row from `runtime-graph.json` (timestamps, agent, memory breakdown, Sensor firings, outcome) |
 | `summary [--json]` | Print deterministic aggregates over the whole graph — stage/phase outcome tallies, memory-entry counts, Sensor 4-state tallies, learnings captured, workflow duration. The data source the read-only session skills read from |
 
@@ -489,7 +491,7 @@ Pre-set the default scope for a project. Read from `.claude/settings.json` `env`
 
 **Precedence:** explicit CLI flag > keyword detection > `AWS_AIDLC_DEFAULT_SCOPE` > hard-coded fallback.
 
-**Scope of effect:** applies at workflow initialization only. Once `aidlc-docs/aidlc-state.md` exists, the state file is authoritative. See [Customization § Per-Project Default Scope](12-customization.md#per-project-default-scope) for the full walkthrough.
+**Scope of effect:** applies at workflow initialization only. Once the intent's `aidlc-state.md` exists, the state file is authoritative. See [Customization § Per-Project Default Scope](12-customization.md#per-project-default-scope) for the full walkthrough.
 
 ---
 

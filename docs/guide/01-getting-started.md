@@ -153,23 +153,25 @@ All `/aidlc` commands run relative to the project root.
 
 ---
 
-## Scaffold the Docs Directory
+## The Workspace Shell
 
-Before the health check can pass, scaffold the `aidlc-docs/` directory tree. This creates all knowledge directories (with guidance READMEs) and stage artifact directories so you can add [team knowledge](07-knowledge.md) before your first run.
+There is no scaffold step. The distribution you copied in already ships the
+workspace shell — the `.claude/` engine plus a pre-built `aidlc/spaces/default/`
+holding the memory layer (`aidlc/spaces/default/memory/`, where team-affirmed
+practices and learnings live). You do not run any init command.
 
-```
-/aidlc --init
-```
+The first time you run `/aidlc` (or describe what to build), the engine
+**auto-births** the first intent into the active space. Each intent gets its own
+record dir at `aidlc/spaces/<space>/intents/<slug>-<id8>/`, which holds:
 
-This creates:
+- `aidlc-state.md` — the per-intent workflow state
+- `audit/` — the audit trail, written as per-clone shards (`<host>-<clone>.md`)
+- `<phase>/<stage>/...` — the stage artifacts (e.g. `inception/requirements-analysis/requirements.md`)
+- `knowledge/aidlc-shared/` and `knowledge/<agent>-agent/` — team knowledge for this intent
 
-- `aidlc-docs/knowledge/aidlc-shared/` — team-wide standards loaded by all agents
-- `aidlc-docs/knowledge/<agent-name>/` — agent-specific standards (one per agent)
-- `aidlc-docs/ideation/`, `inception/`, `construction/`, `operation/` — stage artifact directories
-- `aidlc-docs/verification/` — phase boundary verification output
-- A minimal `aidlc-docs/aidlc-state.md` showing the status line is active
-
-`--init` does **not** start a workflow. It exits after scaffolding.
+To add [team knowledge](07-knowledge.md) or team practices before your first run,
+edit the shipped `aidlc/spaces/default/memory/` files; per-intent knowledge lands
+under the intent's record dir once an intent exists.
 
 ---
 
@@ -190,8 +192,8 @@ Run the health check to confirm everything is in place:
 | Prerequisites | `bun` is installed and on `$PATH` |
 | Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 10 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Project structure | `.claude/settings.json` exists with expected configuration |
-| Docs directory | `aidlc-docs/` scaffold from `--init` is present |
-| State file | `aidlc-docs/aidlc-state.md` matches the audit trail (no drift) |
+| Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
+| State file | the active intent's `aidlc-state.md` matches its audit trail (no drift) |
 | Hook heartbeats | `.aidlc-hooks-health/` contains recent timestamps from hook executions |
 | Graph integrity | No cycles in `stage-graph.json`; every slug has a matching stage file |
 | Scope validation | All 9 scopes walk cleanly against the graph (advisories for scope-truncation gaps are expected) |
@@ -211,7 +213,7 @@ Run the health check to confirm everything is in place:
 ✓ aidlc-statusline.ts present
 ✓ settings.json present
 ✓ AWS_AIDLC_DEFAULT_SCOPE (unset — no project default)
-✓ aidlc-docs/ directory exists
+✓ workspace shell ready (.claude/ + aidlc/spaces/default/memory/)
 ✓ Hook heartbeats: not yet fired (first workflow stage will populate)
 ✓ State matches last audit event (no drift)
 ✓ Cycle detection: 0 cycles
@@ -229,8 +231,8 @@ Run the health check to confirm everything is in place:
 | `bun` not installed | Install via `curl -fsSL https://bun.sh/install \| bash`. On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 \| iex"`. Ensure it is on PATH for non-interactive shells. |
 | Hook not present | Re-copy the `.claude/` directory from the distribution |
 | `settings.json` missing | Re-copy from the distribution: `cp dist/claude/.claude/settings.json .claude/settings.json` |
-| `aidlc-docs/` missing | Run `/aidlc --init` to scaffold it |
-| State file issues | Delete `aidlc-docs/aidlc-state.md` and run `/aidlc` to start fresh |
+| Workspace shell missing | Re-copy the workspace shell from `dist/claude/` into your project root |
+| State file issues | Archive the active intent's record dir under `aidlc/spaces/<space>/intents/` and run `/aidlc` to start fresh |
 | Graph/scope/schema/keyword failures | The diagnostic reports the specific artifact, slug, or scope name at fault. These indicate authoring drift in `.claude/aidlc-common/stages/` or `.claude/scopes/`; regenerate the compiled graph + scope grid with `bun .claude/tools/aidlc-graph.ts compile` or inspect the named stage/scope directly. |
 
 ---
@@ -273,9 +275,6 @@ cd your-project && claude
 Inside the Claude Code session:
 
 ```
-# Scaffold docs directory
-/aidlc --init
-
 # Verify (exits 1 on any check failure; read stdout for the full report)
 /aidlc --doctor
 
