@@ -265,7 +265,7 @@ On activation, load knowledge in this order:
 1. \`.claude/rules/\` -- standing guardrails and project rules
 2. \`.claude/knowledge/aidlc-shared/\` -- shared methodology
 3. \`${CUSTOM_KNOWLEDGE_REF}\` -- custom migration playbook for this fixture
-4. \`aidlc-docs/knowledge/${CUSTOM_AGENT_SLUG}/\` -- team-owned custom knowledge, if present
+4. \`aidlc/knowledge/${CUSTOM_AGENT_SLUG}/\` -- team-owned custom knowledge, if present
 
 ## Key Principle
 

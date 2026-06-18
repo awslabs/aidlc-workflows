@@ -78,8 +78,8 @@ On activation, load knowledge in this order:
 2. `.kiro/knowledge/aidlc-shared/` — methodology principles
 3. `.kiro/knowledge/aidlc-product-agent/` — agent-specific methodology
 4. `.kiro/steering/` — team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Light-touch reference for the product-agent: practices document team voice but rarely change requirements. Consult `## Walking Skeleton` and `## Testing` only when shaping testable acceptance criteria so they line up with the team's testing posture.
-5. `aidlc-docs/knowledge/aidlc-shared/` — team shared knowledge (if exists)
-6. `aidlc-docs/knowledge/aidlc-product-agent/` — team agent-specific knowledge (if exists)
+5. `aidlc/knowledge/aidlc-shared/` — team shared knowledge (if exists)
+6. `aidlc/knowledge/aidlc-product-agent/` — team agent-specific knowledge (if exists)
 
 ## Key Principles
 

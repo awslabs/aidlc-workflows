@@ -193,7 +193,10 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
 
   test("logs record artifact writes as ARTIFACT_CREATED [.sh test 3]", () => {
     const { auditDir, recordRoot } = seedIntentShard(proj);
-    fire(writeJson(join(recordRoot, "knowledge", "aidlc-shared", "intent.md")), proj);
+    // Any markdown artifact written UNDER the per-intent record fires the event;
+    // use a real per-intent stage artifact (domain knowledge is space-level now,
+    // not a record subdir, so it is not a record-artifact example).
+    fire(writeJson(join(recordRoot, "inception", "requirements-analysis", "requirements.md")), proj);
     expect(readShards(auditDir)).toContain("ARTIFACT_CREATED");
   });
 

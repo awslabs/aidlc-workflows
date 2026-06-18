@@ -310,6 +310,18 @@ export function intentsDir(projectDir: string, space?: string): string {
   return join(workspaceRoot(projectDir), "spaces", sp, "intents");
 }
 
+// `aidlc/spaces/<space>/knowledge` — SPACE DOMAIN knowledge (durable, free-form,
+// team-authored, empty at bootstrap). A space-level sibling of memory/codekb/
+// intents (vision §"Spaces": "its own memory, codekb, knowledge, and intent
+// record") — NOT per-intent: domain knowledge accumulates across every intent in
+// the space, so it must not live inside one intent's record. Distinct from the
+// engine's per-agent METHODOLOGY knowledge at <harness>/knowledge/ (shipped,
+// untouched). Created lazily by ensure-exists, never by SEED.
+export function knowledgeDir(projectDir: string, space?: string): string {
+  const sp = space ?? activeSpace(projectDir);
+  return join(workspaceRoot(projectDir), "spaces", sp, "knowledge");
+}
+
 // Enumerate the intent RECORD directories in a space (each `<slug>-<id8>/`
 // holding an aidlc-state.md). Returns the bare directory names, sorted; [] when
 // the space has no intents dir or no records yet. The intents.json registry is
@@ -1005,6 +1017,34 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
       const shardDir = join(leaf, "audit");
       mkdirSync(shardDir, { recursive: true });
       renameSync(migratedFlatAudit, join(shardDir, auditShardName(projectDir)));
+    }
+
+    // (3b) RELOCATE the flat `knowledge/` tree to the SPACE level. The old flat
+    // layout kept team domain knowledge at `aidlc-docs/knowledge/` (the former
+    // scaffold stage seeded `knowledge/README.md` + `knowledge/aidlc-shared/`);
+    // the blind copy in step 1 lands it at `<leaf>/knowledge/`, but the per-intent
+    // record is the WRONG home — knowledge is a space-level concern (a sibling of
+    // intents) so it compounds across every intent, and the agent personas read
+    // it from `spaces/<space>/knowledge/`. Left in the leaf, a migrating team's
+    // accumulated knowledge would be silently invisible to every agent. Move the
+    // COPY up to the space dir (merge into any existing space knowledge); the flat
+    // source is untouched, so the caller's gitRmFlatTree(flatRoot) is unaffected.
+    const migratedFlatKnowledge = join(leaf, "knowledge");
+    if (existsSync(migratedFlatKnowledge)) {
+      const spaceKnowledge = knowledgeDir(projectDir, space);
+      mkdirSync(spaceKnowledge, { recursive: true });
+      // Merge entry-by-entry so a pre-existing space knowledge dir is preserved;
+      // rename each top-level entry, falling back to copy on a cross-name clash.
+      for (const entry of readdirSync(migratedFlatKnowledge)) {
+        const from = join(migratedFlatKnowledge, entry);
+        const to = join(spaceKnowledge, entry);
+        if (existsSync(to)) {
+          cpSync(from, to, { recursive: true });
+        } else {
+          renameSync(from, to);
+        }
+      }
+      rmSync(migratedFlatKnowledge, { recursive: true, force: true });
     }
 
     // (4) Append to intents.json + set the active-intent cursor (workspace bucket).

@@ -73,8 +73,8 @@ On activation, load knowledge in the following order:
 2. `{{HARNESS_DIR}}/knowledge/aidlc-shared/` -- shared methodology
 3. `{{HARNESS_DIR}}/knowledge/aidlc-aws-platform-agent/` -- agent-specific methodology
 4. `{{HARNESS_DIR}}/rules/` -- team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Consult `## Deployment` for the team's stated cadence and environment strategy when sizing infrastructure or selecting AWS-region topology.
-5. `aidlc-docs/knowledge/aidlc-shared/` -- team shared knowledge
-6. `aidlc-docs/knowledge/aidlc-aws-platform-agent/` -- team agent-specific knowledge
+5. `aidlc/knowledge/aidlc-shared/` -- team shared knowledge
+6. `aidlc/knowledge/aidlc-aws-platform-agent/` -- team agent-specific knowledge
 
 ## Key Principles
 

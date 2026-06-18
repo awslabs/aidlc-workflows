@@ -46,8 +46,8 @@
 //   4 "[x] workspace-scaffold"          -> state file contains "[x] workspace-scaffold" (init marker)
 //   5 "[x] workspace-detection"         -> state file contains "[x] workspace-detection"  (init phase always [x])
 //   6 "[x] state-init"                  -> state file contains "[x] state-init"
-//   7 knowledge/ directory exists       -> statSync(recordDirOf(proj)/knowledge).isDirectory()
-//                                          (per-intent knowledge dir, ensureRecordDirs utility.ts:1966)
+//   7 knowledge/ directory exists       -> statSync(aidlc/spaces/default/knowledge).isDirectory()
+//                                          (SPACE-level domain-knowledge dir, ensureWorkspaceDirs → knowledgeDir)
 //
 // STRENGTHENINGS over the .sh (equal-or-stronger, never weaker):
 //   - The birth CLI actually RAN: assertToolResultContains(r,"Bash",<verbatim summary>)
@@ -87,8 +87,10 @@ import {
 import { driveAidlc, readStateField } from "../harness/sdk-drive.ts";
 
 // P4: birth writes the workflow record PER-INTENT under
-// aidlc/spaces/<space>/intents/<slug>-<id8>/ (state, audit/ shards, per-phase +
-// knowledge dirs), NOT the flat aidlc-docs/. Resolve the born record from the
+// aidlc/spaces/<space>/intents/<slug>-<id8>/ (state, audit/ shards, per-phase
+// dirs), NOT the flat aidlc-docs/. (Domain knowledge is SPACE-level — a sibling
+// of intents at aidlc/spaces/<space>/knowledge/, not in the record.) Resolve the
+// born record from the
 // active-space + active-intent cursors (flat fallback for a not-yet-born project).
 // Mirrors sdk-drive's recordDirFor and tests/integration/t-custom-harness-compile.ts.
 function recordDirOf(proj: string): string {
@@ -203,10 +205,12 @@ describe("t21 /aidlc workflow birth (sdk)", () => {
         }
 
         // .sh test 7: knowledge/ directory created. statSync proves it is a
-        // DIRECTORY, not merely a present path. P4: birth ensures a PER-INTENT
-        // knowledge dir under the born record (ensureRecordDirs, utility.ts:1966),
-        // not the old flat aidlc-docs/knowledge/.
-        const knowledgeDir = join(record, "knowledge");
+        // DIRECTORY, not merely a present path. Birth ensures the SPACE-level
+        // domain-knowledge dir aidlc/spaces/<space>/knowledge/ (ensureWorkspaceDirs
+        // → knowledgeDir, utility.ts) — a sibling of intents that accumulates
+        // across every intent in the space, NOT a per-intent record subdir and
+        // NOT the old flat aidlc-docs/knowledge/.
+        const knowledgeDir = join(proj, "aidlc", "spaces", "default", "knowledge");
         expect(existsSync(knowledgeDir)).toBe(true);
         expect(statSync(knowledgeDir).isDirectory()).toBe(true);
 

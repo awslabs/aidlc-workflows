@@ -27,6 +27,7 @@ import {
   DEFAULT_SPACE,
   detectLeakedLocks,
   docsDir,
+  knowledgeDir,
   emitError,
   errorMessage,
   escapeRegex,
@@ -1964,10 +1965,13 @@ function ensureWorkspaceDirs(projectDir: string): void {
     mkdirSync(join(record, phase), { recursive: true });
   }
   mkdirSync(join(record, "verification"), { recursive: true });
-  // Per-intent knowledge dir (team knowledge READMEs are NOT re-seeded — the
-  // method/memory ships in spaces/<space>/memory via SEED; this is the
-  // intent-local knowledge drop the stages reference).
-  mkdirSync(join(record, "knowledge"), { recursive: true });
+  // SPACE-level domain knowledge dir (NOT per-intent): vision §"Spaces" makes
+  // knowledge a sibling of memory/codekb/intents under spaces/<space>/, so team
+  // domain knowledge accumulates across every intent in the space rather than
+  // being trapped in one intent's record. Free-form, empty at bootstrap. The
+  // engine's per-agent METHODOLOGY knowledge ships separately under
+  // <harness>/knowledge/ (untouched). Lazy ensure-exists — never SEED.
+  mkdirSync(knowledgeDir(projectDir), { recursive: true });
 }
 
 // intent-birth — the deterministic mutation behind the engine's birth

@@ -239,6 +239,29 @@ describe("t160 flat-layout migration — crash-safe, idempotent", () => {
     expect(r.movedFrom).toBe(join(proj, "aidlc-docs"));
   });
 
+  test("relocates the flat aidlc-docs/knowledge/ tree to SPACE-level knowledge/, not into the record", () => {
+    seedShell(proj);
+    seedFlat(proj);
+    // A migrating team's accumulated domain knowledge lived flat under
+    // aidlc-docs/knowledge/. Seed both the shared overlay and a per-agent dir.
+    mkdirSync(join(proj, "aidlc-docs", "knowledge", "aidlc-shared"), { recursive: true });
+    writeFileSync(join(proj, "aidlc-docs", "knowledge", "aidlc-shared", "company-standards.md"), "# Standards\n", "utf-8");
+    mkdirSync(join(proj, "aidlc-docs", "knowledge", "aidlc-architect-agent"), { recursive: true });
+    writeFileSync(join(proj, "aidlc-docs", "knowledge", "aidlc-architect-agent", "patterns.md"), "# Patterns\n", "utf-8");
+
+    const res = migrateFlatLayout(proj);
+    expect(res).not.toBeNull();
+    const r = res as NonNullable<typeof res>;
+
+    // Knowledge landed at the SPACE level (a sibling of intents), with content intact.
+    const spaceKnowledge = join(proj, "aidlc", "spaces", "default", "knowledge");
+    expect(existsSync(join(spaceKnowledge, "aidlc-shared", "company-standards.md"))).toBe(true);
+    expect(existsSync(join(spaceKnowledge, "aidlc-architect-agent", "patterns.md"))).toBe(true);
+    // It is NOT trapped inside the per-intent record.
+    const record = join(intentsDir(proj, "default"), r.intentDirName);
+    expect(existsSync(join(record, "knowledge"))).toBe(false);
+  });
+
   test("idempotency keys on the .migrated marker ALONE — re-run is a no-op", () => {
     seedShell(proj);
     seedFlat(proj);

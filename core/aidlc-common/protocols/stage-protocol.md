@@ -609,8 +609,8 @@ Each stage specifies its lead and supporting agents. To load a persona:
 1. `{{HARNESS_DIR}}/rules/` — organization and project guardrails (always)
 2. `{{HARNESS_DIR}}/knowledge/aidlc-shared/` — shared methodology principles
 3. `{{HARNESS_DIR}}/knowledge/[agent-name]/` — agent-specific methodology
-4. `aidlc-docs/knowledge/aidlc-shared/` — team shared knowledge (if exists)
-5. `aidlc-docs/knowledge/[agent-name]/` — team agent-specific knowledge (if exists)
+4. `aidlc/knowledge/aidlc-shared/` — team shared knowledge (if exists)
+5. `aidlc/knowledge/[agent-name]/` — team agent-specific knowledge (if exists)
 6. Prior stage artifacts as required by the current stage
 
 ### For inline stages:

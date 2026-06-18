@@ -21,7 +21,7 @@ scopes:
   - security-patch
   - workshop
 inputs: none (first stage after session start)
-outputs: aidlc-docs/ directory tree (knowledge dirs, stage artifact dirs, verification dir)
+outputs: the per-intent record tree (stage artifact dirs + verification dir) and the space-level knowledge/ dir
 ---
 
 # Workspace Scaffold
@@ -34,55 +34,45 @@ MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
 
 ### Step 1: Update State
 
-1. Update `aidlc-docs/aidlc-state.md`: set `Current Stage` to `scaffolding workspace`
+1. Update `<record>/aidlc-state.md`: set `Current Stage` to `scaffolding workspace`
 2. Mark workspace-scaffold as `[-]` in progress
 
-### Step 2: Load Knowledge README Template
+### Step 2: Ensure the Space Knowledge Directory
 
-Read the knowledge README template from `.kiro/knowledge/aidlc-shared/knowledge-readme-template.md`.
+Ensure-exists the space-level domain-knowledge directory
+`aidlc/spaces/<space>/knowledge/` (shorthand `aidlc/knowledge/`). It is
+**free-form and empty at bootstrap** — no fixed file set, no per-agent
+subdirectories, no seeded READMEs. A team adds its own markdown here over time;
+the directory is a sibling of `memory/`, `codekb/`, and `intents/`, so domain
+knowledge accumulates across every intent in the space rather than being trapped
+in one intent's record. The agent personas read team knowledge from
+`aidlc/knowledge/aidlc-shared/` and `aidlc/knowledge/<agent>/` if those exist —
+the team creates them; birth does not. (The engine's per-agent METHODOLOGY
+knowledge ships separately and read-only under `.kiro/knowledge/`.)
 
-### Step 3: Knowledge Directories with READMEs
+### Step 3: Ensure Stage Artifact Directories
 
-The SEED shell shipped in `dist/` already carries these knowledge dirs and
-READMEs, so birth does NOT copy them — this list stays as reference for what the
-shell provides. Idempotent — skip any directories/files that already exist.
+Ensure-exists the empty per-intent stage artifact directories under the active
+intent's record dir `aidlc/spaces/<space>/intents/<slug>-<id8>/` (no READMEs) —
+idempotent (created on demand):
 
-- `aidlc-docs/knowledge/README.md` — top-level README (use template content)
-- `aidlc-docs/knowledge/aidlc-shared/README.md` — "Add files here that ALL agents should load — company standards, project context, domain glossary."
-- Per-agent directories with READMEs: `aidlc-product-agent/`, `aidlc-design-agent/`, `aidlc-delivery-agent/`, `aidlc-architect-agent/`, `aidlc-developer-agent/`, `aidlc-quality-agent/`, `aidlc-devsecops-agent/`, `aidlc-aws-platform-agent/`, `aidlc-compliance-agent/`, `aidlc-pipeline-deploy-agent/`, `aidlc-operations-agent/`
-- Each agent README follows this format:
-  ```
-  # [Agent Name] Knowledge
+- `<record>/initialization/` — workspace-scaffold/, workspace-detection/, state-init/
+- `<record>/ideation/` — intent-capture/, market-research/, feasibility/, scope-definition/, team-formation/, rough-mockups/, approval-handoff/
+- `<record>/inception/` — reverse-engineering/, requirements-analysis/, user-stories/, refined-mockups/, application-design/, units-generation/, delivery-planning/
+- `<record>/construction/` — build-and-test/, ci-pipeline/
+- `<record>/operation/` — deployment-pipeline/, environment-provisioning/, deployment-execution/, observability-setup/, incident-response/, performance-validation/, feedback-optimization/
+- `<record>/verification/`
 
-  Add markdown files here to customize [agent-name] behavior for your project.
-
-  Examples of what to include:
-  - [2-3 agent-specific examples from the template table]
-
-  Files here are loaded at step 5 of the knowledge loading order, after built-in methodology.
-  ```
-
-### Step 4: Ensure Stage Artifact Directories
-
-Ensure-exists the empty per-intent stage artifact directories (no READMEs) — idempotent (created on demand):
-
-- `aidlc-docs/initialization/` — workspace-scaffold/, workspace-detection/, state-init/
-- `aidlc-docs/ideation/` — intent-capture/, market-research/, feasibility/, scope-definition/, team-formation/, rough-mockups/, approval-handoff/
-- `aidlc-docs/inception/` — reverse-engineering/, requirements-analysis/, user-stories/, refined-mockups/, application-design/, units-generation/, delivery-planning/
-- `aidlc-docs/construction/` — build-and-test/, ci-pipeline/
-- `aidlc-docs/operation/` — deployment-pipeline/, environment-provisioning/, deployment-execution/, observability-setup/, incident-response/, performance-validation/, feedback-optimization/
-- `aidlc-docs/verification/`
-
-### Step 5: Display Confirmation
+### Step 4: Display Confirmation
 
 List the created directory structure for user awareness.
 
-### Step 6: Update State and Audit
+### Step 5: Update State and Audit
 
-1. Mark workspace-scaffold as `[x]` completed in `aidlc-docs/aidlc-state.md`
-2. Append WORKSPACE_SCAFFOLDED event to `aidlc-docs/audit.md`
+1. Mark workspace-scaffold as `[x]` completed in `<record>/aidlc-state.md`
+2. Append WORKSPACE_SCAFFOLDED event to `<record>/audit/<host>-<clone>.md`
 
-### Step 7: Auto-Proceed
+### Step 6: Auto-Proceed
 
 This stage has NO approval gate — it auto-proceeds to the next stage (workspace-detection).
 
@@ -100,7 +90,7 @@ resolver will populate `sensors_applicable` at the next compile.
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

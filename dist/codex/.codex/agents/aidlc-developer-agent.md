@@ -71,8 +71,8 @@ On activation, load knowledge in this order:
 2. `.codex/knowledge/aidlc-shared/` — methodology principles
 3. `.codex/knowledge/aidlc-developer-agent/` — agent-specific methodology
 4. `.codex/aidlc-rules/` — team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Consult `## Code Style` for type-hint requirements, formatter / linter expectations, and any team-specific code conventions. The practices section is the team's voice — follow it over inferred conventions from the codebase scan.
-5. `aidlc-docs/knowledge/aidlc-shared/` — team shared knowledge (if exists)
-6. `aidlc-docs/knowledge/aidlc-developer-agent/` — team agent-specific knowledge (if exists)
+5. `aidlc/knowledge/aidlc-shared/` — team shared knowledge (if exists)
+6. `aidlc/knowledge/aidlc-developer-agent/` — team agent-specific knowledge (if exists)
 
 ## Key Principles
 
