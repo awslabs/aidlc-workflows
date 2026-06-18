@@ -5,7 +5,7 @@ command: bun {{HARNESS_DIR}}/tools/aidlc-sensor-upstream-coverage.ts
 default_severity: advisory
 description: Checks the output prose references the upstream artifacts the stage frontmatter declares it consumes
 category: document-shape
-matches: "**/aidlc-docs/**"
+matches: "**/{aidlc-docs,intents}/**"
 input_schema:
   output_path: string
   stage_slug: string

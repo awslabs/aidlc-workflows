@@ -5,7 +5,7 @@ command: bun .kiro/tools/aidlc-sensor-required-sections.ts
 default_severity: advisory
 description: Checks that stage output contains the required H2 headings — generic content-shape check, fires on every stage that writes markdown
 category: document-shape
-matches: "**/aidlc-docs/**"
+matches: "**/{aidlc-docs,intents}/**"
 input_schema:
   output_path: string
   stage_slug: string

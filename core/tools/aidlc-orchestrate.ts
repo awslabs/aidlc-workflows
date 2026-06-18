@@ -87,13 +87,13 @@ import {
   firstInScopeStageOfPhase,
   getField,
   intentRepos,
-  LEGACY_FLAT_RELATIVE_PREFIX,
   listIntents,
   nextInScopeStage,
   parseCheckboxes,
   PHASE_NUMBERS,
   PHASES,
   relativeRecordDir,
+  relativeSpaceRecordPrefix,
   resolveProjectDir,
   runtimeGraphPath,
   type StageEntry,
@@ -395,15 +395,15 @@ function resolveScope(
 // Derive the memory diary path for a stage (SKILL.md: every stage keeps a
 // <record>/<phase>/<stage>/memory.md diary). `recordPrefix` is the RELATIVE
 // per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>) the engine
-// threads in from the active intent (relativeRecordDir), or null → the flat
-// legacy `aidlc-docs` prefix (a pre-workspace project not yet migrated). These
-// are agent-consumed RELATIVE paths the conductor resolves against the workspace
-// root — the engine never opens them — so re-rooting is a pure prefix swap, not
-// a route through the absolute projectDir-keyed state helpers. Per-unit
-// Construction stages embed a {unit-name} segment that a later engine change
-// resolves; until then the bare phase/slug form is the faithful derivation.
+// threads in from the active intent (relativeRecordDir), or null → the bare space
+// record prefix (relativeSpaceRecordPrefix — a pre-birth shell with no intent
+// yet). These are agent-consumed RELATIVE paths the conductor resolves against
+// the workspace root — the engine never opens them — so re-rooting is a pure
+// prefix swap, not a route through the absolute projectDir-keyed state helpers.
+// Per-unit Construction stages embed a {unit-name} segment that a later engine
+// change resolves; until then the bare phase/slug form is the faithful derivation.
 function memoryPathFor(phase: string, slug: string, recordPrefix: string | null): string {
-  const prefix = recordPrefix ?? LEGACY_FLAT_RELATIVE_PREFIX;
+  const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
   return `${prefix}/${phase}/${slug}/memory.md`;
 }
 
@@ -698,7 +698,7 @@ function resolveArtifactPath(
   unit: string,
   recordPrefix: string | null,
 ): string {
-  const prefix = recordPrefix ?? LEGACY_FLAT_RELATIVE_PREFIX;
+  const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
   if (isPerUnit(owner)) {
     return `${prefix}/construction/${unit}/${owner.slug}/${name}.md`;
   }

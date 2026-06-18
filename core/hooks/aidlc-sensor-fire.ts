@@ -197,11 +197,12 @@ if (applicableSensors.length === 0) process.exit(0);
 // Step 11 — Per-entry dispatch (C5).
 //
 // G1 lock-in: matches IS the filter. Entries without a matches glob
-// do not fire. The G1.5 literal `**/aidlc-docs/**` (vs the v3-draft
-// `**/aidlc-docs/**/*.md`) is load-bearing: the upstream dispatcher's
-// bespoke globToRegex rejects flat-aidlc-docs paths under the *.md
-// form even though Bun.Glob accepts both — both engines agree on the
-// relaxed form.
+// do not fire. The framework artifact glob is `**/{aidlc-docs,intents}/**`
+// (P9 — the per-intent record tree carries an `/intents/` segment; the legacy
+// `aidlc-docs/` arm stays so a pre-migration artifact still matches). The
+// relaxed `**/<seg>/**` form (vs `**/<seg>/**/*.md`) is load-bearing: the
+// upstream dispatcher's bespoke globToRegex rejects the *.md form even though
+// Bun.Glob accepts both — both engines agree on the relaxed form.
 const sensorTs = join(projectDir, harnessDir(), "tools", "aidlc-sensor.ts");
 for (const entry of applicableSensors) {
   if (!entry.matches) continue;

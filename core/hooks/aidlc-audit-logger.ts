@@ -47,22 +47,18 @@ const file: string = parsed.tool_input?.file_path ?? "";
 const auditFileValue = file.replace(/\\/g, "/");
 const fileNorm = auditFileValue; // forward-slash form for all path matching below
 
-// Only log writes to the active intent's RECORD tree. Post-workspace-move the
-// record re-roots per intent (aidlc/spaces/<space>/intents/<slug>-<id8>/…), so
-// a bare `includes("aidlc-docs/")` gate would DROP every artifact write on the
-// new layout (the review minor this fixes). docsRoot() resolves that per-intent
-// root when an intent is active, else the flat-legacy `aidlc-docs/` root — so a
-// flat (pre-migration) project still matches via the recordRoot prefix below.
-// Keep the literal `aidlc-docs/` substring as an explicit flat-fallback so a
-// write that lands in the flat tree of a project whose cursor has since moved
-// to a new-layout intent is still captured (transitional, retired in P9).
+// Only log writes to the active intent's RECORD tree. The record re-roots per
+// intent (aidlc/spaces/<space>/intents/<slug>-<id8>/…), so a bare
+// `includes("aidlc-docs/")` gate would DROP every artifact write on the workspace
+// layout. docsRoot() resolves that per-intent root when an intent is active, else
+// the bare space record root — the write is logged iff it lands under that root.
 const recordRoot = docsRoot(projectDir).replace(/\\/g, "/").replace(/\/$/, "");
 const underRecord = fileNorm === recordRoot || fileNorm.startsWith(`${recordRoot}/`);
-const underFlatLegacy = file.includes("aidlc-docs/") || file.includes("aidlc-docs\\");
-if (!underRecord && !underFlatLegacy) process.exit(0);
+if (!underRecord) process.exit(0);
 
-// Don't log writes to an audit shard itself (avoid recursion). The shard is now
-// audit/<host>-<clone>.md under the record dir; the flat tree keeps audit.md.
+// Don't log writes to an audit shard itself (avoid recursion). The shard is
+// audit/<host>-<clone>.md under the record dir; the bare audit.md guard also
+// covers a migrated tree's pre-shard audit.md before it is relocated.
 if (
   file.endsWith("/audit.md") ||
   file.endsWith("\\audit.md") ||

@@ -268,17 +268,17 @@ export function toPosix(p: string): string {
 //
 // Resolution precedence (vision §5):
 //   space:  explicit arg > active-space pointer > "default" (NEVER errors).
-//   intent: explicit arg > active-intent pointer > lone-intent > flat-legacy.
+//   intent: explicit arg > active-intent pointer > lone-intent > null.
 //
-// LEGACY FLAT FALLBACK (transitional). A pre-workspace project keeps its state
-// at the flat `aidlc-docs/` root until it is migrated (migrateFlatLayout) or a
-// new intent is born. When NO new-layout intent record resolves, the path
-// helpers below return the flat `aidlc-docs/` location so a flat project (and
-// the large flat-seeded test corpus) keeps working unchanged; new-layout
-// projects (SEED shell + auto-birth + post-migration) resolve per-intent. The
-// flat fallback is the only place an `aidlc-docs` path literal survives in the
-// helpers (plus the migration detector) — P9 retires it with the fixture
-// migration. activeIntent() returning null IS that "no record yet" signal.
+// NULL RESOLUTION (P9 end state — no flat root). When NO intent record resolves
+// (activeIntent() → null: a fresh SEED shell before auto-birth, or a flat project
+// still awaiting migration), the absolute path helpers resolve to the bare SPACE
+// record root (aidlc/spaces/<space>/intents/ — see spaceRecordRoot). No
+// aidlc-state.md ever lives directly there, so existence-gated consumers
+// (loadStateFileIfPresent) read "no workflow yet" and the orchestrator
+// births/errors. The ONLY surviving flat `aidlc-docs` read is the one-time
+// migration's SOURCE (flatStateSource/flatMigrationSource below).
+// activeIntent() returning null IS that "no record yet" signal.
 
 export const ACTIVE_SPACE_POINTER = "active-space";
 export const ACTIVE_INTENT_POINTER = "active-intent";
@@ -334,11 +334,11 @@ export function listIntentDirs(projectDir: string, space?: string): string[] {
 }
 
 // The active intent's RECORD directory NAME (`<slug>-<id8>`) for a space, or
-// null when no new-layout record resolves (→ the caller falls back to the flat
-// legacy layout). Precedence: explicit > active-intent cursor (if it names a
-// real record) > lone intent. Returns null rather than throwing on ambiguity so
-// the path helpers stay total; the verb/handler layer (P4) owns the
-// error/prompt for the >1-intent-no-cursor case.
+// null when no record resolves (→ the path helpers resolve the bare space record
+// root). Precedence: explicit > active-intent cursor (if it names a real record)
+// > lone intent. Returns null rather than throwing on ambiguity so the path
+// helpers stay total; the verb/handler layer (P4) owns the error/prompt for the
+// >1-intent-no-cursor case.
 export function activeIntent(
   projectDir: string,
   space?: string,
@@ -356,14 +356,14 @@ export function activeIntent(
   }
   const records = listIntentDirs(projectDir, sp);
   if (records.length === 1) return records[0];
-  // 0 records → null (flat fallback); >1 with no cursor → null (the handler
+  // 0 records → null (bare space root); >1 with no cursor → null (the handler
   // layer prompts; a path helper cannot guess which intent the caller meant).
   return null;
 }
 
 // The absolute RECORD directory for an intent:
-// `aidlc/spaces/<space>/intents/<slug>-<id8>/`. Returns null when no new-layout
-// intent resolves, signalling the flat-legacy fallback to the path helpers.
+// `aidlc/spaces/<space>/intents/<slug>-<id8>/`. Returns null when no intent
+// resolves, signalling the bare-space-root resolution in the path helpers.
 export function recordDir(
   projectDir: string,
   intent?: string,
@@ -378,10 +378,11 @@ export function recordDir(
 // Relative record-dir prefix for the engine's agent-consumed artifact/diary
 // paths: `aidlc/spaces/<space>/intents/<slug>-<id8>` with forward slashes
 // regardless of host OS (portable across worktrees). Returns null → the engine
-// resolvers fall back to the flat `aidlc-docs` relative prefix. The space +
-// intent come from the active cursors unless passed explicitly; the engine
-// threads the active intent's record-dir name in (it knows projectDir but the
-// resolvers themselves take no projectDir — see aidlc-orchestrate.ts).
+// resolvers resolve the bare space-relative record prefix
+// (relativeSpaceRecordPrefix). The space + intent come from the active cursors
+// unless passed explicitly; the engine threads the active intent's record-dir
+// name in (it knows projectDir but the resolvers themselves take no projectDir —
+// see aidlc-orchestrate.ts).
 export function relativeRecordDir(
   projectDir: string,
   intent?: string,
@@ -391,6 +392,26 @@ export function relativeRecordDir(
   const slug = activeIntent(projectDir, sp, intent);
   if (slug === null) return null;
   return `aidlc/spaces/${sp}/intents/${slug}`;
+}
+
+// The bare SPACE record root: `aidlc/spaces/<space>/intents/`. The absolute path
+// helpers resolve here when no intent record exists (activeIntent → null) — a
+// fresh SEED shell before auto-birth, or a flat project still awaiting migration.
+// No aidlc-state.md ever lives directly here, so existence-gated readers
+// (loadStateFileIfPresent) see "no workflow yet" and the orchestrator
+// births/errors. This is the P9 end state — there is no flat `aidlc-docs/` root.
+function spaceRecordRoot(projectDir: string, space?: string): string {
+  return intentsDir(projectDir, space);
+}
+
+// The bare space-RELATIVE record prefix (posix slashes) — the relative analog of
+// spaceRecordRoot, used by the engine/worktree resolvers when no per-intent
+// record prefix is threaded. The relative resolvers take no projectDir, so they
+// cannot read the active-space cursor and default to `default` (the same
+// single-string limitation the old flat relative prefix had — not a regression;
+// a non-default space threads relativeRecordDir explicitly).
+export function relativeSpaceRecordPrefix(space: string = DEFAULT_SPACE): string {
+  return `aidlc/spaces/${space}/intents`;
 }
 
 // --- Intent identity: UUIDv7 + slugify ----------------------------------------
@@ -462,6 +483,22 @@ export function slugify(text: string, maxLength = 48): string {
 // <slug>-<id8>/ (the leaf is created BY this rename); (4) append to intents.json
 // + set active-intent; (5) write the `.migrated` marker LAST. The flat tree is
 // git-rm'd post-move (the data MOVED, not deleted); the source is NEVER rmSync'd.
+//
+// THE ONE SURVIVING `aidlc-docs` READ. P9 removed the transitional dual-layout
+// fallback — the record tree is now a SINGLE per-intent layout. The ONLY place
+// the legacy flat `aidlc-docs/` root is still read is this one-time migration:
+// needsFlatMigration() probes flatStateSource() and migrateFlatLayout() moves
+// flatMigrationSource(). These two private helpers localise that read so the
+// grep gate's `aidlc-docs` allowlist in core code is exactly this constant.
+const FLAT_MIGRATION_ROOT = "aidlc-docs";
+
+function flatMigrationSource(projectDir: string): string {
+  return join(projectDir, FLAT_MIGRATION_ROOT);
+}
+
+function flatStateSource(projectDir: string): string {
+  return join(flatMigrationSource(projectDir), "aidlc-state.md");
+}
 
 export const MIGRATED_MARKER = ".migrated";
 
@@ -475,9 +512,9 @@ export function needsFlatMigration(projectDir: string): boolean {
   // Marker present → already migrated (idempotency key, blocker 2).
   if (existsSync(migratedMarkerPath(projectDir))) return false;
   // No flat state → nothing to migrate (a fresh SEED shell, or already moved).
-  // This is the migration DETECTION trigger — the legitimate read of the legacy
-  // flat state path (allowlisted in the grep gate).
-  const flatState = legacyFlatFallback(projectDir, "aidlc-state.md");
+  // This is the migration DETECTION trigger — the sole legitimate read of the
+  // legacy flat state path (allowlisted in the grep gate).
+  const flatState = flatStateSource(projectDir);
   if (!existsSync(flatState)) return false;
   // Any new-layout intent RECORD already present → migration ran (or a fresh
   // born intent exists); do not move a second tree on top of it.
@@ -899,8 +936,8 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
     // Re-check inside the lock (another clone may have migrated while we waited).
     if (!needsFlatMigration(projectDir)) return null;
 
-    const flatRoot = legacyFlatFallback(projectDir);
-    const flatState = legacyFlatFallback(projectDir, "aidlc-state.md");
+    const flatRoot = flatMigrationSource(projectDir);
+    const flatState = join(flatRoot, "aidlc-state.md");
 
     // Slug from the existing state's most slug-worthy field, else "default".
     // Prefer an explicit intent/workflow name, then the human project name; the
@@ -990,43 +1027,18 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
   });
 }
 
-// --- Migration-aware resolution: the SINGLE legacy flat-layout fallback --------
+// --- Per-intent record resolution (P9 end state — no flat fallback) -----------
 //
-// TRANSITIONAL — remove in P9/Stage D once fixtures migrate; this test flips RED
-// to force removal; see goal-loop-stages.md Stage D checklist.
-// (The "test" is tests/unit/t159-legacy-flat-fallback-bridge.test.ts — a
-// `test.failing` tripwire that goes RED the moment this fallback is deleted.)
-//
-// Resolution is MIGRATION-AWARE, not a permanent dual layout: a path helper
-// resolves the per-intent record dir when a new-layout intent exists (explicit
-// arg, OR aidlc/spaces/<sp>/intents/<dir> present), and resolves the legacy flat
-// `aidlc-docs/` location ONLY in the not-yet-migrated state. That is exactly what
-// a correct PRE-migration helper must do — a flat project has no intent record to
-// resolve until migrateFlatLayout() runs — so the fallback is intentional
-// pre-migration behaviour, not a shim bolted on for tests.
-//
-// EVERY absolute flat fallback funnels through this ONE function, and the two
-// engine relative resolvers funnel through LEGACY_FLAT_RELATIVE_PREFIX, so P9/
-// Stage D retires the entire transitional layer by DELETING this function + the
-// two constants below (the grep-gate allowlist is then these named sites, not
-// scattered literals). The t159 tripwire asserts this fallback exists + is
-// reachable so it cannot silently survive to GA — P9 deletes it and the tripwire
-// goes RED, forcing the fixture migration that retires it.
-export const LEGACY_FLAT_ROOT = "aidlc-docs";
-export const LEGACY_FLAT_RELATIVE_PREFIX = "aidlc-docs";
-
-// Build the legacy flat path `<projectDir>/aidlc-docs/<...segments>`. The ONE
-// absolute pre-migration fallback site. Returns the bare flat root when no
-// segments are given.
-export function legacyFlatFallback(projectDir: string, ...segments: string[]): string {
-  // TRANSITIONAL — remove in P9/Stage D once fixtures migrate; this test flips
-  // RED to force removal; see goal-loop-stages.md Stage D checklist.
-  return join(projectDir, LEGACY_FLAT_ROOT, ...segments);
-}
+// Each absolute path helper resolves the per-intent record dir when an intent
+// exists (explicit arg, active cursor, or a lone intent), else the bare SPACE
+// record root (spaceRecordRoot). There is NO flat `aidlc-docs/` fallback any more
+// — the transitional bridge was retired in P9 once the fixtures migrated. The
+// only place the legacy flat root is still touched is the one-time migration
+// SOURCE (flatStateSource/flatMigrationSource above).
 
 export function stateFilePath(projectDir: string, intent?: string, space?: string): string {
   const dir = recordDir(projectDir, intent, space);
-  if (dir === null) return legacyFlatFallback(projectDir, "aidlc-state.md");
+  if (dir === null) return join(spaceRecordRoot(projectDir, space), "aidlc-state.md");
   return join(dir, "aidlc-state.md");
 }
 
@@ -1034,11 +1046,11 @@ export function stateFilePath(projectDir: string, intent?: string, space?: strin
 // The audit trail is committed (vision §5.1) but each clone writes its OWN
 // shard so git never merge-conflicts concurrent appends (merge=union was proven
 // to corrupt the multi-line blocks). Readers glob `audit/*.md` and merge-sort by
-// timestamp — see auditShards()/readAllAuditShards(). The flat-legacy fallback
-// keeps the single `aidlc-docs/audit.md` (one-clone-per-flat-project world).
+// timestamp — see auditShards()/readAllAuditShards(). With no intent resolved the
+// shard lands under the bare space record root (no flat audit.md any more).
 export function auditFilePath(projectDir: string, intent?: string, space?: string): string {
   const dir = recordDir(projectDir, intent, space);
-  if (dir === null) return legacyFlatFallback(projectDir, "audit.md");
+  if (dir === null) return join(spaceRecordRoot(projectDir, space), "audit", auditShardName(projectDir));
   return join(dir, "audit", auditShardName(projectDir));
 }
 
@@ -1112,23 +1124,19 @@ export function auditShardName(projectDir: string): string {
   return _auditShardName;
 }
 
-// `…/intents/<slug>-<id8>/audit/` — the shard directory. Flat fallback: the
-// flat tree has no audit dir, so callers that enumerate shards there get [].
+// `…/intents/<slug>-<id8>/audit/` — the shard directory, or null when no intent
+// resolves (the bare space root has no audit dir, so an enumerator gets []).
 export function auditShardDir(projectDir: string, intent?: string, space?: string): string | null {
   const dir = recordDir(projectDir, intent, space);
   if (dir === null) return null;
   return join(dir, "audit");
 }
 
-// Every audit shard path for an intent (sorted), or the single flat
-// `aidlc-docs/audit.md` when no new-layout intent resolves. Readers merge-sort
-// the parsed events across these by **Timestamp**.
+// Every audit shard path for an intent (sorted). With no intent resolved the
+// enumerated dir is the bare space record root's audit/ — absent on a fresh
+// shell, so the read is []. Readers merge-sort the parsed events by **Timestamp**.
 export function auditShards(projectDir: string, intent?: string, space?: string): string[] {
-  const shardDir = auditShardDir(projectDir, intent, space);
-  if (shardDir === null) {
-    const flat = legacyFlatFallback(projectDir, "audit.md");
-    return existsSync(flat) ? [flat] : [];
-  }
+  const shardDir = auditShardDir(projectDir, intent, space) ?? join(spaceRecordRoot(projectDir, space), "audit");
   let entries: string[];
   try {
     entries = readdirSync(shardDir);
@@ -1337,18 +1345,17 @@ export function resolveConstructionRepo(
   );
 }
 
-// --- aidlc-docs data-path family ----------------------------------------------
+// --- Record-tree data-path family ---------------------------------------------
 //
-// Single chokepoint for every path under the project's record tree. Resolution
-// is MIGRATION-AWARE (see legacyFlatFallback above): each helper resolves the
-// per-intent RECORD dir (aidlc/spaces/<sp>/intents/<slug>-<id8>/) when a
-// new-layout intent exists, and resolves the legacy flat `aidlc-docs/` root ONLY
-// in the not-yet-migrated state — exactly what a correct pre-migration helper
-// must do, so the whole tree stays on ONE root per intent (state split across
-// two roots is meaningless). The state/audit/worktree helpers above
-// are the load-bearing pair; these cover the rest of the family (runtime graph,
-// hook health, recovery breadcrumb, plan, stop-hook guard, the bare docs dir,
-// and a stage's per-run directory) plus the per-worktree mirror copies.
+// Single chokepoint for every path under the project's record tree. Each helper
+// resolves the per-intent RECORD dir (aidlc/spaces/<sp>/intents/<slug>-<id8>/)
+// when an intent exists, else the bare space record root (spaceRecordRoot) — the
+// P9 end state has no flat `aidlc-docs/` root, so the whole tree stays on ONE
+// root per intent (state split across two roots is meaningless). The
+// state/audit/worktree helpers above are the load-bearing pair; these cover the
+// rest of the family (runtime graph, hook health, recovery breadcrumb, plan,
+// stop-hook guard, the bare docs dir, and a stage's per-run directory) plus the
+// per-worktree mirror copies.
 //
 // NOT funnelled here (deliberately): the two engine artifact/diary resolvers in
 // aidlc-orchestrate.ts (resolveArtifactPath / memoryPathFor) build RELATIVE,
@@ -1356,12 +1363,14 @@ export function resolveConstructionRepo(
 // absolute, projectDir-keyed shape here is incompatible with them. They re-root
 // via relativeRecordDir() threaded from the engine instead.
 
-// The record-tree ROOT for a project: the per-intent record dir when a new-layout
-// intent resolves, else the flat legacy `aidlc-docs/` root. Every family helper
-// below joins under this so the whole tree moves with the intent in lockstep.
+// The record-tree ROOT for a project: the per-intent record dir when an intent
+// resolves, else the bare space record root (aidlc/spaces/<sp>/intents/). Every
+// family helper below joins under this so the whole tree moves with the intent in
+// lockstep. Stays total (never throws) so the hooks that call the family at
+// module top on a pre-birth shell don't crash.
 export function docsRoot(projectDir: string, intent?: string, space?: string): string {
   const dir = recordDir(projectDir, intent, space);
-  return dir ?? legacyFlatFallback(projectDir);
+  return dir ?? spaceRecordRoot(projectDir, space);
 }
 
 // The bare record-tree root (doctor's existence check, the init scaffolder's
@@ -1420,10 +1429,11 @@ export function stageDir(projectDir: string, phase: string, slug: string, intent
 // Relative diary path recorded on a runtime-graph row — forward slashes
 // regardless of host OS so the schema stays portable across worktrees. Mirrors
 // the engine's memoryPathFor. `recordPrefix` is the relative per-intent record
-// dir (relativeRecordDir) when one resolves, else null → the flat `aidlc-docs`
-// prefix. Kept here so the prefix decision funnels with the rest of the family.
+// dir (relativeRecordDir) when one resolves, else null → the bare space record
+// prefix (relativeSpaceRecordPrefix). Kept here so the prefix decision funnels
+// with the rest of the family.
 export function relativeMemoryPath(phase: string, stageSlug: string, recordPrefix?: string | null): string {
-  const prefix = recordPrefix ?? LEGACY_FLAT_RELATIVE_PREFIX;
+  const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
   return `${prefix}/${phase}/${stageSlug}/memory.md`;
 }
 
@@ -1443,17 +1453,16 @@ export function unitDependencyPath(projectDir: string, intent?: string, space?: 
 // A Bolt worktree is a git worktree of the project, so it carries its OWN mirror
 // of the record tree at the SAME relative layout as the main checkout: the
 // per-intent record dir (aidlc/spaces/<sp>/intents/<slug>-<id8>/) when the Bolt
-// forks from a new-layout intent, else the flat legacy `aidlc-docs/` leaf. These
-// take an ALREADY-RESOLVED worktree base dir (the output of worktreePath, or an
+// forks from an intent, else the bare space record root. These take an
+// ALREADY-RESOLVED worktree base dir (the output of worktreePath, or an
 // audit-recorded path), not projectDir, plus an optional `recordPrefix` — the
 // RELATIVE per-intent record dir (relativeRecordDir) the fork inherited from the
-// main intent. When omitted (flat-legacy fork, or a caller without intent
-// context yet — P2 threads it), the leaf stays `aidlc-docs`, preserving today's
-// behaviour. Fork and merge MUST pass the SAME prefix or they read the wrong
-// mirror file.
+// main intent. When omitted (a caller without intent context yet), the prefix
+// falls back to the bare space record root (relativeSpaceRecordPrefix). Fork and
+// merge MUST pass the SAME prefix or they read the wrong mirror file.
 
 function worktreeRecordRoot(wtPath: string, recordPrefix?: string | null): string {
-  const prefix = recordPrefix ?? LEGACY_FLAT_RELATIVE_PREFIX;
+  const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
   // recordPrefix is a posix-relative path (forward slashes); split so join
   // produces native separators under wtPath.
   return join(wtPath, ...prefix.split("/"));
@@ -1468,9 +1477,7 @@ export function worktreeStateFilePath(wtPath: string, recordPrefix?: string | nu
 }
 
 export function worktreeAuditFilePath(wtPath: string, recordPrefix?: string | null, projectDir?: string): string {
-  // A worktree clone writes its own audit shard inside the worktree mirror; the
-  // flat-legacy fork keeps the single audit.md leaf.
-  if (recordPrefix == null) return join(wtPath, LEGACY_FLAT_RELATIVE_PREFIX, "audit.md");
+  // A worktree clone writes its own audit shard inside the worktree mirror.
   // The shard name embeds the MAIN clone's stable token (projectDir), NOT the
   // worktree's own — the fork and merge subprocesses are both spawned from the
   // main checkout, so threading the main clone-id makes them resolve the SAME
