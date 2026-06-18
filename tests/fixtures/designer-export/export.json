@@ -26,7 +26,7 @@
         "workshop"
       ],
       "inputs": "none (first stage after session start)",
-      "outputs": "aidlc-docs/ directory tree (knowledge dirs, stage artifact dirs, verification dir)",
+      "outputs": "the per-intent record tree (stage artifact dirs + verification dir) and the space-level knowledge/ dir",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",

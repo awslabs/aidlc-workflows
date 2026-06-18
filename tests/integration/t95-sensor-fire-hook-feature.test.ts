@@ -271,7 +271,23 @@ describe("t95 sensor-fire hook — single & multi-entry fire (mechanism cli — 
     );
     expect(r.status).toBe(0);
     // requirements-analysis ships required-sections + upstream-coverage, both
-    // with matches: **/aidlc-docs/** — two should fire.
+    // with matches: **/{aidlc-docs,intents}/** — two should fire.
+    expect(spawnArgvs(proj).length).toBe(2);
+  }, 30000);
+
+  test("C1a-intents: a write under the per-intent record dir fires the 2 markdown sensors (the {aidlc-docs,intents} glob's intents arm) [P9 layout]", () => {
+    // GUARDS the sensor-glob fix: the framework glob is **/{aidlc-docs,intents}/**.
+    // C1a drives the legacy aidlc-docs/ arm; on the per-intent layout the real
+    // write path is under aidlc/spaces/<space>/intents/<record>/, which matches
+    // ONLY via the new `intents` arm. Without this case a regression of that arm
+    // (e.g. reverting to **/aidlc-docs/**) leaves C1a green while the sensors go
+    // silent on every real workflow — the exact dead-glob bug P9 fixed.
+    const proj = makeProjectActive("requirements-analysis");
+    const r = runHook(
+      proj,
+      join(seededRecordDir(proj), "inception", "requirements-analysis", "intent.md"),
+    );
+    expect(r.status).toBe(0);
     expect(spawnArgvs(proj).length).toBe(2);
   }, 30000);
 
