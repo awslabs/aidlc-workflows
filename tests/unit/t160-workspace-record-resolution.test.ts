@@ -1,4 +1,4 @@
-// covers: function:activeSpace, function:activeIntent, function:recordDir, function:relativeRecordDir, function:stateFilePath, function:auditFilePath, function:uuidv7, function:slugify, function:migrateFlatLayout
+// covers: function:activeSpace, function:activeIntent, function:recordDir, function:relativeRecordDir, function:stateFilePath, function:auditFilePath, function:uuidv7, function:slugify, function:migrateFlatLayout, function:knowledgeDir
 //
 // t160 — P1 Step B re-root: the per-intent record-dir resolution + the flat
 // legacy fallback + the one-time crash-safe migration. Mechanism: in-process
@@ -25,6 +25,7 @@ import {
   auditShards,
   idSuffix,
   intentsDir,
+  knowledgeDir,
   listIntentDirs,
   migrateFlatLayout,
   migratedMarkerPath,
@@ -114,6 +115,17 @@ describe("t160 selectors — space + intent resolution", () => {
     expect(activeSpace(proj)).toBe("default");
     seedShell(proj, "team-b");
     expect(activeSpace(proj)).toBe("team-b");
+  });
+
+  test("knowledgeDir resolves the SPACE-level knowledge dir for the active (or explicit) space", () => {
+    // Space domain knowledge is a sibling of intents under spaces/<space>/, NOT
+    // per-intent. Default with no cursor:
+    expect(knowledgeDir(proj)).toBe(join(proj, "aidlc", "spaces", "default", "knowledge"));
+    // Explicit space arg overrides:
+    expect(knowledgeDir(proj, "team-b")).toBe(join(proj, "aidlc", "spaces", "team-b", "knowledge"));
+    // And it follows the active-space cursor (must NOT hardcode default):
+    seedShell(proj, "team-b");
+    expect(knowledgeDir(proj)).toBe(join(proj, "aidlc", "spaces", "team-b", "knowledge"));
   });
 
   test("activeIntent: explicit > cursor > lone-intent > null", () => {
@@ -260,6 +272,48 @@ describe("t160 flat-layout migration — crash-safe, idempotent", () => {
     // It is NOT trapped inside the per-intent record.
     const record = join(intentsDir(proj, "default"), r.intentDirName);
     expect(existsSync(join(record, "knowledge"))).toBe(false);
+  });
+
+  test("knowledge relocation MERGES into a pre-existing space knowledge dir (no data loss either side)", () => {
+    seedShell(proj);
+    seedFlat(proj);
+    // A space that already has its own knowledge (e.g. seeded by a prior intent).
+    const spaceKnowledge = join(proj, "aidlc", "spaces", "default", "knowledge");
+    mkdirSync(join(spaceKnowledge, "aidlc-shared"), { recursive: true });
+    writeFileSync(join(spaceKnowledge, "aidlc-shared", "existing.md"), "# Existing\n", "utf-8");
+    // The flat tree brings a NEW per-agent dir AND a same-named aidlc-shared/ with a new file.
+    mkdirSync(join(proj, "aidlc-docs", "knowledge", "aidlc-shared"), { recursive: true });
+    writeFileSync(join(proj, "aidlc-docs", "knowledge", "aidlc-shared", "incoming.md"), "# Incoming\n", "utf-8");
+    mkdirSync(join(proj, "aidlc-docs", "knowledge", "aidlc-developer-agent"), { recursive: true });
+    writeFileSync(join(proj, "aidlc-docs", "knowledge", "aidlc-developer-agent", "conv.md"), "# Conv\n", "utf-8");
+
+    expect(migrateFlatLayout(proj)).not.toBeNull();
+    // Pre-existing content survives (merge, not clobber)...
+    expect(existsSync(join(spaceKnowledge, "aidlc-shared", "existing.md"))).toBe(true);
+    // ...AND the incoming content merged into the same aidlc-shared/ dir...
+    expect(existsSync(join(spaceKnowledge, "aidlc-shared", "incoming.md"))).toBe(true);
+    // ...AND the new per-agent dir landed.
+    expect(existsSync(join(spaceKnowledge, "aidlc-developer-agent", "conv.md"))).toBe(true);
+  });
+
+  test("knowledge relocation is committed by the SAME atomic rename — a crash before the marker re-fires cleanly (no stranded knowledge)", () => {
+    // Crash-safety: knowledge is relocated off the STAGING tree before the atomic
+    // rename + before the .migrated marker, so the migration is re-runnable until
+    // the marker lands. Simulate a crash AFTER a parent mkdir but with no record /
+    // no marker, with flat knowledge present; the re-run must still relocate it.
+    seedShell(proj);
+    seedFlat(proj);
+    mkdirSync(join(proj, "aidlc-docs", "knowledge", "aidlc-shared"), { recursive: true });
+    writeFileSync(join(proj, "aidlc-docs", "knowledge", "aidlc-shared", "k.md"), "# K\n", "utf-8");
+    mkdirSync(intentsDir(proj, "default"), { recursive: true }); // crashed-parent artifact
+    expect(needsFlatMigration(proj)).toBe(true);
+
+    expect(migrateFlatLayout(proj)).not.toBeNull();
+    const spaceKnowledge = join(proj, "aidlc", "spaces", "default", "knowledge");
+    expect(existsSync(join(spaceKnowledge, "aidlc-shared", "k.md"))).toBe(true);
+    expect(existsSync(migratedMarkerPath(proj))).toBe(true);
+    // The flat source is untouched (the caller git-rm's it).
+    expect(existsSync(join(proj, "aidlc-docs", "knowledge", "aidlc-shared", "k.md"))).toBe(true);
   });
 
   test("idempotency keys on the .migrated marker ALONE — re-run is a no-op", () => {

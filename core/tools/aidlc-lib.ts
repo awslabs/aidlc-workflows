@@ -991,52 +991,53 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
     }
     cpSync(flatRoot, staging, { recursive: true });
 
-    // (2) mkdir the intent dir's PARENT chain (the leaf is created by the rename).
-    mkdirSync(intentsRoot, { recursive: true });
+    // ── Shape the staged tree to the target layout BEFORE the atomic rename ──
+    // CRASH-SAFETY INVARIANT: the rename in step (3) is the SOLE commit point.
+    // Everything below operates on the staging tree (or the idempotent, intent-
+    // independent space-knowledge move), so the ONLY "partial" window is steps
+    // 1-2b — which produce no `aidlc-state.md` under intents/ and no `.migrated`
+    // marker, so needsFlatMigration() stays true and a crash re-fires cleanly
+    // (step 1 rmSync's any half-built staging first; the flat source is never
+    // mutated). Doing these relocations AFTER the rename would strand them in a
+    // window where anyIntentRecordExists() has already flipped the detector off.
 
-    // (3) ONE atomic rename of the staged tree into the leaf. The only "partial"
-    // window is steps 1-2, which produce nothing the detector mistakes for a
-    // completed migration (no aidlc-state.md under intents/ until this rename).
-    renameSync(staging, leaf);
-
-    // (3a) RELOCATE the flat `audit.md` into the per-clone SHARD layout the
+    // (2a) RELOCATE the staged `audit.md` into the per-clone SHARD layout the
     // readers glob. The blind copy in step 1 lands the flat `aidlc-docs/audit.md`
-    // FILE at `<leaf>/audit.md`, but auditShards()/readAllAuditShards() read the
-    // `<leaf>/audit/*.md` DIR (auditShardDir), and the flat-fallback fires ONLY
-    // when the record dir is absent — which it never is post-migration. Left as a
-    // top-level file, the pre-migration WORKFLOW_STARTED/STAGE/PHASE history would
-    // be on disk but INVISIBLE to runtime-graph compile, summary/replay, and every
-    // hook. Move it INTO the shard set as `<leaf>/audit/<host>-<clone>.md` so it
+    // FILE at `<staging>/audit.md`, but auditShards()/readAllAuditShards() read
+    // the `<record>/audit/*.md` DIR (auditShardDir), and the flat-fallback fires
+    // ONLY when the record dir is absent — which it never is post-migration. Left
+    // as a top-level file, the pre-migration WORKFLOW_STARTED/STAGE/PHASE history
+    // would be on disk but INVISIBLE to runtime-graph compile, summary/replay, and
+    // every hook. Move it INTO the shard set as `audit/<host>-<clone>.md` so it
     // joins the shards the readers already merge-sort (honours decision #1: a
     // per-clone shard, NOT a single committed audit.md + merge=union). Guard the
-    // no-audit case (a flat tree with no audit.md) — skip silently. We move the
-    // COPY inside the leaf; the flat source aidlc-docs/audit.md is untouched, so
-    // the caller's gitRmFlatTree(movedFrom=flatRoot) is unaffected.
-    const migratedFlatAudit = join(leaf, "audit.md");
-    if (existsSync(migratedFlatAudit)) {
-      const shardDir = join(leaf, "audit");
+    // no-audit case (a flat tree with no audit.md) — skip silently.
+    const stagedAudit = join(staging, "audit.md");
+    if (existsSync(stagedAudit)) {
+      const shardDir = join(staging, "audit");
       mkdirSync(shardDir, { recursive: true });
-      renameSync(migratedFlatAudit, join(shardDir, auditShardName(projectDir)));
+      renameSync(stagedAudit, join(shardDir, auditShardName(projectDir)));
     }
 
-    // (3b) RELOCATE the flat `knowledge/` tree to the SPACE level. The old flat
+    // (2b) RELOCATE the staged `knowledge/` tree to the SPACE level. The old flat
     // layout kept team domain knowledge at `aidlc-docs/knowledge/` (the former
     // scaffold stage seeded `knowledge/README.md` + `knowledge/aidlc-shared/`);
-    // the blind copy in step 1 lands it at `<leaf>/knowledge/`, but the per-intent
-    // record is the WRONG home — knowledge is a space-level concern (a sibling of
-    // intents) so it compounds across every intent, and the agent personas read
-    // it from `spaces/<space>/knowledge/`. Left in the leaf, a migrating team's
-    // accumulated knowledge would be silently invisible to every agent. Move the
-    // COPY up to the space dir (merge into any existing space knowledge); the flat
-    // source is untouched, so the caller's gitRmFlatTree(flatRoot) is unaffected.
-    const migratedFlatKnowledge = join(leaf, "knowledge");
-    if (existsSync(migratedFlatKnowledge)) {
+    // the blind copy in step 1 lands it at `<staging>/knowledge/`, but the
+    // per-intent record is the WRONG home — knowledge is a space-level concern (a
+    // sibling of intents) so it compounds across every intent, and the agent
+    // personas read it from `spaces/<space>/knowledge/`. Left in the record, a
+    // migrating team's accumulated knowledge would be silently invisible to every
+    // agent. Move it up to the space dir (merge into any existing space knowledge,
+    // entry-by-entry so a pre-existing dir is preserved) and empty it out of the
+    // staging tree so the rename carries no `knowledge/` into the record. This is
+    // intent-independent and idempotent — safe to re-apply on a crash re-fire; the
+    // flat source is untouched, so the caller's gitRmFlatTree(flatRoot) is intact.
+    const stagedKnowledge = join(staging, "knowledge");
+    if (existsSync(stagedKnowledge)) {
       const spaceKnowledge = knowledgeDir(projectDir, space);
       mkdirSync(spaceKnowledge, { recursive: true });
-      // Merge entry-by-entry so a pre-existing space knowledge dir is preserved;
-      // rename each top-level entry, falling back to copy on a cross-name clash.
-      for (const entry of readdirSync(migratedFlatKnowledge)) {
-        const from = join(migratedFlatKnowledge, entry);
+      for (const entry of readdirSync(stagedKnowledge)) {
+        const from = join(stagedKnowledge, entry);
         const to = join(spaceKnowledge, entry);
         if (existsSync(to)) {
           cpSync(from, to, { recursive: true });
@@ -1044,8 +1045,15 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
           renameSync(from, to);
         }
       }
-      rmSync(migratedFlatKnowledge, { recursive: true, force: true });
+      rmSync(stagedKnowledge, { recursive: true, force: true });
     }
+
+    // (2c) mkdir the intent dir's PARENT chain (the leaf is created by the rename).
+    mkdirSync(intentsRoot, { recursive: true });
+
+    // (3) ONE atomic rename of the now-target-shaped staged tree into the leaf —
+    // the single commit point (see the crash-safety invariant above).
+    renameSync(staging, leaf);
 
     // (4) Append to intents.json + set the active-intent cursor (workspace bucket).
     appendIntentToRegistry(

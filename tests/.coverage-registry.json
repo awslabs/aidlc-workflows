@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 70,
+      "function": 71,
       "audit": 27,
       "scope": 9,
       "stage": 8,
@@ -1355,8 +1355,13 @@
       "unitClass": "function",
       "unitId": "function:knowledgeDir",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t160-workspace-record-resolution.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
