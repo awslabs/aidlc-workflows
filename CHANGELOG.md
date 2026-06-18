@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.2] - 2026-06-18
+
+Validates the stage `reviewer:` / `reviewer_max_iterations` frontmatter fields, which were carried through schema → graph → directive by the 2.0.0 reviewer mechanism but never checked. A malformed cap, a non-positive-integer cap, a cap declared with no reviewer, or a `reviewer:` naming an agent with no `.claude/agents/*.md` file all passed validation before and surfaced only as a runtime failure or a silently-disabled review loop; they now fail validation/compile loudly and deterministically. This is a behaviour change at authoring time only — the reviewer's runtime behaviour is unchanged. Re-copy your `dist/<harness>/` to pick up the regenerated tools. Refs #389.
+
+* **Authoring impact (action required if you hand-edit stages):** a stage whose `reviewer:` names an unknown agent, or whose `reviewer_max_iterations` is non-numeric / zero / negative / non-integer / present-without-a-reviewer, now FAILS `validateStageFrontmatter` and the graph compile where it previously passed. Fix the value or remove the field.
+* **`reviewer_max_iterations` is now parsed as a number.** `parseStageFrontmatter` coerces an integer-literal cap to a real number (and `emitStageFrontmatter` round-trips it as an unquoted number), so the type is correct end-to-end instead of relying on a `Number()` coercion at compile.
+* **`reviewer` is roster-checked like `lead_agent`.** A reviewer slug with no matching agent file is rejected (stage-schema Rule 9), closing the silent-failure path.
+* **Directive validation** type-checks `reviewer` (string) and `reviewer_max_iterations` (positive integer), and the graph compiler guards the cap so a bad value can never ship NaN to `stage-graph.json`.
+* No new commands or flags; the only breaking change is that previously-accepted malformed reviewer config now errors.
+
 ## [2.0.1] - 2026-06-18
 
 Greens the default-tier test suite (smoke + unit + integration) after the 2.0.0 reviewer-mechanism merge, with no behaviour change to the reviewer feature itself. Three independent, mechanical defects rode in with the merge: the frontmatter emitter dropped the two `reviewer` fields on a round-trip, the version trio was inconsistent, and three agent-count assertions still expected the pre-merge roster of 11. This release reconciles all three so CI is green on a clean 2.0 baseline. No re-copy of `dist/<harness>/` is required for behaviour — the changes are test-correctness, metadata, and the regenerated dist copies of `aidlc-version.ts`. Refs #387.

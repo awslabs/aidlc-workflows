@@ -333,6 +333,43 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   });
 
   // ============================================================
+  // Reviewer fields on a run-stage directive (V4a)
+  // ============================================================
+  // reviewer / reviewer_max_iterations are optional run-stage fields, present
+  // only when the stage declares a reviewer. The directive validator mirrors
+  // the stage-schema validator: reviewer optional-string,
+  // reviewer_max_iterations optional positive-integer. Absent is fine; a valid
+  // pair validates; a non-string reviewer or non-integer cap is rejected.
+
+  test("run-stage reviewer + cap present and valid -> VALID", () => {
+    expect(
+      errs({
+        ...runStage(),
+        reviewer: "aidlc-architecture-reviewer-agent",
+        reviewer_max_iterations: 3,
+      }),
+    ).toBe("VALID");
+  });
+
+  test("run-stage non-string reviewer -> type error", () => {
+    expect(errs({ ...runStage(), reviewer: 42 })).toContain(
+      "run-stage: reviewer must be string, got number",
+    );
+  });
+
+  test("run-stage non-integer reviewer_max_iterations -> positive-integer error", () => {
+    expect(
+      errs({
+        ...runStage(),
+        reviewer: "aidlc-architecture-reviewer-agent",
+        reviewer_max_iterations: "two",
+      }),
+    ).toContain(
+      "run-stage: reviewer_max_iterations must be a positive integer, got string",
+    );
+  });
+
+  // ============================================================
   // Shape failures — non-object inputs (3 assertions)
   // .sh lines 186-188
   // ============================================================

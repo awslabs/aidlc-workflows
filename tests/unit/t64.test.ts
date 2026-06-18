@@ -463,6 +463,28 @@ outputs: b
 ---
 `;
 
+// Reviewer-bearing stage — `reviewer` is a string, `reviewer_max_iterations`
+// is authored as an unquoted integer (the canonical on-disk form). Exercises
+// V1: the parser coerces the cap to a NUMBER, and the emitter round-trips it
+// as an unquoted number.
+const REVIEWER = `---
+slug: test
+phase: inception
+execution: ALWAYS
+condition: x
+lead_agent: aidlc-product-agent
+mode: inline
+reviewer: aidlc-product-lead-agent
+reviewer_max_iterations: 2
+support_agents: []
+produces: []
+consumes: []
+requires_stage: []
+inputs: a
+outputs: b
+---
+`;
+
 // ============================================================
 // Positive baseline (.sh assertions 1-6)
 // ============================================================
@@ -711,6 +733,41 @@ describe("round-trip parse -> emit -> parse", () => {
   test("empty lists -> EQ", () => {
     // .sh: "round-trip: empty lists"
     expect(roundtrip(FLOW_EMPTY)).toBe("EQ");
+  });
+
+  // V1: reviewer-bearing stage round-trips with the cap as a NUMBER.
+  test("reviewer + numeric cap -> EQ", () => {
+    expect(roundtrip(REVIEWER)).toBe("EQ");
+  });
+});
+
+// ============================================================
+// Reviewer field parse/emit (V1) — reviewer_max_iterations is the one
+// numeric scalar field: the parser returns it as a NUMBER (not the string
+// "2"), and the emitter writes it back as an unquoted number that re-parses
+// to the same number.
+// ============================================================
+describe("reviewer fields parse/emit (V1)", () => {
+  test("reviewer_max_iterations parses to a number", () => {
+    const obj = parseStageFrontmatter(REVIEWER) as Record<string, unknown>;
+    expect(typeof obj.reviewer_max_iterations).toBe("number");
+    expect(obj.reviewer_max_iterations).toBe(2);
+  });
+
+  test("reviewer stays a string", () => {
+    const obj = parseStageFrontmatter(REVIEWER) as Record<string, unknown>;
+    expect(typeof obj.reviewer).toBe("string");
+    expect(obj.reviewer).toBe("aidlc-product-lead-agent");
+  });
+
+  test("emitted cap is an unquoted number that re-parses as a number", () => {
+    const obj = parseStageFrontmatter(REVIEWER) as Record<string, unknown>;
+    const yaml = emitStageFrontmatter(obj);
+    // Canonical on-disk form: unquoted integer, no surrounding quotes.
+    expect(yaml).toContain("reviewer_max_iterations: 2\n");
+    const reparsed = parseStageFrontmatter(yaml) as Record<string, unknown>;
+    expect(typeof reparsed.reviewer_max_iterations).toBe("number");
+    expect(reparsed.reviewer_max_iterations).toBe(2);
   });
 });
 

@@ -190,6 +190,36 @@ export function validateStageFrontmatter(
     }
   }
 
+  // reviewer — optional. When present, must be a string. Validated exactly
+  // like lead_agent (checkString + the Rule 9 roster cross-check below), since
+  // reviewer is an agent-slug field of the same kind. checkString does not
+  // enforce non-emptiness (lead_agent does not either); an empty reviewer is
+  // caught by the Rule 9 roster check when ctx.agents is supplied (it matches
+  // no agent file), which every production caller does. No standalone
+  // kebab-pattern check: lead_agent has none either, and a pattern-invalid slug
+  // can never match a real agent file, so Rule 9 already rejects it — a pattern
+  // check here would be redundant.
+  checkString(o, "reviewer", errors);
+
+  // reviewer_max_iterations — optional. When present, must be a positive
+  // integer (>= 1). V1 makes the parser return a number for an integer
+  // literal; a non-integer literal stays a string and is rejected here as a
+  // type error rather than silently coercing to NaN at compile.
+  checkPositiveInteger(o, "reviewer_max_iterations", errors);
+
+  // Coupling — a cap with no reviewer is silently dropped at compile
+  // (aidlc-graph.ts guards the whole reviewer block on `reviewer` being
+  // present). Make the schema's contract match the compiler: reject a cap
+  // declared without a reviewer. The inverse (reviewer present, cap absent)
+  // is valid — the cap defaults to 2.
+  if (
+    "reviewer_max_iterations" in o &&
+    o.reviewer_max_iterations !== undefined &&
+    !("reviewer" in o && o.reviewer !== undefined)
+  ) {
+    errors.push("reviewer_max_iterations requires a reviewer");
+  }
+
   checkStringArray(o, "produces", errors);
 
   // Rule 8: nested consumes[] — array of {artifact, required, conditional_on?}.
@@ -302,6 +332,17 @@ export function validateStageFrontmatter(
         }
       });
     }
+    // reviewer is an agent-slug field like lead_agent; cross-check it against
+    // the same roster (exempting the reserved orchestrator pseudo-agent). This
+    // is the silent-failure fix: a reviewer naming a non-existent agent passed
+    // validation today and surfaced only as a runtime no-op.
+    if (
+      typeof o.reviewer === "string" &&
+      o.reviewer !== RESERVED_AGENT_SLUG &&
+      !known.has(o.reviewer)
+    ) {
+      errors.push(`reviewer "${o.reviewer}" has no matching .claude/agents/*.md`);
+    }
   }
 
   if (errors.length > 0) {
@@ -332,6 +373,24 @@ function checkString(o: Record<string, unknown>, field: string, errors: string[]
   if (!(field in o)) return;
   if (typeof o[field] !== "string") {
     errors.push(`${field} must be string, got ${describe(o[field])}`);
+  }
+}
+
+// checkPositiveInteger — an optional field that, when present, must be a
+// positive integer (>= 1). Mirrors checkString's presence-first shape: absent
+// is valid, present-and-wrong is reported. A non-number (e.g. the string "two"
+// the parser leaves untouched for a non-integer literal), a non-integer
+// (2.5), or a value < 1 (0, -3) all fail. reviewer_max_iterations is the only
+// numeric stage field, so the error names the contract directly.
+function checkPositiveInteger(
+  o: Record<string, unknown>,
+  field: string,
+  errors: string[],
+): void {
+  if (!(field in o) || o[field] === undefined) return;
+  const v = o[field];
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+    errors.push(`${field} must be a positive integer, got ${describe(v)}`);
   }
 }
 

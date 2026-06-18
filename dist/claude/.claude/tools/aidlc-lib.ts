@@ -1218,6 +1218,21 @@ export function parseStageFrontmatter(
 
   obj.consumes = objectListField(fm, CONSUMES_KEY);
 
+  // reviewer_max_iterations is the one numeric scalar field. The generic
+  // scalar loop above captured it as a string ("2"); coerce it to a real
+  // number when the raw value is an integer literal so the type is correct
+  // end-to-end — the schema validator, the directive contract, and the
+  // conductor's `iterations < max` comparison all want a number, not "2".
+  // A non-integer-literal value (e.g. "two", "2.5") is left as the string so
+  // validateStageFrontmatter rejects it loudly rather than the parser
+  // silently coercing to NaN. `reviewer` stays a string (handled by the loop).
+  if (typeof obj.reviewer_max_iterations === "string") {
+    const raw = obj.reviewer_max_iterations;
+    if (/^-?\d+$/.test(raw)) {
+      obj.reviewer_max_iterations = Number(raw);
+    }
+  }
+
   return obj;
 }
 
@@ -1495,6 +1510,12 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
       }
     } else if (typeof v === "string") {
       lines.push(`${key}: ${emitScalar(v)}`);
+    } else if (typeof v === "number") {
+      // reviewer_max_iterations round-trips as an unquoted number, matching
+      // how stages author it on disk (`reviewer_max_iterations: 2`). Without
+      // this branch the numeric value the parser now returns (V1) would be
+      // dropped on emit, breaking the parse -> emit -> parse contract (t65).
+      lines.push(`${key}: ${v}`);
     }
   }
 

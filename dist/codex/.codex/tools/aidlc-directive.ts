@@ -350,6 +350,11 @@ function checkRunStageShared(
   checkStringArray(o, "sensors_applicable", kind, errors);
   checkString(o, "stage_file", kind, errors);
   checkOptionalString(o, "conductor_persona", kind, errors);
+  // reviewer fields — optional on a run-stage directive (present only when the
+  // stage declares a reviewer). Mirror the stage-schema validator: reviewer is
+  // an optional string, reviewer_max_iterations an optional positive integer.
+  checkOptionalString(o, "reviewer", kind, errors);
+  checkOptionalPositiveInteger(o, "reviewer_max_iterations", kind, errors);
 }
 
 // --- Helpers (mirror aidlc-stage-schema.ts: presence first, then type) ---
@@ -408,6 +413,25 @@ function checkOptionalString(
   if (!(field in o)) return;
   if (typeof o[field] !== "string") {
     errors.push(`${kind}: ${field} must be string, got ${describe(o[field])}`);
+  }
+}
+
+// checkOptionalPositiveInteger — a field that may be absent, but if present
+// must be a positive integer (>= 1) — e.g. reviewer_max_iterations. Mirrors
+// the stage-schema validator's checkPositiveInteger so the directive contract
+// matches the frontmatter contract.
+function checkOptionalPositiveInteger(
+  o: Record<string, unknown>,
+  field: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o) || o[field] === undefined) return;
+  const v = o[field];
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+    errors.push(
+      `${kind}: ${field} must be a positive integer, got ${describe(v)}`,
+    );
   }
 }
 

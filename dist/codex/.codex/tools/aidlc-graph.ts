@@ -1220,12 +1220,17 @@ function buildGraphStage(
   if (parsed.reviewer !== undefined) {
     stage.reviewer = parsed.reviewer;
     // Default the cap to 2 when a reviewer is declared but no explicit cap is
-    // set. Coerce to a number — YAML frontmatter may parse the value as a
-    // string ("2"), but the directive contract and the conductor's
-    // `iterations < max` comparison require a number.
+    // set. The parser (V1) now returns a real number and validateStageFrontmatter
+    // (V2) rejects a non-positive-integer cap upstream, so this should always
+    // see a valid number or undefined. Keep the coercion defensive: a value
+    // that isn't a positive integer falls back to the default 2 rather than
+    // letting NaN reach stage-graph.json.
+    const cap = Number(parsed.reviewer_max_iterations);
     stage.reviewer_max_iterations =
-      parsed.reviewer_max_iterations !== undefined
-        ? Number(parsed.reviewer_max_iterations)
+      parsed.reviewer_max_iterations !== undefined &&
+      Number.isInteger(cap) &&
+      cap >= 1
+        ? cap
         : 2;
   }
   return stage;

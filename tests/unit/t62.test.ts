@@ -484,4 +484,118 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
     const errors = (r as { valid: false; errors: string[] }).errors;
     expect(errors.find((e) => e.includes("consumes[0].artifact"))).toBeDefined();
   });
+
+  // ============================================================
+  // Reviewer field validation (V2 + V3) — type, positive-integer,
+  // cap⇒reviewer coupling, and the Rule 9 roster cross-check.
+  // Both fields are OPTIONAL: absent → valid; the only required relation is
+  // the coupling (cap present ⇒ reviewer present). Exercises checkString on
+  // `reviewer`, the new checkPositiveInteger on `reviewer_max_iterations`,
+  // and the reviewer arm of Rule 9.
+  // ============================================================
+
+  test("both reviewer fields absent -> valid", () => {
+    expect(errs(fixture())).toBe("VALID");
+  });
+
+  test("reviewer present, cap absent -> valid (cap defaults to 2)", () => {
+    expect(errs({ ...fixture(), reviewer: "aidlc-product-lead-agent" })).toBe(
+      "VALID",
+    );
+  });
+
+  test("valid reviewer + cap 2 -> valid", () => {
+    expect(
+      errs({
+        ...fixture(),
+        reviewer: "aidlc-product-lead-agent",
+        reviewer_max_iterations: 2,
+      }),
+    ).toBe("VALID");
+  });
+
+  test("non-string reviewer (42) -> type error", () => {
+    expect(errs({ ...fixture(), reviewer: 42 })).toContain(
+      "reviewer must be string",
+    );
+  });
+
+  test("reviewer_max_iterations as string '2' -> positive-integer error", () => {
+    // The parser only coerces an integer LITERAL to a number; a value that
+    // reaches the validator still a string must be rejected, not coerced.
+    expect(
+      errs({
+        ...fixture(),
+        reviewer: "aidlc-product-lead-agent",
+        reviewer_max_iterations: "2",
+      }),
+    ).toContain("reviewer_max_iterations must be a positive integer");
+  });
+
+  test("reviewer_max_iterations zero -> positive-integer error", () => {
+    expect(
+      errs({
+        ...fixture(),
+        reviewer: "aidlc-product-lead-agent",
+        reviewer_max_iterations: 0,
+      }),
+    ).toContain("reviewer_max_iterations must be a positive integer");
+  });
+
+  test("reviewer_max_iterations negative -> positive-integer error", () => {
+    expect(
+      errs({
+        ...fixture(),
+        reviewer: "aidlc-product-lead-agent",
+        reviewer_max_iterations: -3,
+      }),
+    ).toContain("reviewer_max_iterations must be a positive integer");
+  });
+
+  test("reviewer_max_iterations non-integer (2.5) -> positive-integer error", () => {
+    expect(
+      errs({
+        ...fixture(),
+        reviewer: "aidlc-product-lead-agent",
+        reviewer_max_iterations: 2.5,
+      }),
+    ).toContain("reviewer_max_iterations must be a positive integer");
+  });
+
+  test("cap present with reviewer absent -> coupling error", () => {
+    expect(errs({ ...fixture(), reviewer_max_iterations: 2 })).toContain(
+      "reviewer_max_iterations requires a reviewer",
+    );
+  });
+
+  test("reviewer not in ctx.agents -> Rule 9 roster error", () => {
+    const out = errs(
+      { ...fixture(), reviewer: "ghost-reviewer-agent" },
+      { agents: ["aidlc-product-agent", "aidlc-delivery-agent"] },
+    );
+    expect(out).toContain('reviewer "ghost-reviewer-agent" has no matching');
+  });
+
+  test("reviewer in ctx.agents -> valid", () => {
+    expect(
+      errs(
+        { ...fixture(), reviewer: "aidlc-product-lead-agent" },
+        {
+          agents: [
+            "aidlc-product-agent",
+            "aidlc-delivery-agent",
+            "aidlc-product-lead-agent",
+          ],
+        },
+      ),
+    ).toBe("VALID");
+  });
+
+  test("without ctx.agents -> reviewer not roster-checked", () => {
+    // No ctx → agent-slug lookup skipped (same as lead_agent), so a ghost
+    // reviewer still validates as a string.
+    expect(errs({ ...fixture(), reviewer: "ghost-reviewer-agent" })).toBe(
+      "VALID",
+    );
+  });
 });
