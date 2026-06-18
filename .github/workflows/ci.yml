@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - main
-      - v2-unified
+      - v2
 
 permissions:
   contents: read
