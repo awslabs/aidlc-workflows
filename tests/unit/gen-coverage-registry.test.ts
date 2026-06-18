@@ -762,6 +762,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t171-birth-gate-registry.test.ts",
     "integration/t172-migration-audit-trail.test.ts",
     "integration/t173-session-switch-restamp.test.ts",
+    "integration/t175-space-create-memory-isolation.test.ts",
     "integration/t21b.test.ts",
     "integration/t31-help.test.ts",
     "integration/t33-hook-concurrency.test.ts",

@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 379,
+    "total": 377,
     "enumeratedByClass": {
-      "function": 173,
+      "function": 171,
       "audit": 67,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 71,
+      "function": 70,
       "audit": 27,
       "scope": 9,
       "stage": 8,
@@ -1353,32 +1353,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:LEGACY_FLAT_RELATIVE_PREFIX",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:LEGACY_FLAT_ROOT",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:legacyFlatFallback",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t159-legacy-flat-fallback-bridge.test.ts",
-          "mechanism": "none"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:listField",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1891,6 +1865,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:relativeSpaceRecordPrefix",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:releaseAuditLock",
       "minMechanism": "none",
       "coveredBy": [
@@ -2174,10 +2155,6 @@
       "coveredBy": [
         {
           "file": "tests/unit/t106.test.ts",
-          "mechanism": "none"
-        },
-        {
-          "file": "tests/unit/t159-legacy-flat-fallback-bridge.test.ts",
           "mechanism": "none"
         },
         {
@@ -4307,6 +4284,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t165-intent-birth-p4.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t175-space-create-memory-isolation.test.ts",
           "mechanism": "cli"
         }
       ],

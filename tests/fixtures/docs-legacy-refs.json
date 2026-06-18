@@ -1,0 +1,31 @@
+{
+  "_comment": "P9 docs allowlist gate (t174). Every surviving `aidlc-docs` or `--init` occurrence under docs/ MUST be pinned here by exact file + line text, and the total pinned count MUST stay <= ceiling. The flat `aidlc-docs/` layout and `/aidlc --init` are retired; the ONLY legitimate survivors are: (1) the shipped sensor `matches` glob value `**/{aidlc-docs,intents}/**` (the per-intent record tree, keeping the legacy aidlc-docs arm for a pre-migration project), and (2) one prose line explaining that legacy arm. Adding a new entry requires a visible, reviewable diff here; blanket-allowlisting trips the ceiling. See docs/reference/07-sensor-system.md + docs/harness-engineering/06-sensors.md.",
+  "ceiling": 8,
+  "allowed": [
+    {
+      "file": "docs/harness-engineering/06-sensors.md",
+      "text": "`**/{aidlc-docs,intents}/**` — the per-intent record tree, with the legacy",
+      "why": "sensor matches-glob value (the shipped framework glob, post-P9)"
+    },
+    {
+      "file": "docs/harness-engineering/06-sensors.md",
+      "text": "`aidlc-docs/` arm kept for a pre-migration project), the two code-quality checks",
+      "why": "prose explaining the legacy aidlc-docs arm of the sensor glob"
+    },
+    {
+      "file": "docs/reference/07-sensor-system.md",
+      "text": "matches: \"**/{aidlc-docs,intents}/**\"                  # optional capability filter",
+      "why": "sensor manifest frontmatter example (the shipped glob)"
+    },
+    {
+      "file": "docs/reference/07-sensor-system.md",
+      "text": "| `aidlc-required-sections.md` | `**/{aidlc-docs,intents}/**` |",
+      "why": "shipped required-sections sensor matches-glob value"
+    },
+    {
+      "file": "docs/reference/07-sensor-system.md",
+      "text": "| `aidlc-upstream-coverage.md` | `**/{aidlc-docs,intents}/**` |",
+      "why": "shipped upstream-coverage sensor matches-glob value"
+    }
+  ]
+}
