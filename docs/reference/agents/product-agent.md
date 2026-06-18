@@ -72,9 +72,9 @@ Path: `.claude/knowledge/aidlc-product-agent/`
 
 ### Team (Tier 2)
 
-Path: `aidlc/spaces/<space>/intents/<slug>-<id8>/knowledge/aidlc-product-agent/` (the intent's record dir; user-managed)
+Path: `aidlc/knowledge/aidlc-product-agent/` (the space-level knowledge dir; user-managed)
 
-Scaffolded into each intent's record dir when the intent is born. Populated by the team with project-specific
+A space-level directory the team creates when it has content (the engine ships `aidlc/knowledge/` empty). Populated by the team with project-specific
 product knowledge such as existing personas, market research, domain glossaries,
 or stakeholder communication preferences.
 

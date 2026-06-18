@@ -10,7 +10,7 @@ AI-DLC uses a two-tier knowledge system that separates framework methodology fro
 
 **Tier 1: Methodology knowledge** (`.claude/knowledge/`) -- Ships with the framework. Contains shared principles and per-agent methodology references. Updated when upgrading the framework. Read-only during workflow execution.
 
-**Tier 2: Team knowledge** (each intent's record dir under `knowledge/` — `aidlc/spaces/<space>/intents/<slug>-<id8>/knowledge/`, written `<record>/knowledge/` below) -- User-managed. Contains company-specific standards, policies, and conventions. Scaffolded into the record dir when the intent is born; persists with that intent.
+**Tier 2: Team knowledge** (the active space — `aidlc/knowledge/`, shorthand for `aidlc/spaces/<space>/knowledge/`) -- User-managed. Contains company-specific standards, policies, and conventions. A sibling of the space's `memory/`, `codekb/`, and `intents/`, so it accumulates across every intent in the space. Free-form and empty at bootstrap: the engine creates the empty `aidlc/knowledge/` directory on the first `/aidlc` and seeds nothing inside it. There is no fixed file set.
 
 ### Tier 1 Structure
 
@@ -21,7 +21,7 @@ AI-DLC uses a two-tier knowledge system that separates framework methodology fro
 |   +-- verification.md            # Phase boundary verification rules
 |   +-- brownfield.md              # Brownfield safeguards
 |   +-- audit-format.md            # 67-event audit taxonomy
-|   +-- knowledge-readme-template.md  # Template for scaffolded Tier 2 READMEs
+|   +-- knowledge-readme-template.md  # Optional README template a team can copy into Tier 2
 |   +-- state-template.md          # State file template
 +-- aidlc-product-agent/
 |   +-- requirements-guide.md
@@ -50,16 +50,15 @@ AI-DLC uses a two-tier knowledge system that separates framework methodology fro
 
 ### Tier 2 Structure
 
+Empty at bootstrap. The engine creates the bare `aidlc/knowledge/` directory and nothing inside it — no README, no per-agent subdirectories. The `aidlc-shared/` and per-agent directories below are the convention the agent personas look for; the team creates the ones it has content for.
+
 ```
-<record>/knowledge/
-+-- README.md                       # Overview
-+-- aidlc-shared/
-|   +-- README.md                   # Guidance on shared standards
+aidlc/knowledge/                    # empty at bootstrap; team-created subdirs
++-- aidlc-shared/                   # optional — loaded by every agent if present
 |   +-- (user-added files)
-+-- aidlc-product-agent/
-|   +-- README.md
++-- aidlc-product-agent/            # optional — loaded when that agent is active
 |   +-- (user-added files)
-+-- [... 10 more agent dirs, each with README]
++-- [... a directory per agent the team chooses to populate]
 ```
 
 ---
@@ -90,11 +89,11 @@ sequenceDiagram
     Note over AM: Agent-specific methodology
     AM-->>O: Agent methodology loaded
 
-    O->>TK: Step 4: Load <record>/knowledge/aidlc-shared/
+    O->>TK: Step 4: Load aidlc/knowledge/aidlc-shared/
     Note over TK: Team shared knowledge (if exists)
     TK-->>O: Team knowledge loaded
 
-    O->>TAK: Step 5: Load <record>/knowledge/[agent-name]/
+    O->>TAK: Step 5: Load aidlc/knowledge/[agent-name]/
     Note over TAK: Team agent-specific knowledge (if exists)
     TAK-->>O: Team agent knowledge loaded
 
@@ -110,8 +109,8 @@ sequenceDiagram
 | 1 | `.claude/rules/` | -- | Framework + self-learning | First |
 | 2 | `.claude/knowledge/aidlc-shared/` | 1 | Framework | Early |
 | 3 | `.claude/knowledge/[agent]/` | 1 | Framework | Early |
-| 4 | `<record>/knowledge/aidlc-shared/` | 2 | Team | Mid |
-| 5 | `<record>/knowledge/[agent]/` | 2 | Team | Mid |
+| 4 | `aidlc/knowledge/aidlc-shared/` | 2 | Team | Mid |
+| 5 | `aidlc/knowledge/[agent]/` | 2 | Team | Mid |
 | 6 | Prior stage artifacts | -- | Dynamic | Last |
 
 > **Note:** Steps 1-5 are agent knowledge loading (defined in each agent file). Step 6 (prior stage artifacts) is context added by the orchestrator at runtime, not a file-loading step.
@@ -129,7 +128,7 @@ sequenceDiagram
 
 ### Knowledge README Template
 
-When intent birth scaffolds the `<record>/knowledge/` directory, each agent subdirectory receives a README generated from `.claude/knowledge/aidlc-shared/knowledge-readme-template.md`. The template explains:
+`.claude/knowledge/aidlc-shared/knowledge-readme-template.md` ships an optional README template a team can copy into its Tier 2 directories to document them. The engine does not scaffold or seed it — the space-level `aidlc/knowledge/` directory is created empty, and the team adds whatever it wants. The template explains:
 
 - What types of files to add for that agent
 - Examples of common customization files
@@ -148,14 +147,14 @@ Add company-specific files to the team knowledge directories:
 
 ```bash
 # Team-wide standards (loaded by all agents)
-<record>/knowledge/aidlc-shared/company-coding-standards.md
-<record>/knowledge/aidlc-shared/company-architecture-principles.md
+aidlc/knowledge/aidlc-shared/company-coding-standards.md
+aidlc/knowledge/aidlc-shared/company-architecture-principles.md
 
 # Agent-specific standards (loaded only when that agent is active)
-<record>/knowledge/aidlc-architect-agent/company-architecture-patterns.md
-<record>/knowledge/aidlc-devsecops-agent/company-security-policy.md
-<record>/knowledge/aidlc-developer-agent/company-coding-conventions.md
-<record>/knowledge/aidlc-quality-agent/company-testing-standards.md
+aidlc/knowledge/aidlc-architect-agent/company-architecture-patterns.md
+aidlc/knowledge/aidlc-devsecops-agent/company-security-policy.md
+aidlc/knowledge/aidlc-developer-agent/company-coding-conventions.md
+aidlc/knowledge/aidlc-quality-agent/company-testing-standards.md
 ```
 
 Files are loaded automatically when the agent is activated (steps 4-5 of the loading order). No configuration changes needed. Any `.md` file placed in a directory is loaded.

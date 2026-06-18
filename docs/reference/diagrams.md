@@ -443,11 +443,11 @@ sequenceDiagram
     Note over AM: Agent-specific methodology
     AM-->>O: Agent methodology loaded
 
-    O->>TK: Step 4: Load <record>/knowledge/aidlc-shared/
+    O->>TK: Step 4: Load aidlc/knowledge/aidlc-shared/
     Note over TK: Team shared knowledge (if exists)
     TK-->>O: Team knowledge loaded
 
-    O->>TAK: Step 5: Load <record>/knowledge/[agent-name]/
+    O->>TAK: Step 5: Load aidlc/knowledge/[agent-name]/
     Note over TAK: Team agent-specific knowledge (if exists)
     TAK-->>O: Team agent knowledge loaded
 

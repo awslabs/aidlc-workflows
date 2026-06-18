@@ -154,7 +154,7 @@ Agent display names and example knowledge files are authoritative in each agent'
 2. Add knowledge files to `core/knowledge/{name}-agent/`
 3. Add the agent to the stage files (`core/aidlc-common/stages/`) where it participates — set `lead_agent` / `support_agents` in each stage's frontmatter. The compiled `tools/data/stage-graph.json` is GENERATED from that frontmatter by `bun scripts/package.ts`; never hand-edit it (the `package.ts --check` drift guard fails CI on a hand-edited dist).
 4. Regenerate the distributions: `bun scripts/package.ts` (then `--check` to confirm no drift)
-5. Add a knowledge README template entry for the per-intent `knowledge/{name}-agent/` (scaffolded into each intent's record dir at `aidlc/spaces/<space>/intents/<slug>-<id8>/knowledge/`)
+5. Add the agent→examples row to the hand-maintained knowledge tables (the space-level team-knowledge dir is `aidlc/knowledge/{name}-agent/`, created by the team when it has content — the engine does not scaffold it)
 6. Update tests: smoke tests for file existence, feature tests for stage-agent cross-references
 7. Update documentation in this file and [reference/agents/](agents/)
 

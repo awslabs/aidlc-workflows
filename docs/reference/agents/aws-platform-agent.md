@@ -64,9 +64,9 @@ Path: `.claude/knowledge/aidlc-aws-platform-agent/`
 
 ### Team (Tier 2)
 
-Path: `aidlc/spaces/<space>/intents/<slug>-<id8>/knowledge/aidlc-aws-platform-agent/` (the intent's record dir; user-managed)
+Path: `aidlc/knowledge/aidlc-aws-platform-agent/` (the space-level knowledge dir; user-managed)
 
-Scaffolded into each intent's record dir when the intent is born. Populated by the team with project-specific
+A space-level directory the team creates when it has content (the engine ships `aidlc/knowledge/` empty). Populated by the team with project-specific
 infrastructure context such as existing VPC designs, AWS account structure,
 approved service catalog, or cost baselines.
 

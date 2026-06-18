@@ -92,11 +92,11 @@ already encoded in the agent's knowledge files — the three sonnet agents
 (delivery, pipeline-deploy, operations) produce delivery plans, CI/CD YAML, and
 runbook scaffolding. When in doubt, opus.
 
-Two more fields drive scaffolding rather than behavior. `display_name` is the
-human-readable label the statusline and the intent-birth scaffold render (the
-architect shows as "Architect Agent"). `examples` lists knowledge filenames that appear as bullets
-in the scaffolded team-knowledge README — they are *suggestions surfaced to the
-user*; the runtime never loads them.
+Two more fields drive presentation rather than behavior. `display_name` is the
+human-readable label the statusline renders (the architect shows as "Architect
+Agent"). `examples` lists suggested knowledge filenames documented in the
+agent→examples table — they are *suggestions surfaced to the user*; the runtime
+never loads them and the engine never writes them to disk.
 
 For the exact required/optional table and the shared-configuration matrices,
 see [Agent System: Frontmatter Contract](../reference/05-agent-system.md#frontmatter-contract).
@@ -113,8 +113,8 @@ you get an agent that exists and never runs.
   `.claude/tools/aidlc-lib.ts` reads every `.md` file in
   `.claude/agents/` on the next invocation and derives the metadata map. No code
   edit, no registration step — the file's presence is the registration. From
-  this point intent birth will scaffold its knowledge directory (in the intent's
-  record dir) and the statusline can render its display name.
+  this point the statusline can render its display name, and the team can add
+  standards under its space-level `aidlc/knowledge/<slug>-agent/` directory.
 - **Stage binding makes it active.** A stage names its lead and support agents
   by slug in its frontmatter `lead_agent` / `support_agents` fields (compiled
   into `.claude/tools/data/stage-graph.json`). Until some stage references your
@@ -126,10 +126,11 @@ new persona to work, edit the stage that should use it; the binding mechanics
 live in [Adding a Stage](02-adding-a-stage.md).
 
 Each agent also pairs with a knowledge directory you author at
-`core/knowledge/aidlc-<slug>-agent/` (framework methodology) and a team overlay in
-the intent's record dir at `<record>/knowledge/<slug>-agent/` (your standards).
-Intent birth scaffolds the team-knowledge README from the `display_name` and
-`examples` you declared. The two-tier knowledge workflow is covered in
+`core/knowledge/aidlc-<slug>-agent/` (framework methodology) and an optional team
+overlay at the space level, `aidlc/knowledge/<slug>-agent/` (your standards). The
+space-level `aidlc/knowledge/` directory is free-form and empty at bootstrap; the
+team creates the per-agent subdirectory when it has content — the engine does not
+scaffold it. The two-tier knowledge workflow is covered in
 [Team knowledge](07-team-knowledge.md).
 
 ---
@@ -153,14 +154,15 @@ Mirroring the reference recipe, here is the workflow end to end.
    a build artifact, and the next compile overwrites a manual change (see
    [Adding a Stage](02-adding-a-stage.md#4-compile-so-stage-graphjson-regenerates)).
    This is the step that makes it active.
-4. **Scaffold the team-knowledge README entry** for
-   `<record>/knowledge/<slug>-agent/` (in each intent's record dir) so teams
-   have a place to add their standards.
+4. **Document the team-knowledge directory** — note that a team adds its
+   standards under the space-level `aidlc/knowledge/<slug>-agent/`. The engine
+   does not create this directory; the team creates it when it has content (the
+   space's `aidlc/knowledge/` is free-form and empty at bootstrap).
 5. **Update the hand-maintained doc tables** — the Phase Participation matrix
    and the agent→examples table do not regenerate themselves (see what does NOT
    validate, below).
 
-The full recipe — with the discovery, intent-birth scaffold, and statusline verification
+The full recipe — with the discovery, intent-birth, and statusline verification
 commands — is in [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
 To change an existing agent's tools, model, or stage assignments rather than add
 one, see [Agent System: How to Modify an Agent](../reference/05-agent-system.md#how-to-modify-an-agent).
@@ -173,19 +175,18 @@ one, see [Agent System: How to Modify an Agent](../reference/05-agent-system.md#
   the missing field.
 - Agents are returned alphabetically sorted by slug, so discovery order is
   identical on every platform.
-- Intent birth scaffolds the per-agent knowledge directory (in the intent's
-  record dir) from the derived metadata.
-- The statusline renders the display name from the same source, so it never
-  drifts from the scaffold output.
+- Intent birth creates the empty space-level `aidlc/knowledge/` directory; it
+  does not seed per-agent subdirectories or READMEs.
+- The statusline renders the display name from the derived metadata.
 
 ### What does NOT validate automatically
 
 - **Stage-graph participation.** `stage-graph.json` references agents by slug;
   add an agent without wiring it there and it exists but never runs. Discovery
   and activation are separate steps.
-- **Knowledge-file existence.** `examples` are suggested filenames surfaced in
-  the scaffolded README — nothing creates or checks them. You place the real
-  content under `<record>/knowledge/<slug>-agent/` (in the intent's record dir).
+- **Knowledge-file existence.** `examples` are suggested filenames documented in
+  the agent→examples table — nothing creates or checks them. You place the real
+  content under `aidlc/knowledge/<slug>-agent/` (the space-level knowledge dir).
 - **The hand-maintained doc tables.** The Phase Participation matrix in
   [Agent System](../reference/05-agent-system.md#phase-participation) and the
   agent→examples table in the knowledge README template are edited by hand.

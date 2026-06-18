@@ -48,20 +48,18 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 
 ### Steps
 1. Create `<record>/` directory if needed
-2. Load knowledge README template
-3. Create knowledge directories with agent-specific READMEs
-4. Create stage artifact directories for all 5 phases
-5. Create the intent's `audit/` shard dir header + emit `WORKFLOW_STARTED`
-6. Append `STAGE_STARTED` + `WORKSPACE_SCAFFOLDED` + `STAGE_COMPLETED` events
+2. Create stage artifact directories for all 5 phases + `<record>/verification/`
+3. Create the empty space-level `aidlc/knowledge/` directory (free-form; no per-agent subdirs, no READMEs)
+4. Create the intent's `audit/` shard dir header + emit `WORKFLOW_STARTED`
+5. Append `STAGE_STARTED` + `WORKSPACE_SCAFFOLDED` + `STAGE_COMPLETED` events
 
 ### Inputs
 - None (entry point)
-- Knowledge README template from `.claude/knowledge/aidlc-shared/`
 
 ### Outputs
-- `<record>/knowledge/` tree with per-agent READMEs
 - `<record>/initialization/`, `ideation/`, `inception/`, `construction/`, `operation/` with stage subdirectories
 - `<record>/verification/`
+- the empty space-level `aidlc/knowledge/` directory (a sibling of the space's `intents/`)
 - the intent's `audit/` shard dir (header + session + scaffold events)
 
 ### Notes

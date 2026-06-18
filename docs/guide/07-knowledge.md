@@ -16,8 +16,8 @@ flowchart TD
 
     subgraph TIER2["Tier 2: Team Knowledge"]
         direction TB
-        TK_SHARED["<record>/knowledge/aidlc-shared/\n(team-wide standards)"]
-        TK_AGENT["<record>/knowledge/<agent>/\n(team agent-specific)"]
+        TK_SHARED["aidlc/knowledge/aidlc-shared/\n(team-wide standards, optional)"]
+        TK_AGENT["aidlc/knowledge/<agent>/\n(team agent-specific, optional)"]
     end
 
     subgraph RULES["Rules"]
@@ -54,7 +54,7 @@ Ships with the framework. Contains shared principles and per-agent methodology r
 │   ├── ai-dlc-principles.md        # Core methodology principles
 │   ├── audit-format.md             # 67-event audit taxonomy
 │   ├── brownfield.md               # Brownfield safeguards and reverse-engineering guidance
-│   ├── knowledge-readme-template.md # Template for scaffolded Tier 2 READMEs
+│   ├── knowledge-readme-template.md # Optional README template a team can copy into Tier 2
 │   ├── state-template.md           # State file schema
 │   └── verification.md             # Phase boundary verification rules
 ├── aidlc-architect-agent/                 # Loaded when aidlc-architect-agent is active
@@ -67,45 +67,45 @@ Ships with the framework. Contains shared principles and per-agent methodology r
 
 ### Tier 2: Team Knowledge
 
-**Location:** each intent's record dir — `aidlc/spaces/<space>/intents/<slug>-<id8>/knowledge/` (written `<record>/knowledge/` below)
+**Location:** the active space — `aidlc/knowledge/` (shorthand for `aidlc/spaces/<space>/knowledge/`)
 
-User-managed. Contains your company-specific standards, policies, and conventions. Scaffolded into an intent's record dir when the intent is born; persists with that intent.
+User-managed. Contains your company-specific standards, policies, and conventions. It is a sibling of the space's `memory/`, `codekb/`, and `intents/` — so team knowledge accumulates across every intent in the space, not inside any one intent's record. It is **free-form and empty at bootstrap**: the engine just creates the empty `aidlc/knowledge/` directory on your first `/aidlc`. There is no fixed file set and no mandated structure. The convention below — an `aidlc-shared/` directory plus one per agent — is what the agent personas look for, so create the subdirectories you want as you go:
 
 ```
-<record>/knowledge/
-├── aidlc-shared/                 # Loaded by every agent
+aidlc/knowledge/                  # empty at bootstrap; create the subdirs you need
+├── aidlc-shared/                 # if present, loaded by every agent
 │   ├── company-coding-standards.md
 │   └── company-architecture-principles.md
-├── aidlc-architect-agent/           # Loaded when aidlc-architect-agent is active
+├── aidlc-architect-agent/           # if present, loaded when aidlc-architect-agent is active
 │   └── company-architecture-patterns.md
-├── aidlc-developer-agent/           # Loaded when aidlc-developer-agent is active
+├── aidlc-developer-agent/           # if present, loaded when aidlc-developer-agent is active
 │   └── company-coding-conventions.md
-├── aidlc-devsecops-agent/           # Loaded when aidlc-devsecops-agent is active
+├── aidlc-devsecops-agent/           # if present, loaded when aidlc-devsecops-agent is active
 │   └── company-security-policy.md
-├── aidlc-quality-agent/             # Loaded when aidlc-quality-agent is active
+├── aidlc-quality-agent/             # if present, loaded when aidlc-quality-agent is active
 │   └── company-testing-standards.md
-└── ...                        # One directory per agent
+└── ...                        # add a directory per agent only if you have content for it
 ```
 
 ---
 
 ## Adding Company Standards
 
-Place your company-specific files in the appropriate `<record>/knowledge/` directory. They are loaded automatically when the agent is activated — no configuration changes needed.
+Place your company-specific files in the appropriate `aidlc/knowledge/` directory. They are loaded automatically when the agent is activated — no configuration changes needed.
 
 ### Team-wide standards (loaded by all agents)
 
-Add to `<record>/knowledge/aidlc-shared/`:
+Add to `aidlc/knowledge/aidlc-shared/`:
 
 ```
-<record>/knowledge/aidlc-shared/company-coding-standards.md
-<record>/knowledge/aidlc-shared/company-architecture-principles.md
-<record>/knowledge/aidlc-shared/naming-conventions.md
+aidlc/knowledge/aidlc-shared/company-coding-standards.md
+aidlc/knowledge/aidlc-shared/company-architecture-principles.md
+aidlc/knowledge/aidlc-shared/naming-conventions.md
 ```
 
 ### Agent-specific standards (loaded only when that agent is active)
 
-Add to `<record>/knowledge/<agent-name>/`:
+Add to `aidlc/knowledge/<agent-name>/`:
 
 | Directory | Example Files |
 |-----------|--------------|
@@ -123,7 +123,7 @@ Add to `<record>/knowledge/<agent-name>/`:
 
 ### Where the directories come from
 
-You don't run a scaffold command. The per-agent knowledge directories (with guidance READMEs that explain what files to add and include agent-specific examples) are scaffolded into an intent's record dir when the intent is born — on your first `/aidlc` (or when you describe what to build). Add files into the directories that appear.
+The team creates them. On your first `/aidlc` the engine creates the empty space-level `aidlc/knowledge/` directory — and nothing inside it. There is no scaffold command, no seeded per-agent subdirectories, and no guidance READMEs. The `aidlc-shared/` and per-agent subdirectories are a convention the agent personas look for; create the ones you have content for. Match the agent slug exactly (`aidlc-architect-agent/`, not `architect/`) — a typo'd directory name is silently ignored.
 
 ---
 
@@ -131,12 +131,12 @@ You don't run a scaffold command. The per-agent knowledge directories (with guid
 
 Say your team uses Amazon API Gateway with a specific pattern — authorizer Lambdas in front of every route, a request-validation JSON schema, and a standard response envelope. You want the aidlc-architect-agent to default to that pattern whenever it designs a new API.
 
-**Step 1 — Locate the knowledge directories.** When an intent is born (your first `/aidlc`, or describing what to build), the engine scaffolds `<record>/knowledge/` with one subdirectory per agent plus `aidlc-shared/`, each seeded with a README. No separate scaffold command is needed.
+**Step 1 — Create the knowledge directory you need.** On your first `/aidlc` the engine creates an empty `aidlc/knowledge/` directory. There is no per-agent scaffold and no seeded READMEs, so create the agent subdirectory yourself — here, `aidlc/knowledge/aidlc-architect-agent/`. Match the agent slug exactly.
 
 **Step 2 — Create a focused knowledge file in the right agent directory:**
 
 ```
-<record>/knowledge/aidlc-architect-agent/api-gateway-standards.md
+aidlc/knowledge/aidlc-architect-agent/api-gateway-standards.md
 ```
 
 Filename rules:
@@ -174,8 +174,8 @@ Error responses follow:
 
 | Wrong | Right |
 |-------|-------|
-| Editing `.claude/agents/aidlc-architect-agent.md` | Add a file under `<record>/knowledge/aidlc-architect-agent/` |
-| Editing `.claude/knowledge/aidlc-architect-agent/architecture-guide.md` | Add a file under `<record>/knowledge/aidlc-architect-agent/` |
+| Editing `.claude/agents/aidlc-architect-agent.md` | Add a file under `aidlc/knowledge/aidlc-architect-agent/` |
+| Editing `.claude/knowledge/aidlc-architect-agent/architecture-guide.md` | Add a file under `aidlc/knowledge/aidlc-architect-agent/` |
 | Putting everything in `knowledge/aidlc-shared/` | Use agent-specific directories unless the standard truly applies to all 11 agents |
 | One large `company-standards.md` covering API, auth, data, and logging | Split into `api-gateway-standards.md`, `auth-standards.md`, etc. |
 
@@ -199,7 +199,7 @@ The agent lists the Tier 2 files it loaded. If your file is missing, check the f
 <record>/audit/        # per-clone shards; glob and merge by timestamp
 ```
 
-Find the most recent `STAGE_STARTED` entry for your stage and confirm the **Agent** field is the one whose knowledge directory holds your file — that tells you the right persona activated and its `<record>/knowledge/<agent>-agent/` directory was in scope. The audit trail records which agent ran, not the individual files it read; use Option 1 to confirm a specific file was loaded.
+Find the most recent `STAGE_STARTED` entry for your stage and confirm the **Agent** field is the one whose knowledge directory holds your file — that tells you the right persona activated and its `aidlc/knowledge/<agent>-agent/` directory was in scope. The audit trail records which agent ran, not the individual files it read; use Option 1 to confirm a specific file was loaded.
 
 **Option 3 — Run a fast workflow to smoke-test.** For a lightweight end-to-end check, use a small scope that exercises the target agent:
 
@@ -240,8 +240,8 @@ Smaller focused files are easier to update, easier to review, and less likely to
 If a standard originally written for one agent turns out to apply across the team, move it up:
 
 ```
-<record>/knowledge/aidlc-architect-agent/naming-conventions.md
-  →  <record>/knowledge/aidlc-shared/naming-conventions.md
+aidlc/knowledge/aidlc-architect-agent/naming-conventions.md
+  →  aidlc/knowledge/aidlc-shared/naming-conventions.md
 ```
 
 The `aidlc-shared/` directory is loaded by every agent (step 4 in the loading order).
@@ -299,11 +299,11 @@ sequenceDiagram
     Note over AM: Agent-specific methodology
     AM-->>O: Agent methodology loaded
 
-    O->>TK: Step 4: Load <record>/knowledge/aidlc-shared/
+    O->>TK: Step 4: Load aidlc/knowledge/aidlc-shared/
     Note over TK: Team shared knowledge (if exists)
     TK-->>O: Team knowledge loaded
 
-    O->>TAK: Step 5: Load <record>/knowledge/[agent-name]/
+    O->>TAK: Step 5: Load aidlc/knowledge/[agent-name]/
     Note over TAK: Team agent-specific knowledge (if exists)
     TAK-->>O: Team agent knowledge loaded
 
@@ -321,8 +321,8 @@ sequenceDiagram
 | 1 | `.claude/rules/` | The resolved org → team → project → phase → stage rule chain | Behavioral rules — every applicable rule loads (strict-additive) |
 | 2 | `.claude/knowledge/aidlc-shared/` | Shared methodology principles | Framework-level defaults |
 | 3 | `.claude/knowledge/<agent>/` | Agent-specific methodology | Agent expertise |
-| 4 | `<record>/knowledge/aidlc-shared/` | Team-wide standards | Your company defaults |
-| 5 | `<record>/knowledge/<agent>/` | Team agent-specific standards | Your company + agent expertise |
+| 4 | `aidlc/knowledge/aidlc-shared/` | Team-wide standards | Your company defaults |
+| 5 | `aidlc/knowledge/<agent>/` | Team agent-specific standards | Your company + agent expertise |
 | 6 | Prior stage artifacts | Outputs from earlier stages | Runtime context |
 
 **Key points:**
@@ -353,11 +353,11 @@ If you want to **constrain** how the agent applies a methodology principle, add 
 
 ### Don't edit agent files to inject team context
 
-`.claude/agents/*.md` defines the agent's persona, tool access, and knowledge-loading sequence. Editing them to add team knowledge is a common mistake — the changes are overwritten on framework upgrade. Always use `<record>/knowledge/<agent>/` instead.
+`.claude/agents/*.md` defines the agent's persona, tool access, and knowledge-loading sequence. Editing them to add team knowledge is a common mistake — the changes are overwritten on framework upgrade. Always use `aidlc/knowledge/<agent>/` instead.
 
-### Let the engine scaffold the directories
+### Name the directories to match the agent slug
 
-Add files into the `<record>/knowledge/` directories the engine creates when the intent is born — don't hand-create them. The scaffold ships per-agent README guidance, which prevents typos in directory names (e.g. `architect/` vs the correct `aidlc-architect-agent/`) that cause files to be silently ignored.
+The space-level `aidlc/knowledge/` directory is empty at bootstrap — you create the `aidlc-shared/` and per-agent subdirectories yourself as you accumulate standards. The directory name must match the agent slug exactly (e.g. `aidlc-architect-agent/`, not `architect/`); a typo'd name is silently ignored because the loader walks the agent's own directory by name and finds nothing.
 
 ---
 

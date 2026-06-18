@@ -167,11 +167,15 @@ record dir at `aidlc/spaces/<space>/intents/<slug>-<id8>/`, which holds:
 - `aidlc-state.md` — the per-intent workflow state
 - `audit/` — the audit trail, written as per-clone shards (`<host>-<clone>.md`)
 - `<phase>/<stage>/...` — the stage artifacts (e.g. `inception/requirements-analysis/requirements.md`)
-- `knowledge/aidlc-shared/` and `knowledge/<agent>-agent/` — team knowledge for this intent
+
+Team knowledge lives one level up, at the space level —
+`aidlc/spaces/<space>/knowledge/` (a sibling of `intents/`) — so it accumulates
+across every intent in the space. The engine creates it empty; you add free-form
+files under an optional `aidlc-shared/` and per-agent subdirectories.
 
 To add [team knowledge](07-knowledge.md) or team practices before your first run,
-edit the shipped `aidlc/spaces/default/memory/` files; per-intent knowledge lands
-under the intent's record dir once an intent exists.
+edit the shipped `aidlc/spaces/default/memory/` files; the space-level
+`aidlc/knowledge/` directory is created (empty) once your first `/aidlc` runs.
 
 ---
 

@@ -83,7 +83,7 @@ You author all of these in `core/` — the hand-authored, harness-neutral source
 | Define a scope | `core/scopes/aidlc-<name>.md` + per-stage `scopes:` tags | [Scopes](04-scopes.md) |
 | Teach a standing rule | `core/rules/aidlc-{team,project}.md` | [Rules and the Learning Loop](05-rules-and-the-loop.md) |
 | Wire a deterministic check | a sensor manifest under `core/sensors/` + a stage's `sensors:` import | [Sensors](06-sensors.md) |
-| Add team domain knowledge | `aidlc/spaces/<space>/intents/<slug>-<id8>/knowledge/<agent>-agent/` (in the intent's record dir, at runtime) | [Team Knowledge](07-team-knowledge.md) |
+| Add team domain knowledge | `aidlc/knowledge/<agent>-agent/` (the space-level knowledge dir, at runtime) | [Team Knowledge](07-team-knowledge.md) |
 | Shape Construction and swarm posture | `core/rules/` + the `units-generation` stage | [Construction and the Swarm](08-construction-and-swarm.md) |
 
 Each chapter narrates the *how* and links down to the
@@ -91,9 +91,10 @@ Each chapter narrates the *how* and links down to the
 the reference is the normative contract; this guide is the working narrative.
 
 One row is the exception: **team domain knowledge** is the context *you* add in
-your own project under each intent's record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/knowledge/`),
-at runtime — it is not part of `core/` and the framework never overwrites it.
-Everything else above is framework source you author in `core/`.
+your own project at the space level (`aidlc/knowledge/`, a sibling of the space's
+`memory/`, `codekb/`, and `intents/`), at runtime — it is not part of `core/` and
+the framework never overwrites it. Everything else above is framework source you
+author in `core/`.
 
 ---
 

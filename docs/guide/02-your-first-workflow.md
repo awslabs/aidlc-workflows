@@ -39,10 +39,11 @@ The framework births the first intent and creates its record dir at `aidlc/space
 
 ```
 Intent born — record dir scaffolded:
-  aidlc/spaces/default/intents/<slug>-<id8>/knowledge/        (team knowledge — 11 agent dirs + shared)
   aidlc/spaces/default/intents/<slug>-<id8>/initialization/   (3 stage artifact dirs)
   aidlc/spaces/default/intents/<slug>-<id8>/ideation/         (7 stage artifact dirs)
   ...
+Space-level dirs ensured:
+  aidlc/spaces/default/knowledge/                             (team knowledge — empty; you add files)
 ```
 
 ### Stage 0.2: Workspace Detection
@@ -243,11 +244,10 @@ aidlc/spaces/<space>/intents/<slug>-<id8>/
 ├── inception/              # Requirements, stories, design, units
 ├── construction/           # Per-unit code + test artifacts
 ├── operation/              # Deployment, observability, incident plans
-├── verification/           # Phase boundary verification reports
-└── knowledge/              # Team knowledge for this intent
+└── verification/           # Phase boundary verification reports
 ```
 
-(Team-affirmed practices and learnings live one level up, in the space's memory layer at `aidlc/spaces/<space>/memory/`, where they persist across intents.)
+(Team knowledge lives one level up, at the space level in `aidlc/spaces/<space>/knowledge/` — a sibling of `intents/` — so it accumulates across every intent. Team-affirmed practices and learnings live alongside it in the space's memory layer at `aidlc/spaces/<space>/memory/`, where they likewise persist across intents.)
 
 ---
 

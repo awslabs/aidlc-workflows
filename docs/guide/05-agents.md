@@ -18,7 +18,7 @@ In human software teams, a mob of 3-5 people covers an entire feature from requi
 
 - **Support roles enable collaboration without proliferation.** Rather than creating a "security-reviewer-agent" and a "compliance-reviewer-agent" and a "cost-reviewer-agent," the aidlc-devsecops-agent and aidlc-compliance-agent participate as support agents in stages led by others. On an inline stage (every multi-agent stage in the shipped graph) the conductor adopts each support agent as a persona in its own context rather than dispatching it as a `Task`; `Task` is reserved for `mode: subagent` stages. Either way the conductor performs every delegation — agents never invoke each other.
 
-- **Knowledge loading is per-agent.** Each agent loads methodology knowledge from `.claude/knowledge/<agent-name>/` and team knowledge from the intent's record dir at `aidlc/spaces/<space>/intents/<slug>-<id8>/knowledge/<agent-name>/`. Fewer agents means fewer knowledge directories to manage and fewer opportunities for contradictory guidance.
+- **Knowledge loading is per-agent.** Each agent loads methodology knowledge from `.claude/knowledge/<agent-name>/` and team knowledge from the space-level `aidlc/knowledge/<agent-name>/` (if the team created it). Fewer agents means fewer knowledge directories to manage and fewer opportunities for contradictory guidance.
 
 ---
 
@@ -85,7 +85,7 @@ flowchart TD
 
 ## The 11 Agents
 
-> **Customizing what a shipped agent knows?** Do not edit the shipped 11 agent files at `.claude/agents/*.md` — they're framework files and get overwritten on upgrade. Add your company standards to the intent's record dir under `knowledge/<agent-name>/` instead. See [Knowledge](07-knowledge.md) for the full workflow. Teams that want a *new* agent (not just knowledge for the existing 11) can drop a file at `.claude/agents/<slug>.md` with the required frontmatter — that file is user-owned. See [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
+> **Customizing what a shipped agent knows?** Do not edit the shipped 11 agent files at `.claude/agents/*.md` — they're framework files and get overwritten on upgrade. Add your company standards to the space-level `aidlc/knowledge/<agent-name>/` instead. See [Knowledge](07-knowledge.md) for the full workflow. Teams that want a *new* agent (not just knowledge for the existing 11) can drop a file at `.claude/agents/<slug>.md` with the required frontmatter — that file is user-owned. See [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
 
 Each agent below has a **deep-dive page** — its full responsibilities, the stages it leads and supports, and the knowledge it loads. The [agent deep-dive index](agents/README.md) lists all 11; the per-agent links are inline under each heading.
 

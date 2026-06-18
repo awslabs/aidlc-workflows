@@ -145,15 +145,17 @@ and the engine **auto-births** the first intent on your first `/aidlc` (or when
 you describe what to build). Birth runs the three Initialization stages
 (Workspace Scaffold, Workspace Detection, State Init) as a single deterministic
 tool call: it creates the intent's record dir at
-`aidlc/spaces/<space>/intents/<slug>-<id8>/` (knowledge directories with README
-files, the `audit/` shard dir, the per-phase artifact dirs), runs a rule-based
-workspace scan, and writes that intent's `aidlc-state.md` with the scope plan.
+`aidlc/spaces/<space>/intents/<slug>-<id8>/` (the `audit/` shard dir, the
+per-phase artifact dirs, `verification/`) and the empty space-level
+`aidlc/knowledge/` directory, runs a rule-based workspace scan, and writes that
+intent's `aidlc-state.md` with the scope plan.
 It logs the init-sequence events (`WORKFLOW_STARTED`, `WORKSPACE_SCAFFOLDED`,
 `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED`, plus per-stage
 `STAGE_STARTED`/`STAGE_COMPLETED`). Naming a scope (`/aidlc --scope feature`)
 seeds the initial scope; absent one it defaults to `poc`. To add team knowledge
 or guardrails before the first run, edit the shipped `aidlc/spaces/default/memory/`
-files; per-intent knowledge appears under the intent's record dir once it exists.
+files; the space-level `aidlc/knowledge/` directory is created (empty) once the
+first intent exists, and you add free-form files to it from there.
 
 The welcome message is rendered at session start via the `companyAnnouncements`
 entry in `settings.json`.

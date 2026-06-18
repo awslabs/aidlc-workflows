@@ -183,7 +183,7 @@ A stage is authored as a Markdown file with YAML frontmatter under `core/aidlc-c
 
 ## Adding an Agent
 
-Agent metadata (display name, example knowledge files) is read from each agent's `.md` frontmatter under `core/agents/`. The `loadAgents()` helper in `core/tools/aidlc-lib.ts` discovers every `.md` file in that directory and derives the metadata map consumed by intent birth (to scaffold `<record>/knowledge/<agent>/README.md` in the intent's record dir) and by the statusline hook (to render the display name). Adding an agent requires no TypeScript edits.
+Agent metadata (display name, example knowledge files) is read from each agent's `.md` frontmatter under `core/agents/`. The `loadAgents()` helper in `core/tools/aidlc-lib.ts` discovers every `.md` file in that directory and derives the metadata map consumed by the statusline hook (to render the display name). Adding an agent requires no TypeScript edits.
 
 ### Steps
 
@@ -203,11 +203,11 @@ Agent metadata (display name, example knowledge files) is read from each agent's
    ---
    ```
 
-   The `name` field must match the filename stem exactly. `display_name` is the human-facing label used by intent birth and the statusline. `examples` lists filenames that appear as bullets in the scaffolded knowledge README — they're suggestions for the user, not loaded at runtime.
+   The `name` field must match the filename stem exactly. `display_name` is the human-facing label used by the statusline. `examples` lists suggested knowledge filenames documented in the agent→examples table — they're suggestions for the user, not loaded at runtime and not written to disk.
 
 2. **Verify the agent is discovered** — `bun -e "import { loadAgents } from 'core/tools/aidlc-lib.ts'; console.log(loadAgents().find(a => a.slug === '<slug>-agent'));"` should print the new agent's metadata.
 
-3. **Verify intent birth scaffolds the knowledge README** — `bun core/tools/aidlc-utility.ts intent-birth --scope poc --project-dir /tmp/agent-smoke` should create `<record>/knowledge/<slug>-agent/README.md` (under the born intent's record dir) with the display name as H1 and the examples as bullets.
+3. **Verify intent birth creates the space knowledge dir** — `bun core/tools/aidlc-utility.ts intent-birth --scope poc --project-dir /tmp/agent-smoke` should create the empty space-level `aidlc/knowledge/` directory (a sibling of the space's `intents/`). Birth does not seed per-agent subdirectories or READMEs — the team creates `aidlc/knowledge/<slug>-agent/` itself when it has content.
 
 4. **Verify the statusline renders** — seed a state file with `Active Agent: <slug>-agent` and invoke the statusline hook; the output should include the display name after the `--` separator.
 
@@ -218,14 +218,14 @@ Agent metadata (display name, example knowledge files) is read from each agent's
 - `loadAgents()` discovers any new `.md` file in `.claude/agents/` on next invocation — no code edit.
 - The parser throws if `name` or `display_name` is missing, naming the file and the missing field.
 - Agents are returned alphabetically sorted by slug, so `readdirSync` order on any platform produces the same output.
-- Intent birth scaffolds per-agent knowledge directories (in the intent's record dir) using derived metadata.
-- Statusline rendering derives display name from the same source — no risk of drift with the scaffold output.
+- Intent birth creates the empty space-level `aidlc/knowledge/` directory (it does not seed per-agent subdirectories or READMEs).
+- Statusline rendering derives the display name from the same metadata source.
 - `tests/unit/t61.test.ts` asserts all five properties end-to-end against a fixture agent.
 
 ### What does NOT validate automatically
 
 - **Stage-graph participation**. Stage frontmatter references agents by slug in its `lead_agent` / `support_agents` fields, and `aidlc-graph.ts compile` carries those into `stage-graph.json`. Adding a new agent without naming it in any stage's frontmatter means the agent exists but never runs. Stage-graph schema validation (`core/tools/aidlc-stage-schema.ts`) is wired in: `aidlc-graph.ts compile` validates every stage's frontmatter (and `compile --check` is the CI drift guard), and `/aidlc --doctor` re-runs the same `validateStageFrontmatter` plus a "Graph references" check that every `lead_agent` / `support_agents` slug resolves.
-- **Knowledge file existence**. `examples` is a list of filenames surfaced as suggestions in the scaffolded README — they're not created or validated. Users place the actual content in `<record>/knowledge/<agent>/` (the intent's record dir).
+- **Knowledge file existence**. `examples` is a list of suggested filenames documented in the agent→examples table — they're not created or validated. Users place the actual content in `aidlc/knowledge/<agent>/` (the space-level knowledge dir).
 - **Doc tables listing agents**. The Phase Participation matrix at `docs/reference/05-agent-system.md:119-131` and the agent→examples table at `core/knowledge/aidlc-shared/knowledge-readme-template.md:16-29` are maintained by hand. Update them in the same PR that adds the agent (see Documentation Policy below).
 - **`.claude/agents/<new-agent>.md` body content**. Only the frontmatter is parsed. The body prose (Core Responsibilities, Knowledge Loading sequence, etc.) is read by the agent itself when activated — write it to match the other 11 agent files' structure.
 

@@ -340,7 +340,7 @@ An MCP server appearing in the session is a function of `.mcp.json` plus availab
 | Agents (inline) | `.claude/agents/*.md` | Persona activation | 30 of 32 stages: conductor adopts agent persona |
 | Agents (subagent) | `.claude/agents/*.md` | Task tool delegation | 2 stages (2.1, 3.5): isolated execution |
 | Knowledge (Tier 1) | `.claude/knowledge/` | Persona activation (steps 2-3) | 56 methodology reference files |
-| Knowledge (Tier 2) | each intent's `knowledge/` (record dir) | Persona activation (steps 4-5) | Team-managed customization |
+| Knowledge (Tier 2) | space-level `aidlc/knowledge/` (sibling of `intents/`) | Persona activation (steps 4-5) | Team-managed customization |
 | Stage protocol | `stage-protocol.md` | Every stage execution | Mandatory behavioral contract |
 | Stage files | `stages/**/*.md` | Engine routing | 32 individual stage definitions |
 | State file | `aidlc-state.md` | Session start + throughout | Persistent workflow state |

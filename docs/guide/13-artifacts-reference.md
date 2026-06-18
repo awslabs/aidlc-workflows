@@ -18,21 +18,6 @@ aidlc/spaces/<space>/intents/<slug>-<id8>/   # one record dir per intent
   .aidlc-recovery.md                # Recovery breadcrumb (gitignore)
   runtime-graph.json                # Execution telemetry view (gitignore)
 
-  knowledge/                        # Team knowledge for this intent (commit)
-    README.md
-    aidlc-shared/README.md
-    aidlc-product-agent/README.md
-    aidlc-design-agent/README.md
-    aidlc-delivery-agent/README.md
-    aidlc-architect-agent/README.md
-    aidlc-developer-agent/README.md
-    aidlc-quality-agent/README.md
-    aidlc-devsecops-agent/README.md
-    aidlc-aws-platform-agent/README.md
-    aidlc-compliance-agent/README.md
-    aidlc-pipeline-deploy-agent/README.md
-    aidlc-operations-agent/README.md
-
   verification/                     # Phase boundary checks (commit)
     phase-check-initialization.md
     phase-check-ideation.md
@@ -86,6 +71,13 @@ aidlc/spaces/<space>/intents/<slug>-<id8>/   # one record dir per intent
   archive/                          (created on-demand)
     {ISO-date}-{stage-name}/
 ```
+
+**Team knowledge is not in the record dir.** It lives one level up, at the space
+level — `aidlc/spaces/<space>/knowledge/` (a sibling of `intents/`) — so it
+accumulates across every intent in the space rather than being trapped in one
+intent's record. The engine creates it empty; the team adds free-form files
+under an optional `aidlc-shared/` and per-agent subdirectories. See
+[Knowledge](07-knowledge.md).
 
 **Per-stage memory diary.** Each executed stage also keeps a committed
 `memory.md` alongside its artifacts (e.g.
@@ -220,7 +212,7 @@ cursors and machine-local derived state are ignored.
 | `audit/*.md` (per-clone shards) | `.aidlc-recovery.md` and other `intents/*/.aidlc-*` (transient breadcrumbs) |
 | All stage artifacts | `runtime-graph.json` (re-derivable from the audit shards) |
 | `verification/` phase check results | `aidlc/.aidlc-clone-id` (names this clone's shard; must stay machine-local) |
-| `knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-conversation session→intent map) |
+| Space-level `aidlc/knowledge/` team knowledge files | `aidlc/.aidlc-sessions/` (per-conversation session→intent map) |
 | Per-stage `memory.md` diaries; space `memory/` layer | `.aidlc-hooks-health/`, `.aidlc-sensors/` (heartbeats, advisory findings) |
 
 ---
