@@ -39,6 +39,9 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
    - `aws-aidlc-rule-details/` — detailed rules conditionally referenced by the core rules
 3. Follow the setup instructions for your coding agent and platform below.
 
+> [!WARNING]
+> **Downloaded the source code instead of the release?** If you used GitHub's **Code → Download ZIP** button (instead of the Releases page), the extracted folder is named `aidlc-workflows-main/` with rules nested inside. Run `mv ~/Downloads/aidlc-workflows-main/aidlc-rules ~/Downloads/aidlc-rules` (or `Move-Item "$env:USERPROFILE\Downloads\aidlc-workflows-main\aidlc-rules" "$env:USERPROFILE\Downloads\aidlc-rules"` on Windows) to fix the path, then follow the commands below as written.
+
 ---
 
 ## Platform-Specific Setup
