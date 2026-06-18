@@ -61,6 +61,8 @@ import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
+  seededRecordDir,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -86,10 +88,12 @@ function hookProject(): string {
   return proj;
 }
 
-const statePath = (p: string): string =>
-  join(p, "aidlc-docs", "aidlc-state.md");
+// P9 per-intent layout: state + heartbeat re-root under the default intent's
+// record (seedStateFile seeds it so the active-intent cursor resolves; the hook
+// and the set-status tool it shells out to both anchor under that record).
+const statePath = (p: string): string => seededStateFile(p);
 const heartbeatPath = (p: string): string =>
-  join(p, "aidlc-docs", ".aidlc-hooks-health", "sync-statusline.last");
+  join(seededRecordDir(p), ".aidlc-hooks-health", "sync-statusline.last");
 
 interface HookResult {
   status: number;

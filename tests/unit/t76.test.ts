@@ -104,12 +104,19 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { auditLockDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { createTestProject } from "../harness/fixtures.ts";
+import {
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
+  createTestProject,
+  seededAuditDir,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -135,8 +142,14 @@ afterAll(() => {
       /* best-effort */
     }
     try {
-      const lk = auditLockDir(d);
-      if (existsSync(lk)) rmSync(lk, { recursive: true, force: true });
+      // Drop both possible lock buckets — the workspace sentinel AND the
+      // per-intent bucket the fork/merge actually key (the fixture's active intent).
+      for (const lk of [
+        auditLockDir(d),
+        auditLockDir(d, DEFAULT_RECORD_DIR, DEFAULT_SPACE),
+      ]) {
+        if (existsSync(lk)) rmSync(lk, { recursive: true, force: true });
+      }
     } catch {
       /* best-effort */
     }
@@ -163,11 +176,31 @@ function state(proj: string, ...args: string[]): CliResult {
   };
 }
 
-const statePath = (p: string): string =>
-  join(p, "aidlc-docs", "aidlc-state.md");
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+// MAIN record paths — the per-intent workspace layout the fixture seeds
+// (aidlc/spaces/default/intents/<record>/…). State is one file; audit is a
+// per-clone SHARD DIR (readers glob audit/*.md).
+const statePath = (p: string): string => seededStateFile(p);
+const auditDir = (p: string): string => seededAuditDir(p);
+// The bare-header "audit.md" the .sh seeded is now a single fixture SHARD under
+// the audit/ dir (the readers glob *.md, so one shard reads back as the trail).
+const auditPath = (p: string): string => join(seededAuditDir(p), "fixture.md");
+// The worktree mirror carries the SAME relative record dir as the main checkout
+// (relativeRecordDir → aidlc/spaces/default/intents/<record>), so the forked
+// state lands at <wt>/aidlc/spaces/default/intents/<record>/aidlc-state.md.
+const wtRecordDir = (p: string, slug: string): string =>
+  join(
+    p,
+    ".aidlc",
+    "worktrees",
+    `bolt-${slug}`,
+    "aidlc",
+    "spaces",
+    DEFAULT_SPACE,
+    "intents",
+    DEFAULT_RECORD_DIR,
+  );
 const wtStatePath = (p: string, slug: string): string =>
-  join(p, ".aidlc", "worktrees", `bolt-${slug}`, "aidlc-docs", "aidlc-state.md");
+  join(wtRecordDir(p, slug), "aidlc-state.md");
 
 const sha256File = (file: string): string =>
   createHash("sha256").update(readFileSync(file)).digest("hex");
@@ -200,7 +233,10 @@ function makeFixture(): string {
   tempDirs.push(proj);
   writeFileSync(statePath(proj), V7_STATE, "utf-8");
   // The .sh seeds a BARE header here (not audit-sample.md), so audit-row
-  // counts post-fire are unambiguous.
+  // counts post-fire are unambiguous. Audit is now a per-clone shard DIR; the
+  // bare header lands in a single fixture shard (readers glob audit/*.md, so
+  // the tool's own <host>-<clone>.md shard and this one are merged on read).
+  mkdirSync(auditDir(proj), { recursive: true });
   writeFileSync(auditPath(proj), "# AI-DLC Audit Log\n", "utf-8");
   return proj;
 }
@@ -222,17 +258,29 @@ function stateField(proj: string, field: string): string {
   return "";
 }
 
+/** Concatenate every audit shard (audit/*.md) — the tool writes its own
+ *  per-clone shard, so the count/contains readers must glob the whole dir. */
+function readAllShards(dir: string): string {
+  let names: string[];
+  try {
+    names = readdirSync(dir)
+      .filter((f) => f.endsWith(".md"))
+      .sort();
+  } catch {
+    return "";
+  }
+  return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
+}
+
 /** Count audit blocks with `**Event**: <ev>` (mirrors `grep -c STATE_FORKED`). */
 function auditEventCount(proj: string, ev: string): number {
-  const f = auditPath(proj);
-  if (!existsSync(f)) return 0;
-  return readFileSync(f, "utf-8")
+  return readAllShards(auditDir(proj))
     .split("\n")
     .filter((l) => l.includes(`**Event**: ${ev}`)).length;
 }
 
-const fileContains = (file: string, needle: string): boolean =>
-  existsSync(file) && readFileSync(file, "utf-8").includes(needle);
+const auditContains = (proj: string, needle: string): boolean =>
+  readAllShards(auditDir(proj)).includes(needle);
 
 /**
  * Strip the two intentionally-divergent fields (Worktree Path + Bolt Refs)
@@ -342,10 +390,19 @@ describe("t76 aidlc-state fork (migrated from t76-state-fork-merge.sh, plan 16)"
     () => {
       const proj = makeFixture();
       mkWorktreeDir(proj, "partA");
-      // Pre-create the lock dir so acquireAuditLock exhausts its ~5s budget
-      // → withAuditLock throws → exit before any worktree write.
-      const lockDir = auditLockDir(proj);
+      // Pre-create the PER-INTENT lock dir (the bucket the fork keys when an
+      // active intent resolves — the fixture seeds active-intent=DEFAULT_RECORD_DIR)
+      // so acquireAuditLock exhausts its ~5s budget → withAuditLock throws → exit
+      // before any worktree write. Stamp a LIVE owner so the reaper refuses to
+      // reclaim it (a bare dir would be reaped within the retry budget).
+      const lockDir = auditLockDir(proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
       mkdirSync(lockDir, { recursive: true });
+      const ownerNow = Math.floor(performance.timeOrigin + performance.now());
+      writeFileSync(
+        join(lockDir, "owner.json"),
+        JSON.stringify({ pid: process.pid, startedAtMs: ownerNow }),
+        "utf-8",
+      );
       try {
         const r = state(proj, "fork", "--slug", "partA");
         expect(r.status).not.toBe(0);
@@ -367,13 +424,9 @@ describe("t76 aidlc-state fork (migrated from t76-state-fork-merge.sh, plan 16)"
     }
     const proj = makeFixture();
     mkWorktreeDir(proj, "part-b");
-    const wtDocs = join(
-      proj,
-      ".aidlc",
-      "worktrees",
-      "bolt-part-b",
-      "aidlc-docs",
-    );
+    // The worktree mirror record dir (where the fork writes aidlc-state.md);
+    // making it read-only forces the post-emit worktree write to fail.
+    const wtDocs = wtRecordDir(proj, "part-b");
     mkdirSync(wtDocs, { recursive: true });
     chmodSync(wtDocs, 0o555);
     try {
@@ -383,7 +436,7 @@ describe("t76 aidlc-state fork (migrated from t76-state-fork-merge.sh, plan 16)"
       // then ERROR_LOGGED with the slug tag for doctor reconciliation.
       expect(auditEventCount(proj, "STATE_FORKED")).toBe(1);
       expect(auditEventCount(proj, "ERROR_LOGGED")).toBe(1);
-      expect(fileContains(auditPath(proj), "[slug=part-b]")).toBe(true);
+      expect(auditContains(proj, "[slug=part-b]")).toBe(true);
     } finally {
       chmodSync(wtDocs, 0o755);
     }
@@ -435,8 +488,9 @@ describe("t76 aidlc-state fork (migrated from t76-state-fork-merge.sh, plan 16)"
       // `finally` — the withAuditLock exit-handler safety net does it.
       const dup = state(proj, "fork", "--slug", "alpha");
       expect(dup.status).not.toBe(0);
-      // Lock dir released after the failing fork.
-      expect(existsSync(auditLockDir(proj))).toBe(false);
+      // Lock dir released after the failing fork — the PER-INTENT bucket the
+      // fork actually held (the fixture's active intent), not the sentinel.
+      expect(existsSync(auditLockDir(proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE))).toBe(false);
       // A follow-up fork must succeed WITHOUT hitting the ~5s acquire budget.
       const start = Date.now();
       const followup = state(proj, "fork", "--slug", "alpha2");
@@ -581,7 +635,10 @@ describe("t76 aidlc-state merge (migrated from t76-state-fork-merge.sh, plan 16)
       // reclaim it (a live holder is never robbed) — proving a genuinely-held
       // lock still blocks a waiter. (A bare unstamped dir would be reaped after
       // the unstamped-grace window, which is the reaper's job, not a timeout.)
-      const lockDir = auditLockDir(proj);
+      // Key the PER-INTENT bucket the merge resolves (active-intent cursor →
+      // DEFAULT_RECORD_DIR), not the workspace sentinel — they hash to distinct
+      // lock dirs, so a sentinel lock would not block the per-intent merge.
+      const lockDir = auditLockDir(proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
       mkdirSync(lockDir, { recursive: true });
       const nowMs = Math.floor(performance.timeOrigin + performance.now());
       writeFileSync(join(lockDir, "owner.json"), JSON.stringify({ pid: process.pid, startedAtMs: nowMs }), "utf-8");

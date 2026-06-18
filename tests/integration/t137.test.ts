@@ -89,11 +89,13 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
+  seededAuditShard,
+  seededStateFile,
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -361,13 +363,16 @@ describe("t137 F2 — missing audit shard (ensureAuditFile recovers)", () => {
 describe("t137 F3 — corrupted state.md (advance refuses, names Scope)", () => {
   test("5: advance exits 1 on corrupted state; 6: error names Scope", () => {
     const p = proj();
-    mkdirSync(join(p, "aidlc-docs"), { recursive: true });
-    // This case NEVER births a record — it hand-seeds a flat corrupted layout,
-    // so recordDirOf falls back to aidlc-docs/ and statePath resolves there.
-    // State file valid markdown but missing Scope / Current Stage
-    // (mirrors the .sh heredoc, lines 109-114).
+    // P9: the flat aidlc-docs/ fallback is retired. createTestProject seeds the
+    // per-intent shell + default-record cursor, so the advance SUBPROCESS
+    // resolves the seeded record (fixture-0000000000000001). Hand-seed the
+    // corrupted state INTO that record (seededStateFile) — valid markdown but
+    // missing Scope / Current Stage (mirrors the .sh heredoc, lines 109-114) —
+    // and the audit into the shard the subprocess resolves (seededAuditShard).
+    const stateFile = seededStateFile(p);
+    mkdirSync(dirname(stateFile), { recursive: true });
     writeFileSync(
-      statePath(p),
+      stateFile,
       `# AI-DLC State Tracking
 
 ## Project Information
@@ -375,10 +380,12 @@ describe("t137 F3 — corrupted state.md (advance refuses, names Scope)", () => 
 `,
       "utf-8",
     );
-    // Copy the SAME fixture the .sh used (read-only source copy) into the flat
-    // aidlc-docs/audit.md — the flat fallback the corrupted seed resolves to.
+    // Copy the SAME fixture the .sh used (read-only source copy) into the
+    // per-clone shard the corrupted-state record resolves.
+    const shard = seededAuditShard(p);
+    mkdirSync(dirname(shard), { recursive: true });
     writeFileSync(
-      join(p, "aidlc-docs", "audit.md"),
+      shard,
       readFileSync(join(FIXTURES_DIR, "audit-sample.md"), "utf-8"),
       "utf-8",
     );

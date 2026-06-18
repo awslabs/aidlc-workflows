@@ -55,16 +55,19 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
   resetAidlcEnv,
   seedAuditFile,
   seedStateFile,
+  seededAuditDir,
 } from "../harness/fixtures.ts";
 
 resetAidlcEnv();
@@ -126,16 +129,37 @@ function setupForkedProject(slug: string): string {
   return proj;
 }
 
-/** The per-Bolt forked state file the hold-merge marker is written into. */
+/** The per-Bolt forked state file the hold-merge marker is written into — the
+ *  worktree mirror carries the SAME relative record dir as the main checkout
+ *  (aidlc/spaces/default/intents/<record>/aidlc-state.md), not flat aidlc-docs/. */
 function forkedState(proj: string, slug: string): string {
   return join(
     proj,
     ".aidlc",
     "worktrees",
     `bolt-${slug}`,
-    "aidlc-docs",
+    "aidlc",
+    "spaces",
+    DEFAULT_SPACE,
+    "intents",
+    DEFAULT_RECORD_DIR,
     "aidlc-state.md",
   );
+}
+
+/** Concatenate every main audit shard (audit/*.md) — the tools write their own
+ *  per-clone shard alongside seedAuditFile's fixture.md. */
+function readAudit(proj: string): string {
+  const dir = seededAuditDir(proj);
+  let names: string[];
+  try {
+    names = readdirSync(dir)
+      .filter((f) => f.endsWith(".md"))
+      .sort();
+  } catch {
+    return "";
+  }
+  return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
 }
 
 describe("t82 aidlc-bolt HOLD-MERGE invariant (migrated from t82-hold-merge-invariant.sh, plan 10)", () => {
@@ -285,7 +309,7 @@ describe("t82 aidlc-bolt HOLD-MERGE invariant (migrated from t82-hold-merge-inva
     // grepped main audit.md for `^**Event**: BOLT_COMPLETED`. The refusal fires
     // BEFORE the BOLT_COMPLETED emit (aidlc-bolt.ts:336 < :354), so no such row
     // exists in main audit.md.
-    const audit = readFileSync(join(proj, "aidlc-docs", "audit.md"), "utf-8");
+    const audit = readAudit(proj);
     expect(
       audit.split("\n").some((l) => l === "**Event**: BOLT_COMPLETED"),
     ).toBe(false);
@@ -310,7 +334,7 @@ describe("t82 aidlc-bolt HOLD-MERGE invariant (migrated from t82-hold-merge-inva
     expect(r.status).toBe(0);
     // Positive complement to T8: now that the hold lifted, BOLT_COMPLETED IS in
     // main audit.md (the merge pipeline ran).
-    const audit = readFileSync(join(proj, "aidlc-docs", "audit.md"), "utf-8");
+    const audit = readAudit(proj);
     expect(
       audit.split("\n").some((l) => l === "**Event**: BOLT_COMPLETED"),
     ).toBe(true);

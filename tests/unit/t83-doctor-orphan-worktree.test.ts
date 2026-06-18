@@ -78,15 +78,19 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { hostname } from "node:os";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
+  DEFAULT_SPACE,
   FIXTURES_DIR,
   cleanupTestProject,
   createTestProject,
   seedAuditFile,
   seedStateFile,
+  seededAuditDir,
+  seededStateFile,
   sedReplaceInFile,
 } from "../harness/fixtures.ts";
 
@@ -115,22 +119,67 @@ function freshProject(): string {
 }
 
 /** The .sh's append_audit: leading blank line, the block body, then a `---`
- *  separator surrounded by blank lines. Matches findAllEvents' `\n---\n` split. */
+ *  separator surrounded by blank lines. Matches findAllEvents' `\n---\n` split.
+ *  Audit is now a per-clone shard DIR (doctor reads via readAllAuditShards) — the
+ *  appended blocks ride seedAuditFile's fixture.md shard, so the doctor's glob
+ *  picks them up exactly as the flat single file did. */
 function appendAudit(proj: string, body: string): void {
-  appendFileSync(join(proj, "aidlc-docs", "audit.md"), `\n${body}\n\n---\n`);
+  appendFileSync(join(seededAuditDir(proj), "fixture.md"), `\n${body}\n\n---\n`);
 }
 
-/** mkdir -p <proj>/.aidlc/worktrees/bolt-<slug>[/aidlc-docs] */
+/**
+ * The bare-space worktree record root the doctor's Check 3/4 resolve when no
+ * recordPrefix is threaded: worktreeStateFilePath/worktreeAuditFilePath fall back
+ * to relativeSpaceRecordPrefix() = aidlc/spaces/default/intents. So the worktree
+ * state file lives at <wt>/aidlc/spaces/default/intents/aidlc-state.md and the
+ * worktree audit shard under <wt>/aidlc/spaces/default/intents/audit/.
+ */
+function wtRecordRoot(proj: string, slug: string): string {
+  return join(
+    proj,
+    ".aidlc",
+    "worktrees",
+    `bolt-${slug}`,
+    "aidlc",
+    "spaces",
+    DEFAULT_SPACE,
+    "intents",
+  );
+}
+
+/** Replicate aidlc-lib's auditShardName for a worktree: <host>-<clone-id>.md,
+ *  where the clone-id is read from <wt>/aidlc/.aidlc-clone-id. We write a fixed
+ *  token there first so the doctor (a separate process) resolves the SAME shard
+ *  name — its worktreeAuditFilePath(...) → auditShardName(wtPath) reads the same
+ *  on-disk token. (The lib's auditShardName is memoized per-process, so calling
+ *  it from the test process is unreliable across cases; replicate the algorithm.) */
+function seedWtAuditShard(proj: string, slug: string, contents: string): void {
+  const wtRoot = join(proj, ".aidlc", "worktrees", `bolt-${slug}`);
+  mkdirSync(join(wtRoot, "aidlc"), { recursive: true });
+  const token = "ffffffffffff";
+  writeFileSync(join(wtRoot, "aidlc", ".aidlc-clone-id"), `${token}\n`, "utf-8");
+  const host =
+    hostname()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "host";
+  const auditDir = join(wtRecordRoot(proj, slug), "audit");
+  mkdirSync(auditDir, { recursive: true });
+  writeFileSync(join(auditDir, `${host}-${token}.md`), contents, "utf-8");
+}
+
+/** mkdir -p <proj>/.aidlc/worktrees/bolt-<slug>[/<bare-space-record-root>] */
 function mkWorktree(proj: string, slug: string, withDocs = false): string {
   const dir = join(proj, ".aidlc", "worktrees", `bolt-${slug}`);
-  mkdirSync(withDocs ? join(dir, "aidlc-docs") : dir, { recursive: true });
+  mkdirSync(withDocs ? wtRecordRoot(proj, slug) : dir, { recursive: true });
   return dir;
 }
 
 /** The .sh's sed_i on the `- **Bolt Refs**:` line — set the bracketed list. */
 function setBoltRefs(proj: string, value: string): void {
   sedReplaceInFile(
-    join(proj, "aidlc-docs", "aidlc-state.md"),
+    seededStateFile(proj),
     /^- \*\*Bolt Refs\*\*:.*$/m,
     `- **Bolt Refs**: ${value}`,
   );
@@ -167,7 +216,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     setBoltRefs(proj, "[activeslug]");
     mkWorktree(proj, "activeslug", true);
     writeFileSync(
-      join(proj, ".aidlc", "worktrees", "bolt-activeslug", "aidlc-docs", "aidlc-state.md"),
+      join(wtRecordRoot(proj, "activeslug"), "aidlc-state.md"),
       "# stub state\n",
     );
     const { out } = runDoctor(proj);
@@ -213,7 +262,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     const proj = freshProject();
     mkWorktree(proj, "orphanstate", true);
     writeFileSync(
-      join(proj, ".aidlc", "worktrees", "bolt-orphanstate", "aidlc-docs", "aidlc-state.md"),
+      join(wtRecordRoot(proj, "orphanstate"), "aidlc-state.md"),
       "# state\n",
     );
     const { out } = runDoctor(proj);
@@ -228,7 +277,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     const proj = freshProject();
     mkWorktree(proj, "discardedstate", true);
     writeFileSync(
-      join(proj, ".aidlc", "worktrees", "bolt-discardedstate", "aidlc-docs", "aidlc-state.md"),
+      join(wtRecordRoot(proj, "discardedstate"), "aidlc-state.md"),
       "# state\n",
     );
     appendAudit(
@@ -250,7 +299,7 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
 
   test("7: AUDIT_FORKED-without-disk-state flagged (sub-case a)", () => {
     const proj = freshProject();
-    // AUDIT_FORKED but no <wt>/aidlc-docs/audit.md on disk for slug `noaudit`.
+    // AUDIT_FORKED but no worktree audit shard on disk for slug `noaudit`.
     appendAudit(
       proj,
       [
@@ -273,10 +322,10 @@ describe("t83 aidlc-utility doctor — orphan-reconciliation family (migrated fr
     // Disk audit present (passes sub-case a) but no AUDIT_MERGED, slug not in
     // Bolt Refs, no WORKTREE_DISCARDED → sub-case (b).
     mkWorktree(proj, "deltatest", true);
-    writeFileSync(
-      join(proj, ".aidlc", "worktrees", "bolt-deltatest", "aidlc-docs", "audit.md"),
-      "# wt audit\n",
-    );
+    // The worktree audit is now a per-clone shard the doctor resolves via
+    // worktreeAuditFilePath → <wt>/aidlc/spaces/default/intents/audit/<host>-<clone>.md;
+    // seed it at exactly that path (a fixed clone-id token the doctor re-reads).
+    seedWtAuditShard(proj, "deltatest", "# wt audit\n");
     appendAudit(
       proj,
       [

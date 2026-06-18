@@ -17,9 +17,9 @@
 //   - answering advances REAL state on disk — the milestone the .sh asserted
 //     (POC, unlike bugfix, includes Ideation, so intent-capture runs):
 //       * the intent-capture intent-statement artifact exists & is non-empty,
-//       * aidlc-docs/aidlc-state.md records the `poc` scope and a greenfield
+//       * the born intent's aidlc-state.md records the `poc` scope and a greenfield
 //         classification,
-//       * aidlc-docs/ideation/ exists with a questions file carrying filled
+//       * <record>/ideation/ exists with a questions file carrying filled
 //         [Answer]: lines and at least one structured (heading-bearing) artifact,
 //       * MORE than 6 stages are marked complete `- [x]` (POC > bugfix; the .sh's
 //         test 10 — 3 init + Ideation stages),
@@ -67,6 +67,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
+import { auditFilePathFor, recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
 import { gridHasMenu, resolveWinNode } from "../harness/tui-drive.ts";
 import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
 
@@ -186,7 +187,7 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
           drive(["send", "--session", session, "--keys", "2"]);
         }
         // Fresh project (no seeded state) -> the no-workflow "ready" line.
-        expect(waitFor(session, "\\[AIDLC\\] ready", 45000, 800)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
 
         // --- submit the poc workflow command (NO --test-run) -------------------
         // `/aidlc poc` is a single token-stream with no embedded spaces beyond the
@@ -219,7 +220,7 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
         // --stable-ms 0: the screen is streaming (live token counter / spinner),
         // so match the instant the phase text appears.
         expect(
-          waitFor(session, "\\[AIDLC\\] (INITIALIZATION|IDEATION|INCEPTION)", 120000, 0),
+          waitFor(session, "\\[AIDLC\\].*(INITIALIZATION|IDEATION|INCEPTION)", 120000, 0),
         ).toBe(true);
 
         // Begin tailing the grid for the render assertion BEFORE answer-gate runs,
@@ -281,7 +282,7 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
         expect(gateRc).toBe(0);
 
         // --- assert ON DISK (equal-or-stronger than the .sh's greps) -----------
-        const stateMd = readFileSync(join(sandbox, "aidlc-docs", "aidlc-state.md"), "utf8");
+        const stateMd = readFileSync(stateFilePathFor(sandbox), "utf8");
 
         // .sh test 1: state file created (implied — readFileSync would throw).
         // .sh test 2: POC scope recorded ([Pp][Oo][Cc]).
@@ -294,7 +295,7 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
         expect(completed).toBeGreaterThan(6);
 
         // .sh test 3: ideation directory created (POC includes ideation).
-        const ideationDir = join(sandbox, "aidlc-docs", "ideation");
+        const ideationDir = join(recordDirFor(sandbox), "ideation");
         expect(existsSync(ideationDir) && statSync(ideationDir).isDirectory()).toBe(true);
 
         // .sh test 14: intent-capture directory exists.
@@ -342,7 +343,9 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
         expect(bigArtifact).not.toBeNull();
 
         // .sh test 11: audit log exists with substantial content (> 200 bytes).
-        const auditPath = join(sandbox, "aidlc-docs", "audit.md");
+        // P9 shards audit per clone; a single live process writes exactly one
+        // shard, so auditFilePathFor resolves it.
+        const auditPath = auditFilePathFor(sandbox);
         expect(existsSync(auditPath)).toBe(true);
         expect(statSync(auditPath).size).toBeGreaterThan(200);
 

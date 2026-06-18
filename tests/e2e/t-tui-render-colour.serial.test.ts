@@ -41,19 +41,11 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
+import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -130,15 +122,13 @@ describe("t-tui-render statusline COLOUR branch (live turn populates ctx:%, macO
     `statusline-colour emits green SGR and the live TUI renders ctx:N%${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     () => {
       const session = `aidlc_tui_render_colour_${process.pid}`;
-      const sandbox = mkdtempSync(join(tmpdir(), "aidlc-tui-render-colour-"));
+      // setupTuiProject copies the distributable + sibling aidlc/ memory shell,
+      // seeds the per-intent workspace shell, and writes the mid-ideation fixture
+      // into the active intent's record so the statusline hook resolves it.
+      const sandbox = setupTuiProject({ withState: "state-mid-ideation.md" });
       try {
-        // --- copy the distributable + seed mid-ideation state -----------------
         const destClaude = join(sandbox, ".claude");
-        cpSync(AIDLC_SRC, destClaude, { recursive: true });
         expect(readFileSync(join(destClaude, "settings.json"), "utf8")).toContain('"statusLine"');
-        const docsDir = join(sandbox, "aidlc-docs");
-        mkdirSync(docsDir, { recursive: true });
-        writeFileSync(join(docsDir, "aidlc-state.md"), readFileSync(FIXTURE, "utf8"));
         const ESC = String.fromCharCode(0x1b);
 
         // Prove the product hook's colour branch directly: with a synthetic low
@@ -172,7 +162,9 @@ describe("t-tui-render statusline COLOUR branch (live turn populates ctx:%, macO
         if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
           drive(["send", "--session", session, "--keys", "2"]);
         }
-        expect(waitFor(session, "\\[AIDLC\\] IDEATION", 45000, 1000)).toBe(true);
+        // P9: orientation prefix ("<intent-slug> · ") sits between [AIDLC] and the
+        // phase, so match with .* rather than a contiguous gap.
+        expect(waitFor(session, "\\[AIDLC\\].*IDEATION", 45000, 1000)).toBe(true);
 
         // --- submit a trivial prompt to consume context (populate ctx:%) ------
         // One word back; the smallest turn that still advances the context window.
@@ -203,7 +195,7 @@ describe("t-tui-render statusline COLOUR branch (live turn populates ctx:%, macO
         }
       } finally {
         drive(["kill", "--session", session]);
-        if (existsSync(sandbox)) rmSync(sandbox, { recursive: true, force: true });
+        cleanupTuiProject(sandbox);
       }
     },
     TEST_TIMEOUT_MS,

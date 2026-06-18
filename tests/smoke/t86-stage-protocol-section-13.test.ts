@@ -56,10 +56,9 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
+import { AIDLC_SRC, cleanupTestProject, createTestProject, REPO_ROOT, seededAuditDir, seedStateFile } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
 const AUDIT_TOOL = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
@@ -160,8 +159,13 @@ describe("t86 stage-protocol §13 + MEMORY_EMPTY + SKILL.md gate wiring (migrate
     // exercise the real validity gate: an event NOT in the Set causes
     // appendAuditEntry to throw and the CLI to exit non-zero with an error JSON
     // (the t18 contract). MEMORY_EMPTY MUST be accepted — exit 0, appended:true.
-    const proj = mkdtempSync(join(tmpdir(), "aidlc-t86-"));
-    mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
+    // createTestProject seeds the per-intent record + active-intent cursor;
+    // seedStateFile writes the record's aidlc-state.md so the cursor RESOLVES
+    // (the active-intent cursor only binds a record that has state). Then a bare
+    // `aidlc-audit append` lands in <record>/audit/<host>-<clone>.md (P9 — no flat
+    // aidlc-docs/audit.md). Read the appended event back off the shard dir.
+    const proj = createTestProject();
+    seedStateFile(proj, "state-mid-ideation.md");
     try {
       const ok = spawnSync(
         BUN,
@@ -170,7 +174,11 @@ describe("t86 stage-protocol §13 + MEMORY_EMPTY + SKILL.md gate wiring (migrate
       );
       expect(ok.status).toBe(0);
       expect(`${ok.stdout ?? ""}`.includes('"appended":true')).toBe(true);
-      const body = read(join(proj, "aidlc-docs", "audit.md"));
+      const auditDir = seededAuditDir(proj);
+      const body = readdirSync(auditDir)
+        .filter((f) => f.endsWith(".md"))
+        .map((f) => read(join(auditDir, f)))
+        .join("\n");
       expect(body.includes("**Event**: MEMORY_EMPTY")).toBe(true);
 
       // Negative control: an unregistered event is REJECTED, proving the gate
@@ -182,7 +190,7 @@ describe("t86 stage-protocol §13 + MEMORY_EMPTY + SKILL.md gate wiring (migrate
       );
       expect(bad.status).not.toBe(0);
     } finally {
-      rmSync(proj, { recursive: true, force: true });
+      cleanupTestProject(proj);
     }
   });
 

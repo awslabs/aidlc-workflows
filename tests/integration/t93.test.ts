@@ -36,7 +36,7 @@
 //       ids === ["linter","required-sections","type-check","upstream-coverage"]
 //       (same sentinel set, exact).
 //   - .sh Case 5  describe required-sections: id, kind=deterministic,
-//       command, default_severity=advisory, matches: **/aidlc-docs/**  -> Test 5:
+//       command, default_severity=advisory, matches: **/{aidlc-docs,intents}/**  -> Test 5:
 //       all five field lines asserted (STRONGER: the .sh grep'd 5 anchored
 //       lines; here each is an exact line-membership check plus we also assert
 //       the description line, which the .sh's handleDescribe contract emits).
@@ -148,7 +148,7 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
     return out.split("\n").includes(line);
   }
 
-  test("5: describe required-sections lists canonical fields incl. matches: **/aidlc-docs/**", () => {
+  test("5: describe required-sections lists canonical fields incl. matches: **/{aidlc-docs,intents}/**", () => {
     const r = sensor("describe", "required-sections");
     expect(r.status).toBe(0);
     expect(hasLine(r.out, "id: required-sections")).toBe(true);
@@ -160,10 +160,10 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
       ),
     ).toBe(true);
     expect(hasLine(r.out, "default_severity: advisory")).toBe(true);
-    expect(hasLine(r.out, "matches: **/aidlc-docs/**")).toBe(true);
+    expect(hasLine(r.out, "matches: **/{aidlc-docs,intents}/**")).toBe(true);
   });
 
-  test("6: describe upstream-coverage lists canonical fields incl. matches: **/aidlc-docs/**", () => {
+  test("6: describe upstream-coverage lists canonical fields incl. matches: **/{aidlc-docs,intents}/**", () => {
     const r = sensor("describe", "upstream-coverage");
     expect(r.status).toBe(0);
     expect(hasLine(r.out, "id: upstream-coverage")).toBe(true);
@@ -173,7 +173,7 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
         "command: bun .claude/tools/aidlc-sensor-upstream-coverage.ts",
       ),
     ).toBe(true);
-    expect(hasLine(r.out, "matches: **/aidlc-docs/**")).toBe(true);
+    expect(hasLine(r.out, "matches: **/{aidlc-docs,intents}/**")).toBe(true);
   });
 
   test("7: describe linter includes matches: **/*.{ts,js} and canonical fields", () => {

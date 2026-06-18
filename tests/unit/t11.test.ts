@@ -46,6 +46,7 @@ import {
   createTestProject,
   FIXTURES_DIR,
   REPO_ROOT,
+  seededRecordDir,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -65,11 +66,14 @@ function proj(): string {
   return p;
 }
 
-const statePath = (p: string): string => join(p, "aidlc-docs", "aidlc-state.md");
+// Per-intent record (P9 — the flat aidlc-docs/ root is retired). The statusline
+// hook reads state via stateFilePath() → the active intent's record dir; seeding
+// aidlc-state.md there makes the active-intent cursor resolve.
+const statePath = (p: string): string => join(seededRecordDir(p), "aidlc-state.md");
 
-/** Write a state file body to <proj>/aidlc-docs/aidlc-state.md (the inline `cat` heredocs). */
+/** Write a state file body to the default intent's record (the inline `cat` heredocs). */
 function writeState(p: string, body: string): void {
-  mkdirSync(join(p, "aidlc-docs"), { recursive: true });
+  mkdirSync(seededRecordDir(p), { recursive: true });
   writeFileSync(statePath(p), body);
 }
 

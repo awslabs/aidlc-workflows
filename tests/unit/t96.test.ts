@@ -44,7 +44,19 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanupTestProject, createTestProject, seedStateFile } from "../harness/fixtures.ts";
+import {
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
+  cleanupTestProject,
+  createTestProject,
+  seedStateFile,
+  seededRecordDir,
+} from "../harness/fixtures.ts";
+
+// Main runtime-graph path under the seeded per-intent record (was flat aidlc-docs/).
+function mainGraphPath(proj: string): string {
+  return join(seededRecordDir(proj), "runtime-graph.json");
+}
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(
@@ -76,23 +88,40 @@ function makeProject(slug: string | null, mainGraph: string | null): string {
   const proj = createTestProject();
   seedStateFile(proj, "state-construction.md");
   if (mainGraph !== null) {
-    writeFileSync(join(proj, "aidlc-docs", "runtime-graph.json"), mainGraph);
+    writeFileSync(mainGraphPath(proj), mainGraph);
   }
   if (slug !== null) {
-    const wtDocs = join(proj, ".aidlc", "worktrees", `bolt-${slug}`, "aidlc-docs");
+    // The worktree mirror carries the SAME relative record dir as the main
+    // checkout (aidlc/spaces/default/intents/<record>/), not a flat aidlc-docs/.
+    const wtDocs = wtRecordDir(proj, slug);
     mkdirSync(wtDocs, { recursive: true });
     // state-fork byte-copies main state to worktree — simulate that.
     writeFileSync(
       join(wtDocs, "aidlc-state.md"),
-      readFileSync(join(proj, "aidlc-docs", "aidlc-state.md")),
+      readFileSync(join(seededRecordDir(proj), "aidlc-state.md")),
     );
   }
   return proj;
 }
 
-// wt_fragment_path analogue (t96:88-90).
+// The worktree mirror's per-intent record dir.
+function wtRecordDir(proj: string, slug: string): string {
+  return join(
+    proj,
+    ".aidlc",
+    "worktrees",
+    `bolt-${slug}`,
+    "aidlc",
+    "spaces",
+    DEFAULT_SPACE,
+    "intents",
+    DEFAULT_RECORD_DIR,
+  );
+}
+
+// wt_fragment_path analogue (t96:88-90) — under the worktree mirror record.
 function wtFragmentPath(proj: string, slug: string): string {
-  return join(proj, ".aidlc", "worktrees", `bolt-${slug}`, "aidlc-docs", "runtime-graph.json");
+  return join(wtRecordDir(proj, slug), "runtime-graph.json");
 }
 
 // run_runtime analogue (t96:94-100): invoke with --project-dir BEFORE the
@@ -131,9 +160,7 @@ describe("t96 fragment-fork happy path", () => {
     expect(r.rc).toBe(0);
     expect(existsSync(wtFrag)).toBe(true);
     // diff -q main vs fragment: byte-equal copy.
-    expect(readFileSync(wtFrag)).toEqual(
-      readFileSync(join(projDir, "aidlc-docs", "runtime-graph.json")),
-    );
+    expect(readFileSync(wtFrag)).toEqual(readFileSync(mainGraphPath(projDir)));
     expect(r.out).toContain('"status":"fragment-forked"');
     expect(r.out).toContain('"slug":"auth"');
     expect(r.out).toContain(`"source_runtime_graph_hash":"${expectedHash}"`);

@@ -82,10 +82,26 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
-import { AIDLC_SRC, createTestProject, FIXTURES_DIR } from "../harness/fixtures.ts";
+import { dirname, join } from "node:path";
+import {
+  AIDLC_SRC,
+  createTestProject,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
+  FIXTURES_DIR,
+  seededAuditShard,
+  seededRecordDir,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 import { parseSensorManifest } from "../../dist/claude/.claude/tools/aidlc-sensor-schema.ts";
 import { memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+
+// P9: createTestProject seeds the per-intent record (fixture-0000000000000001)
+// + active-intent cursor, so the learnings/graph tools resolve THAT record (not
+// the flat aidlc-docs/, retired). State, runtime-graph, the per-stage memory,
+// and the per-clone audit shard all live under it; the runtime-graph memory_path
+// is record-relative so surface's join(projectDir, memRel) finds the file.
+const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
 const BUN = process.execPath; // the bun running this test
 const TOOLS = join(AIDLC_SRC, "tools");
@@ -111,13 +127,13 @@ function mkproj(): string {
   const pd = createTestProject();
   projects.push(pd);
   cpSync(AIDLC_SRC, join(pd, ".claude"), { recursive: true });
-  mkdirSync(join(pd, "aidlc-docs", "inception", "user-stories"), { recursive: true });
+  mkdirSync(join(seededRecordDir(pd), "inception", "user-stories"), { recursive: true });
   writeFileSync(
-    join(pd, "aidlc-docs", "aidlc-state.md"),
+    seededStateFile(pd),
     "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Scope**: feature\n",
   );
   writeFileSync(
-    join(pd, "aidlc-docs", "runtime-graph.json"),
+    join(seededRecordDir(pd), "runtime-graph.json"),
     JSON.stringify({
       workflow_id: "w1",
       scope: "feature",
@@ -125,7 +141,7 @@ function mkproj(): string {
       stages: [
         {
           stage_slug: "user-stories",
-          memory_path: "aidlc-docs/inception/user-stories/memory.md",
+          memory_path: `${RP}/inception/user-stories/memory.md`,
         },
       ],
     }),
@@ -134,7 +150,7 @@ function mkproj(): string {
 }
 
 function seedMemoryMixed(pd: string): void {
-  cpSync(MEMORY_MIXED, join(pd, "aidlc-docs", "inception", "user-stories", "memory.md"));
+  cpSync(MEMORY_MIXED, join(seededRecordDir(pd), "inception", "user-stories", "memory.md"));
 }
 
 function writeJson(path: string, value: unknown): void {
@@ -166,7 +182,10 @@ function persist(pd: string, sel: string, slug = "user-stories", env?: NodeJS.Pr
 }
 
 function readAudit(pd: string): string {
-  const p = join(pd, "aidlc-docs", "audit.md");
+  // P9: persist writes RULE_LEARNED / SENSOR_PROPOSED into the seeded record's
+  // per-clone shard (the fixture pins the clone-id, so the subprocess resolves
+  // the SAME shard as seededAuditShard).
+  const p = seededAuditShard(pd);
   return existsSync(p) ? readFileSync(p, "utf-8") : "";
 }
 
@@ -306,7 +325,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const pd = mkproj();
     seedMemoryMixed(pd);
     writeFileSync(
-      join(pd, "aidlc-docs", "aidlc-state.md"),
+      seededStateFile(pd),
       "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Test Run Mode**: true\n",
     );
     const r = surface(pd);
@@ -322,12 +341,15 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const pd = mkproj();
     seedMemoryMixed(pd);
     writeFileSync(
-      join(pd, "aidlc-docs", "aidlc-state.md"),
+      seededStateFile(pd),
       "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Test Run Mode**: true\n",
     );
     // The most-recent audit block flags Test-Run → persist refuses (auditTestRun).
+    // Seed the per-clone shard the persist subprocess resolves (seededAuditShard).
+    const trShard = seededAuditShard(pd);
+    mkdirSync(dirname(trShard), { recursive: true });
     writeFileSync(
-      join(pd, "aidlc-docs", "audit.md"),
+      trShard,
       "\n## Stage Start\n**Timestamp**: 2026-05-29T10:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: user-stories\n**Test-Run**: true\n\n---\n",
     );
     const sel = join(pd, "sel2.json");

@@ -103,6 +103,7 @@ import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
+  seededAuditShard,
   sedReplaceInFile,
   seedAuditFile,
   seedStateFile,
@@ -181,10 +182,12 @@ function recordDirOf(p: string): string {
   return join(p, "aidlc-docs");
 }
 const statePath = (p: string): string => join(recordDirOf(p), "aidlc-state.md");
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
-// Audit is written as per-clone shards under <record>/audit/<host>-<pid>.md
-// (Stage B). Concatenate every shard for a content read; fall back to the flat
-// aidlc-docs/audit.md for a seeded-flat / pre-migration project.
+// The DETERMINISTIC per-clone audit shard a spawned utility resolves (the fixture
+// pins the clone-id). seedAuditFile() writes here too, so seed/append/check all
+// agree on one file. Single-shard tests (size growth, one-event count) target it.
+const auditPath = (p: string): string => seededAuditShard(p);
+// Audit is written as per-clone shards under <record>/audit/<host>-<clone>.md.
+// Concatenate every shard for a content read.
 function readAudit(p: string): string {
   const auditDir = join(recordDirOf(p), "audit");
   if (existsSync(auditDir)) {
@@ -193,8 +196,7 @@ function readAudit(p: string): string {
       .map((f) => readFileSync(join(auditDir, f), "utf-8"))
       .join("\n");
   }
-  const flat = join(p, "aidlc-docs", "audit.md");
-  return existsSync(flat) ? readFileSync(flat, "utf-8") : "";
+  return "";
 }
 /** Count `**Event**: <ev>` lines in audit CONTENT (shard-concat or flat). */
 function auditEventCountIn(content: string, ev: string): number {
@@ -426,9 +428,11 @@ describe("t27 aidlc-utility doctor", () => {
   // HEALTH_CHECKED to it (size grows, exactly one row). This is the
   // audit.md-exists arm of the cold-safe gate (#4) — seeding audit.md FIRST is
   // what makes the emit fire.
-  test("13: doctor appends to audit.md when it exists (size grows, exactly one HEALTH_CHECKED)", () => {
-    const p = bareProj();
-    seedAuditFile(p);
+  test("13: doctor appends to the audit shard when it exists (size grows, exactly one HEALTH_CHECKED)", () => {
+    // Seed state + audit so the intent record RESOLVES (the active-intent cursor
+    // only binds a record that has aidlc-state.md) — an initialized project, the
+    // audit-exists arm of the cold-safe gate.
+    const p = stateAuditProj();
     const before = statSync(auditPath(p)).size;
     util(["doctor"], p);
     const after = statSync(auditPath(p)).size;

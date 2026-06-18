@@ -87,6 +87,7 @@ import {
   createTestProject,
   REPO_ROOT,
   seedAuditFile,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -135,8 +136,9 @@ function seededProject(): string {
   return p;
 }
 
-const statePath = (p: string): string =>
-  join(p, "aidlc-docs", "aidlc-state.md");
+// P9 per-intent layout: state lives in the active intent's record (seedStateFile
+// seeds it so the cursor resolves for the spawned doctor tool).
+const statePath = (p: string): string => seededStateFile(p);
 
 /**
  * Replace the entire `- **Practices Affirmed Timestamp**: …` bullet line with

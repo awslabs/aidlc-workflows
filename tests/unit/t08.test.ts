@@ -96,15 +96,19 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
-  seedAuditFile,
+  intentsDirOf,
+  seededAuditDir,
+  seededRecordDir,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -125,19 +129,65 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-/** Fresh temp project (aidlc-docs/ scaffolded). Mirrors create_test_project. */
+/** Fresh temp project (per-intent workspace shell). Mirrors create_test_project. */
 function proj(): string {
   const p = createTestProject();
   tempDirs.push(p);
   return p;
 }
 
-const statePath = (p: string): string => join(p, "aidlc-docs", "aidlc-state.md");
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+// Per-intent record paths (P9 — the flat aidlc-docs/ root is retired). state +
+// recovery + heartbeat re-root under the default intent's record dir; the audit
+// trail is a DIR of per-clone shards (read via the glob below).
+const statePath = (p: string): string => join(seededRecordDir(p), "aidlc-state.md");
 const recoveryPath = (p: string): string =>
-  join(p, "aidlc-docs", ".aidlc-recovery.md");
+  join(seededRecordDir(p), ".aidlc-recovery.md");
 const heartbeatPath = (p: string): string =>
-  join(p, "aidlc-docs", ".aidlc-hooks-health", "validate-state.last");
+  join(seededRecordDir(p), ".aidlc-hooks-health", "validate-state.last");
+// With NO state file the active-intent cursor does not resolve (a record without
+// aidlc-state.md is not honoured), so docsRoot() falls back to the bare SPACE
+// record root — the heartbeat/breadcrumb land there, not under the record.
+const heartbeatPathNoState = (p: string): string =>
+  join(intentsDirOf(p), ".aidlc-hooks-health", "validate-state.last");
+const recoveryPathNoState = (p: string): string =>
+  join(intentsDirOf(p), ".aidlc-recovery.md");
+
+// The shard the spawned hook resolves, computed from a clone-id we pin on disk
+// (mirrors auditShardName()'s `<host>-<clone>.md` shape). Used only by test 13,
+// which needs the hook's audit-shard gate to pass.
+const PINNED_CLONE_ID = "testcloneid08";
+function pinnedShardName(): string {
+  const host =
+    hostname()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "host";
+  return `${host}-${PINNED_CLONE_ID}.md`;
+}
+/** Pin the clone-id + create the resolved audit shard so the SESSION_COMPACTED
+ *  gate (existsSync(auditFilePath)) passes; returns the audit DIR. */
+function seedAuditShard(p: string): string {
+  writeFileSync(join(p, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+  const auditDir = seededAuditDir(p);
+  mkdirSync(auditDir, { recursive: true });
+  writeFileSync(join(auditDir, pinnedShardName()), "", "utf-8");
+  return auditDir;
+}
+/** Concatenate every shard in an audit dir (clone-id-name-agnostic read). */
+function readShards(auditDir: string): string {
+  let names: string[];
+  try {
+    names = readdirSync(auditDir);
+  } catch {
+    return "";
+  }
+  return names
+    .filter((n) => n.endsWith(".md"))
+    .sort()
+    .map((n) => readFileSync(join(auditDir, n), "utf-8"))
+    .join("\n");
+}
 
 interface HookResult {
   status: number;
@@ -165,14 +215,13 @@ function runHook(p: string): HookResult {
 
 /** Write a bare state file with only the given heading lines (mirrors the .sh heredocs). */
 function writeState(p: string, content: string): void {
-  mkdirSync(join(p, "aidlc-docs"), { recursive: true });
+  mkdirSync(seededRecordDir(p), { recursive: true });
   writeFileSync(statePath(p), content, "utf-8");
 }
 
-/** Count `**Event**: SESSION_COMPACTED` block headings. Mirrors the .sh grep, as a count. */
-function sessionCompactedCount(file: string): number {
-  if (!existsSync(file)) return 0;
-  return readFileSync(file, "utf-8")
+/** Count `**Event**: SESSION_COMPACTED` block headings in a buffer. */
+function sessionCompactedCount(body: string): number {
+  return body
     .split("\n")
     .filter((l) => l === "**Event**: SESSION_COMPACTED").length;
 }
@@ -184,11 +233,10 @@ function sessionCompactedCount(file: string): number {
  * separator (mirrors auditField in t31.cli.test.ts / lastSubagentBlock in
  * t09.none.test.ts). Returns the field map; missing keys are absent.
  */
-function lastCompactedBlock(file: string): Record<string, string> {
-  if (!existsSync(file)) return {};
+function lastCompactedBlock(body: string): Record<string, string> {
   let current: Record<string, string> | null = null;
   let last: Record<string, string> = {};
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of body.split("\n")) {
     if (line.startsWith("## ")) {
       current = null;
       continue;
@@ -228,9 +276,9 @@ describe("t08 aidlc-validate-state hook (migrated from t08-hook-validate-state.s
     const p = proj();
     rmSync(statePath(p), { force: true });
     runHook(p);
-    expect(existsSync(heartbeatPath(p))).toBe(true);
+    expect(existsSync(heartbeatPathNoState(p))).toBe(true);
     // STRONGER: the heartbeat carries an ISO timestamp (hook line 28).
-    const ts = readFileSync(heartbeatPath(p), "utf-8").trim();
+    const ts = readFileSync(heartbeatPathNoState(p), "utf-8").trim();
     expect(ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
 
@@ -239,7 +287,7 @@ describe("t08 aidlc-validate-state hook (migrated from t08-hook-validate-state.s
     const p = proj();
     rmSync(statePath(p), { force: true });
     runHook(p);
-    expect(existsSync(recoveryPath(p))).toBe(false);
+    expect(existsSync(recoveryPathNoState(p))).toBe(false);
   });
 
   // --- Test 4: valid mid-ideation fixture -> no WARNING ---
@@ -350,33 +398,34 @@ describe("t08 aidlc-validate-state hook (migrated from t08-hook-validate-state.s
     expect(r.stderr).not.toMatch(/WARNING/i);
   });
 
-  // --- Test 13: audit.md present -> SESSION_COMPACTED emitted ---
-  test("13: audit.md present -> emits SESSION_COMPACTED", () => {
+  // --- Test 13: audit trail present -> SESSION_COMPACTED emitted ---
+  test("13: audit trail present -> emits SESSION_COMPACTED", () => {
     const p = proj();
     seedStateFile(p, "state-mid-ideation.md");
-    seedAuditFile(p);
-    const before = sessionCompactedCount(auditPath(p)); // seed baseline = 0
+    const auditDir = seedAuditShard(p); // pinned shard so the gate (existsSync(auditFilePath)) passes
+    const before = sessionCompactedCount(readShards(auditDir)); // seed baseline = 0 (empty shard)
     runHook(p);
     // STRONGER: counts the appended row against the seeded baseline (the
-    // audit-sample.md seed carries NO SESSION_COMPACTED block), not a bare grep.
-    expect(sessionCompactedCount(auditPath(p))).toBe(before + 1);
+    // empty shard carries NO SESSION_COMPACTED block), not a bare grep.
+    expect(sessionCompactedCount(readShards(auditDir))).toBe(before + 1);
     // STRONGER: the new block's exact field values, block-scoped (hook lines 61-67).
-    const blk = lastCompactedBlock(auditPath(p));
+    const blk = lastCompactedBlock(readShards(auditDir));
     expect(blk.Event).toBe("SESSION_COMPACTED");
     expect(blk["Current Stage"]).toBe("feasibility");
     expect(blk["State Validity"]).toBe("valid");
   });
 
-  // --- Test 14: no audit.md -> hook does NOT auto-create audit.md ---
-  test("14: no audit.md -> hook does not auto-create it (breadcrumb still written)", () => {
+  // --- Test 14: no audit shard -> hook does NOT auto-create the trail ---
+  test("14: no audit shard -> hook does not auto-create it (breadcrumb still written)", () => {
     const p = proj();
     seedStateFile(p, "state-mid-ideation.md");
-    rmSync(auditPath(p), { force: true });
+    const auditDir = seededAuditDir(p);
+    expect(existsSync(auditDir)).toBe(false);
     const r = runHook(p);
-    expect(existsSync(auditPath(p))).toBe(false);
-    // STRONGER: the audit emit is gated on audit.md presence, but the breadcrumb
-    // path is independent — so the hook still exits 0 and still writes the
-    // recovery breadcrumb (its primary signal, hook comment lines 7-8, 47).
+    expect(existsSync(auditDir)).toBe(false);
+    // STRONGER: the audit emit is gated on the shard's presence, but the
+    // breadcrumb path is independent — so the hook still exits 0 and still writes
+    // the recovery breadcrumb (its primary signal, hook comment lines 7-8, 49).
     expect(r.status).toBe(0);
     expect(existsSync(recoveryPath(p))).toBe(true);
   });

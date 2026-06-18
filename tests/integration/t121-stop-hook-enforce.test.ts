@@ -66,14 +66,24 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
+  intentsDirOf,
+  seededAuditDir,
+  seededRecordDir,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test (mirrors t104)
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -86,11 +96,49 @@ const HOOK_TS = join(
   "aidlc-stop.ts",
 );
 
-const GUARD_FILE_REL = join(
-  "aidlc-docs",
-  ".aidlc-stop-hook",
-  "block-count.json",
-);
+// P9 per-intent layout: the stop hook reads state (stateFilePath), the audit
+// (auditFilePath — its own resolved shard, for the progress-signature length),
+// the guard counter (stopHookDir → <record>/.aidlc-stop-hook/block-count.json),
+// and the current stage's memory/questions dir (<record>/<phase>/<slug>/). All
+// re-root under the active intent's record. We PIN the clone-id so the hook
+// (subprocess) and progressSig (in-process) resolve the SAME audit shard.
+const PINNED_CLONE_ID = "testcloneid121";
+function pinnedShardName(): string {
+  const host =
+    hostname()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "host";
+  return `${host}-${PINNED_CLONE_ID}.md`;
+}
+function pinnedShardPath(proj: string): string {
+  return join(seededAuditDir(proj), pinnedShardName());
+}
+/** Seed the per-intent workspace shell + pin the clone-id (mirrors fixtures.ts
+ *  seedWorkspaceShell). */
+function seedShell(proj: string): void {
+  const intentsDir = intentsDirOf(proj, DEFAULT_SPACE);
+  mkdirSync(join(proj, "aidlc", "spaces", DEFAULT_SPACE, "memory"), { recursive: true });
+  mkdirSync(seededRecordDir(proj), { recursive: true });
+  writeFileSync(join(proj, "aidlc", "active-space"), `${DEFAULT_SPACE}\n`, "utf-8");
+  writeFileSync(join(intentsDir, "active-intent"), `${DEFAULT_RECORD_DIR}\n`, "utf-8");
+  writeFileSync(
+    join(intentsDir, "intents.json"),
+    `${JSON.stringify(
+      [{ uuid: "00000000-0000-7000-8000-000000000001", slug: DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, ""), status: "in-flight" }],
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+}
+
+// The stop-hook guard counter, re-rooted under the record (stopHookDir).
+function guardFilePath(proj: string): string {
+  return join(seededRecordDir(proj), ".aidlc-stop-hook", "block-count.json");
+}
 
 const tempDirs: string[] = [];
 
@@ -115,28 +163,37 @@ if (kind === "done") {
 process.exit(0);
 `;
 
-/** A self-contained project with a MOCK engine. Mirrors make_project (.sh). */
+/** A self-contained project with a MOCK engine + the per-intent shell (so the
+ *  stop hook's state/audit/guard/memory paths resolve under the record). Mirrors
+ *  make_project (.sh). */
 function makeProject(): string {
   const proj = mkdtempSync(join(tmpdir(), "aidlc-t121-"));
   tempDirs.push(proj);
   mkdirSync(join(proj, ".claude", "tools"), { recursive: true });
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
   writeFileSync(
     join(proj, ".claude", "tools", "aidlc-orchestrate.ts"),
     MOCK_ENGINE,
     "utf-8",
   );
+  seedShell(proj);
   return proj;
+}
+
+/** Write the audit fixture into the pinned per-clone shard (the stop hook reads
+ *  auditFilePath(projectDir) — that exact shard — for the progress signature). */
+function seedAuditShard(proj: string, body = "audit row 1\n"): void {
+  mkdirSync(seededAuditDir(proj), { recursive: true });
+  writeFileSync(pinnedShardPath(proj), body, "utf-8");
 }
 
 /** Seed an active mid-stage workflow so the hook reaches the engine call. */
 function seedActive(proj: string, slug = "requirements-analysis"): void {
   writeFileSync(
-    join(proj, "aidlc-docs", "aidlc-state.md"),
+    seededStateFile(proj),
     `- **Workflow**: feature\n- **Scope**: feature\n- **Current Stage**: ${slug}\n`,
     "utf-8",
   );
-  writeFileSync(join(proj, "aidlc-docs", "audit.md"), "audit row 1\n", "utf-8");
+  seedAuditShard(proj);
 }
 
 /**
@@ -154,12 +211,12 @@ function seedActiveWithCheckbox(
   slug = "requirements-analysis",
 ): void {
   writeFileSync(
-    join(proj, "aidlc-docs", "aidlc-state.md"),
+    seededStateFile(proj),
     `- **Workflow**: feature\n- **Scope**: feature\n- **Current Stage**: ${slug}\n` +
       `\n## Stage Progress\n- [${marker}] ${slug} — EXECUTE\n`,
     "utf-8",
   );
-  writeFileSync(join(proj, "aidlc-docs", "audit.md"), "audit row 1\n", "utf-8");
+  seedAuditShard(proj);
 }
 
 /**
@@ -184,15 +241,16 @@ function seedInProgressWithQuestions(
     ? `- **Construction Autonomy Mode**: ${opts.autonomy}\n`
     : "";
   writeFileSync(
-    join(proj, "aidlc-docs", "aidlc-state.md"),
+    seededStateFile(proj),
     `- **Workflow**: feature\n- **Scope**: feature\n- **Lifecycle Phase**: ${phase.toUpperCase()}\n` +
       `- **Current Stage**: ${slug}\n${autonomyLine}` +
       `\n## Stage Progress\n- [-] ${slug} — EXECUTE\n`,
     "utf-8",
   );
-  writeFileSync(join(proj, "aidlc-docs", "audit.md"), "audit row 1\n", "utf-8");
+  seedAuditShard(proj);
   if (opts.questions !== undefined) {
-    const stageDir = join(proj, "aidlc-docs", phase.toLowerCase(), slug);
+    // The stage's questions/memory dir re-roots under the record (<record>/<phase>/<slug>/).
+    const stageDir = join(seededRecordDir(proj), phase.toLowerCase(), slug);
     mkdirSync(stageDir, { recursive: true });
     writeFileSync(join(stageDir, `${slug}-questions.md`), opts.questions, "utf-8");
   }
@@ -240,17 +298,14 @@ function runHook(
  * .sh's progress_sig (and aidlc-stop.ts:137 progressSignature).
  */
 function progressSig(proj: string): string {
-  const s = readFileSync(
-    join(proj, "aidlc-docs", "aidlc-state.md"),
-    "utf-8",
-  );
+  const s = readFileSync(seededStateFile(proj), "utf-8");
   const m = s.match(/Current Stage\*{0,2}:?\s*`?([^\n`]*)`?/);
   const stage = (m?.[1] ?? "").trim();
   let al = 0;
   try {
-    al = readFileSync(join(proj, "aidlc-docs", "audit.md"), "utf-8").split(
-      "\n",
-    ).length;
+    // The hook reads its own resolved shard (auditFilePath); with the pinned
+    // clone-id that is exactly the pinned shard, so read the same one.
+    al = readFileSync(pinnedShardPath(proj), "utf-8").split("\n").length;
   } catch {
     /* audit absent => 0 */
   }
@@ -260,9 +315,7 @@ function progressSig(proj: string): string {
 /** Read the persisted no-progress counter (or null if missing/corrupt). */
 function guardCount(proj: string): number | null {
   try {
-    return JSON.parse(
-      readFileSync(join(proj, GUARD_FILE_REL), "utf-8"),
-    ).count as number;
+    return JSON.parse(readFileSync(guardFilePath(proj), "utf-8")).count as number;
   } catch {
     return null;
   }
@@ -341,12 +394,12 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
   test("(c1) recursion guard at ceiling exits 0", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
-    mkdirSync(join(proj, "aidlc-docs", ".aidlc-stop-hook"), {
+    mkdirSync(join(seededRecordDir(proj), ".aidlc-stop-hook"), {
       recursive: true,
     });
     const sig = progressSig(proj);
     writeFileSync(
-      join(proj, GUARD_FILE_REL),
+      guardFilePath(proj),
       JSON.stringify({ signature: sig, count: 8 }),
       "utf-8",
     );
@@ -357,12 +410,12 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
   test("(c1) counter at default cap (8) + stop_hook_active:true releases (no block) — session NOT trapped", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
-    mkdirSync(join(proj, "aidlc-docs", ".aidlc-stop-hook"), {
+    mkdirSync(join(seededRecordDir(proj), ".aidlc-stop-hook"), {
       recursive: true,
     });
     const sig = progressSig(proj);
     writeFileSync(
-      join(proj, GUARD_FILE_REL),
+      guardFilePath(proj),
       JSON.stringify({ signature: sig, count: 8 }),
       "utf-8",
     );
@@ -402,17 +455,13 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
     runHook(proj, '{"stop_hook_active":true}', "run-stage", "8");
     runHook(proj, '{"stop_hook_active":true}', "run-stage", "8");
     const countBefore = guardCount(proj);
-    // Simulate a report landing: Current Stage pivots, audit.md grows.
+    // Simulate a report landing: Current Stage pivots, the audit shard grows.
     writeFileSync(
-      join(proj, "aidlc-docs", "aidlc-state.md"),
+      seededStateFile(proj),
       "- **Workflow**: feature\n- **Scope**: feature\n- **Current Stage**: stage-b\n",
       "utf-8",
     );
-    writeFileSync(
-      join(proj, "aidlc-docs", "audit.md"),
-      "audit row 1\naudit row 2\n",
-      "utf-8",
-    );
+    seedAuditShard(proj, "audit row 1\naudit row 2\n");
     runHook(proj, '{"stop_hook_active":true}', "run-stage", "8");
     const countAfter = guardCount(proj);
     // .sh: count_after == 1 && count_before != 1. After two no-progress blocks

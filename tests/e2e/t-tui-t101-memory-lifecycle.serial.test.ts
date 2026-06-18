@@ -15,7 +15,7 @@
 // WHAT IT PROVES (the memory.md lifecycle the SKILL.md ## Routing block drives):
 //   - init-from-template fires at stage START — the orchestrator copies
 //     knowledge/aidlc-shared/memory-template.md into the stage's
-//     aidlc-docs/ideation/approval-handoff/memory.md (file exists, non-empty).
+//     <record>/ideation/approval-handoff/memory.md (file exists, non-empty).
 //   - the created file carries all FOUR canonical `## ` H2 headings
 //     (## Interpretations / ## Deviations / ## Tradeoffs / ## Open questions)
 //     — the .sh's assertion 2.
@@ -85,6 +85,7 @@ import { join } from "node:path";
 // (aidlc-lib.ts:982). Importing it here ports the .sh's parser↔disk assertion 7.
 // aidlc-lib.ts is import-safe (no node-pty); safe under bun on every platform.
 import { parseMemoryHeadings } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { resolveWinNode } from "../harness/tui-drive.ts";
 import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
 
@@ -107,9 +108,10 @@ const DRIVE_PREFIX = IS_WIN ? ["--experimental-strip-types", DRIVER] : [DRIVER];
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
 const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
 
-// The terminal artifact the journey terminates on (relative to the project dir).
-// Created at stage start; its existence + content is the lifecycle contract.
-const MEM_RELPATH = "aidlc-docs/ideation/approval-handoff/memory.md";
+// The terminal artifact the journey terminates on (relative to the active intent
+// RECORD dir — P9 per-intent layout). Created at stage start; its existence +
+// content is the lifecycle contract.
+const MEM_RELPATH = join("ideation", "approval-handoff", "memory.md");
 
 // The verbatim template ownership blockquote (knowledge/aidlc-shared/
 // memory-template.md). The init is an LLM-driven copy of that template; a faithful
@@ -219,7 +221,7 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         }
         // Seeded mid-ideation state -> the statusline paints the WORKFLOW line
         // ([AIDLC] IDEATION), not the no-workflow "ready" line.
-        expect(waitFor(session, "\\[AIDLC\\] IDEATION", 45000, 800)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*IDEATION", 45000, 800)).toBe(true);
 
         // --- jump to the approval-handoff gate stage (NO --test-run) ----------
         // Slash command has spaces -> send literally with no auto-Enter, then
@@ -240,7 +242,7 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         // the stage name moves toward Approval & Handoff as the orchestrator
         // works). --stable-ms 0: the screen is streaming, so match the instant
         // the marker appears.
-        expect(waitFor(session, "\\[AIDLC\\] IDEATION", 120000, 0)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*IDEATION", 120000, 0)).toBe(true);
 
         // --- PATTERN A (land + render), NOT answer-and-advance --------------
         // t101's contract is the memory.md START→APPROVAL lifecycle observed WHILE
@@ -280,7 +282,7 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         expect(gateRendered).toBe(true);
 
         // --- assert ON DISK (equal-or-stronger than the .sh) ------------------
-        const memPath = join(sandbox, MEM_RELPATH);
+        const memPath = join(seededRecordDir(sandbox), MEM_RELPATH);
         // 1. memory.md exists & non-empty (.sh assertion 1). The terminator
         //    guarantees this on green; we read it for the content asserts.
         expect(existsSync(memPath)).toBe(true);
@@ -330,10 +332,7 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         // 5. the jump landed: aidlc-state.md Current Stage == approval-handoff
         //    (the on-disk proof the orchestrator entered the target stage — the
         //    precondition for the memory.md init to have fired here at all).
-        const stateMd = readFileSync(
-          join(sandbox, "aidlc-docs", "aidlc-state.md"),
-          "utf8",
-        );
+        const stateMd = readFileSync(seededStateFile(sandbox), "utf8");
         expect(stateMd).toMatch(/\*\*Current Stage\*\*:[ \t]*approval-handoff\b/);
 
         // (The render assertion — the AUQ gate footer painted — is proven above by

@@ -29,7 +29,7 @@
 //       — Ideation is never entered.
 //   .sh -> DISK ASSERTION MAP (each grep becomes a structured disk read):
 //     #1  state file created                 -> existsSync(aidlc-state.md)
-//     #2  no ideation artifacts              -> aidlc-docs/ideation/ absent OR empty
+//     #2  no ideation artifacts              -> <record>/ideation/ absent OR empty
 //     #3  no Ideation stage marked [x]       -> 0 lines match `[x] <ideation-slug>`
 //     #4  Inception stages present in state  -> /reverse-engineering|requirements-analysis/
 //     #5  Construction stages present        -> /code-generation|build-and-test/
@@ -95,6 +95,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
+import { auditFilePathFor, recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
 import { resolveWinNode } from "../harness/tui-drive.ts";
 import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
 
@@ -200,7 +201,7 @@ async function waitForDisk(pred: () => boolean, timeoutMs: number): Promise<bool
 // the live `[x]` count on every advance/skip by aidlc-state.ts:258/405/472).
 // Returns the integer, or -1 if absent/unreadable.
 function completedCount(projectDir: string): number {
-  const statePath = join(projectDir, "aidlc-docs", "aidlc-state.md");
+  const statePath = stateFilePathFor(projectDir);
   if (!existsSync(statePath)) return -1;
   try {
     const m = readFileSync(statePath, "utf8").match(/^-\s*\*\*Completed\*\*:\s*(\d+)/m);
@@ -252,7 +253,7 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
           drive(["send", "--session", session, "--keys", "2"]);
         }
         // Fresh project -> the no-workflow `[AIDLC] ready` baseline.
-        expect(waitFor(session, "\\[AIDLC\\] ready", 45000, 800)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
 
         // --- submit the workshop command ----------------------------------------
         // Slash command has spaces -> send literally with no auto-Enter, then a
@@ -274,8 +275,10 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
         // text only — platform-invariant (no colour escapes).
         pollTimer = setInterval(() => {
           const grid = drive(["capture", "--session", session]).stdout;
-          if (grid.includes("[AIDLC] INCEPTION")) sawInception = true;
-          if (grid.includes("[AIDLC] IDEATION")) sawIdeation = true;
+          // P9: the statusline carries an orientation prefix ("<intent-slug> · ")
+          // before the phase, so anchor on the "· <PHASE>" separator.
+          if (grid.includes("· INCEPTION")) sawInception = true;
+          if (grid.includes("· IDEATION")) sawIdeation = true;
           if (grid.includes("Enter to select") || grid.includes("Submit answers")) {
             sawMenu = true;
           }
@@ -334,16 +337,16 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
         expect(reached).toBe(true);
 
         // ===================== ON DISK (the .sh's 14 assertions) =================
-        const statePath = join(proj, "aidlc-docs", "aidlc-state.md");
-        const auditPath = join(proj, "aidlc-docs", "audit.md");
+        const statePath = stateFilePathFor(proj);
+        const auditPath = auditFilePathFor(proj);
 
         // #1 state file created.
         expect(existsSync(statePath)).toBe(true);
         const stateMd = readFileSync(statePath, "utf8");
 
-        // #2 no ideation artifacts: workshop SKIPs all ideation, so aidlc-docs/
-        //    ideation/ is either absent or empty (the .sh's two-branch check).
-        const ideationDir = join(proj, "aidlc-docs", "ideation");
+        // #2 no ideation artifacts: workshop SKIPs all ideation, so the record's
+        //    ideation/ dir is either absent or empty (the .sh's two-branch check).
+        const ideationDir = join(recordDirFor(proj), "ideation");
         if (existsSync(ideationDir)) {
           const ideationFiles = walkFiles(ideationDir);
           expect(ideationFiles.length).toBe(0);

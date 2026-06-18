@@ -80,6 +80,7 @@ import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
+  removeWorkspaceRecord,
   resetAidlcEnv,
   seedStateFile,
 } from "../harness/fixtures.ts";
@@ -309,6 +310,10 @@ describe("t114 cutover: no --args swallow", () => {
 describe("t114 --init test-run threading", () => {
   test("15a: --init --test-run threads --test-run into the scaffold command (birth test-run persistence)", () => {
     proj = createTestProject();
+    // P9: --init births the FIRST intent — drop the seeded record so the
+    // workspace is genuinely empty and the birth/scaffold path fires (a seeded
+    // record makes the engine ask to select an intent instead).
+    removeWorkspaceRecord(proj);
     expect(
       runNext(proj, ["--init", "--scope", "bugfix", "--test-run"]).out,
     ).toContain("--test-run");
@@ -316,6 +321,7 @@ describe("t114 --init test-run threading", () => {
 
   test("15b: --init without --test-run does NOT thread --test-run (control)", () => {
     proj = createTestProject();
+    removeWorkspaceRecord(proj);
     expect(runNext(proj, ["--init", "--scope", "bugfix"]).out).not.toContain(
       "--test-run",
     );

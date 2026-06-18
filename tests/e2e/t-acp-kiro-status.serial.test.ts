@@ -28,7 +28,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { seededStateFile } from "../harness/fixtures.ts";
 import { driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
 
@@ -81,9 +81,11 @@ describe("t-acp-kiro-status (structured ACP round-trip on the shipped dist/kiro)
         expect(statusCall).toBeDefined();
         expect(statusCall!.output.join("")).toContain("No active AI-DLC workflow");
 
-        // Read-only: no state scaffolded by a status run.
+        // Read-only: no state scaffolded by a status run. The seeded record was
+        // stripped (noAidlcDocs); status births nothing, so the per-intent state
+        // file the seeded record would hold never appears.
         expect(r.stateFile).toBeUndefined();
-        expect(existsSync(join(sandbox, "aidlc-docs", "aidlc-state.md"))).toBe(false);
+        expect(existsSync(seededStateFile(sandbox))).toBe(false);
       } finally {
         cleanupTuiProject(sandbox);
       }

@@ -86,14 +86,20 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname } from "node:os";
 import { join } from "node:path";
-import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  AIDLC_SRC,
+  cleanupTestProject,
+  createTestProject,
+  seededAuditDir,
+  seededRecordDir,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
 const SETTINGS = join(AIDLC_SRC, "settings.json");
@@ -101,9 +107,27 @@ const SKILL = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 const SRC_TOOLS = join(AIDLC_SRC, "tools");
 const SRC_HOOKS = join(AIDLC_SRC, "hooks");
 
+// P9 per-intent layout: the audit-logger + runtime-compile spine resolves state
+// via stateFilePath() and the audit trail via auditFilePath()/readAllAuditShards()
+// under the active intent's record. We PIN the clone-id so the seeded shard and
+// the hook's resolved shard agree; reads glob every shard.
+const PINNED_CLONE_ID = "testcloneid131";
+function pinnedShardName(): string {
+  const host =
+    hostname()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "host";
+  return `${host}-${PINNED_CLONE_ID}.md`;
+}
+function pinnedShardPath(proj: string): string {
+  return join(seededAuditDir(proj), pinnedShardName());
+}
+
 const tempDirs: string[] = [];
 afterAll(() => {
-  for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
+  for (const d of tempDirs) cleanupTestProject(d);
 });
 
 // ============================================================================
@@ -238,9 +262,8 @@ describe("t131 hooks-move registration (settings.json + SKILL.md, mechanism none
  * the bare self-gate project omits it).
  */
 function makeProject(withState: boolean): string {
-  const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t131-")));
+  const proj = createTestProject();
   tempDirs.push(proj);
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
   mkdirSync(join(proj, ".claude", "tools", "data"), { recursive: true });
   mkdirSync(join(proj, ".claude", "hooks"), { recursive: true });
   for (const t of ["aidlc-runtime.ts", "aidlc-lib.ts", "aidlc-audit.ts"]) {
@@ -253,12 +276,12 @@ function makeProject(withState: boolean): string {
   for (const h of ["aidlc-audit-logger.ts", "aidlc-runtime-compile.ts"]) {
     copyFileSync(join(SRC_HOOKS, h), join(proj, ".claude", "hooks", h));
   }
+  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   if (withState) {
-    writeFileSync(
-      join(proj, "aidlc-docs", "aidlc-state.md"),
-      "- **Scope**: bugfix",
-      "utf-8",
-    );
+    // State into the record so the active-intent cursor resolves → the hooks
+    // anchor under the record (docsRoot/auditFilePath/runtimeGraphPath).
+    mkdirSync(seededRecordDir(proj), { recursive: true });
+    writeFileSync(seededStateFile(proj), "- **Scope**: bugfix", "utf-8");
   }
   return proj;
 }
@@ -267,10 +290,8 @@ const auditLoggerHook = (proj: string): string =>
   join(proj, ".claude", "hooks", "aidlc-audit-logger.ts");
 const runtimeCompileHook = (proj: string): string =>
   join(proj, ".claude", "hooks", "aidlc-runtime-compile.ts");
-const auditPath = (proj: string): string =>
-  join(proj, "aidlc-docs", "audit.md");
 const graphPath = (proj: string): string =>
-  join(proj, "aidlc-docs", "runtime-graph.json");
+  join(seededRecordDir(proj), "runtime-graph.json");
 
 interface HookResult {
   status: number;
@@ -312,15 +333,17 @@ const TRANSITION_AUDIT = `## Stage Start
 describe("t131 spine fires inside a workflow (mechanism cli — spawnSync)", () => {
   test("B1: in-workflow Write -> audit-logger appends an audit row [.sh test 11]", () => {
     const proj = makeProject(true);
-    // audit.md present == active workflow; the .sh seeds "# audit\n".
-    writeFileSync(auditPath(proj), "# audit\n", "utf-8");
-    const before = readFileSync(auditPath(proj), "utf-8").split("\n").length;
+    // The audit SHARD present == active workflow (the audit-logger's :73 gate);
+    // pin it as the seed so the hook (same clone-id) appends to this shard.
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(pinnedShardPath(proj), "# audit\n", "utf-8");
+    const before = readAllAuditShards(proj).split("\n").length;
     const json = JSON.stringify({
       tool_name: "Write",
       tool_input: {
+        // Under the per-intent record so the audit-logger's docsRoot() gate fires.
         file_path: join(
-          proj,
-          "aidlc-docs",
+          seededRecordDir(proj),
           "inception",
           "requirements-analysis",
           "requirements.md",
@@ -329,16 +352,19 @@ describe("t131 spine fires inside a workflow (mechanism cli — spawnSync)", () 
     });
     const r = runHook(auditLoggerHook(proj), proj, json);
     expect(r.status).toBe(0); // STRONGER: the .sh swallowed the exit code.
-    const after = readFileSync(auditPath(proj), "utf-8").split("\n").length;
+    const after = readAllAuditShards(proj).split("\n").length;
     expect(after).toBeGreaterThan(before);
     // STRONGER than the .sh's wc -l comparison: an actual artifact row landed.
-    const body = readFileSync(auditPath(proj), "utf-8");
+    const body = readAllAuditShards(proj);
     expect(/\*\*Event\*\*:\s*ARTIFACT_(CREATED|UPDATED)/.test(body)).toBe(true);
   }, 30000);
 
   test("B2: in-workflow transition -> runtime-compile emits runtime-graph.json [.sh test 12]", () => {
     const proj = makeProject(true);
-    writeFileSync(auditPath(proj), TRANSITION_AUDIT, "utf-8");
+    // The transition trail goes into the record's audit shard (runtime-compile
+    // reads readAllAuditShards of the active intent).
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(pinnedShardPath(proj), TRANSITION_AUDIT, "utf-8");
     const json = JSON.stringify({
       tool_name: "Bash",
       tool_input: {
@@ -371,8 +397,8 @@ describe("t131 spine self-gates to a no-op outside a workflow (mechanism cli —
       tool_input: { file_path: join(proj, "aidlc-docs", "inception", "x.md") },
     });
     runHook(auditLoggerHook(proj), proj, json);
-    // The "don't auto-create audit.md" guard (hook :55) holds: no audit.md.
-    expect(existsSync(auditPath(proj))).toBe(false);
+    // The "don't auto-create the audit trail" guard (hook :73) holds: no shard.
+    expect(readAllAuditShards(proj)).toBe("");
   }, 30000);
 
   test("S3: outside a workflow -> runtime-compile exits 0 (self-gate) [.sh test 15]", () => {

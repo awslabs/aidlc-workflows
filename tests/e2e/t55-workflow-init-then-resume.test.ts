@@ -97,14 +97,15 @@ const INIT_STATE_SUMMARY = "State initialized:"; // utility.ts:2154
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
 const INIT_STAGES = ["workspace-scaffold", "workspace-detection", "state-init"];
 
-describe("t55 /aidlc --init then --scope bugfix resume continuity (sdk)", () => {
+describe("t55 /aidlc birth (--scope bugfix) then resume continuity (sdk)", () => {
   // -------------------------------------------------------------------------
-  // Two sequential turns against one fresh project: init establishes state, then
-  // a --scope bugfix turn RESUMES from it (init [x] markers persist, audit grows).
-  // NO --test-run; deep progression is the tui t50 journey's surface.
+  // Two sequential turns against one fresh project: turn 1 births the workflow
+  // from a scope (P4 retired --init — a scope on a clean workspace auto-births),
+  // turn 2 a --scope bugfix turn RESUMES from it (init [x] markers persist, audit
+  // grows). NO --test-run; deep progression is the tui t50 journey's surface.
   // -------------------------------------------------------------------------
   test(
-    "init establishes state; a second scope turn resumes from it (init stages persist, audit grows across sessions)",
+    "birth establishes state; a second scope turn resumes from it (init stages persist, audit grows across sessions)",
     async () => {
       const proj = setupIntegrationProject({ noAidlcDocs: true });
       try {
@@ -116,14 +117,20 @@ describe("t55 /aidlc --init then --scope bugfix resume continuity (sdk)", () => 
         const statePath = () => stateFilePathFor(proj);
         const auditDir = () => auditDirFor(proj);
 
-        // ---- Turn 1: /aidlc --init ----
-        const r1 = await driveAidlc("/aidlc --init", {
+        // ---- Turn 1: /aidlc --scope bugfix (BIRTH the workflow) ----
+        // P4 retired `/aidlc --init`: on a fresh workspace the engine auto-births
+        // the first intent from a resolved scope (the old --init had no scope and
+        // now errors directing the user to a scope/description). A named scope on a
+        // clean workspace NAMES intent-birth, which scaffolds state + marks the 3
+        // init stages [x] — the birth this journey starts from.
+        const r1 = await driveAidlc("/aidlc --scope bugfix", {
           projectDir: proj,
+          answerScript: "default",
           timeoutMs: DRIVE_TIMEOUT_MS,
           stopAfterToolResult: STOP_AFTER_INIT,
         });
 
-        // .sh test 1: after init, the state file exists.
+        // .sh test 1: after birth, the state file exists.
         expect(existsSync(statePath())).toBe(true);
         const stateAfterInit = readStateFile(proj);
         expect(stateAfterInit).toBeDefined();

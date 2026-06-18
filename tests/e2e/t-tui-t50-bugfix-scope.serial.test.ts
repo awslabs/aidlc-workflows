@@ -22,7 +22,7 @@
 //     Inception stage progressed"):
 //       * the Completed counter crosses 5 (init=3 + >= 2 Inception); this is the
 //         answer-gate terminator (--until-state-field "Completed=([5-9]|[1-9][0-9])"),
-//       * aidlc-docs/aidlc-state.md records the `bugfix` scope + a brownfield
+//       * the born intent's aidlc-state.md records the `bugfix` scope + a brownfield
 //         classification (.sh tests 3 + 16),
 //       * State Version is 7 (.sh test 12),
 //       * MORE than 4 stages are marked complete `- [x]` (.sh test 13),
@@ -96,6 +96,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
+import { auditFilePathFor, recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
 import { gridHasMenu, resolveWinNode } from "../harness/tui-drive.ts";
 import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
 
@@ -209,7 +210,7 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
           drive(["send", "--session", session, "--keys", "2"]);
         }
         // Fresh project (no seeded state) -> the no-workflow "ready" line.
-        expect(waitFor(session, "\\[AIDLC\\] ready", 45000, 800)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
 
         // --- submit the bugfix workflow command (NO --test-run) ----------------
         // Use the EXPLICIT `--scope bugfix` flag, not the bare freeform `bugfix`
@@ -303,7 +304,7 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
 
         // --- assert ON DISK (equal-or-stronger than the .sh's greps) -----------
         // .sh tests 1 + 2: state + audit files created (readFileSync throws if not).
-        const stateMd = readFileSync(join(sandbox, "aidlc-docs", "aidlc-state.md"), "utf8");
+        const stateMd = readFileSync(stateFilePathFor(sandbox), "utf8");
 
         // .sh test 3: bugfix scope recorded ([Bb]ugfix).
         expect(stateMd).toMatch(/bugfix/i);
@@ -353,14 +354,14 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         ).toBe(false);
 
         // .sh test 11: knowledge directory created.
-        const knowledgeDir = join(sandbox, "aidlc-docs", "knowledge");
+        const knowledgeDir = join(recordDirFor(sandbox), "knowledge");
         expect(existsSync(knowledgeDir) && statSync(knowledgeDir).isDirectory()).toBe(true);
 
         // .sh tests 18-19, 22-23: the reverse-engineering directory exists with
         // >= 4 `.md` artifacts, carries markdown headings, and at least one is
         // > 200 bytes. bugfix on a brownfield workspace ALWAYS runs RE, so this is
         // a hard scaffold assertion, not a soft probe.
-        const reDir = join(sandbox, "aidlc-docs", "inception", "reverse-engineering");
+        const reDir = join(recordDirFor(sandbox), "inception", "reverse-engineering");
         expect(existsSync(reDir) && statSync(reDir).isDirectory()).toBe(true);
         const reFiles = readdirSync(reDir).filter((f) => f.endsWith(".md"));
         // .sh test 19: >= 4 RE .md artifacts (assert_gt 3).
@@ -375,7 +376,8 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         expect(reBig).toBeGreaterThan(0);
 
         // .sh test 14: audit log exists with substantial content (> 200 bytes).
-        const auditPath = join(sandbox, "aidlc-docs", "audit.md");
+        // P9 shards audit per clone; a single live process writes one shard.
+        const auditPath = auditFilePathFor(sandbox);
         expect(existsSync(auditPath)).toBe(true);
         expect(statSync(auditPath).size).toBeGreaterThan(200);
 

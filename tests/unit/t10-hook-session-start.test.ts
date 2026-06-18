@@ -81,7 +81,7 @@
 //     the hook writes), strictly stronger than the .sh's `-z` on merged output.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -89,6 +89,8 @@ import {
   createTestProject,
   FIXTURES_DIR,
   seedAuditFile,
+  seededAuditDir,
+  seededRecordDir,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -101,24 +103,36 @@ const CORRUPTED = join(FIXTURES_DIR, "state-corrupted.md");
 
 let proj: string;
 
+// Per-intent record paths (P9 — the flat aidlc-docs/ root is retired). state +
+// heartbeat + recovery re-root under the default intent's record; the audit
+// trail is a DIR of per-clone shards (read via the glob below). session-start's
+// appendAuditEntry CREATES its own shard if missing (no audit-existence gate), so
+// no shard needs pre-seeding — seedAuditFile only supplies the count baseline.
 function statePath(p: string): string {
-  return join(p, "aidlc-docs", "aidlc-state.md");
-}
-
-function auditPath(p: string): string {
-  return join(p, "aidlc-docs", "audit.md");
+  return join(seededRecordDir(p), "aidlc-state.md");
 }
 
 function readAudit(p: string): string {
-  return readFileSync(auditPath(p), "utf-8");
+  const auditDir = seededAuditDir(p);
+  let names: string[];
+  try {
+    names = readdirSync(auditDir);
+  } catch {
+    return "";
+  }
+  return names
+    .filter((n) => n.endsWith(".md"))
+    .sort()
+    .map((n) => readFileSync(join(auditDir, n), "utf-8"))
+    .join("\n");
 }
 
 function heartbeatPath(p: string): string {
-  return join(p, "aidlc-docs", ".aidlc-hooks-health", "session-start.last");
+  return join(seededRecordDir(p), ".aidlc-hooks-health", "session-start.last");
 }
 
 function recoveryPath(p: string): string {
-  return join(p, "aidlc-docs", ".aidlc-recovery.md");
+  return join(seededRecordDir(p), ".aidlc-recovery.md");
 }
 
 interface FireResult {

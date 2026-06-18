@@ -93,6 +93,7 @@ import {
   createTestProject,
   FIXTURES_DIR,
   resetAidlcEnv,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -148,8 +149,9 @@ function cleanProj(): string {
   return p;
 }
 
-const statePath = (p: string): string =>
-  join(p, "aidlc-docs", "aidlc-state.md");
+// P9: state lives in the seeded per-intent record the subprocess resolves via
+// the active-intent cursor (the flat aidlc-docs/ root is retired).
+const statePath = (p: string): string => seededStateFile(p);
 
 // Parse the single directive JSON the engine emits on stdout (the .sh's
 // json_field python helper, but a real JSON.parse of the whole object — STRONGER

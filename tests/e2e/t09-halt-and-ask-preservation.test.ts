@@ -66,11 +66,13 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
+  seededAuditDir,
+  seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
@@ -83,10 +85,15 @@ afterAll(() => {
   for (const f of fixtures) cleanupWorktreeFixture(f);
 });
 
-/** Fresh git-repo fixture on `main` + aidlc-docs/, registered for cleanup. */
+/** Fresh git-repo fixture on `main` with the per-intent workspace shell. Seed a
+ *  state file into the default record so the active-intent cursor resolves and
+ *  the WORKTREE_CREATED/BOLT_FAILED audit lands in the record (the fixture's
+ *  record is stateless; without aidlc-state.md the cursor is rejected and the
+ *  audit lands at the bare space root). Registered for cleanup. */
 function freshFixture(): string {
   const p = setupWorktreeFixture();
   fixtures.push(p);
+  writeFileSync(seededStateFile(p), "- **Current Stage**: code-generation\n", "utf-8");
   return p;
 }
 
@@ -106,13 +113,19 @@ function run(p: string, tool: string, args: string[]): CliResult {
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
 }
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
 const wtDir = (p: string, slug: string): string =>
   join(p, ".aidlc", "worktrees", `bolt-${slug}`);
 
+/** Concatenate every audit shard (audit/*.md) for the seeded record. */
 function auditBody(p: string): string {
-  const f = auditPath(p);
-  return existsSync(f) ? readFileSync(f, "utf-8") : "";
+  const dir = seededAuditDir(p);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+  } catch {
+    return "";
+  }
+  return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
 }
 
 /** Count `**Event**: <type>` rows of a given event type in audit.md. */

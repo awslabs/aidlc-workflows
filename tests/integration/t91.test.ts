@@ -79,7 +79,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { toPortablePath } from "../harness/fixtures.ts";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  cleanupTestProject,
+  createTestProject,
+  seededAuditDir,
+  seededRecordDir,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -89,7 +96,7 @@ const SRC_HOOKS = join(REPO_ROOT, "dist", "claude", ".claude", "hooks");
 const tempDirs: string[] = [];
 
 afterAll(() => {
-  for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
+  for (const d of tempDirs) cleanupTestProject(d);
 });
 
 /**
@@ -101,9 +108,8 @@ afterAll(() => {
  * the path on Windows.
  */
 function makeProject(): string {
-  const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t91-")));
+  const proj = createTestProject();
   tempDirs.push(proj);
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
   mkdirSync(join(proj, ".claude", "tools", "data"), { recursive: true });
   mkdirSync(join(proj, ".claude", "hooks"), { recursive: true });
   copyFileSync(
@@ -126,22 +132,27 @@ function makeProject(): string {
     join(SRC_HOOKS, "aidlc-runtime-compile.ts"),
     join(proj, ".claude", "hooks", "aidlc-runtime-compile.ts"),
   );
-  writeFileSync(
-    join(proj, "aidlc-docs", "aidlc-state.md"),
-    "- **Scope**: feature",
-    "utf-8",
-  );
+  // P9: write the minimal state into the default record so the active-intent
+  // cursor resolves → the hook reads the record's audit shards (readAllAuditShards)
+  // and writes runtime-graph.json under the record (runtimeGraphPath).
+  mkdirSync(seededRecordDir(proj), { recursive: true });
+  writeFileSync(seededStateFile(proj), "- **Scope**: feature", "utf-8");
+  // Pre-create the record's audit/ DIR so the tests can write the AUDIT_*
+  // fixture directly into a shard (auditPath → <record>/audit/fixture.md).
+  mkdirSync(seededAuditDir(proj), { recursive: true });
   return proj;
 }
 
 const hookPath = (proj: string): string =>
   join(proj, ".claude", "hooks", "aidlc-runtime-compile.ts");
+// The hook reads the audit via the per-clone shard GLOB; writing the AUDIT_*
+// fixtures into one shard under the record's audit/ DIR is what the hook merges.
 const auditPath = (proj: string): string =>
-  join(proj, "aidlc-docs", "audit.md");
+  join(seededAuditDir(proj), "fixture.md");
 const graphPath = (proj: string): string =>
-  join(proj, "aidlc-docs", "runtime-graph.json");
+  join(seededRecordDir(proj), "runtime-graph.json");
 const heartbeatPath = (proj: string): string =>
-  join(proj, "aidlc-docs", ".aidlc-hooks-health", "runtime-compile.last");
+  join(seededRecordDir(proj), ".aidlc-hooks-health", "runtime-compile.last");
 
 interface HookResult {
   status: number;
@@ -457,11 +468,12 @@ describe("t91 aidlc-runtime-compile hook (migrated from t91-runtime-compile-hook
     // Empty per-stage memory.md so the approved stage compiles to
     // memory_entries 0 -> a MEMORY_EMPTY row is emitted (intent-capture lives
     // in the ideation phase per stage-graph.json).
-    mkdirSync(join(p, "aidlc-docs", "ideation", "intent-capture"), {
+    // P9: the per-stage memory.md re-roots under the record.
+    mkdirSync(join(seededRecordDir(p), "ideation", "intent-capture"), {
       recursive: true,
     });
     writeFileSync(
-      join(p, "aidlc-docs", "ideation", "intent-capture", "memory.md"),
+      join(seededRecordDir(p), "ideation", "intent-capture", "memory.md"),
       "",
       "utf-8",
     );
@@ -474,7 +486,8 @@ describe("t91 aidlc-runtime-compile hook (migrated from t91-runtime-compile-hook
     );
     // Block-scoped scan of the `## Memory Empty` heading, mirroring the .sh's
     // `awk '/^## Memory Empty$/,/^---$/' | grep -c '^\*\*Test-Run\*\*: true$'`.
-    const lines = readFileSync(auditPath(p), "utf-8").split("\n");
+    // The compile appends MEMORY_EMPTY to its OWN per-clone shard, so glob-read.
+    const lines = readAllAuditShards(p).split("\n");
     let inBlock = false;
     let trCount = 0;
     for (const line of lines) {

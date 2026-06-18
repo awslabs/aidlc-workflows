@@ -57,7 +57,11 @@ import {
   SNAPSHOT_STAGE_PHASE,
   SNAPSHOT_STAGE_SLUG,
 } from "../harness/custom-harness.ts";
-import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
+import {
+  cleanupTestProject,
+  seededStateFile,
+  setupIntegrationProject,
+} from "../harness/fixtures.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers — run the project's OWN copied tools (resolveProjectDir derives the
@@ -182,7 +186,7 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
         expect(node?.lead_agent).toBe(CUSTOM_AGENT_SLUG);
         const entry = (node?.sensors_applicable ?? []).find((s) => s.id === CUSTOM_SENSOR_ID);
         expect(entry).toBeDefined();
-        expect(entry?.matches).toBe("**/aidlc-docs/**");
+        expect(entry?.matches).toBe("**/{aidlc-docs,intents}/**");
         expect(node?.inputs).toContain(CUSTOM_KNOWLEDGE_REF);
       }
 
@@ -264,11 +268,14 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
       // The statusline renders the agent display only for an ACTIVE workflow —
       // it prints "[AIDLC] ready" unless Lifecycle Phase + Current Stage are
       // present (aidlc-statusline.ts). Seed the same minimal CONSTRUCTION shape
-      // t61's statusline proof uses. Flat seed (no intent record) → stateFilePath
-      // resolves it via the transitional flat fallback.
-      mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
+      // t61's statusline proof uses. P9: the statusline reads the ACTIVE INTENT's
+      // state via stateFilePath(), so seed into the per-intent record
+      // (seededStateFile — the cursor setupIntegrationProject seeds resolves it),
+      // not a flat aidlc-docs/.
+      const stateFile = seededStateFile(proj);
+      mkdirSync(dirname(stateFile), { recursive: true });
       writeFileSync(
-        join(proj, "aidlc-docs", "aidlc-state.md"),
+        stateFile,
         `# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: CONSTRUCTION\n- **Current Stage**: ci-pipeline\n- **Active Agent**: ${CUSTOM_AGENT_SLUG}\n- **Status**: Running\n`,
         "utf8",
       );
@@ -547,7 +554,9 @@ outputs: none
 
       // 3. write the artefact (the trigger) and invoke the REAL sensor-fire hook
       //    with the PostToolUse payload Claude Code would send for that Write.
-      const artifact = join(proj, SNAPSHOT_OUTPUT_REL);
+      //    init birthed the intent, so resolve the CONCRETE record (SNAPSHOT_OUTPUT_REL
+      //    carries a `*` for the runtime-minted intent dir — resolve it here).
+      const artifact = join(recordDirOf(proj), SNAPSHOT_STAGE_PHASE, SNAPSHOT_STAGE_SLUG, `${SNAPSHOT_ARTIFACT}.md`);
       mkdirSync(dirname(artifact), { recursive: true });
       writeFileSync(artifact, "## Summary\nseed\n## Origin\nschema-snapshot\n");
       const payload = JSON.stringify({
@@ -600,11 +609,12 @@ outputs: none
       const ruleFile = join(proj, projectRulePath as string);
       expect(readFileSync(ruleFile, "utf8")).toContain(CUSTOM_RULE_MARKER);
 
-      // the two artefact output paths are distinct + under aidlc-docs/ (the
-      // chain writes two different files, both in the sensor's glob territory)
+      // the two artefact output paths are distinct + under the per-intent record
+      // tree (the chain writes two different files, both in the sensor's glob
+      // territory; the `*` segment is the runtime-minted intent dir).
       expect(SNAPSHOT_OUTPUT_REL).not.toBe(PLAN_OUTPUT_REL);
-      expect(SNAPSHOT_OUTPUT_REL.startsWith("aidlc-docs")).toBe(true);
-      expect(PLAN_OUTPUT_REL.startsWith("aidlc-docs")).toBe(true);
+      expect(SNAPSHOT_OUTPUT_REL.startsWith(join("aidlc", "spaces", "default", "intents"))).toBe(true);
+      expect(PLAN_OUTPUT_REL.startsWith(join("aidlc", "spaces", "default", "intents"))).toBe(true);
     } finally {
       cleanupTestProject(proj);
     }

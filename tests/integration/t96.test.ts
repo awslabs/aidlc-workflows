@@ -64,8 +64,20 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
+import { dirname, join } from "node:path";
+import { DEFAULT_SPACE, REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
+import { auditFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// P9: with no intent cursor seeded, compile resolves the BARE space record root
+// (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/. State,
+// runtime-graph, and the per-clone audit SHARD live under it (no flat
+// aidlc-docs/ fallback); the compiled parent memory_path uses the bare space
+// record PREFIX (relativeMemoryPath with no recordPrefix).
+const RECORD_REL = join("aidlc", "spaces", "default", "intents");
+const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents`;
+function recordRoot(proj: string): string {
+  return join(proj, RECORD_REL);
+}
 
 const BUN = process.execPath;
 const RUNTIME_TS = join(
@@ -100,12 +112,13 @@ afterAll(() => {
 function makeProjectWithAudit(auditFixtureName: string): string {
   const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t96f-")));
   tempDirs.push(proj);
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
-  copyFileSync(STATE_FIXTURE, join(proj, "aidlc-docs", "aidlc-state.md"));
-  copyFileSync(
-    join(FIXTURES_DIR, auditFixtureName),
-    join(proj, "aidlc-docs", "audit.md"),
-  );
+  mkdirSync(recordRoot(proj), { recursive: true });
+  copyFileSync(STATE_FIXTURE, join(recordRoot(proj), "aidlc-state.md"));
+  // The audit fixture goes into the DETERMINISTIC shard the compile tool
+  // resolves (auditFilePath) so readAllAuditShards() merges it back.
+  const shard = auditFilePath(proj);
+  mkdirSync(dirname(shard), { recursive: true });
+  copyFileSync(join(FIXTURES_DIR, auditFixtureName), shard);
   return proj;
 }
 
@@ -119,9 +132,9 @@ function runCompile(proj: string): void {
 }
 
 const graphPath = (proj: string): string =>
-  join(proj, "aidlc-docs", "runtime-graph.json");
-const auditPath = (proj: string): string =>
-  join(proj, "aidlc-docs", "audit.md");
+  join(recordRoot(proj), "runtime-graph.json");
+// The single per-clone audit shard the tool resolves (cases 9/10 rewrite it).
+const auditPath = (proj: string): string => auditFilePath(proj);
 
 // biome-ignore lint/suspicious/noExplicitAny: test reads arbitrary graph shape
 function readGraph(proj: string): any {
@@ -162,9 +175,10 @@ describe("t96 aidlc-runtime compile — instances[] populator (migrated from t96
     expect(row.started_at).toBeNull();
     expect(row.agent).toBeNull();
     expect(row.memory_path).not.toBeNull();
-    // STRONGER than the .sh's `!= "null"`: exact parent memory.md path.
+    // STRONGER than the .sh's `!= "null"`: exact parent memory.md path
+    // (P9 reroots it under the bare space record prefix).
     expect(row.memory_path).toBe(
-      "aidlc-docs/construction/code-generation/memory.md",
+      `${RP}/construction/code-generation/memory.md`,
     );
     expect(row.sensor_firings).toEqual([]);
     // STRONGER: completed_at + per-Bolt memory fields nulled on the parent too.

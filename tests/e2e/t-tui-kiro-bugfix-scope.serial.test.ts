@@ -29,6 +29,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { stateFilePathFor } from "../harness/sdk-drive.ts";
 import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
@@ -82,7 +84,7 @@ const SKIP_REASON = skipReason();
 
 function completedCount(sandbox: string): number {
   try {
-    const s = readFileSync(join(sandbox, "aidlc-docs", "aidlc-state.md"), "utf-8");
+    const s = readFileSync(stateFilePathFor(sandbox), "utf-8");
     const m = /\*\*Completed\*\*:[ \t]*(\d+)/.exec(s);
     return m ? Number.parseInt(m[1], 10) : 0;
   } catch {
@@ -146,7 +148,7 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
         // State surface — the Claude twin's assertion shapes (t50:309-330):
         // loose scope/brownfield matches (live init writes vary the field
         // wording), strict counter-vs-grid consistency.
-        const state = readFileSync(join(sandbox, "aidlc-docs", "aidlc-state.md"), "utf-8");
+        const state = readFileSync(stateFilePathFor(sandbox), "utf-8");
         expect(state).toMatch(/bugfix/i);
         expect(state).toMatch(/brownfield/i);
         const xCount = (state.match(/^- \[x\]/gm) ?? []).length;
@@ -154,7 +156,7 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
 
         // Audit: the workflow really started and at least one gate approval
         // landed through the numbered-prose protocol.
-        const audit = readFileSync(join(sandbox, "aidlc-docs", "audit.md"), "utf-8");
+        const audit = readAllAuditShards(sandbox);
         expect(audit).toContain("WORKFLOW_STARTED");
         expect(audit).toContain("GATE_APPROVED");
       } finally {

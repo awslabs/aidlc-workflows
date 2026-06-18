@@ -36,15 +36,24 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { birthIntent } from "../../core/tools/aidlc-lib.ts";
+import {
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
+  intentsDirOf,
+  seededAuditDir,
+  seededRecordDir,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CODEX_TREE = join(REPO_ROOT, "dist", "codex", ".codex");
@@ -52,28 +61,107 @@ const FIXTURES = JSON.parse(
   readFileSync(join(REPO_ROOT, "tests", "fixtures", "codex-hook-payloads", "payloads.json"), "utf-8"),
 ) as Record<string, Record<string, unknown>>;
 
-// Scratch project: a .codex tree (copied) + minimal aidlc-docs state so the
-// hooks' self-gates open. Built per test for isolation. cwd in the fixture
-// payloads points at the spike rig — the adapter must use ITS project (the
-// scratch dir): we rewrite the fixture's cwd to the scratch dir, exactly
-// what a real install sees (cwd = the project Codex runs in).
+// P9 per-intent layout: the CORE hooks the Codex adapter shims to (audit-logger,
+// session-start/end, log-subagent, set-status) resolve state via stateFilePath()
+// and the audit trail via auditFilePath() — under the active intent's record. So
+// the scratch project seeds the per-intent shell + the state fixture into the
+// default record (so the cursor resolves) + the resolved audit SHARD (pinned
+// clone-id so the log-subagent shard gate passes and reads are deterministic).
+// NOTE: the Codex ADAPTER's OWN bookkeeping (codex-session.json) still lives at
+// <cwd>/aidlc-docs/.aidlc-hooks-health/ — that path is hardcoded in the harness
+// adapter (harness/codex/hooks/aidlc-codex-adapter.ts), NOT a core path helper,
+// so test 10 keeps seeding it there.
+const PINNED_CLONE_ID = "testcloneid149";
+function pinnedShardName(): string {
+  const host =
+    hostname()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "host";
+  return `${host}-${PINNED_CLONE_ID}.md`;
+}
+
+/** Seed the per-intent workspace shell into an arbitrary dir (mirrors
+ *  fixtures.ts seedWorkspaceShell). */
+function seedShell(dir: string): void {
+  const intentsDir = intentsDirOf(dir, DEFAULT_SPACE);
+  mkdirSync(join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory"), { recursive: true });
+  mkdirSync(seededRecordDir(dir), { recursive: true });
+  writeFileSync(join(dir, "aidlc", "active-space"), `${DEFAULT_SPACE}\n`, "utf-8");
+  writeFileSync(join(intentsDir, "active-intent"), `${DEFAULT_RECORD_DIR}\n`, "utf-8");
+  writeFileSync(
+    join(intentsDir, "intents.json"),
+    `${JSON.stringify(
+      [{ uuid: "00000000-0000-7000-8000-000000000001", slug: DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, ""), status: "in-flight" }],
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+}
+
+// Scratch project: a .codex tree (copied) + the per-intent workspace shell with
+// an active workflow state. cwd in the fixture payloads points at the spike rig —
+// the adapter must use ITS project (the scratch dir): we rewrite the fixture's
+// cwd to the scratch dir, exactly what a real install sees.
 function scratchProject(withState: boolean): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "t149-")));
   cpSync(CODEX_TREE, join(dir, ".codex"), { recursive: true });
+  seedShell(dir);
   if (withState) {
-    const docs = join(dir, "aidlc-docs");
-    mkdirSync(docs, { recursive: true });
     writeFileSync(
-      join(docs, "aidlc-state.md"),
+      seededStateFile(dir),
       readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8"),
     );
-    writeFileSync(join(docs, "audit.md"), "# AI-DLC Audit Log\n");
+    writeFileSync(join(dir, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+    const auditDir = seededAuditDir(dir);
+    mkdirSync(auditDir, { recursive: true });
+    writeFileSync(join(auditDir, pinnedShardName()), "# AI-DLC Audit Log\n");
   }
   return dir;
 }
 
+/** Concatenate every audit shard (clone-id-name-agnostic read). */
+function readAudit(dir: string): string {
+  const auditDir = seededAuditDir(dir);
+  let names: string[];
+  try {
+    names = readdirSync(auditDir);
+  } catch {
+    return "";
+  }
+  return names
+    .filter((n) => n.endsWith(".md"))
+    .sort()
+    .map((n) => readFileSync(join(auditDir, n), "utf-8"))
+    .join("\n");
+}
+
 function withCwd(payload: Record<string, unknown>, dir: string): Record<string, unknown> {
   return { ...payload, cwd: dir };
+}
+
+/** Remap a captured apply_patch payload's `aidlc-docs/` paths (a verbatim
+ *  pre-workspace capture) to the active intent's record-relative prefix, so the
+ *  per-intent audit-logger gate sees the write under the record root. Rewrites
+ *  both the patch `command` envelope and the `tool_response` listing. */
+function remapApplyPatchPaths(
+  payload: Record<string, unknown>,
+  recordPrefix: string,
+): Record<string, unknown> {
+  const out = { ...payload };
+  const input = (out.tool_input as Record<string, unknown> | undefined) ?? {};
+  if (typeof input.command === "string") {
+    out.tool_input = {
+      ...input,
+      command: input.command.replaceAll("aidlc-docs/", `${recordPrefix}/`),
+    };
+  }
+  if (typeof out.tool_response === "string") {
+    out.tool_response = out.tool_response.replaceAll("aidlc-docs/", `${recordPrefix}/`);
+  }
+  return out;
 }
 
 function runAdapter(
@@ -137,16 +225,25 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("4: apply_patch Add File under aidlc-docs lands ARTIFACT_CREATED in the audit", () => {
+  // P9: the adapter resolves an apply_patch Add/Update File path relative to the
+  // project dir (harness/codex/hooks/aidlc-codex-adapter.ts patchedFiles) and
+  // forwards it to the core audit-logger, which now logs a write ONLY when the
+  // path is under the active intent's record root (docsRoot()). The captured
+  // fixture is a verbatim pre-workspace run whose paths are `aidlc-docs/<rel>`;
+  // a real post-P9 Codex run emits the per-intent record path. So we remap the
+  // captured prefix to the active intent's record-relative prefix before driving
+  // the adapter — the workspace analog of the old flat capture.
+  test("4: apply_patch Add File under the intent record lands ARTIFACT_CREATED in the audit", () => {
     const dir = scratchProject(true);
     try {
-      const r = runAdapter(
-        dir,
-        "audit-and-sensors",
-        withCwd(FIXTURES.postToolUse_applyPatch_aidlcDocs, dir),
+      const recordPrefix = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
+      const remapped = remapApplyPatchPaths(
+        FIXTURES.postToolUse_applyPatch_aidlcDocs,
+        recordPrefix,
       );
+      const r = runAdapter(dir, "audit-and-sensors", withCwd(remapped, dir));
       expect(r.code).toBe(0);
-      const audit = readFileSync(join(dir, "aidlc-docs", "audit.md"), "utf-8");
+      const audit = readAudit(dir);
       expect(audit).toContain("ARTIFACT_");
       expect(audit).toContain("intent-capture");
     } finally {
@@ -163,7 +260,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         withCwd(FIXTURES.postToolUse_applyPatch_plain, dir),
       );
       expect(r.code).toBe(0);
-      const audit = readFileSync(join(dir, "aidlc-docs", "audit.md"), "utf-8");
+      const audit = readAudit(dir);
       expect(audit).not.toContain("ARTIFACT_");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -179,7 +276,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         withCwd(FIXTURES.postToolUse_updatePlan_slug, dir),
       );
       expect(r.code).toBe(0);
-      const after = readFileSync(join(dir, "aidlc-docs", "aidlc-state.md"), "utf-8");
+      const after = readFileSync(seededStateFile(dir), "utf-8");
       expect(/\*\*Current Stage\*\*:\s*intent-capture/.test(after)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -189,10 +286,10 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   test("7: update_plan without a [slug] suffix is a clean no-op", () => {
     const dir = scratchProject(true);
     try {
-      const before = readFileSync(join(dir, "aidlc-docs", "aidlc-state.md"), "utf-8");
+      const before = readFileSync(seededStateFile(dir), "utf-8");
       const r = runAdapter(dir, "state-sync", withCwd(FIXTURES.postToolUse_updatePlan, dir));
       expect(r.code).toBe(0);
-      const after = readFileSync(join(dir, "aidlc-docs", "aidlc-state.md"), "utf-8");
+      const after = readFileSync(seededStateFile(dir), "utf-8");
       expect(after).toBe(before);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -204,7 +301,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     try {
       const r = runAdapter(dir, "log-subagent", withCwd(FIXTURES.subagentStop, dir));
       expect(r.code).toBe(0);
-      const audit = readFileSync(join(dir, "aidlc-docs", "audit.md"), "utf-8");
+      const audit = readAudit(dir);
       expect(audit).toContain("SUBAGENT_COMPLETED");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -220,7 +317,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(r1.code).toBe(0);
       expect(r2.code).toBe(0);
       expect(r2.stdout).toBe(r1.stdout);
-      const audit = readFileSync(join(dir, "aidlc-docs", "audit.md"), "utf-8");
+      const audit = readAudit(dir);
       const rows = audit.match(/SUBAGENT_COMPLETED/g) ?? [];
       expect(rows.length).toBe(1);
     } finally {
@@ -241,7 +338,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       );
       const r = runAdapter(dir, "session-start", withCwd(FIXTURES.sessionStart, dir));
       expect(r.code).toBe(0);
-      const audit = readFileSync(join(dir, "aidlc-docs", "audit.md"), "utf-8");
+      const audit = readAudit(dir);
       expect(audit).toContain("SESSION_ENDED");
       expect(audit).toContain("inferred");
       expect(audit).toContain("prior-session-0000");
@@ -266,7 +363,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       expect(out.hookSpecificOutput?.hookEventName).toBe("PostCompact");
       expect(out.hookSpecificOutput?.additionalContext).toContain("AIDLC WORKFLOW ACTIVE");
       // source=compact emits NO session audit row (PreCompact owns it).
-      const audit = readFileSync(join(dir, "aidlc-docs", "audit.md"), "utf-8");
+      const audit = readAudit(dir);
       expect(audit).not.toContain("SESSION_STARTED");
     } finally {
       rmSync(dir, { recursive: true, force: true });

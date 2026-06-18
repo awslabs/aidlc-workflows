@@ -82,20 +82,49 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
   cleanupWorktreeFixture,
   FIXTURES_DIR,
+  seededAuditDir,
+  seededRecordDir,
+  seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 // P4: the lock dir is keyed on the COMPOSITE identity (projectDir + intent |
 // __workspace__ sentinel), not bare projectDir — import the real resolver so the
 // planted-lock bucket matches the one audit-merge actually acquires.
 import { auditLockDir as realAuditLockDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// A FIXED clone-id token seeded into every clone (main + each worktree) so the
+// per-clone audit shard is deterministic and SINGLE: the main shard the header
+// is written to is the SAME one audit-fork copies and audit-merge reads, and a
+// worktree-side `append` lands in the SAME shard the fork copied (so its delta
+// merges). This is the per-clone-shard analog of the old single audit.md.
+const FIXED_CLONE_ID = "abcdef012345";
+function shardName(): string {
+  const host =
+    hostname()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "host";
+  return `${host}-${FIXED_CLONE_ID}.md`;
+}
+/** Seed a fixed clone-id into a clone (main proj or a worktree) so its audit
+ *  shard name is deterministic and shared with the main checkout. */
+function seedCloneId(cloneRoot: string): void {
+  mkdirSync(join(cloneRoot, "aidlc"), { recursive: true });
+  writeFileSync(join(cloneRoot, "aidlc", ".aidlc-clone-id"), `${FIXED_CLONE_ID}\n`, "utf-8");
+}
 
 const BUN = process.execPath;
 const AUDIT_TOOL = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
@@ -115,11 +144,24 @@ afterAll(() => {
   }
 });
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+// The MAIN per-clone audit shard (the seeded fixed-clone-id shard). The header is
+// written here so audit-fork copies it and audit-merge hashes/extends it.
+const auditPath = (p: string): string => join(seededAuditDir(p), shardName());
 const wtDir = (p: string, slug: string): string =>
   join(p, ".aidlc", "worktrees", `bolt-${slug}`);
+// The worktree mirror's per-clone audit shard — carries the SAME relative record
+// dir AND (via the seeded fixed clone-id) the SAME shard name as the main checkout.
 const wtAuditPath = (p: string, slug: string): string =>
-  join(wtDir(p, slug), "aidlc-docs", "audit.md");
+  join(
+    wtDir(p, slug),
+    "aidlc",
+    "spaces",
+    DEFAULT_SPACE,
+    "intents",
+    DEFAULT_RECORD_DIR,
+    "audit",
+    shardName(),
+  );
 
 interface CliResult {
   status: number;
@@ -136,7 +178,10 @@ function runAudit(args: string[], env?: Record<string, string>): CliResult {
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
 }
 
-/** Real `aidlc-worktree.ts create` — the same prerequisite the .sh ran. */
+/** Real `aidlc-worktree.ts create` — the same prerequisite the .sh ran. After
+ *  the real create, seed the SAME fixed clone-id into the worktree so a
+ *  worktree-side `aidlc-audit append` lands in the SAME shard audit-fork copied
+ *  (audit-merge reads only that one shard's post-fork delta). */
 function createWorktree(p: string, slug: string): void {
   const res = spawnSync(
     BUN,
@@ -148,23 +193,55 @@ function createWorktree(p: string, slug: string): void {
       `aidlc-worktree create --slug ${slug} failed: ${res.stderr ?? res.stdout ?? `exit ${res.status}`}`,
     );
   }
+  seedCloneId(wtDir(p, slug));
 }
 
 /**
- * make_fixture (t07:53-61): a git fixture on main + a seeded state file
- * (so emitError's stateFilePath existsSync check passes) + a one-line
- * "# AI-DLC Audit Log\n" main audit. Returns the fixture path.
+ * make_fixture (t07:53-61): a git fixture on main + a seeded state file (so the
+ * active-intent cursor resolves AND emitError's stateFilePath check passes) + a
+ * one-line "# AI-DLC Audit Log\n" main audit written into the per-clone shard
+ * (the fixed clone-id makes the shard name deterministic). Returns the fixture
+ * path.
  */
 function makeFixture(): string {
   const p = setupWorktreeFixture();
   fixtures.push(p);
-  mkdirSync(join(p, "aidlc-docs"), { recursive: true });
+  // State into the per-intent record (the fixture seeds a stateless record; this
+  // makes the active-intent cursor resolve so audit lands under the record).
   writeFileSync(
-    join(p, "aidlc-docs", "aidlc-state.md"),
+    seededStateFile(p),
     readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8"),
     "utf-8",
   );
+  // Fixed clone-id → deterministic single shard; write the header there so the
+  // tool appends to the SAME shard and audit-fork copies it.
+  seedCloneId(p);
+  mkdirSync(seededAuditDir(p), { recursive: true });
   writeFileSync(auditPath(p), "# AI-DLC Audit Log\n", "utf-8");
+  // COMMIT the record (state) so the git worktree (branched from main) carries
+  // it and resolves the SAME intent — a worktree-side `aidlc-audit append`
+  // (which can't take --intent and reads the worktree's own cursor) then lands
+  // in the record, the same shard audit-fork copied. The cursors + audit shards +
+  // clone-id stay gitignored (per-user / machine-local); the worktree resolves
+  // the lone record by the lone-intent fallback.
+  writeFileSync(
+    join(p, ".gitignore"),
+    [
+      "aidlc/active-space",
+      "aidlc/.aidlc-clone-id",
+      "aidlc/spaces/*/intents/active-intent",
+      "aidlc/spaces/*/intents/*/runtime-graph.json",
+      "aidlc/spaces/*/intents/*/.aidlc-*",
+      "aidlc/spaces/*/intents/*/audit/",
+      "",
+    ].join("\n"),
+  );
+  spawnSync("git", ["-C", p, "add", "-A"], { encoding: "utf-8" });
+  spawnSync(
+    "git",
+    ["-C", p, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--amend", "--no-edit"],
+    { encoding: "utf-8" },
+  );
   return p;
 }
 
@@ -220,9 +297,11 @@ function bracketOrderViolation(file: string): string | null {
 }
 
 /** The lock dir audit-merge acquires. P4: keyed on the composite identity
- *  (projectDir + intent | __workspace__ sentinel). B6 merges a flat fixture with
- *  NO --intent/--space, so audit-merge keys the workspace sentinel bucket — which
- *  is exactly realAuditLockDir(projectDir) with intent omitted. */
+ *  (projectDir + intent | __workspace__ sentinel). handleAuditMerge threads the
+ *  RAW --intent flag to acquireAuditLock (NOT the resolved active intent — unlike
+ *  state-fork/merge), so a merge with NO --intent keys the WORKSPACE SENTINEL
+ *  bucket even though its WRITE resolves the active record. B6 omits --intent, so
+ *  plant the sentinel — realAuditLockDir(projectDir) with intent omitted. */
 function auditLockDir(projectDir: string): string {
   return realAuditLockDir(projectDir);
 }
@@ -294,13 +373,23 @@ describe("t07 Phase B — edge cases", () => {
     expect(countSeparators(auditPath(p)) - preSeps).toBe(1);
   }, 30000);
 
-  test("B2: missing <wt>/aidlc-docs/ is mkdir -p'd at fork", () => {
+  test("B2: missing worktree audit shard is mkdir -p'd at fork", () => {
     const p = makeFixture();
     createWorktree(p, "e2");
-    // B2.1: aidlc-worktree create does NOT scaffold aidlc-docs/ in the worktree.
-    expect(existsSync(join(wtDir(p, "e2"), "aidlc-docs"))).toBe(false);
+    // B2.1: aidlc-worktree create does NOT scaffold the audit shard in the
+    // worktree mirror (the audit/ dir is gitignored, so the fork branch lacks it).
+    const wtAuditDir = join(
+      wtDir(p, "e2"),
+      "aidlc",
+      "spaces",
+      DEFAULT_SPACE,
+      "intents",
+      DEFAULT_RECORD_DIR,
+      "audit",
+    );
+    expect(existsSync(wtAuditDir)).toBe(false);
     runAudit(["audit-fork", "--slug", "e2", "--project-dir", p]);
-    // B2.2: audit-fork's mkdir -p created <wt>/aidlc-docs/audit.md.
+    // B2.2: audit-fork's mkdir -p created the worktree mirror's audit shard.
     expect(existsSync(wtAuditPath(p, "e2"))).toBe(true);
   }, 30000);
 
@@ -383,9 +472,18 @@ describe("t07 Phase B — edge cases", () => {
       "append", "STAGE_STARTED", "--field", "Stage=t", "--field", "Agent=t",
       "--project-dir", wtDir(p, "timeout"),
     ]);
-    // Plant a stuck lock by mkdir-ing the exact dir the tool acquires.
+    // Plant a stuck lock by mkdir-ing the exact dir the tool acquires. Stamp a
+    // LIVE, FRESH owner (this test process) so the P3 reaper REFUSES to reclaim
+    // it — without the stamp a bare lock dir ages past the unstamped-grace window
+    // and the reaper steals it, letting the merge succeed and defeating this case.
     const lock = auditLockDir(p);
     mkdirSync(lock, { recursive: true });
+    const nowMs = Math.floor(performance.timeOrigin + performance.now());
+    writeFileSync(
+      join(lock, "owner.json"),
+      JSON.stringify({ pid: process.pid, startedAtMs: nowMs }),
+      "utf-8",
+    );
     try {
       const merge = runAudit(
         ["audit-merge", "--slug", "timeout", "--project-dir", p],
@@ -414,10 +512,23 @@ describe("t07 Phase B — edge cases", () => {
   test("B8: post-emit failure path — ERROR_LOGGED carries [fork-emitted:<iso-ts>] for doctor correlation", () => {
     const p = makeFixture();
     createWorktree(p, "erro");
-    // Plant a file where audit-fork needs to mkdir <wt>/aidlc-docs/. This
-    // forces the post-emit copy branch to fail on both POSIX and Windows;
-    // chmod-readonly is not a reliable write denial on Windows under SSM.
-    writeFileSync(join(wtDir(p, "erro"), "aidlc-docs"), "not a directory\n");
+    // Plant a FILE where audit-fork needs to mkdir the worktree mirror's audit/
+    // dir. The worktree carries the committed record dir, so audit/ is the path
+    // audit-fork creates — a file there makes the recursive mkdir fail (EEXIST/
+    // ENOTDIR) on both POSIX and Windows; chmod-readonly is not a reliable write
+    // denial on Windows under SSM.
+    writeFileSync(
+      join(
+        wtDir(p, "erro"),
+        "aidlc",
+        "spaces",
+        DEFAULT_SPACE,
+        "intents",
+        DEFAULT_RECORD_DIR,
+        "audit",
+      ),
+      "not a directory\n",
+    );
     runAudit(["audit-fork", "--slug", "erro", "--project-dir", p]);
     const main = readFileSync(auditPath(p), "utf-8");
     // The correlation tag is the ISO 8601 timestamp (isoTimestamp), NOT the

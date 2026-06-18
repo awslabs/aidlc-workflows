@@ -58,7 +58,7 @@
 // landed; test 6 asserts the reason is exactly "unknown").
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -66,6 +66,9 @@ import {
   createTestProject,
   FIXTURES_DIR,
   seedAuditFile,
+  seededAuditDir,
+  seededRecordDir,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -75,16 +78,32 @@ const MID_IDEATION = join(FIXTURES_DIR, "state-mid-ideation.md");
 
 let proj: string;
 
-function auditPath(p: string): string {
-  return join(p, "aidlc-docs", "audit.md");
+// P9 per-intent layout: state + heartbeat re-root under the default intent's
+// record; the audit trail is a DIR of per-clone shards (read via the glob).
+// session-end's appendAuditEntry CREATES its own shard if missing (no
+// audit-existence gate), so no shard needs pre-seeding — seedAuditFile only
+// supplies a (here irrelevant) baseline.
+function statePath(p: string): string {
+  return seededStateFile(p);
 }
 
 function readAudit(p: string): string {
-  return readFileSync(auditPath(p), "utf-8");
+  const auditDir = seededAuditDir(p);
+  let names: string[];
+  try {
+    names = readdirSync(auditDir);
+  } catch {
+    return "";
+  }
+  return names
+    .filter((n) => n.endsWith(".md"))
+    .sort()
+    .map((n) => readFileSync(join(auditDir, n), "utf-8"))
+    .join("\n");
 }
 
 function heartbeatPath(p: string): string {
-  return join(p, "aidlc-docs", ".aidlc-hooks-health", "session-end.last");
+  return join(seededRecordDir(p), ".aidlc-hooks-health", "session-end.last");
 }
 
 interface FireResult {
@@ -151,7 +170,7 @@ describe("t30 session-end SessionEnd hook (mechanism cli — spawned hook + stdi
     // createTestProject made no state file, so the hook hits its :22 no-op gate
     // and exits 0 before any heartbeat or audit write — the same precondition
     // the .sh set up by `rm -f aidlc-state.md`.
-    expect(existsSync(join(proj, "aidlc-docs", "aidlc-state.md"))).toBe(false);
+    expect(existsSync(statePath(proj))).toBe(false);
     seedAuditFile(proj);
     const before = readAudit(proj);
     const r = fire('{"reason":"logout"}', proj);
@@ -195,7 +214,7 @@ describe("t30 session-end SessionEnd hook (mechanism cli — spawned hook + stdi
     // No state file (createTestProject seeds none), and no audit.md either —
     // the hook's :22 gate fires before mkdir/heartbeat. Mirrors the .sh's
     // rm -f state + rm -rf .aidlc-hooks-health precondition.
-    expect(existsSync(join(proj, "aidlc-docs", "aidlc-state.md"))).toBe(false);
+    expect(existsSync(statePath(proj))).toBe(false);
     fire('{"reason":"logout"}', proj);
     expect(existsSync(heartbeatPath(proj))).toBe(false);
   });

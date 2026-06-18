@@ -113,6 +113,8 @@ import {
   createTestProject,
   sedReplaceInFile,
   seedAuditFile,
+  seededAuditShard,
+  seededStateFile,
   seedStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
@@ -191,9 +193,9 @@ describe("t37 aidlc-utility doctor — state/audit drift (migrated from t37-util
     seedStateFile(p, STATE_MID_IDEATION);
     // state-mid-ideation already carries Status: Running; the .sh re-sets it
     // explicitly. Mirror that to keep the fixture self-describing.
-    const statePath = join(p, "aidlc-docs", "aidlc-state.md");
+    const statePath = seededStateFile(p);
     sedReplaceInFile(statePath, /^- \*\*Status\*\*:.*$/m, "- **Status**: Running");
-    const auditPath = join(p, "aidlc-docs", "audit.md");
+    const auditPath = seededAuditShard(p);
     writeFileSync(
       auditPath,
       `${readFileSync(auditPath, "utf-8")}${WORKFLOW_COMPLETED_BLOCK}`,
@@ -209,9 +211,9 @@ describe("t37 aidlc-utility doctor — state/audit drift (migrated from t37-util
     const p = track(createTestProject());
     seedAuditFile(p);
     seedStateFile(p, STATE_MID_IDEATION);
-    const statePath = join(p, "aidlc-docs", "aidlc-state.md");
+    const statePath = seededStateFile(p);
     sedReplaceInFile(statePath, /^- \*\*Status\*\*:.*$/m, "- **Status**: Completed");
-    const auditPath = join(p, "aidlc-docs", "audit.md");
+    const auditPath = seededAuditShard(p);
     writeFileSync(
       auditPath,
       `${readFileSync(auditPath, "utf-8")}${WORKFLOW_COMPLETED_BLOCK}`,

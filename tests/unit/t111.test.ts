@@ -21,7 +21,8 @@
 // red.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -29,27 +30,43 @@ import {
   appendAuditEntryUnlocked,
   handleAppend,
 } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import {
+  auditFilePath,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 // --- Per-file temp roots, torn down in afterAll ---------------------------
 const tmpRoots: string[] = [];
 
 // Make a fresh project dir. The source's ensureAuditFile() will lazily create
-// aidlc-docs/ + audit.md (seeded "# AI-DLC Audit Log\n") on first append, so a
-// bare dir is a valid project. `seedAuditMd` lets a case pre-seed the file the
-// way the source expects when it wants to assert the seed survives.
+// the per-intent audit SHARD dir + shard (seeded "# AI-DLC Audit Log\n") on
+// first append, so a bare dir is a valid project. With no intent resolved the
+// shard lands under the bare space record root (aidlc/spaces/default/intents/
+// audit/<host>-<clone>.md — see auditFilePath). `seedAuditMd` lets a case
+// pre-seed THAT shard the way the source expects when it wants to assert the
+// seed survives.
 function freshProject(seedAuditMd = false): string {
   const root = mkdtempSync(join(tmpdir(), "aidlc-t111-"));
   tmpRoots.push(root);
   if (seedAuditMd) {
-    const docs = join(root, "aidlc-docs");
-    mkdirSync(docs, { recursive: true });
-    writeFileSync(join(docs, "audit.md"), "# AI-DLC Audit Log\n", "utf-8");
+    const shard = auditFilePath(root);
+    mkdirSync(dirname(shard), { recursive: true });
+    writeFileSync(shard, "# AI-DLC Audit Log\n", "utf-8");
   }
   return root;
 }
 
+// Read the whole audit trail (the per-clone shards merged). For these
+// single-clone fixtures it resolves to the one shard the tool wrote, so the
+// returned bytes equal that shard's contents (seed header + appended blocks).
 function readAudit(projectDir: string): string {
-  return readFileSync(join(projectDir, "aidlc-docs", "audit.md"), "utf-8");
+  return readAllAuditShards(projectDir);
+}
+
+// Whether the resolved audit shard exists on disk (the per-intent successor to
+// "is there an aidlc-docs/audit.md?").
+function auditShardExists(projectDir: string): boolean {
+  return existsSync(auditFilePath(projectDir));
 }
 
 afterAll(() => {
@@ -187,13 +204,13 @@ describe("appendAuditEntry — locked variant", () => {
     );
   });
 
-  test("validation fires before any disk write — no audit.md is created on rejection", () => {
-    // A fresh project has no aidlc-docs/audit.md. If validation ran AFTER
-    // ensureAuditFile, the rejected call would still leave a seeded file
-    // behind. Assert the file is absent, proving validate-then-write order.
+  test("validation fires before any disk write — no audit shard is created on rejection", () => {
+    // A fresh project has no audit shard. If validation ran AFTER
+    // ensureAuditFile, the rejected call would still leave a seeded shard
+    // behind. Assert the shard is absent, proving validate-then-write order.
     const proj = freshProject();
     expect(() => appendAuditEntry("bogus", {}, proj)).toThrow();
-    expect(() => readAudit(proj)).toThrow(); // ENOENT — file never created
+    expect(auditShardExists(proj)).toBe(false); // shard never created
   });
 });
 

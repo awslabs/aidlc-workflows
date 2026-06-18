@@ -87,11 +87,12 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
   REPO_ROOT,
-  seedAuditFile,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -133,19 +134,22 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-const statePath = (p: string): string =>
-  join(p, "aidlc-docs", "aidlc-state.md");
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+// P9 per-intent layout: state lives in the active intent's record (seedStateFile
+// seeds it so the cursor resolves for both this test process and the spawned
+// scope-change tool); the audit trail is a DIR of per-clone shards. The SPAWNED
+// tool mints its own clone-id and CREATES its shard on first emit, so audit reads
+// glob every shard via readAllAuditShards (no audit-seed needed; SCOPE_CHANGED is
+// absent from any baseline).
+const statePath = (p: string): string => seededStateFile(p);
 
 /**
- * Fresh temp project seeded with audit-sample.md + state-mid-ideation.md,
- * mirroring the .sh's per-case create_test_project + seed_audit_file +
- * seed_state_file "$REPO_ROOT/tests/fixtures/state-mid-ideation.md".
+ * Fresh temp project seeded with state-mid-ideation.md, mirroring the .sh's
+ * per-case create_test_project + seed_state_file
+ * "$REPO_ROOT/tests/fixtures/state-mid-ideation.md".
  */
 function proj(): string {
   const p = createTestProject();
   tempDirs.push(p);
-  seedAuditFile(p);
   seedStateFile(p, STATE_MID_IDEATION);
   return p;
 }
@@ -186,9 +190,8 @@ function stateField(file: string, key: string): string {
  * `^\*\*Event\*\*: SCOPE_CHANGED` grep, but as an exact count against the
  * seeded baseline (audit-sample.md carries no SCOPE_CHANGED).
  */
-function scopeChangedCount(file: string): number {
-  if (!existsSync(file)) return 0;
-  return readFileSync(file, "utf-8")
+function scopeChangedCount(body: string): number {
+  return body
     .split("\n")
     .filter((l) => l === "**Event**: SCOPE_CHANGED").length;
 }
@@ -200,10 +203,9 @@ function scopeChangedCount(file: string): number {
  * aidlc-audit.ts:256-267). Block-scoped, so it pins Old Scope to the
  * SCOPE_CHANGED row exactly (STRONGER than the .sh's file-wide grep).
  */
-function auditField(file: string, ev: string, key: string): string {
-  if (!existsSync(file)) return "";
+function auditField(body: string, ev: string, key: string): string {
   let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of body.split("\n")) {
     if (line.startsWith("## ")) {
       matched = false;
       continue;
@@ -244,7 +246,7 @@ describe("t36 aidlc-utility scope-change — CLI contract (migrated from t36-uti
     const r = scopeChange(["--scope", "bugfix"], p);
     expect(r.status).toBe(0);
     // STRONGER: count against the seeded baseline (audit-sample.md has none).
-    expect(scopeChangedCount(auditPath(p))).toBe(1);
+    expect(scopeChangedCount(readAllAuditShards(p))).toBe(1);
   });
 
   // --- .sh Test 3: each of the 9 canonical scopes accepted as a target ---
@@ -295,8 +297,8 @@ describe("t36 aidlc-utility scope-change — CLI contract (migrated from t36-uti
     scopeChange(["--scope", "mvp"], p);
     // state-mid-ideation.md starts at Scope=feature.
     // STRONGER: block-scoped exact-value read, not a file-wide grep.
-    expect(auditField(auditPath(p), "SCOPE_CHANGED", "Old Scope")).toBe("feature");
+    expect(auditField(readAllAuditShards(p), "SCOPE_CHANGED", "Old Scope")).toBe("feature");
     // STRONGER addition: the .sh comment says the row records BOTH From and To.
-    expect(auditField(auditPath(p), "SCOPE_CHANGED", "New Scope")).toBe("mvp");
+    expect(auditField(readAllAuditShards(p), "SCOPE_CHANGED", "New Scope")).toBe("mvp");
   });
 });

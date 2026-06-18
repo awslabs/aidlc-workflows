@@ -64,8 +64,18 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { toPortablePath } from "../harness/fixtures.ts";
+import { auditFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// P9: with no intent cursor seeded, compile/summary resolve the BARE space
+// record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/.
+// State, runtime-graph, per-stage memory, and the per-clone audit SHARD all
+// live under it (the flat aidlc-docs/ root is retired — there is no fallback).
+const RECORD_REL = join("aidlc", "spaces", "default", "intents");
+function recordRoot(proj: string): string {
+  return join(proj, RECORD_REL);
+}
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -122,28 +132,31 @@ function runSummary(proj: string, ...args: string[]): SpawnResult {
 function makeProject(audit: string, state: string): string {
   const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t106-")));
   tempDirs.push(proj);
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
-  writeFileSync(join(proj, "aidlc-docs", "audit.md"), audit, "utf-8");
-  writeFileSync(join(proj, "aidlc-docs", "aidlc-state.md"), state, "utf-8");
+  mkdirSync(recordRoot(proj), { recursive: true });
+  // Seed the DETERMINISTIC audit shard the compile tool resolves (auditFilePath).
+  const shard = auditFilePath(proj);
+  mkdirSync(dirname(shard), { recursive: true });
+  writeFileSync(shard, audit, "utf-8");
+  writeFileSync(join(recordRoot(proj), "aidlc-state.md"), state, "utf-8");
   return proj;
 }
 
-/** Bare temp project with aidlc-docs/ but no state/audit/graph (Case C). */
+/** Bare temp project with the record shell but no state/audit/graph (Case C). */
 function makeBareProject(): string {
   const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t106-")));
   tempDirs.push(proj);
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
+  mkdirSync(recordRoot(proj), { recursive: true });
   return proj;
 }
 
-/** Per-stage memory.md under aidlc-docs/<phase>/<slug>/ (t106:109-116). */
+/** Per-stage memory.md under the bare space record root <phase>/<slug>/. */
 function writeMemory(
   proj: string,
   phase: string,
   slug: string,
   body: string,
 ): void {
-  const dir = join(proj, "aidlc-docs", phase, slug);
+  const dir = join(recordRoot(proj), phase, slug);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "memory.md"), body, "utf-8");
 }

@@ -68,12 +68,19 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
+  DEFAULT_SPACE,
   FIXTURES_DIR,
   resetAidlcEnv,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
 resetAidlcEnv();
+
+// P9: advance/approve emit memory_path against the BARE space record prefix
+// (relativeMemoryPath called with no recordPrefix -> relativeSpaceRecordPrefix);
+// the flat aidlc-docs/ prefix is retired. `advance` does not thread the active
+// intent's record dir, so the row carries the bare-space prefix.
+const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents`;
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -269,18 +276,18 @@ function memoryPath(out: string): string | undefined {
 }
 
 describe("t100 advance/approve memory_path key (Bun spawn — CLI env seam)", () => {
-  test("advance stdout JSON carries memory_path === aidlc-docs/<phase>/<slug>/memory.md [.sh 14]", () => {
+  test("advance stdout JSON carries memory_path === <record-prefix>/<phase>/<slug>/memory.md [.sh 14]", () => {
     const proj = midIdeationProject();
     const r = runState(proj, ["advance", "feasibility", "scope-definition"]);
     expect(r.status).toBe(0);
     // next stage = scope-definition (phase ideation). The .sh asserted the
-    // exact derived path.
+    // exact derived path; P9 reroots it under the bare space record prefix.
     expect(memoryPath(r.out)).toBe(
-      "aidlc-docs/ideation/scope-definition/memory.md",
+      `${RP}/ideation/scope-definition/memory.md`,
     );
   }, 30000);
 
-  test("advance memory_path uses no backslashes and is projectDir-relative (aidlc-docs/ prefix) [.sh 15]", () => {
+  test("advance memory_path uses no backslashes and is projectDir-relative (record prefix) [.sh 15]", () => {
     const proj = midIdeationProject();
     const r = runState(proj, ["advance", "feasibility", "scope-definition"]);
     expect(r.status).toBe(0);
@@ -288,7 +295,7 @@ describe("t100 advance/approve memory_path key (Bun spawn — CLI env seam)", ()
     expect(mp).toBeDefined();
     // Forward-slash only (worktree/Windows-portable) and relative.
     expect(mp).not.toContain("\\");
-    expect(mp?.startsWith("aidlc-docs/")).toBe(true);
+    expect(mp?.startsWith(`${RP}/`)).toBe(true);
   }, 30000);
 
   test("approve inherits the memory_path key via handleAdvance delegation [.sh 16]", () => {
@@ -301,7 +308,7 @@ describe("t100 advance/approve memory_path key (Bun spawn — CLI env seam)", ()
     const ap = runState(proj, ["approve", "feasibility"]);
     expect(ap.status).toBe(0);
     expect(memoryPath(ap.out)).toBe(
-      "aidlc-docs/ideation/scope-definition/memory.md",
+      `${RP}/ideation/scope-definition/memory.md`,
     );
   }, 30000);
 });

@@ -75,10 +75,24 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 // Producer-side pure function — Case 1's `bun -e import parseMemoryHeadings`.
-import { parseMemoryHeadings } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  auditFilePath,
+  parseMemoryHeadings,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { toPortablePath } from "../harness/fixtures.ts";
+
+// P9: with no intent cursor seeded, compile resolves the BARE space record root
+// (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/. State,
+// runtime-graph, the per-stage memory.md, and the per-clone audit SHARD all
+// live under it (the flat aidlc-docs/ root is retired — there is no fallback);
+// compile reads each stage's memory.md at the bare-space-prefixed memory_path.
+const RECORD_REL = join("aidlc", "spaces", "default", "intents");
+function recordRoot(proj: string): string {
+  return join(proj, RECORD_REL);
+}
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -146,15 +160,19 @@ const STATE_FEATURE = [
 function makeProject(): string {
   const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t102-")));
   tempDirs.push(proj);
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
-  writeFileSync(join(proj, "aidlc-docs", "audit.md"), AUDIT_APPROVED, "utf-8");
-  writeFileSync(join(proj, "aidlc-docs", "aidlc-state.md"), STATE_FEATURE, "utf-8");
+  mkdirSync(recordRoot(proj), { recursive: true });
+  // Seed the DETERMINISTIC audit shard the compile tool resolves (auditFilePath)
+  // so readAllAuditShards() sees the WORKFLOW_STARTED trail.
+  const shard = auditFilePath(proj);
+  mkdirSync(dirname(shard), { recursive: true });
+  writeFileSync(shard, AUDIT_APPROVED, "utf-8");
+  writeFileSync(join(recordRoot(proj), "aidlc-state.md"), STATE_FEATURE, "utf-8");
   return proj;
 }
 
 /** memdir (t102:84): the per-stage memory dir for intent-capture (ideation phase). */
 function memDir(proj: string): string {
-  return join(proj, "aidlc-docs", "ideation", "intent-capture");
+  return join(recordRoot(proj), "ideation", "intent-capture");
 }
 
 /** Path to the memory.md the .sh `cp`s the template into. */
@@ -169,9 +187,7 @@ function seedTemplateMemory(proj: string): void {
 }
 
 const graphPath = (proj: string): string =>
-  join(proj, "aidlc-docs", "runtime-graph.json");
-const auditPath = (proj: string): string =>
-  join(proj, "aidlc-docs", "audit.md");
+  join(recordRoot(proj), "runtime-graph.json");
 
 /** Parse the runtime-graph.json the tool wrote. */
 // biome-ignore lint/suspicious/noExplicitAny: test reads arbitrary graph shape
@@ -181,12 +197,11 @@ function readGraph(proj: string): any {
 
 /**
  * Count MEMORY_EMPTY rows, mirroring the .sh's
- * `grep -c "^\*\*Event\*\*: MEMORY_EMPTY"` (t102:131,146,178).
+ * `grep -c "^\*\*Event\*\*: MEMORY_EMPTY"` (t102:131,146,178). Reads the merged
+ * audit shards (compile appends MEMORY_EMPTY to the resolved shard).
  */
 function memoryEmptyCount(proj: string): number {
-  const f = auditPath(proj);
-  if (!existsSync(f)) return 0;
-  return readFileSync(f, "utf-8")
+  return readAllAuditShards(proj)
     .split("\n")
     .filter((l) => l === "**Event**: MEMORY_EMPTY").length;
 }

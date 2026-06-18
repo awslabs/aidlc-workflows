@@ -104,6 +104,7 @@ import { readFileSync } from "node:fs";
 import { assertAuditEvent } from "../harness/assert.ts";
 import {
   cleanupTestProject,
+  seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import {
@@ -156,7 +157,7 @@ describe("t56 /aidlc --stage requirements-analysis forward jump (sdk)", () => {
       try {
         // Precondition: the seed truly starts AT reverse-engineering with
         // Scope=bugfix (no vacuous pass on a pre-jumped state).
-        const seed = readFileSync(`${proj}/aidlc-docs/aidlc-state.md`, "utf8");
+        const seed = readFileSync(seededStateFile(proj), "utf8");
         expect(readStateField(seed, "Current Stage")).toBe(SKIPPED_SLUG);
         expect(readStateField(seed, "Scope")).toBe(SCOPE);
 

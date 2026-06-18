@@ -75,7 +75,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+import {
+  cleanupTestProject,
+  createTestProject,
+  seededAuditShard,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 import { memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -207,6 +212,16 @@ function makeFixture(): Fixture {
   writeFileSync(teamPracticesPath, TEAM_PRACTICES_DRAFT, "utf-8");
   writeFileSync(discoveredRulesPath, DISCOVERED_RULES_DRAFT, "utf-8");
 
+  // P9: practices-promote emits PRACTICES_AFFIRMED/OVERRIDE into the ACTIVE
+  // INTENT's audit shard (appendAuditEvent → resolved record). Seed a state file
+  // into the record so the active-intent cursor resolves it — otherwise the emit
+  // falls back to the bare space root and seededAuditShard reads nothing.
+  writeFileSync(
+    seededStateFile(proj),
+    "# AI-DLC State Tracking\n## Current Status\n- **Scope**: feature\n",
+    "utf-8",
+  );
+
   return { proj, teamMd, projectMd, teamPracticesPath, discoveredRulesPath };
 }
 
@@ -248,8 +263,9 @@ function runPromote(fx: Fixture, ...extra: string[]): CliResult {
   };
 }
 
-const auditPath = (proj: string): string =>
-  join(proj, "aidlc-docs", "audit.md");
+// P9: the per-intent audit shard the practices-promote tool resolves once the
+// seeded record resolves (state present). seededAuditShard mirrors auditShardName.
+const auditPath = (proj: string): string => seededAuditShard(proj);
 
 /** Count audit blocks with `**Event**: <ev>`. Mirrors the .sh's PRACTICES_* grep, as a count. */
 function auditEventCount(file: string, ev: string): number {

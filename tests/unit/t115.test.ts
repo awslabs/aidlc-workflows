@@ -76,13 +76,19 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  auditLockDir,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
   cleanupTestProject,
   createTestProject,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
   FIXTURES_DIR,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -130,8 +136,12 @@ function state(args: string[], p: string): CliResult {
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
 }
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
-const statePath = (p: string): string => join(p, "aidlc-docs", "aidlc-state.md");
+// P9 per-intent layout: state lives in the active intent's record (seedStateFile
+// seeds it so the cursor resolves for the spawned report/approve tools); the
+// audit trail is a DIR of per-clone shards. report→approve threads the RESOLVED
+// active intent, so its events land under the record and its audit lock keys the
+// PER-INTENT bucket (see lockDir below). Reads glob every shard.
+const statePath = (p: string): string => seededStateFile(p);
 
 function replaceStateText(p: string, oldText: string, newText: string): void {
   const path = statePath(p);
@@ -149,10 +159,8 @@ function replaceStateText(p: string, oldText: string, newText: string): void {
  * trailing space is immaterial.
  */
 function auditEvents(p: string): string {
-  const f = auditPath(p);
-  if (!existsSync(f)) return "";
   const events: string[] = [];
-  for (const line of readFileSync(f, "utf-8").split("\n")) {
+  for (const line of readAllAuditShards(p).split("\n")) {
     const m = line.match(/^\*\*Event\*\*: (.+)$/);
     if (m) events.push(m[1]);
   }
@@ -161,19 +169,15 @@ function auditEvents(p: string): string {
 
 /** Count audit rows of one event type. Mirrors the .sh's count_event grep -c. */
 function countEvent(p: string, ev: string): number {
-  const f = auditPath(p);
-  if (!existsSync(f)) return 0;
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
-  return readFileSync(f, "utf-8")
+  return readAllAuditShards(p)
     .split("\n")
     .filter((l) => re.test(l)).length;
 }
 
 /** Total **Event**: rows (any type). Mirrors the .sh's `grep -c '\*\*Event\*\*:'`. */
 function totalEvents(p: string): number {
-  const f = auditPath(p);
-  if (!existsSync(f)) return 0;
-  return readFileSync(f, "utf-8")
+  return readAllAuditShards(p)
     .split("\n")
     .filter((l) => l.startsWith("**Event**:")).length;
 }
@@ -181,9 +185,7 @@ function totalEvents(p: string): number {
 /** Audit blocks (split on the `\n---\n` separator) carrying the given event,
  *  in file order — for asserting per-block fields like `**Recovered**: true`. */
 function auditBlocksFor(p: string, ev: string): string[] {
-  const f = auditPath(p);
-  if (!existsSync(f)) return [];
-  return readFileSync(f, "utf-8")
+  return readAllAuditShards(p)
     .split("\n---\n")
     .filter((b) => b.includes(`**Event**: ${ev}`));
 }
@@ -197,9 +199,12 @@ function auditBlocksFor(p: string, ev: string): string[] {
  * `${TMPDIR:-/tmp}`.
  */
 function lockDir(p: string): string {
-  const hash = createHash("md5").update(p).digest("hex").slice(0, 8);
-  const base = process.env.TMPDIR || "/tmp";
-  return join(base, `.aidlc-audit-${hash}.lock`);
+  // report→approve threads the RESOLVED active intent (the seeded default
+  // record), so the lock keys the PER-INTENT bucket, NOT the workspace sentinel.
+  // Use the lib's auditLockDir with the seeded record so the path matches what
+  // the spawned tool acquires/releases (CRITICAL invariant: aidlc-state's
+  // approve resolves the intent).
+  return auditLockDir(p, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
 }
 
 // ============================================================

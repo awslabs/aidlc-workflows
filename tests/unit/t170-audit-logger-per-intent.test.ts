@@ -6,9 +6,9 @@
 // (aidlc/spaces/<space>/intents/<slug>-<id8>/<phase>/<stage>/…), that path no
 // longer contains "aidlc-docs/", so the old gate DROPPED every ARTIFACT_CREATED/
 // UPDATED on the new layout (the review minor this fixes). The gate now resolves
-// the active intent's record root via docsRoot() and logs writes under it, while
-// keeping the flat "aidlc-docs/" substring as a transitional flat-legacy
-// fallback (retired in P9).
+// the active intent's record root via docsRoot() and logs writes under it. P9
+// RETIRED the transitional flat "aidlc-docs/" substring fallback — a write under
+// a flat aidlc-docs/ tree is no longer logged (last test pins that end state).
 //
 // WHY CLI: the SUBJECT is a hook (top-level run + process.exit gates + stdin),
 // spawned exactly as PostToolUse drives it — the same twin pattern as t07.
@@ -20,7 +20,7 @@
 // and assert the ARTIFACT event + the record-relative breadcrumb landed.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import {
@@ -31,7 +31,6 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
-  seedAuditFile,
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath;
@@ -140,13 +139,16 @@ describe("t170 audit-logger per-intent gate (mechanism cli — spawned hook)", (
     expect(readShards(auditDir)).toBe(before);
   });
 
-  test("flat-legacy fallback still logs under aidlc-docs/ (transitional)", () => {
-    // No birth → flat-legacy. Seed the flat audit.md, fire a write under the flat
-    // aidlc-docs/ tree, and assert it still logs (the fallback the gate keeps).
-    seedAuditFile(proj);
-    const flatAudit = join(proj, "aidlc-docs", "audit.md");
+  test("a write under the flat aidlc-docs/ tree is NOT logged (P9 — no flat-legacy fallback)", () => {
+    // P9 retired the transitional `file.includes("aidlc-docs/")` gate. The
+    // logger now fires ONLY for writes under the per-intent record root. A write
+    // under a flat aidlc-docs/ tree no longer matches, so nothing is logged.
+    const { auditDir } = seedIntentWithShard(proj, "legacy");
+    const before = readShards(auditDir);
     const rc = fire(proj, "Write", join(proj, "aidlc-docs", "ideation", "feasibility", "f.md"));
-    expect(rc).toBe(0);
-    expect(readFileSync(flatAudit, "utf-8")).toContain("ARTIFACT_CREATED");
+    expect(rc).toBe(0); // advisory: the hook still exits clean
+    // No flat audit.md is created, and the per-intent shard is unchanged.
+    expect(existsSync(join(proj, "aidlc-docs", "audit.md"))).toBe(false);
+    expect(readShards(auditDir)).toBe(before);
   });
 });

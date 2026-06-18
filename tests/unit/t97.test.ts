@@ -66,10 +66,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
+  auditFilePath,
   parseMemoryEntries,
   parseMemoryHeadings,
+  readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 
@@ -187,22 +189,39 @@ afterEach(() => {
   tmpRoot = "";
 });
 
+// P9: with no intent cursor seeded, the tool resolves the BARE space record
+// root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/. State,
+// runtime-graph, audit, and the per-stage memory all live under it (the flat
+// aidlc-docs/ root is retired — there is no fallback). mkproj seeds that tree;
+// the runtime-graph memory_path is the record-relative path the tool resolves
+// via join(projectDir, memRel).
+const RECORD_REL = join("aidlc", "spaces", "default", "intents");
+function recordRoot(pd: string): string {
+  return join(pd, RECORD_REL);
+}
+function stateFile(pd: string): string {
+  return join(recordRoot(pd), "aidlc-state.md");
+}
+function memoryFile(pd: string): string {
+  return join(recordRoot(pd), "inception", "user-stories", "memory.md");
+}
+
 function mkproj(name: string): string {
   const pd = join(tmpRoot, name);
-  mkdirSync(join(pd, "aidlc-docs", "inception", "user-stories"), { recursive: true });
+  mkdirSync(join(recordRoot(pd), "inception", "user-stories"), { recursive: true });
   mkdirSync(join(pd, ".claude", "rules"), { recursive: true });
   mkdirSync(join(pd, ".claude", "skills", "aidlc", "stages", "inception"), {
     recursive: true,
   });
   writeFileSync(
-    join(pd, "aidlc-docs", "aidlc-state.md"),
+    stateFile(pd),
     "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Scope**: feature\n",
     "utf-8",
   );
   writeFileSync(
-    join(pd, "aidlc-docs", "runtime-graph.json"),
+    join(recordRoot(pd), "runtime-graph.json"),
     `{ "workflow_id": "w1", "scope": "feature", "started_at": "2026-05-28T13:00:00Z",
-  "stages": [ { "stage_slug": "user-stories", "memory_path": "aidlc-docs/inception/user-stories/memory.md" } ] }
+  "stages": [ { "stage_slug": "user-stories", "memory_path": "aidlc/spaces/default/intents/inception/user-stories/memory.md" } ] }
 `,
     "utf-8",
   );
@@ -251,12 +270,23 @@ function readFile(p: string): string {
 }
 function grepCount(p: string, needle: RegExp | string): number {
   if (!existsSync(p)) return 0;
+  return grepCountText(readFile(p), needle);
+}
+function grepCountText(text: string, needle: RegExp | string): number {
   const re =
     typeof needle === "string"
       ? new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")
       : new RegExp(needle.source, needle.flags.includes("g") ? needle.flags : `${needle.flags}g`);
-  const lines = readFile(p).split("\n").filter((l) => re.test(l));
-  return lines.length;
+  return text.split("\n").filter((l) => re.test(l)).length;
+}
+// P9: the tool writes per-clone audit SHARDS under the record's audit/ dir, not
+// a flat aidlc-docs/audit.md. Read the merged trail (single clone here, so it
+// resolves to the one shard the tool wrote); count rows against the merged text.
+function readAudit(pd: string): string {
+  return readAllAuditShards(pd);
+}
+function grepCountAudit(pd: string, needle: RegExp | string): number {
+  return grepCountText(readAudit(pd), needle);
 }
 
 // Block-scoped extractor — the TS analogue of the .sh's awk:
@@ -332,7 +362,7 @@ describe("t97 surface (cli)", () => {
   // .sh 12 — empty memory.md -> candidates: []
   test("empty memory.md -> zero candidates", () => {
     const pd = mkproj("p12");
-    writeFileSync(join(pd, "aidlc-docs", "inception", "user-stories", "memory.md"), "", "utf-8");
+    writeFileSync(memoryFile(pd), "", "utf-8");
     const res = runCli(["surface", "--slug", "user-stories", "--project-dir", pd]);
     expect(res.rc).toBe(0);
     const j = JSON.parse(res.stdout);
@@ -343,7 +373,7 @@ describe("t97 surface (cli)", () => {
   test("I/D/T -> one candidate each with correct source_heading", () => {
     const pd = mkproj("p13");
     writeFileSync(
-      join(pd, "aidlc-docs", "inception", "user-stories", "memory.md"),
+      memoryFile(pd),
       `## Interpretations
 - 2026-05-28T14:00:00Z — interp one; ctx i
 
@@ -370,7 +400,7 @@ describe("t97 surface (cli)", () => {
   test("Open questions -> parked_open_questions, never candidates", () => {
     const pd = mkproj("p14");
     writeFileSync(
-      join(pd, "aidlc-docs", "inception", "user-stories", "memory.md"),
+      memoryFile(pd),
       `## Interpretations
 
 ## Deviations
@@ -391,7 +421,7 @@ describe("t97 surface (cli)", () => {
   test("mixed headings -> correct partition (2 candidates, 1 parked)", () => {
     const pd = mkproj("p15");
     writeFileSync(
-      join(pd, "aidlc-docs", "inception", "user-stories", "memory.md"),
+      memoryFile(pd),
       `## Interpretations
 - 2026-05-28T14:00:00Z — i; ci
 
@@ -421,7 +451,7 @@ describe("t97 surface (cli)", () => {
     // while the skip was actually dead. With the reader corrected to the space
     // spelling, the seed must use it too for the skip to genuinely fire.)
     writeFileSync(
-      join(pd, "aidlc-docs", "aidlc-state.md"),
+      stateFile(pd),
       "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Test Run Mode**: true\n",
       "utf-8",
     );
@@ -474,7 +504,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     expect(readFile(plf)).toContain("cid:user-stories:c1");
     // ensure-exists created the routed heading; the practice landed under it.
     expect(/^## Corrections/m.test(readFile(plf))).toBe(true);
-    expect(/Event.*: RULE_LEARNED/.test(readFile(join(pd, "aidlc-docs", "audit.md")))).toBe(true);
+    expect(/Event.*: RULE_LEARNED/.test(readAudit(pd))).toBe(true);
   });
 
   // .sh 19 — learning (team scope) -> write a practice to team.md
@@ -558,7 +588,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     // isolation than a whole-file substring — a Source/Candidate-ID landing in
     // some OTHER audit block (e.g. a SENSOR_PROPOSED row, or a future second
     // RULE_LEARNED) would no longer falsely satisfy the assertion.
-    const audit = readFile(join(pd, "aidlc-docs", "audit.md"));
+    const audit = readAudit(pd);
     const ftBlock = extractAuditBlock(audit, /Event.*: RULE_LEARNED/);
     // Sanity: the block must actually exist (start line found + terminated).
     expect(ftBlock).toContain("RULE_LEARNED");
@@ -579,7 +609,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     );
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
-    const rows = grepCount(join(pd, "aidlc-docs", "audit.md"), /Event.*: RULE_LEARNED/);
+    const rows = grepCountAudit(pd, /Event.*: RULE_LEARNED/);
     const lines = grepCount(
       projectPractices(pd),
       "cid:user-stories:c1",
@@ -614,7 +644,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
       "--project-dir",
       pd,
     ]);
-    const rows = grepCount(join(pd, "aidlc-docs", "audit.md"), /Event.*: RULE_LEARNED/);
+    const rows = grepCountAudit(pd, /Event.*: RULE_LEARNED/);
     const lines = grepCount(plf, "cid:user-stories:c1");
     expect(`${res.rc}:${rows}:${lines}`).toBe("0:1:1");
   });
@@ -641,8 +671,13 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
   // .sh 26 — test-run -> exit 0, no writes/emits (most-recent audit block Test-Run: true).
   test("test-run -> no writes, no emits", () => {
     const pd = mkproj("p26");
+    // Pre-seed the DETERMINISTIC shard the persist tool resolves (auditFilePath
+    // -> the bare space record root's audit/<host>-<clone>.md) so the tool's
+    // readAllAuditShards() test-run check sees this most-recent Test-Run block.
+    const shard = auditFilePath(pd);
+    mkdirSync(dirname(shard), { recursive: true });
     writeFileSync(
-      join(pd, "aidlc-docs", "audit.md"),
+      shard,
       `
 ## Stage Start
 **Timestamp**: 2026-05-29T10:00:00Z
@@ -661,7 +696,7 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
 `,
     );
     runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
-    const rows = grepCount(join(pd, "aidlc-docs", "audit.md"), /Event.*: RULE_LEARNED/);
+    const rows = grepCountAudit(pd, /Event.*: RULE_LEARNED/);
     const fileState = existsSync(projectPractices(pd))
       ? "file"
       : "none";

@@ -79,13 +79,12 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
   REPO_ROOT,
-  seedAuditFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -106,23 +105,24 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-/** create_test_project + seed_audit_file + seed_state_file (the .sh's standard prelude). */
+// P9: the flat aidlc-docs/audit.md is retired. seed_state_file seeds the default
+// intent's record so emitError's existsSync(stateFilePath) gate passes and the
+// active-intent cursor resolves; emitError's appendAuditEntry then CREATES its
+// own per-clone shard under that record (no audit-seed needed). The SPAWNED tool
+// mints its own clone-id, so reads glob every shard via readAllAuditShards.
 function seededProj(): string {
   const p = createTestProject();
   tempDirs.push(p);
-  seedAuditFile(p);
   seedStateFile(p, STATE_FIXTURE);
   return p;
 }
 
-/** create_test_project ONLY — aidlc-docs/ exists, but no state file, no audit.md (Test 6). */
+/** create_test_project ONLY — no state file, no audit trail (Test 6). */
 function bareProj(): string {
   const p = createTestProject();
   tempDirs.push(p);
   return p;
 }
-
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
 
 interface CliResult {
   status: number;
@@ -143,10 +143,9 @@ function run(tool: string, args: string[], p: string): CliResult {
   };
 }
 
-/** Count `**Event**: ERROR_LOGGED` lines. Mirrors the .sh's `grep -c '^\*\*Event\*\*: ERROR_LOGGED'`. */
-function errorLoggedCount(file: string): number {
-  if (!existsSync(file)) return 0;
-  return readFileSync(file, "utf-8")
+/** Count `**Event**: ERROR_LOGGED` lines in a buffer. */
+function errorLoggedCount(body: string): number {
+  return body
     .split("\n")
     .filter((l) => l === "**Event**: ERROR_LOGGED").length;
 }
@@ -157,10 +156,9 @@ function errorLoggedCount(file: string): number {
  * on the literal `**: ` separator. Mirrors auditField in t31.cli.test.ts.
  * Returns "" when absent (block-scoped).
  */
-function auditField(file: string, ev: string, key: string): string {
-  if (!existsSync(file)) return "";
+function auditField(body: string, ev: string, key: string): string {
   let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of body.split("\n")) {
     if (line.startsWith("## ")) {
       matched = false;
       continue;
@@ -195,7 +193,7 @@ describe("t34 ERROR_LOGGED via emitError (migrated from t34-tool-error-logged.sh
     const p = seededProj();
     const r = run(STATE, ["bogus-cmd"], p);
     // STRONGER than the .sh presence grep: exact count against a zero-baseline seed.
-    expect(errorLoggedCount(auditPath(p))).toBe(1);
+    expect(errorLoggedCount(readAllAuditShards(p))).toBe(1);
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('"error"'); // JSON error on stderr (emitError, lib.ts:1545)
   });
@@ -203,7 +201,7 @@ describe("t34 ERROR_LOGGED via emitError (migrated from t34-tool-error-logged.sh
   test("2: ERROR_LOGGED has Tool=aidlc-state", () => {
     const p = seededProj();
     run(STATE, ["bogus-cmd"], p);
-    expect(auditField(auditPath(p), "ERROR_LOGGED", "Tool")).toBe("aidlc-state");
+    expect(auditField(readAllAuditShards(p), "ERROR_LOGGED", "Tool")).toBe("aidlc-state");
   });
 
   test("3: ERROR_LOGGED Command starts with the failing invocation", () => {
@@ -217,7 +215,7 @@ describe("t34 ERROR_LOGGED via emitError (migrated from t34-tool-error-logged.sh
     // .sh's unanchored grep matched on its prefix. STRONGER than the file-wide
     // grep: this assert is block-scoped to the ERROR_LOGGED entry, and pins the
     // exact "aidlc-state bogus-cmd" prefix + that --project-dir survives into the row.
-    const command = auditField(auditPath(p), "ERROR_LOGGED", "Command");
+    const command = auditField(readAllAuditShards(p), "ERROR_LOGGED", "Command");
     expect(command).toStartWith("aidlc-state bogus-cmd");
     expect(command).toContain("--project-dir");
   });
@@ -227,7 +225,7 @@ describe("t34 ERROR_LOGGED via emitError (migrated from t34-tool-error-logged.sh
     run(STATE, ["bogus-cmd"], p);
     // .sh grepped '**Error**: Unknown subcommand'; assert the exact field
     // begins with that diagnostic (STRONGER: block-scoped, not file-wide).
-    expect(auditField(auditPath(p), "ERROR_LOGGED", "Error")).toStartWith("Unknown subcommand");
+    expect(auditField(readAllAuditShards(p), "ERROR_LOGGED", "Error")).toStartWith("Unknown subcommand");
   });
 
   test("5: error() exits with code 1", () => {
@@ -236,12 +234,13 @@ describe("t34 ERROR_LOGGED via emitError (migrated from t34-tool-error-logged.sh
     expect(r.status).toBe(1);
   });
 
-  test("6: no-op when no state file (audit.md not created)", () => {
-    // aidlc-docs/ exists (createTestProject), but no state file and no audit.md.
-    // emitError's existsSync(stateFilePath) guard (lib.ts:1513) makes it a no-op.
+  test("6: no-op when no state file (audit trail not created)", () => {
+    // The per-intent shell exists (createTestProject), but no state file makes
+    // the cursor unresolvable; emitError's existsSync(stateFilePath) guard
+    // (lib.ts:1513) makes it a no-op so no shard is written.
     const p = bareProj();
     const r = run(STATE, ["bogus-cmd"], p);
-    expect(existsSync(auditPath(p))).toBe(false);
+    expect(readAllAuditShards(p)).toBe("");
     // Tool still errors out (the no-op only suppresses the audit emit).
     expect(r.status).toBe(1);
   });
@@ -251,7 +250,7 @@ describe("t34 ERROR_LOGGED via emitError (migrated from t34-tool-error-logged.sh
     run(STATE, ["bogus-1"], p);
     run(STATE, ["bogus-2"], p);
     // The recursion guard is process-local; each spawn is a fresh process.
-    expect(errorLoggedCount(auditPath(p))).toBe(2);
+    expect(errorLoggedCount(readAllAuditShards(p))).toBe(2);
   });
 
   test("12: ERROR_LOGGED survives taxonomy validation (row actually lands)", () => {
@@ -261,7 +260,7 @@ describe("t34 ERROR_LOGGED via emitError (migrated from t34-tool-error-logged.sh
     // silently-swallowed write can't masquerade as success).
     const p = seededProj();
     const r = run(STATE, ["bogus"], p);
-    expect(errorLoggedCount(auditPath(p))).toBe(1);
+    expect(errorLoggedCount(readAllAuditShards(p))).toBe(1);
     expect(r.stderr).toContain('"error"');
   });
 });
@@ -275,8 +274,8 @@ describe("t34 emitError is shared across tool CLIs", () => {
   test("7: aidlc-log error routes through emitError (Tool=aidlc-log)", () => {
     const p = seededProj();
     run(LOG, ["bogus"], p);
-    expect(errorLoggedCount(auditPath(p))).toBe(1);
-    expect(auditField(auditPath(p), "ERROR_LOGGED", "Tool")).toBe("aidlc-log");
+    expect(errorLoggedCount(readAllAuditShards(p))).toBe(1);
+    expect(auditField(readAllAuditShards(p), "ERROR_LOGGED", "Tool")).toBe("aidlc-log");
   });
 
   test("8: aidlc-jump error routes through emitError (Tool=aidlc-jump)", () => {
@@ -285,14 +284,14 @@ describe("t34 emitError is shared across tool CLIs", () => {
     // aidlc-jump.ts:65) — so the unknown-subcommand error() fires, regardless
     // of the --to flag. Mirrors the .sh's `aidlc-jump preview --to non-existent-slug`.
     run(JUMP, ["preview", "--to", "non-existent-slug"], p);
-    expect(errorLoggedCount(auditPath(p))).toBe(1);
-    expect(auditField(auditPath(p), "ERROR_LOGGED", "Tool")).toBe("aidlc-jump");
+    expect(errorLoggedCount(readAllAuditShards(p))).toBe(1);
+    expect(auditField(readAllAuditShards(p), "ERROR_LOGGED", "Tool")).toBe("aidlc-jump");
   });
 
   test("9: aidlc-bolt error routes through emitError (Tool=aidlc-bolt)", () => {
     const p = seededProj();
     run(BOLT, ["bogus"], p);
-    expect(errorLoggedCount(auditPath(p))).toBe(1);
-    expect(auditField(auditPath(p), "ERROR_LOGGED", "Tool")).toBe("aidlc-bolt");
+    expect(errorLoggedCount(readAllAuditShards(p))).toBe(1);
+    expect(auditField(readAllAuditShards(p), "ERROR_LOGGED", "Tool")).toBe("aidlc-bolt");
   });
 });

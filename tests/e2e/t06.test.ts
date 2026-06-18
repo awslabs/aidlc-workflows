@@ -37,11 +37,12 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
+  seededAuditDir,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
@@ -96,14 +97,24 @@ function create(cwd: string, projectDir: string, args: string[]): CliResult {
   };
 }
 
-/** Count `**Bolt slug**: <slug>` rows in a given aidlc-docs/audit.md. */
+/** Count `**Bolt slug**: <slug>` rows across the seeded record's audit shards
+ *  (audit/*.md). The sibling worktree never carries the record (it's seeded after
+ *  the fixture's seed commit, so it doesn't travel), so its shard dir is absent →
+ *  [] — exactly the negative the guard-fires-pre-audit assertion wants. */
 function boltSlugRows(dir: string): string[] {
-  const f = join(dir, "aidlc-docs", "audit.md");
-  if (!existsSync(f)) return [];
+  const auditDir = seededAuditDir(dir);
+  let names: string[];
+  try {
+    names = readdirSync(auditDir).filter((f) => f.endsWith(".md"));
+  } catch {
+    return [];
+  }
   const out: string[] = [];
-  for (const line of readFileSync(f, "utf-8").split("\n")) {
-    const m = line.match(/^\*\*Bolt slug\*\*:\s*(\S+)/);
-    if (m) out.push(m[1]);
+  for (const n of names) {
+    for (const line of readFileSync(join(auditDir, n), "utf-8").split("\n")) {
+      const m = line.match(/^\*\*Bolt slug\*\*:\s*(\S+)/);
+      if (m) out.push(m[1]);
+    }
   }
   return out;
 }

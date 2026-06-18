@@ -32,6 +32,14 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { seedCustomHarness } from "./custom-harness.ts";
+import {
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
+  FIXTURE_CLONE_ID,
+  intentsDirOf,
+  seededAuditShard,
+  seededRecordDir,
+} from "./fixtures.ts";
 
 // tests/harness/ -> repo root -> dist/claude/.claude (the shipped distributable).
 const HARNESS_DIR = import.meta.dir;
@@ -39,6 +47,31 @@ const REPO_ROOT = join(HARNESS_DIR, "..", "..");
 export const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 export const KIRO_SRC = join(REPO_ROOT, "dist", "kiro", ".kiro");
 const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures");
+// The per-harness memory shell (aidlc/spaces/default/memory) ships beside the
+// engine tree; copy it so the resolver finds the rule layers, mirroring
+// setupIntegrationProject's AIDLC_MEMORY_SRC copy.
+const CLAUDE_MEMORY_SRC = join(REPO_ROOT, "dist", "claude", "aidlc");
+const KIRO_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro", "aidlc");
+
+/** Seed the per-intent workspace shell into a TUI fixture project: the default
+ *  intent record + cursors + registry + pinned clone-id (mirrors fixtures.ts
+ *  seedWorkspaceShell). Idempotent; the dist copy already brings the memory tree. */
+function seedTuiWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
+  const intentsDir = intentsDirOf(proj, space);
+  mkdirSync(seededRecordDir(proj, space), { recursive: true });
+  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
+  writeFileSync(join(proj, "aidlc", "active-space"), `${space}\n`, "utf-8");
+  writeFileSync(join(intentsDir, "active-intent"), `${DEFAULT_RECORD_DIR}\n`, "utf-8");
+  writeFileSync(
+    join(intentsDir, "intents.json"),
+    `${JSON.stringify(
+      [{ uuid: "00000000-0000-7000-8000-000000000001", slug: DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, ""), status: "in-flight" }],
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+}
 
 export interface TuiProjectOptions {
   /** Which harness distributable to seed. "claude" (default) copies
@@ -105,38 +138,43 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
 
   // 1. Copy the distributable (dest must NOT pre-exist or cp nests it — same
   //    caveat the inline render tests note). Harness selects the dist tree.
+  //    Also copy the sibling aidlc/ memory shell so the resolver finds the rule
+  //    layers (the engine tree under .claude/.kiro does NOT include it).
   if (opts.harness === "kiro") {
     cpSync(KIRO_SRC, join(proj, ".kiro"), { recursive: true });
     cpSync(join(KIRO_SRC, "..", "AGENTS.md"), join(proj, "AGENTS.md"));
+    if (existsSync(KIRO_MEMORY_SRC)) cpSync(KIRO_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
   } else {
     cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
+    if (existsSync(CLAUDE_MEMORY_SRC)) cpSync(CLAUDE_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
   }
 
-  // 2. State / audit / no-docs. The distributable copy may bring a default
-  //    aidlc-docs/; honour the bash order (state/audit seed AFTER copy, and
-  //    --no-aidlc-docs wipes it).
+  // 2. Seed the per-intent workspace shell (default record + cursors), then write
+  //    state/audit into the record. noAidlcDocs is the no-workspace case: strip
+  //    the record so no intent resolves (the resolver falls to the bare space root).
+  seedTuiWorkspaceShell(proj);
+  const record = seededRecordDir(proj);
   if (opts.noAidlcDocs) {
-    rmSync(join(proj, "aidlc-docs"), { recursive: true, force: true });
+    rmSync(intentsDirOf(proj), { recursive: true, force: true });
   } else {
-    const docsDir = join(proj, "aidlc-docs");
-    mkdirSync(docsDir, { recursive: true });
     if (opts.withState) {
       const fixturePath = join(FIXTURES_DIR, opts.withState);
       if (!existsSync(fixturePath)) {
         throw new Error(`setupTuiProject: state fixture not found: ${fixturePath}`);
       }
-      writeFileSync(join(docsDir, "aidlc-state.md"), readFileSync(fixturePath, "utf8"));
+      writeFileSync(join(record, "aidlc-state.md"), readFileSync(fixturePath, "utf8"));
     }
     if (opts.withAudit) {
-      // seed_audit_file (fixtures.sh) writes a minimal audit.md the workflow
-      // appends to; an empty file is sufficient for "exists and grows".
-      const auditPath = join(docsDir, "audit.md");
-      if (!existsSync(auditPath)) writeFileSync(auditPath, "# Audit Log\n");
+      // A minimal audit shard the workflow appends to; the readers glob the
+      // record's audit/ dir, so one seeded shard reads back as the trail.
+      const auditShard = seededAuditShard(proj);
+      mkdirSync(join(record, "audit"), { recursive: true });
+      if (!existsSync(auditShard)) writeFileSync(auditShard, "# Audit Log\n");
     }
   }
 
   // 3. Stubs (fixture-directory copies). greenfield/brownfield land in the project
-  //    ROOT; re-artifacts land under aidlc-docs/inception/reverse-engineering/.
+  //    ROOT; re-artifacts + ideation artifacts land under the intent record.
   if (opts.greenfieldStub) {
     copyDirContents(join(FIXTURES_DIR, "greenfield-todo"), proj);
   }
@@ -144,7 +182,7 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
     copyDirContents(join(FIXTURES_DIR, "brownfield-todo"), proj);
   }
   if (opts.reArtifacts) {
-    const reDir = join(proj, "aidlc-docs", "inception", "reverse-engineering");
+    const reDir = join(record, "inception", "reverse-engineering");
     mkdirSync(reDir, { recursive: true });
     const src = join(FIXTURES_DIR, "re-artifacts");
     for (const f of readdirSync(src)) {
@@ -155,14 +193,13 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
   }
   if (opts.ideationArtifacts) {
     // Seed the 3 REQUIRED ideation artifacts at the canonical paths their
-    // producing stages write (intent-capture/intent-statement.md;
-    // scope-definition/{scope-document,intent-backlog}.md — verified against the
-    // stage frontmatter `outputs:` lines). This is what the forward-jump
-    // missing-input scan checks (SKILL.md:212), so seeding them keeps the jump
-    // gateless without touching the checkbox state the [S] marks derive from.
+    // producing stages write under the intent record (intent-capture/
+    // intent-statement.md; scope-definition/{scope-document,intent-backlog}.md).
+    // This is what the forward-jump missing-input scan checks (SKILL.md:212), so
+    // seeding them keeps the jump gateless without touching checkbox state.
     const src = join(FIXTURES_DIR, "ideation-artifacts");
-    const intentDir = join(proj, "aidlc-docs", "ideation", "intent-capture");
-    const scopeDir = join(proj, "aidlc-docs", "ideation", "scope-definition");
+    const intentDir = join(record, "ideation", "intent-capture");
+    const scopeDir = join(record, "ideation", "scope-definition");
     mkdirSync(intentDir, { recursive: true });
     mkdirSync(scopeDir, { recursive: true });
     writeFileSync(

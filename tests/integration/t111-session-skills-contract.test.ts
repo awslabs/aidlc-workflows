@@ -71,8 +71,18 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
+import { auditFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// P9: with no intent cursor seeded, compile/summary resolve the BARE space
+// record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/.
+// State, runtime-graph, per-stage memory, and the per-clone audit SHARD all
+// live under it (the flat aidlc-docs/ root is retired — there is no fallback).
+const RECORD_REL = join("aidlc", "spaces", "default", "intents");
+function recordRoot(proj: string): string {
+  return join(proj, RECORD_REL);
+}
 
 const BUN = process.execPath; // the bun running this test
 const RUNTIME_TS = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
@@ -96,11 +106,14 @@ afterAll(() => {
 function buildSyntheticProject(): string {
   const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t111-")));
   tempDirs.push(proj);
-  mkdirSync(join(proj, "aidlc-docs", "ideation", "intent-capture"), {
+  mkdirSync(join(recordRoot(proj), "ideation", "intent-capture"), {
     recursive: true,
   });
+  // Seed the DETERMINISTIC audit shard the compile tool resolves (auditFilePath).
+  const shard = auditFilePath(proj);
+  mkdirSync(dirname(shard), { recursive: true });
   writeFileSync(
-    join(proj, "aidlc-docs", "audit.md"),
+    shard,
     [
       "## Workflow Start",
       "**Timestamp**: 2026-05-27T10:00:00Z",
@@ -129,12 +142,12 @@ function buildSyntheticProject(): string {
     "utf-8",
   );
   writeFileSync(
-    join(proj, "aidlc-docs", "aidlc-state.md"),
+    join(recordRoot(proj), "aidlc-state.md"),
     "- **Scope**: feature\n- **Current Stage**: intent-capture\n",
     "utf-8",
   );
   writeFileSync(
-    join(proj, "aidlc-docs", "ideation", "intent-capture", "memory.md"),
+    join(recordRoot(proj), "ideation", "intent-capture", "memory.md"),
     "## Interpretations\n- one\n## Tradeoffs\n- a tradeoff\n",
     "utf-8",
   );

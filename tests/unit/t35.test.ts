@@ -76,12 +76,14 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
-  seedAuditFile,
+  FIXTURES_DIR,
+  seededAuditDir,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -108,7 +110,21 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+// P9: the flat aidlc-docs/audit.md is retired. seed_state_file seeds the default
+// intent's record so the active-intent cursor resolves; the baseline trail is
+// planted in a shard named `0-seed.md` under the record's audit/ DIR. The name
+// is LOW-SORTING (digit '0' precedes any hostname slug) so readAllAuditShards —
+// which concatenates shards in FILENAME order — keeps the seeded SESSION_COMPACTED
+// BEFORE the tool's RECOVERY_COMPLETED shard; handleResume's compaction detection
+// is positional (lastIndexOf SESSION_COMPACTED, then scans the suffix for
+// RECOVERY_COMPLETED), so ordering must hold. The SPAWNED tool mints its own
+// clone-id and writes to `<host>-<clone>.md`, which sorts AFTER `0-seed.md`.
+const seedShardPath = (p: string): string => join(seededAuditDir(p), "0-seed.md");
+function seedBaselineShard(p: string): void {
+  const auditDir = seededAuditDir(p);
+  mkdirSync(auditDir, { recursive: true });
+  copyFileSync(join(FIXTURES_DIR, "audit-sample.md"), seedShardPath(p));
+}
 
 interface CliResult {
   status: number;
@@ -137,7 +153,7 @@ function state(args: string[], p: string): CliResult {
 function proj(opts: { compacted?: boolean } = {}): string {
   const p = createTestProject();
   tempDirs.push(p);
-  seedAuditFile(p);
+  seedBaselineShard(p);
   seedStateFile(p, STATE_MID_IDEATION);
   if (opts.compacted) injectSessionCompacted(p);
   return p;
@@ -149,7 +165,7 @@ function proj(opts: { compacted?: boolean } = {}): string {
  */
 function injectSessionCompacted(p: string): void {
   appendFileSync(
-    auditPath(p),
+    seedShardPath(p),
     "\n## Session Compacted\n" +
       "**Timestamp**: 2026-05-03T00:00:00Z\n" +
       "**Event**: SESSION_COMPACTED\n" +
@@ -166,7 +182,7 @@ function injectSessionCompacted(p: string): void {
  */
 function injectStageStarted(p: string): void {
   appendFileSync(
-    auditPath(p),
+    seedShardPath(p),
     "\n## Stage Start\n" +
       "**Timestamp**: 2026-05-03T00:05:00Z\n" +
       "**Event**: STAGE_STARTED\n" +
@@ -176,11 +192,10 @@ function injectStageStarted(p: string): void {
   );
 }
 
-/** Count audit blocks with `**Event**: <ev>`. Mirrors the .sh's `^**Event**: <ev>` grep, as an exact count. */
-function auditEventCount(file: string, ev: string): number {
-  if (!existsSync(file)) return 0;
+/** Count audit blocks with `**Event**: <ev>` in a buffer. */
+function auditEventCount(body: string, ev: string): number {
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
-  return readFileSync(file, "utf-8")
+  return body
     .split("\n")
     .filter((l) => re.test(l)).length;
 }
@@ -191,10 +206,9 @@ function auditEventCount(file: string, ev: string): number {
  * the literal `**: ` separator. Mirrors auditField in t31.cli.test.ts. Returns
  * "" when absent (block-scoped).
  */
-function auditField(file: string, ev: string, key: string): string {
-  if (!existsSync(file)) return "";
+function auditField(body: string, ev: string, key: string): string {
   let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of body.split("\n")) {
     if (line.startsWith("## ")) {
       matched = false;
       continue;
@@ -228,7 +242,7 @@ describe("t35 acknowledge-compaction -> RECOVERY_COMPLETED (migrated from t35-to
     const p = proj({ compacted: true });
     const r = state(["acknowledge-compaction", "--choice", "continue"], p);
     expect(r.status).toBe(0); // STRONGER: .sh swallowed $? with `|| true`
-    expect(auditEventCount(auditPath(p), RC)).toBe(1); // STRONGER: exact count vs presence grep
+    expect(auditEventCount(readAllAuditShards(p), RC)).toBe(1); // STRONGER: exact count vs presence grep
     // STRONGER: JSON ack on stdout records the acknowledgement.
     expect(r.stdout).toContain('"acknowledged":true');
   });
@@ -237,7 +251,7 @@ describe("t35 acknowledge-compaction -> RECOVERY_COMPLETED (migrated from t35-to
   test("2: RECOVERY_COMPLETED records Choice", () => {
     const p = proj({ compacted: true });
     state(["acknowledge-compaction", "--choice", "review"], p);
-    expect(auditField(auditPath(p), RC, "Choice")).toBe("review");
+    expect(auditField(readAllAuditShards(p), RC, "Choice")).toBe("review");
   });
 
   // --- Test 3: records Current Stage field ---
@@ -246,7 +260,7 @@ describe("t35 acknowledge-compaction -> RECOVERY_COMPLETED (migrated from t35-to
     state(["acknowledge-compaction", "--choice", "continue"], p);
     // STRONGER than the .sh (which only grepped the label): pin the exact
     // value from the seeded state-mid-ideation.md Current Stage = feasibility.
-    expect(auditField(auditPath(p), RC, "Current Stage")).toBe("feasibility");
+    expect(auditField(readAllAuditShards(p), RC, "Current Stage")).toBe("feasibility");
   });
 
   // --- Test 4: all three valid choices accepted (split per-choice) ---
@@ -255,7 +269,7 @@ describe("t35 acknowledge-compaction -> RECOVERY_COMPLETED (migrated from t35-to
       const p = proj({ compacted: true });
       const r = state(["acknowledge-compaction", "--choice", choice], p);
       expect(r.status).toBe(0);
-      expect(auditField(auditPath(p), RC, "Choice")).toBe(choice);
+      expect(auditField(readAllAuditShards(p), RC, "Choice")).toBe(choice);
     });
   }
 
@@ -266,7 +280,7 @@ describe("t35 acknowledge-compaction -> RECOVERY_COMPLETED (migrated from t35-to
     expect(r.status).toBe(1);
     // STRONGER: assert the diagnostic AND that nothing was emitted.
     expect(r.out).toContain("Invalid --choice");
-    expect(auditEventCount(auditPath(p), RC)).toBe(0);
+    expect(auditEventCount(readAllAuditShards(p), RC)).toBe(0);
   });
 
   // --- Test 6: missing --choice rejected (exit 1, no emit) ---
@@ -275,7 +289,7 @@ describe("t35 acknowledge-compaction -> RECOVERY_COMPLETED (migrated from t35-to
     const r = state(["acknowledge-compaction"], p);
     expect(r.status).toBe(1);
     expect(r.out).toContain("Usage:");
-    expect(auditEventCount(auditPath(p), RC)).toBe(0);
+    expect(auditEventCount(readAllAuditShards(p), RC)).toBe(0);
   });
 
   // --- Test 7: no SESSION_COMPACTED -> refuses (exit 1, no emit) ---
@@ -285,7 +299,7 @@ describe("t35 acknowledge-compaction -> RECOVERY_COMPLETED (migrated from t35-to
     const r = state(["acknowledge-compaction", "--choice", "continue"], p);
     expect(r.status).toBe(1);
     expect(r.out).toContain("No pending compaction");
-    expect(auditEventCount(auditPath(p), RC)).toBe(0);
+    expect(auditEventCount(readAllAuditShards(p), RC)).toBe(0);
   });
 
   // --- Test 8: stage activity already followed compaction -> refuses ---
@@ -295,7 +309,7 @@ describe("t35 acknowledge-compaction -> RECOVERY_COMPLETED (migrated from t35-to
     const r = state(["acknowledge-compaction", "--choice", "continue"], p);
     expect(r.status).toBe(1);
     expect(r.out).toContain("No pending compaction");
-    expect(auditEventCount(auditPath(p), RC)).toBe(0);
+    expect(auditEventCount(readAllAuditShards(p), RC)).toBe(0);
   });
 
   // --- Test 9: after acknowledge, resume reports compaction_pending=false ---

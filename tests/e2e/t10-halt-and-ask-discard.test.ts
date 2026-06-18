@@ -72,11 +72,13 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
+  seededAuditDir,
+  seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
@@ -107,12 +109,18 @@ function wt(p: string, sub: string, args: string[]): CliResult {
   };
 }
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
 const wtPath = (p: string, slug: string): string =>
   join(p, ".aidlc", "worktrees", `bolt-${slug}`);
+/** Concatenate every audit shard (audit/*.md) for the seeded record. */
 const auditText = (p: string): string => {
-  const f = auditPath(p);
-  return existsSync(f) ? readFileSync(f, "utf-8") : "";
+  const dir = seededAuditDir(p);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+  } catch {
+    return "";
+  }
+  return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
 };
 
 /** Audit blocks are separated by lines of only `---`. The WORKTREE_DISCARDED
@@ -156,6 +164,11 @@ describe("t10 aidlc-worktree discard halt-and-ask cleanup (migrated from t10-hal
   // one fixture). create establishes the precondition: a worktree on disk.
   const p = setupWorktreeFixture();
   fixtures.push(p);
+  // Seed a state file into the default record so the active-intent cursor
+  // resolves and the WORKTREE_CREATED/DISCARDED audit lands in the per-intent
+  // record (the fixture's record is stateless; without aidlc-state.md the cursor
+  // is rejected and the audit lands at the bare space root).
+  writeFileSync(seededStateFile(p), "- **Current Stage**: code-generation\n", "utf-8");
   const created = wt(p, "create", ["--slug", "y", "--base", "main"]);
 
   test(

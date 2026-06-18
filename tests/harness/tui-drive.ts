@@ -118,6 +118,7 @@ import {
 import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { stateFilePathFor } from "./sdk-drive.ts";
 
 const POLL_INTERVAL_MS = 150;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -901,7 +902,7 @@ function cmdKill(backend: Backend, a: Args): void {
 // deadlock. Disk is the terminator; the screen only tells us WHEN to press Enter.
 // ---------------------------------------------------------------------------
 
-// Read P/aidlc-docs/aidlc-state.md and report whether practices affirmation has
+// Read the active intent record's aidlc-state.md and report whether practices affirmation has
 // committed. The DIGIT-ANCHORED same-line regex is load-bearing: a greedy
 // `\s*(\S.*)` bleeds past an EMPTY field into the next heading
 // (`## Scope Configuration`), a false-positive that bailed a run at 57s during
@@ -911,7 +912,7 @@ function cmdKill(backend: Backend, a: Args): void {
 const AFFIRMED_RE = /Affirmed Timestamp\*\*:[ \t]*(\d[^\r\n]*)/;
 
 function affirmedOnDisk(projectDir: string): boolean {
-  const statePath = join(projectDir, "aidlc-docs", "aidlc-state.md");
+  const statePath = stateFilePathFor(projectDir);
   if (!existsSync(statePath)) return false;
   let md: string;
   try {
@@ -997,7 +998,7 @@ function fileSignalMet(root: string, rel: string): boolean {
 }
 
 function stateFieldSignalMet(projectDir: string, name: string, re: RegExp): boolean {
-  const statePath = join(projectDir, "aidlc-docs", "aidlc-state.md");
+  const statePath = stateFilePathFor(projectDir);
   if (!existsSync(statePath)) return false;
   let md: string;
   try {

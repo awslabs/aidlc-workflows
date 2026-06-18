@@ -84,14 +84,17 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
-  resetAidlcEnv,
+  removeWorkspaceRecord,
+  seededAuditDir,
+  seededStateFile,
   seedStateFile,
+  resetAidlcEnv,
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -134,16 +137,29 @@ function projWithState(fixtureName: string): string {
   return p;
 }
 
-/** Fresh CLEAN temp project — aidlc-docs/ exists, no state file (SP5a). */
+/** Fresh CLEAN temp project — an empty workspace, NO intent record (SP5a). P9:
+ *  createTestProject seeds a default record + cursor, so strip it; otherwise the
+ *  engine resolves the seeded intent instead of naming intent-birth. */
 function cleanProj(): string {
   const p = createTestProject();
   tempDirs.push(p);
+  removeWorkspaceRecord(p);
   return p;
 }
 
-const statePath = (p: string): string =>
-  join(p, "aidlc-docs", "aidlc-state.md");
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+// P9 per-intent layout. seedStateFile writes the record's aidlc-state.md; the
+// audit lands in the record's per-clone shard dir (deterministic — the fixture
+// pins the clone-id). statePath is the record's state file; readAudit globs the
+// shard dir.
+const statePath = (p: string): string => seededStateFile(p);
+function readAudit(p: string): string {
+  const dir = seededAuditDir(p);
+  if (!existsSync(dir)) return "";
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".md"))
+    .map((f) => readFileSync(join(dir, f), "utf-8"))
+    .join("\n");
+}
 
 // Parse the single directive JSON the engine emits on stdout (mirrors the .sh's
 // json_field python helper, but as a real JSON.parse of the whole object).
@@ -157,9 +173,7 @@ function directive(r: CliResult): any {
  * .sh count_event helper `grep -c "\*\*Event\*\*: $2$"` (end-anchored).
  */
 function eventCount(p: string, ev: string): number {
-  const f = auditPath(p);
-  if (!existsSync(f)) return 0;
-  return readFileSync(f, "utf-8")
+  return readAudit(p)
     .split("\n")
     .filter((l) => l === `**Event**: ${ev}`).length;
 }
@@ -171,10 +185,8 @@ function eventCount(p: string, ev: string): number {
  * block specifically. Resets at `## ` headings and `---` separators.
  */
 function blockHasField(p: string, ev: string, key: string, value: string): boolean {
-  const f = auditPath(p);
-  if (!existsSync(f)) return false;
   let matched = false;
-  for (const line of readFileSync(f, "utf-8").replace(/\r\n/g, "\n").split("\n")) {
+  for (const line of readAudit(p).replace(/\r\n/g, "\n").split("\n")) {
     if (line.startsWith("## ") || line === "---") {
       matched = false;
       continue;
@@ -188,11 +200,9 @@ function blockHasField(p: string, ev: string, key: string, value: string): boole
   return false;
 }
 
-/** Whole-file presence of a literal needle (mirrors a bare unanchored grep). */
+/** Whole-trail presence of a literal needle (mirrors a bare unanchored grep). */
 function fileContains(p: string, needle: string): boolean {
-  const f = auditPath(p);
-  if (!existsSync(f)) return false;
-  return readFileSync(f, "utf-8").includes(needle);
+  return readAudit(p).includes(needle);
 }
 
 // ============================================================

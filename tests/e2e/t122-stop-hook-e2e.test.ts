@@ -105,10 +105,17 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  auditFilePath,
+  docsRoot,
+  hooksHealthDir,
+  stopHookDir,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { assertToolResultContains } from "../harness/assert.ts";
 import {
   cleanupTestProject,
   sedReplaceInFile,
+  seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import { driveAidlc } from "../harness/sdk-drive.ts";
@@ -126,9 +133,16 @@ const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
 const HOOK_SPAWN_TIMEOUT_MS = 60_000;
 
 const BUN = process.execPath;
-const GUARD_REL = join("aidlc-docs", ".aidlc-stop-hook", "block-count.json");
-const HEARTBEAT_REL = join("aidlc-docs", ".aidlc-hooks-health", "stop.last");
-const DROPS_REL = join("aidlc-docs", ".aidlc-hooks-health", "stop.drops");
+// P9 per-intent layout: the stop hook's guard / heartbeat / drops re-root under
+// the active intent's record (stopHookDir / hooksHealthDir). setupIntegrationProject
+// seeds state into the record so the cursor resolves for both the in-process
+// resolvers below and the spawned hook.
+const guardPath = (proj: string): string =>
+  join(stopHookDir(proj), "block-count.json");
+const heartbeatPath = (proj: string): string =>
+  join(hooksHealthDir(proj), "stop.last");
+const dropsPath = (proj: string): string =>
+  join(hooksHealthDir(proj), "stop.drops");
 
 // Known-answer literals from the SHIPPED handlers (see header for cites).
 const STATUS_COMPLETED_LINE = "Status:         Completed"; // utility.ts:302 (padEnd shape confirmed by direct run)
@@ -161,14 +175,16 @@ function runRealHook(
  *  count (aidlc-stop.ts:137) — so test 6 can seed the counter AT the cap under
  *  the matching key. Mirrors the .sh's progress_sig. */
 function progressSig(proj: string): string {
-  const s = readFileSync(join(proj, "aidlc-docs", "aidlc-state.md"), "utf-8");
+  const s = readFileSync(seededStateFile(proj), "utf-8");
   const m = s.match(/Current Stage\*{0,2}:?\s*`?([^\n`]*)`?/);
   const stage = (m?.[1] ?? "").trim();
   let auditLines = 0;
   try {
-    auditLines = readFileSync(join(proj, "aidlc-docs", "audit.md"), "utf-8").split(
-      "\n",
-    ).length;
+    // The hook reads its OWN resolved shard (auditFilePath) for the length, not
+    // the glob — resolve the identical shard so the signature matches. (withAudit
+    // seeds a DIFFERENT shard (fixture.md), so this resolved shard is absent →
+    // auditLines 0 on both sides, which is consistent.)
+    auditLines = readFileSync(auditFilePath(proj), "utf-8").split("\n").length;
   } catch {
     /* audit absent => 0 */
   }
@@ -218,9 +234,9 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         // present, the done branch ran resetGuard() -> block-count.json count 0.
         // When absent, record the skip explicitly — the run-to-done assertions
         // above hold either way (an un-fired hook simply lets the turn end).
-        if (existsSync(join(proj, HEARTBEAT_REL))) {
+        if (existsSync(heartbeatPath(proj))) {
           const guard = JSON.parse(
-            readFileSync(join(proj, GUARD_REL), "utf-8"),
+            readFileSync(guardPath(proj), "utf-8"),
           ) as { count: number };
           expect(guard.count).toBe(0);
         } else {
@@ -308,12 +324,10 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         withAudit: true,
       });
       try {
-        mkdirSync(join(proj, "aidlc-docs", ".aidlc-stop-hook"), {
-          recursive: true,
-        });
+        mkdirSync(stopHookDir(proj), { recursive: true });
         const sig = progressSig(proj);
         writeFileSync(
-          join(proj, GUARD_REL),
+          guardPath(proj),
           JSON.stringify({ signature: sig, count: 8 }),
           "utf-8",
         );
@@ -323,7 +337,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         expect(r.rc).toBe(0);
         expect(r.out).toBe("");
         // The drop record documents the release (aidlc-stop.ts:364-371).
-        const drops = readFileSync(join(proj, DROPS_REL), "utf-8");
+        const drops = readFileSync(dropsPath(proj), "utf-8");
         expect(drops).toContain(DROP_RECORD);
       } finally {
         cleanupTestProject(proj);
@@ -356,7 +370,7 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         // awaiting-approval in the seeded state. The fixture's row is
         // `- [-] feedback-optimization — EXECUTE` (state-final-stage.md:86).
         sedReplaceInFile(
-          join(proj, "aidlc-docs", "aidlc-state.md"),
+          seededStateFile(proj),
           `- [-] ${PENDING_STAGE} — EXECUTE`,
           `- [?] ${PENDING_STAGE} — EXECUTE`,
         );
@@ -390,11 +404,10 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
       });
       try {
         // state-final-stage.md: Lifecycle Phase OPERATION, Current Stage
-        // feedback-optimization at [-]. The hook derives the stage dir as
-        // aidlc-docs/operation/feedback-optimization/ (memoryPathFor shape).
+        // feedback-optimization at [-]. P9: the stage dir re-roots under the
+        // record as <record>/operation/feedback-optimization/ (memoryPathFor shape).
         const qDir = join(
-          proj,
-          "aidlc-docs",
+          docsRoot(proj),
           "operation",
           PENDING_STAGE,
         );

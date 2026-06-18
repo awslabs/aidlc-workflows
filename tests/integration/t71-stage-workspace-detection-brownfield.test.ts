@@ -139,9 +139,13 @@ describe("t71 workspace detection — brownfield classification writes state (sd
   test(
     "brownfield stub classifies Brownfield; state + audit record the scan",
     async () => {
+      // noAidlcDocs strips the default seeded intent record so this is a CLEAN
+      // workspace — the engine auto-births a NEW intent over the brownfield stub
+      // and the scan fires. A pre-seeded record would make birth resolve the
+      // existing intent and skip the scan (see header).
       const proj = setupIntegrationProject({
         withBrownfieldStub: true,
-        withAudit: true,
+        noAidlcDocs: true,
       });
       try {
         const r = await driveAidlc('/aidlc --scope poc "build a todo app"', {

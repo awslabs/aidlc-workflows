@@ -79,10 +79,12 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { seededAuditDir, seededStateFile } from "../harness/fixtures.ts";
 import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
@@ -145,11 +147,16 @@ async function waitForDisk(pred: () => boolean, timeoutMs: number): Promise<bool
   return pred();
 }
 
-// Does audit.md carry a canonical `**Event**: <name>` line? (line-anchored so a
-// stray token in a field value cannot satisfy it — the aidlc-audit.ts:259 format.)
-function auditHasEvent(auditPath: string, event: string): boolean {
+// Does the per-intent audit shard dir carry a canonical `**Event**: <name>` line?
+// (line-anchored so a stray token in a field value cannot satisfy it — the
+// aidlc-audit.ts:259 format.) Reads every `.md` shard under <record>/audit/ and
+// concatenates, since P9 shards the audit per clone.
+function auditHasEvent(auditDir: string, event: string): boolean {
   try {
-    return readFileSync(auditPath, "utf8")
+    return readdirSync(auditDir)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => readFileSync(join(auditDir, f), "utf8"))
+      .join("\n")
       .split("\n")
       .some((l) => l.startsWith(`**Event**: ${event}`));
   } catch {
@@ -217,7 +224,7 @@ function bootSeededWorkflow(tag: string): { session: string; proj: string } {
   }
   // The seeded mid-ideation state paints the WORKFLOW line (IDEATION), not the
   // no-workflow "ready" line. Anchor the override against the live workflow row.
-  expect(waitFor(session, "\\[AIDLC\\] IDEATION", 45000, 1000)).toBe(true);
+  expect(waitFor(session, "\\[AIDLC\\].*IDEATION", 45000, 1000)).toBe(true);
   return { session, proj };
 }
 
@@ -235,8 +242,8 @@ describe("t-tui-t27 depth override (config-change lands + renders, no --test-run
     async () => {
       const { session, proj } = bootSeededWorkflow("min");
       try {
-        const statePath = join(proj, "aidlc-docs", "aidlc-state.md");
-        const auditPath = join(proj, "aidlc-docs", "audit.md");
+        const statePath = seededStateFile(proj);
+        const auditDir = seededAuditDir(proj);
         // Sanity: the seed really is Standard (so Minimal is a genuine change and
         // the DEPTH_CHANGED delta is Standard -> Minimal, not a no-op).
         expect(readFileSync(statePath, "utf8")).toMatch(/-\s*\*\*Depth\*\*:\s*Standard/);
@@ -254,7 +261,7 @@ describe("t-tui-t27 depth override (config-change lands + renders, no --test-run
         // anti-pattern, which flaked 1/4 runs). Disk is the truth; the screen prose
         // is the LLM's to reword.
         const landed = await waitForDisk(
-          () => auditHasEvent(auditPath, "DEPTH_CHANGED"),
+          () => auditHasEvent(auditDir, "DEPTH_CHANGED"),
           120000,
         );
         const pane = drive(["capture", "--session", session]).stdout;
@@ -269,7 +276,7 @@ describe("t-tui-t27 depth override (config-change lands + renders, no --test-run
         const stateAfter = readFileSync(statePath, "utf8");
         // .sh: assert_grep "$STATE_A" 'Depth.*Minimal' — pin the exact field.
         expect(stateAfter).toMatch(/-\s*\*\*Depth\*\*:\s*Minimal/);
-        const auditAfter = readFileSync(auditPath, "utf8");
+        const auditAfter = readAllAuditShards(proj);
         // .sh: assert_grep "$AUDIT_A" 'DEPTH_CHANGED' — anchor on the canonical
         // audit-line format (**Event**: <name>) so a stray DEPTH_CHANGED token in
         // a field value can't satisfy it.
@@ -284,7 +291,7 @@ describe("t-tui-t27 depth override (config-change lands + renders, no --test-run
         // and the confirmation prose is LLM-reworded, so the persisting `[AIDLC]
         // IDEATION` row is the honest, deterministic tui-only observation here —
         // what the headless SDK path could not see, asserted without grepping prose.
-        expect(pane).toContain("[AIDLC] IDEATION");
+        expect(pane).toContain("· IDEATION");
       } finally {
         drive(["kill", "--session", session]);
         cleanupTuiProject(proj);
@@ -299,7 +306,7 @@ describe("t-tui-t27 depth override (config-change lands + renders, no --test-run
     () => {
       const { session, proj } = bootSeededWorkflow("err");
       try {
-        const statePath = join(proj, "aidlc-docs", "aidlc-state.md");
+        const statePath = seededStateFile(proj);
         // Snapshot the exact bytes BEFORE the invalid override (the .sh's
         // md5-before). A full-content compare is strictly stronger than md5.
         const before = readFileSync(statePath, "utf8");
@@ -325,7 +332,7 @@ describe("t-tui-t27 depth override (config-change lands + renders, no --test-run
         }
         expect(/isn't valid|not valid|Which depth level/.test(pane)).toBe(true);
         // The workflow row is untouched by a refused override.
-        expect(pane).toContain("[AIDLC] IDEATION");
+        expect(pane).toContain("· IDEATION");
 
         // --- ON DISK: state must be BYTE-IDENTICAL (the .sh's md5 equality). The
         // refusal short-circuits before writeStateFile, so nothing — not even Last

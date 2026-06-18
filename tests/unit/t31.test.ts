@@ -77,12 +77,11 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
-  seedAuditFile,
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -95,15 +94,17 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-/** Fresh seeded project (createTestProject + seed_audit_file). */
-function proj(seed = true): string {
+// P9: the flat aidlc-docs/audit.md is retired. With no per-intent record seeded,
+// aidlc-log's appendAuditEntry resolves (and CREATES) the bare SPACE record
+// root's per-clone shard. The SPAWNED tool mints its own clone-id, so reads glob
+// every shard via readAllAuditShards. The seeded events (DECISION_RECORDED /
+// QUESTION_ANSWERED) are absent from any baseline, so post-fire counts are
+// unambiguous without a seed (the tool creates the trail on first emit).
+function proj(): string {
   const p = createTestProject();
   tempDirs.push(p);
-  if (seed) seedAuditFile(p);
   return p;
 }
-
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
 
 interface CliResult {
   status: number;
@@ -124,11 +125,10 @@ function log(args: string[], p: string): CliResult {
   };
 }
 
-/** Count audit blocks with `**Event**: <ev>`. Mirrors the .sh's `^**Event**: <ev>` grep, but as an exact count. */
-function auditEventCount(file: string, ev: string): number {
-  if (!existsSync(file)) return 0;
+/** Count audit blocks with `**Event**: <ev>` in a buffer. */
+function auditEventCount(body: string, ev: string): number {
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
-  return readFileSync(file, "utf-8")
+  return body
     .split("\n")
     .filter((l) => re.test(l)).length;
 }
@@ -140,10 +140,9 @@ function auditEventCount(file: string, ev: string): number {
  * in t92.cli.test.ts. Returns "" when absent (block-scoped, so it doubles as
  * the .sh's assert_not_grep '**Options**:' check).
  */
-function auditField(file: string, ev: string, key: string): string {
-  if (!existsSync(file)) return "";
+function auditField(body: string, ev: string, key: string): string {
   let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of body.split("\n")) {
     if (line.startsWith("## ")) {
       matched = false;
       continue;
@@ -169,10 +168,9 @@ function auditField(file: string, ev: string, key: string): string {
   return "";
 }
 
-/** Whole-file presence (mirrors a bare grep with no `^` anchor). */
-function fileContains(file: string, needle: string): boolean {
-  if (!existsSync(file)) return false;
-  return readFileSync(file, "utf-8").includes(needle);
+/** Whole-buffer presence (mirrors a bare grep with no `^` anchor). */
+function fileContains(body: string, needle: string): boolean {
+  return body.includes(needle);
 }
 
 // ============================================================
@@ -184,20 +182,20 @@ describe("t31 aidlc-log decision (migrated from t31-tool-log.sh, plan 21)", () =
     const p = proj();
     const r = log(["decision", "--stage", "feasibility", "--decision", "Pick a framework"], p);
     expect(r.status).toBe(0);
-    expect(auditEventCount(auditPath(p), "DECISION_RECORDED")).toBe(1);
+    expect(auditEventCount(readAllAuditShards(p), "DECISION_RECORDED")).toBe(1);
     expect(r.stdout).toContain('"emitted":"DECISION_RECORDED"');
   });
 
   test("2: decision records Stage field", () => {
     const p = proj();
     log(["decision", "--stage", "feasibility", "--decision", "Pick a framework"], p);
-    expect(auditField(auditPath(p), "DECISION_RECORDED", "Stage")).toBe("feasibility");
+    expect(auditField(readAllAuditShards(p), "DECISION_RECORDED", "Stage")).toBe("feasibility");
   });
 
   test("3: decision records Decision field", () => {
     const p = proj();
     log(["decision", "--stage", "feasibility", "--decision", "Pick a framework"], p);
-    expect(auditField(auditPath(p), "DECISION_RECORDED", "Decision")).toBe("Pick a framework");
+    expect(auditField(readAllAuditShards(p), "DECISION_RECORDED", "Decision")).toBe("Pick a framework");
   });
 
   test("4: decision records Options field when supplied", () => {
@@ -206,7 +204,7 @@ describe("t31 aidlc-log decision (migrated from t31-tool-log.sh, plan 21)", () =
       ["decision", "--stage", "feasibility", "--decision", "Pick a framework", "--options", "React,Vue,Svelte"],
       p,
     );
-    expect(auditField(auditPath(p), "DECISION_RECORDED", "Options")).toBe("React,Vue,Svelte");
+    expect(auditField(readAllAuditShards(p), "DECISION_RECORDED", "Options")).toBe("React,Vue,Svelte");
   });
 
   test("5: decision records Rationale field when supplied", () => {
@@ -215,24 +213,24 @@ describe("t31 aidlc-log decision (migrated from t31-tool-log.sh, plan 21)", () =
       ["decision", "--stage", "feasibility", "--decision", "Pick a framework", "--rationale", "Align with team skillset"],
       p,
     );
-    expect(auditField(auditPath(p), "DECISION_RECORDED", "Rationale")).toBe("Align with team skillset");
+    expect(auditField(readAllAuditShards(p), "DECISION_RECORDED", "Rationale")).toBe("Align with team skillset");
   });
 
   test("6: decision --test-run emits Test-Run=true", () => {
     const p = proj();
     log(["decision", "--stage", "feasibility", "--decision", "Pick a framework", "--test-run"], p);
-    expect(auditField(auditPath(p), "DECISION_RECORDED", "Test-Run")).toBe("true");
+    expect(auditField(readAllAuditShards(p), "DECISION_RECORDED", "Test-Run")).toBe("true");
   });
 
   test("7: decision missing --stage exits 1", () => {
-    const p = proj(false);
+    const p = proj();
     const r = log(["decision", "--decision", "x"], p);
     expect(r.status).toBe(1);
     expect(r.out).toContain("Missing --stage");
   });
 
   test("8: decision missing --decision exits 1", () => {
-    const p = proj(false);
+    const p = proj();
     const r = log(["decision", "--stage", "feasibility"], p);
     expect(r.status).toBe(1);
     expect(r.out).toContain("Missing --decision");
@@ -243,12 +241,12 @@ describe("t31 aidlc-log decision (migrated from t31-tool-log.sh, plan 21)", () =
     log(["decision", "--stage", "feasibility", "--decision", "Pick one"], p);
     // Block-scoped absence: no **Options**: line in the DECISION_RECORDED
     // block (the empty-string return). Mirrors assert_not_grep '**Options**:'.
-    expect(auditField(auditPath(p), "DECISION_RECORDED", "Options")).toBe("");
-    expect(fileContains(auditPath(p), "**Options**:")).toBe(false);
+    expect(auditField(readAllAuditShards(p), "DECISION_RECORDED", "Options")).toBe("");
+    expect(fileContains(readAllAuditShards(p), "**Options**:")).toBe(false);
   });
 
   test("17: decision --stage without value (followed by --decision) errors cleanly (exit 1)", () => {
-    const p = proj(false);
+    const p = proj();
     const r = log(["decision", "--stage", "--decision", "x"], p);
     expect(r.status).toBe(1);
     expect(r.out).toContain("expects a value");
@@ -263,7 +261,7 @@ describe("t31 aidlc-log decision (migrated from t31-tool-log.sh, plan 21)", () =
     // LAST element of the filtered list -> "got end of arguments". Either
     // branch ("got another flag" / "end of arguments") is exit 1; we assert
     // the exit code plus that the value-required diagnostic fired.
-    const p = proj(false);
+    const p = proj();
     const r = log(["decision", "--stage", "feasibility", "--decision"], p);
     expect(r.status).toBe(1);
     expect(r.out).toContain("expects a value");
@@ -285,14 +283,14 @@ describe("t31 aidlc-log answer (migrated from t31-tool-log.sh, plan 21)", () => 
     const p = proj();
     const r = log(["answer", "--stage", "feasibility", "--details", "User chose React"], p);
     expect(r.status).toBe(0);
-    expect(auditEventCount(auditPath(p), "QUESTION_ANSWERED")).toBe(1);
+    expect(auditEventCount(readAllAuditShards(p), "QUESTION_ANSWERED")).toBe(1);
     expect(r.stdout).toContain('"emitted":"QUESTION_ANSWERED"');
   });
 
   test("10: answer records Stage and Details fields", () => {
     const p = proj();
     log(["answer", "--stage", "feasibility", "--details", "User chose React"], p);
-    const f = auditPath(p);
+    const f = readAllAuditShards(p);
     expect(auditField(f, "QUESTION_ANSWERED", "Details")).toBe("User chose React");
     // STRONGER than the .sh (which only grepped Details): the .sh case name
     // is "records Stage and Details", so the Stage value is asserted too.
@@ -302,18 +300,18 @@ describe("t31 aidlc-log answer (migrated from t31-tool-log.sh, plan 21)", () => 
   test("11: answer --test-run emits Test-Run=true", () => {
     const p = proj();
     log(["answer", "--stage", "feasibility", "--details", "auto-selected", "--test-run"], p);
-    expect(auditField(auditPath(p), "QUESTION_ANSWERED", "Test-Run")).toBe("true");
+    expect(auditField(readAllAuditShards(p), "QUESTION_ANSWERED", "Test-Run")).toBe("true");
   });
 
   test("12: answer missing --stage exits 1", () => {
-    const p = proj(false);
+    const p = proj();
     const r = log(["answer", "--details", "x"], p);
     expect(r.status).toBe(1);
     expect(r.out).toContain("Missing --stage");
   });
 
   test("13: answer missing --details exits 1", () => {
-    const p = proj(false);
+    const p = proj();
     const r = log(["answer", "--stage", "feasibility"], p);
     expect(r.status).toBe(1);
     expect(r.out).toContain("Missing --details");
@@ -322,7 +320,7 @@ describe("t31 aidlc-log answer (migrated from t31-tool-log.sh, plan 21)", () => 
   test("15a: answer --test-run emits canonical QUESTION_ANSWERED", () => {
     const p = proj();
     log(["answer", "--stage", "feasibility", "--details", "auto", "--test-run"], p);
-    expect(auditEventCount(auditPath(p), "QUESTION_ANSWERED")).toBe(1);
+    expect(auditEventCount(readAllAuditShards(p), "QUESTION_ANSWERED")).toBe(1);
   });
 
   test("15b: answer --test-run does NOT emit deleted QUESTION_AUTO_ANSWERED", () => {
@@ -331,7 +329,7 @@ describe("t31 aidlc-log answer (migrated from t31-tool-log.sh, plan 21)", () => 
     // absence, mirroring the .sh's unanchored assert_not_grep.
     const p = proj();
     log(["answer", "--stage", "feasibility", "--details", "auto", "--test-run"], p);
-    expect(fileContains(auditPath(p), "QUESTION_AUTO_ANSWERED")).toBe(false);
+    expect(fileContains(readAllAuditShards(p), "QUESTION_AUTO_ANSWERED")).toBe(false);
   });
 
   test("20: answer prints JSON ack with emitted field on stdout", () => {
@@ -348,7 +346,7 @@ describe("t31 aidlc-log answer (migrated from t31-tool-log.sh, plan 21)", () => 
 
 describe("t31 aidlc-log dispatch", () => {
   test("14: unknown subcommand exits 1", () => {
-    const p = proj(false);
+    const p = proj();
     const r = log(["bogus"], p);
     expect(r.status).toBe(1);
     expect(r.out).toContain("Unknown subcommand");

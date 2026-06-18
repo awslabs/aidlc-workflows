@@ -103,6 +103,7 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   REPO_ROOT,
+  seededAuditShard,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
@@ -139,8 +140,9 @@ function recordDirOf(proj: string): string {
 }
 const statePath = (proj: string): string =>
   join(recordDirOf(proj), "aidlc-state.md");
-const auditPath = (proj: string): string =>
-  join(proj, "aidlc-docs", "audit.md");
+// P9: the per-intent audit shard a spawned tool resolves once the seeded record
+// resolves (state present). Mirrors auditShardName() against the pinned clone-id.
+const auditPath = (proj: string): string => seededAuditShard(proj);
 
 const tempDirs: string[] = [];
 afterAll(() => {
@@ -421,7 +423,13 @@ describe("t60 valid-scopes derived from .claude/scopes/*.md (migrated from t60-v
 
   // --- Test 9: detect-scope --from-text emits SCOPE_DETECTED (Source=keyword) ---
   test("9: detect-scope --from-text emits SCOPE_DETECTED for fixture-scope (Source=keyword)", () => {
-    const proj = freshProject();
+    // P9: seed state so the per-intent record resolves — detect-scope's
+    // appendAuditEvent then lands SCOPE_DETECTED in that record's audit shard
+    // (seededAuditShard). An audit-less freshProject() strips the record, so the
+    // tool falls back to the bare space root and the seeded-shard read finds nothing.
+    const proj = freshProject({
+      withState: join(REPO_ROOT, "tests", "fixtures", "state-mid-ideation.md"),
+    });
     setupFixtureScope(proj, /* withKeyword */ true);
     const r = run(utilityIn(proj), [
       "detect-scope",

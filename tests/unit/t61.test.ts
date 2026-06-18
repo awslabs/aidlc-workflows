@@ -78,6 +78,7 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   REPO_ROOT,
+  seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
@@ -96,6 +97,18 @@ afterAll(() => {
  */
 function proj(): string {
   const p = setupIntegrationProject({ noAidlcDocs: true, stripEnvScope: true });
+  tempDirs.push(p);
+  return p;
+}
+
+/**
+ * Like proj() but KEEPS the seeded per-intent record + cursors (no
+ * noAidlcDocs), so the active-intent cursor resolves and a state file seeded
+ * into the record is the one stateFilePath() (and thus the statusline) reads.
+ * Used by the statusline cases 5a/5b, which need a resolvable record.
+ */
+function projWithRecord(): string {
+  const p = setupIntegrationProject({ stripEnvScope: true });
   tempDirs.push(p);
   return p;
 }
@@ -151,11 +164,13 @@ function runStatusline(p: string): string {
 
 /** Seed a CONSTRUCTION/ci-pipeline state file naming the given active-agent slug. Mirrors the .sh heredoc + sed swap. */
 function seedState(p: string, activeAgent: string): void {
-  // proj() strips aidlc-docs/ (noAidlcDocs); recreate it like the .sh's
-  // explicit `mkdir -p "$PROJ/aidlc-docs"` before the state heredoc.
-  mkdirSync(join(p, "aidlc-docs"), { recursive: true });
+  // P9: the statusline reads the ACTIVE INTENT's state via stateFilePath(), so
+  // the state must live in the per-intent record (projWithRecord keeps the
+  // seeded record + cursors), not a flat aidlc-docs/. Write into seededStateFile.
+  const stateFile = seededStateFile(p);
+  mkdirSync(join(stateFile, ".."), { recursive: true });
   writeFileSync(
-    join(p, "aidlc-docs", "aidlc-state.md"),
+    stateFile,
     `# AI-DLC State Tracking
 ## Current Status
 - **Lifecycle Phase**: CONSTRUCTION
@@ -276,7 +291,7 @@ describe("t61 agent-metadata derived from frontmatter (migrated from t61-agent-m
   // for BOTH a shipped agent and the fixture agent. Split into 5a/5b.
   // ============================================================
   test("5a: statusline renders 'Pipeline & Deploy Agent' for the shipped pipeline agent", () => {
-    const p = proj();
+    const p = projWithRecord();
     writeFixtureAgent(p);
     seedState(p, "aidlc-pipeline-deploy-agent");
     const out = runStatusline(p);
@@ -286,7 +301,7 @@ describe("t61 agent-metadata derived from frontmatter (migrated from t61-agent-m
   });
 
   test("5b: statusline renders 'Fixture Agent' for the fixture agent", () => {
-    const p = proj();
+    const p = projWithRecord();
     writeFixtureAgent(p);
     seedState(p, "fixture-agent");
     const out = runStatusline(p);

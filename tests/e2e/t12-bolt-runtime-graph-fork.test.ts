@@ -71,15 +71,20 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
   cleanupWorktreeFixture,
   FIXTURES_DIR,
   seedStateFile,
+  seededAuditDir,
+  seededRecordDir,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
@@ -110,9 +115,21 @@ function run(tool: string, args: string[], proj: string): CliResult {
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
 }
 
-/** Path of a Bolt's runtime-graph fragment (wt_fragment, t12:115-117). */
+/** Path of a Bolt's runtime-graph fragment under the worktree mirror record
+ *  (carries the SAME relative record dir as the main checkout). */
 function wtFragment(proj: string, slug: string): string {
-  return join(proj, ".aidlc", "worktrees", `bolt-${slug}`, "aidlc-docs", "runtime-graph.json");
+  return join(
+    proj,
+    ".aidlc",
+    "worktrees",
+    `bolt-${slug}`,
+    "aidlc",
+    "spaces",
+    DEFAULT_SPACE,
+    "intents",
+    DEFAULT_RECORD_DIR,
+    "runtime-graph.json",
+  );
 }
 
 /** Worktree directory for a Bolt slug (worktreePath, aidlc-lib.ts:148). */
@@ -129,19 +146,26 @@ function wtDir(proj: string, slug: string): string {
 function makeBoltFixture(): string {
   const proj = setupWorktreeFixture();
   fixtures.push(proj);
-  // state-construction has the phase/scope that lets Bolt operations run.
+  // state-construction has the phase/scope that lets Bolt operations run; this
+  // seeds it into the per-intent record (committed below so the worktree carries
+  // it). The active-intent cursor on disk lets the main side resolve the record.
   seedStateFile(proj, join(FIXTURES_DIR, "state-construction.md"));
-  // Audit must be present (touched, can be empty).
-  writeFileSync(join(proj, "aidlc-docs", "audit.md"), "# AI-DLC Audit Log\n", "utf-8");
-  // Match the framework gitignore so worktree create doesn't byte-copy
-  // audit.md / runtime-graph.json into the worktree via git checkout.
+  // Audit must be present (touched, can be empty) — a bare-header shard under the
+  // record's audit/ dir (the tool appends its own per-clone shard alongside).
+  mkdirSync(seededAuditDir(proj), { recursive: true });
+  writeFileSync(join(seededAuditDir(proj), "fixture.md"), "# AI-DLC Audit Log\n", "utf-8");
+  // Per-intent framework gitignore: the record state + intents.json commit (so
+  // the worktree carries them); cursors + audit shards + runtime graph stay
+  // machine-local, so worktree create doesn't byte-copy them via git checkout.
   writeFileSync(
     join(proj, ".gitignore"),
     [
-      "aidlc-docs/audit.md",
-      "aidlc-docs/runtime-graph.json",
-      "aidlc-docs/.aidlc-recovery.md",
-      "aidlc-docs/.aidlc-hooks-health/",
+      "aidlc/active-space",
+      "aidlc/.aidlc-clone-id",
+      "aidlc/spaces/*/intents/active-intent",
+      "aidlc/spaces/*/intents/*/runtime-graph.json",
+      "aidlc/spaces/*/intents/*/.aidlc-*",
+      "aidlc/spaces/*/intents/*/audit/",
       "",
     ].join("\n"),
     "utf-8",
@@ -207,9 +231,10 @@ function appendAudit(proj: string, event: string, fields: string[][]): void {
   }
 }
 
-/** Read the compiled main runtime-graph.json's code-generation stage row. */
+/** Read the compiled main runtime-graph.json's code-generation stage row (under
+ *  the per-intent record now, not flat aidlc-docs/). */
 function codeGenStage(proj: string): Record<string, unknown> | null {
-  const p = join(proj, "aidlc-docs", "runtime-graph.json");
+  const p = join(seededRecordDir(proj), "runtime-graph.json");
   if (!existsSync(p)) return null;
   const g = JSON.parse(readFileSync(p, "utf-8")) as {
     stages: Array<Record<string, unknown>>;
@@ -302,7 +327,7 @@ describe("t12 (b) 3-Bolt parallel batch + deterministic merge ordering", () => {
     };
   }
 
-  test("b.1 3-Bolt parallel: all three fragments exist at <wt>/aidlc-docs/runtime-graph.json", () => {
+  test("b.1 3-Bolt parallel: all three fragments exist at the worktree mirror record runtime-graph.json", () => {
     const { frags } = buildThreeBoltFixture();
     expect(existsSync(frags.pay)).toBe(true);
     expect(existsSync(frags.auth)).toBe(true);

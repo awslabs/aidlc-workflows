@@ -186,12 +186,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -252,12 +252,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -335,12 +335,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -412,12 +412,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -486,12 +486,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -565,12 +565,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -664,12 +664,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -738,12 +738,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -838,12 +838,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -934,12 +934,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -1019,12 +1019,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -1108,12 +1108,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -1201,12 +1201,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -1296,12 +1296,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -1395,12 +1395,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -1491,12 +1491,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "linter",
@@ -1595,12 +1595,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "linter",
@@ -1703,12 +1703,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "linter",
@@ -1820,12 +1820,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "linter",
@@ -2017,12 +2017,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "type-check",
@@ -2100,12 +2100,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "linter",
@@ -2192,12 +2192,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -2271,12 +2271,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -2355,12 +2355,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -2444,12 +2444,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -2527,12 +2527,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -2612,12 +2612,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     },
@@ -2705,12 +2705,12 @@
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         },
         {
           "id": "upstream-coverage",
           "path": ".claude/sensors/aidlc-upstream-coverage.md",
-          "matches": "**/aidlc-docs/**"
+          "matches": "**/{aidlc-docs,intents}/**"
         }
       ]
     }

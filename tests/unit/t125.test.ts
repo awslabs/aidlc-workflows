@@ -61,16 +61,20 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { auditFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  cleanupTestProject,
+  createTestProject,
+  seededStateFile,
+  seedStateFile,
+} from "../harness/fixtures.ts";
 
 // --- Paths resolved relative to THIS test file (tests/unit/) ---
 const HERE = import.meta.dir;
@@ -87,47 +91,52 @@ const BUN = process.execPath; // the bun binary running this test
 
 // --- Helpers ---------------------------------------------------------------
 
-// Seed a fresh temp project: aidlc-docs/aidlc-state.md from a fixture, plus a
-// valid audit.md (so the error() path's existsSync(stateFilePath) is satisfied
-// and ERROR_LOGGED has a workflow to attach to — though that emit also EISDIRs
-// and is swallowed). Returns the project dir.
+// P9 per-intent layout: the flat aidlc-docs/ root is retired. The state file
+// lives in the active intent's record (seedStateFile seeds it so the cursor
+// resolves for the spawned tool), and the audit trail is a per-clone SHARD under
+// the record's audit/ dir. We PIN a deterministic clone-id so the shard path the
+// spawned tool resolves is known — the EISDIR sabotage targets exactly that
+// shard. No audit-seed is needed (ensureAuditFile creates the shard; the error()
+// path only needs the state file to exist).
+const PINNED_CLONE_ID = "testcloneid125";
+function pinClone(proj: string): void {
+  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+}
+
+// Seed a fresh temp project: aidlc-state.md from a fixture into the default
+// record (so the active-intent cursor resolves). Returns the project dir.
 function seedProject(stateFixture: string): string {
-  const proj = mkdtempSync(join(tmpdir(), "aidlc-t125-"));
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
-  copyFileSync(
-    join(FIXTURES, stateFixture),
-    join(proj, "aidlc-docs", "aidlc-state.md")
-  );
-  copyFileSync(
-    join(FIXTURES, "audit-sample.md"),
-    join(proj, "aidlc-docs", "audit.md")
-  );
+  const proj = createTestProject();
+  seedStateFile(proj, stateFixture);
+  pinClone(proj);
   return proj;
 }
 
 // Seed a temp project from an explicit state-file STRING (used for the
 // complete-workflow precondition, which needs the final stage in-progress).
 function seedProjectFromContent(content: string): string {
-  const proj = mkdtempSync(join(tmpdir(), "aidlc-t125-"));
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
-  writeFileSync(join(proj, "aidlc-docs", "aidlc-state.md"), content, "utf-8");
-  copyFileSync(
-    join(FIXTURES, "audit-sample.md"),
-    join(proj, "aidlc-docs", "audit.md")
-  );
+  const proj = createTestProject();
+  mkdirSync(statePathDir(proj), { recursive: true });
+  writeFileSync(seededStateFile(proj), content, "utf-8");
+  pinClone(proj);
   return proj;
 }
 
-// Replace audit.md (a file) with a DIRECTORY at the same path → appendFileSync
-// throws EISDIR for ALL uids. This is the t17 Test 65 injection.
+// Replace the resolved audit SHARD (a file) with a DIRECTORY at the same path →
+// appendFileSync throws EISDIR for ALL uids. This is the t17 Test 65 injection,
+// retargeted at the per-clone shard the (clone-id-pinned) tool resolves.
 function sabotageAudit(proj: string): void {
-  const auditPath = join(proj, "aidlc-docs", "audit.md");
-  rmSync(auditPath, { force: true, recursive: true });
-  mkdirSync(auditPath);
+  const auditShard = auditFilePath(proj);
+  mkdirSync(join(auditShard, ".."), { recursive: true });
+  rmSync(auditShard, { force: true, recursive: true });
+  mkdirSync(auditShard);
 }
 
 function statePath(proj: string): string {
-  return join(proj, "aidlc-docs", "aidlc-state.md");
+  return seededStateFile(proj);
+}
+function statePathDir(proj: string): string {
+  return join(seededStateFile(proj), "..");
 }
 
 function readState(proj: string): string {
@@ -147,7 +156,7 @@ function runState(proj: string, args: string[]): number {
 
 function cleanup(proj: string): void {
   // The injected directory must be removed recursively.
-  rmSync(proj, { recursive: true, force: true });
+  cleanupTestProject(proj);
 }
 
 // The core assertion shared by every audit-emitting handler:

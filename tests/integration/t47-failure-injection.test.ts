@@ -119,6 +119,8 @@ import {
   createTestProject,
   FIXTURES_DIR,
   resetAidlcEnv,
+  seededAuditShard,
+  seededStateFile,
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -398,13 +400,15 @@ describe("t47 F2 — missing audit.md before gate-start (ensureAuditFile recover
 describe("t47 F3 — corrupted state.md before advance (refuses, names Scope)", () => {
   test("F3: advance exits 1 on corrupted state + error message names the missing Scope field", () => {
     const p = proj();
-    mkdirSync(join(p, "aidlc-docs"), { recursive: true });
-    // This case NEVER births a record — it hand-seeds a flat corrupted layout,
-    // so recordDirOf falls back to aidlc-docs/ and statePath resolves there.
-    // State file that's valid markdown but missing Scope / Current Stage
+    // P9: the advance tool resolves the ACTIVE INTENT's record (the cursor
+    // createTestProject seeds), so the corrupted state must live in that record
+    // (seededStateFile) — a flat aidlc-docs/ seed would not be the file the tool
+    // reads. State file that's valid markdown but missing Scope / Current Stage
     // (mirrors the .sh heredoc, lines 109-114).
+    const corruptState = seededStateFile(p);
+    mkdirSync(join(corruptState, ".."), { recursive: true });
     writeFileSync(
-      statePath(p),
+      corruptState,
       `# AI-DLC State Tracking
 
 ## Project Information
@@ -413,10 +417,12 @@ describe("t47 F3 — corrupted state.md before advance (refuses, names Scope)", 
       "utf-8",
     );
     // Copy the SAME fixture the .sh used (read-only source copy; nothing is
-    // written under tests/fixtures) into the flat aidlc-docs/audit.md — the
-    // flat fallback the corrupted seed resolves to, mirroring t47:115.
+    // written under tests/fixtures) into the record's audit shard — the trail
+    // the resolved record reads, mirroring t47:115.
+    const shard = seededAuditShard(p);
+    mkdirSync(join(shard, ".."), { recursive: true });
     writeFileSync(
-      join(p, "aidlc-docs", "audit.md"),
+      shard,
       readFileSync(join(FIXTURES_DIR, "audit-sample.md"), "utf-8"),
       "utf-8",
     );

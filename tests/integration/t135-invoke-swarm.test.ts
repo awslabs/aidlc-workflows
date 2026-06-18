@@ -65,7 +65,7 @@
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -75,6 +75,9 @@ import {
   FIXTURES_DIR,
   resetAidlcEnv,
   seedStateFile,
+  seededAuditDir,
+  seededRecordDir,
+  seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
@@ -105,7 +108,7 @@ function seedCodegenProject(autonomy: string): string {
   const proj = createTestProject();
   engineProjects.push(proj);
   seedStateFile(proj, join(FIXTURES_DIR, "state-construction.md"));
-  const statePath = join(proj, "aidlc-docs", "aidlc-state.md");
+  const statePath = seededStateFile(proj);
   let state = readFileSync(statePath, "utf-8");
   // Pivot Current Stage to code-generation (the per-unit build stage). Its
   // checkbox under widget-checkout is [ ] (pending) -> in-flight, so the engine
@@ -123,7 +126,7 @@ function seedCodegenProject(autonomy: string): string {
   }
   writeFileSync(statePath, state);
   writeFileSync(
-    join(proj, "aidlc-docs", "runtime-graph.json"),
+    join(seededRecordDir(proj), "runtime-graph.json"),
     JSON.stringify(
       {
         bolt_dag: {
@@ -143,7 +146,7 @@ function seedCodegenProject(autonomy: string): string {
 
 /** Flip the seeded fixture's scope (e.g. feature -> bugfix). */
 function setScope(proj: string, scope: string): void {
-  const statePath = join(proj, "aidlc-docs", "aidlc-state.md");
+  const statePath = seededStateFile(proj);
   const state = readFileSync(statePath, "utf-8").replace(
     /^- \*\*Scope\*\*: .*$/m,
     `- **Scope**: ${scope}`,
@@ -186,22 +189,26 @@ function setupReferee(): void {
   if (wtproj !== undefined) return; // build once; cases 3-6 read the result
   const proj = setupWorktreeFixture();
   wtproj = proj;
-  // The fixture already created aidlc-docs/ + a seed commit on main. Add the
-  // construction state, a bare audit.md, and a .gitignore for the volatile
-  // files, then amend so the worktree fork branches off a clean tree.
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
+  // The fixture already seeded the per-intent workspace shell + default record +
+  // a seed commit (README only) on main. Write the construction state into the
+  // seeded record, a bare audit shard, and a per-intent .gitignore (cursors +
+  // audit/runtime machine-local), then amend so the worktree fork branches off a
+  // clean tree that CARRIES the committed record.
   writeFileSync(
-    join(proj, "aidlc-docs", "aidlc-state.md"),
+    seededStateFile(proj),
     readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8"),
   );
-  writeFileSync(join(proj, "aidlc-docs", "audit.md"), "# AI-DLC Audit Log\n");
+  mkdirSync(seededAuditDir(proj), { recursive: true });
+  writeFileSync(join(seededAuditDir(proj), "fixture.md"), "# AI-DLC Audit Log\n");
   writeFileSync(
     join(proj, ".gitignore"),
     [
-      "aidlc-docs/audit.md",
-      "aidlc-docs/runtime-graph.json",
-      "aidlc-docs/.aidlc-recovery.md",
-      "aidlc-docs/.aidlc-hooks-health/",
+      "aidlc/active-space",
+      "aidlc/.aidlc-clone-id",
+      "aidlc/spaces/*/intents/active-intent",
+      "aidlc/spaces/*/intents/*/runtime-graph.json",
+      "aidlc/spaces/*/intents/*/.aidlc-*",
+      "aidlc/spaces/*/intents/*/audit/",
       "",
     ].join("\n"),
   );
@@ -239,7 +246,21 @@ function setupReferee(): void {
   );
   finalizeStatus = fin.status ?? -1;
   finalizeOut = fin.stdout ?? "";
-  auditBody = readFileSync(join(proj, "aidlc-docs", "audit.md"), "utf-8");
+  // Audit is now a per-clone shard DIR — the swarm tool writes its SWARM_* rows
+  // to its own <host>-<clone>.md shard alongside the seeded fixture.md; glob +
+  // concat all shards so the batch-level taxonomy assertions see the whole trail.
+  auditBody = readAllShards(seededAuditDir(proj));
+}
+
+/** Concatenate every audit shard (audit/*.md), sorted by filename. */
+function readAllShards(dir: string): string {
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+  } catch {
+    return "";
+  }
+  return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
 }
 
 afterAll(() => {

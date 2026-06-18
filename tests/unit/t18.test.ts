@@ -50,7 +50,7 @@
 //   .sh test 12 (WORKSPACE_SCANNED accepted)          -> "accepts the WORKSPACE_SCANNED initialization event"
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,23 +58,26 @@ import {
   appendAuditEntry,
   handleAppend,
 } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { auditFilePath, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const TOOL = fileURLToPath(
   new URL("../../dist/claude/.claude/tools/aidlc-audit.ts", import.meta.url),
 );
 
-// Mirror create_test_project (tests/lib/fixtures.sh): a temp dir with an
-// aidlc-docs/ subdir already present. Each test gets a fresh dir and tears
-// it down — no cross-test bleed, same isolation the .sh had via
-// create_test_project / cleanup_test_project.
+// P9: the flat aidlc-docs/audit.md is retired. With no per-intent record seeded,
+// appendAuditEntry resolves the bare SPACE record root's per-clone shard
+// (auditFilePath, which ensureAuditFile mkdir -p's on first write). A bare temp
+// dir suffices — the shell is created lazily by the first append. Each test gets
+// a fresh dir and tears it down.
 function makeProject(): string {
-  const proj = mkdtempSync(join(tmpdir(), "aidlc-t18-"));
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
-  return proj;
+  return mkdtempSync(join(tmpdir(), "aidlc-t18-"));
 }
 
+// The in-process clone-id is memoized in THIS process, so the shard
+// appendAuditEntry writes is exactly auditFilePath(proj). The CLI-spawn case
+// (test 9) reads via the shard glob, since the subprocess mints its own clone-id.
 function auditPath(proj: string): string {
-  return join(proj, "aidlc-docs", "audit.md");
+  return auditFilePath(proj);
 }
 
 function withProject(fn: (proj: string) => void): void {
@@ -289,7 +292,9 @@ describe("aidlc-audit CLI shell (Bun.spawnSync env seam)", () => {
         stderr: "pipe",
       });
       expect(r.exitCode).toBe(0);
-      const body = readFileSync(auditPath(proj), "utf-8");
+      // The subprocess mints its own clone-id, so read every shard (glob) rather
+      // than the in-process shard name.
+      const body = readAllAuditShards(proj);
       // handleAppendRaw writes "\n## <heading>\n..." verbatim.
       expect(body.includes("## Custom Event")).toBe(true);
     });

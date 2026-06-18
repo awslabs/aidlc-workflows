@@ -26,19 +26,11 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
+import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -98,19 +90,17 @@ describe("t-tui-render statusline COMPLETE sentinel (seeded completed, no tokens
     `statusline-complete paints "[AIDLC] COMPLETE [▓▓▓▓▓▓▓▓▓▓]"${ABSENT_REASON ? ` — SKIP: ${ABSENT_REASON}` : ""}`,
     () => {
       const session = `aidlc_tui_render_complete_${process.pid}`;
-      const sandbox = mkdtempSync(join(tmpdir(), "aidlc-tui-render-complete-"));
+      // setupTuiProject copies the distributable + sibling aidlc/ memory shell,
+      // seeds the per-intent workspace shell, and writes the completed fixture
+      // into the active intent's record (Status: Completed + OPERATION 7/7 -> the
+      // COMPLETE branch fires with a full bar). State-driven; no prompt, no tokens.
+      const sandbox = setupTuiProject({ withState: "state-completed.md" });
       try {
-        // --- copy the distributable per the README ----------------------------
-        const destClaude = join(sandbox, ".claude");
-        cpSync(AIDLC_SRC, destClaude, { recursive: true });
-        expect(readFileSync(join(destClaude, "settings.json"), "utf8")).toContain('"statusLine"');
-
-        // --- SEED aidlc-docs/aidlc-state.md from the completed fixture ---------
-        // Status: Completed + OPERATION 7/7 -> the COMPLETE branch fires with a
-        // full bar. State-driven; no prompt, no tokens.
-        const docsDir = join(sandbox, "aidlc-docs");
-        mkdirSync(docsDir, { recursive: true });
-        writeFileSync(join(docsDir, "aidlc-state.md"), readFileSync(FIXTURE, "utf8"));
+        // The statusLine key is what wires aidlc-statusline.ts into the TUI; a copy
+        // that dropped it would render no [AIDLC] line at all.
+        expect(
+          readFileSync(join(sandbox, ".claude", "settings.json"), "utf8"),
+        ).toContain('"statusLine"');
 
         // --- launch the claude TUI --------------------------------------------
         const started = drive([
@@ -138,7 +128,9 @@ describe("t-tui-render statusline COMPLETE sentinel (seeded completed, no tokens
         }
 
         // --- wait for the COMPLETE sentinel + assert the full grid ------------
-        const sawMarker = waitFor(session, "\\[AIDLC\\] COMPLETE", 45000, 1000);
+        // P9: the orientation prefix ("<intent-slug> · ") sits between [AIDLC]
+        // and COMPLETE, so match with .* rather than a contiguous gap.
+        const sawMarker = waitFor(session, "\\[AIDLC\\].*COMPLETE", 45000, 1000);
         const pane = drive(["capture", "--session", session]).stdout;
         if (!sawMarker) {
           throw new Error(
@@ -147,10 +139,12 @@ describe("t-tui-render statusline COMPLETE sentinel (seeded completed, no tokens
           );
         }
         // EXACT sentinel + full 10-cell bar the branch should draw.
-        expect(pane).toContain("[AIDLC] COMPLETE [▓▓▓▓▓▓▓▓▓▓]");
+        // P9: the orientation prefix ("<intent-slug> · ") precedes COMPLETE; the
+        // sentinel + full grid is the contract, so assert from COMPLETE onward.
+        expect(pane).toContain("COMPLETE [▓▓▓▓▓▓▓▓▓▓]");
       } finally {
         drive(["kill", "--session", session]);
-        if (existsSync(sandbox)) rmSync(sandbox, { recursive: true, force: true });
+        cleanupTuiProject(sandbox);
       }
     },
     90_000,

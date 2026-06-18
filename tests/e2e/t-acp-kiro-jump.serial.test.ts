@@ -23,7 +23,8 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { seededStateFile } from "../harness/fixtures.ts";
 import { driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
 
@@ -80,13 +81,13 @@ describe("t-acp-kiro-jump (backward phase jump over ACP; t26-class flake policy 
 
         // Disk: the STAGE_JUMPED audit block landed with the immutable
         // Target/Direction lines (tool-owned emission).
-        const audit = readFileSync(join(proj, "aidlc-docs", "audit.md"), "utf-8");
+        const audit = readAllAuditShards(proj);
         expect(audit).toContain("STAGE_JUMPED");
         expect(audit).toContain(AUDIT_TARGET_LINE);
         expect(audit).toContain(AUDIT_DIRECTION_LINE);
 
         // Disk: state now points at the jump target.
-        const state = readFileSync(join(proj, "aidlc-docs", "aidlc-state.md"), "utf-8");
+        const state = readFileSync(seededStateFile(proj), "utf-8");
         expect(state).toMatch(/\*\*Current Stage\*\*:[ \t]*intent-capture/);
       } finally {
         cleanupTuiProject(proj);

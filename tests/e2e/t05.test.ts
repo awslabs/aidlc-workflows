@@ -64,11 +64,14 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
   FIXTURES_DIR,
+  seededAuditDir,
+  seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
@@ -80,8 +83,8 @@ afterAll(() => {
   for (const f of fixtures) {
     // Restore perms on anything we chmod'd so cleanup's rm -rf can recurse.
     try {
-      const audit = join(f, "aidlc-docs", "audit.md");
-      if (existsSync(audit)) chmodSync(audit, 0o644);
+      const auditDir = seededAuditDir(f);
+      if (existsSync(auditDir)) chmodSync(auditDir, 0o755);
     } catch {
       /* best-effort */
     }
@@ -103,10 +106,9 @@ afterAll(() => {
 function freshFixture(): string {
   const p = setupWorktreeFixture();
   fixtures.push(p);
-  copyFileSync(
-    join(FIXTURES_DIR, "state-mid-ideation.md"),
-    join(p, "aidlc-docs", "aidlc-state.md"),
-  );
+  // Seed state into the per-intent record so emitError's existsSync(stateFilePath)
+  // guard passes (the seeded record dir already exists via the fixture shell).
+  copyFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), seededStateFile(p));
   return p;
 }
 
@@ -127,13 +129,19 @@ function create(p: string, args: string[]): CliResult {
   };
 }
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
 const wtPath = (p: string, slug: string): string =>
   join(p, ".aidlc", "worktrees", `bolt-${slug}`);
 
+/** Concatenate every audit shard (audit/*.md) for the seeded record. */
 const auditText = (p: string): string => {
-  const f = auditPath(p);
-  return existsSync(f) ? readFileSync(f, "utf-8") : "";
+  const dir = seededAuditDir(p);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+  } catch {
+    return "";
+  }
+  return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
 };
 
 /**
@@ -180,25 +188,29 @@ describe("t05 aidlc-worktree create audit-first (migrated from t05-worktree-audi
         return;
       }
       const p = freshFixture();
-      // Seed a BARE audit header so the "not mutated" check is exact, then
-      // lock the file read-only (the .sh: printf header > audit.md; chmod 0444).
-      writeFileSync(auditPath(p), "# AI-DLC Audit Log\n", "utf-8");
-      chmodSync(auditPath(p), 0o444);
+      // Audit is a per-clone shard DIR now: lock the audit/ DIR read-only so the
+      // audit-first emit can't create its shard, the per-clone analog of the old
+      // chmod-0444 on the single audit.md. The shipped fixture.md shard is the
+      // only content; the "not mutated" check stays exact.
+      const auditDir = seededAuditDir(p);
+      mkdirSync(auditDir, { recursive: true });
+      writeFileSync(join(auditDir, "fixture.md"), "# AI-DLC Audit Log\n", "utf-8");
+      chmodSync(auditDir, 0o555);
 
       const r = create(p, ["--slug", "demo", "--base", "main"]);
-      chmodSync(auditPath(p), 0o644); // restore before reading/cleanup
+      chmodSync(auditDir, 0o755); // restore before reading/cleanup
 
       // A1: create exits non-zero — the audit-first emit threw on the
-      // read-only file before git was ever invoked.
+      // read-only audit dir before git was ever invoked.
       expect(r.status).not.toBe(0);
       // A2: no worktree directory created (audit-first prevented git add).
       expect(existsSync(wtPath(p, "demo"))).toBe(false);
-      // A3: audit.md was NOT mutated — its shipped header is the only content;
-      // no WORKTREE_CREATED row (emit failed pre-git) ...
-      const after = readFileSync(auditPath(p), "utf-8");
+      // A3: the audit was NOT mutated — no WORKTREE_CREATED row (emit failed
+      // pre-git) ...
+      const after = auditText(p);
       expect(after).not.toContain("WORKTREE_CREATED");
-      // ... and STRONGER than the .sh: no ERROR_LOGGED row either (audit.md was
-      // itself read-only, so emitError's best-effort write also failed).
+      // ... and STRONGER than the .sh: no ERROR_LOGGED row either (the audit dir
+      // was itself read-only, so emitError's best-effort write also failed).
       expect(after).not.toContain("ERROR_LOGGED");
     },
     30000,

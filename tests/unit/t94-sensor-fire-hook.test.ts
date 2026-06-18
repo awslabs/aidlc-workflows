@@ -89,14 +89,19 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
+import {
+  AIDLC_SRC,
+  cleanupTestProject,
+  createTestProject,
+  seededAuditDir,
+  seededRecordDir,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-sensor-fire.ts");
@@ -109,8 +114,28 @@ const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
 
 const tempDirs: string[] = [];
 afterAll(() => {
-  for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
+  for (const d of tempDirs) cleanupTestProject(d);
 });
+
+// P9 per-intent layout: the flat aidlc-docs/ root is retired. The sensor-fire
+// hook's active-workflow gate resolves state via stateFilePath() and the audit
+// trail via auditFilePath() — both under the active intent's record. So a
+// fixture seeds state into the record (so the cursor resolves) and, for the
+// active-workflow projects, the resolved audit SHARD (pinned clone-id) so the
+// audit gate at :100 passes. The heartbeat/skipped files land under the record's
+// .aidlc-hooks-health/. The sensor `matches` glob in the FRAMEWORK graph is still
+// `**/aidlc-docs/**` (core data, unchanged), so the artifact file_path the hook
+// fires on stays an aidlc-docs/ path — only the state/audit/health roots moved.
+const PINNED_CLONE_ID = "testcloneid94";
+function pinnedShardName(): string {
+  const host =
+    hostname()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "host";
+  return `${host}-${PINNED_CLONE_ID}.md`;
+}
 
 // Stub dispatcher (.sh:66-81): record argv to T94_SPAWN_LOG and exit 0. Written
 // to <proj>/.claude/tools/aidlc-sensor.ts — the path the hook joins at :195 — so
@@ -130,30 +155,31 @@ process.stdout.write('{"pass":true}\\n');
 process.exit(0);
 `;
 
-/** make_project (.sh:56-84): temp dir + aidlc-docs/ + the stub dispatcher. */
+/** make_project (.sh:56-84): per-intent workspace shell + the stub dispatcher +
+ *  a pinned clone-id (so a later seedAudit's shard path is deterministic). */
 function makeProject(): string {
-  const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t94-")));
+  const proj = createTestProject();
   tempDirs.push(proj);
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
   mkdirSync(join(proj, ".claude", "tools"), { recursive: true });
   writeFileSync(
     join(proj, ".claude", "tools", "aidlc-sensor.ts"),
     STUB_DISPATCHER,
     "utf-8",
   );
+  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   return proj;
 }
 
 /**
  * make_project_active (.sh:90-104): project + state.md whose Current Stage is a
  * stage that carries applicable md-glob sensors in the FRAMEWORK graph
- * (requirements-analysis -> required-sections + upstream-coverage) + audit.md
- * (the active-workflow gate at hook :90).
+ * (requirements-analysis -> required-sections + upstream-coverage) + the audit
+ * shard (the active-workflow gate at hook :100).
  */
 function makeProjectActive(): string {
   const proj = makeProject();
-  writeFileSync(
-    join(proj, "aidlc-docs", "aidlc-state.md"),
+  seedState(
+    proj,
     [
       "# AI-DLC State (t94 fixture)",
       "",
@@ -163,30 +189,34 @@ function makeProjectActive(): string {
       "- **Current Stage**: requirements-analysis",
       "",
     ].join("\n"),
-    "utf-8",
   );
-  writeFileSync(join(proj, "aidlc-docs", "audit.md"), "audit fixture\n", "utf-8");
+  seedAudit(proj);
   return proj;
 }
 
-/** Write a minimal aidlc-state.md from raw body lines (the .sh's heredocs). */
+/** Write a minimal aidlc-state.md into the record (the .sh's heredocs). Seeding
+ *  state is what makes the active-intent cursor resolve to the record. */
 function seedState(proj: string, body: string): void {
-  writeFileSync(join(proj, "aidlc-docs", "aidlc-state.md"), body, "utf-8");
+  mkdirSync(seededRecordDir(proj), { recursive: true });
+  writeFileSync(seededStateFile(proj), body, "utf-8");
 }
 
-/** Write a bare audit.md (the active-workflow gate at hook :90). */
+/** Create the resolved audit SHARD (the active-workflow gate at hook :100). With
+ *  the pinned clone-id, this is exactly the shard the spawned hook resolves. */
 function seedAudit(proj: string): void {
-  writeFileSync(join(proj, "aidlc-docs", "audit.md"), "audit fixture\n", "utf-8");
+  const auditDir = seededAuditDir(proj);
+  mkdirSync(auditDir, { recursive: true });
+  writeFileSync(join(auditDir, pinnedShardName()), "audit fixture\n", "utf-8");
 }
 
 function spawnLogPath(proj: string): string {
   return join(proj, ".spawn.log");
 }
 function heartbeatPath(proj: string): string {
-  return join(proj, "aidlc-docs", ".aidlc-hooks-health", "sensor-fire.last");
+  return join(seededRecordDir(proj), ".aidlc-hooks-health", "sensor-fire.last");
 }
 function skippedPath(proj: string): string {
-  return join(proj, "aidlc-docs", ".aidlc-hooks-health", "sensor-fire.skipped");
+  return join(seededRecordDir(proj), ".aidlc-hooks-health", "sensor-fire.skipped");
 }
 
 interface HookRun {

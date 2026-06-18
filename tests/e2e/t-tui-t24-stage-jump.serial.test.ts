@@ -94,6 +94,8 @@ import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { seededStateFile } from "../harness/fixtures.ts";
 import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
@@ -214,7 +216,7 @@ describe("t-tui-t24 stage-jump (forward --stage lands on disk + re-renders statu
         }
         // Seeded state -> the workflow statusline paints IDEATION (not "ready").
         // Before the jump it shows the seeded "> Feasibility" stage.
-        expect(waitFor(session, "\\[AIDLC\\] IDEATION", 45000, 800)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*IDEATION", 45000, 800)).toBe(true);
 
         // --- send the slash command ------------------------------------------
         // Spaces in the command -> send literally with no auto-Enter, then Enter
@@ -251,11 +253,11 @@ describe("t-tui-t24 stage-jump (forward --stage lands on disk + re-renders statu
         // The captured grid shows the landed stage name in the workflow
         // statusline. Anchored on the full display string so a stray "Approval"
         // elsewhere can't satisfy it.
-        expect(pane).toContain("[AIDLC] IDEATION");
+        expect(pane).toContain("· IDEATION");
         expect(pane).toContain("> Approval & Handoff");
 
         // --- assert ON DISK: aidlc-state.md (the .sh's state greps) -----------
-        const stateMd = readFileSync(join(proj, "aidlc-docs", "aidlc-state.md"), "utf8");
+        const stateMd = readFileSync(seededStateFile(proj), "utf8");
 
         // Current Stage rewritten to the jump target (t24.sh:28).
         expect(stateMd).toMatch(/^-\s*\*\*Current Stage\*\*:\s*approval-handoff\s*$/m);
@@ -280,8 +282,8 @@ describe("t-tui-t24 stage-jump (forward --stage lands on disk + re-renders statu
         // Last Updated carries a fresh timestamp (t24.sh:57).
         expect(stateMd).toMatch(/^-\s*\*\*Last Updated\*\*:.*\d[0-9T:Z-]/m);
 
-        // --- assert ON DISK: aidlc-docs/audit.md (the .sh's audit greps) ------
-        const auditMd = readFileSync(join(proj, "aidlc-docs", "audit.md"), "utf8");
+        // --- assert ON DISK: the per-intent audit shards (the .sh's audit greps) ------
+        const auditMd = readAllAuditShards(proj);
         // The canonical STAGE_JUMPED event (t24.sh:61). One per appended block:
         // "**Event**: STAGE_JUMPED".
         const stageJumped = auditMd

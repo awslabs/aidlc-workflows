@@ -37,13 +37,29 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
-  seedAuditFile,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+
+// P9 per-intent layout: the flat aidlc-docs/ root is retired. Bolt's audit lands
+// in a per-clone shard under the record (or the bare space record root when no
+// state seeds a resolvable cursor); state lives in the active intent's record.
+// We PIN a deterministic clone-id on disk so every SPAWNED bolt invocation in a
+// project writes the SAME shard — that keeps the lifecycle test's positional
+// "BOLT_STARTED precedes BOLT_COMPLETED" assertion deterministic (two spawns =
+// one shard, append order preserved) and lets reads glob a single shard.
+const PINNED_CLONE_ID = "testcloneid33";
+/** createTestProject + pin the clone-id (so spawned tools share one audit shard). */
+function mkProj(): string {
+  const p = createTestProject();
+  writeFileSync(join(p, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+  return p;
+}
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(
@@ -72,21 +88,21 @@ function runBolt(proj: string, ...args: string[]): RunResult {
 }
 
 function readAudit(proj: string): string {
-  return readFileSync(join(proj, "aidlc-docs", "audit.md"), "utf-8");
+  return readAllAuditShards(proj);
 }
 function readState(proj: string): string {
-  return readFileSync(join(proj, "aidlc-docs", "aidlc-state.md"), "utf-8");
+  return readFileSync(seededStateFile(proj), "utf-8");
 }
 
 // Mirror the .sh's setup_construction_project (lines 89-98): seed the
-// Construction state fixture + audit, then append the Construction Autonomy
-// Mode field (the fixture pre-dates it; setFieldStrict parses by key, not
-// location, so end-of-file append is fine).
+// Construction state fixture (so the active-intent cursor resolves and set-autonomy
+// can read/write the record's state), then append the Construction Autonomy Mode
+// field (the fixture pre-dates it; setFieldStrict parses by key, not location, so
+// end-of-file append is fine). Bolt's audit shard is created lazily on first emit.
 function setupConstructionProject(): string {
-  const proj = createTestProject();
+  const proj = mkProj();
   seedStateFile(proj, join(FIXTURES_DIR, "state-construction.md"));
-  seedAuditFile(proj);
-  const statePath = join(proj, "aidlc-docs", "aidlc-state.md");
+  const statePath = seededStateFile(proj);
   writeFileSync(
     statePath,
     `${readFileSync(statePath, "utf-8")}\n- **Construction Autonomy Mode**: gated\n`,
@@ -105,8 +121,7 @@ describe("t33 start: BOLT_STARTED audit emission", () => {
 
   // Test 1: start emits BOLT_STARTED
   test("start emits BOLT_STARTED", () => {
-    proj = createTestProject();
-    seedAuditFile(proj);
+    proj = mkProj();
     runBolt(proj, "start", "--name", "auth-service", "--batch", "1");
     // .sh: assert_grep '^\*\*Event\*\*: BOLT_STARTED' (line-anchored literal)
     expect(readAudit(proj)).toMatch(/^\*\*Event\*\*: BOLT_STARTED/m);
@@ -114,16 +129,14 @@ describe("t33 start: BOLT_STARTED audit emission", () => {
 
   // Test 2: start records Batch number
   test("start records Batch number", () => {
-    proj = createTestProject();
-    seedAuditFile(proj);
+    proj = mkProj();
     runBolt(proj, "start", "--name", "auth-service", "--batch", "1");
     expect(readAudit(proj)).toContain("**Batch number**: 1");
   });
 
   // Test 3: start accepts CSV bolt names (parallel batch)
   test("start records CSV bolt names", () => {
-    proj = createTestProject();
-    seedAuditFile(proj);
+    proj = mkProj();
     runBolt(
       proj,
       "start",
@@ -137,16 +150,14 @@ describe("t33 start: BOLT_STARTED audit emission", () => {
 
   // Test 4: start --walking-skeleton true flags Walking skeleton=true
   test("start --walking-skeleton true flags correctly", () => {
-    proj = createTestProject();
-    seedAuditFile(proj);
+    proj = mkProj();
     runBolt(proj, "start", "--name", "b1", "--batch", "1", "--walking-skeleton", "true");
     expect(readAudit(proj)).toContain("**Walking skeleton**: true");
   });
 
   // Test 21: start without --walking-skeleton defaults to false
   test("start without --walking-skeleton defaults to false", () => {
-    proj = createTestProject();
-    seedAuditFile(proj);
+    proj = mkProj();
     runBolt(proj, "start", "--name", "b1", "--batch", "1");
     expect(readAudit(proj)).toContain("**Walking skeleton**: false");
   });
@@ -162,34 +173,31 @@ describe("t33 start: input validation", () => {
 
   // Test 5: start missing --name exits 1
   test("start missing --name exits 1", () => {
-    proj = createTestProject();
+    proj = mkProj();
     expect(runBolt(proj, "start", "--batch", "1").status).toBe(1);
   });
 
   // Test 6: start missing --batch exits 1
   test("start missing --batch exits 1", () => {
-    proj = createTestProject();
+    proj = mkProj();
     expect(runBolt(proj, "start", "--name", "b1").status).toBe(1);
   });
 
   // Test 18: start --batch non-numeric exits 1
   test("start --batch non-numeric exits 1", () => {
-    proj = createTestProject();
-    seedAuditFile(proj);
+    proj = mkProj();
     expect(runBolt(proj, "start", "--name", "b1", "--batch", "not-a-number").status).toBe(1);
   });
 
   // Test 19: start --batch 0 exits 1 (must be positive)
   test("start --batch 0 exits 1 (must be positive)", () => {
-    proj = createTestProject();
-    seedAuditFile(proj);
+    proj = mkProj();
     expect(runBolt(proj, "start", "--name", "b1", "--batch", "0").status).toBe(1);
   });
 
   // Test 20: parseFlags rejects --flag without value (no silent flag-as-value)
   test("start --name without value (followed by --batch) errors cleanly", () => {
-    proj = createTestProject();
-    seedAuditFile(proj);
+    proj = mkProj();
     expect(runBolt(proj, "start", "--name", "--batch", "1").status).toBe(1);
   });
 });
@@ -204,8 +212,7 @@ describe("t33 start/complete: JSON ack + completion audit", () => {
 
   // Test 22: start prints JSON ack on stdout
   test("start prints JSON with emitted field", () => {
-    proj = createTestProject();
-    seedAuditFile(proj);
+    proj = mkProj();
     const res = runBolt(proj, "start", "--name", "b1", "--batch", "1");
     // .sh: assert_contains "$OUT" '"emitted":"BOLT_STARTED"' (fixed-string)
     expect(res.out).toContain('"emitted":"BOLT_STARTED"');
@@ -213,8 +220,7 @@ describe("t33 start/complete: JSON ack + completion audit", () => {
 
   // Test 7: complete emits BOLT_COMPLETED
   test("complete emits BOLT_COMPLETED", () => {
-    proj = createTestProject();
-    seedAuditFile(proj);
+    proj = mkProj();
     runBolt(proj, "complete", "--name", "auth-service", "--batch", "1");
     expect(readAudit(proj)).toMatch(/^\*\*Event\*\*: BOLT_COMPLETED/m);
   });
@@ -230,16 +236,14 @@ describe("t33 fail: BOLT_FAILED audit fields", () => {
 
   // Test 8: fail emits BOLT_FAILED with error summary
   test("fail records Error summary", () => {
-    proj = createTestProject();
-    seedAuditFile(proj);
+    proj = mkProj();
     runBolt(proj, "fail", "--name", "auth-service", "--error", "Compilation failed");
     expect(readAudit(proj)).toContain("**Error summary**: Compilation failed");
   });
 
   // Test 9: fail --succeeded-siblings records sibling bolts
   test("fail records Succeeded siblings", () => {
-    proj = createTestProject();
-    seedAuditFile(proj);
+    proj = mkProj();
     runBolt(
       proj,
       "fail",
@@ -316,9 +320,10 @@ describe("t33 set-autonomy: v4 state-file guard (audit-first)", () => {
 - [-] feasibility — EXECUTE
 `;
   function seedV4(): void {
-    proj = createTestProject();
-    writeFileSync(join(proj, "aidlc-docs", "aidlc-state.md"), V4_STATE, "utf-8");
-    seedAuditFile(proj);
+    proj = mkProj();
+    // Write the v4-shaped state into the default intent's record so the cursor
+    // resolves (set-autonomy reads/guards on the record's state).
+    writeFileSync(seededStateFile(proj), V4_STATE, "utf-8");
   }
   afterEach(() => {
     cleanupTestProject(proj);
@@ -353,7 +358,7 @@ describe("t33 dispatch: unknown subcommand", () => {
   });
 
   test("unknown subcommand exits 1", () => {
-    proj = createTestProject();
+    proj = mkProj();
     expect(runBolt(proj, "bogus").status).toBe(1);
   });
 });
@@ -367,8 +372,7 @@ describe("t33 lifecycle: BOLT_STARTED precedes BOLT_COMPLETED", () => {
   });
 
   test("bolt lifecycle: BOLT_STARTED precedes BOLT_COMPLETED for same bolt", () => {
-    proj = createTestProject();
-    seedAuditFile(proj);
+    proj = mkProj();
     runBolt(
       proj,
       "start",

@@ -70,6 +70,7 @@ import { join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -96,8 +97,10 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-const statePath = (p: string): string =>
-  join(p, "aidlc-docs", "aidlc-state.md");
+// P9 per-intent layout: state lives in the active intent's record (seedStateFile
+// seeds it so the active-intent cursor resolves; the spawned status tool reads
+// the same record).
+const statePath = (p: string): string => seededStateFile(p);
 
 /** Fresh project seeded with state-mid-ideation.md (create_test_project + seed_state_file). */
 function seededProj(): string {

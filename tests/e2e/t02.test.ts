@@ -46,11 +46,13 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
+  seededAuditDir,
+  seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
@@ -62,10 +64,15 @@ afterAll(() => {
   for (const f of fixtures) cleanupWorktreeFixture(f);
 });
 
-/** Fresh git-repo fixture on `main` + aidlc-docs/, registered for cleanup. */
+/** Fresh git-repo fixture on `main` with the per-intent workspace shell. Seed a
+ *  state file into the default record so the active-intent cursor resolves (the
+ *  fixture seeds a STATELESS record; without aidlc-state.md the cursor is rejected
+ *  and the WORKTREE_CREATED audit lands at the bare space root, not the record).
+ *  Registered for cleanup. */
 function freshFixture(): string {
   const p = setupWorktreeFixture();
   fixtures.push(p);
+  writeFileSync(seededStateFile(p), "- **Current Stage**: code-generation\n", "utf-8");
   return p;
 }
 
@@ -85,16 +92,26 @@ function create(p: string, args: string[]): CliResult {
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
 }
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
 const wtPath = (p: string, slug: string): string =>
   join(p, ".aidlc", "worktrees", `bolt-${slug}`);
 
-/** Count distinct `**Bolt slug**: <slug>` rows in audit.md. */
+/** Concatenate every audit shard (audit/*.md) for the seeded record — the tool
+ *  emits WORKTREE_CREATED into its own per-clone shard. */
+function readAudit(p: string): string {
+  const dir = seededAuditDir(p);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+  } catch {
+    return "";
+  }
+  return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
+}
+
+/** Count distinct `**Bolt slug**: <slug>` rows across the audit shards. */
 function boltSlugRows(p: string): string[] {
-  const f = auditPath(p);
-  if (!existsSync(f)) return [];
   const out: string[] = [];
-  for (const line of readFileSync(f, "utf-8").split("\n")) {
+  for (const line of readAudit(p).split("\n")) {
     const m = line.match(/^\*\*Bolt slug\*\*:\s*(\S+)/);
     if (m) out.push(m[1]);
   }

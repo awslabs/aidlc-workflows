@@ -3,7 +3,9 @@
 // Ports the project-creation / teardown helpers so the SDK harness can build
 // and tear down temp AIDLC projects from TypeScript, the same way the shell
 // suite did from bash. The bytes of the scaffolding match fixtures.sh:
-//   - create_test_project   -> createTestProject()
+//   - create_test_project   -> createTestProject()  (now seeds the per-intent
+//                                                     workspace shell, not flat
+//                                                     aidlc-docs/)
 //   - seed_state_file        -> seedStateFile()
 //   - seed_audit_file        -> seedAuditFile()
 //   - reset_aidlc_env        -> resetAidlcEnv()
@@ -32,7 +34,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { seedCustomHarness } from "./custom-harness.ts";
@@ -40,6 +42,23 @@ import { seedCustomHarness } from "./custom-harness.ts";
 const HARNESS_DIR = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = join(HARNESS_DIR, "..", "..");
 export const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
+
+// The per-intent WORKSPACE layout the fixtures seed (P9 — the flat aidlc-docs/
+// layout is retired). A fixture project gets a SEED-style shell (aidlc/active-space
+// + spaces/default/) plus ONE default intent record so the path helpers resolve
+// the record dir rather than the bare space root. The slug is fixed + SLUG_RE-valid
+// and the id8 is all-hex so it matches the `<slug>-<id8>` record-dir shape. Tests
+// resolve the seeded paths via seededRecordDir()/seededStateFile() below (or
+// import recordDirFor from sdk-drive.ts) instead of hardcoding aidlc-docs/.
+export const DEFAULT_SPACE = "default";
+export const DEFAULT_RECORD_DIR = "fixture-0000000000000001";
+// A FIXED per-clone audit-shard token seeded into every fixture project's
+// gitignored aidlc/.aidlc-clone-id. Pinning it makes the audit shard a spawned
+// tool resolves (auditShardName = `<host>-<clone>.md`) DETERMINISTIC, so a test
+// that pre-seeds a shard header or reads back a specific shard agrees with the
+// subprocess. On a real project the token is minted + gitignored per clone; a
+// fixture wants it stable across the test process and the tools it spawns.
+export const FIXTURE_CLONE_ID = "fixturecloneid01";
 // The relocated method ("memory") ships at the dist tree ROOT (beside .claude/),
 // at aidlc/spaces/default/memory/. A fixture project must copy this alongside
 // .claude/ so the resolver's default (join(<harness>/tools, "..", "..",
@@ -60,7 +79,8 @@ export function resetAidlcEnv(): void {
 }
 
 /**
- * Create a bare temp project dir with an empty aidlc-docs/. Mirrors
+ * Create a bare temp project dir seeded with the per-intent workspace shell
+ * (aidlc/active-space + spaces/default/ + one default intent record). Mirrors
  * create_test_project (fixtures.sh:20-33). On Windows (Git Bash / MSYS) the
  * raw mktemp path is a POSIX path native Bun cannot resolve; cygpath -m
  * rewrites it to an absolute Windows path with forward slashes that both Git
@@ -86,9 +106,100 @@ export function createTestProject(): string {
   } catch {
     /* keep the raw path */
   }
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
+  seedWorkspaceShell(proj);
   proj = toPortablePath(proj);
   return proj;
+}
+
+/**
+ * The absolute intents dir for a space: `<proj>/aidlc/spaces/<space>/intents`.
+ */
+export function intentsDirOf(proj: string, space = DEFAULT_SPACE): string {
+  return join(proj, "aidlc", "spaces", space, "intents");
+}
+
+/**
+ * The default intent's RECORD directory a fixture seeds:
+ * `<proj>/aidlc/spaces/default/intents/<DEFAULT_RECORD_DIR>`. The data-path
+ * helpers (seededStateFile/seededAuditDir) resolve under this; the chokepoint
+ * seeders write here. Mirrors the per-intent layout the engine writes. (Named
+ * seededRecordDir to avoid colliding with sdk-drive.ts recordDirFor and the many
+ * test-local recordDirOf helpers that resolve from live cursors instead.)
+ */
+export function seededRecordDir(proj: string, space = DEFAULT_SPACE): string {
+  return join(intentsDirOf(proj, space), DEFAULT_RECORD_DIR);
+}
+
+/** The seeded state file path: `<record>/aidlc-state.md`. */
+export function seededStateFile(proj: string, space = DEFAULT_SPACE): string {
+  return join(seededRecordDir(proj, space), "aidlc-state.md");
+}
+
+/** The seeded audit SHARD DIR path: `<record>/audit`. */
+export function seededAuditDir(proj: string, space = DEFAULT_SPACE): string {
+  return join(seededRecordDir(proj, space), "audit");
+}
+
+/**
+ * The DETERMINISTIC audit shard path a spawned tool resolves in a fixture
+ * project: `<record>/audit/<host-slug>-<FIXTURE_CLONE_ID>.md`. Mirrors
+ * auditShardName() in aidlc-lib.ts (hostname slugified + the pinned clone token).
+ * A test that pre-seeds an audit header or reads a single shard should target
+ * THIS path so it agrees with the tool's own resolution.
+ */
+export function seededAuditShard(proj: string, space = DEFAULT_SPACE): string {
+  const host =
+    hostname()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "host";
+  return join(seededAuditDir(proj, space), `${host}-${FIXTURE_CLONE_ID}.md`);
+}
+
+/**
+ * Seed a SEED-style workspace shell plus ONE default intent record + cursors +
+ * registry, so the path helpers resolve the per-intent record. This is the
+ * per-intent analog of the old `mkdir aidlc-docs/`. The record dir holds no
+ * aidlc-state.md until a seeder writes one (a bare createTestProject leaves an
+ * empty record, matching the old empty aidlc-docs/).
+ */
+function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
+  const intentsDir = intentsDirOf(proj, space);
+  mkdirSync(join(proj, "aidlc", "spaces", space, "memory"), { recursive: true });
+  mkdirSync(seededRecordDir(proj, space), { recursive: true });
+  // Pin the per-clone audit-shard token so a spawned tool's shard is
+  // deterministic (see FIXTURE_CLONE_ID / seededAuditShard).
+  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
+  // The cursors (per-user, gitignored on a real project) + the canonical registry.
+  writeFileSync(join(proj, "aidlc", "active-space"), `${space}\n`, "utf-8");
+  writeFileSync(join(intentsDir, "active-intent"), `${DEFAULT_RECORD_DIR}\n`, "utf-8");
+  writeFileSync(
+    join(intentsDir, "intents.json"),
+    `${JSON.stringify(
+      [
+        {
+          uuid: "00000000-0000-7000-8000-000000000001",
+          slug: DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, ""),
+          status: "in-flight",
+        },
+      ],
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+}
+
+/**
+ * Remove the seeded workspace record + cursor so the no-workspace (no active
+ * intent) path is tested. Leaves the shell (active-space + spaces/default/) so a
+ * resolver still finds the space; the record dir + cursor + registry go. Mirrors
+ * the old `rm -rf aidlc-docs/` no-layout option.
+ */
+export function removeWorkspaceRecord(proj: string, space = DEFAULT_SPACE): void {
+  const intentsDir = intentsDirOf(proj, space);
+  rmSync(intentsDir, { recursive: true, force: true });
 }
 
 /**
@@ -106,23 +217,28 @@ export function toPortablePath(p: string): string {
 }
 
 /**
- * Copy a state fixture to <proj>/aidlc-docs/aidlc-state.md. Mirrors
- * seed_state_file (fixtures.sh:45-50). `fixturePath` may be an absolute path
- * or a bare fixture filename resolved against FIXTURES_DIR.
+ * Copy a state fixture into the default intent's record:
+ * <proj>/aidlc/spaces/default/intents/<record>/aidlc-state.md. `fixturePath` may
+ * be an absolute path or a bare fixture filename resolved against FIXTURES_DIR.
  */
 export function seedStateFile(proj: string, fixturePath: string): void {
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
+  const recDir = seededRecordDir(proj);
+  mkdirSync(recDir, { recursive: true });
   const src = existsSync(fixturePath) ? fixturePath : join(FIXTURES_DIR, fixturePath);
-  copyFileSync(src, join(proj, "aidlc-docs", "aidlc-state.md"));
+  copyFileSync(src, join(recDir, "aidlc-state.md"));
 }
 
 /**
- * Copy the audit sample to <proj>/aidlc-docs/audit.md. Mirrors seed_audit_file
- * (fixtures.sh:52-56).
+ * Copy the audit sample into the default intent's DETERMINISTIC per-clone shard
+ * (<record>/audit/<host>-<FIXTURE_CLONE_ID>.md) — the SAME shard a spawned tool
+ * resolves (the fixture pins the clone-id). Seeding the tool's own shard means
+ * the seeded trail and the tool's appends share one file: readers glob audit/*.md
+ * and merge by timestamp, and a test that sabotages the shard blocks the tool.
  */
 export function seedAuditFile(proj: string): void {
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
-  copyFileSync(join(FIXTURES_DIR, "audit-sample.md"), join(proj, "aidlc-docs", "audit.md"));
+  const shard = seededAuditShard(proj);
+  mkdirSync(dirname(shard), { recursive: true });
+  copyFileSync(join(FIXTURES_DIR, "audit-sample.md"), shard);
 }
 
 /**
@@ -155,8 +271,9 @@ export function sedReplaceInFile(
 // aidlc-worktree.ts runs REAL `git worktree add/remove/list` and asserts it is
 // invoked from the main checkout (assertNotSiblingWorktree, aidlc-worktree.ts
 // :101). So a worktree-tier test needs an actual git repo on `main` with one
-// commit, plus an aidlc-docs/ dir for the audit emit. These helpers build and
-// tear that down, mirroring setup_worktree_fixture / cleanup_worktree_fixture.
+// commit, plus the per-intent workspace shell for the audit emit. These helpers
+// build and tear that down, mirroring setup_worktree_fixture /
+// cleanup_worktree_fixture.
 // ============================================================================
 
 /** Basename prefix every worktree fixture lives under; cleanup refuses any
@@ -165,8 +282,8 @@ export function sedReplaceInFile(
 export const WORKTREE_FIXTURE_PREFIX = "aidlc-worktree-";
 
 /**
- * Create a fresh git repo in a tempdir with one commit on `main`, plus an
- * empty aidlc-docs/. Returns the canonical (realpath) project path — git
+ * Create a fresh git repo in a tempdir with one commit on `main`, plus the
+ * per-intent workspace shell. Returns the canonical (realpath) project path — git
  * worktree list --porcelain emits canonical paths, so callers comparing to
  * this path need the canonical form too (macOS /var -> /private/var). Mirrors
  * setup_worktree_fixture (worktree-helpers.sh:21-52): init + symbolic-ref main
@@ -197,7 +314,11 @@ export function setupWorktreeFixture(): string {
   writeFileSync(join(proj, "README.md"), "seed\n");
   git(["add", "README.md"]);
   git(["-c", "user.email=t@x", "-c", "user.name=t", "commit", "-qm", "init"]);
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
+  // Seed the per-intent workspace shell + default record so the data-path
+  // helpers (and the worktree-mirror resolution that threads relativeRecordDir)
+  // anchor under aidlc/spaces/default/intents/<record>/ instead of a flat
+  // aidlc-docs/ tree.
+  seedWorkspaceShell(proj);
   return proj;
 }
 
@@ -264,7 +385,7 @@ export interface IntegrationProjectOptions {
   withState?: string;
   /** Seed audit.md from audit-sample.md. */
   withAudit?: boolean;
-  /** Remove the scaffolded aidlc-docs/ dir (test the no-workspace path). */
+  /** Remove the scaffolded intent record + cursor (test the no-workspace path). */
   noAidlcDocs?: boolean;
   /** Strip AWS_AIDLC_DEFAULT_SCOPE from the copied settings.json so shell env wins. */
   stripEnvScope?: boolean;
@@ -315,7 +436,7 @@ export function setupIntegrationProject(
   if (opts.withAudit) seedAuditFile(proj);
 
   if (opts.noAidlcDocs) {
-    rmSync(join(proj, "aidlc-docs"), { recursive: true, force: true });
+    removeWorkspaceRecord(proj);
   }
 
   if (opts.stripEnvScope) {
@@ -339,15 +460,15 @@ export function setupIntegrationProject(
   }
 
   if (opts.withReArtifacts) {
-    const dest = join(proj, "aidlc-docs", "inception", "reverse-engineering");
+    const dest = join(seededRecordDir(proj), "inception", "reverse-engineering");
     mkdirSync(dest, { recursive: true });
     cpSync(join(FIXTURES_DIR, "re-artifacts"), dest, { recursive: true });
   }
 
   if (opts.withInceptionArtifacts) {
-    const ra = join(proj, "aidlc-docs", "inception", "requirements-analysis");
-    const ad = join(proj, "aidlc-docs", "inception", "application-design");
-    const ug = join(proj, "aidlc-docs", "inception", "units-generation");
+    const ra = join(seededRecordDir(proj), "inception", "requirements-analysis");
+    const ad = join(seededRecordDir(proj), "inception", "application-design");
+    const ug = join(seededRecordDir(proj), "inception", "units-generation");
     mkdirSync(ra, { recursive: true });
     mkdirSync(ad, { recursive: true });
     mkdirSync(ug, { recursive: true });
@@ -368,8 +489,7 @@ export function setupIntegrationProject(
 
   if (opts.withConstructionArtifacts) {
     const dest = join(
-      proj,
-      "aidlc-docs",
+      seededRecordDir(proj),
       "construction",
       "todo-core",
       "functional-design",

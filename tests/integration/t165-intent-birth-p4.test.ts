@@ -15,9 +15,14 @@
 // transforms), then cross-checked against the spawned `intent`/`space --json`.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+import {
+  cleanupTestProject,
+  createTestProject,
+  removeWorkspaceRecord,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 import {
   activeIntent,
   activeSpace,
@@ -36,6 +41,12 @@ const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orches
 let proj: string;
 beforeEach(() => {
   proj = createTestProject();
+  // P9: createTestProject seeds ONE default intent record + registry row. Every
+  // case here asserts birth/discovery behaviour against a GENUINELY EMPTY
+  // workspace (zero intents), so strip the seeded record + cursor + registry —
+  // otherwise registry counts are off-by-one and the engine asks to select the
+  // pre-seeded intent instead of birthing. (Mirrors t160's beforeEach.)
+  removeWorkspaceRecord(proj);
 });
 afterEach(() => {
   cleanupTestProject(proj);
@@ -119,7 +130,7 @@ describe("t164 auto-birth (intent-birth) on an empty workspace", () => {
     expect(d.message).toContain("intent-birth --scope poc");
     // next is read-only: it must NOT have birthed anything.
     expect(existsSync(intentsDir(proj))).toBe(false);
-    expect(existsSync(join(proj, "aidlc-docs", "aidlc-state.md"))).toBe(false);
+    expect(existsSync(seededStateFile(proj))).toBe(false);
   });
 });
 
@@ -386,7 +397,9 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
 // ============================================================
 describe("t164 doctor readiness against the shipped shell", () => {
   test("a project with .claude/ + aidlc/spaces/default/memory/ passes the shell-ready row", () => {
-    // createTestProject only makes aidlc-docs/; build the minimal shipped shell.
+    // P9: createTestProject seeds the shell (incl. aidlc/spaces/default/memory/);
+    // add .claude/ so the readiness row has both halves it checks. (mkdir is
+    // idempotent — memory/ already exists from the seed.)
     mkdirSync(join(proj, ".claude"), { recursive: true });
     mkdirSync(join(proj, "aidlc", "spaces", "default", "memory"), { recursive: true });
     const r = util(["doctor"]);
@@ -397,7 +410,13 @@ describe("t164 doctor readiness against the shipped shell", () => {
 
   test("a project missing the default memory dir fails the shell-ready row", () => {
     mkdirSync(join(proj, ".claude"), { recursive: true });
-    // No aidlc/spaces/default/memory.
+    // P9: createTestProject seeds the shipped shell INCLUDING
+    // aidlc/spaces/default/memory/; this case needs it ABSENT so the readiness
+    // row fails. Strip the seeded memory dir.
+    rmSync(join(proj, "aidlc", "spaces", "default", "memory"), {
+      recursive: true,
+      force: true,
+    });
     const r = util(["doctor"]);
     // The row fails and points at copying the shell from dist/.
     expect(r.out).toContain("workspace shell ready");

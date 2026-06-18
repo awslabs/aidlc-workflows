@@ -5,13 +5,14 @@
 // aidlc/spaces/<sp>/intents/<slug>-<id8>/ — NOT the flat aidlc-docs/ fallback.
 //
 // WHY THIS TEST EXISTS (the test-integrity coverage gap, itself a review MAJOR):
-// before this, NO CLI-driven test seeded a per-intent layout. t49/t76 seed only
-// flat aidlc-docs/, so every spawned tool resolved via legacyFlatFallback and the
+// when first written, NO CLI-driven test seeded a per-intent layout — the
 // per-intent threading (commit 8306892) was exercised by resolver UNIT tests only
 // (t160/t161 call the resolvers directly, never spawning a tool). A threading
-// regression — a caller dropping the intent arg, or auditFilePath returning the
-// flat path when an intent is active — would pass the whole suite. This test puts
-// a real tool in front of a per-intent layout so such a regression FAILS here.
+// regression — a caller dropping the intent arg, or auditFilePath resolving the
+// wrong record when an intent is active — would pass the whole suite. This test
+// puts a real tool in front of a per-intent layout so such a regression FAILS
+// here. (P9 has since migrated the whole fixture corpus to the per-intent layout
+// and retired the transitional flat fallback entirely.)
 //
 // It is also the regression test for the Stage-B BLOCKER: audit-fork (PID A) and
 // audit-merge (PID B) ran as SEPARATE processes whose per-PID shard name

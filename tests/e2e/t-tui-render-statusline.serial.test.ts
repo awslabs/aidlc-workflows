@@ -5,7 +5,7 @@
 // AI-DLC statusline (§5-C render row, §7 Phase 1), driven SEEDED-STATE in a REAL
 // terminal with ZERO Bedrock tokens.
 //
-// These four branches all paint from ONE seeded aidlc-docs/aidlc-state.md, so a
+// These four branches all paint from ONE seeded per-intent aidlc-state.md, so a
 // SINGLE launched TUI capture proves all four — one assertion-focus per unit:
 //   - statusline-phase-bar  : progressBar(done,total) draws the 10-cell ▓/░ grid.
 //                             Seeded mid-ideation = 2 done / 7 total IDEATION
@@ -50,19 +50,11 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
+import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -130,23 +122,18 @@ const ABSENT_REASON = absentReason();
 // state, so one capture is the faithful observation. Returns the captured pane.
 function captureWorkflowStatusline(): string {
   const session = `aidlc_tui_render_sl_${process.pid}`;
-  const sandbox = mkdtempSync(join(tmpdir(), "aidlc-tui-render-sl-"));
+  // setupTuiProject copies the distributable + sibling aidlc/ memory shell,
+  // seeds the per-intent workspace shell, and writes the mid-ideation fixture
+  // into the active intent's record. With state present the hook paints the
+  // WORKFLOW line (phase + bar + counter + stage), not the no-workflow "ready"
+  // line. Purely state-driven — no prompt, no tokens.
+  const sandbox = setupTuiProject({ withState: "state-mid-ideation.md" });
   try {
-    // --- copy the distributable per the README ------------------------------
-    // dest .claude must NOT pre-exist or cp nests it.
-    const destClaude = join(sandbox, ".claude");
-    cpSync(AIDLC_SRC, destClaude, { recursive: true });
     // The statusLine key is what wires aidlc-statusline.ts into the TUI; a copy
     // that dropped it would render no [AIDLC] line at all.
-    expect(readFileSync(join(destClaude, "settings.json"), "utf8")).toContain('"statusLine"');
-
-    // --- SEED aidlc-docs/aidlc-state.md from the mid-ideation fixture --------
-    // This is the new step vs the t-tui-statusline template: with state present
-    // the hook paints the WORKFLOW line (phase + bar + counter + stage), not the
-    // no-workflow "ready" line. Purely state-driven — no prompt, no tokens.
-    const docsDir = join(sandbox, "aidlc-docs");
-    mkdirSync(docsDir, { recursive: true });
-    writeFileSync(join(docsDir, "aidlc-state.md"), readFileSync(FIXTURE, "utf8"));
+    expect(
+      readFileSync(join(sandbox, ".claude", "settings.json"), "utf8"),
+    ).toContain('"statusLine"');
 
     // --- launch the claude TUI ----------------------------------------------
     const started = drive([
@@ -177,7 +164,9 @@ function captureWorkflowStatusline(): string {
     }
 
     // --- wait for the WORKFLOW statusline (IDEATION, not "ready") -----------
-    const sawMarker = waitFor(session, "\\[AIDLC\\] IDEATION", 45000, 1000);
+    // P9: the statusline now carries the orientation prefix ("<intent-slug> · ")
+    // between [AIDLC] and the phase, so match with .* rather than a contiguous gap.
+    const sawMarker = waitFor(session, "\\[AIDLC\\].*IDEATION", 45000, 1000);
     const pane = drive(["capture", "--session", session]).stdout;
     if (!sawMarker) {
       throw new Error(
@@ -188,7 +177,7 @@ function captureWorkflowStatusline(): string {
     return pane;
   } finally {
     drive(["kill", "--session", session]);
-    if (existsSync(sandbox)) rmSync(sandbox, { recursive: true, force: true });
+    cleanupTuiProject(sandbox);
   }
 }
 

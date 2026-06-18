@@ -71,6 +71,8 @@ import { join } from "node:path";
 import {
   cleanupTestProject,
   sedReplaceInFile,
+  seededRecordDir,
+  seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import { driveAidlc, readStateField } from "../harness/sdk-drive.ts";
@@ -103,8 +105,10 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
         withAudit: true,
       });
       try {
+        // P9: state lives in the seeded per-intent record the RE stage resolves
+        // via the active-intent cursor (the flat aidlc-docs/ root is retired).
         sedReplaceInFile(
-          join(proj, "aidlc-docs", "aidlc-state.md"),
+          seededStateFile(proj),
           "- **Project Root**: /tmp/aidlc-test",
           `- **Project Root**: ${proj}`,
         );
@@ -122,8 +126,9 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
         // completion step (no vacuous pass). stopAfterAskUserQuestion fired.
         expect(r.askedQuestions.length).toBeGreaterThan(0);
 
-        // .sh test 1: the RE artifact directory was created.
-        const reDir = join(proj, "aidlc-docs", "inception", "reverse-engineering");
+        // .sh test 1: the RE artifact directory was created (under the seeded
+        // per-intent record the RE stage writes into — flat aidlc-docs/ retired).
+        const reDir = join(seededRecordDir(proj), "inception", "reverse-engineering");
         expect(existsSync(reDir) && statSync(reDir).isDirectory()).toBe(true);
 
         // .sh test 2: >= 4 .md artifacts (the .sh's assert_gt 3).

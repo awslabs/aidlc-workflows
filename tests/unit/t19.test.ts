@@ -94,11 +94,13 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -128,8 +130,12 @@ function proj(stateFixture: string): string {
   return p;
 }
 
-const statePath = (p: string): string => join(p, "aidlc-docs", "aidlc-state.md");
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+// P9 per-intent layout: state lives in the active intent's record; the audit
+// trail is a DIR of per-clone shards. The SPAWNED jump tool mints its own
+// clone-id, so audit reads glob every shard (readAllAuditShards) rather than a
+// single audit.md. seedStateFile seeds the record so the active-intent cursor
+// resolves for both this test process and the spawned tool.
+const statePath = (p: string): string => seededStateFile(p);
 
 interface CliResult {
   status: number;
@@ -168,11 +174,10 @@ function readState(p: string): string {
   return readFileSync(statePath(p), "utf-8");
 }
 
-/** Count audit blocks with `**Event**: <ev>` (mirrors the .sh's STAGE_JUMPED grep, as an exact count). */
-function auditEventCount(file: string, ev: string): number {
-  if (!existsSync(file)) return 0;
+/** Count audit blocks with `**Event**: <ev>` in a buffer (the .sh's grep, as a count). */
+function auditEventCount(body: string, ev: string): number {
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
-  return readFileSync(file, "utf-8")
+  return body
     .split("\n")
     .filter((l) => re.test(l)).length;
 }
@@ -183,10 +188,9 @@ function auditEventCount(file: string, ev: string): number {
  * `**label**: value` on the literal `**: ` separator. Mirrors auditField in
  * t31.cli.test.ts. Returns "" when absent.
  */
-function auditField(file: string, ev: string, key: string): string {
-  if (!existsSync(file)) return "";
+function auditField(body: string, ev: string, key: string): string {
   let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of body.split("\n")) {
     if (line.startsWith("## ")) {
       matched = false;
       continue;
@@ -316,7 +320,7 @@ describe("t19 aidlc-jump execute (migrated from t19-tool-jump.sh, plan 16)", () 
     // Mirrors assert_grep '\[S\] scope-definition'.
     expect(readState(p)).toContain("- [S] scope-definition");
     // STRONGER: the [S] transition emits one STAGE_SKIPPED for that slug.
-    expect(auditField(auditPath(p), "STAGE_SKIPPED", "Stage")).toBe(
+    expect(auditField(readAllAuditShards(p), "STAGE_SKIPPED", "Stage")).toBe(
       "scope-definition",
     );
   });
@@ -375,7 +379,7 @@ describe("t19 aidlc-jump execute (migrated from t19-tool-jump.sh, plan 16)", () 
     );
     // Mirrors assert_grep "STAGE_JUMPED". STRONGER: exact count against the
     // fresh (no STAGE_JUMPED) baseline + block-scoped field values.
-    const a = auditPath(p);
+    const a = readAllAuditShards(p);
     expect(auditEventCount(a, "STAGE_JUMPED")).toBe(1);
     expect(auditField(a, "STAGE_JUMPED", "Direction")).toBe("FORWARD");
     expect(auditField(a, "STAGE_JUMPED", "Target")).toBe("code-generation");

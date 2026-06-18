@@ -83,16 +83,21 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
   seedAuditFile,
   seedStateFile,
+  seededAuditDir,
+  seededStateFile,
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -130,10 +135,37 @@ function setupV7Project(withWorktree?: string): string {
 }
 
 function statePath(proj: string): string {
-  return join(proj, "aidlc-docs", "aidlc-state.md");
+  return seededStateFile(proj);
 }
-function auditPath(proj: string): string {
-  return join(proj, "aidlc-docs", "audit.md");
+// Audit is now a per-clone SHARD DIR — the tool writes its own <host>-<clone>.md
+// shard alongside seedAuditFile's fixture.md. Readers glob audit/*.md and merge,
+// so the exact-line `**Event**:` matches below still work on the concatenation.
+function readAudit(proj: string): string {
+  const dir = seededAuditDir(proj);
+  let names: string[];
+  try {
+    names = readdirSync(dir)
+      .filter((f) => f.endsWith(".md"))
+      .sort();
+  } catch {
+    return "";
+  }
+  return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
+}
+// The worktree mirror carries the SAME relative record dir as the main checkout.
+function wtStatePath(proj: string, slug: string): string {
+  return join(
+    proj,
+    ".aidlc",
+    "worktrees",
+    `bolt-${slug}`,
+    "aidlc",
+    "spaces",
+    DEFAULT_SPACE,
+    "intents",
+    DEFAULT_RECORD_DIR,
+    "aidlc-state.md",
+  );
 }
 
 let projects: string[] = [];
@@ -206,7 +238,7 @@ describe("t77 aidlc-bolt worktree flags — start --worktree (migrated from t77-
       "start", "--name", "Happy", "--batch", "1", "--worktree",
       "--slug", "happy", "--project-dir", proj,
     ]);
-    const audit = readFileSync(auditPath(proj), "utf-8");
+    const audit = readAudit(proj);
     // Mirrors `grep "^\*\*Event\*\*: BOLT_STARTED"`.
     expect(
       audit.split("\n").some((l) => l === "**Event**: BOLT_STARTED"),
@@ -219,7 +251,7 @@ describe("t77 aidlc-bolt worktree flags — start --worktree (migrated from t77-
       "start", "--name", "Happy", "--batch", "1", "--worktree",
       "--slug", "happy", "--project-dir", proj,
     ]);
-    const audit = readFileSync(auditPath(proj), "utf-8");
+    const audit = readAudit(proj);
     expect(
       audit.split("\n").some((l) => l === "**Event**: STATE_FORKED"),
     ).toBe(true);
@@ -231,7 +263,7 @@ describe("t77 aidlc-bolt worktree flags — start --worktree (migrated from t77-
       "start", "--name", "Happy", "--batch", "1", "--worktree",
       "--slug", "happy", "--project-dir", proj,
     ]);
-    const audit = readFileSync(auditPath(proj), "utf-8");
+    const audit = readAudit(proj);
     expect(
       audit.split("\n").some((l) => l === "**Event**: AUDIT_FORKED"),
     ).toBe(true);
@@ -243,7 +275,7 @@ describe("t77 aidlc-bolt worktree flags — start --worktree (migrated from t77-
       "start", "--name", "Happy", "--batch", "1", "--worktree",
       "--slug", "happy", "--project-dir", proj,
     ]);
-    const lines = readFileSync(auditPath(proj), "utf-8").split("\n");
+    const lines = readAudit(proj).split("\n");
     // Mirror the .sh's `tail -1` of each match: the LAST occurrence index.
     let bs = -1;
     let sf = -1;
@@ -275,11 +307,7 @@ describe("t77 aidlc-bolt worktree flags — start --worktree (migrated from t77-
       "start", "--name", "Happy", "--batch", "1", "--worktree",
       "--slug", "happy", "--project-dir", proj,
     ]);
-    expect(
-      existsSync(
-        join(proj, ".aidlc", "worktrees", "bolt-happy", "aidlc-docs", "aidlc-state.md"),
-      ),
-    ).toBe(true);
+    expect(existsSync(wtStatePath(proj, "happy"))).toBe(true);
   });
 });
 
@@ -434,7 +462,7 @@ describe("t77 — abort", () => {
       "abort", "--name", "Foo", "--slug", "foo",
       "--reason", "user changed mind", "--project-dir", proj,
     ]);
-    const audit = readFileSync(auditPath(proj), "utf-8");
+    const audit = readAudit(proj);
     expect(
       audit.split("\n").some((l) => l === "**Event**: BOLT_FAILED"),
     ).toBe(true);
@@ -446,7 +474,7 @@ describe("t77 — abort", () => {
       "abort", "--name", "Foo", "--slug", "foo",
       "--reason", "user changed mind", "--project-dir", proj,
     ]);
-    const audit = readFileSync(auditPath(proj), "utf-8");
+    const audit = readAudit(proj);
     // Mirror `grep '\*\*Reason\*\*: aborted'`.
     expect(audit.includes("**Reason**: aborted")).toBe(true);
   });
@@ -483,7 +511,7 @@ describe("t77 — fail --slug (milestone 12 halt-and-ask correlation)", () => {
       "fail", "--name", "Failed", "--slug", "fail-slug",
       "--error", "broke", "--project-dir", proj,
     ]);
-    const audit = readFileSync(auditPath(proj), "utf-8");
+    const audit = readAudit(proj);
     // Mirror `grep '\*\*Bolt slug\*\*: fail-slug'`.
     expect(audit.includes("**Bolt slug**: fail-slug")).toBe(true);
   });

@@ -69,8 +69,20 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { toPortablePath } from "../harness/fixtures.ts";
+import { auditFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// P9: with no intent cursor seeded, compile resolves the BARE space record root
+// (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/. State,
+// runtime-graph, and the per-clone audit SHARD live under it (the flat
+// aidlc-docs/ root is retired — there is no fallback). The detail_path strings
+// asserted below are read VERBATIM from the read-only audit fixtures, so they
+// keep their recorded aidlc-docs/ values (compile echoes the recorded row).
+const RECORD_REL = join("aidlc", "spaces", "default", "intents");
+function recordRoot(proj: string): string {
+  return join(proj, RECORD_REL);
+}
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -98,24 +110,27 @@ afterAll(() => {
 });
 
 const graphPath = (proj: string): string =>
-  join(proj, "aidlc-docs", "runtime-graph.json");
+  join(recordRoot(proj), "runtime-graph.json");
 
 /**
  * make_project_with_audit (t98:66-78): fresh temp project carrying the shared
- * state-construction.md as aidlc-state.md plus the given audit fixture as
- * audit.md, both under aidlc-docs/. toPortablePath wraps the mktemp path so
- * the runtime-graph.json the tool writes round-trips on native Windows
+ * state-construction.md as aidlc-state.md plus the given audit fixture, both
+ * under the bare space record root. toPortablePath wraps the mktemp path so the
+ * runtime-graph.json the tool writes round-trips on native Windows
  * (forward-slash path helpers). `auditFixturePath` is an absolute path to a
- * read-only on-disk fixture — copied in by byte-read + re-write (no fixtures
+ * read-only on-disk fixture — copied into the DETERMINISTIC audit shard the
+ * compile tool resolves (auditFilePath), by byte-read + re-write (no fixtures
  * mutation).
  */
 function makeProjectWithAudit(auditFixturePath: string): string {
   const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t98f-")));
   tempDirs.push(proj);
-  const docs = join(proj, "aidlc-docs");
-  mkdirSync(docs, { recursive: true });
-  writeFileSync(join(docs, "aidlc-state.md"), readFileSync(STATE_FIXTURE), "utf-8");
-  writeFileSync(join(docs, "audit.md"), readFileSync(auditFixturePath), "utf-8");
+  const rec = recordRoot(proj);
+  mkdirSync(rec, { recursive: true });
+  writeFileSync(join(rec, "aidlc-state.md"), readFileSync(STATE_FIXTURE), "utf-8");
+  const shard = auditFilePath(proj);
+  mkdirSync(dirname(shard), { recursive: true });
+  writeFileSync(shard, readFileSync(auditFixturePath), "utf-8");
   return proj;
 }
 

@@ -72,12 +72,23 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
-  seedAuditFile,
+  FIXTURES_DIR,
+  seededAuditDir,
+  seededRecordDir,
+  seedStateFile,
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -97,17 +108,64 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-/** Fresh project; optionally seed audit-sample.md (matches the .sh's seed_audit_file). */
+// The shard the spawned hook resolves, computed from a clone-id pinned on disk
+// (mirrors auditShardName()'s `<host>-<clone>.md` shape). The pinned shard sorts
+// AFTER the baseline seed shard (named `0-seed.md`) so the glob-concatenated read
+// keeps the hook's NEW block LAST — preserving the .sh's end-of-file semantics.
+const PINNED_CLONE_ID = "testcloneid09";
+function pinnedShardName(): string {
+  const host =
+    hostname()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "host";
+  return `${host}-${PINNED_CLONE_ID}.md`;
+}
+
+/**
+ * Fresh project seeded for the per-intent audit layout: state (so the
+ * active-intent cursor resolves and docsRoot()/auditFilePath() point at the
+ * record), a baseline seed shard carrying the audit-sample.md SUBAGENT_COMPLETED
+ * block (when `seed`), and the empty pinned shard the hook resolves so its
+ * "shard exists" gate passes. When `seed` is false, NO shard is created (test 3's
+ * no-trail path). The clone-id token is pinned on disk for the spawned hook.
+ */
 function proj(seed = true): string {
   const p = createTestProject();
   tempDirs.push(p);
-  if (seed) seedAuditFile(p);
+  seedStateFile(p, join(FIXTURES_DIR, "state-mid-ideation.md"));
+  writeFileSync(join(p, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+  if (seed) {
+    const auditDir = seededAuditDir(p);
+    mkdirSync(auditDir, { recursive: true });
+    // Baseline (sorts first): the audit-sample.md SUBAGENT_COMPLETED block.
+    copyFileSync(join(FIXTURES_DIR, "audit-sample.md"), join(auditDir, "0-seed.md"));
+    // The hook's own shard (sorts last): empty until the hook appends.
+    writeFileSync(join(auditDir, pinnedShardName()), "", "utf-8");
+  }
   return p;
 }
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+const auditDirOf = (p: string): string => seededAuditDir(p);
 const heartbeatPath = (p: string): string =>
-  join(p, "aidlc-docs", ".aidlc-hooks-health", "log-subagent.last");
+  join(seededRecordDir(p), ".aidlc-hooks-health", "log-subagent.last");
+
+/** Concatenate every shard (sorted) — the settled per-intent audit read. */
+function readShards(p: string): string {
+  const auditDir = auditDirOf(p);
+  let names: string[];
+  try {
+    names = readdirSync(auditDir);
+  } catch {
+    return "";
+  }
+  return names
+    .filter((n) => n.endsWith(".md"))
+    .sort()
+    .map((n) => readFileSync(join(auditDir, n), "utf-8"))
+    .join("\n");
+}
 
 interface HookResult {
   status: number;
@@ -128,10 +186,9 @@ function runHook(payload: string, p: string): HookResult {
   return { status: res.status ?? -1 };
 }
 
-/** Count `**Event**: SUBAGENT_COMPLETED` block headings. Mirrors the .sh grep, as a count. */
-function subagentCompletedCount(file: string): number {
-  if (!existsSync(file)) return 0;
-  return readFileSync(file, "utf-8")
+/** Count `**Event**: SUBAGENT_COMPLETED` block headings in a buffer. */
+function subagentCompletedCount(body: string): number {
+  return body
     .split("\n")
     .filter((l) => l === "**Event**: SUBAGENT_COMPLETED").length;
 }
@@ -144,11 +201,10 @@ function subagentCompletedCount(file: string): number {
  * Splits `**label**: value` on the literal `**: ` separator (mirrors auditField in
  * t31.cli.test.ts). Returns the field map for that block; missing keys are absent.
  */
-function lastSubagentBlock(file: string): Record<string, string> {
-  if (!existsSync(file)) return {};
+function lastSubagentBlock(body: string): Record<string, string> {
   let current: Record<string, string> | null = null;
   let last: Record<string, string> = {};
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of body.split("\n")) {
     if (line.startsWith("## ")) {
       current = null;
       continue;
@@ -173,25 +229,24 @@ function lastSubagentBlock(file: string): Record<string, string> {
   return last;
 }
 
-/** Whole-file presence (mirrors a bare grep with no anchor). */
-function fileContains(file: string, needle: string): boolean {
-  if (!existsSync(file)) return false;
-  return readFileSync(file, "utf-8").includes(needle);
+/** Whole-buffer presence (mirrors a bare grep with no anchor). */
+function bodyContains(body: string, needle: string): boolean {
+  return body.includes(needle);
 }
 
 describe("t09 aidlc-log-subagent hook (migrated from t09-hook-log-subagent.sh, plan 8)", () => {
   test("1: logs subagent completion as SUBAGENT_COMPLETED event", () => {
     const p = proj();
-    const before = subagentCompletedCount(auditPath(p)); // seed baseline = 1
+    const before = subagentCompletedCount(readShards(p)); // seed baseline = 1
     const r = runHook(
       '{"agent_type":"architect","agent_id":"abc-123","last_assistant_message":"Done"}',
       p,
     );
     expect(r.status).toBe(0);
     // STRONGER: counts the appended row against the seeded baseline.
-    expect(subagentCompletedCount(auditPath(p))).toBe(before + 1);
+    expect(subagentCompletedCount(readShards(p))).toBe(before + 1);
     // STRONGER: exact field values on the NEW (last) block.
-    const blk = lastSubagentBlock(auditPath(p));
+    const blk = lastSubagentBlock(readShards(p));
     expect(blk["Agent Type"]).toBe("architect");
     expect(blk["Agent ID"]).toBe("abc-123");
     expect(blk.Message).toBe("Done");
@@ -200,7 +255,7 @@ describe("t09 aidlc-log-subagent hook (migrated from t09-hook-log-subagent.sh, p
   test("2: handles missing agent_id — agent type present, no Agent ID line", () => {
     const p = proj();
     runHook('{"agent_type":"developer"}', p);
-    const blk = lastSubagentBlock(auditPath(p));
+    const blk = lastSubagentBlock(readShards(p));
     // .sh grepped only that the type was present; here block-scoped exact value.
     expect(blk["Agent Type"]).toBe("developer");
     // STRONGER: the hook omits Agent ID (and Message) when falsy (hook lines 50-51),
@@ -209,17 +264,17 @@ describe("t09 aidlc-log-subagent hook (migrated from t09-hook-log-subagent.sh, p
     expect(blk.Message).toBeUndefined();
   });
 
-  test("3: exits silently when no audit.md (status 0, audit.md not created)", () => {
+  test("3: exits silently when no audit trail (status 0, trail not created)", () => {
     const p = proj(false);
-    // No audit.md (proj created with aidlc-docs/ but never seeded).
-    rmSync(auditPath(p), { force: true });
+    // No audit shard (proj seeded state but no trail).
+    expect(existsSync(auditDirOf(p))).toBe(false);
     const r = runHook(
       '{"agent_type":"architect","agent_id":"abc-123","last_assistant_message":"Done"}',
       p,
     );
-    // STRONGER: the .sh only checked the file's absence; we also pin the clean exit.
+    // STRONGER: the .sh only checked the trail's absence; we also pin the clean exit.
     expect(r.status).toBe(0);
-    expect(existsSync(auditPath(p))).toBe(false);
+    expect(existsSync(auditDirOf(p))).toBe(false);
   });
 
   test("4: writes heartbeat (ISO timestamp)", () => {
@@ -233,12 +288,12 @@ describe("t09 aidlc-log-subagent hook (migrated from t09-hook-log-subagent.sh, p
 
   test("5: handles empty stdin gracefully (exit 0, audit unchanged)", () => {
     const p = proj();
-    const before = readFileSync(auditPath(p), "utf-8");
+    const before = readShards(p);
     const r = runHook("", p);
     expect(r.status).toBe(0);
     // STRONGER: empty stdin -> JSON.parse("") throws -> exit 0 before any append,
     // so the audit must be byte-identical (the .sh captured BEFORE but never diffed).
-    expect(readFileSync(auditPath(p), "utf-8")).toBe(before);
+    expect(readShards(p)).toBe(before);
   });
 
   test("6a: truncates long messages — entry written", () => {
@@ -248,7 +303,7 @@ describe("t09 aidlc-log-subagent hook (migrated from t09-hook-log-subagent.sh, p
       `{"agent_type":"developer","agent_id":"xyz","last_assistant_message":"${longMsg}"}`,
       p,
     );
-    const blk = lastSubagentBlock(auditPath(p));
+    const blk = lastSubagentBlock(readShards(p));
     expect(blk["Agent Type"]).toBe("developer");
   });
 
@@ -261,15 +316,15 @@ describe("t09 aidlc-log-subagent hook (migrated from t09-hook-log-subagent.sh, p
     );
     // STRONGER: pins the exact 200-char slice boundary (hook line 42), not merely
     // "the 500-run is absent". The Message field is exactly 200 'A's...
-    const blk = lastSubagentBlock(auditPath(p));
+    const blk = lastSubagentBlock(readShards(p));
     expect(blk.Message).toBe("A".repeat(200));
-    // ...and the full 500-run never reaches the file (the .sh's assert_not_grep A{500}).
-    expect(fileContains(auditPath(p), "A".repeat(500))).toBe(false);
+    // ...and the full 500-run never reaches the trail (the .sh's assert_not_grep A{500}).
+    expect(bodyContains(readShards(p), "A".repeat(500))).toBe(false);
   });
 
   test("8: emits canonical Event field", () => {
     const p = proj();
-    const before = subagentCompletedCount(auditPath(p)); // seed baseline = 1
+    const before = subagentCompletedCount(readShards(p)); // seed baseline = 1
     runHook(
       '{"agent_type":"architect","agent_id":"abc-123","last_assistant_message":"done"}',
       p,
@@ -277,7 +332,7 @@ describe("t09 aidlc-log-subagent hook (migrated from t09-hook-log-subagent.sh, p
     // The .sh grepped `**Event**: SUBAGENT_COMPLETED`; here the canonical heading
     // line count goes baseline -> baseline+1 (block-scoped proof of the new row's
     // canonical Event field) and the new block's Event value is exactly that.
-    expect(subagentCompletedCount(auditPath(p))).toBe(before + 1);
-    expect(lastSubagentBlock(auditPath(p)).Event).toBe("SUBAGENT_COMPLETED");
+    expect(subagentCompletedCount(readShards(p))).toBe(before + 1);
+    expect(lastSubagentBlock(readShards(p)).Event).toBe("SUBAGENT_COMPLETED");
   });
 });

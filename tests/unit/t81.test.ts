@@ -73,8 +73,9 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -94,7 +95,10 @@ function proj(): string {
   return p;
 }
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+// P9: practices-event's appendAuditEvent CREATES the bare SPACE record root's
+// per-clone shard on first emit (no state seeded → no intent resolves → bare
+// root); the SPAWNED tool mints its own clone-id, so reads glob every shard.
+const readAudit = (p: string): string => readAllAuditShards(p);
 
 interface CliResult {
   status: number;
@@ -120,10 +124,9 @@ function practicesEvent(args: string[], p: string): CliResult {
 }
 
 /** Count audit blocks with `**Event**: <ev>`. Mirrors the .sh's `grep -c "PRACTICES_OVERRIDE"` but as an exact event-line count. */
-function auditEventCount(file: string, ev: string): number {
-  if (!existsSync(file)) return 0;
+function auditEventCount(body: string, ev: string): number {
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
-  return readFileSync(file, "utf-8")
+  return body
     .split("\n")
     .filter((l) => re.test(l)).length;
 }
@@ -136,10 +139,9 @@ function auditEventCount(file: string, ev: string): number {
  * .sh's `awk '/PRACTICES_OVERRIDE/{flag=1} flag && /^---$/{exit} flag'` block
  * scoping followed by per-field `grep "\*\*Key\*\*: value"`.
  */
-function auditField(file: string, ev: string, key: string): string {
-  if (!existsSync(file)) return "";
+function auditField(body: string, ev: string, key: string): string {
   let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of body.split("\n")) {
     if (line.startsWith("## ")) {
       matched = false;
       continue;
@@ -166,11 +168,10 @@ function auditField(file: string, ev: string, key: string): string {
 }
 
 /** ALL values of <key> across every block whose `**Event**:` matches <ev>. */
-function auditFieldAll(file: string, ev: string, key: string): string[] {
-  if (!existsSync(file)) return [];
+function auditFieldAll(body: string, ev: string, key: string): string[] {
   const out: string[] = [];
   let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of body.split("\n")) {
     if (line.startsWith("## ")) {
       matched = false;
       continue;
@@ -225,7 +226,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
   test("2: PRACTICES_OVERRIDE audit row carries discriminator Reason + milestone 13 fields", () => {
     const p = proj();
     practicesEvent(MILESTONE13_FIELDS, p);
-    const f = auditPath(p);
+    const f = readAudit(p);
     // Exact, block-scoped field values (STRONGER than the .sh's 4 substring greps).
     expect(auditField(f, "PRACTICES_OVERRIDE", "Reason")).toBe("bolt-plan-marker-conflict");
     expect(auditField(f, "PRACTICES_OVERRIDE", "Practices Stance")).toBe("never-skeleton");
@@ -264,7 +265,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
       p,
     );
     expect(writeFail.stdout).toContain('"emitted":"PRACTICES_OVERRIDE"'); // same event
-    const f = auditPath(p);
+    const f = readAudit(p);
     // Both emits land as PRACTICES_OVERRIDE rows (the .sh's grep -c >= 2).
     expect(auditEventCount(f, "PRACTICES_OVERRIDE")).toBeGreaterThanOrEqual(2);
     // STRONGER: the discriminator field disambiguates the two rows — both

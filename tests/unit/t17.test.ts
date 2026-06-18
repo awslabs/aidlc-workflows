@@ -53,6 +53,7 @@ import {
   FIXTURES_DIR,
   resetAidlcEnv,
   seedAuditFile,
+  seededAuditShard,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -130,16 +131,21 @@ function recordDirOf(proj: string): string {
 }
 const stateMd = (proj: string) => join(recordDirOf(proj), "aidlc-state.md");
 // Audit path for appending: a born record has per-clone shards under
-// <record>/audit/<host>-<clone-id>.md (one shard per test clone). Resolve the
-// existing shard so append/read both hit the file the tool reads; fall back to
-// the flat aidlc-docs/audit.md for a seeded-flat project.
+// <record>/audit/<host>-<clone-id>.md. The fixture pins a stable clone-id, so a
+// spawned tool resolves the DETERMINISTIC shard seededAuditShard() returns — a
+// test that pre-seeds a shard header must target that same path so the tool's
+// own append lands in it. Prefer an already-present shard (a born record may
+// carry one) but default to the deterministic fixture shard.
 function auditMd(proj: string): string {
   const auditDir = join(recordDirOf(proj), "audit");
   if (existsSync(auditDir)) {
     const shard = readdirSync(auditDir).find((f) => f.endsWith(".md"));
     if (shard) return join(auditDir, shard);
   }
-  return join(proj, "aidlc-docs", "audit.md");
+  // No shard yet — the deterministic fixture shard. Ensure its dir exists so a
+  // pre-seed writeFileSync(auditMd(proj), header) has a parent to write into.
+  mkdirSync(auditDir, { recursive: true });
+  return seededAuditShard(proj);
 }
 const readState = (proj: string) => readFileSync(stateMd(proj), "utf-8");
 // Concatenate every audit shard under the born record's audit/ dir (Stage B);

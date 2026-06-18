@@ -90,6 +90,8 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
@@ -210,7 +212,7 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         // Seeded mid-inception -> the statusline paints the workflow phase
         // (INCEPTION), not the fresh "ready" line. Either is a valid pre-prompt
         // resting state, but the seeded fixture is INCEPTION.
-        expect(waitFor(session, "\\[AIDLC\\] (INCEPTION|ready)", 45000, 800)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*(INCEPTION|ready)", 45000, 800)).toBe(true);
 
         // --- submit the stage jump (NO --test-run) ----------------------------
         // The slash command has spaces -> send literally with no auto-Enter, then
@@ -232,7 +234,7 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         // live phase). --stable-ms 0: the screen is streaming (token counter /
         // spinner), so match the instant the phase text appears.
         expect(
-          waitFor(session, "\\[AIDLC\\] (INCEPTION|IDEATION|CONSTRUCTION)", 120000, 0),
+          waitFor(session, "\\[AIDLC\\].*(INCEPTION|IDEATION|CONSTRUCTION)", 120000, 0),
         ).toBe(true);
 
         // Begin tailing the grid for the render assertion BEFORE answer-gate runs,
@@ -299,7 +301,7 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         expect(gateRc).toBe(0);
 
         // --- assert ON DISK (the .sh's surface, equal-or-stronger) ------------
-        const reqDir = join(sandbox, "aidlc-docs", "inception", "requirements-analysis");
+        const reqDir = join(seededRecordDir(sandbox), "inception", "requirements-analysis");
 
         // .sh test 1: requirements-analysis directory created.
         expect(existsSync(reqDir)).toBe(true);
@@ -337,7 +339,7 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         expect(answerCount).toBeGreaterThan(0);
 
         // .sh tests 9-11: state advanced.
-        const stateMd = readFileSync(join(sandbox, "aidlc-docs", "aidlc-state.md"), "utf8");
+        const stateMd = readFileSync(seededStateFile(sandbox), "utf8");
 
         // test 9: state marks `[x] requirements-analysis` (case-insensitive, the
         // .sh's grep -qi '\[x\] requirements-analysis').
@@ -357,7 +359,7 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
 
         // .sh test 12: the 4 pre-seeded RE artefacts are still intact (not
         // overwritten) — `find .../reverse-engineering -name "*.md" | wc -l` > 3.
-        const reDir = join(sandbox, "aidlc-docs", "inception", "reverse-engineering");
+        const reDir = join(seededRecordDir(sandbox), "inception", "reverse-engineering");
         expect(existsSync(reDir)).toBe(true);
         const reCount = readdirSync(reDir).filter((f) => f.endsWith(".md")).length;
         expect(reCount).toBeGreaterThan(3);
@@ -367,7 +369,7 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         // GATE_APPROVED). The .sh asserted only state lines; this also pins the
         // audit emission the no-`--test-run` path produces, on the same surface
         // the workshop port asserts (`**Event**: <type>` line, aidlc-audit.ts:258).
-        const auditMd = readFileSync(join(sandbox, "aidlc-docs", "audit.md"), "utf8");
+        const auditMd = readAllAuditShards(sandbox);
         const auditLines = auditMd.split("\n");
         const stageCompleted = auditLines.filter((l) =>
           l.startsWith("**Event**: STAGE_COMPLETED"),

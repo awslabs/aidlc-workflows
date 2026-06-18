@@ -75,7 +75,12 @@ import {
   _resetScopeMappingForTests,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { loadScopeGrid } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
-import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
+import {
+  cleanupTestProject,
+  seededAuditShard,
+  seededStateFile,
+  setupIntegrationProject,
+} from "../harness/fixtures.ts";
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -243,13 +248,18 @@ describe("dropped-file scope dynamics (AIDLC_SCOPES_DIR seam)", () => {
   test("detect-scope --from-text resolves a dropped scope's keyword from its .md (CLI audit) [.sh test 9]", () => {
     // Process-boundary contract: the dropped scope's keyword resolves through
     // a REAL aidlc-utility detect-scope run with AIDLC_SCOPES_DIR pointed at
-    // the sandbox scopes dir, and the SCOPE_DETECTED audit row names it. The
-    // sandbox strips aidlc-docs/; appendAuditEntry re-creates audit.md.
-    const proj = setupIntegrationProject({
-      noAidlcDocs: true,
-      stripEnvScope: true,
-    });
+    // the sandbox scopes dir, and the SCOPE_DETECTED audit row names it.
+    // P9: detect-scope's appendAuditEvent writes into the ACTIVE INTENT's audit
+    // shard; KEEP the seeded record (no noAidlcDocs) and seed state so the
+    // active-intent cursor resolves it, then read seededAuditShard. (Stripping
+    // the record would send the emit to the bare space root, hiding the row.)
+    const proj = setupIntegrationProject({ stripEnvScope: true });
     projects.push(proj);
+    writeFileSync(
+      seededStateFile(proj),
+      "# AI-DLC State Tracking\n## Current Status\n- **Scope**: feature\n",
+      "utf-8",
+    );
     const projScopes = join(proj, ".claude", "scopes");
     writeFileSync(join(projScopes, "aidlc-dropscope.md"), DROPSCOPE_MD, "utf-8");
 
@@ -271,7 +281,7 @@ describe("dropped-file scope dynamics (AIDLC_SCOPES_DIR seam)", () => {
     );
     expect(res.status).toBe(0);
 
-    const auditPath = join(proj, "aidlc-docs", "audit.md");
+    const auditPath = seededAuditShard(proj);
     expect(existsSync(auditPath)).toBe(true);
     const audit = readFileSync(auditPath, "utf-8");
     // Same grep the .sh ran: a "Detected scope ... : dropscope" line. The tool

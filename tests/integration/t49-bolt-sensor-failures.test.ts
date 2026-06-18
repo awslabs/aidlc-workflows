@@ -63,10 +63,32 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AIDLC_SRC, FIXTURES_DIR } from "../harness/fixtures.ts";
+import {
+  AIDLC_SRC,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
+  FIXTURES_DIR,
+} from "../harness/fixtures.ts";
 import { auditLockDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// The per-intent record dir the inline git project seeds (was flat aidlc-docs/).
+function recordDir(proj: string): string {
+  return join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", DEFAULT_RECORD_DIR);
+}
+// Concatenate every main audit shard (audit/*.md) for the seeded record.
+function readMainAudit(proj: string): string {
+  const dir = join(recordDir(proj), "audit");
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+  } catch {
+    return "";
+  }
+  return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
+}
 
 const BUN = process.execPath; // the bun running this test
 const WORKTREE_TOOL = join(AIDLC_SRC, "tools", "aidlc-worktree.ts");
@@ -106,7 +128,10 @@ afterAll(() => {
     } catch {
       /* best effort */
     }
+    // Drop both lock buckets — the workspace sentinel AND the per-intent bucket
+    // the merge keys (the seeded lone record).
     rmSync(auditLockDir(p), { recursive: true, force: true });
+    rmSync(auditLockDir(p, DEFAULT_RECORD_DIR, DEFAULT_SPACE), { recursive: true, force: true });
     rmSync(p, { recursive: true, force: true });
   }
 });
@@ -154,7 +179,18 @@ function auditAppend(dir: string, event: string, fields: [string, string][]): vo
 }
 
 const fragPath = (proj: string, slug: string): string =>
-  join(proj, ".aidlc", "worktrees", `bolt-${slug}`, "aidlc-docs", "runtime-graph.json");
+  join(
+    proj,
+    ".aidlc",
+    "worktrees",
+    `bolt-${slug}`,
+    "aidlc",
+    "spaces",
+    DEFAULT_SPACE,
+    "intents",
+    DEFAULT_RECORD_DIR,
+    "runtime-graph.json",
+  );
 
 /**
  * Build a clean git-init'd project with seeded construction state + empty
@@ -179,15 +215,45 @@ function makeProj(): string {
   git(["init", "-q"]);
   git(["symbolic-ref", "HEAD", "refs/heads/main"]);
   writeFileSync(join(proj, "README.md"), "seed\n");
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
+  // Seed the PER-INTENT workspace layout (the flat aidlc-docs/ root is retired).
+  // The record state + intents.json are COMMITTED so the git worktree (branched
+  // from main) carries them; the active-intent cursor + audit shards / runtime
+  // graph stay gitignored (per-user / machine-local), so a worktree resolves the
+  // lone seeded record by lone-intent fallback.
+  const intentsDir = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents");
+  mkdirSync(recordDir(proj), { recursive: true });
+  mkdirSync(join(proj, "aidlc", "spaces", DEFAULT_SPACE, "memory"), { recursive: true });
   writeFileSync(
-    join(proj, "aidlc-docs", "aidlc-state.md"),
+    join(recordDir(proj), "aidlc-state.md"),
     readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8"),
   );
-  writeFileSync(join(proj, "aidlc-docs", "audit.md"), "");
+  writeFileSync(
+    join(intentsDir, "intents.json"),
+    `${JSON.stringify(
+      [
+        {
+          uuid: "00000000-0000-7000-8000-000000000001",
+          slug: DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, ""),
+          status: "in-flight",
+        },
+      ],
+      null,
+      2,
+    )}\n`,
+  );
+  writeFileSync(join(proj, "aidlc", "active-space"), `${DEFAULT_SPACE}\n`);
+  writeFileSync(join(intentsDir, "active-intent"), `${DEFAULT_RECORD_DIR}\n`);
   writeFileSync(
     join(proj, ".gitignore"),
-    "aidlc-docs/audit.md\naidlc-docs/runtime-graph.json\naidlc-docs/.aidlc-recovery.md\naidlc-docs/.aidlc-hooks-health/\n",
+    [
+      "aidlc/active-space",
+      "aidlc/.aidlc-clone-id",
+      "aidlc/spaces/*/intents/active-intent",
+      "aidlc/spaces/*/intents/*/runtime-graph.json",
+      "aidlc/spaces/*/intents/*/.aidlc-*",
+      "aidlc/spaces/*/intents/*/audit/",
+      "",
+    ].join("\n"),
   );
   git(["add", "-A"]);
   git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"]);
@@ -206,9 +272,9 @@ type Graph = any;
 // biome-ignore lint/suspicious/noExplicitAny: a stage row / instance is arbitrary compiled JSON
 type StageRow = any;
 
-/** Load the compiled main runtime-graph.json, or null if absent. */
+/** Load the compiled main runtime-graph.json (per-intent record), or null. */
 function loadGraph(proj: string): Graph | null {
-  const p = join(proj, "aidlc-docs", "runtime-graph.json");
+  const p = join(recordDir(proj), "runtime-graph.json");
   if (!existsSync(p)) return null;
   return JSON.parse(readFileSync(p, "utf-8"));
 }
@@ -218,11 +284,9 @@ function codegenStage(graph: Graph): StageRow | undefined {
   return graph?.stages?.find((s: StageRow) => s.stage_slug === "code-generation");
 }
 
-/** Count `**Event**: <EVENT>` occurrences in main audit.md (the .sh's grep -c). */
+/** Count `**Event**: <EVENT>` occurrences across main audit shards (the .sh's grep -c). */
 function countEvent(proj: string, event: string): number {
-  const p = join(proj, "aidlc-docs", "audit.md");
-  if (!existsSync(p)) return 0;
-  return readFileSync(p, "utf-8")
+  return readMainAudit(proj)
     .split("\n")
     .filter((l) => l.includes(`**Event**: ${event}`)).length;
 }
@@ -252,7 +316,20 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     // pair written to pay's WORKTREE audit. Direct-append (deterministic) so we
     // verify the audit-merge + compile propagation, not any sensor predicate.
     const payWt = join(batchProj, ".aidlc", "worktrees", "bolt-pay");
-    mkdirSync(join(payWt, "aidlc-docs"), { recursive: true });
+    // Pin the worktree append to the SAME per-clone shard audit-fork wrote (and
+    // audit-merge later reads): copy the MAIN clone-id token into the worktree's
+    // gitignored aidlc/.aidlc-clone-id so auditShardName(payWt) resolves the
+    // main-token shard. Without this the worktree mints its OWN clone-id → the
+    // SENSOR rows land in a sibling shard audit-merge never reads, and the rows
+    // never reach main (audit-merge merges only the single main-token shard's
+    // post-fork delta). This is the per-clone-shard analog of the old flat layout,
+    // where the worktree had ONE audit.md both the fork-copy and the append shared.
+    const mainCloneId = readFileSync(
+      join(batchProj, "aidlc", ".aidlc-clone-id"),
+      "utf-8",
+    );
+    mkdirSync(join(payWt, "aidlc"), { recursive: true });
+    writeFileSync(join(payWt, "aidlc", ".aidlc-clone-id"), mainCloneId, "utf-8");
     auditAppend(payWt, "SENSOR_FIRED", [
       ["Sensor", "required-sections"],
       ["Stage", "code-generation"],
@@ -360,13 +437,13 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     expect(wtCreate(proj, "solo").status).toBe(0);
     expect(boltStart(proj, "solo").status).toBe(0);
 
-    // Plant the exact lock-dir path aidlc-lib.ts auditLockDir() computes
-    // (:512-515: md5(projectDir).slice(0,8) → `.aidlc-audit-<hash>.lock` under
-    // TMPDIR). STRONGER than the .sh, which re-derived the hash with an inline
-    // bun -e crypto snippet; here we call the real function so the test breaks
-    // if the lock-path contract ever changes. The lock is a DIRECTORY
-    // (mkdirSync atomicity).
-    const lockDir = auditLockDir(proj);
+    // Plant the exact lock-dir path aidlc-lib.ts auditLockDir() computes. The
+    // merge keys the PER-INTENT bucket (the active-intent cursor resolves the lone
+    // seeded record), NOT the workspace sentinel — they hash to distinct dirs, so
+    // a sentinel lock would not block the per-intent state-merge. STRONGER than the
+    // .sh's inline crypto snippet: call the real function so the test breaks if the
+    // lock-path contract changes. The lock is a DIRECTORY (mkdirSync atomicity).
+    const lockDir = auditLockDir(proj, DEFAULT_RECORD_DIR, DEFAULT_SPACE);
     mkdirSync(lockDir, { recursive: true });
     // Stamp the planted lock with a LIVE, FRESH owner (this test-runner process)
     // so the P3 stale-lock reaper correctly REFUSES to reclaim it — a live,
@@ -422,7 +499,7 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     // carries the fragment-merge-failed reason actually exists. Split into
     // per-block units and find the one mentioning the reason; confirm it is a
     // BOLT_FAILED row.
-    const auditBody = readFileSync(join(softGapProj, "aidlc-docs", "audit.md"), "utf-8");
+    const auditBody = readMainAudit(softGapProj);
     const blocks = auditBody.split(/\n---\n/);
     const failBlock = blocks.find((b) => b.includes("fragment-merge-failed"));
     expect(failBlock).toBeDefined();
@@ -442,7 +519,7 @@ describe("t49 Bolt fork/merge runtime-graph + failure modes (migrated from t49-b
     if (softGapFrag && existsSync(softGapFrag)) rmSync(softGapFrag, { force: true });
 
     runtimeCompile(softGapProj);
-    const graphPath = join(softGapProj, "aidlc-docs", "runtime-graph.json");
+    const graphPath = join(recordDir(softGapProj), "runtime-graph.json");
     const sha1 = createHash("sha256").update(readFileSync(graphPath)).digest("hex");
     runtimeCompile(softGapProj);
     const sha2 = createHash("sha256").update(readFileSync(graphPath)).digest("hex");

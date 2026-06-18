@@ -73,17 +73,24 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { toPortablePath } from "../harness/fixtures.ts";
+import {
+  auditFilePath,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// P9: with no intent cursor seeded, doctor's appendAuditEvent resolves the BARE
+// space record root's per-clone audit SHARD (auditFilePath -> aidlc/spaces/
+// default/intents/audit/<host>-<clone>.md) — the flat aidlc-docs/audit.md is
+// retired. Seed + read THAT shard. The single-clone fixture means the shard is
+// the whole trail (no merge needed).
+const RECORD_REL = join("aidlc", "spaces", "default", "intents");
+function recordRoot(proj: string): string {
+  return join(proj, RECORD_REL);
+}
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -115,15 +122,18 @@ interface DoctorResult {
 function runDoctor(rulesDir: string): DoctorResult {
   const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t105-proj-")));
   tempDirs.push(proj);
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
-  // Seed an audit.md so doctor's GUARDRAIL_LOADED / HEALTH_CHECKED emits fire.
-  // As of v0.6.10 doctor is COLD-SAFE: on a project with no audit.md it prints
-  // the health report and creates NOTHING (it no longer self-scaffolds the
-  // audit file as a side effect — see t27 test 13b). This suite asserts the
-  // GUARDRAIL_LOADED row's content, which is the initialized-project path, so
-  // we seed the audit file first. (The pristine/cold-safe arm is covered by
-  // t27.) A bare header line is enough for appendAuditEntry to append onto.
-  writeFileSync(join(proj, "aidlc-docs", "audit.md"), "# AI-DLC Audit Log\n", "utf-8");
+  mkdirSync(recordRoot(proj), { recursive: true });
+  // Seed the per-clone audit shard so doctor's GUARDRAIL_LOADED / HEALTH_CHECKED
+  // emits fire. As of v0.6.10 doctor is COLD-SAFE: on a project with no audit
+  // shard it prints the health report and creates NOTHING (it no longer
+  // self-scaffolds the audit file as a side effect — see t27 test 13b). This
+  // suite asserts the GUARDRAIL_LOADED row's content, which is the
+  // initialized-project path, so we seed the shard the tool resolves first.
+  // (The pristine/cold-safe arm is covered by t27.) A bare header line is enough
+  // for appendAuditEntry to append onto.
+  const shard = auditFilePath(proj);
+  mkdirSync(dirname(shard), { recursive: true });
+  writeFileSync(shard, "# AI-DLC Audit Log\n", "utf-8");
   const res = spawnSync(BUN, [UTIL, "doctor", "--project-dir", proj], {
     encoding: "utf-8",
     env: {
@@ -146,26 +156,28 @@ function makeRulesDir(): string {
   return rd;
 }
 
-const auditPath = (proj: string): string =>
-  join(proj, "aidlc-docs", "audit.md");
+// The merged per-clone audit trail doctor wrote (its SUBPROCESS mints its own
+// clone-id, distinct from the test process's memoized one, so read the whole
+// audit/ dir rather than a single memoized shard path).
+function readAudit(proj: string): string {
+  return readAllAuditShards(proj);
+}
 
 /**
  * Count audit blocks with `**Event**: <ev>`. Mirrors the .sh's `grep -q
  * "GUARDRAIL_LOADED"` but as an exact count against a fresh-project zero
  * baseline (STRONGER than bare presence).
  */
-function auditEventCount(file: string, ev: string): number {
-  if (!existsSync(file)) return 0;
+function auditEventCount(proj: string, ev: string): number {
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
-  return readFileSync(file, "utf-8")
+  return readAudit(proj)
     .split("\n")
     .filter((l) => re.test(l)).length;
 }
 
-/** Whole-file presence of a needle (mirrors a bare unanchored grep). */
-function fileContains(file: string, needle: string): boolean {
-  if (!existsSync(file)) return false;
-  return readFileSync(file, "utf-8").includes(needle);
+/** Whole-trail presence of a needle (mirrors a bare unanchored grep). */
+function fileContains(proj: string, needle: string): boolean {
+  return readAudit(proj).includes(needle);
 }
 
 /**
@@ -174,10 +186,9 @@ function fileContains(file: string, needle: string): boolean {
  * on the literal `**: `. Mirrors the audit_field helper in t31.cli.test.ts.
  * Returns "" when absent.
  */
-function auditField(file: string, ev: string, key: string): string {
-  if (!existsSync(file)) return "";
+function auditField(proj: string, ev: string, key: string): string {
   let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of readAudit(proj).split("\n")) {
     if (line.startsWith("## ")) {
       matched = false;
       continue;
@@ -294,21 +305,19 @@ describe("t105 doctor paired-coverage + GUARDRAIL_LOADED (migrated from t105-doc
   // --- Case 4: GUARDRAIL_LOADED row written to audit.md ---
   test("4: GUARDRAIL_LOADED row + heading written to audit.md", () => {
     const r = ensureCov();
-    const f = auditPath(r.proj);
     // STRONGER than the .sh's bare presence grep: exact count of 1 against a
     // fresh-project zero baseline (doctor emits exactly once per run).
-    expect(auditEventCount(f, "GUARDRAIL_LOADED")).toBe(1);
-    expect(fileContains(f, "## Guardrail Loaded")).toBe(true);
+    expect(auditEventCount(r.proj, "GUARDRAIL_LOADED")).toBe(1);
+    expect(fileContains(r.proj, "## Guardrail Loaded")).toBe(true);
   });
 
   // --- Case 5: required fields (Scope, Path, Rule count) on the row ---
   test("5: GUARDRAIL_LOADED carries Scope/Path/Rule count fields", () => {
     const r = ensureCov();
-    const f = auditPath(r.proj);
     // Block-scoped exact values (STRONGER than the file-wide ^-anchored grep).
-    expect(auditField(f, "GUARDRAIL_LOADED", "Scope")).toBe("all");
-    expect(auditField(f, "GUARDRAIL_LOADED", "Path")).toBe(".claude/rules/");
-    expect(auditField(f, "GUARDRAIL_LOADED", "Rule count")).toBe("3");
+    expect(auditField(r.proj, "GUARDRAIL_LOADED", "Scope")).toBe("all");
+    expect(auditField(r.proj, "GUARDRAIL_LOADED", "Path")).toBe(".claude/rules/");
+    expect(auditField(r.proj, "GUARDRAIL_LOADED", "Rule count")).toBe("3");
   });
 
   // -------------------------------------------------------------------------
@@ -328,9 +337,8 @@ describe("t105 doctor paired-coverage + GUARDRAIL_LOADED (migrated from t105-doc
     expect(r.out).toContain(
       "Paired sensor coverage: no sensor-bound rules (0 feedforward-only)",
     );
-    const f = auditPath(r.proj);
-    expect(auditEventCount(f, "GUARDRAIL_LOADED")).toBe(1);
+    expect(auditEventCount(r.proj, "GUARDRAIL_LOADED")).toBe(1);
     // STRONGER: the M-X==0 branch still emits with the correct rule count (1).
-    expect(auditField(f, "GUARDRAIL_LOADED", "Rule count")).toBe("1");
+    expect(auditField(r.proj, "GUARDRAIL_LOADED", "Rule count")).toBe("1");
   });
 });

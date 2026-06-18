@@ -18,7 +18,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+import {
+  cleanupTestProject,
+  createTestProject,
+  removeWorkspaceRecord,
+} from "../harness/fixtures.ts";
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -28,6 +32,11 @@ const ORCH = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orches
 let proj: string;
 beforeEach(() => {
   proj = createTestProject();
+  // P9: the birth gate's whole point is consulting an EMPTY registry (zero
+  // intents → birth; >0 intents + no cursor → prompt). createTestProject seeds
+  // ONE default intent record + registry row, so strip it to restore the
+  // zero-intent baseline every case here assumes. (Mirrors t160's beforeEach.)
+  removeWorkspaceRecord(proj);
 });
 afterEach(() => {
   cleanupTestProject(proj);

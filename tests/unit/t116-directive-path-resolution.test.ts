@@ -79,7 +79,10 @@ import { join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
   resetAidlcEnv,
+  seededStateFile,
   seedStateFile,
   sedReplaceInFile,
 } from "../harness/fixtures.ts";
@@ -95,6 +98,12 @@ const ORCH = join(
   "aidlc-orchestrate.ts",
 );
 const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures");
+
+// P9: the engine resolves a directive's produces/consumes RELATIVE to the active
+// intent's record dir (relativeRecordDir). The fixtures seed one default intent,
+// so the record prefix is deterministic. Every expected directive path below is
+// rooted here (was the flat `aidlc-docs/` prefix pre-P9).
+const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
 // reset_aidlc_env (t116 sources fixtures.sh): clear AWS_AIDLC_DEFAULT_SCOPE so
 // the fixture's own scope drives stages-in-scope, not a leaked shell export.
@@ -127,7 +136,7 @@ function emitFor(fixture: string, slug: string): RunStageDirective {
   const proj = createTestProject();
   tempDirs.push(proj);
   seedStateFile(proj, join(FIXTURES_DIR, fixture));
-  const state = join(proj, "aidlc-docs", "aidlc-state.md");
+  const state = seededStateFile(proj);
   // Pivot Current Stage to the target (matches any current value).
   sedReplaceInFile(
     state,
@@ -179,14 +188,14 @@ describe("t116 brownfield application-design (migrated from t116-directive-path-
   // STRONGER: assert the exact path is a member, not a substring of stdout.
   test("1: brownfield produces 'components' → inception/application-design/components.md", () => {
     expect(BF.produces).toContain(
-      "aidlc-docs/inception/application-design/components.md",
+      `${RP}/inception/application-design/components.md`,
     );
   });
 
   // .sh test 2: another produces name resolves under the same stage dir.
   test("2: brownfield produces 'decisions' → inception/application-design/decisions.md", () => {
     expect(BF.produces).toContain(
-      "aidlc-docs/inception/application-design/decisions.md",
+      `${RP}/inception/application-design/decisions.md`,
     );
   });
 
@@ -195,11 +204,11 @@ describe("t116 brownfield application-design (migrated from t116-directive-path-
   // under application-design's own dir, and there are exactly five.
   test("3: brownfield resolves all 5 produces to inception/application-design/ paths", () => {
     expect(BF.produces).toEqual([
-      "aidlc-docs/inception/application-design/components.md",
-      "aidlc-docs/inception/application-design/component-methods.md",
-      "aidlc-docs/inception/application-design/services.md",
-      "aidlc-docs/inception/application-design/component-dependency.md",
-      "aidlc-docs/inception/application-design/decisions.md",
+      `${RP}/inception/application-design/components.md`,
+      `${RP}/inception/application-design/component-methods.md`,
+      `${RP}/inception/application-design/services.md`,
+      `${RP}/inception/application-design/component-dependency.md`,
+      `${RP}/inception/application-design/decisions.md`,
     ]);
     expect(BF.produces.length).toBe(5);
   });
@@ -209,7 +218,7 @@ describe("t116 brownfield application-design (migrated from t116-directive-path-
   // the consuming application-design dir.
   test("4: brownfield consume 'architecture' → reverse-engineering/architecture.md (producer-keyed)", () => {
     expect(BF.consumes).toContain(
-      "aidlc-docs/inception/reverse-engineering/architecture.md",
+      `${RP}/inception/reverse-engineering/architecture.md`,
     );
   });
 
@@ -217,7 +226,7 @@ describe("t116 brownfield application-design (migrated from t116-directive-path-
   // is PRESENT for Brownfield and ALSO resolves under its producer.
   test("5: brownfield consume 'component-inventory' → reverse-engineering/component-inventory.md", () => {
     expect(BF.consumes).toContain(
-      "aidlc-docs/inception/reverse-engineering/component-inventory.md",
+      `${RP}/inception/reverse-engineering/component-inventory.md`,
     );
   });
 
@@ -226,7 +235,7 @@ describe("t116 brownfield application-design (migrated from t116-directive-path-
   // every consume, not just the conditional ones.
   test("12: consume 'requirements' → requirements-analysis/requirements.md (producer-keyed, not conditional)", () => {
     expect(BF.consumes).toContain(
-      "aidlc-docs/inception/requirements-analysis/requirements.md",
+      `${RP}/inception/requirements-analysis/requirements.md`,
     );
   });
 
@@ -237,7 +246,7 @@ describe("t116 brownfield application-design (migrated from t116-directive-path-
   // consume entry, not the raw joined string.
   test("13: no application-design consume resolves under its own dir — each lives under its producer", () => {
     const selfKeyed = BF.consumes.filter((p) =>
-      p.startsWith("aidlc-docs/inception/application-design/"),
+      p.startsWith(`${RP}/inception/application-design/`),
     );
     expect(selfKeyed).toEqual([]);
   });
@@ -270,7 +279,7 @@ describe("t116 greenfield application-design — conditional_on drop", () => {
   // the filter only touches conditional_on consumes-entries, not produces.
   test("8: greenfield produces 'components' still resolves (filter is consumes-only)", () => {
     expect(GF.produces).toContain(
-      "aidlc-docs/inception/application-design/components.md",
+      `${RP}/inception/application-design/components.md`,
     );
   });
 });
@@ -295,7 +304,7 @@ describe("t116 per-unit {unit-name} injection", () => {
   // per-unit shape construction/{unit-name}/functional-design/<name>.md.
   test("9: per-unit functional-design injects {unit-name}: construction/{unit-name}/functional-design/business-logic-model.md", () => {
     expect(FD.produces).toContain(
-      "aidlc-docs/construction/{unit-name}/functional-design/business-logic-model.md",
+      `${RP}/construction/{unit-name}/functional-design/business-logic-model.md`,
     );
   });
 
@@ -306,7 +315,7 @@ describe("t116 per-unit {unit-name} injection", () => {
   test("10: per-unit code-generation resolves under construction/{unit-name}/code-generation/", () => {
     expect(
       CG.produces.some((p) =>
-        p.startsWith("aidlc-docs/construction/{unit-name}/code-generation/"),
+        p.startsWith(`${RP}/construction/{unit-name}/code-generation/`),
       ),
     ).toBe(true);
   });

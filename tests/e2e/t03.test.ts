@@ -53,11 +53,13 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
+  seededAuditDir,
+  seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
@@ -80,10 +82,15 @@ afterAll(() => {
   for (const f of fixtures) cleanupWorktreeFixture(f);
 });
 
-/** Fresh git-repo fixture on `main` + aidlc-docs/, registered for cleanup. */
+/** Fresh git-repo fixture on `main` with the per-intent workspace shell. Seed a
+ *  state file into the default record so the active-intent cursor resolves (the
+ *  fixture's record is stateless; without aidlc-state.md the cursor is rejected
+ *  and the WORKTREE_MERGED audit lands at the bare space root, not the record).
+ *  Registered for cleanup. */
 function freshFixture(): string {
   const p = setupWorktreeFixture();
   fixtures.push(p);
+  writeFileSync(seededStateFile(p), "- **Current Stage**: code-generation\n", "utf-8");
   return p;
 }
 
@@ -116,13 +123,22 @@ function git(cwd: string, args: string[]): void {
 
 const wtPath = (p: string, slug: string): string =>
   join(p, ".aidlc", "worktrees", `bolt-${slug}`);
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
 
-/** True if audit.md has a WORKTREE_MERGED block for the given slug. */
+/** Concatenate every audit shard (audit/*.md) for the seeded record. */
+function readAudit(p: string): string {
+  const dir = seededAuditDir(p);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+  } catch {
+    return "";
+  }
+  return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
+}
+
+/** True if the audit shards carry a WORKTREE_MERGED block for the given slug. */
 function hasMergedAudit(p: string, slug: string): boolean {
-  const f = auditPath(p);
-  if (!existsSync(f)) return false;
-  const blocks = readFileSync(f, "utf-8").split(/\n---\n/);
+  const blocks = readAudit(p).split(/\n---\n/);
   return blocks.some(
     (b) =>
       /^\*\*Event\*\*:\s*WORKTREE_MERGED\b/m.test(b) &&

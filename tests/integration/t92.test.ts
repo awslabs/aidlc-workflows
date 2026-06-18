@@ -63,6 +63,23 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { toPortablePath } from "../harness/fixtures.ts";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// P9: with no intent cursor seeded, the sensor dispatcher resolves the BARE
+// space record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/
+// intents/ for BOTH the per-clone audit SHARD (audit/<host>-<clone>.md) and the
+// detail tree (.aidlc-sensors/<stage>/...) — the flat aidlc-docs/ root is retired.
+// The SENSED output files still live wherever the test writes them (e.g.
+// aidlc-docs/test.md), so the dispatcher's project-relative `Output path` field
+// is unchanged. Audit reads go through readAllAuditShards (the subprocess mints
+// its own clone-id, distinct from the test process's memoized one, so read the
+// whole audit/ dir rather than a single memoized shard path).
+const RECORD_REL = join("aidlc", "spaces", "default", "intents");
+function recordRoot(proj: string): string {
+  return join(proj, RECORD_REL);
+}
+// Posix record prefix for the relative detail-path audit fields.
+const RP = "aidlc/spaces/default/intents";
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -198,27 +215,35 @@ function makeForkSensors(
   return dir;
 }
 
-const auditPath = (proj: string): string => join(proj, "aidlc-docs", "audit.md");
+/** The audit/ shard dir the dispatcher writes into (bare space record root). */
+const auditDir = (proj: string): string => join(recordRoot(proj), "audit");
+/** Whether ANY audit shard exists (the P9 successor to "is there an audit.md?"). */
+function auditExists(proj: string): boolean {
+  const dir = auditDir(proj);
+  return existsSync(dir) && readdirSync(dir).some((f) => f.endsWith(".md"));
+}
+/** The merged audit trail (per-clone shards; one here for a single clone). */
+function readAudit(proj: string): string {
+  return readAllAuditShards(proj);
+}
 
-/** audit_event_count: count bodies with `**Event**: <type>`. */
-function auditEventCount(file: string, ev: string): number {
-  if (!existsSync(file)) return 0;
+/** audit_event_count: count bodies with `**Event**: <type>` across the trail. */
+function auditEventCount(proj: string, ev: string): number {
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
-  return readFileSync(file, "utf-8")
+  return readAudit(proj)
     .split("\n")
     .filter((l) => re.test(l)).length;
 }
 
 /**
  * audit_field (t92-sensor-fire.sh:153-176): value of <key> from the FIRST
- * audit block whose `**Event**:` matches <ev>. Walks the file; resets at
- * `## ` headings and `---` separators; splits `**label**: value` on the
+ * audit block whose `**Event**:` matches <ev>. Walks the merged trail; resets
+ * at `## ` headings and `---` separators; splits `**label**: value` on the
  * literal `**: ` separator.
  */
-function auditField(file: string, ev: string, key: string): string {
-  if (!existsSync(file)) return "";
+function auditField(proj: string, ev: string, key: string): string {
   let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of readAudit(proj).split("\n")) {
     if (line.startsWith("## ")) {
       matched = false;
       continue;
@@ -248,12 +273,11 @@ function auditField(file: string, ev: string, key: string): string {
  * audit_field_count (t92-sensor-fire.sh:183-198): count `**…**:` lines in
  * the FIRST audit block whose `**Event**:` matches <ev>.
  */
-function auditFieldCount(file: string, ev: string): number {
-  if (!existsSync(file)) return 0;
+function auditFieldCount(proj: string, ev: string): number {
   let inSection = false;
   let n = 0;
   let matchesEv = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of readAudit(proj).split("\n")) {
     if (line.startsWith("## ")) {
       inSection = true;
       n = 0;
@@ -397,7 +421,7 @@ describe("t92 Group A: argv validation (exit 1, no audit emit)", () => {
   });
 
   test("8: validate-before-lock — 7 invalid invocations created NO audit file", () => {
-    expect(existsSync(auditPath(argvProj))).toBe(false);
+    expect(auditExists(argvProj)).toBe(false);
   });
 });
 
@@ -432,7 +456,7 @@ function runPassedMdReal(
   fire([id, "--stage", stage, "--output-path", join(proj, "aidlc-docs", outname)], {
     CLAUDE_PROJECT_DIR: proj,
   });
-  const f = auditPath(proj);
+  const f = proj;
   return {
     fired: auditEventCount(f, "SENSOR_FIRED"),
     passed: auditEventCount(f, "SENSOR_PASSED"),
@@ -440,7 +464,7 @@ function runPassedMdReal(
     firedId: auditField(f, "SENSOR_FIRED", "Fire id"),
     passedId: auditField(f, "SENSOR_PASSED", "Fire id"),
     path: auditField(f, "SENSOR_PASSED", "Output path"),
-    detailExists: existsSync(join(proj, "aidlc-docs", ".aidlc-sensors")),
+    detailExists: existsSync(join(recordRoot(proj), ".aidlc-sensors")),
     outname,
   };
 }
@@ -468,7 +492,7 @@ function runPassedTsReal(
   fire([id, "--stage", stage, "--output-path", join(proj, subdir, "sample.ts")], {
     CLAUDE_PROJECT_DIR: proj,
   });
-  const f = auditPath(proj);
+  const f = proj;
   return {
     fired: auditEventCount(f, "SENSOR_FIRED"),
     passed: auditEventCount(f, "SENSOR_PASSED"),
@@ -477,7 +501,7 @@ function runPassedTsReal(
     passedId: auditField(f, "SENSOR_PASSED", "Fire id"),
     path: auditField(f, "SENSOR_PASSED", "Output path"),
     note: auditField(f, "SENSOR_PASSED", "Note"),
-    detailExists: existsSync(join(proj, "aidlc-docs", ".aidlc-sensors")),
+    detailExists: existsSync(join(recordRoot(proj), ".aidlc-sensors")),
     subdir,
   };
 }
@@ -563,7 +587,7 @@ function runFailedMdReal(
   fire([id, "--stage", stage, "--output-path", join(proj, "aidlc-docs", outname)], {
     CLAUDE_PROJECT_DIR: proj,
   });
-  const f = auditPath(proj);
+  const f = proj;
   const fired = auditEventCount(f, "SENSOR_FIRED");
   const failed = auditEventCount(f, "SENSOR_FAILED");
   const firedId = auditField(f, "SENSOR_FIRED", "Fire id");
@@ -576,7 +600,7 @@ function runFailedMdReal(
   expect(firedId).not.toBe("");
   expect(firedId).toBe(failedId);
   expect(findings).toBe(expectedFindings);
-  expect(detailPath).toBe(`aidlc-docs/.aidlc-sensors/${stage}/${id}-${firedId}.md`);
+  expect(detailPath).toBe(`${RP}/.aidlc-sensors/${stage}/${id}-${firedId}.md`);
   expect(existsSync(join(proj, detailPath))).toBe(true);
   expect(path).toBe(`aidlc-docs/${outname}`);
 }
@@ -595,7 +619,7 @@ function runFailedTsReal(
   fire([id, "--stage", stage, "--output-path", join(proj, subdir, "sample.ts")], {
     CLAUDE_PROJECT_DIR: proj,
   });
-  const f = auditPath(proj);
+  const f = proj;
   const fired = auditEventCount(f, "SENSOR_FIRED");
   const failed = auditEventCount(f, "SENSOR_FAILED");
   const firedId = auditField(f, "SENSOR_FIRED", "Fire id");
@@ -608,7 +632,7 @@ function runFailedTsReal(
   expect(firedId).not.toBe("");
   expect(firedId).toBe(failedId);
   expect(findings).toBe(expectedFindings);
-  expect(detailPath).toBe(`aidlc-docs/.aidlc-sensors/${stage}/${id}-${firedId}.md`);
+  expect(detailPath).toBe(`${RP}/.aidlc-sensors/${stage}/${id}-${firedId}.md`);
   expect(existsSync(join(proj, detailPath))).toBe(true);
   expect(path).toBe(`${subdir}/sample.ts`);
 }
@@ -657,7 +681,7 @@ function runToolUnavailable(id: string, stage: string, matches: string): void {
     CLAUDE_PROJECT_DIR: proj,
     AIDLC_SENSORS_DIR: sensorsDir,
   });
-  const f = auditPath(proj);
+  const f = proj;
   expect(auditEventCount(f, "SENSOR_PASSED")).toBe(1);
   expect(auditField(f, "SENSOR_PASSED", "Note")).toBe("tool-unavailable");
 }
@@ -686,7 +710,7 @@ describe("t92 Group E: script-error fall-through", () => {
       CLAUDE_PROJECT_DIR: proj,
       AIDLC_SENSORS_DIR: sensors,
     });
-    expect(auditField(auditPath(proj), "SENSOR_PASSED", "Note")).toBe("script-error: exit-2");
+    expect(auditField(proj, "SENSOR_PASSED", "Note")).toBe("script-error: exit-2");
   });
 
   test("20: garbage stdout -> Note=script-error: bad-output", () => {
@@ -697,7 +721,7 @@ describe("t92 Group E: script-error fall-through", () => {
       CLAUDE_PROJECT_DIR: proj,
       AIDLC_SENSORS_DIR: sensors,
     });
-    expect(auditField(auditPath(proj), "SENSOR_PASSED", "Note")).toBe("script-error: bad-output");
+    expect(auditField(proj, "SENSOR_PASSED", "Note")).toBe("script-error: bad-output");
   });
 
   test("21: blocked detail dir -> Note=script-error: detail-write-failed", () => {
@@ -705,14 +729,14 @@ describe("t92 Group E: script-error fall-through", () => {
     // dispatcher's mkdirSync(detailDir, {recursive:true}) throws ENOTDIR.
     const proj = makeProj();
     writeFileSync(join(proj, "aidlc-docs", "test.md"), "stub\n", "utf-8");
-    mkdirSync(join(proj, "aidlc-docs", ".aidlc-sensors"), { recursive: true });
-    writeFileSync(join(proj, "aidlc-docs", ".aidlc-sensors", "intent-capture"), "block\n", "utf-8");
+    mkdirSync(join(recordRoot(proj), ".aidlc-sensors"), { recursive: true });
+    writeFileSync(join(recordRoot(proj), ".aidlc-sensors", "intent-capture"), "block\n", "utf-8");
     const sensors = makeForkSensors("required-sections", "bun .claude/tools/aidlc-sensor-stub-fail.ts");
     fire(["required-sections", "--stage", "intent-capture", "--output-path", join(proj, "aidlc-docs", "test.md")], {
       CLAUDE_PROJECT_DIR: proj,
       AIDLC_SENSORS_DIR: sensors,
     });
-    const note = auditField(auditPath(proj), "SENSOR_PASSED", "Note");
+    const note = auditField(proj, "SENSOR_PASSED", "Note");
     expect(note.startsWith("script-error: detail-write-failed")).toBe(true);
   });
 });
@@ -731,7 +755,7 @@ describe("t92 Group F: budget override (timeout -> SENSOR_BUDGET_OVERRIDE)", () 
       CLAUDE_PROJECT_DIR: proj,
       AIDLC_SENSORS_DIR: sensors,
     });
-    const f = auditPath(proj);
+    const f = proj;
     const observed = auditField(f, "SENSOR_BUDGET_OVERRIDE", "Observed value");
     expect(auditEventCount(f, "SENSOR_BUDGET_OVERRIDE")).toBe(1);
     expect(auditField(f, "SENSOR_BUDGET_OVERRIDE", "Cap layer")).toBe("registry");
@@ -749,7 +773,7 @@ describe("t92 Group F: budget override (timeout -> SENSOR_BUDGET_OVERRIDE)", () 
       CLAUDE_PROJECT_DIR: proj,
       AIDLC_SENSORS_DIR: sensors,
     });
-    const f = auditPath(proj);
+    const f = proj;
     const cap = auditField(f, "SENSOR_BUDGET_OVERRIDE", "Cap value");
     const observed = auditField(f, "SENSOR_BUDGET_OVERRIDE", "Observed value");
     expect(auditEventCount(f, "SENSOR_BUDGET_OVERRIDE")).toBe(1);
@@ -779,12 +803,12 @@ describe("t92 Group G: concurrency invariants", () => {
         ),
       ),
     );
-    const f = auditPath(proj);
+    const f = proj;
     expect(auditEventCount(f, "SENSOR_FIRED")).toBe(5);
     expect(auditEventCount(f, "SENSOR_PASSED")).toBe(5);
     // Each Fire id appears exactly twice (FIRED + PASSED); count unique ids
     // that are paired. Mirrors the awk uniq -c | $1==2 | wc -l.
-    const ids = readFileSync(f, "utf-8")
+    const ids = readAudit(f)
       .split("\n")
       .filter((l) => l.startsWith("**Fire id**: "))
       .map((l) => l.slice("**Fire id**: ".length));
@@ -813,12 +837,12 @@ describe("t92 Group G: concurrency invariants", () => {
     // The spawn window is 5s wide (stub-slow sleeps 5s), so the fast fire below
     // has ample room to complete inside it on any platform.
     {
-      const f = auditPath(proj);
+      const f = proj;
       const deadline = Date.now() + 15000;
       while (Date.now() < deadline) {
         if (
           existsSync(f) &&
-          readFileSync(f, "utf-8")
+          readAudit(f)
             .split("\n")
             .some((l) => l === "**Sensor ID**: required-sections")
         ) {
@@ -835,8 +859,8 @@ describe("t92 Group G: concurrency invariants", () => {
     // Snapshot row order WHILE slow is still running. required-sections has
     // only its FIRED row (1); linter has FIRED+PASSED (2) — proving the slow
     // fire released its lock between windows A and B.
-    const f = auditPath(proj);
-    const text = readFileSync(f, "utf-8").split("\n");
+    const f = proj;
+    const text = readAudit(f).split("\n");
     const slowVisible = text.filter((l) => l === "**Sensor ID**: required-sections").length;
     const fastVisible = text.filter((l) => l === "**Sensor ID**: linter").length;
     await slowDone;
@@ -861,7 +885,7 @@ describe("t92 Group G: concurrency invariants", () => {
     });
     const elapsedMs = Date.now() - start;
     expect(lockRc).toBe(1);
-    expect(auditEventCount(auditPath(proj), "SENSOR_PASSED")).toBe(1);
+    expect(auditEventCount(proj, "SENSOR_PASSED")).toBe(1);
     // The .sh asserts elapsed < 3s (no 5x100ms retry burn). Use ms form.
     expect(elapsedMs).toBeLessThan(3000);
   }, 15000);
@@ -881,9 +905,9 @@ function runDetailShape(id: string, stage: string, matches = ""): void {
     CLAUDE_PROJECT_DIR: proj,
     AIDLC_SENSORS_DIR: sensors,
   });
-  const detailDir = join(proj, "aidlc-docs", ".aidlc-sensors", stage);
+  const detailDir = join(recordRoot(proj), ".aidlc-sensors", stage);
   // Find the single <id>-*.md detail file.
-  const firedId = auditField(auditPath(proj), "SENSOR_FAILED", "Fire id");
+  const firedId = auditField(proj, "SENSOR_FAILED", "Fire id");
   const detail = join(detailDir, `${id}-${firedId}.md`);
   expect(existsSync(detail)).toBe(true);
   const body = readFileSync(detail, "utf-8");
@@ -928,7 +952,7 @@ describe("t92 Group I: detail-file collision-free", () => {
         AIDLC_SENSORS_DIR: sensors,
       });
     }
-    const detailDir = join(proj, "aidlc-docs", ".aidlc-sensors", "intent-capture");
+    const detailDir = join(recordRoot(proj), ".aidlc-sensors", "intent-capture");
     // List required-sections-*.md files in the detail dir.
     const files: string[] = existsSync(detailDir)
       ? readdirSync(detailDir).filter((n) => /^required-sections-.*\.md$/.test(n))
@@ -956,7 +980,7 @@ describe("t92 Group J: audit-row required fields per event type", () => {
   });
 
   test("32: SENSOR_FIRED — 6 fields (Timestamp, Event, Fire id, Sensor ID, Stage slug, Output path)", () => {
-    const f = auditPath(jProj);
+    const f = jProj;
     expect(auditFieldCount(f, "SENSOR_FIRED")).toBe(6);
     expect(auditField(f, "SENSOR_FIRED", "Fire id")).not.toBe("");
     expect(auditField(f, "SENSOR_FIRED", "Sensor ID")).toBe("required-sections");
@@ -965,7 +989,7 @@ describe("t92 Group J: audit-row required fields per event type", () => {
   });
 
   test("33: SENSOR_PASSED — 7 fields including Duration ms (integer)", () => {
-    const f = auditPath(jProj);
+    const f = jProj;
     expect(auditFieldCount(f, "SENSOR_PASSED")).toBe(7);
     expect(isInteger(auditField(f, "SENSOR_PASSED", "Duration ms"))).toBe(true);
   });
@@ -978,7 +1002,7 @@ describe("t92 Group J: audit-row required fields per event type", () => {
       CLAUDE_PROJECT_DIR: proj,
       AIDLC_SENSORS_DIR: sensors,
     });
-    const f = auditPath(proj);
+    const f = proj;
     expect(auditFieldCount(f, "SENSOR_FAILED")).toBe(8);
     expect(auditField(f, "SENSOR_FAILED", "Detail path")).not.toBe("");
     expect(isInteger(auditField(f, "SENSOR_FAILED", "Findings count"))).toBe(true);
@@ -992,7 +1016,7 @@ describe("t92 Group J: audit-row required fields per event type", () => {
       CLAUDE_PROJECT_DIR: proj,
       AIDLC_SENSORS_DIR: sensors,
     });
-    const f = auditPath(proj);
+    const f = proj;
     expect(auditFieldCount(f, "SENSOR_BUDGET_OVERRIDE")).toBe(9);
     expect(auditField(f, "SENSOR_BUDGET_OVERRIDE", "Cap layer")).toBe("registry");
     expect(isInteger(auditField(f, "SENSOR_BUDGET_OVERRIDE", "Cap value"))).toBe(true);
@@ -1049,7 +1073,7 @@ function assertNoFiredBeforeLock(args: string[]): void {
   fire(args.map((a) => (a === "__OUT__" ? join(proj, "aidlc-docs", "test.md") : a)), {
     CLAUDE_PROJECT_DIR: proj,
   });
-  const f = auditPath(proj);
+  const f = proj;
   if (!existsSync(f)) {
     expect(true).toBe(true);
     return;
@@ -1141,7 +1165,7 @@ describe("t92 Group N: type-check status gate (config-load failure)", () => {
     fire(["type-check", "--stage", "code-generation", "--output-path", join(proj, sub, "sample.ts")], {
       CLAUDE_PROJECT_DIR: proj,
     });
-    const f = auditPath(proj);
+    const f = proj;
     // Gate routes to PASSED Note=script-error: exit-2 — NOT a bare clean PASS, NOT FAILED.
     expect(auditEventCount(f, "SENSOR_PASSED")).toBe(1);
     expect(auditEventCount(f, "SENSOR_FAILED")).toBe(0);
@@ -1186,7 +1210,7 @@ describe("t92 Group O: type-check status gate (cross-file errors, none for targe
     fire(["type-check", "--stage", "code-generation", "--output-path", join(proj, sub, "sample.ts")], {
       CLAUDE_PROJECT_DIR: proj,
     });
-    const f = auditPath(proj);
+    const f = proj;
     // Per-file clean PASS — NOT script-error (the bug), NOT FAILED (no target errors).
     expect(auditEventCount(f, "SENSOR_PASSED")).toBe(1);
     expect(auditEventCount(f, "SENSOR_FAILED")).toBe(0);

@@ -37,7 +37,7 @@
 //   - the answer-gate clears the stage's rendered AUQ menu(s) by taking the
 //     Recommended default and TERMINATES on the on-disk intent-statement artifact,
 //   - ON DISK (the surface the .sh greps, equal-or-stronger):
-//       * aidlc-docs/ideation/intent-capture/ exists,
+//       * <record>/ideation/intent-capture/ exists,
 //       * a *questions* file exists AND carries >=1 `[Answer]:` line (the gate's
 //         answers were written back — the thing --test-run faked),
 //       * a *intent*statement* artifact exists, is > 100 bytes, and has at least
@@ -75,6 +75,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
@@ -210,7 +212,7 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         }
         // Seeded state => the workflow statusline paints the live IDEATION phase
         // (not the no-workflow "ready" line). Wait for it before driving.
-        expect(waitFor(session, "\\[AIDLC\\] IDEATION", 45000, 800)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*IDEATION", 45000, 800)).toBe(true);
 
         // --- submit the stage-jump WITH a build description (NO --test-run) ----
         // intent-capture.md Step 2 reads the project description from "$ARGUMENTS
@@ -235,7 +237,7 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         // Confirm the stage actually started running (the statusline stays in a
         // live IDEATION phase while turns stream). --stable-ms 0: the screen is
         // streaming (token counter / spinner), so match the instant it appears.
-        expect(waitFor(session, "\\[AIDLC\\] IDEATION", 120000, 0)).toBe(true);
+        expect(waitFor(session, "\\[AIDLC\\].*IDEATION", 120000, 0)).toBe(true);
 
         // Begin tailing the grid for the render assertion BEFORE answer-gate runs,
         // so we catch the AUQ select footer + multi-tab Submit strip while the
@@ -296,7 +298,7 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         expect(gateRc).toBe(0);
 
         // --- assert ON DISK (the .sh's greps, equal-or-stronger) --------------
-        const icDir = join(sandbox, "aidlc-docs", "ideation", "intent-capture");
+        const icDir = join(seededRecordDir(sandbox), "ideation", "intent-capture");
         // .sh test 1: intent-capture directory created.
         expect(existsSync(icDir)).toBe(true);
 
@@ -323,10 +325,7 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         expect(stakeholderFile).not.toBeNull();
 
         // --- state invariants (the .sh's tests 9, 11, 12) ---------------------
-        const stateMd = readFileSync(
-          join(sandbox, "aidlc-docs", "aidlc-state.md"),
-          "utf8",
-        );
+        const stateMd = readFileSync(seededStateFile(sandbox), "utf8");
         // test 9: Completed counter == count of `- [x]` lines (consistency).
         const xCount = (stateMd.match(/^- \[x\]/gm) ?? []).length;
         const completedMatch = /\*\*Completed\*\*:[ \t]*(\d+)/.exec(stateMd);
@@ -351,10 +350,7 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
 
         // --- audit assertion (STRONGER than the .sh, which never checked audit) -
         // The completed intent-capture stage emits a STAGE_COMPLETED for it.
-        const auditMd = readFileSync(
-          join(sandbox, "aidlc-docs", "audit.md"),
-          "utf8",
-        );
+        const auditMd = readAllAuditShards(sandbox);
         expect(auditMd).toMatch(/STAGE_COMPLETED/);
         expect(auditMd.toLowerCase()).toContain("intent-capture");
 

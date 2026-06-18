@@ -87,8 +87,8 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -108,7 +108,11 @@ function proj(): string {
   return p;
 }
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+// P9: bolt dispatch-event's appendAuditEvent CREATES the bare SPACE record
+// root's per-clone shard on first emit (the integration project seeds no state,
+// so no intent resolves → bare root); the SPAWNED tool mints its own clone-id,
+// so reads glob every shard via readAllAuditShards.
+const readAudit = (p: string): string => readAllAuditShards(p);
 
 interface CliResult {
   status: number;
@@ -129,11 +133,10 @@ function dispatch(args: string[], p: string): CliResult {
   };
 }
 
-/** Count audit blocks with `**Event**: <ev>`. Mirrors the .sh's grep, but as an exact count. */
-function auditEventCount(file: string, ev: string): number {
-  if (!existsSync(file)) return 0;
+/** Count audit blocks with `**Event**: <ev>` in a buffer. */
+function auditEventCount(body: string, ev: string): number {
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
-  return readFileSync(file, "utf-8")
+  return body
     .split("\n")
     .filter((l) => re.test(l)).length;
 }
@@ -145,10 +148,9 @@ function auditEventCount(file: string, ev: string): number {
  * block grep the .sh used (awk '/<EVENT>/{flag=1} flag && /^---$/{exit} flag').
  * Returns "" when absent.
  */
-function auditField(file: string, ev: string, key: string): string {
-  if (!existsSync(file)) return "";
+function auditField(body: string, ev: string, key: string): string {
   let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of body.split("\n")) {
     if (line.startsWith("## ")) {
       matched = false;
       continue;
@@ -218,7 +220,7 @@ describe("t79 aidlc-bolt dispatch-event — emission (migrated from t79-dispatch
       ],
       p,
     );
-    const f = auditPath(p);
+    const f = readAudit(p);
     expect(auditEventCount(f, "MERGE_DISPATCH_INVOKED")).toBe(1);
     // STRONGER than the .sh (bare presence grep): exact block-scoped fields.
     expect(auditField(f, "MERGE_DISPATCH_INVOKED", "Bolt slug")).toBe("t79-bolt-1");
@@ -269,7 +271,7 @@ describe("t79 aidlc-bolt dispatch-event — emission (migrated from t79-dispatch
       ],
       p,
     );
-    const f = auditPath(p);
+    const f = readAudit(p);
     expect(auditEventCount(f, "MERGE_DISPATCH_RETURNED")).toBe(1);
     expect(auditField(f, "MERGE_DISPATCH_RETURNED", "Strategy")).toBe("squash");
     expect(auditField(f, "MERGE_DISPATCH_RETURNED", "Target branch")).toBe("main");
@@ -313,7 +315,7 @@ describe("t79 aidlc-bolt dispatch-event — emission (migrated from t79-dispatch
       ],
       p,
     );
-    const f = auditPath(p);
+    const f = readAudit(p);
     expect(auditEventCount(f, "MERGE_DISPATCH_FALLBACK")).toBe(1);
     expect(auditField(f, "MERGE_DISPATCH_FALLBACK", "Fallback reason")).toBe("timeout");
     expect(auditField(f, "MERGE_DISPATCH_FALLBACK", "Defaults applied")).toBe("squash + main");

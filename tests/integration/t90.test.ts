@@ -51,8 +51,21 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { toPortablePath } from "../harness/fixtures.ts";
+import {
+  auditFilePath,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// P9: with no intent cursor seeded, the compile tool resolves the BARE space
+// record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/.
+// State, runtime-graph, per-stage memory, and the per-clone audit SHARD all
+// live under it (the flat aidlc-docs/ root is retired — there is no fallback).
+const RECORD_REL = join("aidlc", "spaces", "default", "intents");
+function recordRoot(proj: string): string {
+  return join(proj, RECORD_REL);
+}
 
 const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -103,24 +116,27 @@ function runRead(proj: string, slug: string): SpawnResult {
 function makeProject(audit: string, state: string): string {
   const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t90-")));
   tempDirs.push(proj);
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
-  writeFileSync(join(proj, "aidlc-docs", "audit.md"), audit, "utf-8");
-  writeFileSync(join(proj, "aidlc-docs", "aidlc-state.md"), state, "utf-8");
+  mkdirSync(recordRoot(proj), { recursive: true });
+  // Seed the DETERMINISTIC audit shard the compile tool resolves
+  // (auditFilePath -> the bare space record root's audit/<host>-<clone>.md) so
+  // its readAllAuditShards() merge sees this trail.
+  const shard = auditFilePath(proj);
+  mkdirSync(dirname(shard), { recursive: true });
+  writeFileSync(shard, audit, "utf-8");
+  writeFileSync(join(recordRoot(proj), "aidlc-state.md"), state, "utf-8");
   return proj;
 }
 
-/** Bare temp project with aidlc-docs/ but no state/audit (case 8). */
+/** Bare temp project with the record shell but no state/audit (case 8). */
 function makeBareProject(): string {
   const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t90-")));
   tempDirs.push(proj);
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
+  mkdirSync(recordRoot(proj), { recursive: true });
   return proj;
 }
 
 const graphPath = (proj: string): string =>
-  join(proj, "aidlc-docs", "runtime-graph.json");
-const auditPath = (proj: string): string =>
-  join(proj, "aidlc-docs", "audit.md");
+  join(recordRoot(proj), "runtime-graph.json");
 
 /** Parse the runtime-graph.json the tool wrote. */
 // biome-ignore lint/suspicious/noExplicitAny: test reads arbitrary graph shape
@@ -128,25 +144,31 @@ function readGraph(proj: string): any {
   return JSON.parse(readFileSync(graphPath(proj), "utf-8"));
 }
 
+/** Append-only audit writes (case 13) target the resolved shard directly. */
+const auditShardPath = (proj: string): string => auditFilePath(proj);
+
+/** Read the merged audit trail (per-clone shards; one here). */
+function readAudit(proj: string): string {
+  return readAllAuditShards(proj);
+}
+
 /**
  * Count MEMORY_EMPTY rows, mirroring the .sh's
  * `grep -c "^\*\*Event\*\*: MEMORY_EMPTY"`.
  */
 function memoryEmptyCount(proj: string): number {
-  const f = auditPath(proj);
-  if (!existsSync(f)) return 0;
-  return readFileSync(f, "utf-8")
+  return readAudit(proj)
     .split("\n")
     .filter((l) => l === "**Event**: MEMORY_EMPTY").length;
 }
 
 /**
- * The .sh writes per-stage memory.md under aidlc-docs/<phase>/<slug>/.
- * intent-capture lives in the ideation phase (stage-graph.json), so the
- * .sh hard-codes `aidlc-docs/ideation/intent-capture/`.
+ * The .sh writes per-stage memory.md under aidlc-docs/<phase>/<slug>/; P9
+ * reroots that under the bare space record root. intent-capture lives in the
+ * ideation phase (stage-graph.json).
  */
 function writeMemory(proj: string, phase: string, slug: string, body: string): void {
-  const dir = join(proj, "aidlc-docs", phase, slug);
+  const dir = join(recordRoot(proj), phase, slug);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "memory.md"), body, "utf-8");
 }
@@ -315,7 +337,7 @@ describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-
     // Block-scoped scan: the .sh used `awk '/^## Memory Empty$/,/^---$/'`
     // then `grep -c '^\*\*Test-Run\*\*: true$'`. Here: split the audit into
     // `## Memory Empty` blocks (heading .. ---) and count Test-Run: true.
-    const lines = readFileSync(auditPath(proj), "utf-8").split("\n");
+    const lines = readAudit(proj).split("\n");
     let inBlock = false;
     let trCount = 0;
     for (const line of lines) {
@@ -523,7 +545,7 @@ describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-
 
 ---
 `;
-    const f = auditPath(proj);
+    const f = auditShardPath(proj);
     writeFileSync(f, readFileSync(f, "utf-8") + rejump, "utf-8");
     await new Promise((r) => setTimeout(r, 2000));
     runCompile(proj);

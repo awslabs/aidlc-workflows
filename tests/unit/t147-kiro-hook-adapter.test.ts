@@ -31,10 +31,18 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { birthIntent } from "../../core/tools/aidlc-lib.ts";
+import {
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
+  intentsDirOf,
+  seededAuditDir,
+  seededRecordDir,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
@@ -42,22 +50,78 @@ const FIXTURES = JSON.parse(
   readFileSync(join(REPO_ROOT, "tests", "fixtures", "kiro-hook-payloads", "payloads.json"), "utf-8"),
 ) as Record<string, unknown>;
 
-// Scratch project: a .kiro tree (copied) + minimal aidlc-docs state so the
-// hooks' self-gates open. Built once per test for isolation.
+// P9 per-intent layout: the core hooks the Kiro adapter shims to resolve state
+// via stateFilePath() and the audit trail via auditFilePath() — under the active
+// intent's record, not the flat aidlc-docs/ root. So the scratch project seeds
+// the per-intent workspace shell + the state fixture into the default record (so
+// the active-intent cursor resolves) + the resolved audit SHARD (pinned clone-id
+// so the log-subagent shard gate passes and reads are deterministic).
+const PINNED_CLONE_ID = "testcloneid147";
+function pinnedShardName(): string {
+  const host =
+    hostname()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "host";
+  return `${host}-${PINNED_CLONE_ID}.md`;
+}
+
+/** Seed the per-intent workspace shell (active-space + intents/<record> + cursors
+ *  + registry) into an arbitrary dir. Mirrors fixtures.ts seedWorkspaceShell. */
+function seedShell(dir: string): void {
+  const intentsDir = intentsDirOf(dir, DEFAULT_SPACE);
+  mkdirSync(join(dir, "aidlc", "spaces", DEFAULT_SPACE, "memory"), { recursive: true });
+  mkdirSync(seededRecordDir(dir), { recursive: true });
+  writeFileSync(join(dir, "aidlc", "active-space"), `${DEFAULT_SPACE}\n`, "utf-8");
+  writeFileSync(join(intentsDir, "active-intent"), `${DEFAULT_RECORD_DIR}\n`, "utf-8");
+  writeFileSync(
+    join(intentsDir, "intents.json"),
+    `${JSON.stringify(
+      [{ uuid: "00000000-0000-7000-8000-000000000001", slug: DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, ""), status: "in-flight" }],
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+}
+
+// Scratch project: a .kiro tree (copied) + the per-intent workspace shell with an
+// active workflow state so the core hooks' self-gates open. Built per test.
 function scratchProject(withState: boolean): string {
   const dir = mkdtempSync(join(tmpdir(), "t147-"));
   cpSync(KIRO_TREE, join(dir, ".kiro"), { recursive: true });
+  seedShell(dir);
   if (withState) {
-    const docs = join(dir, "aidlc-docs");
-    mkdirSync(docs, { recursive: true });
-    // Minimal v7-shaped state: mid-ideation, intent-capture running.
+    // State fixture into the default record so the active-intent cursor resolves.
     writeFileSync(
-      join(docs, "aidlc-state.md"),
+      seededStateFile(dir),
       readFileSync(join(REPO_ROOT, "tests", "fixtures", "state-brownfield-feature.md"), "utf-8"),
     );
-    writeFileSync(join(docs, "audit.md"), "# AI-DLC Audit Log\n");
+    // The resolved audit shard (pinned clone-id) so the log-subagent shard gate
+    // passes and the trail seeds the "# AI-DLC Audit Log" header.
+    writeFileSync(join(dir, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+    const auditDir = seededAuditDir(dir);
+    mkdirSync(auditDir, { recursive: true });
+    writeFileSync(join(auditDir, pinnedShardName()), "# AI-DLC Audit Log\n");
   }
   return dir;
+}
+
+/** Concatenate every audit shard (clone-id-name-agnostic read). */
+function readAudit(dir: string): string {
+  const auditDir = seededAuditDir(dir);
+  let names: string[];
+  try {
+    names = require("node:fs").readdirSync(auditDir) as string[];
+  } catch {
+    return "";
+  }
+  return names
+    .filter((n: string) => n.endsWith(".md"))
+    .sort()
+    .map((n: string) => readFileSync(join(auditDir, n), "utf-8"))
+    .join("\n");
 }
 
 function runAdapter(
@@ -119,10 +183,10 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   test("4: todo_list create with [slug] suffix syncs the state file", () => {
     const dir = scratchProject(true);
     try {
-      const before = readFileSync(join(dir, "aidlc-docs", "aidlc-state.md"), "utf-8");
+      const before = readFileSync(seededStateFile(dir), "utf-8");
       const r = runAdapter(dir, "state-sync", FIXTURES.postToolUse_todo_create);
       expect(r.code).toBe(0);
-      const after = readFileSync(join(dir, "aidlc-docs", "aidlc-state.md"), "utf-8");
+      const after = readFileSync(seededStateFile(dir), "utf-8");
       // The fixture's [intent-capture] slug dispatches set-status; assert the
       // Current Stage field reflects it (robust to the fixture state already
       // being on intent-capture: require the field present AND the heartbeat).
@@ -149,7 +213,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     try {
       const r = runAdapter(dir, "log-subagent", FIXTURES.postToolUse_subagent);
       expect(r.code).toBe(0);
-      const audit = readFileSync(join(dir, "aidlc-docs", "audit.md"), "utf-8");
+      const audit = readAudit(dir);
       expect(audit).toContain("SUBAGENT_COMPLETED");
       expect(audit).toContain("aidlc-developer-agent");
     } finally {

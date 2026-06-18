@@ -57,8 +57,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { AIDLC_SRC, FIXTURES_DIR, toPortablePath } from "../harness/fixtures.ts";
+import { auditFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// P9: with no intent cursor seeded, the compile tool resolves the BARE space
+// record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/.
+// State, runtime-graph, the unit-dependency artefact, and the audit shard all
+// live under it (the flat aidlc-docs/ root is retired — there is no fallback).
+const RECORD_REL = join("aidlc", "spaces", "default", "intents");
+function recordRoot(proj: string): string {
+  return join(proj, RECORD_REL);
+}
 
 const BUN = process.execPath; // the bun running this test
 const RUNTIME = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
@@ -105,18 +115,22 @@ function makeProject(): string {
   let proj = mkdtempSync(join(tmpdir(), "aidlc-t133-"));
   proj = toPortablePath(proj);
   tempDirs.push(proj);
-  mkdirSync(join(proj, "aidlc-docs", "inception", "units-generation"), {
+  mkdirSync(join(recordRoot(proj), "inception", "units-generation"), {
     recursive: true,
   });
-  cpSync(STATE_FIXTURE, join(proj, "aidlc-docs", "aidlc-state.md"));
-  writeFileSync(join(proj, "aidlc-docs", "audit.md"), AUDIT_MD, "utf-8");
+  cpSync(STATE_FIXTURE, join(recordRoot(proj), "aidlc-state.md"));
+  // Seed the DETERMINISTIC audit shard the compile tool resolves
+  // (auditFilePath -> the bare space record root's audit/<host>-<clone>.md) so
+  // its readAllAuditShards() sees the WORKFLOW_STARTED header.
+  const shard = auditFilePath(proj);
+  mkdirSync(dirname(shard), { recursive: true });
+  writeFileSync(shard, AUDIT_MD, "utf-8");
   return proj;
 }
 
 function uowdPath(proj: string): string {
   return join(
-    proj,
-    "aidlc-docs",
+    recordRoot(proj),
     "inception",
     "units-generation",
     "unit-of-work-dependency.md",
@@ -124,7 +138,7 @@ function uowdPath(proj: string): string {
 }
 
 function graphPath(proj: string): string {
-  return join(proj, "aidlc-docs", "runtime-graph.json");
+  return join(recordRoot(proj), "runtime-graph.json");
 }
 
 // write_uowd (.sh:102-114): unit-of-work-dependency.md with the given fenced
@@ -314,8 +328,7 @@ describe("t133 edge-block sensor (aidlc-sensor-required-sections, units-generati
   test("sensor: non-target markdown keeps generic H2 check (no edge_block) [.sh test 10]", () => {
     const proj = makeProject();
     const other = join(
-      proj,
-      "aidlc-docs",
+      recordRoot(proj),
       "inception",
       "units-generation",
       "unit-of-work.md",

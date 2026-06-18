@@ -73,23 +73,45 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
+import {
+  AIDLC_SRC,
+  cleanupTestProject,
+  createTestProject,
+  seededAuditDir,
+  seededRecordDir,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-sensor-fire.ts");
+
+// P9 per-intent layout: the sensor-fire hook's active-workflow gate resolves
+// state via stateFilePath() and the audit trail via auditFilePath() — under the
+// active intent's record. The FRAMEWORK sensor `matches` glob is still
+// `**/aidlc-docs/**` (core data, unchanged), so the triggering artifact path
+// stays an aidlc-docs/ path; only state/audit/health roots moved to the record.
+const PINNED_CLONE_ID = "testcloneid95";
+function pinnedShardName(): string {
+  const host =
+    hostname()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "host";
+  return `${host}-${PINNED_CLONE_ID}.md`;
+}
 const FRAMEWORK_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 
 const tempDirs: string[] = [];
 afterAll(() => {
-  for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
+  for (const d of tempDirs) cleanupTestProject(d);
 });
 
 // The mock dispatcher (t95:60-88): records argv to T95_SPAWN_LOG and exits per
@@ -119,11 +141,11 @@ process.stdout.write('{"pass":true}\\n');
 process.exit(0);
 `;
 
-/** make_project (t95:90-96): temp dir + aidlc-docs/ + the mock dispatcher. */
+/** make_project (t95:90-96): per-intent workspace shell + the mock dispatcher +
+ *  a pinned clone-id (so a later makeProjectActive's shard path is deterministic). */
 function makeProject(): string {
-  const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t95-")));
+  const proj = createTestProject();
   tempDirs.push(proj);
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
   mkdirSync(join(proj, ".claude", "tools"), { recursive: true });
   mkdirSync(join(proj, ".claude", "hooks"), { recursive: true });
   writeFileSync(
@@ -131,18 +153,23 @@ function makeProject(): string {
     MOCK_DISPATCHER,
     "utf-8",
   );
+  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
   return proj;
 }
 
-/** make_project_active (t95:100-110): project + state.md (active stage) + audit.md. */
+/** make_project_active (t95:100-110): project + state.md into the record (active
+ *  stage, so the cursor resolves) + the resolved audit SHARD (the :100 gate). */
 function makeProjectActive(slug = "requirements-analysis"): string {
   const proj = makeProject();
+  mkdirSync(seededRecordDir(proj), { recursive: true });
   writeFileSync(
-    join(proj, "aidlc-docs", "aidlc-state.md"),
+    seededStateFile(proj),
     `- **Workflow**: bugfix\n- **Current Stage**: ${slug}\n`,
     "utf-8",
   );
-  writeFileSync(join(proj, "aidlc-docs", "audit.md"), "audit fixture\n", "utf-8");
+  const auditDir = seededAuditDir(proj);
+  mkdirSync(auditDir, { recursive: true });
+  writeFileSync(join(auditDir, pinnedShardName()), "audit fixture\n", "utf-8");
   return proj;
 }
 
@@ -232,7 +259,7 @@ function spawnArgvs(proj: string): string[][] {
 }
 
 function dropsPath(proj: string): string {
-  return join(proj, "aidlc-docs", ".aidlc-hooks-health", "sensor-fire.drops");
+  return join(seededRecordDir(proj), ".aidlc-hooks-health", "sensor-fire.drops");
 }
 
 describe("t95 sensor-fire hook — single & multi-entry fire (mechanism cli — spawnSync)", () => {
@@ -471,7 +498,7 @@ describe("t95 sensor-fire hook — heartbeat & skipped-file accounting (mechanis
       "intent.md",
     );
     runHook(proj, fp);
-    const hb = join(proj, "aidlc-docs", ".aidlc-hooks-health", "sensor-fire.last");
+    const hb = join(seededRecordDir(proj), ".aidlc-hooks-health", "sensor-fire.last");
     expect(existsSync(hb)).toBe(true);
     const m1 = statSync(hb).mtimeMs;
     Bun.sleepSync(1100); // isoTimestamp() has second granularity; advance > 1s.
@@ -482,9 +509,11 @@ describe("t95 sensor-fire hook — heartbeat & skipped-file accounting (mechanis
 
   test("C9a: two Test-Run writes -> sensor-fire.skipped has 2 timestamped lines [.sh test 18]", () => {
     const proj = makeProject();
-    writeFileSync(join(proj, "aidlc-docs", "audit.md"), "audit fixture\n", "utf-8");
+    mkdirSync(seededRecordDir(proj), { recursive: true });
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(join(seededAuditDir(proj), pinnedShardName()), "audit fixture\n", "utf-8");
     writeFileSync(
-      join(proj, "aidlc-docs", "aidlc-state.md"),
+      seededStateFile(proj),
       "- **Current Stage**: requirements-analysis\n- **Test Run Mode**: true\n",
       "utf-8",
     );
@@ -493,8 +522,7 @@ describe("t95 sensor-fire hook — heartbeat & skipped-file accounting (mechanis
     Bun.sleepSync(50);
     runHook(proj, fp);
     const skip = join(
-      proj,
-      "aidlc-docs",
+      seededRecordDir(proj),
       ".aidlc-hooks-health",
       "sensor-fire.skipped",
     );
@@ -510,9 +538,11 @@ describe("t95 sensor-fire hook — heartbeat & skipped-file accounting (mechanis
 
   test("C9b: every line in sensor-fire.skipped is an ISO timestamp [.sh test 19]", () => {
     const proj = makeProject();
-    writeFileSync(join(proj, "aidlc-docs", "audit.md"), "audit fixture\n", "utf-8");
+    mkdirSync(seededRecordDir(proj), { recursive: true });
+    mkdirSync(seededAuditDir(proj), { recursive: true });
+    writeFileSync(join(seededAuditDir(proj), pinnedShardName()), "audit fixture\n", "utf-8");
     writeFileSync(
-      join(proj, "aidlc-docs", "aidlc-state.md"),
+      seededStateFile(proj),
       "- **Current Stage**: requirements-analysis\n- **Test Run Mode**: true\n",
       "utf-8",
     );
@@ -521,8 +551,7 @@ describe("t95 sensor-fire hook — heartbeat & skipped-file accounting (mechanis
     Bun.sleepSync(50);
     runHook(proj, fp);
     const skip = join(
-      proj,
-      "aidlc-docs",
+      seededRecordDir(proj),
       ".aidlc-hooks-health",
       "sensor-fire.skipped",
     );

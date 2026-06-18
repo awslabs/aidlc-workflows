@@ -53,7 +53,7 @@ import {
   expect,
   test,
 } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -63,6 +63,7 @@ import {
   resetAidlcEnv,
   seedAuditFile,
   seedStateFile,
+  seededAuditDir,
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -70,9 +71,22 @@ const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 
 interface RaceResult {
   proj: string;
-  audit: string;
   body: string;
   elapsedMs: number;
+}
+
+/** Concatenate every audit shard (audit/*.md) for the seeded record — the 5
+ *  racing processes share one clone-id (pre-seeded below) so they contend on a
+ *  single shard, but the fixture rides a separate fixture.md shard, so we merge. */
+function readAllShards(proj: string): string {
+  const dir = seededAuditDir(proj);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+  } catch {
+    return "";
+  }
+  return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
 }
 
 let current: { proj: string } | null = null;
@@ -93,7 +107,13 @@ async function raceFiveBolts(): Promise<RaceResult> {
   // Bolt-start doesn't require state, but emitError's workflow check does;
   // seed it so any accidental error path lands cleanly (mirrors the .sh).
   seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
-  const audit = join(proj, "aidlc-docs", "audit.md");
+  // Pre-seed a stable clone-id so all 5 racing processes resolve the SAME
+  // per-clone audit shard (the cross-process audit-lock serialisation under test
+  // is on one shard file). Without this, the 5 processes would race to MINT the
+  // clone-id and a first-run mint race could split the 5 writes across two shards
+  // — non-deterministic. The lock contention this test asserts is unchanged.
+  mkdirSync(join(proj, "aidlc"), { recursive: true });
+  writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), "cccccccccccc\n", "utf-8");
 
   const start = Date.now();
   const procs = [1, 2, 3, 4, 5].map((i) =>
@@ -119,7 +139,7 @@ async function raceFiveBolts(): Promise<RaceResult> {
   await Promise.all(procs.map((p) => p.exited));
   const elapsedMs = Date.now() - start;
 
-  return { proj, audit, body: readFileSync(audit, "utf-8"), elapsedMs };
+  return { proj, body: readAllShards(proj), elapsedMs };
 }
 
 // Run the race once per test (each test gets a fresh project + fresh race) so

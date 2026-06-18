@@ -74,16 +74,21 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
+  DEFAULT_RECORD_DIR,
+  DEFAULT_SPACE,
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
   seedAuditFile,
   seedStateFile,
+  seededAuditDir,
+  seededStateFile,
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -147,24 +152,65 @@ function worktreeDir(proj: string, slug: string): string {
   return join(proj, ".aidlc", "worktrees", `bolt-${slug}`);
 }
 
+/** The worktree mirror's per-intent record dir — carries the SAME relative
+ *  record dir as the main checkout (aidlc/spaces/default/intents/<record>/). */
+function wtRecordDir(proj: string, slug: string): string {
+  return join(
+    worktreeDir(proj, slug),
+    "aidlc",
+    "spaces",
+    DEFAULT_SPACE,
+    "intents",
+    DEFAULT_RECORD_DIR,
+  );
+}
+
+/** Merge every main audit shard (audit/*.md) by **Timestamp** into one ordered
+ *  buffer — the tools write their own per-clone shard alongside seedAuditFile's
+ *  fixture.md, and production readers sort the parsed blocks by timestamp (not by
+ *  filename), so this mirrors that to keep the canonical-sequence assertions
+ *  host-independent (the tool shard's filename can sort before OR after fixture.md). */
+function readMainAudit(proj: string): string {
+  const dir = seededAuditDir(proj);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((f) => f.endsWith(".md"));
+  } catch {
+    return "";
+  }
+  // Split each shard into `\n---\n`-separated blocks, tag each with its
+  // **Timestamp**, then stable-sort across all shards by timestamp.
+  const blocks: { ts: string; text: string }[] = [];
+  for (const n of names) {
+    const body = readFileSync(join(dir, n), "utf-8");
+    for (const raw of body.split("\n---\n")) {
+      if (!raw.includes("**Event**:")) continue;
+      const tsLine = raw.split("\n").find((l) => l.startsWith("**Timestamp**:")) ?? "";
+      const ts = tsLine.replace("**Timestamp**:", "").trim();
+      blocks.push({ ts, text: raw });
+    }
+  }
+  blocks.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+  return blocks.map((b) => b.text).join("\n---\n");
+}
+
 /** The single `Bolt Refs` line from main's state (the .sh's `grep "Bolt Refs" | head -1`). */
 function boltRefsLine(proj: string): string {
-  const state = readFileSync(join(proj, "aidlc-docs", "aidlc-state.md"), "utf-8");
+  const state = readFileSync(seededStateFile(proj), "utf-8");
   return state.split("\n").find((l) => l.includes("Bolt Refs")) ?? "";
 }
 
-/** The ordered list of `**Event**: <TYPE>` event types in main's audit.md. */
+/** The ordered list of `**Event**: <TYPE>` event types in main's audit shards. */
 function auditEvents(proj: string): string[] {
-  const audit = readFileSync(join(proj, "aidlc-docs", "audit.md"), "utf-8");
-  return audit
+  return readMainAudit(proj)
     .split("\n")
     .filter((l) => l.startsWith("**Event**:"))
     .map((l) => l.replace("**Event**:", "").trim());
 }
 
-/** The lines of the LAST `**Event**: <type>` block in audit.md (for block-scoped field checks). */
+/** The lines of the LAST `**Event**: <type>` block in main audit (for block-scoped field checks). */
 function lastEventBlock(proj: string): string[] {
-  const audit = readFileSync(join(proj, "aidlc-docs", "audit.md"), "utf-8");
+  const audit = readMainAudit(proj);
   const lines = audit.split("\n");
   let start = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -203,20 +249,26 @@ describe("t78 aidlc-bolt per-Bolt worktree lifecycle (migrated from t78-bolt-wor
     });
 
     test("L1: forked worktree state file exists [.sh T2]", () => {
-      // STRONGER: the forked state file lands under the canonical
-      // .aidlc/worktrees/bolt-<slug>/aidlc-docs/ path (worktreePath contract).
-      expect(existsSync(join(wt, "aidlc-docs", "aidlc-state.md"))).toBe(true);
+      // STRONGER: the forked state file lands under the canonical worktree mirror
+      // record (aidlc/spaces/default/intents/<record>/) — the worktreePath contract.
+      expect(existsSync(join(wtRecordDir(proj, slug), "aidlc-state.md"))).toBe(true);
     });
 
     test("L1: forked worktree audit file exists [.sh T3]", () => {
-      expect(existsSync(join(wt, "aidlc-docs", "audit.md"))).toBe(true);
+      // Audit is now a per-clone shard DIR; audit-fork copies the main shard into
+      // <wt>/<record>/audit/, so at least one *.md shard exists there.
+      const wtAuditDir = join(wtRecordDir(proj, slug), "audit");
+      const shards = existsSync(wtAuditDir)
+        ? readdirSync(wtAuditDir).filter((f) => f.endsWith(".md"))
+        : [];
+      expect(shards.length).toBeGreaterThan(0);
     });
 
     // Simulate per-Unit work in the worktree by marking a Construction stage
     // [ ] -> [x] in the worktree state (the .sh's sed_i). Per-field merge then
     // propagates back on complete --merge.
     test("L1: simulate per-Unit work in the worktree (checkbox flip)", () => {
-      const wtState = join(wt, "aidlc-docs", "aidlc-state.md");
+      const wtState = join(wtRecordDir(proj, slug), "aidlc-state.md");
       const body = readFileSync(wtState, "utf-8");
       const flipped = body.replace(
         "- [ ] code-generation — EXECUTE",

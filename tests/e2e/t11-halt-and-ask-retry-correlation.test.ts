@@ -56,11 +56,13 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupWorktreeFixture,
+  seededAuditDir,
+  seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
@@ -88,11 +90,19 @@ function run(tool: string, args: string[], cwd: string): CliResult {
   };
 }
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
 const wtPath = (p: string): string =>
   join(p, ".aidlc", "worktrees", `bolt-${SLUG}`);
-const auditText = (p: string): string =>
-  existsSync(auditPath(p)) ? readFileSync(auditPath(p), "utf-8") : "";
+/** Concatenate every audit shard (audit/*.md) for the seeded record. */
+const auditText = (p: string): string => {
+  const dir = seededAuditDir(p);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+  } catch {
+    return "";
+  }
+  return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
+};
 
 /** Count audit blocks emitting `event` — `**Event**: <event>` lines. */
 function eventCount(p: string, event: string): number {
@@ -112,6 +122,11 @@ let info2: CliResult;
 
 beforeAll(() => {
   fixture = setupWorktreeFixture();
+  // Seed a state file into the default record so the active-intent cursor
+  // resolves and the WORKTREE_CREATED/BOLT_FAILED audit lands in the per-intent
+  // record (the fixture's record is stateless; without aidlc-state.md the cursor
+  // is rejected and the audit lands at the bare space root).
+  writeFileSync(seededStateFile(fixture), "- **Current Stage**: code-generation\n", "utf-8");
 
   // --- Setup: create the worktree once (the only WORKTREE_CREATED). ---
   const created = run(

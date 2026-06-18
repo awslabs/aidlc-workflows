@@ -133,8 +133,10 @@ import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
+  removeWorkspaceRecord,
   REPO_ROOT,
   resetAidlcEnv,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -207,7 +209,7 @@ function emitScopeStage(scope: string, stage: string): EmitResult {
   const proj = createTestProject();
   tempDirs.push(proj);
   seedStateFile(proj, join(FIXTURES_DIR, "state-initialization-done.md"));
-  const statePath = join(proj, "aidlc-docs", "aidlc-state.md");
+  const statePath = seededStateFile(proj);
   // Swap ONLY the Scope field (mirrors the .sh sed_i on `- **Scope**: ...`).
   const swapped = readFileSync(statePath, "utf-8").replace(
     /^- \*\*Scope\*\*: .*$/m,
@@ -243,7 +245,7 @@ function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopRes
   const proj = createTestProject();
   tempDirs.push(proj);
   seedStateFile(proj, join(FIXTURES_DIR, "state-initialization-done.md"));
-  const statePath = join(proj, "aidlc-docs", "aidlc-state.md");
+  const statePath = seededStateFile(proj);
   // Swap ONLY the Scope field, and pivot Current Stage to the last init stage so
   // the fingerprint resolves forward for every scope (mirrors the .sh's two sed_i).
   let md = readFileSync(statePath, "utf-8").replace(
@@ -301,6 +303,10 @@ function emitNext(fixtureFile: string): EmitResult {
 function emitNextNoState(...args: string[]): EmitResult {
   const proj = createTestProject();
   tempDirs.push(proj);
+  // P9: createTestProject seeds a default intent record; the no-state birth path
+  // requires a GENUINELY empty workspace (zero intents), else the engine asks to
+  // SELECT the existing intent instead of birthing. Strip the seeded record.
+  removeWorkspaceRecord(proj);
   const res = spawnSync(BUN, [TOOL, "next", ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env: cleanEnv(),

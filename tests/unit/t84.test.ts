@@ -62,6 +62,7 @@ import {
   cleanupTestProject,
   createTestProject,
   REPO_ROOT as HARNESS_REPO_ROOT,
+  seededAuditShard,
   seedAuditFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
@@ -162,7 +163,11 @@ function initGitRepo(p: string): void {
  * then `---`. findAllEvents keys terminal events on `**Bolt slug**: <slug>`.
  */
 function appendAudit(p: string, body: string): void {
-  const f = join(p, "aidlc-docs", "audit.md");
+  // P9: append into the seeded per-clone audit SHARD (the SAME file
+  // seedAuditFile planted — seededAuditShard, `<host>-<clone>.md`). seedStateFile
+  // makes the active-intent cursor resolve, so doctor reads this trail via the
+  // record's audit/*.md shard glob (readAllAuditShards).
+  const f = seededAuditShard(p);
   writeFileSync(f, `${readFileSync(f, "utf-8")}\n${body}\n\n---\n`, "utf-8");
 }
 

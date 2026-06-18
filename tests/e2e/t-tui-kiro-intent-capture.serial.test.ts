@@ -56,6 +56,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
@@ -141,7 +143,7 @@ function findArtifact(dir: string, fragments: string[], exclude: string[] = []):
 
 function lastCompletedIsIntentCapture(sandbox: string): boolean {
   try {
-    const s = readFileSync(join(sandbox, "aidlc-docs", "aidlc-state.md"), "utf8");
+    const s = readFileSync(seededStateFile(sandbox), "utf8");
     const m = /\*\*Last Completed Stage\*\*:[ \t]*([^\r\n]*)/.exec(s);
     return (m?.[1] ?? "").trim() === "intent-capture";
   } catch {
@@ -232,7 +234,7 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         expect(terminated).toBe(true);
 
         // --- assert ON DISK (the Claude twin's surface, verbatim) -------------
-        const icDir = join(sandbox, "aidlc-docs", "ideation", "intent-capture");
+        const icDir = join(seededRecordDir(sandbox), "ideation", "intent-capture");
         expect(existsSync(icDir)).toBe(true);
 
         const questionsFile = findArtifact(icDir, ["questions"]);
@@ -249,7 +251,7 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         const stakeholderFile = findArtifact(icDir, ["stakeholder"]);
         expect(stakeholderFile).not.toBeNull();
 
-        const stateMd = readFileSync(join(sandbox, "aidlc-docs", "aidlc-state.md"), "utf8");
+        const stateMd = readFileSync(seededStateFile(sandbox), "utf8");
         const xCount = (stateMd.match(/^- \[x\]/gm) ?? []).length;
         const completedMatch = /\*\*Completed\*\*:[ \t]*(\d+)/.exec(stateMd);
         expect(completedMatch).not.toBeNull();
@@ -262,7 +264,7 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         expect(currentStageLine.length).toBeGreaterThan(0);
         expect(currentStageLine.toLowerCase()).not.toContain("intent-capture");
 
-        const auditMd = readFileSync(join(sandbox, "aidlc-docs", "audit.md"), "utf8");
+        const auditMd = readAllAuditShards(sandbox);
         expect(auditMd).toMatch(/STAGE_COMPLETED/);
         expect(auditMd.toLowerCase()).toContain("intent-capture");
       } finally {

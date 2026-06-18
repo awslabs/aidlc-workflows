@@ -19,9 +19,14 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  cleanupTestProject,
+  createTestProject,
+  seededAuditShard,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(
@@ -35,10 +40,23 @@ const TOOL = join(
 );
 
 // --- per-case temp project harness ----------------------------------------
+// P9: `aidlc-worktree info` reads the ACTIVE INTENT's per-clone audit shard via
+// readAllAuditShards(), not a flat aidlc-docs/audit.md. Seed the per-intent
+// workspace shell (createTestProject) + a state file (so the active-intent
+// cursor resolves the record), then write the test's audit content into the
+// deterministic shard the tool will read (seededAuditShard).
 let projDir = "";
 function writeAudit(content: string): void {
-  mkdirSync(join(projDir, "aidlc-docs"), { recursive: true });
-  writeFileSync(join(projDir, "aidlc-docs", "audit.md"), `${content}\n`, "utf-8");
+  // Seed state so the active-intent cursor resolves the seeded record (an
+  // audit-only project would fall back to the bare space root, hiding the shard).
+  writeFileSync(
+    seededStateFile(projDir),
+    "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: CONSTRUCTION\n",
+    "utf-8",
+  );
+  const shard = seededAuditShard(projDir);
+  mkdirSync(join(shard, ".."), { recursive: true });
+  writeFileSync(shard, `${content}\n`, "utf-8");
 }
 function runInfo(slug: string): { rc: number; out: string } {
   // Combine stdout+stderr like the .sh's `2>&1`, and run with cwd=projDir +
@@ -50,10 +68,10 @@ function runInfo(slug: string): { rc: number; out: string } {
   return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 beforeEach(() => {
-  projDir = mkdtempSync(join(tmpdir(), "t72-cli-"));
+  projDir = createTestProject();
 });
 afterEach(() => {
-  if (projDir) rmSync(projDir, { recursive: true, force: true });
+  if (projDir) cleanupTestProject(projDir);
   projDir = "";
 });
 

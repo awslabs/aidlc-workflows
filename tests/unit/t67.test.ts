@@ -99,7 +99,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
-  existsSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -108,6 +107,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
@@ -174,7 +174,10 @@ function proj(): string {
   return p;
 }
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
+// P9: detect-scope's appendAuditEvent CREATES the bare SPACE record root's
+// per-clone shard on first emit (no state seeded → no intent resolves → bare
+// root); the SPAWNED tool mints its own clone-id, so reads glob every shard.
+const readAudit = (p: string): string => readAllAuditShards(p);
 
 interface CliResult {
   status: number;
@@ -223,10 +226,9 @@ function ackScope(r: CliResult): string {
  * Resets at `## ` headings / `---`; splits `**label**: value` on `**: `.
  * Mirrors audit_field in the proven t31/t90 ports. Returns "" when absent.
  */
-function auditField(file: string, ev: string, key: string): string {
-  if (!existsSync(file)) return "";
+function auditField(body: string, ev: string, key: string): string {
   let matched = false;
-  for (const line of readFileSync(file, "utf-8").split("\n")) {
+  for (const line of body.split("\n")) {
     if (line.startsWith("## ")) {
       matched = false;
       continue;
@@ -252,19 +254,17 @@ function auditField(file: string, ev: string, key: string): string {
   return "";
 }
 
-/** Count audit blocks with `**Event**: <ev>`. */
-function auditEventCount(file: string, ev: string): number {
-  if (!existsSync(file)) return 0;
+/** Count audit blocks with `**Event**: <ev>` in a buffer. */
+function auditEventCount(body: string, ev: string): number {
   const re = new RegExp(`^\\*\\*Event\\*\\*: ${ev}$`);
-  return readFileSync(file, "utf-8")
+  return body
     .split("\n")
     .filter((l) => re.test(l)).length;
 }
 
-/** Whole-file presence (mirrors a bare grep). */
-function fileContains(file: string, needle: string): boolean {
-  if (!existsSync(file)) return false;
-  return readFileSync(file, "utf-8").includes(needle);
+/** Whole-buffer presence (mirrors a bare grep). */
+function fileContains(body: string, needle: string): boolean {
+  return body.includes(needle);
 }
 
 /**
@@ -413,7 +413,7 @@ describe("t67 detect-scope --from-text keyword inference (migrated from t67 §7)
     const r = detectFromText(input, p);
     expect(r.status).toBe(0);
     expect(ackScope(r)).toBe(expected);
-    expect(auditField(auditPath(p), "SCOPE_DETECTED", "Detected scope")).toBe(
+    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Detected scope")).toBe(
       expected,
     );
   };
@@ -435,7 +435,7 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
     const r = detectFromText(input, p);
     expect(r.status).toBe(0);
     expect(ackScope(r)).toBe(expected);
-    expect(auditField(auditPath(p), "SCOPE_DETECTED", "Detected scope")).toBe(
+    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Detected scope")).toBe(
       expected,
     );
   };
@@ -449,7 +449,7 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
     const r = detectFromText("minimum  viable", p);
     expect(r.status).toBe(0);
     expect(ackScope(r)).toBe("mvp");
-    expect(auditField(auditPath(p), "SCOPE_DETECTED", "Detected scope")).toBe(
+    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Detected scope")).toBe(
       "mvp",
     );
   });
@@ -463,11 +463,11 @@ describe("t67 detect-scope --from-text boundary + fallback (migrated from t67 §
     const r = detectFromText("", p);
     expect(r.status).toBe(0);
     expect(ackScope(r)).toBe("feature");
-    expect(auditField(auditPath(p), "SCOPE_DETECTED", "Detected scope")).toBe(
+    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Detected scope")).toBe(
       "feature",
     );
     // STRONGER: a keyword-less match also marks Source=freeform.
-    expect(auditField(auditPath(p), "SCOPE_DETECTED", "Source")).toBe("freeform");
+    expect(auditField(readAudit(p), "SCOPE_DETECTED", "Source")).toBe("freeform");
   });
 });
 
@@ -483,7 +483,7 @@ describe("t67 detect-scope audit + backward-compat + collision (migrated from t6
     const p = proj();
     const r = detectFromText("fix the login bug", p);
     expect(r.status).toBe(0);
-    const f = auditPath(p);
+    const f = readAudit(p);
     expect(auditEventCount(f, "SCOPE_DETECTED")).toBe(1); // STRONGER: exact count
     expect(auditField(f, "SCOPE_DETECTED", "Detected scope")).toBe("bugfix");
     expect(auditField(f, "SCOPE_DETECTED", "Source")).toBe("keyword");
@@ -492,7 +492,7 @@ describe("t67 detect-scope audit + backward-compat + collision (migrated from t6
   test("26: keyword-match SCOPE_DETECTED includes Matched keywords field", () => {
     const p = proj();
     detectFromText("fix the login bug", p);
-    const f = auditPath(p);
+    const f = readAudit(p);
     // Whole-file presence (.sh used unanchored grep "Matched keywords").
     expect(fileContains(f, "Matched keywords")).toBe(true);
     // STRONGER: exact matched-keyword value.
@@ -514,7 +514,7 @@ describe("t67 detect-scope audit + backward-compat + collision (migrated from t6
       p,
     ]);
     expect(r.status).toBe(0);
-    const f = auditPath(p);
+    const f = readAudit(p);
     expect(auditEventCount(f, "SCOPE_DETECTED")).toBe(1); // STRONGER
     expect(auditField(f, "SCOPE_DETECTED", "Detected scope")).toBe("feature");
     expect(auditField(f, "SCOPE_DETECTED", "Source")).toBe("freeform");
@@ -537,6 +537,6 @@ describe("t67 detect-scope audit + backward-compat + collision (migrated from t6
     expect(r.status).toBe(1);
     expect(r.out).toContain("Cannot combine --from-text and --scope");
     // STRONGER: the rejected call emits NO SCOPE_DETECTED row.
-    expect(auditEventCount(auditPath(p), "SCOPE_DETECTED")).toBe(0);
+    expect(auditEventCount(readAudit(p), "SCOPE_DETECTED")).toBe(0);
   });
 });

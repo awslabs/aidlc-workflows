@@ -36,7 +36,7 @@ import {
   stateFilePath,
   uuidv7,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+import { cleanupTestProject, createTestProject, removeWorkspaceRecord } from "../harness/fixtures.ts";
 
 let proj: string;
 
@@ -63,6 +63,10 @@ function seedFlat(p: string): void {
 
 beforeEach(() => {
   proj = createTestProject();
+  // t160 drives resolution from a controlled blank slate via seedShell/seedIntent
+  // below, so strip the default record createTestProject now seeds (P9) — these
+  // tests assert the resolver's behaviour with NO intent, a lone intent, etc.
+  removeWorkspaceRecord(proj);
 });
 afterEach(() => {
   cleanupTestProject(proj);
@@ -139,13 +143,16 @@ describe("t160 selectors — space + intent resolution", () => {
   });
 });
 
-describe("t160 path re-root — per-intent layout vs flat fallback", () => {
-  test("flat project (no intent) → flat aidlc-docs/ paths (backward compatible)", () => {
-    seedFlat(proj);
+describe("t160 path re-root — per-intent layout vs bare space root (P9 end state)", () => {
+  test("no intent resolves → bare space record root (no flat aidlc-docs/ fallback)", () => {
+    seedShell(proj); // a SEED shell, no intent born yet
     expect(recordDir(proj)).toBeNull();
     expect(relativeRecordDir(proj)).toBeNull();
-    expect(stateFilePath(proj)).toBe(join(proj, "aidlc-docs", "aidlc-state.md"));
-    expect(auditFilePath(proj)).toBe(join(proj, "aidlc-docs", "audit.md"));
+    // End state: resolves under the bare space record root, NEVER the flat root.
+    const intentsRoot = join(proj, "aidlc", "spaces", "default", "intents");
+    expect(stateFilePath(proj)).toBe(join(intentsRoot, "aidlc-state.md"));
+    expect(stateFilePath(proj)).not.toBe(join(proj, "aidlc-docs", "aidlc-state.md"));
+    expect(auditFilePath(proj)).toBe(join(intentsRoot, "audit", auditShardName(proj)));
   });
 
   test("new-layout intent (lone) → per-intent record dir", () => {

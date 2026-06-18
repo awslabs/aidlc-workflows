@@ -78,6 +78,8 @@ import {
   FIXTURES_DIR,
   resetAidlcEnv,
   seedAuditFile,
+  seededAuditShard,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -130,9 +132,10 @@ function runJump(opts: {
   if (withTestRunFlag) {
     // jump's terminal behaviour triggers when state declares Test Run Mode:
     // true. Inject the field so the fixture is in the right mode without
-    // running full init (byte-for-byte the .sh's printf append).
+    // running full init (byte-for-byte the .sh's printf append). P9: state lives
+    // in the seeded per-intent record, not the flat aidlc-docs/.
     appendFileSync(
-      join(proj, "aidlc-docs", "aidlc-state.md"),
+      seededStateFile(proj),
       "\n- **Test Run Mode**: true\n",
     );
   }
@@ -157,8 +160,11 @@ function runJump(opts: {
   return {
     status: res.status ?? -1,
     stdout: res.stdout ?? "",
-    audit: readFileSync(join(proj, "aidlc-docs", "audit.md"), "utf-8"),
-    state: readFileSync(join(proj, "aidlc-docs", "aidlc-state.md"), "utf-8"),
+    // P9: the jump tool appends to the per-clone shard the seeded record
+    // resolves (seededAuditShard — the fixture pins the clone-id so the
+    // subprocess and the test agree on one shard); state is the per-intent file.
+    audit: readFileSync(seededAuditShard(proj), "utf-8"),
+    state: readFileSync(seededStateFile(proj), "utf-8"),
   };
 }
 

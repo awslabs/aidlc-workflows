@@ -70,6 +70,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
+import { stateFilePathFor } from "../harness/sdk-drive.ts";
 import { gridHasMenu, resolveWinNode } from "../harness/tui-drive.ts";
 import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
 
@@ -186,7 +187,7 @@ interface Terminal {
 
 /** Read the comparable terminal fields off the post-run aidlc-state.md. */
 function readTerminal(sandbox: string): Terminal {
-  const md = readFileSync(join(sandbox, "aidlc-docs", "aidlc-state.md"), "utf8");
+  const md = readFileSync(stateFilePathFor(sandbox), "utf8");
   const scope = /\*\*Scope\*\*:[ \t]*(\S+)/.exec(md)?.[1];
   const phase = /\*\*Lifecycle Phase\*\*:[ \t]*([^\r\n]+)/.exec(md)?.[1]?.trim();
   const revisionCount = Number.parseInt(
@@ -238,7 +239,7 @@ function launchBugfix(session: string, sandbox: string): void {
   if (waitFor(session, "Bypass Permissions mode", 15000, 600)) {
     drive(["send", "--session", session, "--keys", "2"]);
   }
-  expect(waitFor(session, "\\[AIDLC\\] ready", 45000, 800)).toBe(true);
+  expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
 
   // Explicit `--scope bugfix` (not the bare keyword) so the shipped
   // AWS_AIDLC_DEFAULT_SCOPE=workshop env-default does NOT trigger a scope-

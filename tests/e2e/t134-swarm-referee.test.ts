@@ -76,12 +76,14 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   FIXTURES_DIR,
   cleanupWorktreeFixture,
+  seededAuditDir,
+  seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";
 
@@ -102,21 +104,25 @@ afterAll(() => {
 function makeSwarmFixture(): string {
   const proj = setupWorktreeFixture();
   fixtures.push(proj);
-  mkdirSync(join(proj, "aidlc-docs"), { recursive: true });
-  // Seed Construction-phase state + a fresh audit log (.sh: cp state +
-  // `printf "# AI-DLC Audit Log\n"`).
+  // Seed Construction-phase state into the per-intent record + a fresh audit log
+  // shard (.sh: cp state + `printf "# AI-DLC Audit Log\n"`). The record state +
+  // intents.json commit (so the worktree fork carries them); cursors + audit
+  // shards stay machine-local.
   writeFileSync(
-    join(proj, "aidlc-docs", "aidlc-state.md"),
+    seededStateFile(proj),
     readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8"),
   );
-  writeFileSync(join(proj, "aidlc-docs", "audit.md"), "# AI-DLC Audit Log\n");
+  mkdirSync(seededAuditDir(proj), { recursive: true });
+  writeFileSync(join(seededAuditDir(proj), "fixture.md"), "# AI-DLC Audit Log\n");
   writeFileSync(
     join(proj, ".gitignore"),
     [
-      "aidlc-docs/audit.md",
-      "aidlc-docs/runtime-graph.json",
-      "aidlc-docs/.aidlc-recovery.md",
-      "aidlc-docs/.aidlc-hooks-health/",
+      "aidlc/active-space",
+      "aidlc/.aidlc-clone-id",
+      "aidlc/spaces/*/intents/active-intent",
+      "aidlc/spaces/*/intents/*/runtime-graph.json",
+      "aidlc/spaces/*/intents/*/.aidlc-*",
+      "aidlc/spaces/*/intents/*/audit/",
       "",
     ].join("\n"),
   );
@@ -163,11 +169,20 @@ function runRef(proj: string, args: string[]): RefResult {
   return { rc: res.status ?? -1, out: res.stdout ?? "" };
 }
 
-const auditPath = (p: string): string => join(p, "aidlc-docs", "audit.md");
-const auditBody = (p: string): string =>
-  existsSync(auditPath(p)) ? readFileSync(auditPath(p), "utf-8") : "";
+/** Concatenate every audit shard (audit/*.md) for the seeded record — the swarm
+ *  tool writes SWARM_* rows to its own per-clone shard alongside fixture.md. */
+const auditBody = (p: string): string => {
+  const dir = seededAuditDir(p);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+  } catch {
+    return "";
+  }
+  return names.map((n) => readFileSync(join(dir, n), "utf-8")).join("\n");
+};
 
-/** Exact `**Event**: <type>` row count in audit.md (STRONGER than grep -q). */
+/** Exact `**Event**: <type>` row count across the audit shards (STRONGER than grep -q). */
 function eventCount(p: string, event: string): number {
   return auditBody(p)
     .split("\n")

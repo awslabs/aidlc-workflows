@@ -63,26 +63,50 @@
 // the source-computed lock dir, not a hand-recomputed hash).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, rmdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, rmdirSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import {
+  AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
-  seedAuditFile,
-  AIDLC_SRC,
+  FIXTURES_DIR,
+  seededAuditDir,
+  seedStateFile,
 } from "../harness/fixtures.ts";
-import { auditLockDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  auditLockDir,
+  docsRoot,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath; // the bun running this test
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-audit-logger.ts");
 
-// Per-test project: a fresh temp dir + seeded audit.md (one ARTIFACT_CREATED
-// block). One project shared by all five racing spawns inside a test, fresh
-// between tests — same isolation the .sh had (create/cleanup per run).
+// P9 per-intent layout: the audit trail is a DIR of per-clone shards. We PIN one
+// clone-id on disk so all five parallel processes resolve the SAME shard — that
+// reproduces the original contract (five racing appends to ONE audit file,
+// serialised by the workspace-sentinel lock), and pre-creating that one shard
+// satisfies the audit-logger's "shard exists" gate for every process.
+// seedStateFile makes the active-intent cursor resolve so the artifacts land
+// under docsRoot(); the lock test 8 keys auditLockDir(projectDir) (the sentinel
+// bucket appendAuditEntry uses with no --intent).
 let proj: string;
 
-function auditPath(p: string): string {
-  return join(p, "aidlc-docs", "audit.md");
+const PINNED_CLONE_ID = "testcloneid33c";
+function pinnedShardName(): string {
+  const host =
+    hostname()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "host";
+  return `${host}-${PINNED_CLONE_ID}.md`;
+}
+
+// The audit trail read as one buffer (every per-clone shard, merge-concatenated).
+function readAudit(p: string): string {
+  return readAllAuditShards(p);
 }
 
 /** Count occurrences of an "**Event**: <type>" line. */
@@ -99,11 +123,13 @@ function eventCount(body: string, type: string): number {
  */
 async function fireParallel(p: string, n: number): Promise<void> {
   const procs = [];
+  const recordRoot = docsRoot(p);
   for (let i = 1; i <= n; i++) {
     const json = JSON.stringify({
       tool_name: "Write",
       tool_input: {
-        file_path: join(p, "aidlc-docs", `artifact-${i}.md`),
+        // Under the per-intent record so the audit-logger's docsRoot() gate fires.
+        file_path: join(recordRoot, `artifact-${i}.md`),
       },
     });
     const child = Bun.spawn({
@@ -122,7 +148,17 @@ async function fireParallel(p: string, n: number): Promise<void> {
 describe("t33 audit-logger lock contention under parallel writes (mechanism cli — parallel spawn)", () => {
   beforeEach(() => {
     proj = createTestProject();
-    seedAuditFile(proj);
+    // Seed state so the active-intent cursor resolves → docsRoot()/auditFilePath()
+    // anchor under the record.
+    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    // Pin the clone-id + plant the one-block baseline INTO the resolved shard, so
+    // all five processes resolve + append to this single shard (the audit-logger's
+    // "shard exists" gate passes for each). audit-sample.md carries exactly one
+    // ARTIFACT_CREATED block (INITIAL_ENTRIES = 1).
+    writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
+    const auditDir = seededAuditDir(proj);
+    mkdirSync(auditDir, { recursive: true });
+    copyFileSync(join(FIXTURES_DIR, "audit-sample.md"), join(auditDir, pinnedShardName()));
   });
 
   afterEach(() => {
@@ -140,14 +176,14 @@ describe("t33 audit-logger lock contention under parallel writes (mechanism cli 
   // The seeded fixture carries exactly one ARTIFACT_CREATED block; assert that
   // precondition so the "+5" math below is anchored to a known baseline.
   test("seed fixture starts with exactly one ARTIFACT_CREATED block [.sh INITIAL_ENTRIES]", () => {
-    const body = readFileSync(auditPath(proj), "utf-8");
+    const body = readAudit(proj);
     expect(eventCount(body, "ARTIFACT_CREATED")).toBe(1);
   });
 
   test("all 5 parallel writes are recorded (no lost writes) [.sh test 1]", async () => {
-    const before = eventCount(readFileSync(auditPath(proj), "utf-8"), "ARTIFACT_CREATED");
+    const before = eventCount(readAudit(proj), "ARTIFACT_CREATED");
     await fireParallel(proj, 5);
-    const after = eventCount(readFileSync(auditPath(proj), "utf-8"), "ARTIFACT_CREATED");
+    const after = eventCount(readAudit(proj), "ARTIFACT_CREATED");
     // .sh: NEW_ENTRIES == 5. The lock must serialise all five appends so none
     // clobber another — exactly five new ARTIFACT_CREATED blocks land.
     expect(after - before).toBe(5);
@@ -155,7 +191,7 @@ describe("t33 audit-logger lock contention under parallel writes (mechanism cli 
 
   test("every parallel artifact path lands in audit.md (no dropped reference) [.sh tests 2-6]", async () => {
     await fireParallel(proj, 5);
-    const body = readFileSync(auditPath(proj), "utf-8");
+    const body = readAudit(proj);
     // .sh tests 2,3,4,5,6: assert_grep audit.md "artifact-<i>.md" for i=1..5.
     for (let i = 1; i <= 5; i++) {
       expect(body.includes(`artifact-${i}.md`)).toBe(true);
@@ -164,7 +200,7 @@ describe("t33 audit-logger lock contention under parallel writes (mechanism cli 
 
   test("no interleaved/corrupted blocks — counts are mutually consistent [.sh test 7]", async () => {
     await fireParallel(proj, 5);
-    const body = readFileSync(auditPath(proj), "utf-8");
+    const body = readAudit(proj);
     const lines = body.split("\n");
     const sepCount = lines.filter((l) => l === "---").length;
     const eventLines = lines.filter((l) => l.trim().startsWith("**Event**:")).length;

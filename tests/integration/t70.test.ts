@@ -113,12 +113,15 @@ describe("t70 /aidlc birth on a greenfield stub (sdk)", () => {
   test(
     "greenfield classification writes Project Type=Greenfield to the born intent's state; WORKSPACE_SCANNED fires; no gate",
     async () => {
-      // A fresh greenfield-todo stub + an audit log, NO seeded state — a clean
-      // birth (not a migration). NO --test-run: the birth path has no gate to
-      // auto-approve (it prints state and STOPs).
+      // A fresh greenfield-todo stub on a CLEAN workspace — noAidlcDocs strips
+      // the default seeded intent record so the engine AUTO-BIRTHS a new intent
+      // over the stub and the scan fires (a pre-seeded record would make the
+      // engine resolve the existing intent and ask to pick one, skipping the
+      // scan — same fix as t71-brownfield). NO --test-run: the birth path has no
+      // gate (it prints state and STOPs).
       const proj = setupIntegrationProject({
         withGreenfieldStub: true,
-        withAudit: true,
+        noAidlcDocs: true,
       });
       try {
         const r = await driveAidlc('/aidlc --scope poc "build a todo app"', {

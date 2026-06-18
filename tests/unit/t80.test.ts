@@ -55,7 +55,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractMarkdownSection } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  extractMarkdownSection,
+  readAllAuditShards,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
 const STATE_TS = join(AIDLC_SRC, "tools", "aidlc-state.ts");
@@ -206,7 +209,11 @@ describe("t80 practices-event --type empty (spawnSync CLI-boundary, parity-only)
     );
     expect(res.status).toBe(0);
 
-    const audit = readFileSync(join(proj, "aidlc-docs", "audit.md"), "utf8");
+    // P9: the flat aidlc-docs/audit.md is retired. practices-event's
+    // appendAuditEvent CREATES the bare SPACE record root's per-clone shard on
+    // first emit (no state seeded → no intent resolves → bare root); read it via
+    // the shard glob (readAllAuditShards).
+    const audit = readAllAuditShards(proj);
     // Slice the PRACTICES_SECTION_EMPTY block up to the next `---` separator
     // (mirrors the .sh's `awk '/PRACTICES_SECTION_EMPTY/{flag=1} flag && /^---$/{exit} flag'`).
     const start = audit.indexOf("PRACTICES_SECTION_EMPTY");

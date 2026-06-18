@@ -20,7 +20,8 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { seededStateFile } from "../harness/fixtures.ts";
 import { driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
 
@@ -60,7 +61,7 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
         withState: "state-mid-ideation.md",
         withAudit: true,
       });
-      const statePath = join(proj, "aidlc-docs", "aidlc-state.md");
+      const statePath = seededStateFile(proj);
       const stateBefore = readFileSync(statePath, "utf-8");
       try {
         const r = await driveKiroAcp({
@@ -111,7 +112,10 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
         expect(out).toContain("agents/aidlc.json present");
         expect(out).toContain("settings/cli.json present");
         expect(out).not.toContain("settings.json present — copy from `dist/claude");
-        expect(out).toContain("aidlc-docs/ directory exists");
+        // P9: the flat `aidlc-docs/ directory exists` check is retired. The doctor
+        // now verifies the SHIPPED workspace shell (the harness engine dir + the
+        // default space's memory dir). On the Kiro tree harnessDir() === ".kiro".
+        expect(out).toContain("workspace shell ready (.kiro/ + aidlc/spaces/default/memory/)");
       } finally {
         cleanupTuiProject(proj);
       }
@@ -173,10 +177,10 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
         });
         // Disk is the contract: the state field flipped and the audit row
         // landed (tool-owned emission).
-        expect(r.stateFile ?? readFileSync(join(proj, "aidlc-docs", "aidlc-state.md"), "utf-8")).toMatch(
+        expect(r.stateFile ?? readFileSync(seededStateFile(proj), "utf-8")).toMatch(
           /\*\*Test Strategy\*\*:[ \t]*Minimal/,
         );
-        const audit = readFileSync(join(proj, "aidlc-docs", "audit.md"), "utf-8");
+        const audit = readAllAuditShards(proj);
         expect(audit).toContain("TEST_STRATEGY_CHANGED");
       } finally {
         cleanupTuiProject(proj);
