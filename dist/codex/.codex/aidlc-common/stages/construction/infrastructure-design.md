@@ -66,6 +66,10 @@ outputs: "deployment-architecture.md, infrastructure-services.md, monitoring-des
 
 MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
 
+## Constraints
+
+This is a design stage — artifacts describe what infrastructure is needed and why, not implementation-ready code. Complete IaC (CDK constructs, Terraform modules, CloudFormation), full Lambda handlers, and IAM policy documents belong in code-generation. Limit code to short illustrative snippets (pseudocode or interface-level, ≤15 lines) that clarify a design decision.
+
 ## Steps
 
 ### Execution Modes

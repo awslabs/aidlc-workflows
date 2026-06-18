@@ -59,6 +59,10 @@ outputs: "performance-design.md, security-design.md, scalability-design.md, reli
 
 MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
 
+## Constraints
+
+This is a design stage — artifacts describe architectural patterns, strategies, and decisions, not implementation-ready code. Complete implementations (middleware, interceptors, retry libraries, encryption routines) belong in code-generation. Limit code to short illustrative snippets (pseudocode or interface-level, ≤15 lines) that clarify a design decision.
+
 ## Steps
 
 ### Execution Modes
