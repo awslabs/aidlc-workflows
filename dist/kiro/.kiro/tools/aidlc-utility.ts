@@ -1949,11 +1949,12 @@ function gitRmFlatTree(projectDir: string, flatTree: string): void {
   }
 }
 
-// Ensure the per-intent artifact + knowledge dirs a workflow writes into exist.
-// Idempotent ensure-exists (NOT the old data/scaffold copy — SEED ships the
-// shell). Creates the active intent's record dir plus its per-phase artifact
-// dirs and a knowledge/ dir; all skipped if already present. The active-intent
-// cursor must be set (birthIntent/migration did so) before this runs.
+// Ensure the dirs a workflow writes into exist. Idempotent ensure-exists (NOT
+// the old data/scaffold copy — SEED ships the shell). Creates the active intent's
+// record dir plus its per-phase artifact dirs, AND the SPACE-level domain
+// knowledge/ dir (a sibling of intents, not a record subdir); all skipped if
+// already present. The active-intent cursor must be set (birthIntent/migration
+// did so) before this runs.
 function ensureWorkspaceDirs(projectDir: string): void {
   // docsDir() default-resolves the active intent's record dir (or the flat
   // fallback when no intent resolves) — the cursor set by birthIntent/migration
@@ -2125,18 +2126,18 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
 
     // ---- Ensure-exists scaffold (lazy; SEED ships the shell) ----
     // The shipped shell already carries spaces/default/memory + native includes.
-    // Birth only ensures the per-intent artifact + knowledge dirs the workflow
-    // will write into exist; it never re-copies the data/scaffold tree (SEED
-    // owns that). All idempotent — skip any dir that already exists.
+    // Birth only ensures the per-intent artifact dirs + the space-level knowledge/
+    // dir the workflow will write into exist; it never re-copies the data/scaffold
+    // tree (SEED owns that). All idempotent — skip any dir that already exists.
     ensureWorkspaceDirs(projectDir);
 
     appendAuditEvent(projectDir, "WORKSPACE_SCAFFOLDED", {
       Request: `/aidlc ${flags.arguments || scope}`,
-      Details: "Per-intent artifact + knowledge dirs ensured (shell shipped by SEED)",
+      Details: "Per-intent artifact dirs + space-level knowledge/ ensured (shell shipped by SEED)",
     });
     appendAuditEvent(projectDir, "STAGE_COMPLETED", {
       Stage: "workspace-scaffold",
-      Details: "Per-intent artifact + knowledge dirs ensured",
+      Details: "Per-intent artifact dirs + space-level knowledge/ ensured",
     });
 
     handleIntentBirthStateBuild(projectDir, flags, scope, ts);

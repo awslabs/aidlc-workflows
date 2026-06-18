@@ -94,9 +94,10 @@ const HOOK = join(AIDLC_SRC, "hooks", "aidlc-sensor-fire.ts");
 
 // P9 per-intent layout: the sensor-fire hook's active-workflow gate resolves
 // state via stateFilePath() and the audit trail via auditFilePath() — under the
-// active intent's record. The FRAMEWORK sensor `matches` glob is still
-// `**/aidlc-docs/**` (core data, unchanged), so the triggering artifact path
-// stays an aidlc-docs/ path; only state/audit/health roots moved to the record.
+// active intent's record. The FRAMEWORK sensor `matches` glob was widened to
+// `**/{aidlc-docs,intents}/**` (the per-intent record arm + the legacy aidlc-docs
+// arm for a pre-migration project), so a trigger fires from EITHER a legacy
+// aidlc-docs/ path OR a per-intent intents/<record>/ path (see C1a vs C1a-intents).
 const PINNED_CLONE_ID = "testcloneid95";
 function pinnedShardName(): string {
   const host =

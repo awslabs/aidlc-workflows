@@ -7,8 +7,11 @@
 // the docs now describe the per-intent workspace model + auto-birth. This gate
 // makes that a CLOSED, reviewable predicate rather than a free-text "is this
 // legitimately legacy?" judgement (which is trivially satisfiable by allowlisting
-// everything). It scans every docs/**/*.md line for a surviving `aidlc-docs` or
-// `--init` occurrence and FAILS unless:
+// everything). It scans every docs/**/*.md line PLUS the user-facing onboarding
+// template `core/templates/onboarding.md` (the source-of-truth that renders to the
+// shipped dist `CLAUDE.md` / `AGENTS.md` — the FIRST surface a user reads, and the
+// blind spot that let stale flat-layout prose ship in an earlier pass) for a
+// surviving `aidlc-docs` or `--init` occurrence and FAILS unless:
 //   (a) the occurrence is pinned in tests/fixtures/docs-legacy-refs.json by exact
 //       file + line text — so widening the allowlist needs a visible diff there; AND
 //   (b) the pinned-set size stays <= the fixture's `ceiling` — so blanket-
@@ -29,6 +32,10 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const DOCS_DIR = join(REPO_ROOT, "docs");
 const FIXTURE = join(REPO_ROOT, "tests", "fixtures", "docs-legacy-refs.json");
+// User-facing prose surfaces OUTSIDE docs/ that render into the shipped install
+// (CLAUDE.md / AGENTS.md) — the onboarding template is hand-authored source; its
+// dist renderings are generated, so gating the source covers all three harnesses.
+const EXTRA_DOC_FILES = ["core/templates/onboarding.md"];
 
 interface AllowEntry {
   file: string;
@@ -66,7 +73,7 @@ interface Occurrence {
 
 function scanOccurrences(): Occurrence[] {
   const out: Occurrence[] = [];
-  for (const rel of listDocs(DOCS_DIR)) {
+  for (const rel of [...listDocs(DOCS_DIR), ...EXTRA_DOC_FILES]) {
     const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
     const lines = body.split("\n");
     for (let i = 0; i < lines.length; i++) {

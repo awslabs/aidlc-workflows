@@ -12,8 +12,10 @@
 // `bun .claude/tools/aidlc-utility.ts intent-birth --scope <scope> ...`. Birth no
 // longer scaffolds a flat aidlc-docs/ tree — it writes PER-INTENT: state at
 // aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md, audit as per-clone
-// shards under <record>/audit/, and the per-phase artifact + knowledge dirs under
-// that record. The State-Version-7 template + the birth audit events are
+// shards under <record>/audit/, and the per-phase artifact dirs under that
+// record. (Domain knowledge is SPACE-level — aidlc/spaces/<space>/knowledge/, a
+// sibling of intents — not a record subdir.) The State-Version-7 template + the
+// birth audit events are
 // unchanged (birth still writes them) — only the LOCATION moved (per-intent) and
 // the dispatch verb (intent-birth, not init). This test resolves the born record
 // via recordDirOf() (the proven pattern) and re-expresses every .sh assertion on

@@ -548,8 +548,8 @@ describe("t27 aidlc-utility init", () => {
   test("14: init creates aidlc-state.md, audit shard dir, and knowledge/ directory", () => {
     const p = emptyDir();
     util(["init", "--scope", "poc"], p);
-    // P4: birth writes a per-intent record (state + audit shards + knowledge),
-    // not the flat aidlc-docs/ trio.
+    // P4: birth writes a per-intent record (state + audit shards), not the flat
+    // aidlc-docs/ trio. (Domain knowledge is SPACE-level, asserted below.)
     expect(existsSync(statePath(p))).toBe(true);
     // Audit is now a SHARD DIR (<record>/audit/<host>-<pid>.md), not a single file.
     const auditDir = join(recordDirOf(p), "audit");

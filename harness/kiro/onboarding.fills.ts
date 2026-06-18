@@ -34,7 +34,7 @@ This is the same AI-DLC core that ships to every harness — one deterministic e
 - Construction swarm runs as **subagent fan-out only** (\`AIDLC_USE_SWARM=1\` is a loud no-op).
 - Session-end and pre-compaction audit events (\`SESSION_ENDED\`, \`SESSION_COMPACTED\`) are not emitted — Kiro has no hooks for those moments.
 - **MCP servers**: none ship, and the Kiro MCP config mechanism is not configured here (the Claude distribution ships five; Kiro ships zero today).
-- A workflow's \`aidlc-docs/\` is harness-neutral: a project can move between Claude Code and Kiro CLI installs (supported but untested — keep both \`.claude/\` and \`.kiro/\` in sync via the framework's packaging if you do this).
+- A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can move between Claude Code and Kiro CLI installs (supported but untested — keep both \`.claude/\` and \`.kiro/\` in sync via the framework's packaging if you do this).
 `,
 
     sections_after_resumption: "",
