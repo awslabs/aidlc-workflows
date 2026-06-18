@@ -8,6 +8,7 @@ Moves AI-DLC from a single flat `aidlc-docs/` record to a per-intent **workspace
 
 * `/aidlc --init` is **retired** — the shipped shell scaffolds the workspace and the first intent auto-births; `--force`/state-wipe is gone. Re-copy `dist/<harness>/`.
 * New intent + space verbs: `/aidlc intent` (list/switch), `/aidlc space` (list/switch), `/aidlc space-create <name>`, `/aidlc intent-birth`; a `--json` query layer on the list handlers.
+* While an intent is active, describing a genuinely new, unrelated piece of work prompts the orchestrator to **offer a second intent alongside** (you confirm Y/n before anything is born); switch between them any time with `/aidlc intent <name>`.
 * `--repo`/`--repos` make an intent multi-repo: the repo set is captured at birth and Construction worktrees fork against the right sibling repo.
 * The record tree, audit shards, `intents.json`, memory, codekb, and knowledge are committed; the per-user cursors (`active-space`, `active-intent`) and machine-local runtime are gitignored.
 * CI/scripts: the flat `aidlc-docs/` path no longer resolves for new projects — resolve state/audit/artifacts under `aidlc/spaces/<space>/intents/<slug>-<id8>/` (the migration keys on `aidlc-docs/aidlc-state.md` as its sole detection trigger).

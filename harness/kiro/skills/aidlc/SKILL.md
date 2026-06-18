@@ -96,6 +96,16 @@ The engine names which stage to run; you read and execute that stage from its `s
 - `aidlc-common/protocols/stage-protocol-recovery.md` — load on session resume, or when a change event is detected mid-stage.
 - `aidlc-common/protocols/stage-protocol-governance.md` — load at phase boundaries.
 
+### New work while an intent is active — offer a second intent
+
+When an intent is already active, `next` advances it (the engine is read-only and never births alongside a live intent). But the FIRST thing you do with each `$ARGUMENTS` is a knowledge judgment that belongs to you, not the engine: **does this input continue the active intent, or describe a genuinely new, unrelated piece of work?**
+
+- **Default to CONTINUATION.** Most prompts continue the active intent — a follow-up, a correction, an answer to a gate. Treat the input as new-work ONLY when it clearly names a distinct feature/bug/unit unrelated to the active intent's subject. Compare against the active intent: `bun .kiro/tools/aidlc-utility.ts intent --json` gives its `slug` (the subject) and `status`. False-positive offers are the main risk — when in doubt, continue. This is the same recognise-vs-route discipline as "The Forwarding Loop": you do not improvise routing, but recognising a topic change before you run a Branch-10 stage IS your job.
+- **On genuine new-work, OFFER — never auto-birth.** Render a structured question per `question-rendering.md` (numbered-prose options) showing the active intent and the proposed new one, including the **scope** you would give the new intent (infer it from the new-work description the way the engine resolves a fresh `/aidlc` — keyword/precedence — and name it so the human can correct it). Phrase it as a Yes/No confirmation and **lead the affirmative option with the word "Yes"** (e.g. "Yes — start a second intent"), with a decline option alongside. Starting a workflow is a mutation gated on a human yes (judgement→human) — never birth without an explicit confirmation.
+- **On CONFIRM:** run `bun .kiro/tools/aidlc-utility.ts intent-birth --scope <the confirmed scope> --arguments "<the new-work description>"` (the existing deterministic handler — it births into the active space, mints the intent's uuid, and moves the active-intent cursor to it), then re-run `next` to land on the new intent's first stage. This is the same run-then-continue shape the `print` directive already uses for `intent-birth` (see "Acting on a directive" above); the offer is conductor prose, not a new directive kind.
+- **On DECLINE:** proceed with the active intent — the normal Branch-10 `run-stage`.
+- You switch between intents any time with `/aidlc intent <name>` (bare `/aidlc intent` lists them) — parallel to `/aidlc space <name>`.
+
 ---
 
 ## Scope-to-Stage Mapping

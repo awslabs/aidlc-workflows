@@ -4207,6 +4207,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t176-new-work-offer-second-intent.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/integration/t21.test.ts",
           "mechanism": "sdk"
         },
