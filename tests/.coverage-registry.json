@@ -2546,6 +2546,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/e2e/t-tui-journey-orientation.serial.test.ts",
+          "mechanism": "tui"
+        },
+        {
           "file": "tests/integration/t40-settings-hook-config.test.ts",
           "mechanism": "none"
         },
@@ -4183,6 +4187,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t-journey-workspace.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/integration/t165-intent-birth-p4.test.ts",
           "mechanism": "cli"
         }
@@ -4194,6 +4202,18 @@
       "unitId": "aidlc-utility intent-birth",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/e2e/t-acp-kiro-journey-workspace.serial.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/e2e/t-exec-codex-journey-workspace.serial.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-journey-workspace.sdk.test.ts",
+          "mechanism": "sdk"
+        },
         {
           "file": "tests/integration/t165-intent-birth-p4.test.ts",
           "mechanism": "cli"
@@ -4287,6 +4307,18 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/e2e/t-acp-kiro-journey-workspace.serial.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/e2e/t-exec-codex-journey-workspace.serial.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-journey-workspace.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/integration/t165-intent-birth-p4.test.ts",
           "mechanism": "cli"
         }
@@ -4298,6 +4330,18 @@
       "unitId": "aidlc-utility space-create",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/e2e/t-acp-kiro-journey-workspace.serial.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/e2e/t-exec-codex-journey-workspace.serial.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t-journey-workspace.sdk.test.ts",
+          "mechanism": "sdk"
+        },
         {
           "file": "tests/integration/t165-intent-birth-p4.test.ts",
           "mechanism": "cli"

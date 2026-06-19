@@ -793,6 +793,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "smoke/t05-run-tests-parallel.test.ts",
     "smoke/t130-scope-runners.test.ts",
     "smoke/t86-stage-protocol-section-13.test.ts",
+    "e2e/t-exec-codex-journey-workspace.serial.test.ts",
     "e2e/t-tui-custom-harness.serial.test.ts",
     "e2e/t-tui-render-colour.serial.test.ts",
     "unit/gen-coverage-registry.test.ts",

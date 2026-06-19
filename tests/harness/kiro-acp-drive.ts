@@ -351,12 +351,19 @@ function parseAuditEvents(projectDir: string): string[] | undefined {
   return [...body.matchAll(/^\*\*Event\*\*:\s*([A-Z_]+)\s*$/gm)].map((m) => m[1]);
 }
 
-// NOTE: there is deliberately NO multi-turn gate-loop here. Calibration
-// proved the conductor does not reliably end its ACP turn at gates (it can
-// keep executing the forwarding loop for many minutes inside one turn), so
-// turn-per-gate pacing is NOT a dependable ACP primitive. Gate-paced journeys
-// belong to the TUI driver, where pacing is human-shaped. ACP's lane is
-// single-turn contracts bounded by stopAfterToolTitle.
+// NOTE: there is deliberately NO multi-turn gate-loop here. Calibration proved
+// the conductor does not reliably end its ACP turn by WAITING for it to
+// VOLUNTARILY stop at a gate (it can keep executing the forwarding loop for many
+// minutes inside one turn) — so turn-per-gate pacing that relies on a voluntary
+// turn-end is NOT a dependable ACP primitive. But multi-turn journeys ARE
+// dependable when each turn STOPS at a deterministic tool boundary via
+// stopAfterToolTitle (which fires session/cancel the moment the named tool's
+// output lands) rather than waiting for end_turn: the workspace journey leg
+// (t-acp-kiro-journey-workspace) reuses one keepAlive AcpSession across turns and
+// drives the conductor's offer→confirm flow this way, spike-verified 3/3. Gate
+// loops that need a HUMAN-shaped voluntary stop still belong to the TUI driver;
+// ACP's lane is single-turn contracts (and bounded multi-turn sequences) anchored
+// by stopAfterToolTitle.
 
 /** Run one agentic turn through `kiro-cli acp` and return structure. */
 export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResult> {
