@@ -35,6 +35,10 @@ to scaffold \`aidlc-docs/\`, \`$aidlc --doctor\` to validate setup, and
 
     agents_note: `On Codex the agent personas are transposed into \`.agents/\` TOMLs (the conductor reads the persona \`.md\` bodies as prose); the two subagent stages (2.1, 3.5) run as \`codex exec\` workers.`,
 
+    hooks_or_extensions: `- **Hooks**: \`{{HARNESS_DIR}}/hooks/\` — Framework hooks for audit emission, session lifecycle, state sync, state validation, subagent tracking, and statusline rendering. All framework files prefixed \`aidlc-*.ts\`.`,
+
+
+    hook_permissions: `- **Hook permissions**: All 10 hooks are TypeScript (\`.ts\`) and run via \`bun\`. No executable bits required — works identically on macOS, Linux, and native Windows PowerShell.`,
     structure_extra: "",
 
     guide_pointer: `The Codex-specific guide (prerequisites, trust pre-seed, Bedrock config, the git-repo requirement) is \`docs/guide/harnesses/codex-cli.md\`.`,

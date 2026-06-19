@@ -262,12 +262,12 @@ core/                  # hand-authored, harness-neutral (tools, aidlc-common,
                        #   agents, rules, scopes, sensors, knowledge, hooks,
                        #   3 session skills); prose uses the {{HARNESS_DIR}} token
 harness/<name>/        # per-CLI surface: manifest.ts + orchestrator skill +
-                       #   harness files (+ emit.ts for codex)
-scripts/package.ts     # the build: copy core (token→.claude/.kiro/.codex) +
+                       #   harness files (+ emit.ts for codex and omp)
+scripts/package.ts     # the build: copy core (token→.claude/.kiro/.codex/.pi/.omp) +
                        #   harness, compile the graph, generate runners, emit;
                        #   `--check` is the byte-parity drift guard
 dist/<harness>/        # GENERATED + committed: claude/.claude, kiro/.kiro,
-                       #   codex/{.codex,.agents} — never hand-edited
+                       #   codex/{.codex,.agents}, pi/.pi, omp/.omp — never hand-edited
 ```
 
 `core/` `.ts` is byte-copied untransformed; the runtime `harnessDir()` seam

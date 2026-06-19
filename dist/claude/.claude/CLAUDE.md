@@ -24,6 +24,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 - **Team Knowledge**: `aidlc-docs/knowledge/` — User-managed team and project knowledge (per-agent + cross-agent, scaffolded by `/aidlc --init` or auto-created on workflow start).
 - **Tools**: `.claude/tools/` — Deterministic CLI tools (TypeScript, run via bun). All framework files prefixed `aidlc-*.ts`. They cover state management, audit emission, the orchestration engine (`aidlc-orchestrate.ts` with its `next`/`report` subcommands), graph compile, runner generation, sensor firing, the §13 learnings gate (`aidlc-learnings.ts`), and the swarm convergence referee (`aidlc-swarm.ts`).
 - **Hooks**: `.claude/hooks/` — Framework hooks for audit emission, session lifecycle, state sync, state validation, subagent tracking, and statusline rendering. All framework files prefixed `aidlc-*.ts`.
+
 ## Conventions
 
 - All artifacts go to `aidlc-docs/` under the workspace root; application code goes to the workspace root
@@ -35,6 +36,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 ## Documentation
 
 For full documentation, see `docs/guide/` (User Guide), `docs/harness-engineering/` (Harness Engineer Guide), and `docs/reference/` (Developer Reference); start at `docs/README.md`.
+
 ## Session Resumption
 
 On startup, check for `aidlc-docs/aidlc-state.md`. If found, load prior context and offer to resume from last checkpoint.

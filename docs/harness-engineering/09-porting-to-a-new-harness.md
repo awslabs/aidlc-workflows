@@ -1,7 +1,7 @@
 # Porting AI-DLC to a New Harness
 
 AI-DLC ships from **one core, many harnesses** — today Claude Code, Kiro CLI,
-and Codex CLI, and the set is open. The hand-authored source is a
+Kiro IDE, Codex CLI, Pi, and oh-my-pi (omp), and the set is open. The hand-authored source is a
 harness-neutral `core/` plus a thin `harness/<name>/` surface per CLI; the
 packager (`scripts/package.ts`) regenerates each committed `dist/<harness>/`
 tree. Adding another harness is **one directory and one manifest row** — the
@@ -21,7 +21,10 @@ core/                      # harness-neutral source — not edited to add a harn
 harness/
   claude/  manifest.ts · skills/aidlc/ · CLAUDE.md · settings.json
   kiro/    manifest.ts · skills/aidlc/ · agents/*.json · hooks/aidlc-kiro-adapter.ts · settings/cli.json · AGENTS.md
+  kiro-ide/  manifest.ts · skills/aidlc/ · agents/*.json · hooks/*.kiro.hook · settings/cli.json · AGENTS.md
   codex/   manifest.ts · emit.ts · skills/aidlc/ · hooks/aidlc-codex-adapter.ts
+  pi/      manifest.ts · skills/aidlc/ · extensions/ · settings.json · CLAUDE.md
+  omp/     manifest.ts · emit.ts · skills/aidlc/ · hooks/ · tools/aidlc-orchestrate/ · APPEND_SYSTEM.md
 scripts/
   package.ts               # bun scripts/package.ts [<name>] [--check]
   manifest-types.ts        # the HarnessManifest contract every manifest implements
@@ -51,7 +54,7 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `coreDirs: DirMap[]` — which `core/<src>` dirs project into `<harnessDir>/<dst>`.
   Rename or drop dirs here (Kiro `rules → steering`; Codex `rules → aidlc-rules`
   and drops `skills/` — see emit). The 3 session skills are core dirs for
-  in-tree harnesses (claude, kiro); codex emits them instead.
+  in-tree harnesses (claude, kiro, kiro-ide, pi); codex and omp emit them instead.
 - `harnessFiles: FileMap[]` — authored surfaces copied verbatim from
   `harness/<name>/<src>` into the dist (`.md` get token substitution).
   `projectRoot: true` lands a file beside the harness dir (e.g. `AGENTS.md`).

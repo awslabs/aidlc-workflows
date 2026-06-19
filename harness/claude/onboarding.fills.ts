@@ -20,6 +20,10 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     agents_note: `Each is a flat \`.md\` file prefixed \`aidlc-<role>-agent.md\`; the conductor adopts the persona inline, or delegates to it via the \`Task\` tool for the two subagent stages (2.1, 3.5).`,
 
+    hooks_or_extensions: `- **Hooks**: \`{{HARNESS_DIR}}/hooks/\` — Framework hooks for audit emission, session lifecycle, state sync, state validation, subagent tracking, and statusline rendering. All framework files prefixed \`aidlc-*.ts\`.`,
+
+    hook_permissions: `- **Hook permissions**: All 10 hooks are TypeScript (\`.ts\`) and run via \`bun\`. No executable bits required — works identically on macOS, Linux, and native Windows PowerShell.`,
+
     structure_extra: "",
 
     guide_pointer: "",

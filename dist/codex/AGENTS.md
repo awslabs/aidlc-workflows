@@ -33,6 +33,7 @@ to scaffold `aidlc-docs/`, `$aidlc --doctor` to validate setup, and
 - **Team Knowledge**: `aidlc-docs/knowledge/` — User-managed team and project knowledge (per-agent + cross-agent, scaffolded by `$aidlc --init` or auto-created on workflow start).
 - **Tools**: `.codex/tools/` — Deterministic CLI tools (TypeScript, run via bun). All framework files prefixed `aidlc-*.ts`. They cover state management, audit emission, the orchestration engine (`aidlc-orchestrate.ts` with its `next`/`report` subcommands), graph compile, runner generation, sensor firing, the §13 learnings gate (`aidlc-learnings.ts`), and the swarm convergence referee (`aidlc-swarm.ts`).
 - **Hooks**: `.codex/hooks/` — Framework hooks for audit emission, session lifecycle, state sync, state validation, subagent tracking, and statusline rendering. All framework files prefixed `aidlc-*.ts`.
+
 ## Conventions
 
 - All artifacts go to `aidlc-docs/` under the workspace root; application code goes to the workspace root
@@ -70,3 +71,4 @@ Commit `aidlc-docs/` (except the entries below, which may contain sensitive data
 - `aidlc-docs/runtime-graph.json` (also covers per-Bolt worktree fragments at `<worktree>/aidlc-docs/runtime-graph.json` by relative-path glob semantics)
 - `aidlc-docs/.aidlc-hooks-health/`
 - `aidlc-docs/.aidlc-sensors/`
+

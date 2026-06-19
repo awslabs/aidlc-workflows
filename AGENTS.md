@@ -2,15 +2,15 @@
 
 This directory contains a native implementation of the AI-DLC (AI-Driven
 Development Life Cycle) methodology that ships to many CLI harnesses — today
-Claude Code, Kiro CLI, and Codex CLI, and any capable CLI you port it to — from
+Claude Code, Kiro CLI, Codex CLI, Pi, and oh-my-pi (omp), and any capable CLI you port it to — from
 a single hand-authored source.
 
 ## Project Structure
 
-- `core/` — **The hand-authored, harness-neutral source of truth.** Tools, stages (`aidlc-common/`), agents, rules, scopes, sensors, knowledge, hooks, and the 3 session skills. Prose names the harness directory with the `{{HARNESS_DIR}}` token; the packager substitutes `.claude`/`.kiro`/`.codex` per tree.
-- `harness/<name>/` — **The thin per-harness authored surface.** Each holds `manifest.ts` (how to project `core/` into that harness's dist) plus the orchestrator skill and harness-specific files; `harness/codex/` adds `emit.ts` (Codex-only emissions). `claude/`, `kiro/`, `codex/`.
+- `core/` — **The hand-authored, harness-neutral source of truth.** Tools, stages (`aidlc-common/`), agents, rules, scopes, sensors, knowledge, hooks, and the 3 session skills. Prose names the harness directory with the `{{HARNESS_DIR}}` token; the packager substitutes `.claude`/`.kiro`/`.codex`/`.pi`/`.omp` per tree.
+- `harness/<name>/` — **The thin per-harness authored surface.** Each holds `manifest.ts` (how to project `core/` into that harness's dist) plus the orchestrator skill and harness-specific files; `harness/codex/` and `harness/omp/` add `emit.ts` (per-shell emissions). `claude/`, `kiro/`, `kiro-ide/`, `codex/`, `pi/`, `omp/`.
 - `scripts/package.ts` — **The build entry.** `bun scripts/package.ts` regenerates every `dist/<harness>/`; `bun scripts/package.ts --check` is the byte-parity drift guard (CI tier). `manifest-types.ts` is the shared manifest contract.
-- `dist/<harness>/` — **GENERATED, committed, drift-guarded.** `dist/claude/.claude/`, `dist/kiro/.kiro/` (+ `AGENTS.md`), `dist/codex/` (`.codex/` + `.agents/` + `AGENTS.md`). Never hand-edit — `package.ts --check` fails CI on drift. Users copy `dist/<harness>/` into their project.
+- `dist/<harness>/` — **GENERATED, committed, drift-guarded.** `dist/claude/.claude/`, `dist/kiro/.kiro/` (+ `AGENTS.md`), `dist/codex/` (`.codex/` + `.agents/` + `AGENTS.md`), `dist/pi/.pi/`, `dist/omp/` (`.omp/` + `AGENTS.md`). Never hand-edit — `package.ts --check` fails CI on drift. Users copy `dist/<harness>/` into their project.
 - `tests/` — All-TypeScript test suite (`t*.test.ts`, run via bun), four levels (smoke/unit/integration/e2e). Run `bash tests/run-tests.sh --help` for levels and profiles.
 - `docs/guide/` — User Guide: getting started, workflows, scopes, agents, customization, troubleshooting
 - `docs/harness-engineering/` — Harness Engineer Guide: reshaping AIDLC through configuration (stages, agents, scopes, rules, sensors, knowledge) without code, plus porting AIDLC to a new harness
@@ -34,7 +34,7 @@ trees. The core uses the same building blocks in every harness:
 
 - **Edit `core/` (or `harness/<name>/`), never `dist/`.** `dist/<harness>/` is generated. After editing, run `bun scripts/package.ts` to regenerate and `bun scripts/package.ts --check` to confirm no drift (the CI guard fails on a hand-edited or stale dist).
 - The orchestrator skill (`harness/<name>/skills/aidlc/SKILL.md`) is per-harness; the engine and methodology live in `core/`.
-- `harness/claude/CLAUDE.md` is the user-facing CLAUDE.md that ships in `dist/claude/` — it is NOT this file. Edit it when changing user-facing Claude behavior (commands, prerequisites, conventions); the Kiro/Codex equivalents are each harness's `AGENTS.md` (codex's is emitted from CLAUDE.md by `harness/codex/emit.ts`).
+- `harness/claude/CLAUDE.md` is the user-facing CLAUDE.md that ships in `dist/claude/` — it is NOT this file. Edit it when changing user-facing Claude behavior (commands, prerequisites, conventions); the Kiro/Codex/OMP equivalents are each harness's `AGENTS.md` (codex's is emitted from CLAUDE.md by `harness/codex/emit.ts`; omp's is rendered from the shared onboarding template with `harness/omp/onboarding.fills.ts`). Pi ships `dist/pi/.pi/CLAUDE.md` (same template, Pi fills).
 - "harness" has three senses in this repo: `harness/` (top-level, the per-CLI distribution surfaces — this effort), `docs/harness-engineering/` (the Harness Engineer Guide), and `tests/harness/` (test-suite helper library) — unrelated.
 - See `docs/guide/` (User Guide), `docs/harness-engineering/` (Harness Engineer Guide), and `docs/reference/` (Developer Reference) for full documentation
 

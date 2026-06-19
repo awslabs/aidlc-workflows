@@ -62,9 +62,9 @@ const command: string = parsed.tool_input?.command ?? "";
 //    `aidlc-orchestrate.ts report` is included because the conductor calls it
 //    as the public transition surface; the state-tool emit happens in its
 //    subprocess, which PostToolUse cannot see as a separate Bash command.
-const aidlcTransitionTool = /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-(state|jump|bolt|utility)\.ts\b/;
-const aidlcOrchestrateReport = /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-orchestrate\.ts\b.*\breport\b/;
-const aidlcRuntimeRef = /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-runtime\.ts\b/;
+const aidlcTransitionTool = /\bbun\b.*\.[a-z][a-z0-9._-]*\/tools\/aidlc-(state|jump|bolt|utility)\.ts\b/;
+const aidlcOrchestrateReport = /\bbun\b.*\.[a-z][a-z0-9._-]*\/tools\/aidlc-orchestrate\.ts\b.*\breport\b/;
+const aidlcRuntimeRef = /\bbun\b.*\.[a-z][a-z0-9._-]*\/tools\/aidlc-runtime\.ts\b/;
 if (aidlcRuntimeRef.test(command)) process.exit(0);
 if (!aidlcTransitionTool.test(command) && !aidlcOrchestrateReport.test(command)) process.exit(0);
 

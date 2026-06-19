@@ -1,0 +1,4 @@
+{
+  "harnessDir": ".omp",
+  "rulesSubdir": "aidlc-common/rules"
+}

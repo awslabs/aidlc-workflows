@@ -16,9 +16,9 @@ Contributions to this implementation are welcome. This guide covers prerequisite
 
 ```
 core/                # Hand-authored, harness-neutral source (tools, stages, agents, rules, knowledge, hooks)
-harness/<name>/      # Per-harness authored surfaces (manifest, orchestrator skill, settings/config; e.g. claude/, kiro/, codex/)
+harness/<name>/      # Per-harness authored surfaces (manifest, orchestrator skill, settings/config; e.g. claude/, kiro/, kiro-ide/, codex/, pi/, omp/)
 scripts/package.ts   # The build: regenerates dist/<harness>/ from core/ + harness/ (`--check` drift-guards it)
-dist/<harness>/      # GENERATED distributables (claude/.claude/, kiro/.kiro/ + AGENTS.md, codex/) — never hand-edit; run the packager
+dist/<harness>/      # GENERATED distributables (claude/.claude/, kiro/.kiro/ + AGENTS.md, codex/, pi/.pi/, omp/) — never hand-edit; run the packager
 tests/               # All-TypeScript test suite (t*.test.ts, run via bun)
 docs/                # Documentation
   guide/             # User guide (how to use AI-DLC)

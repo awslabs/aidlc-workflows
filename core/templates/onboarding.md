@@ -4,7 +4,7 @@
 
 {{SLOT:prereq_bullets}}
 - **Locking**: Audit log file locking is handled portably using mkdir-based locking in the system temp directory (no external dependencies).
-- **Hook permissions**: All 10 hooks are TypeScript (`.ts`) and run via `bun`. No executable bits required — works identically on macOS, Linux, and native Windows PowerShell.
+{{SLOT:hook_permissions}}
 {{SLOT:prereq_bullets_tail}}
 
 ## AI-DLC Structure
@@ -18,7 +18,7 @@
 - **Knowledge**: `{{HARNESS_DIR}}/knowledge/` — Methodology reference. Per-agent under `aidlc-<agent>-agent/` subfolders; `aidlc-shared/` holds cross-agent material. Ships with framework.
 - **Team Knowledge**: `aidlc-docs/knowledge/` — User-managed team and project knowledge (per-agent + cross-agent, scaffolded by `{{INVOKE}} --init` or auto-created on workflow start).
 - **Tools**: `{{HARNESS_DIR}}/tools/` — Deterministic CLI tools (TypeScript, run via bun). All framework files prefixed `aidlc-*.ts`. They cover state management, audit emission, the orchestration engine (`aidlc-orchestrate.ts` with its `next`/`report` subcommands), graph compile, runner generation, sensor firing, the §13 learnings gate (`aidlc-learnings.ts`), and the swarm convergence referee (`aidlc-swarm.ts`).
-- **Hooks**: `{{HARNESS_DIR}}/hooks/` — Framework hooks for audit emission, session lifecycle, state sync, state validation, subagent tracking, and statusline rendering. All framework files prefixed `aidlc-*.ts`.
+{{SLOT:hooks_or_extensions}}
 {{SLOT:structure_extra}}
 ## Conventions
 

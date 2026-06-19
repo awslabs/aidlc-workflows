@@ -3,7 +3,7 @@
 > Part of the [AI-DLC documentation](../README.md) · [User Guide](../guide/00-introduction.md) · **Harness Engineer Guide** · [Developer Reference](../reference/00-overview.md)
 
 AI-DLC is a methodology, and this implementation ships it working out of the box
-on the harness you use — Claude Code, Kiro CLI, or Codex CLI: 11 agents, 32
+on the harness you use — Claude Code, Kiro CLI, Kiro IDE, Codex CLI, Pi, or oh-my-pi (omp): 11 agents, 32
 stages, 9 scopes, a set of rules and sensors. This guide is for the person who
 wants to **reshape** that methodology — change which stages run, add an agent for
 a domain the framework doesn't cover, tighten a scope, teach the framework a

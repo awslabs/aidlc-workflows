@@ -17,19 +17,19 @@ For hooks: see [Hooks and Tools](06-hooks-and-tools.md). For knowledge: see [Kno
 The AI-DLC concept is the constant; the primitive that carries it is the
 harness parameter. Add a column when you port to a new harness.
 
-| AI-DLC Concept | Claude Code | Kiro CLI | Codex CLI |
-|----------------|-------------|----------|-----------|
-| **Orchestrator entry** (`/aidlc` + runners) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`$aidlc`) |
-| **Agent personas** (11 domain experts) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | `.agents/` TOMLs |
-| **Automation** (audit, state, tracking) | Hooks via `settings.json` | Hooks via `agents/aidlc.json` | Hooks via `.codex/hooks.json` (one adapter) |
-| **Standing rules** (the layer chain) | `.claude/rules/` | `.kiro/steering/` | `.codex/aidlc-rules/` |
-| **Project onboarding doc** | `CLAUDE.md` | `AGENTS.md` | `AGENTS.md` |
-| **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | `.codex/config.toml` (+ Starlark `rules/`) |
+| AI-DLC Concept | Claude Code | Kiro CLI | Codex CLI | Pi | oh-my-pi (omp) |
+|----------------|-------------|----------|-----------|-----|----------------|
+| **Orchestrator entry** (`/aidlc` + runners) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`$aidlc`) | Skills (`/aidlc`) | Commands (`/aidlc-<stage>`) + Custom tool (`aidlc_orchestrate`) |
+| **Agent personas** (11 domain experts) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | `.agents/` TOMLs | `.pi/agents/*.md` | `.omp/agents/*.md` |
+| **Automation** (audit, state, tracking) | Hooks via `settings.json` | Hooks via `agents/aidlc.json` | Hooks via `.codex/hooks.json` (one adapter) | Extensions (`aidlc-hooks`) | Hooks via `hooks/pre/` + `hooks/post/` |
+| **Standing rules** (the layer chain) | `.claude/rules/` | `.kiro/steering/` | `.codex/aidlc-rules/` | `.pi/rules/` | `.omp/aidlc-common/rules/` (compiled → `.omp/RULES.md`) |
+| **Project onboarding doc** | `CLAUDE.md` | `AGENTS.md` | `AGENTS.md` | `.pi/CLAUDE.md` | `AGENTS.md` |
+| **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | `.codex/config.toml` (+ Starlark `rules/`) | `.pi/settings.json` | `.omp/APPEND_SYSTEM.md` + omp config |
 
 The deterministic engine, state machine, audit log, stage graph, and swarm
 referee underneath are byte-identical across every harness — only the primitives
 that carry them differ. The rest of this chapter documents the **Claude Code**
-expression of each primitive in detail; for the Kiro and Codex equivalents see
+expression of each primitive in detail; for the Kiro, Codex, Pi, and OMP equivalents see
 their guide chapters.
 
 ---

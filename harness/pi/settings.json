@@ -1,0 +1,35 @@
+{
+  "companyAnnouncements": [
+    "# AI-DLC — AI-Driven Development Life Cycle\n\nRun `/skill:aidlc` to start or resume a workflow. Describe what to build and scope is auto-detected.\n\n**Phases** (32 stages across 5 phases):\n\n| Phase          | Stages       | Focus                                            |\n|----------------|--------------|--------------------------------------------------|\n| INITIALIZATION | 0.1–0.3 (3)  | Bootstrap state, scaffold dirs, detect workspace |\n| IDEATION       | 1.1–1.7 (7)  | Validate intent, scope, feasibility              |\n| INCEPTION      | 2.1–2.8 (8)  | Practices, requirements, design, planning        |\n| CONSTRUCTION   | 3.1–3.7 (7)  | Build, test, CI — per unit                       |\n| OPERATION      | 4.1–4.7 (7)  | Deploy, observe, optimise                        |\n\n**Scopes:** poc, mvp, feature, bugfix, refactor, security-patch, infra, enterprise, workshop\n\nRun `/aidlc --doctor` to validate your setup. Run `/aidlc --help` for all commands."
+  ],
+  "env": {
+    "AWS_AIDLC_DEFAULT_SCOPE": "workshop",
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "AWS_REGION": "us-east-1",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "us.anthropic.claude-opus-4-8",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "us.anthropic.claude-sonnet-4-6",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+  },
+  "extensions": ["aidlc-hooks", "askuserquestion"],
+  "statusLine": {
+    "type": "command",
+    "command": "bun $PI_PROJECT_DIR/.pi/scripts/aidlc-statusline.ts"
+  },
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash(bun $PI_PROJECT_DIR/.pi/tools/*)",
+      "Bash",
+      "Glob",
+      "Grep",
+      "Task",
+      "WebSearch"
+    ]
+  },
+  "model": "opus[1m]",
+  "effortLevel": "high",
+  "packages": [],
+  "prompts": []
+}

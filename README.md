@@ -4,12 +4,14 @@ A native implementation of the **AI-DLC methodology** (AI-Driven Development Lif
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.0.2-blue)
+![version](https://img.shields.io/badge/version-2.0.3-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
 ![Claude Code](https://img.shields.io/badge/harness-Claude%20Code-orange)
 ![Codex CLI](https://img.shields.io/badge/harness-Codex%20CLI-orange)
+![Pi](https://img.shields.io/badge/harness-Pi-orange)
+![oh--my--pi](https://img.shields.io/badge/harness-oh--my--pi-orange)
 
 > [!NOTE]
 > This implementation realizes the autonomous software development vision, the core principles, and the architecture specified in the [AI-DLC Workflows 2.0 Specification](https://github.com/awslabs/aidlc-workflows/blob/v2/assets/AI-DLC-Workflows-2.0-Specification.pdf) whitepaper, rendered natively across multiple CLI harnesses from one source. It is under active development (pre-1.0) — the layout, skill set, and install model are still evolving, so expect breaking changes between releases.
@@ -49,6 +51,8 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 | **Kiro CLI** (≥ 2.6) | `dist/kiro/.kiro/` → `<project>/.kiro/` (+ `dist/kiro/AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro CLI](docs/guide/harnesses/kiro-cli.md). |
 | **Claude Code** | `dist/claude/.claude/` → `<project>/.claude/` | `/aidlc` | [Quick Start](#quick-start) below + [Getting Started](docs/guide/01-getting-started.md). |
 | **Codex CLI** (≥ 0.139.0) | `dist/codex/` → `<project>/` (`.codex/` + `.agents/` + `AGENTS.md`) | `$aidlc` (or `/skills` → aidlc) | [Quick Start](#quick-start) below + [AI-DLC on Codex CLI](docs/guide/harnesses/codex-cli.md). |
+| **Pi** | `dist/pi/.pi/` → `<project>/.pi/` (+ `dist/pi/.pi/CLAUDE.md`) | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on Pi](docs/guide/harnesses/pi.md). |
+| **oh-my-pi (omp)** | `dist/omp/.omp/` → `<project>/.omp/` (+ `dist/omp/AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on oh-my-pi](docs/guide/harnesses/omp.md). |
 
 The deterministic engine — state machine, audit log, and the referee that coordinates parallel agents — is byte-identical across every harness; only the shell differs. Each section in the [Quick Start](#quick-start) installs one harness end to end, and its guide above goes deeper on prerequisites and differences.
 
@@ -201,7 +205,138 @@ After copying, apply the `.gitignore` entries from the shipped `AGENTS.md` befor
 bun .codex/tools/aidlc-utility.ts doctor
 ```
 
-Invoke the orchestrator with `$aidlc` (or `/skills` → aidlc) followed by a scope or description. The [Codex guide](docs/guide/harnesses/codex-cli.md) covers the trust dialog, config merge, and sandbox/git notes in full.
+<details>
+<summary><b>Pi</b></summary>
+
+**1. Install Pi** (earendil-works coding agent)
+
+```bash
+# macOS / Linux
+curl -fsSL https://pi.dev/install.sh | sh
+```
+
+```powershell
+# Windows PowerShell
+powershell -c "irm https://pi.dev/install.ps1 | iex"
+```
+
+```bash
+# Alternative: npm/pnpm/bun
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+```
+
+**2. Set up your project**
+
+```bash
+cp -r dist/pi/.pi/  your-project/.pi/
+# Pi uses .pi/CLAUDE.md as its onboarding doc (inside the harness dir)
+```
+
+Inside Pi, run:
+
+```
+/aidlc --doctor                                          # verify the setup
+/aidlc Build a task management API with user authentication   # start a workflow
+```
+
+The shipped `.pi/settings.json` runs on **AWS Bedrock** (`AWS_REGION=us-east-1`, Opus 4.8 pinned). Enable model access in your AWS account and have credentials on your SDK chain. Pi uses the `aidlc-hooks` extension (consolidated audit, sensors, runtime compile, session lifecycle, state validation, subagent tracking, stop hook, statusline) and the `askuserquestion` extension for approval gates.
+
+</details>
+
+<details>
+<summary><b>oh-my-pi (omp)</b></summary>
+
+**1. Install oh-my-pi**
+
+```bash
+# macOS / Linux
+curl -fsSL https://omp.sh/install | sh
+```
+
+```powershell
+# Windows PowerShell
+irm https://omp.sh/install.ps1 | iex
+```
+
+```bash
+# Alternative: bun
+bun install -g @oh-my-pi/pi-coding-agent
+```
+
+**2. Set up your project**
+
+```bash
+cp -r dist/omp/.omp/  your-project/.omp/
+cp dist/omp/AGENTS.md your-project/AGENTS.md   # merge if you already have one
+```
+
+Run `omp -p '/extensions'` to confirm all skills, agents, hooks, commands, tools, and rules loaded from your project, then inside an omp session:
+
+```
+/aidlc --doctor                                          # validate the methodology state
+/aidlc Build a task management API with user authentication   # start a workflow
+```
+
+Omp uses its custom tool `aidlc_orchestrate` (exposes the engine as an omp custom tool rather than a subprocess), filesystem-driven hooks in `hooks/pre/` and `hooks/post/`, rules at `.omp/aidlc-common/rules/` (compiled into `.omp/RULES.md` for always-apply context), and slash commands at `.omp/commands/` (`/aidlc-<stage>`, `/aidlc-<scope>`, plus utility commands). The system prompt tail `.omp/APPEND_SYSTEM.md` is injected into every session.
+
+</details>
+
+ DE<|tool_call_begin|>assistant<|tool_call_begin|>assistant<|tool_call_begin|>assistant<|tool_call_begin|>assistant
+<|tool_call_begin|>assistant
+The edit seems to have failed or the input was malformed. Let me try a different approach - I'll read the file again and make the edit more carefully.
+<tool_call>
+<function=read>
+<details>
+<summary><b>Pi</b></summary>
+
+**1. Install Pi** (earendil-works coding agent)
+
+```bash
+# Pi is a standalone CLI; follow the Pi installation guide for your platform
+```
+
+**2. Set up your project**
+
+```bash
+cp -r dist/pi/.pi/  your-project/.pi/
+# Pi uses .pi/CLAUDE.md as its onboarding doc (inside the harness dir)
+```
+
+Inside Pi, run:
+
+```
+/aidlc --doctor                                          # verify the setup
+/aidlc Build a task management API with user authentication   # start a workflow
+```
+
+The shipped `.pi/settings.json` runs on **AWS Bedrock** (`AWS_REGION=us-east-1`, Opus 4.8 pinned). Enable model access in your AWS account and have credentials on your SDK chain. Pi uses the `aidlc-hooks` extension (consolidated audit, sensors, runtime compile, session lifecycle, state validation, subagent tracking, stop hook, statusline) and the `askuserquestion` extension for approval gates.
+
+</details>
+
+<details>
+<summary><b>oh-my-pi (omp)</b></summary>
+
+**1. Install oh-my-pi**
+
+```bash
+# omp is a standalone CLI; follow the omp installation guide for your platform
+```
+
+**2. Set up your project**
+
+```bash
+cp -r dist/omp/.omp/  your-project/.omp/
+cp dist/omp/AGENTS.md your-project/AGENTS.md   # merge if you already have one
+```
+
+Run `omp -p '/extensions'` to confirm all skills, agents, hooks, commands, tools, and rules loaded from your project, then inside an omp session:
+
+```
+/aidlc --doctor                                          # validate the methodology state
+/aidlc Build a task management API with user authentication   # start a workflow
+```
+
+Omp uses its custom tool `aidlc_orchestrate` (exposes the engine as an omp custom tool rather than a subprocess), filesystem-driven hooks in `hooks/pre/` and `hooks/post/`, rules at `.omp/aidlc-common/rules/` (compiled into `.omp/RULES.md` for always-apply context), and slash commands at `.omp/commands/` (`/aidlc-<stage>`, `/aidlc-<scope>`, plus utility commands). The system prompt tail `.omp/APPEND_SYSTEM.md` is injected into every session.
 
 </details>
 
@@ -235,7 +370,9 @@ aidlc-claude/
 │   ├── claude/                 #   manifest.ts · orchestrator skill · settings.json · onboarding fills
 │   ├── kiro-ide/               #   manifest.ts · orchestrator · agent JSONs · .kiro.hook files · settings · onboarding fills
 │   ├── kiro/                   #   manifest.ts · orchestrator · agent JSONs · settings · onboarding fills (CLI — agent-JSON hooks)
-│   └── codex/                  #   manifest.ts · emit.ts (Codex-only emissions) · orchestrator · hooks adapter
+│   ├── codex/                  #   manifest.ts · emit.ts (Codex-only emissions) · orchestrator · hooks adapter
+│   ├── pi/                     #   manifest.ts · orchestrator skill · extensions (aidlc-hooks, askuserquestion) · settings · onboarding fills
+│   └── omp/                    #   manifest.ts · emit.ts (OMP-only emissions) · orchestrator · hooks · custom tool · onboarding fills
 │
 ├── scripts/
 │   ├── package.ts              # THE build entry: copy core+harness per manifest → graph compile →
@@ -247,7 +384,9 @@ aidlc-claude/
 │   ├── claude/.claude/                       # what Claude Code users copy
 │   ├── kiro-ide/{AGENTS.md, .kiro/}          # what Kiro IDE users copy
 │   ├── kiro/{AGENTS.md, .kiro/}              # what Kiro CLI users copy
-│   └── codex/{AGENTS.md, .agents/, .codex/}  # what Codex CLI users copy
+│   ├── codex/{AGENTS.md, .agents/, .codex/}  # what Codex CLI users copy
+│   ├── pi/.pi/                               # what Pi users copy
+│   └── omp/{AGENTS.md, .omp/}                # what oh-my-pi users copy
 │
 │  ─────────── SUPPORTING ───────────
 ├── tests/                      # all-TypeScript suite (t*.test.ts) — resolves dist via AIDLC_SRC
@@ -264,7 +403,7 @@ hand-edit `dist/`**, the drift guard fails CI.
 
 ```bash
 bun scripts/package.ts            # regenerate every dist/<harness>/ from core/ + harness/
-bun scripts/package.ts <name>     # regenerate one harness (e.g. claude, kiro-ide, codex)
+bun scripts/package.ts <name>     # regenerate one harness (e.g. claude, kiro-ide, codex, pi, omp)
 bun scripts/package.ts --check    # byte-parity drift guard (run in CI)
 ```
 
@@ -289,10 +428,11 @@ Most first-run trouble is one of these; each harness guide covers the rest.
 | --- | --- | --- |
 | `which bun` works in your terminal, but the harness can't find bun | all | bun isn't on the non-interactive PATH. Copy the `BUN_INSTALL`/`PATH` export into `~/.zshenv` (zsh) or `~/.bashrc` (bash/Git Bash) — see the tip under [Quick Start](#quick-start). |
 | `/aidlc --doctor` reports a Codex CLI version below 0.139.0 | Codex | Upgrade to Codex CLI 0.139.0 or later. Older releases break subagent attribution and hyphenated agent TOML resolution. |
-| Bedrock calls fail with `AccessDenied` or a model-not-found error | Claude, Codex | Enable model access for the harness's configured models in your AWS account and put working credentials on your SDK chain. Confirm `AWS_REGION` is a region where you enabled them. |
+| Bedrock calls fail with `AccessDenied` or a model-not-found error | Claude, Codex, Pi, omp | Enable model access for the harness's configured models in your AWS account and put working credentials on your SDK chain. Confirm `AWS_REGION` is a region where you enabled them. |
 | Hooks never fire (no audit rows, no gates) | Codex | Trust the hooks: run `bun scripts/package.ts codex trust --project <dir>`, or start one TUI session and choose "Trust all." Untrusted hooks never run. |
+| OMP hooks fire but wrong directory | omp | OMP hooks require the project root as CWD. Run `omp` from your project root, not a subdirectory. |
+| Pi extensions not loaded | Pi | Run `bun scripts/package.ts pi` to regenerate `.pi/extensions/` from `harness/pi/`. |
 | Skills or rules don't take effect after you copy a new `dist/` | all | Start a fresh session — harnesses load skills, agents, and rules at session start. |
-
 ## Contributing
 
 See [Contributing Guide](docs/reference/11-contributing.md) for prerequisites, workflow, and submission process.
