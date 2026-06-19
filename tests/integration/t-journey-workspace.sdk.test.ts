@@ -27,12 +27,18 @@
 //      registry rows + record dirs, distinct UUIDs, and A's state + audit shard
 //      byte-untouched by B's birth.
 //   4. `/aidlc space-create teamB` → `/aidlc space teamB` → birth an intent
-//      there. Asserted: teamB/memory/org.md copied from default's; team.md +
-//      project.md are FRESH EMPTY stubs (default's promoted learnings do NOT
-//      leak); the space-level knowledge/ dir appears at FIRST BIRTH into teamB
-//      (lazy ensure-exists), NOT at space-create; the active-space cursor moved.
-//   5. `/aidlc space default` → intent A is still resumable (the cursor flip is a
-//      pure write) and its audit shard is intact.
+//      there. The two space verbs are driven the PLAIN user way — the engine now
+//      routes a leading space/space-create/intent token through the conductor
+//      (aidlc-orchestrate.ts Branch 1b → terminal print naming aidlc-utility.ts),
+//      so no "do NOT run next" steering is needed; the conductor runs the named
+//      utility and stops without touching the active intent. Asserted:
+//      teamB/memory/org.md copied from default's; team.md + project.md are FRESH
+//      EMPTY stubs (default's promoted learnings do NOT leak); the space-level
+//      knowledge/ dir appears at FIRST BIRTH into teamB (lazy ensure-exists), NOT
+//      at space-create; the active-space cursor moved.
+//   5. `/aidlc space default` (again the plain conductor-routed switch) → intent A
+//      is still resumable (the cursor flip is a pure write) and its audit shard is
+//      intact.
 //
 // DRIFT NOTE (verified @ this branch, surfaced for the runbook): the engine's
 // `next` flag parser (aidlc-orchestrate.ts parseNextFlags :249) does NOT
@@ -109,19 +115,6 @@ function birthToolPrompt(scope: string, args: string): string {
     `Run this exact command with the Bash tool and then stop — do NOT run \`next\`, ` +
     `do NOT advance or scope-change the currently active intent: ` +
     `bun .claude/tools/aidlc-utility.ts intent-birth --scope ${scope} --arguments ${JSON.stringify(args)}`
-  );
-}
-
-/** Switch the active SPACE via the space utility directly (not via `next`).
- *  `/aidlc space <name>` is fed to `next`, which doesn't handle the `space` verb;
- *  with an active intent in the current space the engine advances THAT intent
- *  (Branch 10) instead of switching (a verified codex step-5 failure). Naming the
- *  tool runs handleSpace and moves only the active-space cursor. */
-function spaceSwitchPrompt(name: string): string {
-  return (
-    `Run this exact command with the Bash tool and then stop — do NOT run \`next\`, ` +
-    `do NOT advance the currently active intent: ` +
-    `bun .claude/tools/aidlc-utility.ts space ${name}`
   );
 }
 
@@ -285,11 +278,17 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         // space-create provisions memory/ + intents/ ONLY — no knowledge/ yet.
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(false);
 
-        // Switch into teamB and birth an intent there.
-        await driveAidlc(spaceSwitchPrompt("teamB"), {
+        // Switch into teamB and birth an intent there. The plain `/aidlc space
+        // teamB` is forwarded to `next`, which (with intent A active in default)
+        // recognises the leading `space` verb and emits a TERMINAL print naming
+        // `aidlc-utility.ts space teamB` (Branch 1b, before state inspection — so
+        // the active intent is never advanced); the conductor runs that tool and
+        // stops. The on-disk cursor moving to teamb is the proof the real path ran.
+        await driveAidlc(`/aidlc space teamB`, {
           projectDir: root,
           answerScript: "default",
           timeoutMs: VERB_DRIVE_MS,
+          stopAfterToolResult: { resultIncludes: `Active space → ${TEAM_B_SLUG}` },
         });
         expect(activeSpace(root)).toBe(TEAM_B_SLUG); // the active-space cursor moved
 
@@ -311,10 +310,12 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);
 
         // --- Step 5: switch back to default; intent A still resumable ---------
-        await driveAidlc(spaceSwitchPrompt("default"), {
+        // Same plain conductor-routed switch as beat 4, back the other way.
+        await driveAidlc(`/aidlc space default`, {
           projectDir: root,
           answerScript: "default",
           timeoutMs: VERB_DRIVE_MS,
+          stopAfterToolResult: { resultIncludes: "Active space → default" },
         });
         expect(activeSpace(root)).toBe("default");
         // A's WORKFLOW STATE survived the round trip untouched (the cursor flip is

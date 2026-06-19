@@ -82,19 +82,6 @@ function birthToolPrompt(scope: string, args: string): string {
   );
 }
 
-/** Prompt the conductor to switch the active SPACE via the space utility
- *  directly. `/aidlc space <name>` is fed to `next`, which does not handle the
- *  `space` verb; with an active intent in the current space the engine advances
- *  THAT intent (Branch 10) instead of switching (a verified codex step-5 failure:
- *  `space default` left the cursor on teamb). Naming the tool runs handleSpace. */
-function spaceSwitchPrompt(name: string): string {
-  return (
-    `Run this exact command with the shell and then stop — do NOT run \`next\`, ` +
-    `do NOT advance the currently active intent: ` +
-    `bun .codex/tools/aidlc-utility.ts space ${name}`
-  );
-}
-
 function codexVersionOk(): boolean {
   const r = spawnSync(CODEX_BIN, ["--version"], { encoding: "utf-8" });
   const m = (r.stdout ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
@@ -277,7 +264,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         expect(readFileSync(join(teamBMemory, "project.md"), "utf-8")).toBe("# Project overrides\n");
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(false);
 
-        const r4b = execCodex(root, home, spaceSwitchPrompt("teamB"));
+        const r4b = execCodex(root, home, `Use the $aidlc skill to run: /aidlc space teamB`);
         expect(r4b.rc).toBe(0);
         expect(activeSpace(root)).toBe(TEAM_B_SLUG);
 
@@ -288,7 +275,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);
 
         // --- Step 5: back to default; A still resumable ----------------------
-        const r5 = execCodex(root, home, spaceSwitchPrompt("default"));
+        const r5 = execCodex(root, home, `Use the $aidlc skill to run: /aidlc space default`);
         expect(r5.rc).toBe(0);
         expect(activeSpace(root)).toBe("default");
         // A's workflow state survived the round trip; no foreign birth bled in.

@@ -13,43 +13,41 @@
 // and NEVER the inferred scope (the conductor infers a new intent's scope from the
 // new-work text — non-deterministic; the invariants below do not depend on it).
 //
-// TWO conducting techniques, by surface design (both live-verified on this branch,
-// kiro-cli 2.7.0):
+// ALL FIVE beats drive through the PRODUCTION `aidlc` conductor (live-verified on
+// this branch, kiro-cli 2.7.0):
 //
-//   * Beats 1-3 drive through the PRODUCTION `aidlc` conductor. Beat 3 (birth a
-//     2nd intent alongside active A) is the conductor's AUTHORIZED offer→confirm
-//     routing (SKILL.md § "New work while an intent is active": on a genuine
-//     new-work prose it renders an offer, and on the human's "Yes" it runs
-//     `intent-birth` DIRECTLY — "the same run-then-continue shape the print
-//     directive already uses"). That does NOT fight the forwarding override in
+//   * Beats 1-3. Beat 3 (birth a 2nd intent alongside active A) is the conductor's
+//     AUTHORIZED offer→confirm routing (SKILL.md § "New work while an intent is
+//     active": on a genuine new-work prose it renders an offer, and on the human's
+//     "Yes" it runs `intent-birth` DIRECTLY — "the same run-then-continue shape the
+//     print directive already uses"). That does NOT fight the forwarding override in
 //     agents/aidlc.json, so the production conductor births the 2nd intent over a
 //     keepAlive multi-turn ACP session: turn 1 auto-births A, turn 2 (new-work)
 //     stops at the offer's compare-read (`intent --json`), turn 3 (confirm) stops
 //     at the birth. Live-verified: turn 3 ran `intent-birth` directly; A's state
 //     was byte-unchanged.
 //
-//   * Beats 4-5 (space-create teamB · switch · birth into teamB · switch back) are
-//     driven through the `aidlc-developer-agent` (a delegation target), NOT the
-//     production `aidlc` conductor — DELIBERATE, documented, not a workaround for
-//     tidiness. Unlike beat 3's offer→confirm, the `space`/`space-create` verbs
-//     have NO authorized conductor routing path: the engine's `next` does not parse
-//     or route them (verified — parseNextFlags aidlc-orchestrate.ts:249 has no
-//     space branch, and the Branch ladder has none; `space-create teamB` falls into
-//     freeform intent words → with active A, Branch 10 advances A instead, the
-//     Codex leg's spaceSwitchPrompt comment documents the same failure). And the
-//     production `aidlc` agent's prompt hard-wires "The engine binary
-//     aidlc-orchestrate.ts is the ONLY authority on the next move … never re-derive
-//     routing", so naming the space tool to it routes to `next` (a verified probe:
-//     the agent's first tool call was `next`, never the space verb). So there is no
-//     single ACP turn through the production conductor that runs a space verb. The
-//     `aidlc-developer-agent` IS the drivable surface: its config carries
-//     `execute_bash` with allowedCommands `bun \.kiro/tools/.*` (so the space verbs
-//     are permitted) and its persona file lacks the forwarding override, so it just
-//     runs the exact command it is given and stops. Live-verified: each beat-4/5
-//     turn's first AND only tool call was the named space/birth command; zero
-//     `next`. This proves the ACP SURFACE carries the space-switch + isolated-birth
-//     mutations live; the production conductor's offer→confirm half is exercised by
-//     beat 3 above and by the SDK + Codex legs.
+//   * Beats 4-5 (space-create teamB · switch · birth into teamB · switch back) now
+//     ALSO drive through the production `aidlc` conductor — the d44828b engine fix
+//     routes the workspace navigation verbs through `next`: a LEADING
+//     `space`/`space-create`/`intent` token (parseNextFlags aidlc-orchestrate.ts:276,
+//     WORKSPACE_VERBS:146) maps to a TERMINAL print directive naming
+//     `bun .kiro/tools/aidlc-utility.ts <verb> [<arg>]` (handleNext Branch 1b ~:921,
+//     placed BEFORE state inspection so it works with or without an active workflow
+//     — it never advances a workflow). The `aidlc` agent's prompt rule (3) — "When a
+//     directive is a print whose message names a command to run, run THAT EXACT
+//     command as your immediate next tool call" — makes the live conductor honor it:
+//     each beat-4/5 turn's tool calls are exactly `next <verb>` (forward) then
+//     `aidlc-utility.ts <verb>` (run the named tool); zero intent-advance.
+//     Live-verified 3/3 via a throwaway spike (the ndjson trace showed the two-call
+//     pair for space-create/space/space default, never a `next`-advances-A). The
+//     teamB birth (4c) rides the same engine seam: in teamB (zero intents) a
+//     `/aidlc --scope poc "<desc>"` hits the birth gate (Branch 9a →
+//     birthPrintDirective ~:1231) which prints `intent-birth …`; the conductor runs
+//     it. Each space verb is its own single-turn driveKiroAcp call (ACP is
+//     single-turn; stopAfterToolTitle catches the named tool's output). This proves
+//     the ACP SURFACE carries the space-switch + isolated-birth mutations live
+//     through the SAME production conductor the SDK + Codex legs exercise.
 //
 // (There is NO Kiro-TUI leg for these beats — Kiro ships no statusline, so the
 // render-half matrix is Claude only for the statusline surface; the
@@ -199,22 +197,6 @@ function workflowStartedCount(recordDir: string): number {
   return n;
 }
 
-/** Drive ONE deterministic workspace verb through the `aidlc-developer-agent`
- *  (Approach C): the delegation target lacks the production conductor's forwarding
- *  override, so it runs the EXACT command it is handed and stops at the verb's tool
- *  boundary. The vehicle for beats 4-5 (the space verbs the production conductor
- *  cannot route — see the header). The named tool's verbatim output is captured
- *  before the stopAfterToolTitle cancel fires; the on-disk assertions are the proof. */
-async function driveDevVerb(root: string, verbArgs: string, stop: RegExp): Promise<void> {
-  await driveKiroAcp({
-    projectDir: root,
-    agent: "aidlc-developer-agent",
-    prompt: `Run this exact shell command and then stop: bun .kiro/tools/aidlc-utility.ts ${verbArgs}`,
-    timeoutMs: VERB_DRIVE_MS,
-    stopAfterToolTitle: stop,
-  });
-}
-
 describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journey)", () => {
   test.skipIf(SKIP_REASON !== null)(
     `one feature spanning two repos, per-repo codekb, a 2nd intent, a non-default space — composed live over ACP${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
@@ -229,11 +211,15 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
       // (learnings ritual + memory.md edit) instead of parsing the new-work prose,
       // so `intent --json` never ran and the turn overran (live-verified). A fresh
       // session reads the workspace clean off disk (A active, RE'd), recognises the
-      // new-work prose, and renders the offer. Beats 4-5 spawn their own
-      // `aidlc-developer-agent` sessions (the ACP agent is fixed at process spawn —
-      // driveDevVerb opens a fresh one each).
+      // new-work prose, and renders the offer. Beats 4-5 open a THIRD fresh `aidlc`
+      // session (`space`) for the same reason: beat 3's `offer` session is cancelled
+      // mid-birth, so reusing it would resume that birth rather than parse the new
+      // `/aidlc space-create` prompt. Each space verb is a terminal print directive
+      // ("…then stop"), so all of beats 4-5 reuse this ONE keepAlive `space` session
+      // (spike-verified: three sequential space verbs run clean on one session).
       const conductor = new AcpSession(root, "aidlc", true);
       const offer = new AcpSession(root, "aidlc", true);
+      const space = new AcpSession(root, "aidlc", true);
       try {
         // --- Beat 1: auto-birth A spanning both siblings ---------------------
         // Name the scope explicitly: a bare prose `/aidlc "<desc>"` emits an `ask`
@@ -319,10 +305,20 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         expect(workflowStartedCount(recordADir)).toBe(1);
 
         // --- Beat 4: non-default space — create, switch, birth there; no leak --
-        // Through the developer agent (the space verbs aren't conductor-routable —
-        // see the header). 4a: create teamB; assert org.md byte-copied from default,
-        // fresh empty team/project stubs, knowledge/ ABSENT at create time.
-        await driveDevVerb(root, "space-create teamB", /aidlc-utility\.ts space-create/);
+        // Through the PRODUCTION conductor (the d44828b fix routes the space verbs
+        // via `next` → print directive → run the named tool — see the header). Each
+        // verb is its own single-turn `/aidlc <verb>` drive on the keepAlive `space`
+        // session, bounded by stopAfterToolTitle at the named tool's output.
+        // 4a: create teamB; assert org.md byte-copied from default, fresh empty
+        // team/project stubs, knowledge/ ABSENT at create time.
+        await driveKiroAcp({
+          projectDir: root,
+          session: space,
+          prompt: `/aidlc space-create teamB`,
+          timeoutMs: VERB_DRIVE_MS,
+          stopAfterToolTitle: /aidlc-utility\.ts space-create/,
+          keepAlive: true,
+        });
         const teamBMemory = join(root, "aidlc", "spaces", TEAM_B_SLUG, "memory");
         const defaultOrg = readFileSync(
           join(root, "aidlc", "spaces", "default", "memory", "org.md"),
@@ -334,22 +330,42 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(false);
 
         // 4b: switch to teamB.
-        await driveDevVerb(root, "space teamB", /aidlc-utility\.ts space teamB/);
+        await driveKiroAcp({
+          projectDir: root,
+          session: space,
+          prompt: `/aidlc space teamB`,
+          timeoutMs: VERB_DRIVE_MS,
+          stopAfterToolTitle: /aidlc-utility\.ts space teamB/,
+          keepAlive: true,
+        });
         expect(activeSpace(root)).toBe(TEAM_B_SLUG);
 
-        // 4c: birth into teamB — knowledge/ now PRESENT (lazy ensure on first birth);
-        // teamB holds its 1 intent, default still holds its 2 (no cross-space leak).
-        await driveDevVerb(
-          root,
-          'intent-birth --scope poc --arguments "teamB onboarding flow"',
-          /aidlc-utility\.ts intent-birth/,
-        );
+        // 4c: birth into teamB via the conductor's birth gate — in teamB (zero
+        // intents) a `/aidlc --scope poc "<desc>"` hits Branch 9a → birthPrintDirective
+        // → the conductor runs `intent-birth …` directly. knowledge/ now PRESENT
+        // (lazy ensure on first birth); teamB holds its 1 intent, default still holds
+        // its 2 (no cross-space leak).
+        await driveKiroAcp({
+          projectDir: root,
+          session: space,
+          prompt: `/aidlc --scope poc "teamB onboarding flow"`,
+          timeoutMs: VERB_DRIVE_MS,
+          stopAfterToolTitle: /aidlc-utility\.ts intent-birth/,
+          keepAlive: true,
+        });
         expect(listIntents(root, TEAM_B_SLUG).length).toBe(1);
         expect(listIntents(root, "default").length).toBe(2);
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);
 
         // --- Beat 5: back to default; A still resumable ----------------------
-        await driveDevVerb(root, "space default", /aidlc-utility\.ts space default/);
+        await driveKiroAcp({
+          projectDir: root,
+          session: space,
+          prompt: `/aidlc space default`,
+          timeoutMs: VERB_DRIVE_MS,
+          stopAfterToolTitle: /aidlc-utility\.ts space default/,
+          keepAlive: true,
+        });
         expect(activeSpace(root)).toBe("default");
         // A's workflow state survived the round trip; no foreign birth bled in.
         expect(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")).toBe(stateABefore);
@@ -358,6 +374,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
       } finally {
         conductor.close();
         offer.close();
+        space.close();
         cleanupWorkspaceJourney(journey);
       }
     },
