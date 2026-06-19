@@ -134,6 +134,17 @@ const READ_ONLY_FLAGS = new Set([
   "--version",
 ]);
 
+// Workspace navigation verbs dispatched before any state inspection, mirroring
+// READ_ONLY_FLAGS. These are the explicit "cd" between teams/intents
+// (workspace-vision §3): `space <name>` / `space-create <name>` / `intent
+// <name>` switch the active space or intent (and the bare `space` / `intent`
+// list). Like the read-only flags, the engine names a TERMINAL print move and
+// the conductor runs the deterministic handler — the verbs never advance a
+// workflow, so there is nothing for `next` to continue into. Recognised ONLY as
+// the LEADING positional token (parseNextFlags guards on i === 0) so freeform
+// prose that merely contains "space"/"intent" stays freeform intent text.
+const WORKSPACE_VERBS = new Set(["space", "space-create", "intent"]);
+
 // --- Directive emission ---
 
 // Print exactly one directive as JSON to stdout, after validating it against
@@ -237,6 +248,7 @@ interface ParsedFlags {
   testRun?: boolean; // --test-run: CI/automation mode (rides through to a jump's execute)
   single?: boolean; // --single: run ONE stage under a synthetic workflow id, never touching the main pointer
   intent?: string; // freeform request text (no leading --flag)
+  workspaceVerb?: { verb: string; arg?: string }; // leading workspace verb (space/space-create/intent) + optional <name> arg
   projectDir?: string;
 }
 
@@ -253,6 +265,19 @@ function parseNextFlags(args: string[]): ParsedFlags {
     const a = args[i];
     if (READ_ONLY_FLAGS.has(a)) {
       flags.readOnly = a;
+      continue;
+    }
+    // A LEADING workspace verb (space/space-create/intent) is the explicit
+    // workspace navigation move (workspace-vision §3). Only the FIRST positional
+    // token counts (i === 0) so freeform prose containing "space"/"intent"
+    // mid-sentence stays intent text. The optional <name> arg is args[1] when it
+    // is present and not itself a --flag; consume it so it is not pushed as
+    // freeform. The engine maps this to a terminal print naming the handler.
+    if (i === 0 && WORKSPACE_VERBS.has(a)) {
+      const next = args[i + 1];
+      const arg = next !== undefined && !next.startsWith("--") ? next : undefined;
+      flags.workspaceVerb = arg !== undefined ? { verb: a, arg } : { verb: a };
+      if (arg !== undefined) i++;
       continue;
     }
     if (a === "--resume") {
@@ -881,6 +906,28 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       kind: "print",
       message: `Run the read-only utility for ${flags.readOnly} and print its output verbatim.`,
     });
+    return;
+  }
+
+  // Branch 1b — workspace navigation verbs (space/space-create/intent) dispatch
+  // BEFORE any state inspection, mirroring Branch 1. This MUST precede
+  // resolveProjectDir/loadState: a switch works whether or not a workflow is
+  // active, and placing it later would let e.g. `space teamB` fall into the
+  // happy-path branch and advance the WRONG intent (the bug this fixes). All of
+  // space / space-create / intent map to the same TERMINAL print shape — switch
+  // is a cursor write that echoes the new world and stops, space-create mutates
+  // but advances no workflow, and a bare `space`/`intent` (no arg) is a
+  // read-only listing — so none of them leaves anything for `next` to continue
+  // into. The deterministic handler (aidlc-utility.ts) itself branches
+  // list-vs-switch on whether the <name> arg is present, so the engine just
+  // passes args[1] through when captured and omits it when absent — it does NOT
+  // replicate that decision here. The harness dir is resolved through
+  // harnessDir() so the directive names the right tree on every harness.
+  if (flags.workspaceVerb) {
+    const { verb, arg } = flags.workspaceVerb;
+    emit(printDirective(
+      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}${arg ? " " + arg : ""}\`, print its output verbatim, then stop.`,
+    ));
     return;
   }
 

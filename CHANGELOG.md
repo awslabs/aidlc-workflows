@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.1] - 2026-06-20
+
+Completes the workspace navigation verbs shipped in 0.8.0: `/aidlc space <name>`, `/aidlc space-create <name>`, and `/aidlc intent <name>` now route through the orchestration conductor. Previously the engine treated the leading verb as freeform new-work text and advanced the active intent instead of switching the active space or intent (the deterministic handlers existed but were unreachable through `/aidlc`). No re-copy needed beyond the usual `dist/<harness>/` refresh.
+
+* `/aidlc space <name>` / `/aidlc space-create <name>` / `/aidlc intent <name>` (and the bare `/aidlc space` / `/aidlc intent` listings) now switch/create/list as documented instead of being read as a description of work to advance the current intent.
+* The verb is recognised only as the LEADING token, so a freeform request that merely contains the words "space" or "intent" mid-sentence (e.g. `/aidlc add a settings space`) is still treated as new-work input, not a navigation command.
+
 ## [0.8.0] - 2026-06-18
 
 Moves AI-DLC from a single flat `aidlc-docs/` record to a per-intent **workspace** layout: a project root holds `aidlc/spaces/<space>/intents/<slug>-<id8>/`, so many intents (and non-default spaces) live side by side without colliding. **Upgrade:** re-copy your `dist/<harness>/` shell into the project — it ships the workspace pre-scaffolded, so there is no more `/aidlc --init` (the engine auto-births the first intent on your first `/aidlc`). A project still on the old flat `aidlc-docs/` layout is migrated automatically and crash-safely on first run (copy → atomic rename into the per-intent record; the tracked flat tree is git-rm'd post-move; idempotent on a `.migrated` marker). The audit trail is now **committed as per-clone shards** (`intents/<id>/audit/<host>-<clone>.md`) rather than a single `audit.md`, so concurrent clones never merge-conflict the trail; readers glob and merge by timestamp. A confirmed learning now lands as a **practice** in the relocated `aidlc/spaces/<space>/memory/` (the `*-learnings.md` files are gone). Team **domain knowledge** is now **space-level** at `aidlc/spaces/<space>/knowledge/` (a free-form, empty-at-bootstrap sibling of memory/codekb/intents, shared across every intent in the space) — not per-intent; a migrating project's flat `aidlc-docs/knowledge/` is relocated there automatically. (The engine's per-agent methodology knowledge stays shipped under `<harness>/knowledge/`.)

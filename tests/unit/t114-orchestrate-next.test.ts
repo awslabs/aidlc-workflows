@@ -410,3 +410,55 @@ describe("t114 branch order: scope-change beats test-run-persist", () => {
     );
   });
 });
+
+// ===========================================================================
+// Workspace navigation verbs route through the conductor (Branch 1b). A LEADING
+// space/space-create/intent token is the explicit "cd" between teams/intents
+// (workspace-vision §3). It dispatches BEFORE any state inspection and maps to a
+// TERMINAL print naming the deterministic aidlc-utility.ts handler, so the
+// engine never treats it as freeform new-work text that advances the active
+// intent (the bug this fixes). The handler itself branches list-vs-switch on the
+// <name> arg, so the engine just passes args[1] through when present.
+// ===========================================================================
+describe("t114 workspace verbs -> terminal print naming the handler", () => {
+  test("20: `space teamB` -> print naming aidlc-utility.ts space teamB (switch, not freeform)", () => {
+    proj = createTestProject();
+    const out = runNext(proj, ["space", "teamB"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-utility.ts space teamB");
+    // It must NOT be misread as a new-work freeform intent that advances state.
+    expect(out).not.toContain('"kind":"run-stage"');
+  });
+
+  test("21: bare `space` (no arg) -> print naming aidlc-utility.ts space (read-only listing)", () => {
+    proj = createTestProject();
+    const out = runNext(proj, ["space"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-utility.ts space");
+    // No trailing name arg leaks into the directive.
+    expect(out).not.toContain("aidlc-utility.ts space ");
+  });
+
+  test("22: `intent some-slug` -> print naming aidlc-utility.ts intent some-slug", () => {
+    proj = createTestProject();
+    const out = runNext(proj, ["intent", "some-slug"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-utility.ts intent some-slug");
+  });
+
+  test("23: `space-create teamB` -> print naming aidlc-utility.ts space-create teamB", () => {
+    proj = createTestProject();
+    const out = runNext(proj, ["space-create", "teamB"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-utility.ts space-create teamB");
+  });
+
+  test("24: REGRESSION -- freeform containing 'space' NOT as leading token stays freeform (i===0 guard)", () => {
+    // `add a settings space` leads with "add", so "space" mid-sentence is NOT a
+    // workspace verb. The engine must route it as freeform new-work, never as a
+    // space-switch print naming the workspace handler.
+    proj = createTestProject();
+    const out = runNext(proj, ["add", "a", "settings", "space"]).out;
+    expect(out).not.toContain("aidlc-utility.ts space");
+  });
+});
