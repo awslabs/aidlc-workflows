@@ -117,6 +117,22 @@ export interface TuiProjectOptions {
    * tests/harness/custom-harness.ts.
    */
   customHarness?: boolean;
+  /**
+   * Seed a NON-default second space (a sibling dir under aidlc/spaces/) so the
+   * statusline orientation prefix paints its `<space> ·` segment. The prefix
+   * builder suppresses that segment until listSpaces().length > 1
+   * (aidlc-statusline.ts orientationPrefix → listSpaces(projectDir).length > 1),
+   * so a single-space fixture never paints the space token — the render-half
+   * journey (P10 / Stage E) needs >1 space + an active intent for the FULL
+   * `<space> · <intent> · <phase>` orientation to appear in a real TUI pane.
+   *
+   * The second space gets the same default-space memory shell shape (so it is a
+   * real space the resolver/listSpaces honours, not a bare dir); the ACTIVE
+   * space stays `default`, whose seeded record (seedTuiWorkspaceShell) carries
+   * the active intent. So the prefix renders as `default · <slug> · <phase>`.
+   * Defaults to "teamB" when set to `true`; pass a string to name it.
+   */
+  secondSpace?: boolean | string;
 }
 
 /**
@@ -222,7 +238,36 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
   // {sdk,tui} two-driver test drives byte-identical custom harness.
   if (opts.customHarness) seedCustomHarness(proj);
 
+  // A non-default SECOND space so listSpaces().length > 1 and the statusline
+  // orientation prefix paints its `<space> ·` segment (the render-half journey).
+  // The active space stays `default` (whose record carries the active intent),
+  // so the prefix reads `default · <slug> · <phase>`.
+  if (opts.secondSpace) {
+    const name = typeof opts.secondSpace === "string" ? opts.secondSpace : "teamB";
+    seedSecondSpace(proj, name);
+  }
+
   return proj;
+}
+
+/** Seed a NON-default space as an additive sibling of identical shape: copy the
+ *  default space's memory shell into aidlc/spaces/<name>/ so listSpaces() reports
+ *  it as a real space (>1 → the orientation prefix's space token paints). The
+ *  active-space cursor is NOT touched — `default` stays active, so its seeded
+ *  record remains the active intent the orientation prefix renders. */
+function seedSecondSpace(proj: string, name: string): void {
+  if (name === DEFAULT_SPACE) {
+    throw new Error(`seedSecondSpace: a second space must be non-default, got "${name}"`);
+  }
+  const spacesRoot = join(proj, "aidlc", "spaces");
+  const defaultMemory = join(spacesRoot, DEFAULT_SPACE, "memory");
+  const targetMemory = join(spacesRoot, name, "memory");
+  if (existsSync(defaultMemory)) {
+    cpSync(defaultMemory, targetMemory, { recursive: true });
+  } else {
+    // Dist shell with no default memory tree — still make the dir a real space.
+    mkdirSync(targetMemory, { recursive: true });
+  }
 }
 
 // Mirror `cp -r "$SRC/." "$DEST/"` — copy the CONTENTS of src into dest (not src
