@@ -519,3 +519,129 @@ export function setupIntegrationProject(
 
   return proj;
 }
+
+// ============================================================================
+// Workspace-journey fixture (P10 / Stage E) — the net-new harness piece.
+//
+// The live multi-repo·intent·space journey needs a workspace whose shape the
+// per-intent fixtures above never model: TWO sibling code repos under one
+// workspace root, the shipped harness shell, and NO pre-born intent (the
+// journey's step 1 auto-births it live). setupWorkspaceJourney() builds that.
+//
+// Why a fresh tmpdir root (not createTestProject's reuse): the journey's
+// construction beat forks git worktrees INSIDE the sibling repos, and
+// assertNotSiblingWorktree (aidlc-worktree.ts:112) is a STRUCTURAL git check
+// (`git rev-parse --show-toplevel` vs `dirname(--git-common-dir)`) keyed on the
+// target repo's cwd. Scaffolding under .claude/worktrees/ would leave the
+// spawned tool inside this very worktree's git tree; an os.tmpdir() root with
+// its own git-init'd sibling repos makes toplevel == dirname(common-dir) hold
+// for each repo, so the guard passes (the same posture setupCodexProject takes).
+//
+// Harness-parameterized so all three logic drivers (Claude SDK · Kiro ACP ·
+// Codex exec) reuse ONE fixture: each copies the shipped dist/<harness>/ shell
+// (engine dir + the sibling aidlc/ memory shell) into the root, exactly as
+// setupIntegrationProject / setupTuiProject / setupCodexProject do.
+// ============================================================================
+
+/** Per-harness dist source paths for the journey shell. Reuses the same dist
+ *  trees the other fixtures copy (AIDLC_SRC / KIRO_SRC / the codex shell). */
+const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude");
+const KIRO_DIST = join(REPO_ROOT, "dist", "kiro");
+const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
+
+export type JourneyHarness = "claude" | "kiro" | "codex";
+
+export interface WorkspaceJourney {
+  /** The tmp workspace root (canonical realpath) — the project dir every driver
+   *  points the engine at (--project-dir / spawn cwd). The aidlc/ roof + the
+   *  harness engine dir live directly under here; the sibling repos are children. */
+  root: string;
+  /** Sibling repo dirs (immediate children of root), git-init'd with one commit
+   *  so discoverSiblingRepos(root) returns ["repo-a","repo-b"]. */
+  repoA: string;
+  repoB: string;
+  /** An isolated $HOME the codex harness needs for its CODEX_HOME/config.toml.
+   *  Allocated for every harness so callers can rely on it; only codex uses it. */
+  home: string;
+  /** The harness this shell was seeded for. */
+  harness: JourneyHarness;
+}
+
+function gitInit(dir: string, seedFile: string): void {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, seedFile), "seed\n", "utf-8");
+  for (const args of [
+    ["init", "-q"],
+    ["symbolic-ref", "HEAD", "refs/heads/main"],
+    ["add", "-A"],
+    ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"],
+  ]) {
+    const r = spawnSync("git", args, { cwd: dir, encoding: "utf-8" });
+    if (r.status !== 0) {
+      throw new Error(`git ${args.join(" ")} in ${dir} failed: ${r.stderr?.trim() || r.stdout?.trim()}`);
+    }
+  }
+}
+
+/**
+ * Scaffold a multi-repo workspace journey root and return its paths. Copies the
+ * shipped dist/<harness>/ shell (engine dir + the sibling aidlc/ memory shell)
+ * into a fresh os.tmpdir() root, then git-init's two sibling repos (repo-a,
+ * repo-b) as immediate children so discoverSiblingRepos finds them sorted. Does
+ * NOT auto-birth an intent — the journey's step 1 does that live; the shell ships
+ * the default space's memory only.
+ *
+ * Each repo gets a tiny brownfield-ish source file + an initial commit so a
+ * reverse-engineering stage has something to scan and write per-repo codekb for
+ * (the journey's step-2 cheaper variant), and so the construction-worktree guard
+ * sees a real checkout.
+ */
+export function setupWorkspaceJourney(harness: JourneyHarness = "claude"): WorkspaceJourney {
+  const root = realpathSync(mkdtempSync(join(process.env.TMPDIR || tmpdir(), "aidlc-journey-")));
+  const home = join(root, ".home");
+  mkdirSync(home, { recursive: true });
+
+  // 1. Copy the shipped harness shell: the engine dir + the sibling aidlc/ memory
+  //    shell (all three dist trees ship dist/<h>/aidlc/{active-space,spaces/default}).
+  if (harness === "kiro") {
+    cpSync(join(KIRO_DIST, ".kiro"), join(root, ".kiro"), { recursive: true });
+    cpSync(join(KIRO_DIST, "AGENTS.md"), join(root, "AGENTS.md"));
+    cpSync(join(KIRO_DIST, "aidlc"), join(root, "aidlc"), { recursive: true });
+  } else if (harness === "codex") {
+    cpSync(join(CODEX_DIST, ".codex"), join(root, ".codex"), { recursive: true });
+    cpSync(join(CODEX_DIST, ".agents"), join(root, ".agents"), { recursive: true });
+    cpSync(join(CODEX_DIST, "AGENTS.md"), join(root, "AGENTS.md"));
+    cpSync(join(CODEX_DIST, "aidlc"), join(root, "aidlc"), { recursive: true });
+  } else {
+    cpSync(join(CLAUDE_DIST, ".claude"), join(root, ".claude"), { recursive: true });
+    cpSync(join(CLAUDE_DIST, "aidlc"), join(root, "aidlc"), { recursive: true });
+  }
+
+  // Pin the per-clone audit-shard token (gitignored on a real project) so any
+  // shard a spawned tool writes is deterministic — same posture as the per-intent
+  // fixtures (FIXTURE_CLONE_ID / seededAuditShard).
+  writeFileSync(join(root, "aidlc", ".aidlc-clone-id"), `${FIXTURE_CLONE_ID}\n`, "utf-8");
+
+  // 2. Two git-init'd sibling repos as immediate children of the root, each with a
+  //    tiny source file so a reverse-engineering scan has real content and the
+  //    construction guard sees a checkout. discoverSiblingRepos sorts + dedups, so
+  //    the names come back ["repo-a","repo-b"] regardless of creation order.
+  const repoA = join(root, "repo-a");
+  const repoB = join(root, "repo-b");
+  gitInit(repoA, "main.py");
+  gitInit(repoB, "main.py");
+
+  return { root, repoA, repoB, home, harness };
+}
+
+/** Remove a workspace-journey root. Mirrors the codex test's rmSync(root) and
+ *  cleanupTuiProject's AIDLC_KEEP_TEMP escape hatch (a timed-out live journey
+ *  otherwise leaves nothing under a random mkdtemp name to inspect). */
+export function cleanupWorkspaceJourney(journey: WorkspaceJourney | undefined): void {
+  if (!journey?.root) return;
+  if (process.env.AIDLC_KEEP_TEMP === "1") {
+    process.stderr.write(`[fixtures] AIDLC_KEEP_TEMP=1 — preserved ${journey.root}\n`);
+    return;
+  }
+  if (existsSync(journey.root)) removeTreeWithRetry(journey.root);
+}
