@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.8] - 2026-07-03
+
+Brings the 2.0.0 reviewer mechanism up to scratch across harnesses so it actually runs everywhere and can't write outside its lane. Three self-contained defects are fixed: the reviewer step was missing entirely from the Codex orchestrator (a stage's `reviewer:` was silently ignored on Codex), the Kiro reviewer sub-agents were not trusted by the conductor (so invoking them prompted/blocked), and the Kiro reviewer agents were granted unrestricted `fs_write` (broader than the builders they review). No change to per-unit / swarm reviewer behaviour. Re-copy your `dist/<harness>/` to pick up the regenerated trees — the Codex reviewer step, the Kiro trust entries, and the Kiro write cap all ship in the dist.
+
+* **The reviewer now fires on the Codex harness.** The Codex orchestrator's `gate: true` flow gained the §12a reviewer step (it was present on Claude and Kiro but absent on Codex), so a stage's `reviewer:` directive is honoured on Codex instead of silently ignored.
+* **On Kiro, the reviewer sub-agent no longer prompts for trust.** `aidlc-architecture-reviewer-agent` and `aidlc-product-lead-agent` are added to the conductor's `subagent.trustedAgents` on both Kiro CLI and Kiro IDE, so the conductor can invoke the reviewer without a trust prompt blocking the workflow.
+* **On Kiro, the reviewer can only write under the `aidlc/` workspace.** The reviewer agent configs cap `fs_write` to `aidlc/spaces/**` (where the per-intent artifacts carrying the `## Review` section live), matching the conductor's path-cap pattern instead of granting unrestricted writes.
+* No new commands or flags; no breaking change for CI or scripts.
+
 ## [2.1.7] - 2026-07-03
 
 Closes the dangling-consume gaps behind the incremental scopes (issue #461). The lean scopes deliberately skip upstream producer stages, but three downstream consumers of the stage `consumes:` contracts did not honor that design: the run-stage directive pointed the executing agent at input files that can never exist (leaving the fallback to per-run improvisation), the upstream-coverage sensor demanded the output prose reference artifacts that were never produced (a guaranteed recurring `SENSOR_FAILED` in six scopes), and nothing distinguished a deliberate scope shortcut from an accidental new dangling edge. Also widens `security-patch` with `requirements-analysis` — the one dangling edge with no in-scope substitute — so a CVE response records an auditable statement of the vulnerability and its remediation criteria. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
