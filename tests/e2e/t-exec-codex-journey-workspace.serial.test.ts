@@ -9,8 +9,11 @@
 //
 // CODEX IS LOGIC-HALF ONLY, BY SURFACE LIMITATION — stated, not skipped. There is
 // no Codex TUI driver (tui-drive.ts is tmux/Claude-shaped, zero codex awareness),
-// so the render-half journey matrix is Claude + Kiro TUI; Codex contributes the
-// exec/logic leg only. `codex exec` is a one-shot, non-interactive spawn
+// so the render-half (statusline-orientation) journey matrix is Claude TUI ONLY —
+// Kiro likewise ships no statusline surface (dist/kiro has no settings.json
+// statusLine row; its AGENTS.md/SKILL.md state "there is no statusline"), so neither
+// Codex nor Kiro contributes a render-half orientation leg; both are logic-half only.
+// `codex exec` is a one-shot, non-interactive spawn
 // (stdio:["ignore",…] — no stdin), so it CANNOT answer a mid-run question; each
 // journey beat is therefore a separate single-shot spawn invoking one
 // deterministic /aidlc verb whose result we read off disk.
