@@ -17,7 +17,7 @@
 //     exact disk assertion):
 //       * aidlc-state.md `Practices Affirmed Timestamp` non-empty,
 //       * audit.md has GATE_APPROVED >= 1,
-//       * aidlc-team.md `## Way of Working` populated (trunk|merge|branch),
+//       * team.md `## Way of Working` populated (trunk|merge|branch),
 //   - RENDER (the tui-only value-add): the captured grid showed the multi-tab
 //     `Submit` strip and the `Enter to select` footer at least once — the thing
 //     the SDK path cannot see.
@@ -245,7 +245,14 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
           .filter((l) => l.startsWith("**Event**: GATE_APPROVED")).length;
         expect(gateApproved).toBeGreaterThanOrEqual(1);
 
-        const teamRules = readFileSync(join(sandbox, ".claude", "rules", "aidlc-team.md"), "utf8");
+        // The method relocated (P5/fe7f470) from .claude/rules/aidlc-team.md to
+        // the harness-neutral workspace-root aidlc/spaces/default/memory/team.md
+        // (neutral basename, no aidlc- prefix). Affirmation writes the section
+        // there via memoryDirFor (aidlc-state.ts:1346-1352).
+        const teamRules = readFileSync(
+          join(sandbox, "aidlc", "spaces", "default", "memory", "team.md"),
+          "utf8",
+        );
         // The shipped template ships `## Way of Working` EMPTY; affirmation
         // promotes org defaults into it (trunk|merge|branch).
         const wowIdx = teamRules.indexOf("## Way of Working");

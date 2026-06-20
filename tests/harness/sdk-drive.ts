@@ -713,6 +713,20 @@ export function recordDirFor(projectDir: string): string {
   return join(projectDir, "aidlc-docs");
 }
 
+/** The SPACE-level domain-knowledge dir: aidlc/spaces/<space>/knowledge —
+ *  a sibling of intents/ (NOT per-intent). The knowledge relocation (b29ced6)
+ *  moved this out of each intent's record so domain knowledge accumulates
+ *  across the whole space; the engine ensures it at birth (aidlc-utility.ts
+ *  ensureWorkspaceDirs → knowledgeDir, lib.ts). Resolves the active space from
+ *  the same cursor recordDirFor reads, defaulting to "default". */
+export function spaceKnowledgeDirFor(projectDir: string): string {
+  const spaceCursor = join(projectDir, "aidlc", "active-space");
+  const space = existsSync(spaceCursor)
+    ? readFileSync(spaceCursor, "utf8").trim() || "default"
+    : "default";
+  return join(projectDir, "aidlc", "spaces", space, "knowledge");
+}
+
 /** Absolute path to the state file the framework writes (per-intent record). */
 export function stateFilePathFor(projectDir: string): string {
   return join(recordDirFor(projectDir), "aidlc-state.md");

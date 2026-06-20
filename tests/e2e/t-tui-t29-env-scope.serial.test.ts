@@ -288,9 +288,11 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
         // The guidance sentence can line-wrap at any word, and Claude may
         // collapse the tail of a tool result behind "+N lines" in the rendered
         // pane. Pin the visible recovery lead plus the no-state disk invariant;
-        // the exact full tool string is covered at the engine layer.
+        // the exact full tool string is covered at the engine layer. The engine
+        // emits "…or by naming a scope (/aidlc --scope <scope>)."
+        // (aidlc-orchestrate.ts:1245-1247) — assert a stable substring of that.
         const flat = pane.replace(/[▎\s]+/g, " ");
-        expect(flat).toContain("Name a scope to start a workflow");
+        expect(flat).toContain("naming a scope");
         // No-scope run births no intent, so no per-intent state file resolves
         // (stateFilePathFor falls to the never-created flat fallback path).
         expect(existsSync(stateFilePathFor(proj))).toBe(false);

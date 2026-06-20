@@ -59,7 +59,7 @@
 //      (The sensor hook SKIPS under --test-run, aidlc-sensor-fire.ts:110-124 —
 //      so this is ONLY provable by a real human-driven run, which is the point.)
 //   3. CUSTOM RULE REACHES THE AGENT — two ways, both data: (a) the compiled
-//      stage-graph node carries .claude/rules/aidlc-project.md in
+//      stage-graph node carries aidlc/spaces/default/memory/project.md in
 //      rules_in_context AND that file carries the unique custom-rule marker (the
 //      compile-baked half, proven here + in the deterministic sibling); (b) the
 //      live artefact the agent writes CITES the marker (runtime evidence the
@@ -238,9 +238,16 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
       // VACUOUS-PASS GUARD: the custom stage must exist in the compiled graph.
       expect(node).toBeDefined();
       const rulePaths = (node?.rules_in_context ?? []).map((r) => r.path);
-      expect(rulePaths).toContain(".claude/rules/aidlc-project.md");
+      // The method relocated (P5/fe7f470) to the harness-neutral workspace-root
+      // aidlc/spaces/default/memory/ tree (neutral basenames). The compile bakes
+      // the neutral display path; verified against the actual emitted array
+      // ["…/org.md","…/team.md","…/project.md","…/phases/inception.md"].
+      expect(rulePaths).toContain("aidlc/spaces/default/memory/project.md");
       // the project rule FILE carries the unique custom-rule marker
-      const rule = readFileSync(join(proj, ".claude", "rules", "aidlc-project.md"), "utf8");
+      const rule = readFileSync(
+        join(proj, "aidlc", "spaces", "default", "memory", "project.md"),
+        "utf8",
+      );
       expect(rule).toContain(CUSTOM_RULE_MARKER);
     } finally {
       cleanupTuiProject(proj);

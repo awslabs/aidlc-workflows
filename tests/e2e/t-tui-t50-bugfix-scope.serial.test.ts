@@ -36,7 +36,7 @@
 //       * the reverse-engineering directory exists with >= 4 structured `.md`
 //         artifacts, at least one > 200 bytes, carrying markdown headings (.sh
 //         tests 18-19, 22-23),
-//       * the knowledge directory was created (.sh test 11),
+//       * the space-level knowledge directory was created (.sh test 11),
 //       * audit.md has substantial content (> 200 bytes) (.sh test 14),
 //   - RENDER (the tui-only value-add): the captured grid showed a gate menu
 //     (`❯` caret + the `Enter to select` / `Submit answers` footer) at least once —
@@ -96,7 +96,12 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
-import { auditFilePathFor, recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
+import {
+  auditFilePathFor,
+  recordDirFor,
+  spaceKnowledgeDirFor,
+  stateFilePathFor,
+} from "../harness/sdk-drive.ts";
 import { gridHasMenu, resolveWinNode } from "../harness/tui-drive.ts";
 import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
 
@@ -353,8 +358,12 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
           ["workspace-scaffold", "workspace-detection", "state-init"].includes(currentStage),
         ).toBe(false);
 
-        // .sh test 11: knowledge directory created.
-        const knowledgeDir = join(recordDirFor(sandbox), "knowledge");
+        // .sh test 11: knowledge directory created. The knowledge relocation
+        // (b29ced6) moved this from the per-intent record to the SPACE level
+        // (aidlc/spaces/<space>/knowledge — a sibling of intents/), ensured at
+        // birth by ensureWorkspaceDirs (aidlc-utility.ts:1975, which runs in the
+        // workspace-scaffold init stage for every scope, bugfix included).
+        const knowledgeDir = spaceKnowledgeDirFor(sandbox);
         expect(existsSync(knowledgeDir) && statSync(knowledgeDir).isDirectory()).toBe(true);
 
         // .sh tests 18-19, 22-23: the reverse-engineering directory exists with
