@@ -431,8 +431,8 @@ sequenceDiagram
     participant TAK as Team Agent Knowledge
     participant PA as Prior Artifacts
 
-    O->>G: Step 1: Load .claude/rules/
-    Note over G: aidlc-org.md + aidlc-team.md + aidlc-project.md + aidlc-phase-<phase>.md
+    O->>G: Step 1: Load aidlc/spaces/<space>/memory/
+    Note over G: org.md + team.md + project.md + phases/<phase>.md
     G-->>O: Rules loaded (strict-additive — all layers present)
 
     O->>SM: Step 2: Load .claude/knowledge/aidlc-shared/

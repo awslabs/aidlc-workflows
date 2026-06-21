@@ -78,8 +78,8 @@ On activation, load knowledge in the following order:
 2. `.kiro/knowledge/aidlc-shared/` -- shared methodology
 3. `.kiro/knowledge/aidlc-operations-agent/` -- agent-specific methodology
 4. `.kiro/steering/` -- team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Consult `## Deployment` for release-cadence and on-call rotation expectations when designing observability dashboards, alert thresholds, and runbooks.
-5. `aidlc-docs/knowledge/aidlc-shared/` -- team shared knowledge
-6. `aidlc-docs/knowledge/aidlc-operations-agent/` -- team agent-specific knowledge
+5. `aidlc/knowledge/aidlc-shared/` -- team shared knowledge
+6. `aidlc/knowledge/aidlc-operations-agent/` -- team agent-specific knowledge
 
 ## Key Principles
 

@@ -284,7 +284,7 @@ step between them:
    data. Open questions never become candidates (they are research items).
 2. **Conductor renders the AskUserQuestion (knowledge).** One option per
    candidate (label = the candidate `summary`, verbatim; description = the
-   derived destination, e.g. `→ aidlc-project-learnings.md (Deviation)` plus
+   derived destination, e.g. `→ memory/project.md (Deviation)` plus
    a promote-to-team affordance). After `multiSelect`, the conductor
    correlates each kept label back to its candidate `id` + `source_heading`.
    It then always asks "Anything to add for next time?"; any free-text gets
@@ -293,7 +293,7 @@ step between them:
    destination is derived from it.
 3. **Admission conflict-check (knowledge → orchestrator-LLM; gates which
    selections reach persist).** For each kept learning, the conductor
-   compares the single proposed dated entry against `aidlc-org.md`'s
+   compares the single proposed dated entry against `org.md`'s
    matching `## <section>` (the single-line variant of the §5 admission
    gate). On a contradiction the conductor surfaces the conflicting org sentence inline
    and the user revises / skips / escalates (judgement → user; no
@@ -303,8 +303,8 @@ step between them:
    selections to `<record>/.aidlc-learnings/<slug>-selections.json` (in the intent's record dir)
    (gitignored) and calls `bun .claude/tools/aidlc-learnings.ts persist
    --slug <slug> --selections-json <path>`. The tool is the deterministic
-   writer — it never judges conflicts; it routes learnings to
-   `aidlc-{project,team}-learnings.md` and, for a sensor selection, does the
+   writer — it never judges conflicts; it routes each learning as a practice to
+   `aidlc/spaces/<space>/memory/{project,team}.md` and, for a sensor selection, does the
    two-write install (manifest + originating stage `sensors:` frontmatter)
    inside one `withAuditLock`, then emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
 

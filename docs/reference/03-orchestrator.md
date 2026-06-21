@@ -36,7 +36,7 @@ When the argument matches one of the 9 known scopes (`enterprise`, `feature`, `m
 
 An explicitly named scope on a fresh workspace (no intent yet — no `aidlc-state.md` under `aidlc/spaces/*/intents/*/`) **births the first intent**: the engine's `next` emits a run-then-continue `print` directive naming `aidlc-utility.ts intent-birth --scope <scope>` (threading any `--depth` / `--test-strategy` / `--test-run` flags onto the named command); the conductor runs it and re-runs `next` to land on the first stage. Both naming shapes — the bare positional (`/aidlc bugfix`) and the explicit flag (`/aidlc --scope bugfix`) — emit the identical birth print. Describing what to build (`/aidlc "build the auth service"`) also births. A bare `/aidlc` with no explicitly named scope and no description does NOT birth (an env- or default-resolved scope is not a birth signal); it emits the no-state error directing the user to describe what to build or name a scope.
 
-1. Reads guardrails from `.claude/rules/`.
+1. Reads guardrails from `aidlc/spaces/<space>/memory/`.
 2. Asks the user "What would you like to build?"
 3. Determines stages to execute per the Scope-to-Stage Mapping.
 4. Executes the Initialization phase (workspace-scaffold, workspace-detection, state-init) as a single deterministic `aidlc-utility init` call. The welcome message is rendered at session start via `companyAnnouncements` in `settings.json`.
@@ -47,7 +47,7 @@ An explicitly named scope on a fresh workspace (no intent yet — no `aidlc-stat
 
 When the argument is freeform text (not a known scope keyword):
 
-1. Reads guardrails from `.claude/rules/`.
+1. Reads guardrails from `aidlc/spaces/<space>/memory/`.
 2. Analyzes the intent against keyword patterns:
    - "fix" / "bug" / "broken" maps to `bugfix`
    - "refactor" / "clean up" / "simplify" maps to `refactor`
@@ -303,7 +303,7 @@ sequenceDiagram
     participant K as Knowledge (6 steps)
     participant U as User
     participant S as aidlc-state.md
-    participant AU as audit.md
+    participant AU as audit/ shard
 
     O->>SF: 1. Read stage file
     Note over SF: stages/[phase]/[stage].md
@@ -583,7 +583,7 @@ When a Claude Code Task tool call fails:
 
 1. **Retry once** with a reduced context prompt (summarize inception artifacts, pass only current unit's design artifacts).
 2. **If retry also fails**, offer two options: "Run inline" (execute in orchestrator conversation) or "Skip and revisit" (mark incomplete and continue).
-3. **Log the failure** using the Error format in `audit.md`.
+3. **Log the failure** using the Error format in the `audit/` shards.
 
 ### State Corruption Recovery
 

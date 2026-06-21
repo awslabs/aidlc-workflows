@@ -16,10 +16,12 @@
 //       and inside ONE withAuditLock body (decide-inside-lock): re-reads
 //       the audit fresh, dedups per (Stage, Candidate-ID) against the
 //       fresh audit + an in-memory cid-marker content-presence check,
-//       writes dated learnings to aidlc-{project,team}-learnings.md (the
-//       two-surface destinations, created from a header template on first
-//       write), or scaffolds + two-write-binds a project-tier sensor
-//       manifest, then emits RULE_LEARNED / SENSOR_PROPOSED.
+//       writes a confirmed learning as a PRACTICE under the orchestrator-
+//       routed heading in {project,team}.md (the relocated method files the
+//       resolver reads — a learning IS a practice, vision §6; the heading is
+//       ensure-exists so an absent target is created, never a throw), or
+//       scaffolds + two-write-binds a project-tier sensor manifest, then
+//       emits RULE_LEARNED / SENSOR_PROPOSED.
 //
 // The conflict COMPARISON is the orchestrator-LLM's job (the "single-line
 // variant" of the §5 gate model); persist receives only conflict-clear or
@@ -34,6 +36,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { memoryDirFor } from "./aidlc-graph.ts";
 import {
   appendUnderHeading,
   errorMessage,
@@ -41,12 +44,13 @@ import {
   getField,
   isoTimestamp,
   parseMemoryEntries,
+  readAllAuditShards,
   readStateFile,
   resolveProjectDir,
+  runtimeGraphPath,
   withAuditLock,
   writeFileAtomic,
   harnessDir,
-  rulesSubdir,
 } from "./aidlc-lib.ts";
 
 // --- Exit-code convention (plan §2) ---
@@ -61,12 +65,15 @@ function fail(message: string, code: 1 | 2): never {
 
 // --- Path helpers ---
 
-function runtimeGraphPath(projectDir: string): string {
-  return join(projectDir, "aidlc-docs", "runtime-graph.json");
-}
-
-function learningsFilePath(projectDir: string, scope: "project" | "team"): string {
-  return join(projectDir, harnessDir(), rulesSubdir(), `aidlc-${scope}-learnings.md`);
+// A confirmed learning IS a practice (vision §6). It lands in the relocated
+// method file the resolver reads — team.md / project.md under
+// aidlc/spaces/<space>/memory/ (neutral names, no `aidlc-` prefix) — NOT a
+// parallel dated `*-learnings.md` log. memoryDirFor() derives the path from
+// the SAME MEMORY_SEGMENTS loadRules()/the packager use, so the writer can
+// never drift from the reader root (P5 relocated the reader; P6 closes the
+// seam by pointing the writer at the same place).
+function practiceFilePath(projectDir: string, scope: "project" | "team"): string {
+  return join(memoryDirFor(projectDir), `${scope}.md`);
 }
 
 // Project-tier sensor manifest path. The learning loop scaffolds to the
@@ -355,11 +362,28 @@ function parseSelectionsFile(path: string): SelectionsFile {
 }
 
 // Most-recent audit block carries Test-Run: true → skip all writes/emits.
+// "Most-recent" is CHRONOLOGICAL, not buffer-order: readAllAuditShards
+// concatenates per-clone shards in FILENAME order, so the last buffer block is
+// the lexically-last shard's tail, NOT necessarily the newest event. Pick the
+// block with the greatest **Timestamp** (ISO-8601 sorts lexicographically; ties
+// break to the later buffer position to keep a single shard's order stable).
 function auditTestRun(auditContent: string): boolean {
   const blocks = auditContent.replace(/\r\n/g, "\n").split(/\n---\n/).filter((b) => b.trim() !== "");
   if (blocks.length === 0) return false;
-  const last = blocks[blocks.length - 1];
-  return /^\*\*Test-Run\*\*:\s*true\s*$/m.test(last);
+  const tsRegex = /^\*\*Timestamp\*\*:\s*(\S+)/m;
+  let newest = "";
+  let newestTs = "";
+  for (const block of blocks) {
+    const m = block.match(tsRegex);
+    const ts = m ? m[1] : "";
+    // >= so that on a timestamp tie the LATER buffer block wins (within one
+    // shard, later position == later append == newer).
+    if (newest === "" || ts >= newestTs) {
+      newest = block;
+      newestTs = ts;
+    }
+  }
+  return /^\*\*Test-Run\*\*:\s*true\s*$/m.test(newest);
 }
 
 // A prior RULE_LEARNED / SENSOR_PROPOSED row for this (Stage, Candidate-ID)?
@@ -379,19 +403,44 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const LEARNINGS_HEADING = "## Learnings";
+// The §13 default destination heading when the orchestrator routes a learning
+// to no more-specific section. A learning IS a practice (vision §6): it lands
+// under a topical practice heading in the method file, defaulting to the
+// self-learning-loop section `## Corrections` (which org/team/project.md all
+// ship). The orchestrator may route to a more fitting heading (testing →
+// `## Testing Posture`, prohibition → `## Forbidden`); whatever it names is
+// ensure-exists before the append (appendUnderHeading throws on an absent
+// heading, so the tool creates the heading first when needed).
+const DEFAULT_PRACTICE_HEADING = "## Corrections";
 
-function learningsTemplate(scope: "project" | "team"): string {
+// Header template for the method file's FIRST creation. The relocated
+// org/team/project.md always ship with all eight practice headings, so this
+// only fires for a fresh/fixture workspace that ships no method file yet —
+// it provides the minimal scaffold the ensure-exists append can land into.
+function practiceFileTemplate(scope: "project" | "team"): string {
   const tier = scope === "project" ? "Project" : "Team";
-  return (
-    `# ${tier}-Level Learnings\n\n` +
-    `> Rolling dated entries captured by the §13 learning gate. A separate\n` +
-    `> surface from aidlc-${scope}.md proper — never practices-discovery's\n` +
-    `> topical sections, never ## Corrections. Each entry is tagged by its\n` +
-    `> diary heading (Interpretation / Deviation / Tradeoff). Edit at the\n` +
-    `> gate, not directly.\n\n` +
-    `${LEARNINGS_HEADING}\n`
-  );
+  return `# ${tier}-Level Rules\n`;
+}
+
+// Normalise the orchestrator-routed destination to a `## ` heading. A bare
+// "Corrections" and a fully-formed "## Corrections" both resolve to the same
+// heading line; an empty/whitespace pick falls back to the default.
+function practiceHeading(routed: string | undefined): string {
+  const t = (routed ?? "").trim();
+  if (t === "") return DEFAULT_PRACTICE_HEADING;
+  return t.startsWith("## ") ? t : `## ${t.replace(/^#+\s*/, "")}`;
+}
+
+// Ensure-exists a `## ` heading in a method file. appendUnderHeading throws
+// when the heading is absent (DETERMINISM safety net, aidlc-lib.ts), so the
+// orchestrator may name a heading the shipped file doesn't carry — append it
+// (with a leading blank line when the file already has content) so the
+// subsequent appendUnderHeading lands cleanly.
+function ensureHeading(content: string, heading: string): string {
+  const headingRe = new RegExp(`^${escapeRegex(heading)}[ \\t]*$`, "m");
+  if (headingRe.test(content)) return content;
+  const sep = content === "" ? "" : content.endsWith("\n") ? "\n" : "\n\n";
+  return `${content}${sep}${heading}\n`;
 }
 
 // cid marker — stable, date-/text-independent idempotency key per written
@@ -420,8 +469,8 @@ function handlePersist(args: string[], projectDir: string): void {
   let lockResult: { rule_learned: number; sensor_proposed: number; bound_stages: string[] };
   try {
     lockResult = withAuditLock(projectDir, () => {
-      const auditPath = join(projectDir, "aidlc-docs", "audit.md");
-      const auditContent = existsSync(auditPath) ? readFileSync(auditPath, "utf-8") : "";
+      // Read across every per-clone audit shard (single shard in the common case).
+      const auditContent = readAllAuditShards(projectDir);
 
       // Test-run skip: most-recent audit block Test-Run: true → no writes.
       if (auditTestRun(auditContent)) {
@@ -432,9 +481,12 @@ function handlePersist(args: string[], projectDir: string): void {
       let sensorProposed = 0;
       const boundStages: string[] = [];
 
-      // --- Learnings: group by destination file, read once, thread the
-      // append through accumulating in-memory content (mirrors
-      // handlePracticesPromote's same-file write-and-emit precedent). ---
+      // --- Learnings-as-practices: group by destination method file, read
+      // once, thread the append through accumulating in-memory content
+      // (mirrors handlePracticesPromote's same-file write-and-emit
+      // precedent). A confirmed learning is appended as a PRACTICE under the
+      // orchestrator-routed heading in {project,team}.md — the relocated
+      // files the resolver reads. ---
       const learnings = selFile.selections.filter(
         (s): s is LearningSelection => s.type === "learning"
       );
@@ -443,12 +495,14 @@ function handlePersist(args: string[], projectDir: string): void {
       // returns { path, content } so callers never re-fetch from the Map.
       const fileContent = new Map<string, string>();
       const ensureFile = (scope: "project" | "team"): { path: string; content: string } => {
-        const path = learningsFilePath(projectDir, scope);
+        const path = practiceFilePath(projectDir, scope);
         const existing = fileContent.get(path);
         if (existing !== undefined) {
           return { path, content: existing };
         }
-        const initial = existsSync(path) ? readFileSync(path, "utf-8") : learningsTemplate(scope);
+        const initial = existsSync(path)
+          ? readFileSync(path, "utf-8")
+          : practiceFileTemplate(scope);
         fileContent.set(path, initial);
         return { path, content: initial };
       };
@@ -460,6 +514,9 @@ function handlePersist(args: string[], projectDir: string): void {
         const marker = cidMarker(stageSlug, sel.candidate_id);
         const today = isoTimestamp().slice(0, 10);
         const source = sel.source ?? "orchestrator";
+        // The orchestrator routes the learning to the fitting practice heading
+        // (KNOWLEDGE); normalise + ensure-exists it before the append.
+        const heading = practiceHeading(sel.heading);
 
         const hasRow = priorAuditRow(auditContent, "RULE_LEARNED", stageSlug, sel.candidate_id);
         const hasLine = content.includes(marker);
@@ -468,10 +525,12 @@ function handlePersist(args: string[], projectDir: string): void {
         if (hasRow && hasLine) continue;
 
         // Write the line unless it is already present (recovery: row exists,
-        // line missing → write only; fresh: neither → write + emit).
+        // line missing → write only; fresh: neither → write + emit). Create the
+        // routed heading first when the method file doesn't carry it.
         if (!hasLine) {
-          const line = `- ${today} [${sel.heading}] ${sel.text} ${marker}\n`;
-          content = appendUnderHeading(content, LEARNINGS_HEADING, line);
+          content = ensureHeading(content, heading);
+          const line = `- ${sel.text} (learned ${today}) ${marker}\n`;
+          content = appendUnderHeading(content, heading, line);
           fileContent.set(path, content);
         }
 
@@ -483,7 +542,7 @@ function handlePersist(args: string[], projectDir: string): void {
               Stage: stageSlug,
               "Candidate-ID": sel.candidate_id,
               Destination: path,
-              Heading: sel.heading,
+              Heading: heading,
               Source: source,
             },
             projectDir
@@ -492,7 +551,7 @@ function handlePersist(args: string[], projectDir: string): void {
         }
       }
 
-      // Flush each learnings file once (atomic).
+      // Flush each method file once (atomic).
       for (const [path, content] of fileContent) {
         mkdirSync(dirname(path), { recursive: true });
         writeFileAtomic(path, content);
@@ -733,9 +792,10 @@ function printHelp(): void {
       "      Read memory.md for the active stage; emit structured candidates",
       "      (Interpretations/Deviations/Tradeoffs) + parked open questions.",
       "  persist --slug <stage-slug> --selections-json <path> [--project-dir <path>]",
-      "      Write confirmed selections to aidlc-{project,team}-learnings.md",
-      "      and/or scaffold + bind a project-tier sensor manifest; emit",
-      "      RULE_LEARNED / SENSOR_PROPOSED under one withAuditLock.",
+      "      Write confirmed learnings as practices under the routed heading in",
+      "      {project,team}.md (the relocated method files) and/or scaffold + bind",
+      "      a project-tier sensor manifest; emit RULE_LEARNED / SENSOR_PROPOSED",
+      "      under one withAuditLock.",
       "  --help",
       "",
     ].join("\n")

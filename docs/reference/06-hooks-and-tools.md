@@ -8,7 +8,7 @@ This chapter documents the hook system architecture, all ten hook scripts, the a
 
 ## Hook System Architecture
 
-This implementation uses ten hook scripts in `.claude/hooks/`. All ten are TypeScript (run via `bun`). All ten are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other nine via the `hooks` block), they fire regardless of which skill is active. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block. This is safe because every hook **self-gates**: it early-exits when there is no active workflow (`aidlc-state.md` / `audit.md` absent), so always-on is a no-op outside AI-DLC.
+This implementation uses ten hook scripts in `.claude/hooks/`. All ten are TypeScript (run via `bun`). All ten are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other nine via the `hooks` block), they fire regardless of which skill is active. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block. This is safe because every hook **self-gates**: it early-exits when there is no active workflow (`aidlc-state.md` / the active intent's `audit/` shard absent), so always-on is a no-op outside AI-DLC.
 
 Nine of the ten are **non-blocking** — they observe and exit 0, never altering control flow. One, the `Stop` hook (`aidlc-stop.ts`), is **flow-altering**: it may return `{"decision":"block"}` to keep the interactive forwarding loop running. That is a sanctioned, deliberate contract for loop enforcement and is distinct from the advisory `never-block` contract every other hook honours (see "The flow-altering `Stop` hook" below).
 
@@ -30,7 +30,7 @@ Nine of the ten are **non-blocking** — they observe and exit 0, never altering
 
 | Hook | Event | Scoping | Matcher | Purpose |
 |------|-------|---------|---------|---------|
-| `audit-logger.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Auto-log artifact writes to `audit.md` |
+| `audit-logger.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Auto-log artifact writes to the `audit/` shards |
 | `sensor-fire.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Fire the active stage's resolved Sensors on matching writes (advisory; never blocks) |
 | `sync-statusline.ts` | PostToolUse | Project-wide (settings.json) | `TaskUpdate` | Auto-sync state file on stage task activation |
 | `runtime-compile.ts` | PostToolUse | Project-wide (settings.json) | `Bash` | Recompile `runtime-graph.json` on transition-class audit emits |
@@ -63,7 +63,7 @@ sequenceDiagram
     participant LS as log-subagent.ts
     participant SS as session-start.ts
     participant SE as session-end.ts
-    participant AF as audit.md
+    participant AF as audit/ shard
     participant SF as aidlc-state.md
     participant RF as .aidlc-recovery.md
 
@@ -99,7 +99,7 @@ sequenceDiagram
 
 ## Workflow-Spine Hooks
 
-These six hooks (the audit/sensor/statusline/runtime-compile/state-validation/subagent spine) are registered project-wide in `settings.json`. They are always on, but each **self-gates**: it early-exits when there is no active workflow (`aidlc-state.md` / `audit.md` absent), so audit logging and state sync never clutter non-AI-DLC sessions. Before v0.6.0 they were declared in `aidlc/SKILL.md` frontmatter (skill-scoped); the move to `settings.json` lets every entry point — the orchestrator and every packaged or hand-written runner — inherit the spine without copying a `hooks:` block.
+These six hooks (the audit/sensor/statusline/runtime-compile/state-validation/subagent spine) are registered project-wide in `settings.json`. They are always on, but each **self-gates**: it early-exits when there is no active workflow (`aidlc-state.md` / the active intent's `audit/` shard absent), so audit logging and state sync never clutter non-AI-DLC sessions. Before v0.6.0 they were declared in `aidlc/SKILL.md` frontmatter (skill-scoped); the move to `settings.json` lets every entry point — the orchestrator and every packaged or hand-written runner — inherit the spine without copying a `hooks:` block.
 
 ### PostToolUse: audit-logger.ts
 
@@ -146,7 +146,7 @@ These six hooks (the audit/sensor/statusline/runtime-compile/state-validation/su
 **Processing steps:**
 
 1. **Project directory resolution:** Same multi-fallback pattern as audit-logger.ts.
-2. **Audit + state guards:** Exits silently if `audit.md` or `aidlc-state.md` does not exist (pre-init).
+2. **Audit + state guards:** Exits silently if the `audit/` shard or `aidlc-state.md` does not exist (pre-init).
 3. **Active-stage read:** Reads the active stage's `sensors_applicable` array off `stage-graph.json` — the compile-resolved sensor list for that stage node (empty for stages like workspace-scaffold).
 4. **Dispatch:** For each applicable Sensor, spawns `aidlc-sensor.ts fire <id> --stage <slug> --output-path <path>`. The dispatcher applies each Sensor's `matches` glob hook-side; a non-matching write is skipped. Outcomes are advisory — the hook never blocks the write.
 5. **Health heartbeat:** Writes `.aidlc-hooks-health/sensor-fire.last` on a fire and `.aidlc-hooks-health/sensor-fire.skipped` when it short-circuits, so the doctor can distinguish a healthy idle hook from a silent failure.
@@ -162,9 +162,9 @@ See [Sensor System](07-sensor-system.md) for the manifest schema and the fire li
 **Processing steps:**
 
 1. **Command filter:** Only `bun .claude/tools/aidlc-(state|jump|bolt|utility).ts` invocations pass the early exit. `aidlc-runtime.ts` is rejected explicitly (recursion guard).
-2. **Audit-existence guard:** Exits cleanly before init (no `audit.md` yet).
+2. **Audit-existence guard:** Exits cleanly before init (no `audit/` shard yet).
 3. **Health heartbeat:** Writes `.aidlc-hooks-health/runtime-compile.last`.
-4. **Tail-read:** Splits `audit.md` on `\n---\n` and takes the last 3 blocks (the upper bound a single `approve` call appends).
+4. **Tail-read:** Splits the merged `audit/` shards on `\n---\n` and takes the last 3 blocks (the upper bound a single `approve` call appends).
 5. **Event-class filter:** Recompiles only when one of the last 3 blocks carries `GATE_APPROVED`, `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `AUDIT_MERGED`, or `WORKFLOW_COMPLETED`. Exits on no match.
 6. **Dispatch:** Spawns `bun aidlc-runtime.ts compile` (adds `--test-run` when the matched blocks carry `Test-Run: true`). On non-zero exit, records a hook drop for `--doctor`; never blocks the parent Bash call.
 
@@ -198,7 +198,7 @@ See [Runtime Graph](13-runtime-graph.md) for the compile lifecycle and the locke
 1. **Project directory resolution:** Same multi-fallback pattern as audit-logger.ts.
 2. **Health heartbeat:** Writes to `.aidlc-hooks-health/log-subagent.last`.
 3. **JSON parsing:** Extracts `agent_type` (defaults to `"unknown"`), `agent_id`, and `last_assistant_message` (truncated to 200 characters).
-4. **Audit file guard:** Exits silently if `audit.md` does not exist.
+4. **Audit file guard:** Exits silently if the `audit/` shard does not exist.
 5. **Entry assembly:** Emits canonical `SUBAGENT_COMPLETED` event via `appendAuditEntry`. Fields: Timestamp, Event, Agent Type, and optionally Agent ID and truncated Message.
 6. **Atomic locking:** Same `mkdir`-based pattern as audit-logger.ts (unified in `lib.ts`) but with a separate lock name to avoid contention.
 
@@ -287,7 +287,7 @@ Next Action: resume current stage
 
 **Lifecycle:**
 1. **Workflow guard:** Exits silently when no active intent's `aidlc-state.md` exists (the canonical "active workflow" marker — same guard as `session-start.ts`). A workspace shell with no born intent emits nothing.
-2. **Audit emission:** Appends `SESSION_ENDED` to `audit.md` via `aidlc-audit.ts`. Pairs with `session-start.ts`'s `SESSION_STARTED` for session lifecycle observability.
+2. **Audit emission:** Appends `SESSION_ENDED` to the `audit/` shard via `aidlc-audit.ts`. Pairs with `session-start.ts`'s `SESSION_STARTED` for session lifecycle observability.
 
 ### Status Line: aidlc-statusline.ts
 
@@ -459,7 +459,7 @@ The tool-as-actor half of the stage-protocol §13 learning ritual. `surface` rea
 | Subcommand | Purpose | Emits |
 |------------|---------|-------|
 | `surface --slug <stage-slug>` | Read-only. Partition `memory.md` entries into keep-candidates (Interpretations / Deviations / Tradeoffs) and parked open questions; print a structured JSON candidate set | — |
-| `persist --slug <stage-slug> --selections-json <path>` | Write confirmed learnings to `aidlc-project-learnings.md` / `aidlc-team-learnings.md` as dated entries; for a Sensor-binding learning, scaffold a project-tier manifest and append its id to the originating stage's `sensors:` frontmatter — both writes inside one `withAuditLock` | `RULE_LEARNED`, `SENSOR_PROPOSED` |
+| `persist --slug <stage-slug> --selections-json <path>` | Write each confirmed learning as a practice (default scope project) to `aidlc/spaces/<space>/memory/project.md` / `memory/team.md` as dated entries; for a Sensor-binding learning, scaffold a project-tier manifest and append its id to the originating stage's `sensors:` frontmatter — both writes inside one `withAuditLock` | `RULE_LEARNED`, `SENSOR_PROPOSED` |
 
 Both subcommands accept `--project-dir <path>`. Under Test-Run Mode, `surface` returns an empty candidate set and `persist` performs no writes or emits. `persist` never judges — it receives only conflict-clear or user-escalated selections — and dedups per `(Stage, Candidate-ID)` against a fresh in-lock read of the audit, so a same-day re-run is a no-op rather than a double-append.
 

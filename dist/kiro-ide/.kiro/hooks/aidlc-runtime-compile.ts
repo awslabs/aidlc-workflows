@@ -21,14 +21,17 @@
 // compile's own audit emits cannot re-trigger the compile.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  auditFilePath,
+  activeIntent,
+  activeSpace,
   type ClaudeCodeHookInput,
   errorMessage,
+  hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
+  readAllAuditShards,
   recordHookDrop,
   resolveProjectDirFromHook,
   harnessDir,
@@ -68,20 +71,33 @@ const aidlcRuntimeRef = /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-runtime\
 if (aidlcRuntimeRef.test(command)) process.exit(0);
 if (!aidlcTransitionTool.test(command) && !aidlcOrchestrateReport.test(command)) process.exit(0);
 
-// 4. Audit-existence guard — exit cleanly before init (no audit.md yet).
-const auditFile = auditFilePath(projectDir);
-if (!existsSync(auditFile)) process.exit(0);
+// 4. Audit read — across EVERY per-clone shard of the ACTIVE intent, NOT this
+//    hook process's own PID/clone shard. The state tool that wrote the
+//    transition runs in a SEPARATE process; on the new layout a bare
+//    auditFilePath(projectDir) would resolve a per-process/PID shard the hook
+//    never wrote, so the transition would be invisible and the runtime-graph
+//    would never refresh after a transition (the major). Resolve the active
+//    intent (cursor / lone-intent → null = flat-legacy) and glob-merge its
+//    shards. Exit cleanly before init (no audit yet → "").
+const space = activeSpace(projectDir);
+const intent = activeIntent(projectDir, space) ?? undefined;
+const audit = readAllAuditShards(projectDir, intent, space).replace(/\r\n/g, "\n");
+if (audit.length === 0) process.exit(0);
 
 // 5. Heartbeat — doctor reads this file's mtime to detect silent-hook failure.
-const healthDir = join(projectDir, "aidlc-docs", ".aidlc-hooks-health");
+//    Kept at the bare (workspace-level) health dir to match where --doctor reads
+//    it (aidlc-utility.ts) and where recordHookDrop writes drops — the heartbeat
+//    is a per-hook liveness probe, not per-intent state.
+const healthDir = hooksHealthDir(projectDir);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "runtime-compile.last"), isoTimestamp(), "utf-8");
 
 // 6. Tail-read last 3 audit blocks. Three is the upper bound: a normal
 //    approve writes GATE_APPROVED + STAGE_COMPLETED + STAGE_STARTED in
 //    one Bash call. Terminal-WORKFLOW approve writes 5 rows; the last 3
-//    are PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED.
-const audit = readFileSync(auditFile, "utf-8").replace(/\r\n/g, "\n");
+//    are PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED. In the common
+//    single-clone case the merged buffer is one shard, so the last 3 blocks are
+//    the just-written transition rows.
 const blocks = audit.split(/\n---\n/);
 const last3 = blocks.slice(-3);
 

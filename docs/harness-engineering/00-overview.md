@@ -3,7 +3,7 @@
 > Part of the [AI-DLC documentation](../README.md) · [User Guide](../guide/00-introduction.md) · **Harness Engineer Guide** · [Developer Reference](../reference/00-overview.md)
 
 AI-DLC is a methodology, and this implementation ships it working out of the box
-on the harness you use — Claude Code, Kiro CLI, or Codex CLI: 11 agents, 32
+on the harness you use — Claude Code, Kiro CLI, Kiro IDE, or Codex CLI: 11 agents, 32
 stages, 9 scopes, a set of rules and sensors. This guide is for the person who
 wants to **reshape** that methodology — change which stages run, add an agent for
 a domain the framework doesn't cover, tighten a scope, teach the framework a
@@ -81,10 +81,10 @@ You author all of these in `core/` — the hand-authored, harness-neutral source
 | Add a brand-new stage | a new file in the right phase directory + graph wiring | [Adding a Stage](02-adding-a-stage.md) |
 | Add or modify an agent | `core/agents/<name>-agent.md` | [Adding an Agent](03-adding-an-agent.md) |
 | Define a scope | `core/scopes/aidlc-<name>.md` + per-stage `scopes:` tags | [Scopes](04-scopes.md) |
-| Teach a standing rule | `core/rules/aidlc-{team,project}.md` | [Rules and the Learning Loop](05-rules-and-the-loop.md) |
+| Teach a standing rule | `core/memory/{team,project}.md` | [Rules and the Learning Loop](05-rules-and-the-loop.md) |
 | Wire a deterministic check | a sensor manifest under `core/sensors/` + a stage's `sensors:` import | [Sensors](06-sensors.md) |
 | Add team domain knowledge | `aidlc/knowledge/<agent>-agent/` (the space-level knowledge dir, at runtime) | [Team Knowledge](07-team-knowledge.md) |
-| Shape Construction and swarm posture | `core/rules/` + the `units-generation` stage | [Construction and the Swarm](08-construction-and-swarm.md) |
+| Shape Construction and swarm posture | `core/memory/` + the `units-generation` stage | [Construction and the Swarm](08-construction-and-swarm.md) |
 
 Each chapter narrates the *how* and links down to the
 [Developer Reference](../reference/00-overview.md) for the exhaustive schema —

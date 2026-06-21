@@ -13,8 +13,10 @@ import {
   auditFilePath,
   errorMessage,
   getField,
+  hooksHealthDir,
   isoTimestamp,
   recordHookDrop,
+  recoveryFilePath,
   resolveProjectDirFromHook,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
@@ -23,7 +25,7 @@ const projectDir = resolveProjectDirFromHook(import.meta.url);
 const stateFile = stateFilePath(projectDir);
 
 // Write health heartbeat
-const healthDir = join(projectDir, "aidlc-docs", ".aidlc-hooks-health");
+const healthDir = hooksHealthDir(projectDir);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "validate-state.last"), isoTimestamp(), "utf-8");
 
@@ -47,7 +49,7 @@ const stateStatus = missing.length > 0
 // Write recovery breadcrumb so the orchestrator can detect compaction-related state corruption
 const currentStage = getField(content, "Current Stage") ?? "";
 const timestamp = isoTimestamp();
-const recoveryFile = join(projectDir, "aidlc-docs", ".aidlc-recovery.md");
+const recoveryFile = recoveryFilePath(projectDir);
 writeFileSync(
   recoveryFile,
   `# AIDLC Recovery Breadcrumb\n**Last validated**: ${timestamp}\n**Current stage**: ${currentStage}\n**State file**: ${stateStatus}\n`,

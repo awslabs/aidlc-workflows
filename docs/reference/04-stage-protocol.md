@@ -76,14 +76,14 @@ with a fresh timestamp.
 | # | Check |
 |---|-------|
 | 1 | At the approval gate, optionally call `bun .claude/tools/aidlc-state.ts gate-start <slug>` (positional slug, not `--stage`) -- the tool flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. If skipped, the engine's `report` / `reject` paths backfill the missing `STAGE_AWAITING_APPROVAL` row (tagged `Recovered=true`) before recording the outcome. (`STAGE_STARTED` / the `[-]` transition is emitted earlier by `advance` / `approve` when the stage becomes active.) |
-| 2 | Log options BEFORE calling `AskUserQuestion` via `bun .claude/tools/aidlc-log.ts decision` (not by hand-writing to `audit.md`) |
+| 2 | Log options BEFORE calling `AskUserQuestion` via `bun .claude/tools/aidlc-log.ts decision` (not by hand-writing to the `audit/` shards) |
 | 3 | After the user responds, log the exact choice via `bun .claude/tools/aidlc-log.ts answer`, then use `aidlc-orchestrate.ts report --stage <slug> --result approved` for approval or `aidlc-state.ts reject <slug>` for request-changes. If the approval UI first captures only the "Request Changes" choice, ask once for revision feedback and then call `reject` immediately before any revision work or re-presented gate |
 | 4 | Never summarize user input -- pass exact option labels to the log tool; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
 | 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
 | 7 | Mark previous stage task `completed` and current stage task `in_progress` with `activeForm` BEFORE work begins (the `sync-statusline` hook handles state syncing) |
-| 8 | Use ONLY event types from `knowledge/aidlc-shared/audit-format.md` -- the state and log tools enforce this; never write directly to `audit.md` |
-| 9 | Do NOT hand-write `STAGE_STARTED` / `STAGE_COMPLETED` blocks to `audit.md`. The state-tool subcommands emit them. Hand-written blocks break atomicity and miss the timestamp guarantee |
+| 8 | Use ONLY event types from `knowledge/aidlc-shared/audit-format.md` -- the state and log tools enforce this; never write directly to the `audit/` shards |
+| 9 | Do NOT hand-write `STAGE_STARTED` / `STAGE_COMPLETED` blocks to the `audit/` shards. The state-tool subcommands emit them. Hand-written blocks break atomicity and miss the timestamp guarantee |
 
 ---
 
@@ -144,7 +144,7 @@ approval gates add a third option:
 The question text changes to include the cycle count:
 `"[Stage Name] -- this is revision cycle [N]. How would you like to proceed?"`
 
-**When "Accept as-is" is selected:** log in `audit.md` ("User accepted stage
+**When "Accept as-is" is selected:** log in the `audit/` shards ("User accepted stage
 output as-is after [N] revision cycles"), mark complete, proceed. This
 overrides the No Emergent Behavior Rule for Construction stages only when
 the threshold is reached.
@@ -157,7 +157,7 @@ revision, an 'Accept as-is' option will become available."
 ```mermaid
 flowchart TD
     COMPLETE["Stage work complete"]
-    AUDIT_PRE["Append to audit.md:\nstage summary + options\n(fresh ISO timestamp)"]
+    AUDIT_PRE["Append to this clone's audit shard:\nstage summary + options\n(fresh ISO timestamp)"]
     ASK["AskUserQuestion:\nApproval Gate"]
 
     APPROVE["Approve"]
@@ -296,7 +296,7 @@ AskUserQuestion({
 })
 ```
 
-Log the mode choice to `audit.md`. Users can switch modes mid-stage.
+Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
 
 #### Guide Me (Interactive Mode)
 
@@ -634,7 +634,7 @@ If user inputs from different stages contradict:
 2. Do NOT resolve by choosing one interpretation
 3. Ask which takes priority
 4. Update overridden artifact
-5. Log resolution in `audit.md`
+5. Log resolution in the `audit/` shards
 
 ### Severity Levels
 
@@ -643,7 +643,7 @@ If user inputs from different stages contradict:
 | **Critical** | Cannot continue | Corrupted state, missing critical artifacts, unrecoverable parse errors | Stop, ask user immediately |
 | **High** | Output may be wrong | Contradictory inputs, incomplete answers, missing dependencies | Stop, ask user immediately |
 | **Medium** | Quality reduced | Vague responses, partial context, ambiguous requirements | Attempt resolution; if unresolved, ask user |
-| **Low** | Cosmetic | Formatting, naming, style issues | Handle silently, log in `audit.md` |
+| **Low** | Cosmetic | Formatting, naming, style issues | Handle silently, log in the `audit/` shards |
 
 ---
 
@@ -669,7 +669,7 @@ Affect prior stages:
 ### Scope Changes
 
 New requirements or scope-level modifications:
-1. Document in `audit.md`
+1. Document in the `audit/` shards
 2. Return to Requirements Analysis (2.3) or Delivery Planning (2.8)
 3. Re-plan from that point
 4. If change affects stage selection (e.g., `poc` -> `feature`), update scope
@@ -768,7 +768,7 @@ brief analysis, skip optional stages:
 | **Planning** | Stages producing markdown artifacts (analysis, questions, design) |
 | **Generation** | Stages producing executable code (Code Generation, Build and Test) |
 | **Artifact** | A versioned markdown file in `<record>/` recording a decision, design, or analysis |
-| **Guardrail** | A learned behavioral rule stored in `.claude/rules/` |
+| **Guardrail** | A learned behavioral rule stored in the space memory layer (`aidlc/spaces/<space>/memory/`) |
 | **Approval Gate** | Structured prompt where user approves or requests changes |
 | **Inline Stage** | Stage executing directly in the orchestrator conversation |
 | **Subagent Stage** | Stage delegating execution to a Claude Code Task tool call |
@@ -860,7 +860,35 @@ investigation before marking complete.
 1. **Retry once** with reduced context (summarize inception, current unit only)
 2. If retry fails, offer user: "Run inline" (execute in orchestrator) or
    "Skip and revisit" (mark incomplete, continue)
-3. Log failure in `audit.md` using Error log format
+3. Log failure in the `audit/` shards using Error log format
+
+---
+
+## Reviewer Invocation
+
+When a `run-stage` directive carries a non-null `reviewer` field, the conductor
+invokes that reviewer as a **separate sub-agent** after the stage body produces its
+artifacts and before the §13 Learnings Ritual and the approval gate. The stage
+ritual sequence in full: questions → artifact → reviewer (if declared) →
+learnings → gate.
+
+*(Protocol Section 12a)*
+
+1. **Invoke.** Delegate to the agent named in `directive.reviewer`, passing the
+   stage definition path, the Q&A file, the produced artifact paths, and any
+   validation tools from frontmatter — never the builder's `memory.md` or plan, so
+   the reviewer forms independent judgment.
+2. **Review.** The reviewer reads the definition, Q&A, and artifacts, runs any
+   listed validation tools, and appends a `## Review` section to the primary
+   artifact with a **READY** or **NOT-READY** verdict.
+3. **Verdict.** READY → proceed to the learnings ritual then the gate. NOT-READY
+   with iterations remaining below `reviewer_max_iterations` (default 2) → the lead
+   agent re-runs to address the findings and the reviewer re-checks. NOT-READY with
+   iterations exhausted → proceed to the gate with the unresolved findings noted.
+
+The reviewer never blocks — the human always has final say at the gate — and does
+not fire for stages without a `reviewer` field. See the `reviewer` /
+`reviewer_max_iterations` frontmatter fields in [Stage Definition](15-stage-definition.md).
 
 ---
 
@@ -882,10 +910,10 @@ approval gate:
 3. **Confirm**: the conductor renders the candidates; the user picks which to
    keep and, for free-text additions, picks the heading that derives the
    destination.
-4. **Admission check**: each kept learning is checked against `aidlc-org.md`'s
+4. **Admission check**: each kept learning is checked against `org.md`'s
    matching section; a contradiction is surfaced to revise / skip / escalate.
-5. **Persist**: `aidlc-learnings.ts persist` writes confirmed learnings to
-   `.claude/rules/aidlc-{project,team}-learnings.md` (and, for a sensor-binding
+5. **Persist**: `aidlc-learnings.ts persist` writes each confirmed learning as a practice to
+   `aidlc/spaces/<space>/memory/{project,team}.md` (and, for a sensor-binding
    learning, installs the manifest + stage `sensors:` import in one locked
    transaction), emitting `RULE_LEARNED` / `SENSOR_PROPOSED`.
 
@@ -917,7 +945,7 @@ Ritual, which is `stage-protocol.md` Section 13)*
 3. Write results to `<record>/verification/[phase-boundary]-verification.md`
 4. If failed: present issues (missing links, orphaned artifacts,
    inconsistencies) before proceeding
-5. Log `PHASE_VERIFIED` to `audit.md`
+5. Log `PHASE_VERIFIED` to the `audit/` shards
 
 ### Per-Phase Checks
 

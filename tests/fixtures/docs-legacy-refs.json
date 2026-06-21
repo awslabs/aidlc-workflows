@@ -1,7 +1,32 @@
 {
-  "_comment": "P9 docs allowlist gate (t174). Every surviving `aidlc-docs` or `--init` occurrence under docs/ MUST be pinned here by exact file + line text, and the total pinned count MUST stay <= ceiling. The flat `aidlc-docs/` layout and `/aidlc --init` are retired; the ONLY legitimate survivors are: (1) the shipped sensor `matches` glob value `**/{aidlc-docs,intents}/**` (the per-intent record tree, keeping the legacy aidlc-docs arm for a pre-migration project), and (2) one prose line explaining that legacy arm. Adding a new entry requires a visible, reviewable diff here; blanket-allowlisting trips the ceiling. See docs/reference/07-sensor-system.md + docs/harness-engineering/06-sensors.md.",
-  "ceiling": 8,
+  "_comment": "Docs legacy-ref allowlist gate (t174). The gate scans docs/**/*.md + core/templates/*.md + each harness/<h>/skills/aidlc/SKILL.md (derived FROM DISK) and FAILS unless every surviving retired-token line is pinned here by exact file + line text, with the pinned count <= ceiling. FOUR retired-token lanes: (1) `aidlc-docs` — the flat record layout relocated to aidlc/spaces/<space>/intents/<slug>-<id8>/; (2) bare `--init` — the retired aidlc command; (3) dotted rules dirs `.claude/rules/` | `.kiro/steering/` | `.codex/aidlc-rules/` — the method/rules layer relocated to aidlc/spaces/<space>/memory/ (graph.ts MEMORY_SEGMENTS), so these survive ONLY in native-include prose (the `.claude/rules/aidlc.md` @-import stub, the Kiro `.kiro/steering/` resources glob, the packager rename narrative); (4) `*-learnings.md` filename — learnings collapsed into practices in memory/{team,project}.md (aidlc-learnings.ts), so there are ZERO legitimate survivors. EXCLUDES dist/** (generated; package.ts --check proves parity) and core/aidlc-common/** (the engine-parsed stage tree's aidlc-docs reroot is a separate deferred sweep). Adding an entry requires a visible diff here; blanket-allowlisting trips the ceiling. See docs/reference/07-sensor-system.md, docs/reference/14-claude-features.md, docs/harness-engineering/06-sensors.md.",
+  "ceiling": 14,
   "allowed": [
+    {
+      "file": "docs/reference/14-claude-features.md",
+      "text": "| **Standing rules** (the layer chain) | `aidlc/spaces/<space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via `AIDLC_RULES_DIR`) |",
+      "why": "native-include mapping: names the .claude/rules/aidlc.md @-import stub that pulls the relocated memory tree (correct, not stale)"
+    },
+    {
+      "file": "docs/reference/14-claude-features.md",
+      "text": "This implementation reads behavioral rules from the space memory layer at `aidlc/spaces/<space>/memory/`, pulled into Claude's context via the `.claude/rules/aidlc.md` @-import stub. One file per layer of the inheritance chain:",
+      "why": "names the .claude/rules/aidlc.md @-import stub (the native include, correct)"
+    },
+    {
+      "file": "docs/reference/14-claude-features.md",
+      "text": "**Why the org/team files stay lean:** Claude Code loads the space memory files (via the `.claude/rules/aidlc.md` @-import stub) into each conversation, including non-AI-DLC ones. Keeping the shipped layers to concise, topical structure avoids polluting regular development sessions. Detailed methodology that the upstream specification places in rules instead lives in `.claude/knowledge/aidlc-shared/` or in SKILL.md and stage-protocol.md, loaded only when `/aidlc` is active.",
+      "why": "names the .claude/rules/aidlc.md @-import stub (the native include, correct)"
+    },
+    {
+      "file": "docs/reference/14-claude-features.md",
+      "text": "| Rules | `aidlc/spaces/<space>/memory/*.md` (via `.claude/rules/aidlc.md` @-stub) | Every conversation | Minimal guardrails; self-learning corrections |",
+      "why": "names the .claude/rules/aidlc.md @-import stub (the native include, correct)"
+    },
+    {
+      "file": "docs/reference/01-architecture.md",
+      "text": "9. **Minimal rules** -- Only guardrails (~35 lines total) live in the space memory layer (`aidlc/spaces/<space>/memory/`, pulled in via the `.claude/rules/aidlc.md` @-import stub). Everything else (verification, brownfield safeguards, audit format, adaptive patterns) lives in `knowledge/aidlc-shared/` or is embedded in SKILL.md/stage-protocol.md. This prevents context bloat in non-AI-DLC conversations since rules are always loaded.",
+      "why": "names the .claude/rules/aidlc.md @-import stub (the native include, correct)"
+    },
     {
       "file": "docs/harness-engineering/06-sensors.md",
       "text": "`**/{aidlc-docs,intents}/**` — the per-intent record tree, with the legacy",

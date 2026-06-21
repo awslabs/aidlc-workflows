@@ -387,6 +387,39 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
       "practices/org.md",
       "practices/project.md",
       "aidlc-docs/.sensors/",
+      // ── learnings→practices relocation (docs-freshness sweep) ──
+      // The two retired learnings FILES — aidlc-team-learnings.md and
+      // aidlc-project-learnings.md — collapsed into the unified practices
+      // written under aidlc/spaces/<space>/memory/{team,project}.md (see
+      // core/tools/aidlc-learnings.ts → memoryDirFor). These concrete filenames
+      // have ZERO legitimate survivors anywhere in core/harness/dist/docs — the
+      // only on-disk hits are three tests that embed them as negative-match data
+      // (carved by STEM below). So these tokens catch any stale learnings-FILE
+      // reference that re-enters the corpus.
+      //
+      // We anchor on the full `aidlc-<scope>-learnings.md` filename, NOT a bare
+      // `-learnings.md` substring: the explanatory glob `*-learnings.md` (the
+      // prose that DOCUMENTS the collapse — "there is no parallel `*-learnings.md`
+      // surface") appears legitimately in ~17 files (core stage-protocol +
+      // aidlc-{graph,learnings}.ts, their dist copies, docs/{guide,reference,
+      // harness-engineering}, and tests). That retirement-narrating prose is
+      // correct, not stale, and is already pinned by t174 over the authored
+      // surfaces — so a bare-substring token would over-broaden into it.
+      //
+      // NOTE: the sibling rules→memory relocation (the DOTTED dirs
+      // `.claude/rules/`, `.kiro/steering/`, `.codex/aidlc-rules/`) is
+      // deliberately NOT swept here either. Those dotted forms survive
+      // legitimately in ~77 files: the 52 rendered dist/claude/.claude copies
+      // (token-substitution output), the packager/emit/@-stub/native-glob
+      // sources, the resolver doc-comments in aidlc-{lib,graph}.ts, and the
+      // authored-prose mentions of the `.claude/rules/aidlc.md` @-import stub —
+      // and the bare `{{HARNESS_DIR}}/rules/` template token (~73× in
+      // core/aidlc-common) is a SEPARATE deferred sweep (G6) that must NOT be
+      // matched here. That lane is already pinned by t174 (docs-legacy-refs-gate)
+      // over the authored-prose surfaces; duplicating it here would mean carving
+      // all 77 paths.
+      "aidlc-team-learnings.md",
+      "aidlc-project-learnings.md",
     ];
     const pathHits = grepHits(
       [
@@ -402,7 +435,7 @@ describe("t55 — test-suite metadata drift (migrated from t55-test-suite-drift.
     ).filter((h: string) => !pathHitCarvedOut(h));
     if (pathHits.length > 0) {
       pathDrift.push(
-        "stale path strings (aidlc-knowledge/, .claude/practices/, rules/aidlc/, practices/{team,org,project}.md, aidlc-docs/.sensors/):",
+        "stale path strings (aidlc-knowledge/, .claude/practices/, rules/aidlc/, practices/{team,org,project}.md, aidlc-docs/.sensors/, aidlc-{team,project}-learnings.md):",
       );
       pathDrift.push(...pathHits);
     }
@@ -509,7 +542,18 @@ function pathHitCarvedOut(hit: string): boolean {
   return (
     commonExcluded(hit) ||
     hit.includes("t55-test-suite-drift") || // STEM: carves .sh AND .test.ts
-    hit.includes("t06-claude-md-paths") // STEM: t06 is now .test.ts
+    hit.includes("t06-claude-md-paths") || // STEM: t06 is now .test.ts
+    // ── learnings-filename carve-outs (learnings→practices relocation sweep) ──
+    // The retired filenames aidlc-team-learnings.md / aidlc-project-learnings.md
+    // have ZERO legitimate survivors in core/harness/dist/docs (verified: grep
+    // for the concrete filenames returns nothing there). Their only on-disk
+    // appearances are these three tests, which embed the filename as
+    // negative-match TEST DATA — they assert the file is GONE (the .sh
+    // ancestor's `assert_file_not_exists`) or narrate the old learnings flow.
+    // Carved by STEM so the embedded filename never self-trips this sweep.
+    hit.includes("t99-learnings-gate-flow") || // narrates old learnings landing paths
+    hit.includes("t86-stage-protocol-section-13") || // asserts filename absent in stage-protocol
+    hit.includes("t158-memory-writer-reader-seam") // asserts old learnings file not created
   );
 }
 

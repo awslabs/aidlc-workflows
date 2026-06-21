@@ -87,8 +87,8 @@ On activation, load knowledge in the following order:
 2. `.kiro/knowledge/aidlc-shared/` -- shared methodology
 3. `.kiro/knowledge/aidlc-pipeline-deploy-agent/` -- agent-specific methodology
 4. `.kiro/steering/` -- team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md`)
-5. `aidlc-docs/knowledge/aidlc-shared/` -- team shared knowledge
-6. `aidlc-docs/knowledge/aidlc-pipeline-deploy-agent/` -- team agent-specific knowledge
+5. `aidlc/knowledge/aidlc-shared/` -- team shared knowledge
+6. `aidlc/knowledge/aidlc-pipeline-deploy-agent/` -- team agent-specific knowledge
 
 ## Key Principles
 

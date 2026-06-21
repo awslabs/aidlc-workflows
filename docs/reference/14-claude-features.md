@@ -22,7 +22,7 @@ harness parameter. Add a column when you port to a new harness.
 | **Orchestrator entry** (`/aidlc` + runners) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`$aidlc`) |
 | **Agent personas** (11 domain experts) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | `.agents/` TOMLs |
 | **Automation** (audit, state, tracking) | Hooks via `settings.json` | Hooks via `agents/aidlc.json` | Hooks via `.codex/hooks.json` (one adapter) |
-| **Standing rules** (the layer chain) | `.claude/rules/` | `.kiro/steering/` | `.codex/aidlc-rules/` |
+| **Standing rules** (the layer chain) | `aidlc/spaces/<space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via `AIDLC_RULES_DIR`) |
 | **Project onboarding doc** | `CLAUDE.md` | `AGENTS.md` | `AGENTS.md` |
 | **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | `.codex/config.toml` (+ Starlark `rules/`) |
 
@@ -90,7 +90,7 @@ SKILL.md references two companion file sets in `.claude/skills/aidlc/`:
 
 ### Agent File Format
 
-This implementation renders AI-DLC's 11 agent roles as flat `.md` files in `.claude/agents/`. Each uses YAML frontmatter followed by a markdown body. The frontmatter controls Claude Code's behavior when the agent is activated; the body provides persona, responsibilities, stage ownership, collaboration patterns, knowledge loading order, and key principles.
+This implementation renders AI-DLC's agent roles as flat `.md` files in `.claude/agents/` — 13 files: the 11 domain-expert personas plus 2 review-only agents (product-lead, architecture-reviewer). Each uses YAML frontmatter followed by a markdown body. The frontmatter controls Claude Code's behavior when the agent is activated; the body provides persona, responsibilities, stage ownership, collaboration patterns, knowledge loading order, and key principles.
 
 For full agent system documentation, see [Agent System](05-agent-system.md).
 
@@ -122,24 +122,25 @@ Workspace detection (0.2) used to be a subagent; it now runs deterministically i
 
 ## Rules
 
-### The flat layered rule files
+### The layered rule files
 
-This implementation uses `.claude/rules/` for behavioral rules. The directory is flat — one file per layer of the inheritance chain:
+This implementation reads behavioral rules from the space memory layer at `aidlc/spaces/<space>/memory/`, pulled into Claude's context via the `.claude/rules/aidlc.md` @-import stub. One file per layer of the inheritance chain:
 
 ```
-.claude/rules/
-├── aidlc-org.md                  # framework defaults (shipped)
-├── aidlc-team.md                 # this team's affirmed practices
-├── aidlc-project.md              # this project's specialization
-├── aidlc-phase-ideation.md       # rules scoped to a phase
-├── aidlc-phase-inception.md
-├── aidlc-phase-construction.md
-└── aidlc-phase-operation.md
+aidlc/spaces/<space>/memory/
+├── org.md                        # framework defaults (shipped)
+├── team.md                       # this team's affirmed practices
+├── project.md                    # this project's specialization
+└── phases/                       # rules scoped to a phase
+    ├── ideation.md
+    ├── inception.md
+    ├── construction.md
+    └── operation.md
 ```
 
 Each file carries topical `##` headings (Way of Working, Testing Posture, Deployment, Code Style, Forbidden, Mandated, and so on). At workflow start the compile resolver walks the chain **org → team → project → phase → stage** and bakes the resolved rule set onto each stage's graph node. The model is **strict-additive**: every applicable rule from every layer appears in the agent's context simultaneously — a narrower layer never silently overrides a broader one. A rule that would *contradict* a broader-scope rule is rejected at the admission gate when it is written, not reconciled at runtime. The authoritative layout, scope derivation, and conflict semantics are in [Rule System](08-rule-system.md).
 
-**Why the org/team files stay lean:** Claude Code loads every file in `.claude/rules/` into each conversation, including non-AI-DLC ones. Keeping the shipped layers to concise, topical structure avoids polluting regular development sessions. Detailed methodology that the upstream specification places in rules instead lives in `.claude/knowledge/aidlc-shared/` or in SKILL.md and stage-protocol.md, loaded only when `/aidlc` is active.
+**Why the org/team files stay lean:** Claude Code loads the space memory files (via the `.claude/rules/aidlc.md` @-import stub) into each conversation, including non-AI-DLC ones. Keeping the shipped layers to concise, topical structure avoids polluting regular development sessions. Detailed methodology that the upstream specification places in rules instead lives in `.claude/knowledge/aidlc-shared/` or in SKILL.md and stage-protocol.md, loaded only when `/aidlc` is active.
 
 ### The Learning Loop
 
@@ -148,8 +149,8 @@ The rule files are not static — the v0.5.0 learning loop turns an in-workflow 
 1. **Diary (LLM).** During the stage, observations accumulate in the intent's record dir at `<record>/<phase>/<stage>/memory.md` (`<record>/` = `aidlc/spaces/<space>/intents/<slug>-<id8>/`).
 2. **Surface (tool).** At the approval gate, `aidlc-learnings.ts surface` reads the diary and emits structured candidates — the LLM does not re-parse or classify.
 3. **Confirm (human).** The conductor renders the candidates; you pick which to keep and, for free-text additions, pick the single heading that derives the destination.
-4. **Admission check (knowledge).** Each kept learning is checked against `aidlc-org.md`'s matching section; a contradiction is surfaced for you to revise, skip, or escalate.
-5. **Persist (tool).** `aidlc-learnings.ts persist` writes confirmed learnings to `aidlc-{project,team}-learnings.md` as dated entries and, for a sensor-binding learning, installs the manifest plus the stage `sensors:` import inside one locked transaction. It emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
+4. **Admission check (knowledge).** Each kept learning is checked against `org.md`'s matching section; a contradiction is surfaced for you to revise, skip, or escalate.
+5. **Persist (tool).** `aidlc-learnings.ts persist` writes each confirmed learning as a practice to `aidlc/spaces/<space>/memory/{project,team}.md` as dated entries and, for a sensor-binding learning, installs the manifest plus the stage `sensors:` import inside one locked transaction. It emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
 
 The user-facing walk-through (with a worked example) is in [Rules and the Learning Loop](../guide/08-rules-and-the-learning-loop.md); the harness-engineer authoring angle is in [Rules and the Learning Loop](../harness-engineering/05-rules-and-the-loop.md).
 
@@ -334,7 +335,7 @@ An MCP server appearing in the session is a function of `.mcp.json` plus availab
 |---------|---------|---------------|------|
 | CLAUDE.md | `.claude/CLAUDE.md` | Every conversation | Bootstrap: structure, prerequisites, conventions |
 | Settings | `.claude/settings.json` | Every conversation | Pre-approve Claude Code tools |
-| Rules | `.claude/rules/*.md` | Every conversation | Minimal guardrails; self-learning corrections |
+| Rules | `aidlc/spaces/<space>/memory/*.md` (via `.claude/rules/aidlc.md` @-stub) | Every conversation | Minimal guardrails; self-learning corrections |
 | Skill | `.claude/skills/aidlc/SKILL.md` | On `/aidlc` invocation | Orchestrator: session, scope, stage graph, delegation |
 | Workflow-spine hooks | `.claude/settings.json` | Always on; self-gate when no workflow | PostToolUse, PreCompact, SubagentStop, Stop |
 | Agents (inline) | `.claude/agents/*.md` | Persona activation | 30 of 32 stages: conductor adopts agent persona |
@@ -355,7 +356,7 @@ When a user runs `/aidlc feature`:
 1a. statusLine command starts    (settings.json -- runs continuously)
 2.  settings.json loads          (every conversation; all hooks register here, project-wide)
 2a. SessionStart hook fires      (settings.json -- if session resume)
-3.  rules/ load                  (every conversation)
+3.  memory/ rules load            (every conversation)
 4.  SKILL.md activates           (skill invocation -- the conductor)
 5.  Conductor calls the engine   (`aidlc-orchestrate next $ARGUMENTS`)
 6.  Engine reads state + graph   (decides the move, emits a typed directive)

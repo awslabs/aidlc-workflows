@@ -123,7 +123,7 @@ recompile at the next workflow start.
 | State | Lifecycle | Source on disk | Compiled into | Read by |
 |---|---|---|---|---|
 | Stage DAG, scope routing, artifact production | Framework-versioned (changes via framework PR) | Stage frontmatter (`.claude/aidlc-common/stages/*.md`) | `stage-graph.json` | Orchestrator, doctor, designer |
-| **Rules** (prose, prescriptive) | Mutable; framework PR or learning-loop writes | `.claude/rules/aidlc-<scope>.md` (filename-derived; org/team/project attach to every stage) | `stage-graph.json` per-node `rules_in_context` | Orchestrator (resolved view); Claude Code auto-load reads source for in-context prose |
+| **Rules** (prose, prescriptive) | Mutable; framework PR or learning-loop writes | `aidlc/spaces/<space>/memory/<scope>.md` (filename-derived; org/team/project attach to every stage) | `stage-graph.json` per-node `rules_in_context` | Orchestrator (resolved view); Claude Code auto-load reads source for in-context prose |
 | **Sensors** (manifests, verification checks) | Mutable; framework PR or learning-loop writes (manifest authored once; stages import by id) | `.claude/sensors/aidlc-<id>.md` | `stage-graph.json` per-node `sensors_applicable` | Dispatcher reads resolved list at stage entry; PostToolUse fires from it |
 | Workflow execution telemetry | Per-workflow, accumulating | `audit/` shards · `memory.md` · Bolt forks | `<record>/runtime-graph.json` | Doctor, gate ritual, future cross-workflow observer |
 | Per-stage observation log | Per-stage-run | `<record>/<phase>/<stage>/memory.md` | (no compile — read directly) | Gate ritual at this stage's gate |
@@ -137,14 +137,14 @@ authoring surface; compiled graphs are what runtime reads.
 
 ### One compile, at workflow start
 
-The compile reads stage frontmatter, walks `.claude/rules/` and
+The compile reads stage frontmatter, walks `aidlc/spaces/<space>/memory/` and
 `.claude/sensors/`, attaches universal-default rules by filename
-(`aidlc-org.md`, `aidlc-team.md`, `aidlc-project.md` apply to every
+(`org.md`, `team.md`, `project.md` apply to every
 stage), then looks up each stage's pull imports against the source
 registries:
 
 - The stage's `phase: <name>` field attaches the matching
-  `aidlc-phase-<name>.md` rule (one rule per stage). See
+  `phases/<name>.md` rule (one rule per stage). See
   [Rule System](08-rule-system.md).
 - The stage's `sensors: [<id>, ...]` list resolves each id against
   `.claude/sensors/`. Unknown ids fail the compile loud — a stage
@@ -223,10 +223,10 @@ Concretely, each stage node gains two fields:
   "phase": "inception",
   "sensors": ["required-sections", "upstream-coverage"],
   "rules_in_context": [
-    {"path": ".claude/rules/aidlc-org.md", "scope": "org"},
-    {"path": ".claude/rules/aidlc-team.md", "scope": "team"},
-    {"path": ".claude/rules/aidlc-project.md", "scope": "project"},
-    {"path": ".claude/rules/aidlc-phase-inception.md", "scope": "phase"}
+    {"path": "aidlc/spaces/default/memory/org.md", "scope": "org"},
+    {"path": "aidlc/spaces/default/memory/team.md", "scope": "team"},
+    {"path": "aidlc/spaces/default/memory/project.md", "scope": "project"},
+    {"path": "aidlc/spaces/default/memory/phases/inception.md", "scope": "phase"}
   ],
   "sensors_applicable": [
     {"id": "required-sections", "path": ".claude/sensors/aidlc-required-sections.md"},

@@ -29,7 +29,7 @@ worth holding the whole picture before you touch any one knob.
 
 | Concern in Construction | Owner | Where it lives |
 |---|---|---|
-| The team's autonomy **posture** (a standing default) | you, the harness engineer | a rule in `core/rules/aidlc-{team,project}.md` (data) |
+| The team's autonomy **posture** (a standing default) | you, the harness engineer | a rule in `core/memory/{team,project}.md` (data) |
 | What Units **can** parallelise | you, the harness engineer | the `units-generation` stage and its dependency DAG (data) |
 | The **convergence check** the swarm trusts | you, the harness engineer | your project's own build/test command + a protected spec (data + project config) |
 | The actual autonomy **grant** for this project | the human | the ladder prompt at runtime |
@@ -46,8 +46,8 @@ author none of them.
 
 The first thing a team wants to control is how much hand-holding Construction
 demands. The shipped default lives in the org rule you author at
-`core/rules/aidlc-org.md` under the `## Walking Skeleton` heading
-(`aidlc-org.md:28-42`). Read it as the framework's stance:
+`core/memory/org.md` under the `## Walking Skeleton` heading
+(`org.md:28-42`). Read it as the framework's stance:
 
 - The **walking-skeleton Bolt runs first** for greenfield scopes — `mvp`,
   `enterprise`, `feature`, `poc`, `workshop`, `infra`. Bolt 1 is solo and gated,
@@ -62,8 +62,8 @@ demands. The shipped default lives in the org rule you author at
 
 You shape this posture the same way you shape any rule, through the
 strict-additive layers from [Rules and the Learning Loop](05-rules-and-the-loop.md):
-edit `aidlc-team.md` for a team-wide stance, or `aidlc-project.md` for a durable
-deviation on one project. You leave `aidlc-org.md` alone — it is framework-shipped
+edit `team.md` for a team-wide stance, or `project.md` for a durable
+deviation on one project. You leave `org.md` alone — it is framework-shipped
 and inherited.
 
 What you set is the **default and the guidance**. The grant stays with the human
@@ -78,7 +78,7 @@ decides (judgment).
 
 Suppose your team is new to autonomous Construction and wants the conservative
 posture: every Bolt reviewed, no hands-off runs, until trust is earned. You add a
-bullet under `## Walking Skeleton` in `core/rules/aidlc-team.md`:
+bullet under `## Walking Skeleton` in `core/memory/team.md`:
 
 ```markdown
 ## Walking Skeleton
@@ -179,9 +179,9 @@ Two surfaces carry the signal:
 
 Your harness contribution is making both real and meaningful. A check that always
 passes, or a spec that is empty, hands the swarm a rubber stamp. The
-`## Testing Posture` rule in `aidlc-org.md:44-58` already sets per-scope test
+`## Testing Posture` rule in `org.md:44-58` already sets per-scope test
 floors (for example, `mvp`/`feature` get tests-alongside-code at 80% coverage);
-authoring a stricter posture at `aidlc-team.md` is how you raise the bar the
+authoring a stricter posture at `team.md` is how you raise the bar the
 check enforces.
 
 A sensor complements the check on the prose side. The `required-sections` and

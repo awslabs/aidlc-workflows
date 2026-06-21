@@ -11,7 +11,9 @@ import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   auditFilePath,
   type ClaudeCodeHookInput,
+  docsRoot,
   errorMessage,
+  hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
   recordHookDrop,
@@ -21,7 +23,7 @@ import {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 // Write health heartbeat
-const healthDir = join(projectDir, "aidlc-docs", ".aidlc-hooks-health");
+const healthDir = hooksHealthDir(projectDir);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "audit-logger.last"), isoTimestamp(), "utf-8");
 
@@ -43,25 +45,48 @@ try {
 const tool = parsed.tool_name ?? "";
 const file: string = parsed.tool_input?.file_path ?? "";
 const auditFileValue = file.replace(/\\/g, "/");
+const fileNorm = auditFileValue; // forward-slash form for all path matching below
 
-// Only log writes to aidlc-docs/ (match both POSIX and Windows separators)
-if (!file.includes("aidlc-docs/") && !file.includes("aidlc-docs\\")) process.exit(0);
+// Only log writes to the active intent's RECORD tree. The record re-roots per
+// intent (aidlc/spaces/<space>/intents/<slug>-<id8>/…), so a bare
+// `includes("aidlc-docs/")` gate would DROP every artifact write on the workspace
+// layout. docsRoot() resolves that per-intent root when an intent is active, else
+// the bare space record root — the write is logged iff it lands under that root.
+const recordRoot = docsRoot(projectDir).replace(/\\/g, "/").replace(/\/$/, "");
+const underRecord = fileNorm === recordRoot || fileNorm.startsWith(`${recordRoot}/`);
+if (!underRecord) process.exit(0);
 
-// Don't log writes to audit.md itself (avoid recursion)
-if (file.endsWith("/audit.md") || file.endsWith("\\audit.md")) process.exit(0);
+// Don't log writes to an audit shard itself (avoid recursion). The shard is
+// audit/<host>-<clone>.md under the record dir; the bare audit.md guard also
+// covers a migrated tree's pre-shard audit.md before it is relocated.
+if (
+  file.endsWith("/audit.md") ||
+  file.endsWith("\\audit.md") ||
+  /[/\\]audit[/\\][^/\\]+\.md$/.test(file)
+) {
+  process.exit(0);
+}
 
 const auditFile = auditFilePath(projectDir);
 
-// Don't auto-create audit.md — the orchestrator creates it during --init or workflow start.
+// Don't auto-create the audit trail — the orchestrator creates it at workflow start.
 if (!existsSync(auditFile)) process.exit(0);
 
-// Extract context from file path (handle both separators)
-const aidlcIdxPosix = file.indexOf("aidlc-docs/");
-const aidlcIdxWin = file.indexOf("aidlc-docs\\");
-const aidlcIdx = aidlcIdxPosix >= 0 ? aidlcIdxPosix : aidlcIdxWin;
-const context = aidlcIdx >= 0
-  ? file.slice(aidlcIdx + "aidlc-docs/".length).replace(/[/\\]/g, " > ")
-  : file;
+// Extract the context breadcrumb: the path relative to the record root (the
+// per-intent record dir on the new layout, or the flat `aidlc-docs/` root).
+// Prefer the record-root prefix; fall back to the `aidlc-docs/` anchor for a
+// flat-legacy write that didn't match the active record root.
+let context: string;
+if (underRecord && fileNorm.length > recordRoot.length) {
+  context = fileNorm.slice(recordRoot.length + 1).replace(/\//g, " > ");
+} else {
+  const aidlcIdxPosix = file.indexOf("aidlc-docs/");
+  const aidlcIdxWin = file.indexOf("aidlc-docs\\");
+  const aidlcIdx = aidlcIdxPosix >= 0 ? aidlcIdxPosix : aidlcIdxWin;
+  context = aidlcIdx >= 0
+    ? file.slice(aidlcIdx + "aidlc-docs/".length).replace(/[/\\]/g, " > ")
+    : file;
+}
 
 // CREATE vs UPDATE distinction:
 // - Edit tool → always UPDATE (Edit requires the file to pre-exist)

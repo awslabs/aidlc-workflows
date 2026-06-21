@@ -77,8 +77,8 @@ sequenceDiagram
     participant TAK as Team Agent Knowledge
     participant PA as Prior Artifacts
 
-    O->>G: Step 1: Load .claude/rules/
-    Note over G: aidlc-org.md + aidlc-team.md + aidlc-project.md + aidlc-phase-<phase>.md
+    O->>G: Step 1: Load aidlc/spaces/<space>/memory/
+    Note over G: org.md + team.md + project.md + phases/<phase>.md
     G-->>O: Rules loaded (strict-additive — all layers present)
 
     O->>SM: Step 2: Load .claude/knowledge/aidlc-shared/
@@ -106,7 +106,7 @@ sequenceDiagram
 
 | Step | Source | Tier | Managed By | Loaded |
 |------|--------|------|-----------|--------|
-| 1 | `.claude/rules/` | -- | Framework + self-learning | First |
+| 1 | `aidlc/spaces/<space>/memory/` | -- | Framework + self-learning | First |
 | 2 | `.claude/knowledge/aidlc-shared/` | 1 | Framework | Early |
 | 3 | `.claude/knowledge/[agent]/` | 1 | Framework | Early |
 | 4 | `aidlc/knowledge/aidlc-shared/` | 2 | Team | Mid |

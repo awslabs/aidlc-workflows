@@ -250,6 +250,38 @@ See [Getting Started](01-getting-started.md) for the server registry and credent
 
 ---
 
+## Reviewer Agents
+
+Beyond the 11 domain-expert agents, AI-DLC ships **2 quality-gate reviewer
+agents**. They do not produce artifacts — they review what a builder produced and
+challenge it, representing the customer (or the review board) at the gate.
+
+| Reviewer | Reviews | Runs on |
+|----------|---------|---------|
+| `aidlc-product-lead-agent` | Requirements, user stories, and UX/mockup artifacts — completeness, business alignment, testability | sonnet |
+| `aidlc-architecture-reviewer-agent` | Technical design artifacts — soundness, implementability, broken cross-references, unachievable NFR targets | sonnet |
+
+A reviewer fires only when a stage declares a `reviewer:` field. Today the product
+lead reviews `rough-mockups`, `refined-mockups`, `requirements-analysis`, and
+`user-stories`; the architecture reviewer reviews `application-design`,
+`units-generation`, `functional-design`, `nfr-requirements`, `nfr-design`,
+`infrastructure-design`, and `code-generation`.
+
+**The reviewer step.** After the stage body produces its artifacts and before the
+learnings ritual and approval gate, the conductor invokes the named reviewer as a
+**separate sub-agent**. The reviewer reads the stage definition, the Q&A, and the
+artifacts (never the builder's `memory.md` or plan — it forms independent
+judgment), then appends a `## Review` section with a verdict: **READY** or
+**NOT-READY**. On NOT-READY the builder re-runs to address the findings and the
+reviewer re-checks, looping up to `reviewer_max_iterations` times (default 2). If
+findings remain after the cap, the workflow proceeds to the approval gate with the
+unresolved findings noted — the reviewer never blocks, the human always has final
+say.
+
+(IMPORTANT: use plain agent names in backticks as shown — do NOT make them markdown links; per-agent reviewer doc pages do not exist yet.)
+
+---
+
 ## Next Steps
 
 - [Phases and Stages](03-phases-and-stages.md) — see agents in context of the full stage flow

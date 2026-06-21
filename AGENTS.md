@@ -2,15 +2,15 @@
 
 This directory contains a native implementation of the AI-DLC (AI-Driven
 Development Life Cycle) methodology that ships to many CLI harnesses — today
-Claude Code, Kiro CLI, and Codex CLI, and any capable CLI you port it to — from
+Claude Code, Kiro CLI, Kiro IDE, and Codex CLI, and any capable CLI you port it to — from
 a single hand-authored source.
 
 ## Project Structure
 
-- `core/` — **The hand-authored, harness-neutral source of truth.** Tools, stages (`aidlc-common/`), agents, rules, scopes, sensors, knowledge, hooks, and the 3 session skills. Prose names the harness directory with the `{{HARNESS_DIR}}` token; the packager substitutes `.claude`/`.kiro`/`.codex` per tree.
-- `harness/<name>/` — **The thin per-harness authored surface.** Each holds `manifest.ts` (how to project `core/` into that harness's dist) plus the orchestrator skill and harness-specific files; `harness/codex/` adds `emit.ts` (Codex-only emissions). `claude/`, `kiro/`, `codex/`.
+- `core/` — **The hand-authored, harness-neutral source of truth.** Tools, stages (`aidlc-common/`), agents, memory (the rule/method layer), scopes, sensors, knowledge, hooks, and the 3 session skills. Prose names the harness directory with the `{{HARNESS_DIR}}` token; the packager substitutes `.claude`/`.kiro`/`.codex` per tree.
+- `harness/<name>/` — **The thin per-harness authored surface.** Each holds `manifest.ts` (how to project `core/` into that harness's dist) plus the orchestrator skill and harness-specific files; `harness/codex/` adds `emit.ts` (Codex-only emissions). `claude/`, `kiro/`, `kiro-ide/`, `codex/`.
 - `scripts/package.ts` — **The build entry.** `bun scripts/package.ts` regenerates every `dist/<harness>/`; `bun scripts/package.ts --check` is the byte-parity drift guard (CI tier). `manifest-types.ts` is the shared manifest contract.
-- `dist/<harness>/` — **GENERATED, committed, drift-guarded.** `dist/claude/.claude/`, `dist/kiro/.kiro/` (+ `AGENTS.md`), `dist/codex/` (`.codex/` + `.agents/` + `AGENTS.md`). Never hand-edit — `package.ts --check` fails CI on drift. Users copy `dist/<harness>/` into their project.
+- `dist/<harness>/` — **GENERATED, committed, drift-guarded.** `dist/claude/.claude/`, `dist/kiro/.kiro/` (+ `AGENTS.md`), `dist/kiro-ide/.kiro/` (+ `AGENTS.md`), `dist/codex/` (`.codex/` + `.agents/` + `AGENTS.md`). Never hand-edit — `package.ts --check` fails CI on drift. Users copy `dist/<harness>/` into their project.
 - `tests/` — All-TypeScript test suite (`t*.test.ts`, run via bun), four levels (smoke/unit/integration/e2e). Run `bash tests/run-tests.sh --help` for levels and profiles.
 - `docs/guide/` — User Guide: getting started, workflows, scopes, agents, customization, troubleshooting
 - `docs/harness-engineering/` — Harness Engineer Guide: reshaping AIDLC through configuration (stages, agents, scopes, rules, sensors, knowledge) without code, plus porting AIDLC to a new harness
@@ -23,8 +23,8 @@ The hand-authored source lives in `core/` (harness-neutral) + `harness/<name>/`
 trees. The core uses the same building blocks in every harness:
 
 - **Skills** (`skills/aidlc/`) — Orchestrator (`SKILL.md`), stage protocol, and 32 stage files across 5 phases (initialization, ideation, inception, construction, operation)
-- **Agents** (`agents/`) — 11 domain-expert personas as `aidlc-<role>-agent.md` files: product, design, delivery, architect, aws-platform, compliance, devsecops, developer, quality, pipeline-deploy, operations
-- **Rules** (`rules/`) — Flat layered config: `aidlc-org.md` (framework defaults), `aidlc-team.md` (affirmed practices), `aidlc-project.md` (project overrides), and `aidlc-phase-<phase>.md` for ideation/inception/construction/operation
+- **Agents** (`agents/`) — 13 `aidlc-<role>-agent.md` files: 11 domain-expert personas (product, design, delivery, architect, aws-platform, compliance, devsecops, developer, quality, pipeline-deploy, operations) plus 2 review-only agents (product-lead, architecture-reviewer)
+- **Method/rules** (`memory/`) — Layered config in the space memory layer: `org.md` (framework defaults), `team.md` (affirmed practices), `project.md` (project overrides), and `phases/<phase>.md` for ideation/inception/construction/operation
 - **Sensors** (`sensors/`) — Deterministic verification manifests (advisory): `aidlc-required-sections.md`, `aidlc-upstream-coverage.md`, `aidlc-linter.md`, `aidlc-type-check.md`
 - **Knowledge** (`knowledge/`) — Methodology reference. Per-agent under `aidlc-<agent>-agent/`; cross-agent material in `aidlc-shared/`
 - **Tools** (`tools/`) — TypeScript CLI tools, all prefixed `aidlc-*.ts` and run via bun

@@ -226,7 +226,7 @@ Two-step scan of the existing codebase. Identifies the existing service structur
 
 **Stage 2.2 — Practices Discovery** (aidlc-pipeline-deploy-agent)
 
-The aidlc-pipeline-deploy-agent leads this stage, with aidlc-quality-agent, aidlc-developer-agent, and aidlc-devsecops-agent supporting. Because this is a brownfield project, it consumes the Reverse Engineering artifacts to infer the team's existing practices — test framework and coverage conventions, CI/lint setup, branching and review norms. Produces `team-practices.md`, `discovered-rules.md`, and `evidence.md`. On affirmation, the discovered practices are promoted into `.claude/rules/aidlc-team.md` and `.claude/rules/aidlc-project.md` so downstream stages honour them.
+The aidlc-pipeline-deploy-agent leads this stage, with aidlc-quality-agent, aidlc-developer-agent, and aidlc-devsecops-agent supporting. Because this is a brownfield project, it consumes the Reverse Engineering artifacts to infer the team's existing practices — test framework and coverage conventions, CI/lint setup, branching and review norms. Produces `team-practices.md`, `discovered-rules.md`, and `evidence.md`. On affirmation, the discovered practices are promoted into `aidlc/spaces/<space>/memory/team.md` and `aidlc/spaces/<space>/memory/project.md` so downstream stages honour them.
 
 **Stage 2.3 — Requirements Analysis** (aidlc-product-agent)
 

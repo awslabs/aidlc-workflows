@@ -609,8 +609,8 @@ Each stage specifies its lead and supporting agents. To load a persona:
 1. `.claude/rules/` — organization and project guardrails (always)
 2. `.claude/knowledge/aidlc-shared/` — shared methodology principles
 3. `.claude/knowledge/[agent-name]/` — agent-specific methodology
-4. `aidlc-docs/knowledge/aidlc-shared/` — team shared knowledge (if exists)
-5. `aidlc-docs/knowledge/[agent-name]/` — team agent-specific knowledge (if exists)
+4. `aidlc/knowledge/aidlc-shared/` — team shared knowledge (if exists)
+5. `aidlc/knowledge/[agent-name]/` — team agent-specific knowledge (if exists)
 6. Prior stage artifacts as required by the current stage
 
 ### For inline stages:
@@ -760,6 +760,9 @@ Before creating any artifact file, validate:
 - All entities referenced in the artifact (components, stories, APIs, data models) exist in prior artifacts
 - No naming conflicts with existing artifacts (e.g., two components with the same name)
 - File path matches the expected convention for the stage
+
+### Template overrides
+Before writing artifact `X`, if a team template resolves at `aidlc/spaces/<space>/memory/templates/X.md` (keyed by the output filename stem — artifact `X` writes to `X.md`), follow its structure: use its `##` headings as the skeleton to fill. A resolved template is used whole-doc (verbatim structure, no section merge); if none resolves, follow the stage's existing prose. The `required-sections` sensor verifies the output against the SAME template file, so the produced shape and the checked shape cannot drift.
 
 ### ASCII Diagram Standards
 
@@ -912,9 +915,9 @@ The ritual is **tool-as-actor**: a deterministic tool (`aidlc-learnings.ts`) det
 
 **Stage files are immutable framework artefacts.** The ritual NEVER edits a stage file's `## Steps`, `## Sensors`, or `## Learn` content. Stage files ship with framework releases; user-tier customisation lives in the harness. The one carve-out is the frontmatter `sensors:` import list — a sensor-binding addition appends a new id there (the pull-authoring two-write install). That is the import list, not body content; the stage's immutable shape is unchanged. Stage files are framework-and-loop-edited, not framework-only — but only that one frontmatter list grows.
 
-**The harness IS mutable.** Confirmed learnings write to one of two surfaces:
+**The harness IS mutable.** A confirmed learning IS a practice — it writes to one of two surfaces:
 
-- `.claude/rules/aidlc-project-learnings.md` (default) or `.claude/rules/aidlc-team-learnings.md` — rolling dated entries, one click to widen a candidate from project to team. There is no org-learnings file and no widen-to-org path. These are a separate surface from the practices files (`aidlc-project.md` / `aidlc-team.md`) and their topical sections — never `## Corrections`, never a practices-discovery heading.
+- `aidlc/spaces/<space>/memory/project.md` (default) or `aidlc/spaces/<space>/memory/team.md` — appended as a practice line under the fitting topical heading (e.g. `## Corrections`, `## Testing Posture`, `## Forbidden`), one click to widen a candidate from project to team. These are the SAME method files the resolver reads; there is no parallel `*-learnings.md` surface, no fractional override tier, and no org tier (no widen-to-org path). History of what was learned lives in the audit shards + the per-stage diary, not a rolling dated file.
 - `.claude/sensors/aidlc-<id>.md` — for verification checks. A project-tier manifest with a `matches:` capability glob, bound to the originating stage by appending its id to that stage's `sensors:` frontmatter list.
 
 Next time the stage runs, the resolved rules and the bound sensor load automatically at compile — the stage runs better without anyone having edited the stage file's body.
@@ -944,16 +947,16 @@ Trigger after Step N-1 (completion message rendered) and before Step N (approval
    ```
    The tool parses memory.md and emits structured JSON: one candidate per non-blank entry under **Interpretations / Deviations / Tradeoffs** (surfaced verbatim — no paraphrase, no "interesting" filtering), plus a read-only `parked_open_questions[]` list. Open questions are research items, not learnings to install — they never become candidates. Most runs surface nothing worth keeping; that's the most common outcome.
 
-3. **Render the structured question + free-text channel.** For each candidate, render one option whose `label` is the candidate `summary` (verbatim) and whose `description` is the derived destination (e.g. `→ aidlc-project-learnings.md (Deviation)`) plus a "promote to team?" affordance. After `multiSelect` returns, correlate each kept label back to its candidate `id` + `source_heading`. Then **always** ask "Anything to add for next time?"; for any non-empty response, ask the user to pick one of the four headings (Interpretation / Deviation / Tradeoff / Open question). **The heading pick is the only classification asked of the user** — the destination is derived from it, not picked. There is no "rule or preference?" question and no practice-section menu (the practices sections of `aidlc-project.md` / `aidlc-team.md` are practices-discovery's surface, off-limits to the learning gate).
+3. **Render the structured question + free-text channel.** For each candidate, render one option whose `label` is the candidate `summary` (verbatim) and whose `description` names the routed destination (e.g. `→ project.md ## Corrections`) plus a "promote to team?" affordance. After `multiSelect` returns, correlate each kept label back to its candidate `id` + `source_heading`. Then **always** ask "Anything to add for next time?"; for any non-empty response, ask the user to pick one of the four diary headings (Interpretation / Deviation / Tradeoff / Open question). **The diary-heading pick is the only classification asked of the user.** From it, the orchestrator routes the learning to the fitting practice heading in the method file (KNOWLEDGE): a testing learning → `## Testing Posture`, a prohibition → `## Forbidden`, anything general → `## Corrections` (the default). The user never picks the destination heading directly — the orchestrator routes by fit, and the tool ensure-exists the heading before it writes.
 
-4. **Admission conflict-check (before any write).** For each kept learning candidate, compare the single proposed dated entry against `aidlc-org.md`'s matching `## <section>` (matched by topic — the single-line variant of the §5 admission gate). This comparison is a section-level LLM check (knowledge → orchestrator-LLM). If the entry contradicts an org guardrail, surface the conflicting org sentence inline; the user **revises, skips this candidate, or escalates** (judgement → user; there is no user-override path). Only conflict-clear or user-escalated selections proceed to the write. Sensor manifests have no org-section analogue and skip this check.
+4. **Admission conflict-check (before any write).** For each kept learning candidate, compare the proposed practice line against `org.md`'s matching `## <section>` (matched by the routed heading — the single-line variant of the §5 admission gate). This comparison is a section-level LLM check (knowledge → orchestrator-LLM). If the practice contradicts an org guardrail, surface the conflicting org sentence inline; the user **revises, skips this candidate, or escalates** (judgement → user; there is no user-override path). Only conflict-clear or user-escalated selections proceed to the write. Sensor manifests have no org-section analogue and skip this check.
 
 5. **Persist (the tool writes + emits audit).** Build the selections file and call:
    ```bash
    bun .claude/tools/aidlc-learnings.ts persist --slug <stage-slug> --selections-json <path>
    ```
    The tool, inside one `withAuditLock` transaction (decide-inside-lock, content-presence idempotency via a `<!-- cid:<slug>:<id> -->` marker so a crashed run recovers without double-appending):
-   - **Learning** → appends a dated entry to `aidlc-<scope>-learnings.md` (scope ∈ {project, team}), tagged by its heading: `- YYYY-MM-DD [<Heading>] <text> <!-- cid:... -->`. Creates the file from a header template on first write so the rolling-list heading always exists. Emits `RULE_LEARNED` (with `Source: orchestrator | user_addition`).
+   - **Learning** → appends a practice line under the orchestrator-routed heading in `<scope>.md` (scope ∈ {project, team}): `- <text> (learned YYYY-MM-DD) <!-- cid:... -->`. Ensure-exists the heading first, so a routed heading the file doesn't yet carry is created rather than throwing. Emits `RULE_LEARNED` (with `Source: orchestrator | user_addition`, `Heading: <routed>`).
    - **Sensor** → scaffolds a project-tier `<project>/.claude/sensors/aidlc-<id>.md` manifest (with the user-supplied `matches:` glob) AND appends the new id to the originating stage's `sensors:` frontmatter list — both writes inside the same lock. Emits `SENSOR_PROPOSED`. The sensor binds and fires from the next workflow's compile.
 
    The orchestrator never `Edit`s a rule or sensor file directly — every learning write goes through the tool under the lock, so the `RULE_LEARNED` / `SENSOR_PROPOSED` audit row is the replayable source of truth for what was learned. The selections file is the replay artefact: a crashed persist replays the same selections-json without re-prompting the human.
@@ -964,10 +967,12 @@ Trigger after Step N-1 (completion message rendered) and before Step N (approval
 
 ```
 Is the entry an Interpretation / Deviation / Tradeoff?
-└── Learning → aidlc-<scope>-learnings.md (dated entry, tagged by heading)
+└── Learning → a practice line under the routed heading in <scope>.md
+    Heading routed by fit (testing → ## Testing Posture, prohibition →
+      ## Forbidden, general → ## Corrections); ensure-exists before write.
     Scope derived from the user's keep + optional promote:
-    ├── default                       — aidlc-project-learnings.md
-    └── promote scope (project→team)  — aidlc-team-learnings.md   (no org-learnings file)
+    ├── default                       — project.md
+    └── promote scope (project→team)  — team.md   (no org tier)
 
 Is the entry an Open question?
 └── Parked — research item, never installed.
@@ -983,9 +988,9 @@ Is the improvement a verification check?
 
 | Entry shape | Destination |
 |---|---|
-| Interpretation: "Reused the auth module rather than rewriting it" | `rules/aidlc-project-learnings.md` (dated, `[Interpretation]`) |
-| Deviation: "Used Given/When/Then for AC despite freeform prose" | `rules/aidlc-project-learnings.md` (dated, `[Deviation]`); promote to `aidlc-team-learnings.md` if team-wide |
-| Tradeoff: "Picked TDD over BDD for the new generators this run" | `rules/aidlc-project-learnings.md` (dated, `[Tradeoff]`) |
+| Interpretation: "Reused the auth module rather than rewriting it" | `project.md ## Corrections` (practice line, `(learned YYYY-MM-DD)`) |
+| Deviation: "Used Given/When/Then for AC despite freeform prose" | `project.md ## Testing Posture` (practice line); promote to `team.md` if team-wide |
+| Tradeoff: "Picked TDD over BDD for the new generators this run" | `project.md ## Testing Posture` (practice line) |
 | Open question: "Confirm whether story splitting is by persona or journey" | Parked — never installed |
 | Check: "ADRs should carry Security and Compliance headings" | Sensor manifest `aidlc-<id>.md` (`matches:` glob) bound to the stage via its `sensors:` frontmatter |
 

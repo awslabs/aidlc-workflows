@@ -14,7 +14,7 @@
     "file://.kiro/agents/aidlc-product-lead-agent.md",
     "file://.kiro/knowledge/aidlc-product-lead-agent/*.md",
     "file://.kiro/knowledge/aidlc-shared/*.md",
-    "file://.kiro/steering/*.md"
+    "file://aidlc/spaces/default/memory/**/*.md"
   ],
   "hooks": {},
   "model": "claude-opus-4.8"

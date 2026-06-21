@@ -38,12 +38,12 @@ import {
   loadAgents,
   loadScopeMapping,
   harnessDir,
-  rulesSubdir,
   loadStageGraph,
   mustGet,
   mustPop,
   mustShift,
   parseStageFrontmatter,
+  planFilePath,
   resolveProjectDir,
   type ScopeDefinition,
   type StageEntry,
@@ -171,11 +171,54 @@ function stageGraphPath(): string {
   return process.env.AIDLC_STAGE_GRAPH ?? join(DATA_DIR, "stage-graph.json");
 }
 
-/** Resolve the rules directory. AIDLC_RULES_DIR env-var seam mirrors
- *  AIDLC_STAGE_GRAPH so t88's fixture-driven inheritance tests can isolate
- *  from the real .claude/rules/ tree. Evaluated at call time. */
+// The relocated method ("memory") is harness-neutral and lives at the
+// WORKSPACE ROOT under aidlc/spaces/<space>/memory/, NOT inside the harness
+// dir — one hand-editable copy, read by every harness via its own native
+// include (Claude @-stub, Kiro resources glob, Codex AGENTS.md/@-mention).
+// `default` is the always-present space; the resolver follows the active-space
+// cursor in a later phase (GA ships pointed at default — the include and this
+// default both resolve there). The segments below are joined under the
+// workspace root so a bare `aidlc/memory/…` means `aidlc/spaces/default/…`.
+const MEMORY_SPACE = "default";
+const MEMORY_SEGMENTS = ["aidlc", "spaces", MEMORY_SPACE, "memory"] as const;
+
+/** Resolve the method ("memory") directory — the single source of truth for
+ *  the layered practices (org/team/project + phases/). AIDLC_RULES_DIR env-var
+ *  seam mirrors AIDLC_STAGE_GRAPH so t88's fixture-driven inheritance tests can
+ *  isolate from the real tree. Evaluated at call time. The default resolves the
+ *  workspace-root aidlc/spaces/default/memory/ relative to this tool's location
+ *  (<ws>/<harness>/tools/ → up two to the workspace root). */
 function rulesDir(): string {
-  return process.env.AIDLC_RULES_DIR ?? join(__FILE_DIR, "..", rulesSubdir());
+  return process.env.AIDLC_RULES_DIR ?? join(__FILE_DIR, "..", "..", ...MEMORY_SEGMENTS);
+}
+
+/** The harness-neutral DISPLAY path baked into each RuleResolution — the
+ *  workspace-relative location of a method file (e.g. "aidlc/spaces/default/
+ *  memory/org.md"). Replaces the old per-harness "<harness>/<rulesSubdir>/<f>"
+ *  display form: the method now lives at the neutral aidlc/ roof, identical on
+ *  every harness, so the baked path is harness-neutral too. `rel` is the file's
+ *  sub-path under memory/ (e.g. "org.md" or "phases/construction.md"). */
+function memoryDisplayPath(rel: string): string {
+  return toPosix(join(...MEMORY_SEGMENTS, rel));
+}
+
+/** The method ("memory") directory under a given workspace root, derived from
+ *  the SAME `MEMORY_SEGMENTS` the resolver + display path use — so the rules
+ *  resolver, the packager's emit, the native includes, and the TPL template
+ *  lookup can never drift to different roots. `<projectDir>/aidlc/spaces/<space>/memory`.
+ *  (The TPL templates dir is this + "templates"; see `memoryTemplatesDir`.) */
+export function memoryDirFor(projectDir: string): string {
+  return join(projectDir, ...MEMORY_SEGMENTS);
+}
+
+/** The TPL template-override source-of-truth dir for a workspace:
+ *  `<projectDir>/aidlc/spaces/<space>/memory/templates` — where SEED ships the
+ *  `templates/` floor and a team drops `<artifact>.md` overrides. Used by the
+ *  `required-sections` sensor dispatcher as the default `--templates-dir`. Kept
+ *  here (not hardcoded in the dispatcher) so it stays byte-aligned with where
+ *  the packager emits and the resolver reads. */
+export function memoryTemplatesDir(projectDir: string): string {
+  return join(projectDir, ...MEMORY_SEGMENTS, "templates");
 }
 
 /** Resolve the sensors directory. AIDLC_SENSORS_DIR env-var seam mirrors
@@ -278,13 +321,13 @@ const FIELD_ORDER = [
 // Per-stage chain: org → team → project → phase. Pull authoring puts
 // the phase→stage relationship on the stage's existing `phase:`
 // declaration; the resolver attaches the matching aidlc-phase-<name>.md
-// file with no rule-side glob filter. The
-// `aidlc-{team,project}-learnings.md` slots in the filename regex are
-// reserved for the future memory-gate surface; today no learnings files
-// ship.
+// file with no rule-side glob filter. A confirmed learning is a PRACTICE
+// (vision §6): the §13 gate appends it under a topical heading in
+// team.md / project.md directly — there is no parallel `*-learnings.md`
+// surface and no fractional override tier.
 
 export interface RuleFile {
-  path: string;          // ".claude/rules/aidlc-org.md"
+  path: string;          // "aidlc/spaces/default/memory/org.md"
   scope: "org" | "team" | "project" | "phase";
   phase?: string;        // populated only when scope === "phase"
   frontmatter: RuleFrontmatter;
@@ -295,24 +338,26 @@ export interface RuleFile {
   headings: Map<string, string>;
 }
 
-// Filename anchor. `team-learnings` and `project-learnings` slots are
-// the future memory-gate surface (two-surface separation locked
-// 2026-05-24). The regex permits them so the future memory-gate work
-// doesn't have to widen the schema. Anything not matching is silently
-// ignored — including user-extension overlays like `team-overrides.md`
-// (no `aidlc-` prefix), per 08-rule-system.md.
-const RULE_FILE_REGEX =
-  /^aidlc-(org|team|team-learnings|project|project-learnings|phase-[a-z][a-z0-9-]*)\.md$/;
+// Filename anchors for the relocated method tree (aidlc/memory/). The layered
+// practice files are top-level (org/team/project, plain neutral names — no
+// `aidlc-` prefix now that they live under the neutral aidlc/ roof); the
+// phase-scoped files are nested under phases/<phase>.md. A confirmed learning
+// is a practice (vision §6) — it lands in team.md / project.md directly, so
+// there is no `*-learnings.md` slot and no fractional override tier. Anything
+// not matching is silently ignored — including user-extension overlays like
+// `team-overrides.md`, per 08-rule-system.md.
+const RULE_FILE_REGEX = /^(org|team|project)\.md$/;
+// Phase rule files live in phases/<phase>.md (the flat aidlc-phase-<phase>.md
+// scheme moved under a nested phases/ dir in the aidlc/memory/ relocation).
+const PHASE_RULES_SUBDIR = "phases";
+const PHASE_FILE_REGEX = /^([a-z][a-z0-9-]*)\.md$/;
 
-// Scope-priority for the deterministic sort. learnings sit immediately
-// after their parent tier's substantive file so the resolved chain reads
-// org → team → team-learnings → project → project-learnings → phase.
+// Scope-priority for the deterministic sort — the resolved chain reads
+// org → team → project → phase (a clean four-layer additive chain).
 const SCOPE_PRIORITY: Record<string, number> = {
   "org": 0,
   "team": 1,
-  "team-learnings": 1.5,
   "project": 2,
-  "project-learnings": 2.5,
   "phase": 3,
 };
 
@@ -384,45 +429,56 @@ export function loadRules(): RuleFile[] {
   const dir = rulesDir();
   if (!existsSync(dir)) return [];
 
-  const matched: RuleFile[] = [];
+  // Each candidate: the absolute on-disk path to read, the display sub-path
+  // (relative to aidlc/memory/, e.g. "org.md" or "phases/construction.md")
+  // baked into the RuleResolution, the resolved scope, and the phase name when
+  // scope === "phase". The method tree is shallow: top-level layered files plus
+  // one nested phases/ dir, so the walk is two explicit reads (no recursion).
+  type Candidate = {
+    rel: string;
+    filePath: string;
+    scope: RuleFile["scope"];
+    phase?: string;
+  };
+  const candidates: Candidate[] = [];
+
+  // 1. Top-level layered files: org/team/project (the neutral practice files).
   for (const f of readdirSync(dir)) {
     const m = f.match(RULE_FILE_REGEX);
     if (!m) continue;
-
     const scopeKey = m[1];
-    const filePath = join(dir, f);
-    const raw = readFileSync(filePath, "utf-8");
+    if (scopeKey !== "org" && scopeKey !== "team" && scopeKey !== "project") {
+      continue; // unreachable given the regex, but keep the guard explicit
+    }
+    candidates.push({ rel: f, filePath: join(dir, f), scope: scopeKey });
+  }
+
+  // 2. Phase-scoped files nested under phases/<phase>.md.
+  const phasesDir = join(dir, PHASE_RULES_SUBDIR);
+  if (existsSync(phasesDir)) {
+    for (const f of readdirSync(phasesDir)) {
+      const m = f.match(PHASE_FILE_REGEX);
+      if (!m) continue;
+      candidates.push({
+        rel: toPosix(join(PHASE_RULES_SUBDIR, f)),
+        filePath: join(phasesDir, f),
+        scope: "phase",
+        phase: m[1],
+      });
+    }
+  }
+
+  const matched: RuleFile[] = [];
+  for (const c of candidates) {
+    const raw = readFileSync(c.filePath, "utf-8");
     const fm = parseRuleFrontmatter(raw);
-    validateRuleFrontmatter(fm, filePath);
+    validateRuleFrontmatter(fm, c.filePath);
     const headings = parseRuleHeadings(raw);
 
-    let scope: RuleFile["scope"];
-    let phase: string | undefined;
-    if (scopeKey.startsWith("phase-")) {
-      scope = "phase";
-      phase = scopeKey.slice("phase-".length);
-    } else if (scopeKey === "team-learnings") {
-      scope = "team";
-    } else if (scopeKey === "project-learnings") {
-      scope = "project";
-    } else {
-      // scopeKey didn't match any of the named cases above ("phase-*",
-      // "team-learnings", "project-learnings") nor was it a known prefix.
-      // The filename pattern that fed scopeKey is \\.claude/rules/aidlc-(.+)\\.md
-      // — the only legal scopes left are "org" and "team". Verify and assert.
-      if (scopeKey !== "org" && scopeKey !== "team" && scopeKey !== "project") {
-        // Filename was aidlc-<unknown>.md — not a recognised rule scope.
-        // Skip silently to match the previous else-cast behaviour (which
-        // accepted any string).
-        continue;
-      }
-      scope = scopeKey;
-    }
-
     matched.push({
-      path: toPosix(join(harnessDir(), rulesSubdir(), f)),
-      scope,
-      phase,
+      path: memoryDisplayPath(c.rel),
+      scope: c.scope,
+      phase: c.phase,
       frontmatter: fm,
       headings,
     });
@@ -432,17 +488,7 @@ export function loadRules(): RuleFile[] {
   // filesystem-order; non-portable. The sort is the determinism contract
   // that t66's canonical-emitter pin and `--check` rely on.
   matched.sort((a, b) => {
-    const aKey = a.scope === "team" && a.path.includes("team-learnings")
-      ? "team-learnings"
-      : a.scope === "project" && a.path.includes("project-learnings")
-        ? "project-learnings"
-        : a.scope;
-    const bKey = b.scope === "team" && b.path.includes("team-learnings")
-      ? "team-learnings"
-      : b.scope === "project" && b.path.includes("project-learnings")
-        ? "project-learnings"
-        : b.scope;
-    const pri = SCOPE_PRIORITY[aKey] - SCOPE_PRIORITY[bKey];
+    const pri = SCOPE_PRIORITY[a.scope] - SCOPE_PRIORITY[b.scope];
     if (pri !== 0) return pri;
     return a.path.localeCompare(b.path);
   });
@@ -607,6 +653,30 @@ export function producersOf(artifact: string): GraphStage[] {
 export function consumersOf(artifact: string): GraphStage[] {
   return loadGraph().filter((s) =>
     (s.consumes ?? []).some((c) => c.artifact === artifact)
+  );
+}
+
+/** TPL — the subset of a stage's `produces[]` eligible for a template
+ *  override. The template-override layer keys a template off the
+ *  output-filename stem (artifact X → X.md, per resolveArtifactPath's
+ *  `<...>/${name}.md`), but that stem==artifact key is SOUND only for prose
+ *  artifacts: a `*-questions.md` Q&A file or a `*-timestamp.md` marker is
+ *  intentionally not a ≥2-H2 doc, so applying a heading-set template to it
+ *  would yield spurious missing-section findings. The per-sensor
+ *  required-sections script gets only --stage/--output-path and so cannot know
+ *  the stage's artifact set — the dispatcher (aidlc-sensor.ts) and the
+ *  PostToolUse fire hook (aidlc-sensor-fire.ts) both hold the GraphStage and
+ *  thread this filtered set so a resolved template applies ONLY to a
+ *  declared-prose artifact. Lives here so both invocation sites derive it
+ *  identically without importing the dispatcher (whose top-level main() would
+ *  run on import). */
+export function templateEligibleArtifacts(produces: string[]): string[] {
+  return (produces ?? []).filter(
+    (a) =>
+      typeof a === "string" &&
+      a.length > 0 &&
+      !a.endsWith("-questions") &&
+      !a.endsWith("-timestamp")
   );
 }
 
@@ -1351,7 +1421,7 @@ const COMMANDS: Record<string, Handler> = {
     const plan = resolvePlanForScope(scope);
     const pd = resolveProjectDir();
     const outPath =
-      process.env.AIDLC_PLAN_PATH ?? join(pd, "aidlc-docs", ".aidlc-plan.json");
+      process.env.AIDLC_PLAN_PATH ?? planFilePath(pd);
     const planJson = `${JSON.stringify(plan, null, 2)}\n`;
     if (args.includes("--stdout")) {
       process.stdout.write(planJson);

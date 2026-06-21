@@ -4,7 +4,7 @@
 
 ## What is AI-DLC?
 
-AI-DLC (AI-Driven Development Life Cycle) is a methodology for structuring AI-assisted software development into repeatable, traceable phases. It originated from the [AWS AI-DLC methodology](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/). This repository implements it natively from one harness-neutral core, so it runs inside the CLI harness you already use — today Claude Code, Kiro CLI, or Codex CLI. This guide is harness-neutral; where a detail differs by harness, it says so and points you to your harness's chapter (see [Running on other harnesses](harnesses/README.md)). Examples are shown in Claude Code unless noted.
+AI-DLC (AI-Driven Development Life Cycle) is a methodology for structuring AI-assisted software development into repeatable, traceable phases. It originated from the [AWS AI-DLC methodology](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/). This repository implements it natively from one harness-neutral core, so it runs inside the CLI harness you already use — today Claude Code, Kiro CLI, Kiro IDE, or Codex CLI. This guide is harness-neutral; where a detail differs by harness, it says so and points you to your harness's chapter (see [Running on other harnesses](harnesses/README.md)). Examples are shown in Claude Code unless noted.
 
 You invoke it with a single command:
 
@@ -26,7 +26,7 @@ At its core, AI-DLC runs a simple loop. A deterministic **engine** decides what 
 
 1. **Reads stage files** — 32 stage definitions across 5 phases, each specifying inputs, steps, outputs, and the lead agent
 2. **Loads agent personas** — Activates domain-expert perspectives (architect, developer, product manager, etc.) with specialized knowledge
-3. **Manages state and audit** — Tracks progress in `aidlc-state.md` and logs every decision to `audit.md` for traceability
+3. **Manages state and audit** — Tracks progress in `aidlc-state.md` and logs every decision to the intent's `audit/` shards for traceability
 4. **Delegates to subagents** — For stages requiring focused, autonomous work (reverse engineering, code generation), spawns a subprocess
 5. **Presents approval gates** — After each stage, you review and approve before the workflow advances
 

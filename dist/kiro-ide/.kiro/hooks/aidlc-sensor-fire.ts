@@ -24,11 +24,13 @@ import {
   auditFilePath,
   type ClaudeCodeHookInput,
   getField,
+  hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
   readStateFile,
   recordHookDrop,
   resolveProjectDirFromHook,
+  sensorsDir,
   stateFilePath,
   harnessDir,
 } from "../tools/aidlc-lib.ts";
@@ -46,7 +48,7 @@ const SUBPROCESS_TIMEOUT_MS =
 
 // Health-dir for the heartbeat (sensor-fire.last) + skipped-file
 // (sensor-fire.skipped). Read by the future hook-health doctor.
-const healthDir = join(projectDir, "aidlc-docs", ".aidlc-hooks-health");
+const healthDir = hooksHealthDir(projectDir);
 
 // Step 2 — TTY guard. Hook invoked outside a piped-stdin context (e.g.
 // interactive shell, test harness running under `bash -x`) has no JSON
@@ -74,12 +76,19 @@ try {
 const filePath: string = parsed?.tool_input?.file_path ?? "";
 if (!filePath) process.exit(0);
 
-// Step 5 — Recursion guard. Skip writes to the dispatcher's
-// detail-file directory. Dual-separator pattern mirrors
-// aidlc-audit-logger.ts for cross-platform paths. Dispatcher uses
-// direct fs I/O so the loop isn't reachable today; defensive depth
-// for future LLM sensors that may emit findings via Write.
+// Step 5 — Recursion guard. Skip writes to the dispatcher's detail-file
+// directory. Post-workspace-move that dir re-roots per intent
+// (<record>/.aidlc-sensors/ via sensorsDir(projectDir, intent, space)); the
+// active-intent resolution is implicit in sensorsDir's bare projectDir call
+// (it resolves the active record root). Keep the flat `aidlc-docs/.aidlc-sensors/`
+// literal as the transitional flat-legacy fallback (retired in P9). Dispatcher
+// uses direct fs I/O so the loop isn't reachable today; defensive depth for
+// future LLM sensors that may emit findings via Write.
+const sensorsLeaf = sensorsDir(projectDir).replace(/\\/g, "/").replace(/\/$/, "");
+const filePathNorm = filePath.replace(/\\/g, "/");
 if (
+  filePathNorm === sensorsLeaf ||
+  filePathNorm.startsWith(`${sensorsLeaf}/`) ||
   filePath.includes("aidlc-docs/.aidlc-sensors/") ||
   filePath.includes("aidlc-docs\\.aidlc-sensors\\")
 ) {
@@ -188,11 +197,12 @@ if (applicableSensors.length === 0) process.exit(0);
 // Step 11 — Per-entry dispatch (C5).
 //
 // G1 lock-in: matches IS the filter. Entries without a matches glob
-// do not fire. The G1.5 literal `**/aidlc-docs/**` (vs the v3-draft
-// `**/aidlc-docs/**/*.md`) is load-bearing: the upstream dispatcher's
-// bespoke globToRegex rejects flat-aidlc-docs paths under the *.md
-// form even though Bun.Glob accepts both — both engines agree on the
-// relaxed form.
+// do not fire. The framework artifact glob is `**/{aidlc-docs,intents}/**`
+// (P9 — the per-intent record tree carries an `/intents/` segment; the legacy
+// `aidlc-docs/` arm stays so a pre-migration artifact still matches). The
+// relaxed `**/<seg>/**` form (vs `**/<seg>/**/*.md`) is load-bearing: the
+// upstream dispatcher's bespoke globToRegex rejects the *.md form even though
+// Bun.Glob accepts both — both engines agree on the relaxed form.
 const sensorTs = join(projectDir, harnessDir(), "tools", "aidlc-sensor.ts");
 for (const entry of applicableSensors) {
   if (!entry.matches) continue;
@@ -203,6 +213,14 @@ for (const entry of applicableSensors) {
   // matches the upstream dispatcher manifest's `command:` convention.
   // Sync subprocess; user pays wall-clock per Write inside an active
   // stage with applicable sensors. Use --test-run to skip per G2.
+  //
+  // TPL note: this hook invokes the DISPATCHER (aidlc-sensor.ts fire), not the
+  // per-sensor script directly. The dispatcher re-resolves the stageNode by
+  // --stage and owns the template seam — it derives --templates-dir +
+  // --template-eligible (via templateEligibleArtifacts) and threads them to the
+  // required-sections script. So both invocation sites (this hook and a direct
+  // `aidlc-sensor fire`) converge on the dispatcher's single threading point and
+  // stay consistent; the hook passes only --stage/--output-path as before.
   try {
     const result = spawnSync(
       "bun",

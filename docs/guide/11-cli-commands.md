@@ -160,6 +160,18 @@ first intent exists, and you add free-form files to it from there.
 The welcome message is rendered at session start via the `companyAnnouncements`
 entry in `settings.json`.
 
+**Multi-repo workspaces.** When your workspace root holds more than one sibling
+code repo (each an immediate child directory with a `.git`), the birth step
+records the set of repos the intent touches in its `intents.json` row. By default
+it **auto-discovers** every sibling repo; to scope an intent to a specific subset,
+the birth tool accepts `--repos a,b` (a comma-separated list of repo directory
+names). These are flags of the deterministic `aidlc-utility intent-birth` step the
+engine runs for you — not `/aidlc` flags you type. During Construction, each git
+operation (worktree, swarm, Bolt) targets one repo; the conductor passes
+`--repo <name>` to anchor it, required only when an intent spans more than one
+repo. An intent with no recorded repos is the single-repo default (git runs in the
+workspace/project dir). See [Artifacts Reference](13-artifacts-reference.md).
+
 ---
 
 ### `/aidlc --status` — Read-only status
@@ -408,7 +420,7 @@ Display a summary of available commands and flags.
 
 ## Deterministic CLI Tools
 
-Beyond the `/aidlc` flags above, this implementation ships three Bun/TypeScript tools that the hooks call automatically as a workflow runs. You rarely invoke them by hand — they keep the audit trail, the Sensor results, and the runtime graph in sync without you asking. They are documented here because they surface in `--doctor` output and in `audit.md`, and because each one is a useful debug handle when you want to see what the framework saw.
+Beyond the `/aidlc` flags above, this implementation ships three Bun/TypeScript tools that the hooks call automatically as a workflow runs. You rarely invoke them by hand — they keep the audit trail, the Sensor results, and the runtime graph in sync without you asking. They are documented here because they surface in `--doctor` output and in the `audit/` shards, and because each one is a useful debug handle when you want to see what the framework saw.
 
 Run any of them with `bun .claude/tools/<tool>.ts <subcommand>`.
 

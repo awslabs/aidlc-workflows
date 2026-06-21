@@ -45,7 +45,7 @@ and a parallel multi-agent dispatch at Stage 2.2 (Practices Discovery).
 - Stage 2.7 produces `unit-of-work.md`, which defines the units that drive
   the phased construction flow in the Construction phase.
 - Stage 2.8 produces the execution plan that determines which Construction
-  stages run for each unit and in what order. It reads `.claude/rules/aidlc-team.md`
+  stages run for each unit and in what order. It reads `aidlc/spaces/<space>/memory/team.md`
   for the team's Way of Working (branching), Walking Skeleton stance, and
   Deployment sections.
 - The phase boundary verification at Stage 2.8 validates Requirements to
@@ -220,8 +220,8 @@ walking-skeleton stance, testing posture, deployment cadence, and code-style
 rules from evidence (brownfield) or via AskUserQuestion using `org.md`
 defaults (greenfield), drafts proposals at `<record>/inception/practices-discovery/`,
 and at an affirmation gate **promotes** the affirmed content into team-authored
-harness config: `.claude/rules/aidlc-team.md` and
-`.claude/rules/aidlc-project.md`. The affirmation gate is
+harness config: `aidlc/spaces/<space>/memory/team.md` and
+`aidlc/spaces/<space>/memory/project.md`. The affirmation gate is
 what makes the cross-row write legitimate -- without it the framework would
 put words in the team's mouth in its own harness config.
 
@@ -232,7 +232,7 @@ put words in the team's mouth in its own harness config.
   architecture, code-structure, api-documentation, component-inventory,
   technology-stack, dependencies, code-quality-assessment,
   reverse-engineering-timestamp)
-- `.claude/rules/aidlc-org.md` (greenfield default suggestions)
+- `aidlc/spaces/<space>/memory/org.md` (greenfield default suggestions)
 - `.claude/knowledge/aidlc-pipeline-deploy-agent/branching-strategies.md` (lead-agent KB)
 
 ### Outputs
@@ -240,7 +240,7 @@ put words in the team's mouth in its own harness config.
 Four artifacts written to `<record>/inception/practices-discovery/`:
 
 - `team-practices.md` -- descriptive, team-voice prose. Five sections matching
-  `aidlc-team.md` headings: Way of Working, Walking Skeleton, Testing Posture,
+  `team.md` headings: Way of Working, Walking Skeleton, Testing Posture,
   Deployment, Code Style.
 - `discovered-rules.md` -- corrective, agent-facing. Two sections: Mandated
   (`ALWAYS …` rules) and Forbidden (`NEVER …` rules).
@@ -249,9 +249,9 @@ Four artifacts written to `<record>/inception/practices-discovery/`:
 
 On affirmation, content is promoted to:
 
-- `.claude/rules/aidlc-team.md` -- section-replace via `replaceSection` (re-runs
+- `aidlc/spaces/<space>/memory/team.md` -- section-replace via `replaceSection` (re-runs
   overwrite section content rather than accumulate).
-- `.claude/rules/aidlc-project.md` -- append-under-heading
+- `aidlc/spaces/<space>/memory/project.md` -- append-under-heading
   via `appendUnderHeading` (rules accumulate; date stamps distinguish them).
 
 ### Steps
@@ -270,9 +270,9 @@ On affirmation, content is promoted to:
 5. Affirmation gate -- AskUserQuestion presents both drafts. Options:
    Approve / Edit-then-Approve / Reject-and-rewrite-from-scratch.
 6. Promote (on Approve) -- section-replace the five practice sections in
-   `.claude/rules/aidlc-team.md`; append rules under `## Mandated` and
-   `## Forbidden` in `.claude/rules/aidlc-project.md` with date stamps.
-   Atomicity: write `aidlc-project.md` first, then `aidlc-team.md`. On failure,
+   `aidlc/spaces/<space>/memory/team.md`; append rules under `## Mandated` and
+   `## Forbidden` in `aidlc/spaces/<space>/memory/project.md` with date stamps.
+   Atomicity: write `project.md` first, then `team.md`. On failure,
    emit `PRACTICES_OVERRIDE` and abort without recording PRACTICES_AFFIRMED.
 7. Emit `PRACTICES_AFFIRMED`; update state checkbox; update
    `Practices Affirmed Timestamp` (v7 state template field, milestone 6).
@@ -282,7 +282,7 @@ On affirmation, content is promoted to:
 - The `replaceSection` helper in `.claude/tools/aidlc-lib.ts` was added in milestone 8
   specifically to support the team.md cross-row promotion (the existing
   `appendUnderHeading` accumulates duplicates across re-runs).
-- `aidlc-org.md` and `aidlc-team.md` share one Title Case heading set
+- `org.md` and `team.md` share one Title Case heading set
   (`## Way of Working`, `## Walking Skeleton`, `## Testing Posture`,
   `## Deployment`, `## Code Style`). The stage reads each section from
   `org.md` via `extractMarkdownSection` with the matching Title Case

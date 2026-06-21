@@ -32,10 +32,36 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const DOCS_DIR = join(REPO_ROOT, "docs");
 const FIXTURE = join(REPO_ROOT, "tests", "fixtures", "docs-legacy-refs.json");
-// User-facing prose surfaces OUTSIDE docs/ that render into the shipped install
-// (CLAUDE.md / AGENTS.md) — the onboarding template is hand-authored source; its
-// dist renderings are generated, so gating the source covers all three harnesses.
-const EXTRA_DOC_FILES = ["core/templates/onboarding.md"];
+// Authored-prose surfaces OUTSIDE docs/, derived FROM DISK so a new harness's
+// SKILL.md or a new onboarding template is auto-covered without a test edit. Two
+// roots beyond docs/: every `core/templates/*.md` (these render to the shipped
+// CLAUDE.md / AGENTS.md — the FIRST surface a user reads), and each harness's
+// orchestrator `SKILL.md` (the conductor prose the harness loads at runtime — the
+// blind spot that let stale rules-dir prose ship in an earlier pass).
+//   EXCLUDED by design: dist/** (generated — `package.ts --check` proves byte
+//   parity, so gating the authored source suffices for all 4 dist trees) and
+//   core/aidlc-common/** (the engine-parsed stage/protocol method tree — its
+//   `aidlc-docs/` reroot is a separate deferred sweep; scanning it here would red
+//   on pre-existing debt this gate does not own).
+function listExtraAuthoredDocs(): string[] {
+  const out: string[] = [];
+  // core/templates/*.md (non-recursive — templates live flat)
+  for (const name of readdirSync(join(REPO_ROOT, "core", "templates"))) {
+    if (name.endsWith(".md")) out.push(`core/templates/${name}`);
+  }
+  // each harness's orchestrator SKILL.md: harness/<h>/skills/aidlc/SKILL.md
+  for (const h of readdirSync(join(REPO_ROOT, "harness"))) {
+    const rel = `harness/${h}/skills/aidlc/SKILL.md`;
+    try {
+      statSync(join(REPO_ROOT, rel));
+      out.push(rel);
+    } catch {
+      // harness without an orchestrator SKILL.md — skip
+    }
+  }
+  return out;
+}
+const EXTRA_DOC_FILES = listExtraAuthoredDocs();
 
 interface AllowEntry {
   file: string;
@@ -81,7 +107,21 @@ function scanOccurrences(): Occurrence[] {
       const hasAidlcDocs = line.includes("aidlc-docs");
       // A bare `--init` flag token: `--init` not preceded by another flag char.
       const hasInit = /(^|[^-\w])--init\b/.test(line);
-      if (hasAidlcDocs || hasInit) {
+      // Retired rules-DIR tokens (the dotted per-harness rules dirs). The method
+      // tree relocated to `aidlc/spaces/<space>/memory/` (graph.ts MEMORY_SEGMENTS);
+      // the dotted dirs survive ONLY in native-include prose (the `.claude/rules/
+      // aidlc.md` @-import stub mentions, the Kiro `.kiro/steering/` resources glob,
+      // the packager rename narrative) — those are pinned in the fixture.
+      const hasRulesDir =
+        line.includes(".claude/rules/") ||
+        line.includes(".kiro/steering/") ||
+        line.includes(".codex/aidlc-rules/");
+      // Retired dated learnings-LOG filenames. A confirmed learning is now a
+      // practice in `memory/{team,project}.md` (aidlc-learnings.ts); there is no
+      // `*-learnings.md` surface. Filename-anchored so the live tool
+      // `aidlc-learnings.ts` and the phrase "learnings ritual" never match.
+      const hasLearningsLog = /[a-z]+-learnings\.md/.test(line);
+      if (hasAidlcDocs || hasInit || hasRulesDir || hasLearningsLog) {
         out.push({ file: rel, line: i + 1, text: line.trim() });
       }
     }
@@ -97,7 +137,7 @@ describe("t174 docs legacy-ref allowlist gate (P9 — closed predicate)", () => 
     allowedByFile.get(e.file)?.add(e.text.trim());
   }
 
-  test("every surviving aidlc-docs/--init docs occurrence is pinned in the allowlist", () => {
+  test("every surviving aidlc-docs/--init/rules-dir/learnings-log docs occurrence is pinned in the allowlist", () => {
     const unpinned = occurrences.filter(
       (o) => !(allowedByFile.get(o.file)?.has(o.text) ?? false),
     );

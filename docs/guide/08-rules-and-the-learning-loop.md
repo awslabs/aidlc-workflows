@@ -8,22 +8,23 @@ This chapter is the user-facing tour. It covers where rules live, how the five l
 
 ## Rules at a glance
 
-Rules live as flat Markdown files under `.claude/rules/`. Each file is named for its scope:
+Rules live as Markdown files in the space memory layer at `aidlc/spaces/<space>/memory/` — a single hand-editable set at the workspace root, read by every harness via its native include (Claude `@`-import stub, Kiro resources glob, Codex `AIDLC_RULES_DIR`). Each file is named for its scope:
 
 ```
-.claude/rules/
-├── aidlc-org.md           # framework + organization-wide defaults
-├── aidlc-team.md          # your team's affirmed practices
-├── aidlc-project.md       # this project's specialization
-├── aidlc-phase-ideation.md
-├── aidlc-phase-inception.md
-├── aidlc-phase-construction.md
-└── aidlc-phase-operation.md
+aidlc/spaces/<space>/memory/
+├── org.md                 # framework + organization-wide defaults
+├── team.md                # your team's affirmed practices
+├── project.md             # this project's specialization
+└── phases/
+    ├── ideation.md
+    ├── inception.md
+    ├── construction.md
+    └── operation.md
 ```
 
-There is no `scope:` field inside the files — scope comes from the filename. `aidlc-org.md` carries framework defaults (trunk-based development, testing posture, walking-skeleton policy). `aidlc-team.md` holds what your team has affirmed. `aidlc-project.md` holds anything specific to this one project. The four `aidlc-phase-<phase>.md` files carry rules that apply to every stage in a given phase — for example, the inception phase rule requires every architecture decision to document at least two alternatives.
+There is no `scope:` field inside the files — scope comes from the filename. `org.md` carries framework defaults (trunk-based development, testing posture, walking-skeleton policy). `team.md` holds what your team has affirmed. `project.md` holds anything specific to this one project. The four `phases/<phase>.md` files carry rules that apply to every stage in a given phase — for example, the inception phase rule requires every architecture decision to document at least two alternatives.
 
-Each file is plain prose under topical headings (`## Way of Working`, `## Testing Posture`, `## Deployment`, `## Code Style`, and so on). You read them, you can edit them by hand, and the framework writes to them through the learning loop. The `aidlc-` prefix marks framework-shipped files; files without it are your own extension overlays.
+Each file is plain prose under topical headings (`## Way of Working`, `## Testing Posture`, `## Deployment`, `## Code Style`, and so on). You read them, you can edit them by hand, and the framework writes to them through the learning loop.
 
 The schema, the filename-to-scope table, and the resolver mechanics are documented in [Rule System](../reference/08-rule-system.md) in the Developer Reference.
 
@@ -75,18 +76,18 @@ You tick the candidates you want to keep. If `memory.md` was empty for the stage
 
 You never pick a file path. The heading determines the destination:
 
-- Interpretations, Deviations, and Tradeoffs route to `.claude/rules/aidlc-project-learnings.md` as dated entries.
+- Interpretations, Deviations, and Tradeoffs land as practices in `aidlc/spaces/<space>/memory/project.md` (a confirmed learning *is* a practice) under topical headings.
 - Open questions don't promote — they're research items, not rules to install.
 
-The default scope is **project**. A one-click "promote to team" affordance widens a kept learning from `aidlc-project-learnings.md` to `aidlc-team-learnings.md` when the lesson applies beyond this one project. There is no widen-to-org path: org rules are framework-shipped or organization-authored through a separate process, so the learning loop never writes at org scope. Defaulting to the narrowest scope keeps one project's surprise from becoming an organization-wide rule by accident.
+The default scope is **project**. A one-click "promote to team" affordance widens a kept learning from `memory/project.md` to `memory/team.md` when the lesson applies beyond this one project. There is no widen-to-org path: org rules are framework-shipped or organization-authored through a separate process, so the learning loop never writes at org scope. Defaulting to the narrowest scope keeps one project's surprise from becoming an organization-wide rule by accident.
 
-These rolling `*-learnings.md` files are distinct from the affirmed-practices files (`aidlc-project.md`, `aidlc-team.md`), which your team edits through practices-discovery. The two surfaces are kept separate by lifecycle: affirmed practices stay stable and team-edited, while captured learnings roll in through the loop.
+A confirmed learning *is* a practice: it lands in the same space memory files (`aidlc/spaces/<space>/memory/project.md`, `memory/team.md`) that practices-discovery affirms — there is no separate rolling `*-learnings.md` surface. The two paths into those files differ by lifecycle: practices-discovery affirms a whole section deterministically, while the learning loop appends one dated, topically-headed entry at a time through the gate.
 
 When a kept learning is a **sensor binding** rather than a rule (you want a new deterministic check to fire on a stage's output), the framework does a two-write install atomically: it scaffolds the sensor manifest and appends the new sensor's id to the originating stage's import list. The diary, the gate confirmation, and the resulting file write each leave an audit row (`RULE_LEARNED` or `SENSOR_PROPOSED`), so no rule is ever installed silently.
 
 ### Admission-time conflict checks
 
-Before a kept learning lands on disk, the framework runs a section-level check against `aidlc-org.md`. If your proposed entry contradicts an org rule under the same heading, the gate stops and quotes the conflicting org sentence inline. You then choose to revise the entry, skip it, or escalate to the org-rule owner. The conflicting rule never lands with the contradiction in it, so the runtime resolver stays simple — it only ever sees rules that already passed the conflict check.
+Before a kept learning lands on disk, the framework runs a section-level check against `memory/org.md`. If your proposed entry contradicts an org rule under the same heading, the gate stops and quotes the conflicting org sentence inline. You then choose to revise the entry, skip it, or escalate to the org-rule owner. The conflicting rule never lands with the contradiction in it, so the runtime resolver stays simple — it only ever sees rules that already passed the conflict check.
 
 The same section-level check guards the practices-discovery affirmation gate. And when org policy changes *after* a team or project rule is already on disk, `/aidlc --doctor` surfaces the resulting drift on demand: it names the file, the section, and the conflicting org sentence so the team can act on it. The doctor check is advisory and never blocks. The two doctor advisory rows are described in [CLI Commands](11-cli-commands.md) and [Troubleshooting](15-troubleshooting.md).
 
@@ -116,13 +117,13 @@ Nothing in the framework predicted this. There's no rule about ANZ-specific term
 
 No rule is installed yet — this is just the agent's diary.
 
-**2. The gate surfaces it.** The stage finishes. Before the approval gate, the learning gate reads `memory.md` and shows the interpretation line as a candidate. It also asks "Anything to add for next time?" Sam ticks the transaction-terminology candidate (Interpretation → routes to `aidlc-project-learnings.md`) and adds a free-text note: "the agent kept defaulting to AWS account terminology — should always say 'ANZ customer' for the banking customer entity." Sam picks the Deviation heading for that addition, which routes it to the same project-learnings file.
+**2. The gate surfaces it.** The stage finishes. Before the approval gate, the learning gate reads `memory.md` and shows the interpretation line as a candidate. It also asks "Anything to add for next time?" Sam ticks the transaction-terminology candidate (Interpretation → lands in `memory/project.md`) and adds a free-text note: "the agent kept defaulting to AWS account terminology — should always say 'ANZ customer' for the banking customer entity." Sam picks the Deviation heading for that addition, which routes it to the same `memory/project.md` file.
 
-**3. The conflict check runs.** The framework compares both entries against `aidlc-org.md`. Neither "ANZ transaction" nor "ANZ customer" terminology is covered by an org rule, so both pass. A deterministic tool writes both lines into `aidlc-project-learnings.md` with provenance, and the audit log records a `RULE_LEARNED` event for each.
+**3. The conflict check runs.** The framework compares both entries against the org practices (`memory/org.md`). Neither "ANZ transaction" nor "ANZ customer" terminology is covered by an org rule, so both pass. A deterministic tool writes both lines into `memory/project.md` with provenance, and the audit log records a `RULE_LEARNED` event for each.
 
 **4. The current workflow continues unchanged.** The stage approves and the workflow advances to `user-stories`. The new lines are on disk but don't enter this workflow's compiled view — Sam already corrected the agent in-stage for this run.
 
-**5. The next workflow picks them up.** Later that day Sam runs `/aidlc bugfix`. The compile at workflow start walks `.claude/rules/`, picks up `aidlc-project-learnings.md`, and includes it in every stage's context. From stage one of the bugfix workflow, the agent knows "transaction" means a payment and the customer entity is the "ANZ customer."
+**5. The next workflow picks them up.** Later that day Sam runs `/aidlc bugfix`. The compile at workflow start walks the space memory layer, picks up `memory/project.md`, and includes it in every stage's context. From stage one of the bugfix workflow, the agent knows "transaction" means a payment and the customer entity is the "ANZ customer."
 
 The cost was paid once — one gate confirmation, one file write — and it pays back on every future workflow for the price of one more file in the directory walk.
 

@@ -83,7 +83,7 @@ as seed context so the stage does not re-ask "what do you want to build?"
 
 - User's project description from `$ARGUMENTS` or the intent's `audit/` shards
 - Existing `<record>/` artifacts from prior sessions (if any)
-- Guardrails from `.claude/rules/`
+- Guardrails from `aidlc/spaces/<space>/memory/`
 
 ### Steps
 

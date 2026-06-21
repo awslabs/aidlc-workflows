@@ -20,41 +20,41 @@ are designed to pair.
 
 ## The five layers and which file you edit
 
-Rules live as flat Markdown files under `core/rules/`, one file per scope.
+Rules live as Markdown files under `core/memory/` (the authored source for the space memory layer), one file per scope.
 There is no `scope:` frontmatter field — this implementation derives scope from
 the filename, so the file you pick *is* the scope you author at:
 
 | You want a rule that applies to… | Edit | Scope |
 |---|---|---|
-| every project at your organization | `aidlc-org.md` | org (framework default) |
-| every project your team runs | `aidlc-team.md` | team |
-| this one project | `aidlc-project.md` | project |
-| every stage in one phase | `aidlc-phase-<phase>.md` | phase |
+| every project at your organization | `org.md` | org (framework default) |
+| every project your team runs | `team.md` | team |
+| this one project | `project.md` | project |
+| every stage in one phase | `phases/<phase>.md` | phase |
 
-The four phase files are `aidlc-phase-ideation.md`, `aidlc-phase-inception.md`,
-`aidlc-phase-construction.md`, and `aidlc-phase-operation.md` (initialization is
+The four phase files are `phases/ideation.md`, `phases/inception.md`,
+`phases/construction.md`, and `phases/operation.md` (initialization is
 bootstrap-only and ships no rule file). A fifth layer — per-stage rules
 (`aidlc-stage-<slug>.md`) — is reserved for a future release; you cannot author
 one yet.
 
 Two judgment calls drive which file you reach for:
 
-- **`aidlc-org.md` is framework-shipped.** It carries the defaults every project
+- **`org.md` is framework-shipped.** It carries the defaults every project
   inherits — trunk-based development, the walking-skeleton policy, the testing
   posture per scope. Treat it as upstream. Most harness engineers leave it alone
   and author at team or project.
 - **Project scope is for durable deviation, not for everything.** Reach for
-  `aidlc-project.md` only when *this* project stably departs from team-wide
+  `project.md` only when *this* project stably departs from team-wide
   practice — a monorepo that rebases where the team squashes, a legacy project
   that skips the test floor. If the rule would help every project your team runs,
-  it belongs in `aidlc-team.md`.
+  it belongs in `team.md`.
 
 Each file is plain prose under topical headings — `## Way of Working`,
 `## Testing Posture`, `## Deployment`, `## Code Style`, and so on. You add a rule
 by adding a bullet under the heading it belongs to. The full filename-to-scope
 table and the resolver mechanics are the normative contract:
 [Rule System § Filename-derived scope](../reference/08-rule-system.md#filename-derived-scope)
-and [§ Flat layout](../reference/08-rule-system.md#flat-layout).
+and [§ Layout](../reference/08-rule-system.md#layout).
 
 ---
 
@@ -89,7 +89,7 @@ Because nothing overrides at runtime, a rule that *contradicts* a broader-scope
 rule would be a problem the resolver could not untangle. The framework forecloses
 that by checking at **write time**, not run time. When a team-scope rule is being
 added under a given `## Heading`, an admission gate compares the proposed text
-against `aidlc-org.md`'s same heading; if it finds a contradiction, the gate stops
+against `org.md`'s same heading; if it finds a contradiction, the gate stops
 the write and offers three choices — **revise**, **skip**, or **escalate** to the
 org-rule owner. Project-tier writes check against org only, since team-versus-
 project differences are legitimate project specialization, not a policy violation.
@@ -135,24 +135,26 @@ harness-engineer view is what the loop produces and where it lands:
 
 ### Where a kept learning lands
 
-Confirmed learnings do **not** go into the affirmed-practices files
-(`aidlc-team.md` / `aidlc-project.md`) you edit by hand. They go to a separate
-rolling pair routed by topical heading:
+A confirmed learning *is* a practice: it lands in the same space memory files
+practices-discovery affirms (`aidlc/spaces/<space>/memory/team.md` /
+`memory/project.md`) — there is no separate `*-learnings.md` surface. The gate
+routes it by topical heading:
 
 | Heading at the gate | Lands in | Audit event |
 |---|---|---|
-| Interpretation / Deviation / Tradeoff | `.claude/rules/aidlc-project-learnings.md` (default) | `RULE_LEARNED` |
-| same, promoted one click | `.claude/rules/aidlc-team-learnings.md` | `RULE_LEARNED` |
+| Interpretation / Deviation / Tradeoff | `aidlc/spaces/<space>/memory/project.md` (default) | `RULE_LEARNED` |
+| same, promoted one click | `aidlc/spaces/<space>/memory/team.md` | `RULE_LEARNED` |
 | Open question | nothing — research items don't promote | — |
 
 The default scope is **project**, the narrowest. A one-click "promote to team"
-affordance widens a learning to `aidlc-team-learnings.md` when the lesson applies
-beyond this project. There is no widen-to-org path — org rules are framework-
+affordance widens a learning to `memory/team.md` when the lesson applies
+beyond this project. There is no widen-to-org path — org practices are framework-
 shipped or organization-authored through a separate process, so the loop never
 writes at org scope. Keeping the default narrow stops one project's surprise from
-becoming an organization-wide rule by accident. These rolling `*-learnings.md`
-files are kept distinct from the stable affirmed-practices files by lifecycle: the
-resolver admits and sorts them between the team and project tiers.
+becoming an organization-wide rule by accident. The learning loop and
+practices-discovery write into these same files by two different lifecycles: the
+loop appends one dated entry at a time, practices-discovery affirms whole sections.
+The resolver sorts the files on the clean integer chain org → team → project → phase.
 
 ### When the learning is a check, not a rule (`SENSOR_PROPOSED`)
 
@@ -176,7 +178,7 @@ keeps the compiled view it started with. The *next* `/aidlc` you run recompiles,
 the directory walk picks up the new file, and the rule applies from stage one
 onward.
 
-This matters when you author by hand too: editing `aidlc-team.md` mid-workflow
+This matters when you author by hand too: editing `team.md` mid-workflow
 will not retroactively change the run in progress. Rules take effect at the next
 compile boundary. If you need a change to bite immediately, finish or restart the
 workflow so the compile re-reads your edit.

@@ -1,15 +1,17 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import {
   acquireAuditLock,
   auditFilePath,
   errorMessage,
   isoTimestamp,
   parseFieldArgs,
+  relativeRecordDir,
   releaseAuditLock,
   resolveProjectDir,
   validateBoltSlug,
+  worktreeAuditFilePath,
   worktreePath,
 } from "./aidlc-lib.ts";
 
@@ -186,8 +188,8 @@ const EVENT_HEADINGS: Record<string, string> = {
 
 // --- Helpers ---
 
-function ensureAuditFile(projectDir: string): string {
-  const path = auditFilePath(projectDir);
+function ensureAuditFile(projectDir: string, intent?: string, space?: string): string {
+  const path = auditFilePath(projectDir, intent, space);
   const dir = dirname(path);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
@@ -214,7 +216,9 @@ function jsonError(message: string): never {
 export function appendAuditEntry(
   eventType: string,
   fields: Record<string, string>,
-  projectDir: string
+  projectDir: string,
+  intent?: string,
+  space?: string
 ): { appended: true; event: string; timestamp: string } {
   if (!VALID_EVENT_TYPES.has(eventType)) {
     throw new Error(
@@ -222,14 +226,16 @@ export function appendAuditEntry(
     );
   }
 
-  if (!acquireAuditLock(projectDir)) {
+  // Lock + audit shard both pin to the same (intent, space) record so a fork/
+  // merge pair targets ONE intent end-to-end; omitted -> default-resolution.
+  if (!acquireAuditLock(projectDir, 50, 100, intent, space)) {
     throw new Error("Failed to acquire audit lock after retries");
   }
 
   try {
-    return appendAuditEntryUnlocked(eventType, fields, projectDir);
+    return appendAuditEntryUnlocked(eventType, fields, projectDir, intent, space);
   } finally {
-    releaseAuditLock(projectDir);
+    releaseAuditLock(projectDir, intent, space);
   }
 }
 
@@ -243,7 +249,9 @@ export function appendAuditEntry(
 export function appendAuditEntryUnlocked(
   eventType: string,
   fields: Record<string, string>,
-  projectDir: string
+  projectDir: string,
+  intent?: string,
+  space?: string
 ): { appended: true; event: string; timestamp: string } {
   if (!VALID_EVENT_TYPES.has(eventType)) {
     throw new Error(
@@ -254,7 +262,7 @@ export function appendAuditEntryUnlocked(
   const heading = EVENT_HEADINGS[eventType] || eventType;
   const ts = isoTimestamp();
 
-  const path = ensureAuditFile(projectDir);
+  const path = ensureAuditFile(projectDir, intent, space);
 
   let block = `\n## ${heading}\n`;
   block += `**Timestamp**: ${ts}\n`;
@@ -339,6 +347,26 @@ function handleAppendRaw(
 // halt the workflow. Routing through a subcommand removes the LLM from the
 // path entirely.
 
+// The intent/space SELECTOR for a Bolt audit fork/merge pair: --intent <record>
+// / --space <name> pin BOTH ends to one intent's audit shard + worktree mirror
+// (vision §5). Omitted -> default-resolution (the active cursor), which is what
+// the orchestrator threads today. Returns undefined when a flag is absent so the
+// helpers default-resolve.
+function parseSelectorFlags(args: string[]): { intent?: string; space?: string } {
+  let intent: string | undefined;
+  let space: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--intent" && i + 1 < args.length) {
+      intent = args[i + 1];
+      i++;
+    } else if (args[i] === "--space" && i + 1 < args.length) {
+      space = args[i + 1];
+      i++;
+    }
+  }
+  return { intent, space };
+}
+
 function parseSlugFlag(args: string[], subcommand: string): string {
   let slug: string | undefined;
   for (let i = 0; i < args.length; i++) {
@@ -359,14 +387,23 @@ function parseSlugFlag(args: string[], subcommand: string): string {
 
 function handleAuditFork(args: string[], projectDir: string): void {
   const slug = parseSlugFlag(args, "audit-fork");
+  // Pin the main-side audit shard AND the worktree mirror to ONE intent so
+  // audit-fork/merge operate on the same record (the SAME selector the state
+  // fork used). recordPrefix is the worktree mirror's relative record dir
+  // (null -> flat-legacy mirror, today's behaviour).
+  const { intent, space } = parseSelectorFlags(args);
+  const recordPrefix = relativeRecordDir(projectDir, intent, space);
 
-  const mainAuditPath = auditFilePath(projectDir);
+  const mainAuditPath = auditFilePath(projectDir, intent, space);
   const wtPath = worktreePath(projectDir, slug);
-  const wtAuditPath = join(wtPath, "aidlc-docs", "audit.md");
+  // Thread the MAIN projectDir so the worktree shard name uses the main clone's
+  // stable token (the fork and merge subprocesses are both spawned from main →
+  // they resolve the SAME worktree shard across PIDs).
+  const wtAuditPath = worktreeAuditFilePath(wtPath, recordPrefix, projectDir);
 
   // Pre-emit guards (fail clean before any audit side-effect).
   if (!existsSync(mainAuditPath)) {
-    jsonError(`main audit not found at ${mainAuditPath}; run /aidlc --init first`);
+    jsonError(`main audit not found at ${mainAuditPath}; start a workflow first (describe what to build, e.g. /aidlc "build the auth service")`);
   }
   if (!existsSync(wtPath)) {
     jsonError(
@@ -398,6 +435,8 @@ function handleAuditFork(args: string[], projectDir: string): void {
       "Fork Boundary": String(boundary),
     },
     projectDir,
+    intent,
+    space,
   );
   const auditTs = result.timestamp;
 
@@ -417,6 +456,8 @@ function handleAuditFork(args: string[], projectDir: string): void {
         Error: `[slug=${slug}] [fork-emitted:${auditTs}] ${message}`,
       },
       projectDir,
+      intent,
+      space,
     );
     process.exit(1);
   }
@@ -462,16 +503,21 @@ function handleAuditFork(args: string[], projectDir: string): void {
 
 function handleAuditMerge(args: string[], projectDir: string): void {
   const slug = parseSlugFlag(args, "audit-merge");
+  // Same selector the state/audit fork used -> the SAME intent record on both
+  // ends (vision §5). recordPrefix pins the worktree audit mirror.
+  const { intent, space } = parseSelectorFlags(args);
+  const recordPrefix = relativeRecordDir(projectDir, intent, space);
 
-  const mainAuditPath = auditFilePath(projectDir);
+  const mainAuditPath = auditFilePath(projectDir, intent, space);
   const wtPath = worktreePath(projectDir, slug);
-  const wtAuditPath = join(wtPath, "aidlc-docs", "audit.md");
+  // Same MAIN clone-id token the fork used → the SAME worktree shard on merge.
+  const wtAuditPath = worktreeAuditFilePath(wtPath, recordPrefix, projectDir);
 
   if (!existsSync(wtAuditPath)) {
     jsonError(`worktree audit not found at ${wtAuditPath}; nothing to merge`);
   }
   if (!existsSync(mainAuditPath)) {
-    jsonError(`main audit not found at ${mainAuditPath}; run /aidlc --init first`);
+    jsonError(`main audit not found at ${mainAuditPath}; start a workflow first (describe what to build, e.g. /aidlc "build the auth service")`);
   }
 
   const wtContent = readFileSync(wtAuditPath, "utf-8");
@@ -553,7 +599,7 @@ function handleAuditMerge(args: string[], projectDir: string): void {
     process.env.AIDLC_AUDIT_LOCK_RETRY_MS ?? "100",
     10,
   );
-  if (!acquireAuditLock(projectDir, lockRetries, lockRetryMs)) {
+  if (!acquireAuditLock(projectDir, lockRetries, lockRetryMs, intent, space)) {
     jsonError(
       `Failed to acquire audit lock after ${lockRetries} × ${lockRetryMs}ms = ${(lockRetries * lockRetryMs / 1000).toFixed(1)}s retries; another merge in flight?`
     );
@@ -594,6 +640,8 @@ function handleAuditMerge(args: string[], projectDir: string): void {
         "Fork Boundary": String(boundary),
       },
       projectDir,
+      intent,
+      space,
     );
   } catch (e) {
     const message = e instanceof Error ? errorMessage(e) : String(e);
@@ -609,13 +657,15 @@ function handleAuditMerge(args: string[], projectDir: string): void {
           Error: `[slug=${slug}] [fork-emitted:${forkTs}] ${message}`,
         },
         projectDir,
+        intent,
+        space,
       );
     } finally {
-      releaseAuditLock(projectDir);
+      releaseAuditLock(projectDir, intent, space);
     }
     process.exit(1);
   }
-  releaseAuditLock(projectDir);
+  releaseAuditLock(projectDir, intent, space);
 
   jsonSuccess({
     emitted: "AUDIT_MERGED",

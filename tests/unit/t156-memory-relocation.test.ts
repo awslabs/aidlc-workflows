@@ -142,7 +142,9 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     join(REPO_ROOT, "dist", harness, "aidlc", "spaces", "default", "memory");
 
   test("5: every harness ships the relocated method tree at the workspace root", () => {
-    for (const h of ["claude", "kiro", "codex"]) {
+    // All four shipped harnesses, kiro-ide included — it ships the workspace shell
+    // like the others, so it must carry the relocated method tree too.
+    for (const h of ["claude", "kiro", "codex", "kiro-ide"]) {
       const top = readdirSync(MEM(h)).sort();
       // org/team/project + phases/ are P5's relocated method; templates/ is the
       // SEED-shipped TPL override floor (empty-but-present via a .gitkeep) — it
@@ -197,18 +199,49 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     expect(rulesDirFiles).toEqual(["aidlc.md"]);
   });
 
-  test("7: Kiro resources globs point at the active space's memory tree", () => {
-    const agentsDir = join(REPO_ROOT, "dist", "kiro", ".kiro", "agents");
-    for (const f of ["aidlc.json", "aidlc-architect-agent.json", "aidlc-developer-agent.json"]) {
-      const json = JSON.parse(readFileSync(join(agentsDir, f), "utf-8")) as {
-        resources: string[];
-      };
-      expect(json.resources, `${f} resources`).toContain(
-        "file://aidlc/spaces/default/memory/**/*.md",
-      );
-      // The old steering glob is gone.
-      expect(json.resources.some((r) => r.includes(".kiro/steering"))).toBe(false);
+  test("7: EVERY Kiro-family agent resources glob points at the active space's memory tree (not the now-empty steering dir)", () => {
+    // Derive BOTH the harness list and the agent list from disk — do NOT hardcode.
+    // A closed list let the kiro-ide harness + the two reviewer personas ship
+    // pointing at the empty `.kiro/steering/*.md` glob (loading zero method files)
+    // because they were absent from the enumerated set. Every dist tree that ships
+    // `.kiro/agents/*.json` (kiro CLI + kiro IDE) and every agent in it that
+    // declares a `resources` array must resolve the method via the relocated
+    // memory glob, and none may still point at the retired steering glob.
+    const distRoot = join(REPO_ROOT, "dist");
+    const kiroTrees = readdirSync(distRoot).filter((h) =>
+      existsSync(join(distRoot, h, ".kiro", "agents")),
+    );
+    // Both Kiro distributions must be present (guards against the dir-detection
+    // silently matching zero trees and vacuously passing).
+    expect(kiroTrees.sort()).toEqual(["kiro", "kiro-ide"]);
+
+    let checkedAgents = 0;
+    for (const h of kiroTrees) {
+      const agentsDir = join(distRoot, h, ".kiro", "agents");
+      const agentFiles = readdirSync(agentsDir).filter((f) => f.endsWith(".json"));
+      expect(agentFiles.length, `${h} ships agent JSONs`).toBeGreaterThan(0);
+      for (const f of agentFiles) {
+        const json = JSON.parse(readFileSync(join(agentsDir, f), "utf-8")) as {
+          resources?: string[];
+        };
+        // Only agents that declare a method-loading resources array are in scope.
+        if (!json.resources) continue;
+        checkedAgents++;
+        expect(json.resources, `${h}/${f} resources → relocated memory`).toContain(
+          "file://aidlc/spaces/default/memory/**/*.md",
+        );
+        // The old steering glob is gone from `resources` (note: `.kiro/steering/**`
+        // may legitimately remain in fs_write.allowedPaths — that is a write
+        // permission, NOT a method-load glob, so we only inspect `resources`).
+        expect(
+          json.resources.some((r) => r.includes(".kiro/steering")),
+          `${h}/${f} resources must not point at the empty steering dir`,
+        ).toBe(false);
+      }
     }
+    // All 5 agents × 2 trees declare resources today; guard the floor so a
+    // regression that drops the arrays cannot make this test vacuous.
+    expect(checkedAgents).toBeGreaterThanOrEqual(10);
   });
 
   test("8: Codex include is wired (AIDLC_RULES_DIR seam + AGENTS.md) — FLAGGED untested", () => {

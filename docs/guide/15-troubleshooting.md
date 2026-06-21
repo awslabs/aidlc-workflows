@@ -93,7 +93,7 @@ The framework follows a built-in retry protocol:
 
 ### Manual recovery
 
-Re-run `/aidlc` — it detects the `[-]` (in-progress) state and offers to resume or redo the stage. Check `audit.md` for the error entry to understand what failed.
+Re-run `/aidlc` — it detects the `[-]` (in-progress) state and offers to resume or redo the stage. Check the `audit/` shards for the error entry to understand what failed.
 
 ---
 
@@ -153,7 +153,7 @@ The next `/aidlc` invocation (or any hook-triggered write) creates a fresh shard
 
 ### Git considerations
 
-`audit.md` is listed in the recommended `.gitignore` entries. If you do commit it, consider archiving before commits to keep diffs manageable.
+The `audit/` shards are committed (not gitignored) — see [What to Commit vs. Gitignore](13-artifacts-reference.md#what-to-commit-vs-gitignore). Each clone writes its own `<host>-<clone>.md` shard, so concurrent appends never merge-conflict; consider archiving (see above) before commits to keep diffs manageable.
 
 ---
 

@@ -86,12 +86,15 @@ describe("distributable CLAUDE.md describes the post-Wave-1 .claude/ layout", ()
     expect(body.includes(".claude/sensors")).toBe(true);
   });
 
-  test("mentions the aidlc-org rule file (positive layout anchor) [.sh test 6]", () => {
-    // Positive anchor: a new flat-rules filename must appear, so a regression
-    // that deleted the whole Rules bullet can't pass tests 2-5 silently.
-    // .sh: grep -q "aidlc-org" => MUST match.
+  test("mentions the relocated space-memory rule layer (positive layout anchor) [.sh test 6]", () => {
+    // Positive anchor: the method/rules layer must appear, so a regression that
+    // deleted the whole Rules bullet can't pass tests 2-5 silently. The workspace
+    // refactor relocated the rule files off `.claude/rules/` to the space memory
+    // layer `aidlc/spaces/<space>/memory/` (neutral names org.md/team.md/project.md),
+    // read via the `.claude/rules/aidlc.md` @-import stub — so the positive anchor
+    // is the relocated path + the neutral `org.md` filename, not the old `aidlc-org`.
     const body = readClaudeMd();
-    expect(countOccurrences(body, "aidlc-org")).toBeGreaterThanOrEqual(1);
-    expect(body.includes("aidlc-org")).toBe(true);
+    expect(countOccurrences(body, "aidlc/spaces/<space>/memory/")).toBeGreaterThanOrEqual(1);
+    expect(body.includes("org.md")).toBe(true);
   });
 });

@@ -2,8 +2,15 @@
 // Registered via statusLine setting in settings.json
 // Invoked via: bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { loadAgents, resolveProjectDirFromHook } from "../tools/aidlc-lib.ts";
+import {
+  activeIntent,
+  activeSpace,
+  listIntents,
+  listSpaces,
+  loadAgents,
+  resolveProjectDirFromHook,
+  stateFilePath,
+} from "../tools/aidlc-lib.ts";
 
 type Input = {
   workspace?: { project_dir?: string };
@@ -163,6 +170,32 @@ function buildRightSide(modelShort: string, ctxInt: number | null): { plain: str
   return { plain: parts.join(" "), formatted: fmtParts.join(" ") };
 }
 
+// The "<space> · <intent-slug> · " orientation prefix (vision §3 / §11.2): the
+// statusline always tells the user which world they're in. Two invisibility
+// rules keep it out of the single-team user's face:
+//   - the "<space> ·" segment renders ONLY when more than one space exists
+//     (listSpaces() always reports at least the always-present "default", so a
+//     single-team user — exactly one space — never sees the word "space");
+//   - the intent slug renders whenever a per-intent record is active. On the
+//     flat-legacy / pre-auto-birth layout activeIntent() returns null, so the
+//     prefix is empty and the line reads exactly as it did before the workspace
+//     move (a flat project is unchanged).
+// The intent SLUG comes from the registry (rename-stable) when the active
+// record has a registry row; otherwise it falls back to the record dir name
+// minus its `-id8` disambiguator (an orphan / hand-created record).
+function orientationPrefix(projectDir: string): string {
+  const space = activeSpace(projectDir);
+  const activeDir = activeIntent(projectDir, space);
+  if (activeDir === null) return ""; // flat-legacy / no record → no prefix
+  const intents = listIntents(projectDir, space);
+  const match = intents.find((i) => i.dirName === activeDir);
+  const slug = match?.slug || activeDir.replace(/-[0-9a-f]+$/, "");
+  const segments: string[] = [];
+  if (listSpaces(projectDir).length > 1) segments.push(space);
+  segments.push(slug);
+  return `${segments.join(" · ")} · `;
+}
+
 function printLine(left: string, right: { plain: string; formatted: string }): void {
   if (!right.formatted) {
     process.stdout.write(`${left}\n`);
@@ -196,7 +229,7 @@ async function main(): Promise<void> {
   const ctxInt = typeof ctxRaw === "number" ? Math.round(ctxRaw) : null;
   const right = buildRightSide(modelShort, ctxInt);
 
-  const stateFile = projectDir ? join(projectDir, "aidlc-docs", "aidlc-state.md") : "";
+  const stateFile = projectDir ? stateFilePath(projectDir) : "";
   if (!stateFile || !existsSync(stateFile)) {
     printLine("[AIDLC] ready", right);
     return;
@@ -219,17 +252,20 @@ async function main(): Promise<void> {
     printLine("[AIDLC] ready", right);
     return;
   }
+  // Orientation prefix — only computed once a record is active (the state file
+  // resolved above), so the empty-state "[AIDLC] ready" lines never carry it.
+  const prefix = orientationPrefix(projectDir);
   if (status === "Completed" || status === "Complete") {
     // At workflow completion, show a full bar even if Lifecycle Phase no longer
     // resolves to a real heading (e.g. a future caller writes a "COMPLETE"
     // sentinel or leaves the phase stale). Keep the natural bar when phaseProgress
     // could resolve it so tests that seed a real terminal phase still see 10/10.
     const completeBar = bar || `[${"▓".repeat(10)}]`;
-    printLine(`[AIDLC] COMPLETE ${completeBar}`, right);
+    printLine(`[AIDLC] ${prefix}COMPLETE ${completeBar}`, right);
     return;
   }
 
-  let output = `[AIDLC] ${phase}`;
+  let output = `[AIDLC] ${prefix}${phase}`;
   if (bar) output += ` ${bar}`;
   if (phaseProg) output += ` ${phaseProg}`;
   if (stageDisplay) output += ` > ${stageDisplay}`;

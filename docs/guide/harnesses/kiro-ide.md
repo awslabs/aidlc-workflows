@@ -48,10 +48,11 @@ In the chat panel, run `/aidlc --doctor` to verify the setup, then
 ## Usage
 
 Identical to the Claude Code harness: `/aidlc <description>` starts a
-workflow, `/aidlc --status` reports position, `/aidlc --init`, `--doctor`,
-`--stage`, `--phase`, `--depth`, `--test-strategy`, `--test-run` all work, and
-the per-stage (`/aidlc-application-design`) and per-scope (`/aidlc-feature`)
-runner skills are installed.
+workflow, `/aidlc --status` reports position, `/aidlc --doctor`, `--stage`,
+`--phase`, `--depth`, `--test-strategy`, `--test-run` all work, and the
+per-stage (`/aidlc-application-design`) and per-scope (`/aidlc-feature`) runner
+skills are installed. There is no init command — the shipped shell scaffolds
+the workspace and the first intent auto-births on your first `/aidlc`.
 
 ## How hooks work on Kiro IDE
 
@@ -85,13 +86,15 @@ You will see a "Run Command Hook" line in chat each time one fires.
 | Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` / `SESSION_ENDED` (no pre-compaction event) |
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped |
 
-Everything else — state machine, audit trail, artifacts under `aidlc-docs/`,
-the learnings ritual, sensors, scopes, depth/test-strategy — behaves
-identically, because it IS identical: the same tools run from `.kiro/tools/`.
+Everything else — state machine, audit trail, artifacts under the per-intent
+record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/`), the learnings
+ritual, sensors, scopes, depth/test-strategy — behaves identically, because it
+IS identical: the same tools run from `.kiro/tools/`.
 
-A project's `aidlc-docs/` is harness-neutral. Moving a project between
+A project's `aidlc/` workspace is harness-neutral. Moving a project between
 harnesses (or running both side by side) is supported-but-untested; `/aidlc
---doctor` will warn if it detects both trees with an active workflow.
+--doctor` will warn if it detects a conflicting harness setup with an active
+workflow.
 
 ## For framework developers
 

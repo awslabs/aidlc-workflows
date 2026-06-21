@@ -73,7 +73,7 @@ The default approval gate presents two options:
 ```mermaid
 flowchart TD
     COMPLETE["Stage work complete"]
-    AUDIT_PRE["Append to audit.md:\nstage summary + options\n(fresh ISO timestamp)"]
+    AUDIT_PRE["Append to this clone's audit shard:\nstage summary + options\n(fresh ISO timestamp)"]
     ASK["AskUserQuestion:\nApproval Gate"]
 
     APPROVE["Approve"]

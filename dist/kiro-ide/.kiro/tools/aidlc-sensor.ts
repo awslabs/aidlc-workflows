@@ -36,8 +36,14 @@ import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve as pathResolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
-import { loadGraph, loadSensors, type SensorFile } from "./aidlc-graph.ts";
-import { errorMessage, isoTimestamp, isPlainObject, resolveProjectDir, withAuditLock } from "./aidlc-lib.ts";
+import {
+	loadGraph,
+	loadSensors,
+	memoryTemplatesDir,
+	type SensorFile,
+	templateEligibleArtifacts,
+} from "./aidlc-graph.ts";
+import { errorMessage, isoTimestamp, isPlainObject, resolveProjectDir, sensorsDir, withAuditLock } from "./aidlc-lib.ts";
 
 // --- Constants ---
 
@@ -276,7 +282,29 @@ function handleFire(args: string[]): void {
 	// --- 3. Pre-compute detail-file path (used only on FAILED) ---
 	// aidlc-docs/.aidlc-sensors/<stage-slug>/<sensor-id>-<fire-id>.md
 	const projectDir = resolveProjectDir();
-	const detailDir = join(projectDir, "aidlc-docs", ".aidlc-sensors", stageSlug);
+
+	// required-sections additionally takes the TPL template seam: the
+	// templates source-of-truth dir + the stage's template-eligible artifact
+	// set. The per-sensor script cannot know the stage's artifact set (it gets
+	// only --stage/--output-path), so the dispatcher threads it from the
+	// stageNode — exactly as --consumes is threaded for upstream-coverage above.
+	// Eligibility = the `produces` artifact names that are NOT questions/timestamp
+	// markers (the stem==artifact key is unsound for those non-prose files). The
+	// script applies a resolved template only when the output stem ∈ this set.
+	// AIDLC_TEMPLATES_DIR is a test/relocation seam mirroring AIDLC_RULES_DIR;
+	// the default lookup is the workspace method tree's templates/ dir —
+	// <projectDir>/aidlc/spaces/<space>/memory/templates — derived via
+	// memoryTemplatesDir() from the SAME MEMORY_SEGMENTS the rules resolver +
+	// packager emit use, so the sensor's lookup can never drift from where SEED
+	// ships the floor (resolution falls through gracefully when absent).
+	if (id === "required-sections") {
+		const eligible = templateEligibleArtifacts(stageNode.produces ?? []);
+		const templatesDir =
+			process.env.AIDLC_TEMPLATES_DIR ?? memoryTemplatesDir(projectDir);
+		scriptArgs.push("--templates-dir", templatesDir);
+		scriptArgs.push("--template-eligible", eligible.join(","));
+	}
+	const detailDir = join(sensorsDir(projectDir), stageSlug);
 	const detailPath = join(detailDir, `${id}-${fireId}.md`);
 
 	// --- 1f. Resolve sibling script path + timeout ---

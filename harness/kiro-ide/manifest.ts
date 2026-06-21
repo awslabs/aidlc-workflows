@@ -49,6 +49,14 @@ const manifest: HarnessManifest = {
     { src: "hooks/aidlc-stop.kiro.hook", dst: "hooks/aidlc-stop.kiro.hook" },
     { src: "hooks/aidlc-sync-statusline.kiro.hook", dst: "hooks/aidlc-sync-statusline.kiro.hook" },
     { src: "settings/cli.json", dst: "settings/cli.json" },
+    // Project-root .gitignore (beside .kiro/, not inside it) — same workspace-layout
+    // committed-vs-ignored split as the Kiro CLI tree: per-user cursors + machine-local
+    // runtime ignored, the shared work (memory/codekb/registry/state/audit shards/
+    // artifacts) committed. Authored as dot-gitignore so it does not act as a live
+    // ignore inside harness/kiro-ide/; projectRoot routes it to dist/kiro-ide/.gitignore
+    // + the --check drift guard. (The roll-forward latch lines are inert on Kiro IDE,
+    // which has no userPromptSubmit/preToolUse seam, but are kept for parity.)
+    { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
   onboarding: { dst: "AGENTS.md", projectRoot: true, fills: onboardingFills },

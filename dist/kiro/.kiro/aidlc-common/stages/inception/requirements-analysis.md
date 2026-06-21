@@ -58,7 +58,7 @@ Load aidlc-product-agent persona from `agents/aidlc-product-agent.md` and knowle
 
 ### Step 2: Load Prior Context
 
-- If brownfield: Read RE artifacts from `aidlc-docs/inception/reverse-engineering/`
+- If brownfield: Read RE artifacts from `aidlc/codekb/<repo>/`
 - Read user's project description from `aidlc-docs/audit.md`
 
 ### Step 3: Analyze User Request

@@ -74,7 +74,7 @@ Initialization stages run **automatically** without approval gates. All three ex
 |---|-------|------|---------------|-----------|
 | 0.1 | Workspace Scaffold | orchestrator | first intent's record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/`) | ALWAYS |
 | 0.2 | Workspace Detection | orchestrator | `aidlc-state.md` (workspace state) | ALWAYS |
-| 0.3 | State Initialization | orchestrator | `aidlc-state.md`, `audit.md` | ALWAYS |
+| 0.3 | State Initialization | orchestrator | `aidlc-state.md`, `audit/` shards | ALWAYS |
 
 **Execution notes:**
 - All three stages run inline inside `aidlc-utility init` — no LLM subagent delegation, no per-stage prompt.
@@ -196,7 +196,7 @@ flowchart TD
 | # | Stage | Lead | Supporting | Key Artifacts | Condition |
 |---|-------|------|-----------|---------------|-----------|
 | 2.1 | Reverse Engineering | aidlc-developer-agent | aidlc-architect-agent | 9 RE artifacts | Brownfield projects |
-| 2.2 | Practices Discovery | aidlc-pipeline-deploy-agent | aidlc-quality-agent, aidlc-developer-agent, aidlc-devsecops-agent | `team-practices.md`, `discovered-rules.md`, `evidence.md` (promoted to `aidlc-team.md` / `aidlc-project.md` on affirmation) | CONDITIONAL |
+| 2.2 | Practices Discovery | aidlc-pipeline-deploy-agent | aidlc-quality-agent, aidlc-developer-agent, aidlc-devsecops-agent | `team-practices.md`, `discovered-rules.md`, `evidence.md` (promoted to `aidlc/spaces/<space>/memory/team.md` / `memory/project.md` on affirmation) | CONDITIONAL |
 | 2.3 | Requirements Analysis | aidlc-product-agent | — | `requirements.md` | ALWAYS |
 | 2.4 | User Stories | aidlc-product-agent | aidlc-design-agent | `stories.md`, `personas.md` | User-facing features |
 | 2.5 | Refined Mockups | aidlc-design-agent | aidlc-product-agent | Hi-fi mockups, interaction spec | UI projects |

@@ -84,7 +84,7 @@ right directory is the registration. When a stage begins, the conductor
 loads context in a fixed six-step order, and your Tier 2 files come in at steps
 4 and 5:
 
-1. Rules — the resolved `.claude/rules/` chain (loaded first)
+1. Rules — the resolved `aidlc/spaces/<space>/memory/` chain (loaded first)
 2. Tier 1 shared methodology — `.claude/knowledge/aidlc-shared/`
 3. Tier 1 agent methodology — `.claude/knowledge/<agent>-agent/`
 4. **Tier 2 team shared** — `aidlc/knowledge/aidlc-shared/`
@@ -132,7 +132,7 @@ when reviewing, it's knowledge.
 So a document describing how your team designs APIs is knowledge: drop it in
 `aidlc/knowledge/aidlc-architect-agent/`. A non-negotiable like "every
 architecture decision must record at least two alternatives" is a rule: it
-belongs in `.claude/rules/`, where the framework will hold the agent to it. For
+belongs in the space memory layer (`aidlc/spaces/<space>/memory/`), where the framework will hold the agent to it. For
 authoring rules across the layer chain and letting the learning loop promote
 corrections into them, see
 [Rules and the Learning Loop](05-rules-and-the-loop.md). The User Guide's

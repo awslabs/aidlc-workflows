@@ -3,9 +3,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+  activeIntent,
   appendSlug,
   appendUnderHeading,
-  auditFilePath,
   type CheckboxState,
   countCheckboxes,
   emitError,
@@ -24,7 +24,10 @@ import {
   parseCheckboxes,
   parseRefsList,
   parseStateStageSuffixes,
+  readAllAuditShards,
   readStateFile,
+  relativeMemoryPath,
+  relativeRecordDir,
   removeSlug,
   replaceSection,
   resolveProjectDir,
@@ -34,13 +37,15 @@ import {
   setFieldStrict,
   setOrInsertField,
   stagesInScope,
+  updateIntentStatus,
   validScopes,
   withAuditLock,
+  worktreeDocsDir,
   worktreePath,
+  worktreeStateFilePath,
   writeStateFile,
-  harnessDir,
-  rulesSubdir,
 } from "./aidlc-lib.js";
+import { memoryDirFor } from "./aidlc-graph.ts";
 
 // All valid checkbox states (lib.ts adds [?] awaiting-approval and [R] revising)
 const VALID_CHECKBOX_STATES: CheckboxState[] = [
@@ -95,9 +100,11 @@ function hasStageAuditEvent(
   eventType: string,
   stageSlug: string
 ): boolean {
-  const path = auditFilePath(projectDir);
-  if (!existsSync(path)) return false;
-  const audit = readFileSync(path, "utf-8");
+  // Read across every per-clone audit shard (one in the common single-clone /
+  // flat-legacy case; the glob-merge matters only when concurrent clones append
+  // to the same intent). readAllAuditShards returns "" when no shard exists.
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) return false;
   const workflowStarts = findAllEvents(audit, "WORKFLOW_STARTED");
   const since = workflowStarts.length > 0
     ? workflowStarts[workflowStarts.length - 1].timestamp
@@ -152,6 +159,21 @@ function parseFlags(args: string[]): Record<string, string> {
 // --- CLI entry point ---
 
 let projectDir: string | undefined;
+
+// Active per-intent lock context for the in-transaction error path. handleFork/
+// handleMerge resolve their intent and hold a PER-INTENT audit lock across the
+// whole transaction (withAuditLock(pd, fn, resolvedIntent, space)). When an
+// errorWithSlug fires mid-transaction it routes through error() -> emitError,
+// whose holdsAuditLock probe must key the SAME per-intent bucket the caller
+// holds — a bare holdsAuditLock(pd) keys the __workspace__ sentinel, returns
+// false mid per-intent transaction, and takes emitError's 5s blocking-acquire
+// branch writing ERROR_LOGGED to the wrong bucket. These mirror the resolved
+// intent+space into error() so emitError keys lock==write. Set immediately
+// before the lock, cleared after; on the happy path no error fires and they are
+// harmless. All OTHER handlers lock the sentinel bucket and leave these unset
+// (undefined), so error() keys the sentinel for them — correct.
+let lockIntent: string | undefined;
+let lockSpace: string | undefined;
 
 function main(): void {
   const args = process.argv.slice(2);
@@ -579,7 +601,7 @@ function handleAdvance(args: string[]): void {
       completed_count: completedCount,
       next_after: nextAfterNext ? nextAfterNext.slug : null,
       already_completed: alreadyMarkedCompleted,
-      memory_path: `aidlc-docs/${nextStage.phase}/${nextStage.slug}/memory.md`,
+      memory_path: relativeMemoryPath(nextStage.phase, nextStage.slug),
       timestamp,
     })
   );
@@ -739,6 +761,14 @@ function handleCompleteWorkflow(args: string[]): void {
   }
 
   writeStateFile(pd, content);
+  // Intent status lifecycle: terminal completion flips the active intent's
+  // registry row to "complete". This is the determinism (field write) gated by
+  // the human-confirmed completion that drove complete-workflow here — never an
+  // automatic inference from state, so a crashed run never self-completes. Runs
+  // under the workspace lock already held (every intents.json mutation takes the
+  // sentinel bucket). No-op for the legacy flat record (no registry row).
+  const completedIntentDir = activeIntent(pd);
+  if (completedIntentDir) updateIntentStatus(pd, completedIntentDir, "complete");
   console.log(
     JSON.stringify({
       completed: completedSlug,
@@ -1083,10 +1113,10 @@ function handleResume(_args: string[]): void {
   // to surface the compaction-awareness prompt without a fragile shell pipeline.
   let compactionPending = false;
   try {
-    const auditPath = join(pd, "aidlc-docs", "audit.md");
-    if (existsSync(auditPath)) {
+    // Merge across per-clone audit shards (single shard in the common case).
+    const raw = readAllAuditShards(pd);
+    if (raw.length > 0) {
       // Read last ~400 lines (enough to cover ~30 events' worth of blocks)
-      const raw = readFileSync(auditPath, "utf-8");
       const tailLines = raw.split("\n").slice(-400);
       const tail = tailLines.join("\n");
       // Find the index of the last SESSION_COMPACTED event
@@ -1157,9 +1187,8 @@ function handleAcknowledgeCompaction(args: string[]): void {
   // RECOVERY_COMPLETED events when the orchestrator calls acknowledge unnecessarily.
   let compactionPending = false;
   try {
-    const auditPath = join(pd, "aidlc-docs", "audit.md");
-    if (existsSync(auditPath)) {
-      const raw = readFileSync(auditPath, "utf-8");
+    const raw = readAllAuditShards(pd);
+    if (raw.length > 0) {
       const tail = raw.split("\n").slice(-400).join("\n");
       const lastCompactIdx = tail.lastIndexOf("**Event**: SESSION_COMPACTED");
       if (lastCompactIdx !== -1) {
@@ -1266,29 +1295,30 @@ function handlePracticesEvent(args: string[]): void {
 // practices-promote --team-practices <path> --discovered-rules <path>
 //                   [--affirming-user <name>] [--target-dir <path>]
 //
-// Cross-row promotion of affirmed practices into team-authored harness config.
-// Reads two draft files from aidlc-docs/inception/practices-discovery/ and
-// applies them deterministically to the live .claude/ files:
+// Cross-row promotion of affirmed practices into the team-authored method
+// files. Reads two draft files from aidlc-docs/inception/practices-discovery/
+// and applies them deterministically to the relocated method files the
+// resolver reads (aidlc/spaces/<space>/memory/, neutral names):
 //
-//   .claude/rules/aidlc-team.md ........... replaceSection × 5 (Way of Working,
-//                                            Walking Skeleton, Testing Posture,
-//                                            Deployment, Code Style)
-//   .claude/rules/aidlc-project.md ........ appendUnderHeading × 2 (Mandated,
-//                                            Forbidden), each rule stamped
-//                                            with `(affirmed YYYY-MM-DD)`
+//   memory/team.md ........... replaceSection × 5 (Way of Working,
+//                              Walking Skeleton, Testing Posture,
+//                              Deployment, Code Style)
+//   memory/project.md ........ appendUnderHeading × 2 (Mandated,
+//                              Forbidden), each rule stamped
+//                              with `(affirmed YYYY-MM-DD)`
 //
 // Atomicity:
 //   1. Read both drafts (fail closed before any write).
 //   2. Read both targets (fail closed if either missing).
 //   3. Build new contents in memory.
-//   4. Write aidlc-project.md first (smaller, more constrained).
-//   5. Write aidlc-team.md second.
+//   4. Write project.md first (smaller, more constrained).
+//   5. Write team.md second.
 //   6. On success → emit PRACTICES_AFFIRMED.
 //   7. On any failure → emit PRACTICES_OVERRIDE with the failure reason
 //      and rethrow so the caller halts the gate.
 //
-// Why this exists: when stage prose tells the LLM to write to
-// .claude/rules/, the LLM (running non-interactively under `claude -p`)
+// Why this exists: when stage prose tells the LLM to write to the method
+// files directly, the LLM (running non-interactively under `claude -p`)
 // hallucinates a sensitive-file permission policy that does not actually
 // exist. The orchestrator then halts at "awaiting-approval" and emits
 // PRACTICES_OVERRIDE without ever attempting the write — the workflow
@@ -1311,11 +1341,16 @@ function handlePracticesPromote(args: string[]): void {
   }
 
   const pd = resolveProjectDir(projectDir);
-  // target-dir lets tests point the writes at a fixture .claude/ tree.
-  // Defaults to the project's .claude/ directory.
-  const targetRoot = flags["target-dir"] ?? join(pd, harnessDir());
-  const teamMdPath = join(targetRoot, rulesSubdir(), "aidlc-team.md");
-  const guardrailsPath = join(targetRoot, rulesSubdir(), "aidlc-project.md");
+  // The affirmed practices land in the relocated method files the resolver
+  // reads — team.md / project.md under aidlc/spaces/<space>/memory/ (neutral
+  // names, no `aidlc-` prefix). memoryDirFor() derives the path from the SAME
+  // MEMORY_SEGMENTS loadRules() reads from, so this writer and the reader can
+  // never drift (P5 relocated the reader; P6 closes the seam here). --target-dir
+  // lets tests point the writes at a fixture memory dir; it defaults to the
+  // project's resolved memory dir.
+  const targetRoot = flags["target-dir"] ?? memoryDirFor(pd);
+  const teamMdPath = join(targetRoot, "team.md");
+  const guardrailsPath = join(targetRoot, "project.md");
 
   const today = isoTimestamp().slice(0, 10);
   const sectionsWritten: string[] = [];
@@ -1353,9 +1388,9 @@ function handlePracticesPromote(args: string[]): void {
   }
 
   // Step 2: Read both target files. Fail closed if either is missing.
-  if (!existsSync(teamMdPath)) fail(`aidlc-team.md not found at ${teamMdPath}`);
+  if (!existsSync(teamMdPath)) fail(`team.md not found at ${teamMdPath}`);
   if (!existsSync(guardrailsPath))
-    fail(`aidlc-project.md not found at ${guardrailsPath}`);
+    fail(`project.md not found at ${guardrailsPath}`);
 
   let teamMd: string;
   let guardrailsMd: string;
@@ -1367,8 +1402,8 @@ function handlePracticesPromote(args: string[]): void {
     return;
   }
 
-  // Step 3a: Build new aidlc-team.md by section-replacing each of the five
-  // sections. aidlc-team.md uses Title Case headings; the draft mirrors that
+  // Step 3a: Build new team.md by section-replacing each of the five
+  // sections. team.md uses Title Case headings; the draft mirrors that
   // shape.
   const TEAM_SECTIONS = [
     "## Way of Working",
@@ -1390,7 +1425,7 @@ function handlePracticesPromote(args: string[]): void {
       sectionsWritten.push(heading.slice(3));
     } catch (e) {
       fail(
-        `replaceSection failed on aidlc-team.md for "${heading}": ${errorMessage(e)}`
+        `replaceSection failed on team.md for "${heading}": ${errorMessage(e)}`
       );
       return;
     }
@@ -1446,8 +1481,8 @@ function handlePracticesPromote(args: string[]): void {
     }
   }
 
-  // Step 4 & 5: Write aidlc-project.md first, then aidlc-team.md.
-  // If the project write fails, aidlc-team.md is untouched. If the team write
+  // Step 4 & 5: Write project.md first, then team.md.
+  // If the project write fails, team.md is untouched. If the team write
   // fails after project succeeded, we surface that as PRACTICES_OVERRIDE —
   // the user re-enters the gate; the duplicate-rule case is mitigated because
   // re-running parses the same rule list and appendUnderHeading is idempotent
@@ -1456,14 +1491,14 @@ function handlePracticesPromote(args: string[]): void {
   try {
     writeFileSync(guardrailsPath, newGuardrailsMd, "utf-8");
   } catch (e) {
-    fail(`writing aidlc-project.md failed: ${errorMessage(e)}`);
+    fail(`writing project.md failed: ${errorMessage(e)}`);
     return;
   }
   try {
     writeFileSync(teamMdPath, newTeamMd, "utf-8");
   } catch (e) {
     fail(
-      `writing aidlc-team.md failed AFTER aidlc-project.md was written: ${errorMessage(e)}`
+      `writing team.md failed AFTER project.md was written: ${errorMessage(e)}`
     );
     return;
   }
@@ -1655,6 +1690,38 @@ function handleFork(args: string[]): void {
   const slug = validateSlug(flags.slug);
   const pd = resolveProjectDir(projectDir);
 
+  // The space+intent selector pins this fork to ONE intent end-to-end (vision
+  // §5): --intent <record> / --space <name> override the active cursor;
+  // omitted -> default-resolution (the active cursor / lone intent). The SAME
+  // selector threads main-side state/audit/lock AND the worktree mirror, and
+  // MUST match what merge resolves so they touch one record.
+  const intent = flags.intent;
+  const space = flags.space;
+  // recordPrefix is the worktree mirror's relative record dir (null -> the flat
+  // legacy mirror, today's behaviour); wtRecord is the resolved record-dir NAME
+  // the worktree state file lives under (null -> flat). Resolved on the MAIN
+  // side so fork and merge pin to the same intent regardless of the worktree's
+  // own cursor.
+  const recordPrefix = relativeRecordDir(pd, intent, space);
+  // Resolve the intent ONCE, here, BEFORE acquiring the lock. activeIntent maps
+  // an omitted (--intent unset) selector to the active cursor / lone record, so
+  // `resolvedIntent` is the SAME value the per-intent path helpers (readStateFile
+  // / writeStateFile / auditFilePath) resolve internally. Threading the RAW
+  // flags.intent to the lock instead would key the __workspace__ sentinel on the
+  // omitted path while the writes target the resolved per-intent shard — LOCK !=
+  // WRITE, the exact lost-update race the lock exists to prevent (a concurrent
+  // explicit-intent op on the same shard would hold a DIFFERENT lock). So we use
+  // `resolvedIntent` for the wrapping lock AND every main-side read/write/audit
+  // below. `wtRecord` is the same value (kept as a distinct name for the
+  // worktree-mirror write, whose null->flat semantics read clearer there).
+  const resolvedIntent = activeIntent(pd, space, intent) ?? undefined;
+  const wtRecord = resolvedIntent;
+  // Publish the resolved lock context so any errorWithSlug fired inside the
+  // per-intent withAuditLock below routes ERROR_LOGGED to the bucket we hold
+  // (see error()/emitError). Cleared after the transaction.
+  lockIntent = resolvedIntent;
+  lockSpace = space;
+
   // target-dir lets tests point fork at a fixture worktree-parent. Defaults
   // to the project's .aidlc/worktrees/bolt-<slug>/ via worktreePath().
   const wtPath = flags["target-dir"] ?? worktreePath(pd, slug);
@@ -1666,7 +1733,7 @@ function handleFork(args: string[]): void {
   // mkdir BEFORE acquiring the lock. A read-only-fs mkdir failure must not
   // leave a phantom STATE_FORKED row, and acquiring the lock for a doomed
   // operation just delays the failure.
-  const wtDocsDir = join(wtPath, "aidlc-docs");
+  const wtDocsDir = worktreeDocsDir(wtPath, recordPrefix);
   try {
     mkdirSync(wtDocsDir, { recursive: true });
   } catch (e) {
@@ -1683,10 +1750,16 @@ function handleFork(args: string[]): void {
   //     `finally`, which would otherwise poison the project for ~5s).
   let srcSha: string;
   try {
+    // Lock the SAME per-intent bucket the inner state/audit writes target
+    // (resolvedIntent+space threaded), NOT the __workspace__ sentinel — without
+    // this the transaction serializes every intent's fork on one workspace lock
+    // (the P3 shared-lock cliff) and intent-birth/migration would block unrelated
+    // forks. resolvedIntent (not raw flags.intent) makes LOCK == WRITE even when
+    // --intent is omitted (both resolve to the active record).
     srcSha = withAuditLock(pd, () => {
     let mainContent: string;
     try {
-      mainContent = readStateFile(pd);
+      mainContent = readStateFile(pd, resolvedIntent, space);
     } catch (e) {
       errorWithSlug(slug, `failed to read main state: ${errorMessage(e)}`);
       return ""; // unreachable
@@ -1720,14 +1793,14 @@ function handleFork(args: string[]): void {
         "Worktree path": wtPath,
         "Source state hash": sha,
         "Target state hash": sha, // fork = byte-identical copy
-      }, pd);
+      }, pd, resolvedIntent, space);
     } catch (e) {
       errorWithSlug(slug, `audit emission failed: ${errorMessage(e)}`);
     }
 
     // Write main state with updated Bolt Refs.
     try {
-      writeStateFile(pd, mainNow);
+      writeStateFile(pd, mainNow, resolvedIntent, space);
     } catch (e) {
       errorWithSlug(slug, `failed to write main state with updated Bolt Refs: ${errorMessage(e)}`);
     }
@@ -1744,19 +1817,26 @@ function handleFork(args: string[]): void {
       errorWithSlug(slug, `failed to set Worktree Path on worktree state: ${errorMessage(e)}`);
     }
     try {
-      writeStateFile(wtPath, wtContent);
+      // The worktree mirror lives under the SAME record (wtRecord/space) the
+      // main side resolved — NOT the worktree's own cursor — so fork and merge
+      // read/write one file. wtRecord===undefined -> the flat legacy mirror.
+      writeStateFile(wtPath, wtContent, wtRecord, space);
     } catch (e) {
       errorWithSlug(slug, `failed to write worktree state at ${wtPath}: ${errorMessage(e)}`);
     }
 
     return sha;
-    });
+    }, resolvedIntent, space);
   } catch (e) {
     // Slug-tag any error from the locked block (most commonly: lock-acquire
     // timeout when a peer tool holds the lock across the retry budget).
     errorWithSlug(slug, errorMessage(e));
     return; // unreachable
   }
+  // Transaction done — clear the lock context so any subsequent sentinel-locked
+  // emit in this process keys the sentinel, not a stale per-intent bucket.
+  lockIntent = undefined;
+  lockSpace = undefined;
 
   process.stdout.write(
     `${JSON.stringify({
@@ -1780,19 +1860,37 @@ function handleMerge(args: string[]): void {
   const slug = validateSlug(flags.slug);
   const pd = resolveProjectDir(projectDir);
 
+  // Same selector the fork used -> the SAME intent record on both ends (vision
+  // §5). recordPrefix pins the worktree mirror; wtRecord is its record-dir NAME.
+  const intent = flags.intent;
+  const space = flags.space;
+  const recordPrefix = relativeRecordDir(pd, intent, space);
+  // Resolve the intent ONCE before locking (same rationale as handleFork):
+  // activeIntent maps an omitted selector to the active record, so resolvedIntent
+  // == the value the per-intent path helpers resolve internally. Threading it to
+  // the wrapping lock AND every main-side read/write/audit makes LOCK == WRITE
+  // even when --intent is omitted; raw flags.intent would key the sentinel while
+  // the writes hit the per-intent shard (lost-update race). wtRecord is the same
+  // value, named for the worktree-mirror read where null->flat reads clearer.
+  const resolvedIntent = activeIntent(pd, space, intent) ?? undefined;
+  const wtRecord = resolvedIntent;
+  // Publish the lock context for the in-transaction error path (see error()).
+  lockIntent = resolvedIntent;
+  lockSpace = space;
+
   const wtPath = flags["target-dir"] ?? worktreePath(pd, slug);
   if (!existsSync(wtPath)) {
     errorWithSlug(slug, `worktree directory does not exist: ${wtPath}.`);
   }
-  const wtStatePath = join(wtPath, "aidlc-docs", "aidlc-state.md");
+  const wtStatePath = worktreeStateFilePath(wtPath, recordPrefix);
   if (!existsSync(wtStatePath)) {
     errorWithSlug(slug, `worktree state file does not exist: ${wtStatePath}. Was fork run?`);
   }
 
   // Read worktree state outside the lock — its file isn't shared with peers
   // (each Bolt owns its own worktree state file), so it doesn't need the
-  // audit lock for consistency.
-  const wtContent = readStateFile(wtPath);
+  // audit lock for consistency. Read the SAME record the fork wrote.
+  const wtContent = readStateFile(wtPath, wtRecord, space);
   const wtSha = sha256(wtContent);
   const wtCheckboxes = parseCheckboxes(wtContent);
 
@@ -1805,8 +1903,13 @@ function handleMerge(args: string[]): void {
   // alphabetical tiebreak, and (c) one merge clobbering another's writes.
   let result: { postMergeSha: string; conflictResolutionField: string };
   try {
+    // Lock the per-intent bucket (resolvedIntent+space threaded) the inner
+    // writes target — same fix as handleFork: the __workspace__ sentinel would
+    // serialize all intents' merges and let intent-birth block an unrelated
+    // merge (P3 shared-lock cliff). resolvedIntent (not raw flags.intent) makes
+    // LOCK == WRITE on the omitted-intent path.
     result = withAuditLock(pd, () => {
-    const mainContent = readStateFile(pd);
+    const mainContent = readStateFile(pd, resolvedIntent, space);
 
     // Idempotency: if slug is not in main's Bolt Refs, this is a re-run after
     // a prior successful merge (or a never-forked slug). Either way, no work
@@ -1869,21 +1972,24 @@ function handleMerge(args: string[]): void {
         "Source state hash": wtSha,
         "Target state hash": postMergeSha,
         "Conflict resolution": conflictResolutionField,
-      }, pd);
+      }, pd, resolvedIntent, space);
     } catch (e) {
       errorWithSlug(slug, `audit emission failed: ${errorMessage(e)}`);
     }
 
-    writeStateFile(pd, merged);
+    writeStateFile(pd, merged, resolvedIntent, space);
 
     return { postMergeSha, conflictResolutionField };
-    });
+    }, resolvedIntent, space);
   } catch (e) {
     // Slug-tag any error from the locked block (most commonly: lock-acquire
     // timeout when a peer tool holds the lock across the retry budget).
     errorWithSlug(slug, errorMessage(e));
     return; // unreachable
   }
+  // Transaction done — clear the lock context (see handleFork).
+  lockIntent = undefined;
+  lockSpace = undefined;
 
   process.stdout.write(
     `${JSON.stringify({
@@ -1904,5 +2010,10 @@ function error(msg: string): never {
   // fixtures and explicit overrides propagate to ERROR_LOGGED.
   const pd = resolveProjectDir(projectDir);
   const command = `aidlc-state ${process.argv.slice(2).join(" ")}`.trim();
-  emitError(pd, "aidlc-state", command, msg);
+  // Thread the active per-intent lock context (set by fork/merge before their
+  // per-intent withAuditLock) so emitError's holdsAuditLock probe keys the SAME
+  // bucket the caller holds — lock==write on the in-transaction error path.
+  // Unset (undefined) for every sentinel-locked handler -> emitError keys the
+  // sentinel, matching their lock.
+  emitError(pd, "aidlc-state", command, msg, lockIntent, lockSpace);
 }

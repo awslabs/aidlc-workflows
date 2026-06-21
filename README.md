@@ -4,7 +4,7 @@ A native implementation of the **AI-DLC methodology** (AI-Driven Development Lif
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-0.8.2-blue)
+![version](https://img.shields.io/badge/version-2.1.0-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
@@ -63,7 +63,7 @@ This release works better with `Claude Opus 4.8`. We are sharpening it for previ
 
 ### Prerequisites (every harness)
 
-Every harness runs the same TypeScript hooks and CLI tools through **bun**, so install bun first — it's the one requirement shared by all three.
+Every harness runs the same TypeScript hooks and CLI tools through **bun**, so install bun first — it's the one requirement they all share.
 
 ```bash
 # macOS / Linux
@@ -226,7 +226,7 @@ aidlc-claude/
 │   ├── tools/                  #   25 aidlc-*.ts engine tools (+ data/scaffold/ templates)
 │   ├── aidlc-common/           #   stage protocol + 32 stage files + conductor
 │   ├── agents/                 #   11 domain-expert personas
-│   ├── knowledge/ rules/ scopes/ sensors/ hooks/
+│   ├── knowledge/ memory/ scopes/ sensors/ hooks/
 │   ├── skills/                 #   3 session skills (session-cost, replay, outcomes-pack)
 │   └── templates/              #   onboarding skeleton → each harness's CLAUDE.md / AGENTS.md
 │       # prose names the harness dir with the {{HARNESS_DIR}} token — substituted at packaging

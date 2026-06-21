@@ -5,7 +5,7 @@ command: bun .kiro/tools/aidlc-sensor-required-sections.ts
 default_severity: advisory
 description: Checks that stage output contains the required H2 headings — generic content-shape check, fires on every stage that writes markdown
 category: document-shape
-matches: "**/aidlc-docs/**"
+matches: "**/{aidlc-docs,intents}/**"
 input_schema:
   output_path: string
   stage_slug: string
@@ -15,6 +15,10 @@ output_schema:
   headings: string[]
   findings_count: integer
   edge_block: string
+  template: string
+  template_expected: string[]
+  template_missing: string[]
+  config_warning: string
 timeout_seconds: 5
 ---
 
@@ -31,11 +35,31 @@ the batch fan-out. The check reports `edge_block` as `ok`, `absent`,
 the malformed block never reaches the compiler. Every other artefact keeps
 the generic H2-count check only.
 
-Per-stage shape can override the default heading set when the stage's
-`## Sensors` body documents the override (post-milestone-12 mechanism). The
-framework ships no per-stage overrides by default — teams introduce
-specific heading shapes via the §13 learning loop when there's a real
-reason.
+## Heading-set overrides — two paths, with precedence
+
+The default heading set can be overridden two ways. **Precedence: a resolving
+`templates/<artifact>.md` wins over a `## Sensors`-documented heading set.**
+
+1. **Template-override layer (file-driven, preferred).** A team drops
+   `aidlc/spaces/<space>/memory/templates/<artifact>.md` (keyed by the output filename stem —
+   artifact `X` writes to `X.md`). When one resolves for the output path, its
+   `##` headings become the expected set and the sensor passes iff
+   `expected ⊆ output`; the missing headings are precise findings. Whole-doc,
+   advisory — the human decides at the gate. The same file is the skeleton the
+   agent fills (see the stage protocol § Template overrides), so the produced
+   shape and the checked shape cannot drift. A template applies only to a
+   template-eligible artifact (the stage's prose `produces` entries, threaded by
+   the dispatcher); a template resolving for a questions/timestamp marker is
+   ignored with a config warning, and the marker keeps the generic floor.
+
+2. **`## Sensors`-prose override (in-stage, legacy anticipation).** A stage's
+   `## Sensors` body may document a heading-set override (post-milestone-12
+   mechanism). This applies only when no template file resolves for the output.
+
+The framework ships no per-stage `## Sensors` overrides by default — teams
+introduce specific heading shapes either by authoring a template (path 1) or via
+the §13 learning loop when there's a real reason. When neither override is
+present, the output keeps the generic ≥2-H2 floor.
 
 ## Failure mode
 

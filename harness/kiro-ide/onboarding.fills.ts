@@ -10,7 +10,7 @@ const fills: OnboardingFills = {
   slots: {
     title_block: `# Project Name <!-- Replace with your project name -->
 
-This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on the **Kiro CLI harness**. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --init\` to scaffold the full \`aidlc-docs/\` directory tree without starting a workflow (\`--init --force\` overwrites an existing workspace). Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume, or \`/aidlc --test-run\` to auto-approve gates for automated runs.`,
+This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on the **Kiro IDE harness**. The workspace shell ships in \`.kiro/\` (no setup command); the engine auto-births the first intent when you describe what to build. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume, or \`/aidlc --test-run\` to auto-approve gates for automated runs.`,
 
     prereq_bullets: `- **Kiro CLI ≥ 2.6**: the hooks/skills/agent features this install relies on (stop hook with blocking, preToolUse/postToolUse matchers, \`.kiro/skills/\` slash commands, workspace \`chat.defaultAgent\`) shipped in the 2.x line. Check with \`kiro-cli --version\`.
 - **bun**: Required for the CLI tools and hook scripts (state management, audit logging, orchestration engine). Install via \`curl -fsSL https://bun.sh/install | bash\`. \`bun\` must be on your PATH for the non-interactive shells the harness spawns — these source \`~/.zshenv\` (zsh) or \`~/.bashrc\` (bash), NOT \`~/.zshrc\`.
@@ -34,7 +34,7 @@ This is the same AI-DLC core that ships to every harness — one deterministic e
 - Construction swarm runs as **subagent fan-out only** (\`AIDLC_USE_SWARM=1\` is a loud no-op).
 - Session-end and pre-compaction audit events (\`SESSION_ENDED\`, \`SESSION_COMPACTED\`) are not emitted — Kiro has no hooks for those moments.
 - **MCP servers**: none ship, and the Kiro MCP config mechanism is not configured here (the Claude distribution ships five; Kiro ships zero today).
-- A workflow's \`aidlc-docs/\` is harness-neutral: a project can move between Claude Code and Kiro CLI installs (supported but untested — keep both \`.claude/\` and \`.kiro/\` in sync via the framework's packaging if you do this).
+- A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can move between Claude Code and Kiro IDE installs (supported but untested — keep both \`.claude/\` and \`.kiro/\` in sync via the framework's packaging if you do this).
 `,
 
     sections_after_resumption: "",

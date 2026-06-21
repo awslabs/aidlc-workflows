@@ -24,24 +24,31 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
-  auditFilePath,
   errorMessage,
+  activeIntent,
   findAllEvents,
   getField,
   loadStageGraph,
+  memoryFilePath,
   parseBoltDag,
   parseCheckboxes,
   parseMemoryHeadings,
   parseStateStageSuffixes,
+  readAllAuditShards,
+  activeSpace,
   readStateFile,
+  relativeMemoryPath,
+  relativeRecordDir,
   resolveProjectDir,
+  runtimeGraphPath,
   stateFilePath,
+  unitDependencyPath,
   validateBoltSlug,
   withAuditLock,
   worktreePath,
+  worktreeRuntimeGraphPath,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 
@@ -116,32 +123,11 @@ interface RuntimeGraph {
 }
 
 // --- Path helpers ---
-
-function runtimeGraphPath(projectDir: string): string {
-  return join(projectDir, "aidlc-docs", "runtime-graph.json");
-}
-
-function memoryPath(projectDir: string, phase: string, stageSlug: string): string {
-  return join(projectDir, "aidlc-docs", phase, stageSlug, "memory.md");
-}
-
-// units-generation (2.7) writes the unit dependency artifact here; its fenced
-// edge block is the structured input the Bolt-DAG node is computed from.
-function unitDependencyPath(projectDir: string): string {
-  return join(
-    projectDir,
-    "aidlc-docs",
-    "inception",
-    "units-generation",
-    "unit-of-work-dependency.md"
-  );
-}
-
-// Memory path to record on the row, relative to projectDir, forward slashes
-// regardless of host OS — keeps the schema portable across worktrees.
-function memoryPathForRow(phase: string, stageSlug: string): string {
-  return `aidlc-docs/${phase}/${stageSlug}/memory.md`;
-}
+//
+// The aidlc-docs data-path helpers (runtimeGraphPath, memoryFilePath,
+// unitDependencyPath, relativeMemoryPath, worktreeRuntimeGraphPath) are imported
+// from aidlc-lib.ts — the single chokepoint for the aidlc-docs tree. memoryPath
+// here is memoryFilePath; the per-row relative form is relativeMemoryPath.
 
 // --- Compile ---
 
@@ -188,10 +174,10 @@ function pairStartedCompleted(
   audit: string,
   sinceTimestamp: string
 ): Map<string, PairingEntry> {
-  // findAllEvents returns chronologically (source-position-ordered) blocks.
-  // sinceTimestamp filters out rows from prior workflows on the same
-  // audit log (the `--init --force` re-init case appends without truncating).
-  // Synthetic single-stage rows are excluded regardless of timestamp.
+  // findAllEvents returns blocks chronologically (timestamp-sorted, ties broken
+  // by buffer position). sinceTimestamp filters out rows from prior workflows on
+  // the same audit log (the `--init --force` re-init case appends without
+  // truncating). Synthetic single-stage rows are excluded regardless of timestamp.
   const startedEvents = findAllEvents(audit, "STAGE_STARTED").filter(
     (e) => e.timestamp >= sinceTimestamp && !isSingleStageRow(e.block)
   );
@@ -288,7 +274,7 @@ function readMemory(
   phase: string,
   stageSlug: string
 ): { memory_entries: number | null; memory_breakdown: MemoryBreakdown | null } {
-  const path = memoryPath(projectDir, phase, stageSlug);
+  const path = memoryFilePath(projectDir, phase, stageSlug);
   if (!existsSync(path)) {
     return { memory_entries: null, memory_breakdown: null };
   }
@@ -330,7 +316,6 @@ function computeBoltDag(projectDir: string): BoltDag | undefined {
 
 function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   const { projectDir, testRun } = opts;
-  const auditPath = auditFilePath(projectDir);
 
   // Env-misconfig fallback per plan §97-102.
   const statePath = stateFilePath(projectDir);
@@ -340,13 +325,14 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
     );
     return { skipped: "no-state" };
   }
-  if (!existsSync(auditPath)) {
+  // Read across every per-clone audit shard (single shard in the common case).
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) {
     // No audit yet — write an empty graph anchored to state cursor only,
     // mirroring the "fresh init, no transitions" case.
     return writeEmptyGraph(projectDir);
   }
 
-  const audit = readFileSync(auditPath, "utf-8");
   const stateContent = readStateFile(projectDir);
 
   const header = buildWorkflowHeader(audit, stateContent);
@@ -382,7 +368,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
       started_at: entry.started_at,
       completed_at: entry.completed_at,
       agent: entry.agent || phaseInfo.agent,
-      memory_path: memoryPathForRow(phaseInfo.phase, slug),
+      memory_path: relativeMemoryPath(phaseInfo.phase, slug),
       memory_entries: memory.memory_entries,
       memory_breakdown: memory.memory_breakdown,
       sensor_firings: [],
@@ -784,7 +770,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   // MEMORY_EMPTY per (slug, gate-completion) tuple, so doctor's rate
   // metric is honest under N-compile-per-workflow re-fires.
   withAuditLock(projectDir, () => {
-    const auditNow = readFileSync(auditPath, "utf-8");
+    const auditNow = readAllAuditShards(projectDir);
     const existingEmpties = findAllEvents(auditNow, "MEMORY_EMPTY");
 
     for (const ze of zeroEntryApprovedStages) {
@@ -823,10 +809,12 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
 // emit, no source-of-truth mutation).
 function writeEmptyGraph(
   projectDir: string,
-  opts?: { acquireLock?: boolean }
+  opts?: { acquireLock?: boolean },
+  intent?: string,
+  space?: string
 ): { written: string } {
   const acquireLock = opts?.acquireLock ?? true;
-  const stateContent = readStateFile(projectDir);
+  const stateContent = readStateFile(projectDir, intent, space);
   const scope = getField(stateContent, "Scope") || "";
   const graph: RuntimeGraph = {
     workflow_id: "",
@@ -835,14 +823,14 @@ function writeEmptyGraph(
     stages: [],
   };
   const writer = () => {
-    writeFileAtomic(runtimeGraphPath(projectDir), `${JSON.stringify(graph, null, 2)}\n`);
+    writeFileAtomic(runtimeGraphPath(projectDir, intent, space), `${JSON.stringify(graph, null, 2)}\n`);
   };
   if (acquireLock) {
-    withAuditLock(projectDir, writer);
+    withAuditLock(projectDir, writer, intent, space);
   } else {
     writer();
   }
-  return { written: runtimeGraphPath(projectDir) };
+  return { written: runtimeGraphPath(projectDir, intent, space) };
 }
 
 // --- Read subcommand ---
@@ -1141,6 +1129,12 @@ function handleFragmentFork(rest: string[], projectDir: string): void {
     if (a === "--slug" && i + 1 < rest.length) {
       flags.slug = rest[i + 1];
       i++;
+    } else if (a === "--intent" && i + 1 < rest.length) {
+      flags.intent = rest[i + 1];
+      i++;
+    } else if (a === "--space" && i + 1 < rest.length) {
+      flags.space = rest[i + 1];
+      i++;
     }
   }
   if (!flags.slug) {
@@ -1155,9 +1149,26 @@ function handleFragmentFork(rest: string[], projectDir: string): void {
     process.exit(1);
   }
 
+  // Pin the worktree runtime-graph mirror AND the main read to ONE intent
+  // (vision §5). recordPrefix -> the worktree mirror's relative record dir
+  // (null -> flat); wtRecord -> the record-dir NAME the worktree fragment lives
+  // under (null -> flat). Resolved on the MAIN side so fork and merge agree.
+  const intent = flags.intent;
+  // Resolve the SPACE segment ONCE against the MAIN cursor and pass it
+  // EXPLICITLY everywhere below. Without this, the source-absent write path
+  // (writeEmptyGraph -> runtimeGraphPath -> recordDir) would fall through to
+  // activeSpace(wtPath) — the WORKTREE's own cursor — while recordPrefix /
+  // wtFragmentPath interpolate activeSpace(projectDir) (the MAIN cursor). If the
+  // two cursors differ, the empty graph is written under the worktree-space path
+  // but re-read under the main-space path → ENOENT, fragment-fork exits 1 despite
+  // a successful write. One resolved space keeps both sides on the same segment.
+  const space = flags.space ?? activeSpace(projectDir);
+  const recordPrefix = relativeRecordDir(projectDir, intent, space);
+  const wtRecord = activeIntent(projectDir, space, intent) ?? undefined;
+
   const wtPath = worktreePath(projectDir, flags.slug);
-  const wtFragmentPath = join(wtPath, "aidlc-docs", "runtime-graph.json");
-  const mainPath = runtimeGraphPath(projectDir);
+  const wtFragmentPath = worktreeRuntimeGraphPath(wtPath, recordPrefix);
+  const mainPath = runtimeGraphPath(projectDir, intent, space);
 
   if (!existsSync(wtPath)) {
     process.stderr.write(
@@ -1185,7 +1196,7 @@ function handleFragmentFork(rest: string[], projectDir: string): void {
     // Source-absent: write empty graph to the worktree path. Pass
     // acquireLock: false because fragment-fork takes no audit lock
     // (decision L9), and the worktree-local path has no concurrent writer.
-    writeEmptyGraph(wtPath, { acquireLock: false });
+    writeEmptyGraph(wtPath, { acquireLock: false }, wtRecord, space);
     // Re-read the just-written bytes so the source-hash reflects the
     // empty-graph fragment exactly.
     const buf = readFileSync(wtFragmentPath);
@@ -1223,6 +1234,12 @@ function handleFragmentMerge(rest: string[], projectDir: string): void {
     if (a === "--slug" && i + 1 < rest.length) {
       flags.slug = rest[i + 1];
       i++;
+    } else if (a === "--intent" && i + 1 < rest.length) {
+      flags.intent = rest[i + 1];
+      i++;
+    } else if (a === "--space" && i + 1 < rest.length) {
+      flags.space = rest[i + 1];
+      i++;
     }
   }
   if (!flags.slug) {
@@ -1237,8 +1254,11 @@ function handleFragmentMerge(rest: string[], projectDir: string): void {
     process.exit(1);
   }
 
+  // Same selector the fork used -> the SAME intent record (vision §5).
+  const recordPrefix = relativeRecordDir(projectDir, flags.intent, flags.space);
+
   const wtPath = worktreePath(projectDir, flags.slug);
-  const wtFragmentPath = join(wtPath, "aidlc-docs", "runtime-graph.json");
+  const wtFragmentPath = worktreeRuntimeGraphPath(wtPath, recordPrefix);
 
   if (!existsSync(wtFragmentPath)) {
     // Fragment-absent: clean no-op. Covers (a) re-run after a successful
