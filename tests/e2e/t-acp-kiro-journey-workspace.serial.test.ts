@@ -305,10 +305,20 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         expect(workflowStartedCount(recordADir)).toBe(1);
 
         // --- Beat 4: non-default space — create, switch, birth there; no leak --
-        // Through the PRODUCTION conductor (the d44828b fix routes the space verbs
-        // via `next` → print directive → run the named tool — see the header). Each
-        // verb is its own single-turn `/aidlc <verb>` drive on the keepAlive `space`
-        // session, bounded by stopAfterToolTitle at the named tool's output.
+        // The space NAVIGATION verbs (space-create / space) are TERMINAL commands —
+        // they map 1:1 to an aidlc-utility.ts subcommand and carry no workflow work.
+        // On Kiro they are dispatched DETERMINISTICALLY by the userPromptSubmit seam
+        // (agents/aidlc.json → aidlc-kiro-adapter.ts verb-intercept): the hook runs
+        // the tool OFF-BAND (not as a conductor tool call) and hands the conductor the
+        // verbatim output with a do-NOT-advance instruction, so the conductor relays
+        // and ends the turn making ZERO tool calls (live-verified: toolCalls=[],
+        // stopReason=end_turn, the space created on disk). Therefore each verb turn is
+        // driven to its natural end_turn — NOT stopAfterToolTitle (the tool runs inside
+        // the hook, never surfaces as an ACP tool_call, so a title stop would never
+        // fire). The assertable surface is the on-disk outcome. (Beat 4c below is a
+        // BIRTH — run-then-continue, genuine conductor work — so it keeps its title
+        // stop.) Each verb reuses the keepAlive `space` session; the seam ends every
+        // verb turn cleanly so reuse is safe.
         // 4a: create teamB; assert org.md byte-copied from default, fresh empty
         // team/project stubs, knowledge/ ABSENT at create time.
         await driveKiroAcp({
@@ -316,7 +326,6 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           session: space,
           prompt: `/aidlc space-create teamB`,
           timeoutMs: VERB_DRIVE_MS,
-          stopAfterToolTitle: /aidlc-utility\.ts space-create/,
           keepAlive: true,
         });
         const teamBMemory = join(root, "aidlc", "spaces", TEAM_B_SLUG, "memory");
@@ -329,13 +338,12 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         expect(readFileSync(join(teamBMemory, "project.md"), "utf-8")).toBe("# Project overrides\n");
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(false);
 
-        // 4b: switch to teamB.
+        // 4b: switch to teamB (terminal verb — seam-dispatched, drive to end_turn).
         await driveKiroAcp({
           projectDir: root,
           session: space,
           prompt: `/aidlc space teamB`,
           timeoutMs: VERB_DRIVE_MS,
-          stopAfterToolTitle: /aidlc-utility\.ts space teamB/,
           keepAlive: true,
         });
         expect(activeSpace(root)).toBe(TEAM_B_SLUG);
@@ -358,12 +366,12 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);
 
         // --- Beat 5: back to default; A still resumable ----------------------
+        // `space default` is a terminal verb — seam-dispatched, drive to end_turn.
         await driveKiroAcp({
           projectDir: root,
           session: space,
           prompt: `/aidlc space default`,
           timeoutMs: VERB_DRIVE_MS,
-          stopAfterToolTitle: /aidlc-utility\.ts space default/,
           keepAlive: true,
         });
         expect(activeSpace(root)).toBe("default");

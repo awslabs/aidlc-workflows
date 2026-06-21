@@ -116,8 +116,12 @@ describe("t-tui-kiro-status (read-only status through the Kiro print-directive a
         submitStatus(session);
         // The seeded fixture is mid-inception, scope=feature, current stage
         // requirements-analysis. The status output the conductor prints must
-        // surface those strings in the pane.
-        expect(waitFor(session, "requirements-analysis", 240000, 0)).toBe(true);
+        // surface those strings in the pane. NOTE: the status tool renders the
+        // stage DISPLAY name ("Requirements Analysis"), not the slug — it prints
+        // `Current Stage:  ${stageDisplay}` from the graph entry's `name`
+        // (aidlc-utility.ts:347 / :267-282), so we wait on the display name, the
+        // same calibration lesson the ACP twin (t-acp-kiro-utilities) encodes.
+        expect(waitFor(session, "Requirements Analysis", 240000, 0)).toBe(true);
         expect(waitFor(session, "feature", 30000, 0)).toBe(true);
         // Read-only contract: the state file is byte-identical afterwards.
         expect(readFileSync(statePath, "utf8")).toBe(stateBefore);

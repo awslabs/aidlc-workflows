@@ -284,6 +284,67 @@ export const ACTIVE_SPACE_POINTER = "active-space";
 export const ACTIVE_INTENT_POINTER = "active-intent";
 export const DEFAULT_SPACE = "default";
 
+// --- Terminal-command classification (the deterministic-dispatch seam) ---
+//
+// A small set of `/aidlc` commands are TERMINAL: they map 1:1 to an
+// `aidlc-utility.ts` subcommand that runs a tool, prints its output, and stops —
+// they carry NO workflow work and never advance an intent. The orchestration
+// engine's `next` already routes these to a terminal `print` directive
+// (handleNext Branch 1 + 1b). They are exported HERE so a pre-LLM harness seam
+// (e.g. the Kiro userPromptSubmit hook) can dispatch them deterministically off
+// the SAME classification the engine uses — never a divergent hardcoded list.
+//
+//   - read-only utility flags: matched ANYWHERE in the args (mirrors the engine's
+//     parseNextFlags, which sets `readOnly` on any matching token). Each maps to
+//     its subcommand by stripping the leading `--` (--status→status, …).
+//   - workspace navigation verbs: matched ONLY as the LEADING token (i === 0), so
+//     freeform prose merely containing "space"/"intent" stays intent text. The
+//     optional <name> arg is args[1] when present and not itself a --flag.
+export const READ_ONLY_FLAGS: ReadonlySet<string> = new Set([
+  "--status",
+  "--help",
+  "--doctor",
+  "--version",
+]);
+export const WORKSPACE_VERBS: ReadonlySet<string> = new Set([
+  "space",
+  "space-create",
+  "intent",
+]);
+
+// A classified terminal command: the aidlc-utility.ts subcommand to run, plus an
+// optional positional arg (the <name> for a workspace verb). `source` records
+// which family matched, for diagnostics.
+export interface TerminalCommand {
+  subcommand: string;
+  arg?: string;
+  source: "read-only-flag" | "workspace-verb";
+}
+
+// Classify the post-`/aidlc` argument tokens. Returns the terminal command to run
+// deterministically, or null when the input is NOT a terminal command (freeform
+// intent text, a --scope/--stage/--phase jump, a config/scope change, birth — all
+// of which carry workflow work and MUST go through the engine + conductor). The
+// matching rules are byte-for-byte the engine's parseNextFlags terminal branches
+// (read-only flag anywhere; workspace verb only at index 0) so the seam and the
+// engine can never disagree about what is terminal.
+export function classifyTerminalCommand(args: string[]): TerminalCommand | null {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (READ_ONLY_FLAGS.has(a)) {
+      return { subcommand: a.replace(/^--/, ""), source: "read-only-flag" };
+    }
+    if (i === 0 && WORKSPACE_VERBS.has(a)) {
+      const next = args[i + 1];
+      const arg = next !== undefined && !next.startsWith("--") ? next : undefined;
+      return arg !== undefined
+        ? { subcommand: a, arg, source: "workspace-verb" }
+        : { subcommand: a, source: "workspace-verb" };
+    }
+  }
+  return null;
+}
+
 // `aidlc/` — the harness-neutral workspace roof (memory · codekb · knowledge ·
 // intents live under spaces/<space>/ here; the engine stays in <harness>/).
 function workspaceRoot(projectDir: string): string {

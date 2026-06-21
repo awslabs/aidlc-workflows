@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 378,
+    "total": 381,
     "enumeratedByClass": {
-      "function": 172,
+      "function": 175,
       "audit": 67,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 71,
+      "function": 74,
       "audit": 27,
       "scope": 9,
       "stage": 8,
@@ -985,6 +985,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:classifyTerminalCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t178-classify-terminal-command.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:CLONE_ID_FILE",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1779,6 +1791,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:READ_ONLY_FLAGS",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t178-classify-terminal-command.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readAllAuditShards",
       "minMechanism": "none",
       "coveredBy": [
@@ -2334,6 +2358,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:WORKSPACE_VERBS",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t178-classify-terminal-command.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

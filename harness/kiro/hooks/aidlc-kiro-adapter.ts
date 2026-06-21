@@ -25,10 +25,13 @@
 // Usage (registered in .kiro/agents/aidlc.json):
 //   bun .kiro/hooks/aidlc-kiro-adapter.ts <target>
 // where <target> ∈ session-start | audit-and-sensors | runtime-compile |
-//                  state-sync | log-subagent | stop
+//                  state-sync | log-subagent | stop | verb-intercept |
+//                  pretool-block
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { classifyTerminalCommand } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const target = process.argv[2] ?? "";
@@ -52,6 +55,156 @@ if (!process.stdin.isTTY) {
   } catch {
     process.exit(0); // malformed stdin — advisory hooks fail open
   }
+}
+
+// --- verb-intercept: the deterministic terminal-command seam (userPromptSubmit) ---
+//
+// A `/aidlc` command that leads with a workspace navigation verb
+// (space/space-create/intent) or a read-only utility flag (--status/--doctor/
+// --help/--version) is TERMINAL — it maps 1:1 to an aidlc-utility.ts subcommand
+// and carries no workflow work. Over an ACTIVE workflow the live conductor is
+// unreliable at honouring these: under accumulated session context it runs a
+// bare `next` and advances the active intent (verb dropped) or rolls into the
+// active stage (read-only flag ignored) — the "roll-forward" bug. This hook
+// dispatches them DETERMINISTICALLY before the conductor decides anything:
+// recover the raw args, classify with the engine's own classifier
+// (classifyTerminalCommand — same sets the engine routes on), run the tool, and
+// hand the conductor the verbatim output with an explicit do-NOT-advance
+// instruction (Kiro's context channel is plain stdout at exit 0; it has no
+// block API, so the conductor relays rather than is bypassed — measured to land
+// the command and leave the active intent untouched).
+//
+// WHY the args are recovered from the EXPANDED body: Kiro fires userPromptSubmit
+// with `prompt` = the fully-expanded skill body (the raw `/aidlc …` literal is
+// gone), but it SUBSTITUTES the user's post-/aidlc text ($ARGUMENTS) into the
+// forwarding-loop anchor `aidlc-orchestrate.ts next <ARGS>`. We read the args
+// back from that anchor — the same text the conductor would forward.
+function extractNextArgs(expandedPrompt: string): string[] {
+  // Match the FIRST `… aidlc-orchestrate.ts next <ARGS>` occurrence (the loop's
+  // step-1 anchor) and take the tokens up to the closing backtick. The anchor is
+  // inside a markdown code span, so the args end at the backtick.
+  const m = expandedPrompt.match(/aidlc-orchestrate\.ts next ([^`\n]*)`/);
+  if (!m) return [];
+  return m[1].trim().split(/\s+/).filter((t) => t.length > 0);
+}
+
+if (target === "verb-intercept") {
+  // The whole turn's only job here is to deterministically handle a terminal
+  // command; anything else falls through to the conductor untouched (exit 0, no
+  // output → Kiro proceeds to the LLM normally). Advisory: any failure fails open.
+  const args = extractNextArgs(kiro.prompt ?? "");
+  const cmd = classifyTerminalCommand(args);
+  // Turn-clock: bump a per-turn counter EVERY time this seam fires (it fires
+  // once per turn, BEFORE the cmd===null exit so a bare-next turn still advances
+  // the clock and a prior turn's latch goes stale). The read-only/nav latch
+  // below stamps THIS counter value; the engine done-guard + preToolUse backstop
+  // fire ONLY when the latch's turn === the current counter (same turn) — truly
+  // turn-scoped, no time window, no wedge. Best-effort; failure fails open.
+  let turn = 0;
+  try {
+    const cwd = kiro.cwd ?? process.cwd();
+    mkdirSync(join(cwd, "aidlc"), { recursive: true });
+    const cp = join(cwd, "aidlc", ".aidlc-turn-counter");
+    turn = existsSync(cp)
+      ? (Number.parseInt(readFileSync(cp, "utf-8").trim(), 10) || 0) + 1
+      : 1;
+    writeFileSync(cp, String(turn) + "\n", "utf-8");
+  } catch { /* turn-clock best-effort */ }
+  if (cmd === null) process.exit(0); // not a terminal command — conductor handles it
+
+  const cwd = kiro.cwd ?? process.cwd();
+  const utilArgs = [join(".kiro", "tools", "aidlc-utility.ts"), cmd.subcommand];
+  if (cmd.arg !== undefined) utilArgs.push(cmd.arg);
+  const run = Bun.spawnSync(["bun", ...utilArgs], { cwd, stdout: "pipe", stderr: "pipe" });
+  const out = ((run.stdout?.toString() ?? "") + (run.stderr?.toString() ?? "")).trim();
+
+  // Turn-scoped latch: a terminal command was handled OFF-BAND this turn (the
+  // seam ran the tool; the conductor only relays). Stamp the latch with the
+  // CURRENT turn counter so the engine done-guard + preToolUse backstop know a
+  // bare advancing `next` THIS SAME turn is the spurious roll-forward and must
+  // be neutralized. Read-only flags (--status/--doctor/--help/--version) and
+  // workspace verbs (space/space-create/intent) both arm it, so the same guard
+  // catches the read-only AND the nav roll-forward. Best-effort; fails open.
+  if (cmd.source === "read-only-flag" || cmd.source === "workspace-verb") {
+    try {
+      const cwd = kiro.cwd ?? process.cwd();
+      mkdirSync(join(cwd, "aidlc"), { recursive: true });
+      const flag = cmd.source === "read-only-flag"
+        ? cmd.subcommand
+        : (cmd.arg ? cmd.subcommand + " " + cmd.arg : cmd.subcommand);
+      writeFileSync(
+        join(cwd, "aidlc", ".aidlc-readonly-latch"),
+        JSON.stringify({ turn, flag, source: cmd.source, ts: Date.now() }) + "\n",
+        "utf-8",
+      );
+    } catch { /* latch best-effort */ }
+  }
+  // Echo the command the way the user typed it (verb + arg, or the --flag) so the
+  // short-circuit message is legible.
+  const typed = cmd.source === "read-only-flag"
+    ? `--${cmd.subcommand}`
+    : `${cmd.subcommand}${cmd.arg ? " " + cmd.arg : ""}`;
+  process.stdout.write(
+    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness — it is a read-only/navigation command that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n--- OUTPUT ---\n${out}\n--- END OUTPUT ---\n`,
+  );
+  process.exit(0);
+}
+
+// --- pretool-block: the preToolUse roll-forward backstop (matcher: execute_bash) ---
+//
+// Defense-in-depth behind the engine done-guard. The verb-intercept seam above
+// handles a read-only/nav command off-band and stamps aidlc/.aidlc-readonly-latch
+// with the current turn counter; the engine's `next` then emits `done` for a bare
+// advancing next this same turn. But Kiro's userPromptSubmit can only INJECT, not
+// block — so if the live conductor retries a bare `next` past the engine's `done`,
+// this preToolUse hook is the hard floor: when the latch is fresh-for-this-turn and
+// the attempted execute_bash command is a TRULY BARE advancing `aidlc-orchestrate.ts
+// next` (no advancing flag, classifyTerminalCommand === null), exit 2 + stderr →
+// Kiro BLOCKS the tool call (live-verified contract: only exit 2 blocks; exit 1 and
+// a JSON {"decision":...} on stdout do NOT). It does NOT consume the latch (the
+// conductor may retry within the turn; the next turn bumps the counter so the latch
+// goes stale and a legitimate advancing next runs). Advisory/fail-open: any
+// parse/read failure exits 0 and never blocks a real next.
+if (target === "pretool-block") {
+  const cmdStr = String((kiro.tool_input ?? {}).command ?? "");
+  const cwd = kiro.cwd ?? process.cwd();
+  const m = cmdStr.match(/aidlc-orchestrate\.ts\s+next\b([^\n]*)/);
+  const nextArgs = m ? m[1].trim().split(/\s+/).filter((t) => t.length > 0) : [];
+  // A next carrying ANY advancing/config flag is a DELIBERATE move — only a truly
+  // bare next is the spurious roll-forward. Mirrors the engine done-guard's
+  // exemptions (the engine doesn't parse --init/--force — retired P4 — so listing
+  // them here is a harmless superset).
+  const ADVANCING_FLAGS = new Set([
+    "--stage", "--phase", "--scope", "--resume", "--depth",
+    "--test-strategy", "--single", "--init", "--force", "--test-run",
+  ]);
+  const isBareAdvancing =
+    m !== null &&
+    !nextArgs.some((a) => ADVANCING_FLAGS.has(a)) &&
+    classifyTerminalCommand(nextArgs) === null;
+
+  let counter = -1;
+  let latchTurn = -2;
+  try {
+    const cp = join(cwd, "aidlc", ".aidlc-turn-counter");
+    if (existsSync(cp)) {
+      const n = Number.parseInt(readFileSync(cp, "utf-8").trim(), 10);
+      if (Number.isFinite(n)) counter = n;
+    }
+    const lp = join(cwd, "aidlc", ".aidlc-readonly-latch");
+    if (existsSync(lp)) {
+      const r = JSON.parse(readFileSync(lp, "utf-8")) as { turn?: number };
+      if (typeof r.turn === "number") latchTurn = r.turn;
+    }
+  } catch { /* fail open */ }
+
+  if (isBareAdvancing && counter >= 0 && latchTurn === counter) {
+    process.stderr.write(
+      "read-only/navigation command already handled this turn by the deterministic harness — do not advance the workflow. The output was already relayed; end the turn.\n",
+    );
+    process.exit(2); // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+  }
+  process.exit(0);
 }
 
 // Normalize Kiro's alias tool names to the canonical names the core hooks

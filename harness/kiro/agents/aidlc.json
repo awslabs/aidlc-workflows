@@ -54,6 +54,19 @@
         "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts session-start"
       }
     ],
+    "userPromptSubmit": [
+      {
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts verb-intercept",
+        "timeout_ms": 30000
+      }
+    ],
+    "preToolUse": [
+      {
+        "matcher": "execute_bash",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts pretool-block",
+        "timeout_ms": 15000
+      }
+    ],
     "postToolUse": [
       {
         "matcher": "fs_write",

@@ -91,7 +91,13 @@ describe("t148 dist/kiro file structure", () => {
   test("conductor hooks all route through the adapter", () => {
     const a = readJson(join(K, "agents", "aidlc.json"));
     const hooks = a.hooks as Record<string, Array<{ command: string; matcher?: string }>>;
-    expect(Object.keys(hooks).sort()).toEqual(["agentSpawn", "postToolUse", "stop"]);
+    expect(Object.keys(hooks).sort()).toEqual([
+      "agentSpawn",
+      "postToolUse",
+      "preToolUse",
+      "stop",
+      "userPromptSubmit",
+    ]);
     const all = Object.values(hooks).flat();
     for (const h of all) {
       expect(h.command).toContain("aidlc-kiro-adapter.ts");

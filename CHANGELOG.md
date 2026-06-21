@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.2] - 2026-06-21
+
+Makes the read-only and navigation `/aidlc` commands reliable mid-workflow on the Kiro CLI harness. Over an active workflow the live conductor could "roll forward" — ignore a `/aidlc --status` / `--doctor` / `--help` (rolling into the active stage instead of printing the utility) or drop a `/aidlc space-create <name>` / `space <name>` / `intent <name>` verb (advancing the active intent instead of switching). A new Kiro `userPromptSubmit` hook now runs these deterministic, read-only/navigation commands directly and hands the conductor the verbatim output; a turn-scoped guard then ensures that even if the conductor still fires a bare `next`, the engine stops it instead of advancing the active intent. Re-copy your `dist/kiro/` shell to pick up the new hooks (the seam registers `agents/aidlc.json` → `hooks.userPromptSubmit`, plus a `hooks.preToolUse` backstop). On every harness, the engine's read-only print directive is also sharpened to name the exact utility command and stop.
+
+* On Kiro, `/aidlc --status` / `--doctor` / `--help` / `--version` and `/aidlc space` / `space-create <name>` / `intent <name>` now run reliably while a workflow is active — they print/switch as documented instead of occasionally advancing the active intent.
+* The `next --status` / `--doctor` / `--help` / `--version` print directive now names the exact `aidlc-utility.ts` subcommand and instructs the conductor to stop (no `next`), tightening read-only behaviour on all harnesses.
+* The Kiro read-only/navigation dispatch is now enforced by a turn-scoped guard: the engine emits a terminal stop (and a Kiro `preToolUse` backstop blocks) when a bare `next` would otherwise roll a workflow forward in the same turn a read-only/navigation command was already handled — so these commands never advance an active intent even when the live conductor retries.
+* Mutating commands are unaffected: `--scope` / `--test-strategy` changes and intent birth still run and then resume the workflow.
+
 ## [0.8.1] - 2026-06-20
 
 Completes the workspace navigation verbs shipped in 0.8.0: `/aidlc space <name>`, `/aidlc space-create <name>`, and `/aidlc intent <name>` now route through the orchestration conductor. Previously the engine treated the leading verb as freeform new-work text and advanced the active intent instead of switching the active space or intent (the deterministic handlers existed but were unreachable through `/aidlc`). No re-copy needed beyond the usual `dist/<harness>/` refresh.

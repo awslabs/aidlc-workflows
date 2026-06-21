@@ -92,6 +92,7 @@ import {
   parseCheckboxes,
   PHASE_NUMBERS,
   PHASES,
+  READ_ONLY_FLAGS,
   relativeRecordDir,
   relativeSpaceRecordPrefix,
   resolveProjectDir,
@@ -100,6 +101,7 @@ import {
   stateFilePath,
   validScopes,
   harnessDir,
+  WORKSPACE_VERBS,
 } from "./aidlc-lib.ts";
 import {
   type Consume,
@@ -123,27 +125,18 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 // orchestrator's freeform-fallback default (SKILL.md detect-scope fallback).
 const DEFAULT_SCOPE = "feature";
 
-// Read-only utility flags dispatched before any state inspection (SKILL.md
-// "Read-Only Utility Commands"). Each maps to a terminal directive (print)
-// rather than running the tool — the engine answers "what move?", and the
-// conductor runs the tool and prints its stdout.
-const READ_ONLY_FLAGS = new Set([
-  "--status",
-  "--help",
-  "--doctor",
-  "--version",
-]);
-
-// Workspace navigation verbs dispatched before any state inspection, mirroring
-// READ_ONLY_FLAGS. These are the explicit "cd" between teams/intents
-// (workspace-vision §3): `space <name>` / `space-create <name>` / `intent
-// <name>` switch the active space or intent (and the bare `space` / `intent`
-// list). Like the read-only flags, the engine names a TERMINAL print move and
-// the conductor runs the deterministic handler — the verbs never advance a
-// workflow, so there is nothing for `next` to continue into. Recognised ONLY as
-// the LEADING positional token (parseNextFlags guards on i === 0) so freeform
-// prose that merely contains "space"/"intent" stays freeform intent text.
-const WORKSPACE_VERBS = new Set(["space", "space-create", "intent"]);
+// READ_ONLY_FLAGS (--status/--help/--doctor/--version) and WORKSPACE_VERBS
+// (space/space-create/intent) — the terminal-command sets — are the single
+// source of truth in aidlc-lib.ts (imported above), so the engine's `next`
+// routing and any pre-LLM harness seam (the Kiro userPromptSubmit dispatch)
+// classify the same tokens identically. See classifyTerminalCommand there.
+// Both dispatch before any state inspection (SKILL.md "Read-Only Utility
+// Commands" + workspace-vision §3): each maps to a TERMINAL print directive —
+// the engine answers "what move?", the conductor runs the tool and prints its
+// stdout. The verbs never advance a workflow, so there is nothing for `next` to
+// continue into; they are recognised ONLY as the LEADING positional token
+// (parseNextFlags guards on i === 0) so freeform prose containing
+// "space"/"intent" mid-sentence stays freeform intent text.
 
 // --- Directive emission ---
 
@@ -896,16 +889,70 @@ function nodeForSlug(slug: string): GraphStage | undefined {
 function handleNext(args: string[], projectDir: string | undefined): void {
   const flags = parseNextFlags(args);
 
+  // Branch 0 — turn-scoped no-op-next guard (Kiro roll-forward defense). On Kiro
+  // the userPromptSubmit seam handles a read-only/navigation command
+  // deterministically off-band but CANNOT block the turn, so the conductor relays
+  // the output AND may still fire a bare `next` (sometimes several times the same
+  // turn), rolling the active workflow forward. The seam stamps
+  // aidlc/.aidlc-readonly-latch with the CURRENT turn counter; here, BEFORE any
+  // state inspection, a TRULY BARE advancing next (none of its own flags set)
+  // checks the latch: when latch.turn === the current counter (the SAME turn) we
+  // emit `done` instead of routing to a run-stage. Turn-scoped — a legitimate
+  // advancing next in a LATER turn (counter bumped, latch now stale) is never
+  // swallowed. Inert on Claude/Codex: the latch files are never written there (no
+  // seam) → fresh is always false → falls through. Advisory: any failure fails
+  // open to the normal `next`.
+  if (!flags.readOnly && !flags.workspaceVerb && !flags.stage && !flags.phase &&
+      !flags.scope && !flags.intent && !flags.resume && !flags.depth && !flags.testStrategy &&
+      !flags.single && !flags.testRun) {
+    try {
+      const pdLatch = resolveProjectDir(projectDir);
+      const latchPath = join(pdLatch, "aidlc", ".aidlc-readonly-latch");
+      const counterPath = join(pdLatch, "aidlc", ".aidlc-turn-counter");
+      let counter = -1;
+      let latchTurn = -2;
+      let label = "the read-only command";
+      if (existsSync(counterPath)) {
+        const n = Number.parseInt(readFileSync(counterPath, "utf-8").trim(), 10);
+        if (Number.isFinite(n)) counter = n;
+      }
+      if (existsSync(latchPath)) {
+        const lr = JSON.parse(readFileSync(latchPath, "utf-8")) as { turn?: number; flag?: string; source?: string };
+        if (typeof lr.turn === "number") latchTurn = lr.turn;
+        if (typeof lr.flag === "string") {
+          // read-only flags render with a leading `--`; workspace verbs are bare.
+          label = lr.source === "workspace-verb" ? `\`${lr.flag}\`` : `--${lr.flag}`;
+        }
+      }
+      if (counter >= 0 && latchTurn === counter) {
+        emit({
+          kind: "done",
+          reason: `The read-only/navigation command (${label}) already ran this turn and its output was shown above. This was a read-only utility or a workspace switch, not workflow work — there is nothing to advance. The workflow is unchanged; if one is active it remains paused where it was. STOP.`,
+        });
+        return;
+      }
+    } catch { /* advisory: guard is best-effort, never blocks a real next */ }
+  }
+
   // Branch 1 — read-only utility flags dispatch FIRST, before any state
   // inspection (SKILL.md absolute-precedence rule: --status/--help/--doctor/
   // --version run even when a state file exists). The engine names the move as
   // a print directive; the conductor runs the matching tool and prints its
-  // stdout verbatim.
+  // stdout verbatim. The directive NAMES THE EXACT command (the flag maps 1:1 to
+  // an aidlc-utility.ts subcommand by stripping the leading `--`: --status→status,
+  // --doctor→doctor, --help→help, --version→version) and spells out the terminal
+  // contract ("then stop … do NOT run `next`"). This mirrors the workspace-verb
+  // branch (Branch 1b below) and exists because the earlier vague wording ("Run
+  // the read-only utility for --doctor …") let a live conductor over an active
+  // workflow mis-route to a bare `next` and roll forward into the active stage
+  // instead of running the utility — a read-only command carries no workflow
+  // work, so it must never advance an intent. The harness dir is resolved through
+  // harnessDir() so the directive names the right tree on every harness.
   if (flags.readOnly) {
-    emit({
-      kind: "print",
-      message: `Run the read-only utility for ${flags.readOnly} and print its output verbatim.`,
-    });
+    const sub = flags.readOnly.replace(/^--/, "");
+    emit(printDirective(
+      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${sub}\`, print its output verbatim, then stop. This is a read-only utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+    ));
     return;
   }
 

@@ -2,13 +2,27 @@
 //
 // t-acp-kiro-status.serial.test.ts — drive `/aidlc --status` through Kiro's
 // Agent Client Protocol surface (`kiro-cli acp`) using the kiro-acp-drive
-// harness driver, and assert on VERBATIM tool outputs — the structured
-// "logic half" the SDK driver gives the Claude harness, no tmux, no screen.
+// harness driver, and assert on the DETERMINISTIC surfaces that survive the
+// userPromptSubmit seam — stopReason + the on-disk outcome, never the prose.
 //
 // SPIKE-PROVEN (2026-06-12, kiro-cli 2.6.1): initialize → session/new
 // (modes.currentModeId == the shipped `aidlc` agent) → session/prompt runs one
-// full agentic turn; tool_call/tool_call_update stream the conductor's real
-// engine invocations with byte-verbatim output text.
+// full agentic turn; tool_call/tool_call_update stream the conductor's tool
+// invocations with byte-verbatim output text.
+//
+// SEAM CHANGE (why this no longer asserts tool_calls). A Kiro userPromptSubmit
+// seam (agents/aidlc.json → aidlc-kiro-adapter.ts) now classifies read-only
+// flags (`--status`/`--doctor`/`--help`/`--version`) as TERMINAL and runs them
+// OFF-BAND inside the hook, handing the conductor the verbatim output with a
+// do-NOT-advance instruction; a turn-scoped engine `done`-guard + a preToolUse
+// backstop neutralize any trailing bare `next`. CONSEQUENCE: `--status` no
+// longer surfaces as an `aidlc-orchestrate.ts next` or `aidlc-utility.ts status`
+// ACP tool_call — the seam ran it, and the conductor only relays prose (which is
+// non-deterministic, never assertable). So the only robust surfaces for this
+// seam-dispatched read-only command are stopReason === "end_turn" and the
+// on-disk NO-OP (status births nothing). This mirrors how the staged
+// t-acp-kiro-journey-workspace leg drives terminal verbs to end_turn and asserts
+// on disk rather than on stopAfterToolTitle.
 //
 // SCOPE: the no-state case ONLY. With an ACTIVE workflow, the conductor may
 // legitimately resume it inside the same turn (the forwarding loop lives
@@ -17,13 +31,17 @@
 // turn-stable here; that contract is covered by the TUI twin
 // (t-tui-kiro-status), where turn boundaries are human-paced.
 //
+// BYTE-VERBATIM status output ("No active AI-DLC workflow found.", the status
+// block fields) has its deterministic home in the SDK twin t20 (drives the real
+// /aidlc --status and asserts the Bash tool_result bytes) AND the CLI twin t27
+// (spawns aidlc-utility.ts status directly) — so dropping the ACP tool-output
+// asserts loses no coverage; that surface no longer exists on the ACP path.
+//
 // What this proves on the SHIPPED tree, structurally:
-//   - the conductor ran the engine (`aidlc-orchestrate.ts next --status`) and
-//     the engine emitted the print directive (verbatim JSON in tool output),
-//   - the conductor then ran the named utility and its VERBATIM output carries
-//     "No active AI-DLC workflow",
-//   - nothing was scaffolded (status is read-only even with no state),
-//   - the turn ended cleanly (stopReason end_turn).
+//   - the read-only command ran (seam-dispatched off-band) and the turn ended
+//     cleanly (stopReason end_turn),
+//   - nothing was scaffolded (status is read-only even with no state) — the
+//     on-disk no-op.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -52,7 +70,7 @@ const SKIP_REASON = skipReason();
 
 describe("t-acp-kiro-status (structured ACP round-trip on the shipped dist/kiro)", () => {
   test.skipIf(SKIP_REASON !== null)(
-    `no state: the engine's print directive and the utility's verbatim output stream through ACP${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
+    `no state: the seam-dispatched read-only --status ends the turn cleanly and scaffolds nothing${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       const sandbox = setupTuiProject({ harness: "kiro", noAidlcDocs: true });
       try {
@@ -62,24 +80,13 @@ describe("t-acp-kiro-status (structured ACP round-trip on the shipped dist/kiro)
           timeoutMs: Math.max(120_000, TEST_TIMEOUT_MS - 60_000),
         });
 
+        // The seam classifies `--status` as TERMINAL and runs it OFF-BAND, so
+        // no `aidlc-orchestrate.ts next` / `aidlc-utility.ts status` ACP
+        // tool_call surfaces and the conductor only relays prose (never
+        // assertable). The deterministic surfaces are the clean turn end and
+        // the on-disk no-op. The verbatim status bytes are covered by the SDK
+        // twin t20 + the CLI twin t27 (see header).
         expect(r.stopReason).toBe("end_turn");
-
-        // The conductor consulted the engine; the print directive arrived
-        // byte-verbatim in the tool output (the assertable surface — never
-        // the assistant prose).
-        const engineCall = r.toolCalls.find((t) =>
-          t.title.includes("aidlc-orchestrate.ts next"),
-        );
-        expect(engineCall).toBeDefined();
-        expect(engineCall!.output.join("")).toContain('"kind":"print"');
-
-        // The conductor ran the named read-only utility; its verbatim output
-        // carries the no-workflow wording (aidlc-utility.ts:186).
-        const statusCall = r.toolCalls.find((t) =>
-          t.title.includes("aidlc-utility.ts status"),
-        );
-        expect(statusCall).toBeDefined();
-        expect(statusCall!.output.join("")).toContain("No active AI-DLC workflow");
 
         // Read-only: no state scaffolded by a status run. The seeded record was
         // stripped (noAidlcDocs); status births nothing, so the per-intent state

@@ -824,6 +824,8 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t168-statusline-orientation.test.ts",
     "unit/t169-session-resume-rebind.test.ts",
     "unit/t170-audit-logger-per-intent.test.ts",
+    "unit/t179-orchestrate-rollforward-guard.test.ts",
+    "unit/t180-kiro-rollforward-seam.test.ts",
     "unit/t17.test.ts",
     "unit/t18.test.ts",
     "unit/t19.test.ts",
