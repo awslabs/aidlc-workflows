@@ -169,10 +169,17 @@ key.
 Dispatch mechanism, three values:
 
 - `inline` — the conductor runs the stage in its own context. Short stages,
-  fast to execute, no context pressure.
-- `subagent` — delegates via the Task tool to a fresh subagent context.
-  Long stages (Construction code generation) that would blow out the main
-  conductor context.
+  fast to execute, no context pressure. A gated `inline` stage may still
+  delegate **only its artifact-DRAFTING sub-step** to a throwaway
+  `Task(lead_agent)` subagent (so heavy artifact-reasoning context is discarded
+  after a short summary returns) while the conductor keeps the
+  questions/reviewer/learnings/gate inline — the stage remains `mode: inline`.
+  See [Stage Protocol -- Drafting Delegation for Inline Stages](04-stage-protocol.md#drafting-delegation-for-inline-stages).
+- `subagent` — delegates the **whole stage** (including the approval gate) via
+  the Task tool to a fresh subagent context. Long stages (Construction code
+  generation) that would blow out the main conductor context. Distinct from an
+  `inline` stage's drafting-only hand-off above: a `subagent` stage cannot be
+  interactive, since a subagent cannot drive the gate.
 - `agent-team` — **reserved**. For when Anthropic's experimental
   `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` primitive stabilises and we need
   direct agent-to-agent messaging. Likely first consumer is v0.8.0's Ralph

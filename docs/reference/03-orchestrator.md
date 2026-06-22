@@ -352,6 +352,18 @@ The 6-step process:
 5. **Follow stage-protocol.md for approval gates.** Every inline stage (except the 3 Initialization stages) ends with the 5-part completion message and an `AskUserQuestion` approval gate.
 6. **Return control to the stage advancement protocol.** After approval, the orchestrator updates state, logs the completion, transitions tasks, and routes to the next stage.
 
+**Drafting hand-off.** A gated inline stage may delegate **only its
+artifact-DRAFTING sub-step** (step 4 above) to a throwaway `Task(directive.lead_agent)`
+subagent, whose heavy artifact-reasoning context is discarded after it returns a
+short §11 summary. The conductor still collects answers, runs the
+reviewer/learnings/gate, and tracks state inline — the stage stays `mode: inline`
+and the Stage Graph mode column is unchanged. This is **distinct from
+`mode: subagent`**, which delegates the *entire* stage including the gate; an
+interactive stage cannot be `mode: subagent`. The draft runs after the questions
+completeness check and before the reviewer/learnings/gate. See [Stage Protocol --
+Drafting Delegation for Inline Stages](04-stage-protocol.md#drafting-delegation-for-inline-stages)
+for the full contract and hook-safety constraints.
+
 ### Subagent Execution
 
 Subagent stages delegate work to a separate Claude Code task via the Claude Code Task tool. Two stages use this pattern:

@@ -540,6 +540,67 @@ dynamic per workflow position.
 2. Pass relevant prior artifacts as context
 3. Specify `subagent_type` from stage metadata
 
+### Drafting Delegation for Inline Stages
+
+A gated, artifact-generating inline stage keeps its `mode: inline` declaration
+but delegates **only the artifact-DRAFTING sub-step** to a throwaway subagent.
+The heavy artifact-reasoning context (large upstream `consumes` artifacts, the
+full draft of the `produces` files) is discarded after the subagent returns a
+short summary, so it never accumulates in the conductor's session. The
+conductor stays thin: it collects answers, runs the reviewer/learnings/gate,
+and tracks state.
+
+This is **not** a new ritual step. It is *how* the existing artifact step
+(Critical Compliance Checklist item 6: questions -> artifact -> reviewer ->
+learnings -> gate) runs. It is also **distinct from `mode: subagent`**, which
+delegates the *entire* stage including the gate — an interactive stage cannot
+be `mode: subagent` because a subagent cannot call `AskUserQuestion` or drive
+the approval gate.
+
+**Applicability.** Any gated inline stage that generates artifacts (e.g.
+Requirements Analysis, User Stories, Application Design, Functional Design). It
+EXCLUDES the `gate: false` bootstrap Initialization stages (no drafting
+reasoning to offload) and whole-stage `mode: subagent` stages (Reverse
+Engineering, Code Generation).
+
+**Three-part execution**, ordered **after** the questions step completes (§3
+Step 4 verifies all `[Answer]:` tags are filled) and **before** the §12a
+reviewer step and §13 learnings ritual:
+
+1. **INLINE (conductor):** Collect the human's answers into
+   `<slug>-questions.md` per the Question Flow (tri-mode, completeness check,
+   contradiction detection).
+2. **SUBAGENT (one `Task`):** Spawn exactly one `Task` with
+   `subagent_type = directive.lead_agent`. The `Task` boundary loads that
+   persona automatically — do NOT inject persona text into the prompt. The
+   prompt passes only the path to the answered `<slug>-questions.md` and the
+   resolved `directive.consumes` artifact paths (paths, not embedded content,
+   for large artifacts — the subagent reads what it needs). The subagent writes
+   the `directive.produces` artifacts to disk, appends its diary to
+   `directive.memory_path`, and returns ONLY the §11 Subagent Return Summary.
+3. **INLINE (conductor):** Read the returned §11 summary, then run §12a reviewer
+   (if `directive.reviewer` is declared) -> §13 learnings -> §2 completion -> §1
+   approval gate -> `report --stage <slug> --result approved`.
+
+**Hook safety (non-negotiable):**
+- Do NOT spawn the drafting subagent while ANY `[Answer]:` tag in
+  `<slug>-questions.md` is still blank — the §3 Step 4 completeness check must
+  pass first.
+- The drafting subagent treats `<slug>-questions.md` as **read-only**; it must
+  never write to or create that file. Only the conductor owns the questions
+  file. Reason: the `aidlc-stop.ts` Stop hook permits a Stop only when a
+  `*-questions.md` in the stage dir has an unanswered `[Answer]:` tag (its
+  Tier-2 human-wait carve-out). A `Task` call is synchronous within one
+  assistant turn so the Stop hook does not fire mid-draft, but a subagent that
+  could introduce or clear a blank tag would make the hook misread the wait
+  state.
+
+**Failure fallback.** If the `Task` fails, retry once with reduced context
+(summarize `consumes` artifacts to 1-2 lines each + path) per §11. If the retry
+also fails, offer the user **"Run inline"** (draft directly in the conductor
+conversation) or **"Skip and revisit"** (mark incomplete, continue). Log the
+failure using the Error log format.
+
 ### Multi-Agent Stages
 
 The conductor brings in the lead agent first, then each support agent with the lead's

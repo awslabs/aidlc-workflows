@@ -42,6 +42,38 @@ support agent in is governed by `directive.mode`, never by the presence of
 `Task` is reserved for `directive.mode == "subagent"`. Agents never invoke each
 other — only you, the conductor, delegate.
 
+## Delegating the draft on an inline stage
+
+A gated inline stage stays `mode: inline`, but you offload the *artifact-drafting*
+to a throwaway `Task(directive.lead_agent)` so the heavy reasoning (large
+`consumes` artifacts, the full draft of `produces`) never lands in your context.
+You stay thin: collect answers, then read back a short summary. See
+`stage-protocol.md` § "Drafting delegation for inline stages" for the full
+contract; the craft of it is:
+
+- **Tight prompt, tight budget.** The subagent's prompt is *answered
+  `<slug>-questions.md` + resolved `consumes` paths*, nothing more. Pass paths,
+  not embedded content, for large upstream artifacts — the subagent reads what
+  it needs. Do **not** inject the persona text: the `Task` boundary loads
+  `directive.lead_agent` for you. Instruct it to write `directive.produces`,
+  append its diary to `directive.memory_path`, and return ONLY the §11 Subagent
+  Return Summary.
+- **Read the §11 summary, don't re-derive.** When it returns, read the summary's
+  *Produced* (confirm the expected files exist), *Key Decisions*, and
+  *Issues / Concerns*. If *Issues / Concerns* is non-empty, surface it to the
+  human before the gate — never silently absorb it. If *Produced* lists fewer
+  files than the stage expects, investigate before marking the stage complete.
+  Then proceed in the order §13 mandates: §12a reviewer (the draft happens
+  *before* the reviewer) → §2 completion → §13 learnings → the gate.
+- **Two hook-safety lines.** Never spawn the draft `Task` while any `[Answer]:`
+  tag is still blank (the §3 Step 4 completeness check gates it), and tell the
+  subagent that ANY `*-questions.md` in the stage dir is read-only — only you
+  write it (the Stop hook matches the `-questions.md` suffix, not just the
+  canonical name). Both keep `aidlc-stop.ts`'s human-wait carve-out reading the
+  true wait state.
+- **Fallback.** On `Task` failure, retry once with reduced context, then offer
+  the human "Run inline" / "Skip and revisit" (§11 subagent failure recovery).
+
 ## Asking good questions
 
 - Questions go in markdown files using `[Answer]:` tags with A-E + X (Other)
