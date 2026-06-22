@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI-DLC Workflows 2.0 — Roadmap &amp; Gaps</title>
+<style>
+  :root {
+    --fg: #0f172a;
+    --muted: #64748b;
+    --bg: #f8fafc;
+    --card: #ffffff;
+    --border: #e2e8f0;
+    --code: #f1f5f9;
+    --accent: #4f46e5;
+    --good: #10b981;
+    --good-bg: #ecfdf5;
+    --good-bd: #a7f3d0;
+    --warn: #d97706;
+    --warn-bg: #fef3c7;
+    --warn-bd: #fde68a;
+    --bad: #dc2626;
+    --bad-bg: #fee2e2;
+    --info: #1d4ed8;
+    --info-bg: #eff6ff;
+    --info-bd: #bfdbfe;
+    --new: #7c3aed;
+    --new-bg: #f5f3ff;
+    --new-bd: #ddd6fe;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; scroll-behavior: smooth; }
+  body {
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 32px 40px 96px; }
+
+  /* Hero */
+  .hero {
+    background: linear-gradient(135deg, #4f46e5 0%, #06b6d4 100%);
+    color: #fff;
+    border-radius: 14px;
+    padding: 40px 44px;
+    margin-bottom: 36px;
+    box-shadow: 0 12px 40px rgba(79,70,229,0.18);
+  }
+  .hero .eyebrow { font-size: 11.5px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; opacity: 0.85; }
+  .hero h1 { font-size: 38px; margin: 8px 0 14px; font-weight: 800; letter-spacing: -0.6px; line-height: 1.15; }
+  .hero p.lead { font-size: 17.5px; line-height: 1.55; max-width: 880px; opacity: 0.96; margin: 0 0 16px; }
+  .hero p.lead b { font-weight: 700; }
+  .hero .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .hero .chip {
+    font: 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    background: rgba(255,255,255,0.16); border: 1px solid rgba(255,255,255,0.25);
+    padding: 5px 11px; border-radius: 999px; color: #fff;
+  }
+  .hero .chip b { font-weight: 700; }
+
+  /* Headings */
+  h2.section {
+    font-size: 26px; margin: 64px 0 8px; padding-top: 26px;
+    border-top: 2px solid var(--fg); letter-spacing: -0.4px; font-weight: 800;
+  }
+  h2.section + .lede { color: var(--muted); font-size: 15.5px; margin: 4px 0 24px; max-width: 920px; }
+  h3 { font-size: 19px; margin: 28px 0 10px; letter-spacing: -0.2px; font-weight: 700; }
+  h4 { font-size: 13px; margin: 18px 0 8px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); font-weight: 700; }
+
+  code {
+    font: 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    background: var(--code); padding: 1.5px 6px; border-radius: 4px;
+  }
+  a { color: var(--accent); }
+
+  /* Status badges (map to house palette) */
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+    font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: 0.4px; border: 1px solid transparent;
+  }
+  .badge .d { width: 8px; height: 8px; border-radius: 50%; }
+  .badge.shipped { color: var(--good); background: var(--good-bg); border-color: var(--good-bd); }
+  .badge.shipped .d { background: var(--good); }
+  .badge.inflight { color: var(--info); background: var(--info-bg); border-color: var(--info-bd); }
+  .badge.inflight .d { background: var(--info); }
+  .badge.partial { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-bd); }
+  .badge.partial .d { background: var(--warn); }
+  .badge.planned { color: var(--new); background: var(--new-bg); border-color: var(--new-bd); }
+  .badge.planned .d { background: var(--new); }
+
+  /* Version chip */
+  .ver {
+    display: inline-block; font: 12px ui-monospace, Menlo, monospace; font-weight: 700;
+    color: var(--accent); background: #eef2ff; border: 1px solid #c7d2fe;
+    padding: 2px 8px; border-radius: 6px; white-space: nowrap;
+  }
+  .ver.now { color: var(--good); background: var(--good-bg); border-color: var(--good-bd); }
+  .ver.patch { color: var(--muted); background: var(--code); border-color: var(--border); }
+
+  /* Release ladder */
+  table.ladder { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin: 16px 0; }
+  table.ladder th, table.ladder td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.ladder th { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); background: var(--bg); font-weight: 700; }
+  table.ladder tr:last-child td { border-bottom: none; }
+  table.ladder td .feat { font-weight: 700; }
+  table.ladder td .desc { color: var(--muted); font-size: 13px; display: block; margin-top: 2px; }
+  table.ladder tr.highlight td { background: #f5f7ff; }
+  table.ladder tr:hover td { background: #fbfcfe; }
+  table.ladder tr.highlight:hover td { background: #eef2ff; }
+
+  /* Legend */
+  .legend { display: grid; grid-template-columns: repeat(2,1fr); gap: 14px; margin: 16px 0; }
+  @media (max-width: 720px){ .legend { grid-template-columns: 1fr; } }
+  .legend .card { display: flex; gap: 12px; align-items: flex-start; margin: 0; }
+  .legend .card .txt b { display: block; font-size: 14.5px; }
+  .legend .card .txt span { color: var(--muted); font-size: 13.5px; }
+
+  /* Cards */
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 22px; margin: 14px 0; }
+  .card .label { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 6px; }
+  .card.note { background: var(--info-bg); border-color: var(--info-bd); }
+  .card.note .label { color: var(--info); }
+  .card.warn { background: var(--warn-bg); border-color: var(--warn-bd); }
+  .card.warn .label { color: var(--warn); }
+
+  /* Scorecard table */
+  table.score, table.idx { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin: 16px 0; }
+  table.score th, table.score td, table.idx th, table.idx td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  table.score th, table.idx th { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); background: var(--bg); font-weight: 700; }
+  table.score tr:last-child td, table.idx tr:last-child td { border-bottom: none; }
+  table.score td.num { font: 14px ui-monospace, Menlo, monospace; color: var(--accent); font-weight: 800; width: 38px; }
+  table.score td a { color: var(--fg); text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  table.score td a:hover { color: var(--accent); border-color: var(--accent); }
+  table.score tr:hover td, table.idx tr:hover td { background: #fbfcfe; }
+  table.idx td .ref { font: 12.5px ui-monospace, Menlo, monospace; color: var(--info); }
+
+  /* Goal cards */
+  .goal { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px 28px; margin: 18px 0; scroll-margin-top: 16px; }
+  .goal-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .goal-num { font: 14px ui-monospace, Menlo, monospace; font-weight: 800; color: #fff; background: var(--fg); border-radius: 50%; width: 32px; height: 32px; line-height: 32px; text-align: center; flex: none; }
+  .goal h3 { font-size: 21px; margin: 0; font-weight: 800; letter-spacing: -0.3px; flex: 1 1 auto; }
+  .goal blockquote { margin: 16px 0 18px; padding: 12px 18px; border-left: 4px solid var(--accent); background: var(--bg); color: #475569; font-size: 14.5px; border-radius: 0 8px 8px 0; }
+
+  .lane { margin: 16px 0; }
+  .lane h4 { display: flex; align-items: center; gap: 8px; }
+  .lane h4 .d { width: 9px; height: 9px; border-radius: 50%; }
+  .lane h4 .d.ship { background: var(--good); }
+  .lane h4 .d.fly { background: var(--info); }
+  .lane h4 .d.gap { background: var(--new); }
+
+  ul.items { list-style: none; margin: 0; padding: 0; }
+  ul.items li { position: relative; padding: 6px 0 6px 24px; font-size: 14.5px; }
+  ul.items li::before { content: ""; position: absolute; left: 4px; top: 14px; width: 7px; height: 7px; border-radius: 50%; }
+  li.l-ship::before { background: var(--good); }
+  li.l-fly::before { background: var(--info); }
+  li.l-plan::before { background: var(--new); }
+  ul.items li .src { color: var(--muted); font: 12px ui-monospace, Menlo, monospace; }
+  ul.items li .tag { color: var(--info); font: 12px ui-monospace, Menlo, monospace; background: var(--info-bg); padding: 1px 6px; border-radius: 4px; }
+
+  /* Role mapping table (Goal 1) */
+  table.map { width: 100%; border-collapse: collapse; margin: 4px 0; font-size: 14px; }
+  table.map th, table.map td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  table.map th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); font-weight: 700; }
+  table.map tr:last-child td { border-bottom: none; }
+  table.map td .mono { font: 12.5px ui-monospace, Menlo, monospace; color: var(--accent); }
+
+  /* Sequencing */
+  .seq { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; margin: 16px 0; }
+  @media (max-width: 860px){ .seq { grid-template-columns: 1fr; } }
+  .seq .col { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px 10px; }
+  .seq .col.now { border-top: 4px solid var(--good); }
+  .seq .col.next { border-top: 4px solid var(--info); }
+  .seq .col.later { border-top: 4px solid var(--new); }
+  .seq .col h4 { margin: 0 0 2px; font-size: 17px; color: var(--fg); text-transform: none; letter-spacing: -0.2px; }
+  .seq .col .sub { color: var(--muted); font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 12px; }
+  .seq ol { margin: 0; padding-left: 20px; }
+  .seq ol li { padding: 6px 0; font-size: 14px; }
+  .seq ol li .goalref { font: 11px ui-monospace, Menlo, monospace; color: var(--accent); font-weight: 700; }
+
+  /* Release notes */
+  .rel { display: flex; flex-direction: column; gap: 12px; margin: 16px 0; }
+  .rel .card { margin: 0; }
+  .rel .card.hl { background: #f5f7ff; border-color: #c7d2fe; }
+  .rel .card .goalref { font: 11px ui-monospace, Menlo, monospace; color: var(--accent); font-weight: 700; margin-left: 6px; }
+  .rel .card .src { color: var(--muted); font: 12px ui-monospace, Menlo, monospace; }
+
+  footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+  footer code { font-size: 12px; }
+
+  @media print { body { background: #fff; } .hero { box-shadow: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HERO -->
+  <div class="hero">
+    <p class="eyebrow">North Star · Functional Goals</p>
+    <h1>AI-DLC Workflows 2.0 — Roadmap &amp; Gaps</h1>
+    <p class="lead">Delivery against the seven 2.0 North Star goals — organized as a <b>semver release ladder</b>:
+    the in-flight hardening lands on the <code style="background:rgba(255,255,255,.18);color:#fff">2.0.x</code> patch line,
+    and <b>each major feature steps the minor</b> (<code style="background:rgba(255,255,255,.18);color:#fff">2.x.0</code>).
+    2.0 ships as <b>GA Preview</b>; <b>full GA lands at 2.3.0</b>, once per-intent workspace, reviewer-as-verifier, and adaptive
+    workflows are all in place. The North Star serves two needs at once: low-effort configurability for customers, and cross-harness reusability
+    for us — one hand-authored <code style="background:rgba(255,255,255,.18);color:#fff">core/</code>, projected to Claude, Kiro CLI, Kiro IDE, and Codex.</p>
+    <div class="chips">
+      <span class="chip">GA Preview <b>v2 @ 2.0.2</b></span>
+      <span class="chip">Next minor <b>2.1.0 — per-intent workspace</b></span>
+      <span class="chip">Full GA <b>2.3.0</b></span>
+      <span class="chip">Harnesses <b>Claude · Kiro CLI · Kiro IDE · Codex</b></span>
+      <span class="chip">32 stages · 13 agents · 9 scopes · 4 sensors</span>
+    </div>
+  </div>
+
+  <!-- LEGEND -->
+  <h2 class="section">Status legend</h2>
+  <div class="legend">
+    <div class="card"><span class="badge shipped"><span class="d"></span>Shipped</span><span class="txt"><b>On the v2 branch today</b><span>Merged and live in <code>core/</code>.</span></span></div>
+    <div class="card"><span class="badge inflight"><span class="d"></span>In flight</span><span class="txt"><b>Active branch / worktree / PR</b><span>Code exists, but not yet on <code>v2</code>.</span></span></div>
+    <div class="card"><span class="badge partial"><span class="d"></span>Partial</span><span class="txt"><b>Foundation shipped</b><span>The North Star intent is not fully met.</span></span></div>
+    <div class="card"><span class="badge planned"><span class="d"></span>Planned</span><span class="txt"><b>Designed or filed only</b><span>No code built yet.</span></span></div>
+  </div>
+
+  <!-- RELEASE LADDER -->
+  <h2 class="section">Release ladder</h2>
+  <p class="lede">Each major feature is a minor version. Patches on the current line are hardening that doesn't change the architecture.</p>
+  <table class="ladder">
+    <thead><tr><th>Version</th><th>Major feature</th><th>Goal(s)</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="ver patch">2.0.0–2.0.2</span></td>
+        <td><span class="feat">2.0 GA Preview</span><span class="desc">Reviewer mechanism · multi-harness <code>core/</code> · 13 agents</span></td>
+        <td>1, 4</td><td><span class="badge shipped"><span class="d"></span>Shipped</span></td>
+      </tr>
+      <tr>
+        <td><span class="ver patch">2.0.x</span></td>
+        <td><span class="feat">Hardening</span><span class="desc">Reviewer harness wiring · field validation · stop-hook integrity</span></td>
+        <td>1, 2, 4, 5</td><td><span class="badge inflight"><span class="d"></span>In flight</span></td>
+      </tr>
+      <tr class="highlight">
+        <td><span class="ver patch">2.1.0</span></td>
+        <td><span class="feat">Per-intent workspace</span><span class="desc">Spaces · intents · multi-repo · space-level knowledge</span></td>
+        <td>7</td><td><span class="badge inflight"><span class="d"></span>In flight</span></td>
+      </tr>
+      <tr>
+        <td><span class="ver patch">2.2.0</span></td>
+        <td><span class="feat">Reviewer-as-verifier</span><span class="desc">Domain-aware validation tools · token budget · adversarial framing</span></td>
+        <td>4</td><td><span class="badge inflight"><span class="d"></span>In flight</span></td>
+      </tr>
+      <tr class="highlight">
+        <td><span class="ver now">2.3.0</span></td>
+        <td><span class="feat">Adaptive workflows <span class="ver now">Full GA</span></span><span class="desc">Per-unit iteration · dynamic stage composition · scale-in triage — completes the GA bar (per-intent + reviewer + adaptive)</span></td>
+        <td>3</td><td><span class="badge planned"><span class="d"></span>Planned</span></td>
+      </tr>
+      <tr>
+        <td><span class="ver patch">2.4.0</span></td>
+        <td><span class="feat">Three-role ensemble</span><span class="desc">Owner → Contributor → Reviewer · configurable collaboration patterns</span></td>
+        <td>1</td><td><span class="badge planned"><span class="d"></span>Planned</span></td>
+      </tr>
+      <tr>
+        <td><span class="ver patch">2.5.0</span></td>
+        <td><span class="feat">Governed cyclic flows</span><span class="desc">Cross-stage backward edges</span></td>
+        <td>5</td><td><span class="badge planned"><span class="d"></span>Planned</span></td>
+      </tr>
+      <tr>
+        <td><span class="ver patch">2.6.0</span></td>
+        <td><span class="feat">Progressive enrichment</span><span class="desc">In-place artefact enrichment · ADRs</span></td>
+        <td>6</td><td><span class="badge planned"><span class="d"></span>Planned</span></td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="card note"><span class="label">Versioning convention</span>Per <code>AGENTS.md</code> changelog policy, patch versions accumulate through a release-prep cycle and a minor cut consolidates them. Here <code>2.0.x</code> carries the current hardening; <code>2.1.0</code> is the first <i>major feature</i> cut, and each subsequent major feature gets its own <code>2.x.0</code>. <b>2.0 is GA Preview; full GA is declared at <code>2.3.0</code></b>, the point at which per-intent workspace (2.1.0), reviewer-as-verifier (2.2.0), and adaptive workflows (2.3.0) are all in place. Version assignments are a planning proposal, not yet reflected in <code>core/tools/aidlc-version.ts</code>.</div>
+
+  <!-- SCORECARD -->
+  <h2 class="section">Goal → version map</h2>
+  <table class="score">
+    <thead><tr><th>#</th><th>North Star goal</th><th>Status</th><th>Lands in</th></tr></thead>
+    <tbody>
+      <tr><td class="num">1</td><td><a href="#g1">Mimic what we practice in the real world</a></td><td><span class="badge partial"><span class="d"></span>Partial</span></td><td><span class="ver patch">2.0.x</span> <span class="ver">2.4.0</span></td></tr>
+      <tr><td class="num">2</td><td><a href="#g2">Customization of behaviour</a></td><td><span class="badge shipped"><span class="d"></span>Shipped</span></td><td><span class="ver patch">2.0.x</span></td></tr>
+      <tr><td class="num">3</td><td><a href="#g3">Adaptiveness of workflows</a></td><td><span class="badge partial"><span class="d"></span>Partial</span></td><td><span class="ver">2.3.0</span></td></tr>
+      <tr><td class="num">4</td><td><a href="#g4">Verifier as a true adversary</a></td><td><span class="badge partial"><span class="d"></span>Partial</span> <span class="badge inflight"><span class="d"></span>In flight</span></td><td><span class="ver patch">2.0.x</span> <span class="ver patch">2.2.0</span></td></tr>
+      <tr><td class="num">5</td><td><a href="#g5">Support for cyclic, directional flows</a></td><td><span class="badge partial"><span class="d"></span>Partial</span></td><td><span class="ver patch">2.0.x</span> <span class="ver">2.5.0</span></td></tr>
+      <tr><td class="num">6</td><td><a href="#g6">Preserve artefact traceability</a></td><td><span class="badge partial"><span class="d"></span>Partial</span></td><td><span class="ver">2.6.0</span></td></tr>
+      <tr><td class="num">7</td><td><a href="#g7">Organizational, not project-local, repository</a></td><td><span class="badge inflight"><span class="d"></span>In flight</span></td><td><span class="ver patch">2.1.0</span></td></tr>
+    </tbody>
+  </table>
+
+  <!-- GOALS -->
+  <h2 class="section">The seven goals</h2>
+  <p class="lede">Each goal lists what is shipped on <code>v2</code>, what is in flight, and the residual gap to the North Star — with source citations.</p>
+
+  <!-- GOAL 1 -->
+  <div class="goal" id="g1">
+    <div class="goal-head"><span class="goal-num">1</span><h3>Mimic what we practice in the real world</h3><span class="badge partial"><span class="d"></span>Partial</span></div>
+    <blockquote>A single stage executed by a configurable ensemble of agents with clear responsibilities — Owner, Collaborator, Verifier — preserving the same collaboration pattern and handoff semantics across harnesses. (e.g. mob elaboration: PM = Owner, Devs/QA = Collaborators, Product Leader = Reviewer.)</blockquote>
+
+    <p style="margin:0 0 6px; color:#475569; font-size:14px;">The three roles map almost one-to-one onto fields that already exist on every stage:</p>
+    <table class="map">
+      <thead><tr><th>North Star role</th><th>v2 mechanism</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td><b>Owner</b> (PM)</td><td><code>lead_agent</code> — writes the primary artifact</td><td><span class="mono">application-design → architect-agent</span></td></tr>
+        <tr><td><b>Collaborators</b> (Devs, QA)</td><td><code>support_agents[]</code> — added perspectives</td><td><span class="mono">feasibility → aws-platform + compliance</span></td></tr>
+        <tr><td><b>Reviewer</b> (Product Leader)</td><td><code>reviewer</code> — separate agent, own model</td><td><span class="mono">user-stories → product-lead-agent</span></td></tr>
+      </tbody>
+    </table>
+
+    <div class="lane">
+      <h4><span class="d ship"></span>Shipped</h4>
+      <ul class="items">
+        <li class="l-ship">Lead + support ensemble per stage, brought in via <code>directive.mode</code>. <span class="src">core/aidlc-common/conductor.md</span></li>
+        <li class="l-ship">Verifier role with two reviewer personas; the reviewer is a true separate invocation with its own context and model. <span class="src">core/agents/aidlc-{product-lead,architecture-reviewer}-agent.md</span></li>
+        <li class="l-ship">Collaboration pattern + <code>produces/consumes/requires_stage</code> handoff identical across Claude / Kiro / Codex; only the dispatch driver differs.</li>
+      </ul>
+    </div>
+    <div class="lane">
+      <h4><span class="d fly"></span>In flight</h4>
+      <ul class="items">
+        <li class="l-fly">Reviewer wired across all harnesses (Kiro <code>fs_write</code> cap, trustedAgents, Codex §12a step).</li>
+      </ul>
+    </div>
+    <div class="lane">
+      <h4><span class="d gap"></span>Gap to North Star <span class="ver">2.4.0</span></h4>
+      <ul class="items">
+        <li class="l-plan"><b>Collaborators aren't independent contributors.</b> On <code>inline</code> mode (every multi-agent stage shipped), a support agent is "a voice you adopt, not a subagent you dispatch" — one model speaking in multiple registers, not separate participants reasoning independently.</li>
+        <li class="l-plan"><b>The collaboration pattern isn't a configurable knob.</b> The shape is fixed (lead → inline support → optional reviewer loop); "pipeline / swarm / review-loop / mob" is not a per-stage selectable ensemble model.</li>
+      </ul>
+    </div>
+    <div class="card note"><span class="label">Read</span>The skeleton of the three roles is shipped and maps cleanly to the mob example — but the North Star's <i>independent</i> ensemble (collaborators not collapsed into the conductor's voice) and a <i>configurable</i> pattern are the residual.</div>
+  </div>
+
+  <!-- GOAL 2 -->
+  <div class="goal" id="g2">
+    <div class="goal-head"><span class="goal-num">2</span><h3>Customization of Behaviour</h3><span class="badge shipped"><span class="d"></span>Shipped</span></div>
+    <blockquote>Encode new behaviours, policies, and constraints with minimal change (≤2 targeted changes), reusable across all harnesses without per-tool rewrites.</blockquote>
+    <div class="lane">
+      <h4><span class="d ship"></span>Shipped — goal substantially met</h4>
+      <ul class="items">
+        <li class="l-ship">Five-layer rules stack (<code>org → team → project → phase →</code> stage-reserved), strict-additive, conflicts checked at admission. New constraint = <b>1 edit</b> to a rule file; +1 optional sensor for a deterministic check. <span class="src">core/rules/ · knowledge/aidlc-shared/rules-reading.md</span></li>
+        <li class="l-ship">Automatic cross-harness projection: <code>core/</code> → <code>dist/{claude,kiro,kiro-ide,codex}</code> via manifests, with rules rename and <code>{{HARNESS_DIR}}</code> substitution; byte-parity guarded by <code>--check</code>. <b>Zero</b> per-harness rewrites. <span class="src">scripts/package.ts · harness/*/manifest.ts</span></li>
+        <li class="l-ship">Scopes (9), sensors (4), per-agent + shared knowledge as declarative no-code surfaces. Learning loop writes a confirmed correction (and optionally scaffolds a sensor) automatically.</li>
+      </ul>
+    </div>
+    <div class="lane">
+      <h4><span class="d gap"></span>Gap to North Star</h4>
+      <ul class="items">
+        <li class="l-plan">Stage-level rules (<code>aidlc-stage-&lt;slug&gt;.md</code>) — reserved layer, not yet built.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- GOAL 3 -->
+  <div class="goal" id="g3">
+    <div class="goal-head"><span class="goal-num">3</span><h3>Adaptiveness of Workflows</h3><span class="badge partial"><span class="d"></span>Partial</span></div>
+    <blockquote>Scale <b>in</b> (triage a SonarQube report → compact Fix→Test→PR, skipping upstream stages) and scale <b>out</b> (defer composing a full workflow when downstream clarity is low; decide next stage(s) at each boundary). Stage composition should not be hard-wired.</blockquote>
+    <div class="lane">
+      <h4><span class="d ship"></span>Shipped</h4>
+      <ul class="items">
+        <li class="l-ship">Scope-driven composition with a static EXECUTE/SKIP grid; incremental scopes (<code>bugfix</code>, <code>refactor</code>, <code>security-patch</code>) already express a <b>compact</b> workflow. <span class="src">core/scopes/ · tools/data/scope-grid.json</span></li>
+        <li class="l-ship">Scale-out <i>within</i> Construction: <code>units-generation</code> emits a dependency DAG; five stages fan out <code>for_each: unit-of-work</code> into parallel Bolts/swarm. <span class="src">core/tools/aidlc-{swarm,bolt}.ts</span></li>
+      </ul>
+    </div>
+    <div class="lane">
+      <h4><span class="d gap"></span>Gap to North Star <span class="ver">2.3.0</span> — largest divergence</h4>
+      <ul class="items">
+        <li class="l-plan"><b>Dynamic stage composition.</b> Composition is fixed at <code>--init</code> by scope; the engine does not assess accumulated context / remaining uncertainty at a boundary to decide the next stage(s). <span class="src">aidlc-orchestrate.ts (nextInScopeStage)</span></li>
+        <li class="l-plan"><b>Scale-in from an external report.</b> No mechanism to ingest a scan report, triage findings into auto-fixable vs human-decision, and launch a compact Fix→Test→PR run.</li>
+        <li class="l-plan">Per-unit iteration plumbing: <code>for_each: unit-of-work</code> emits one directive but the conductor doesn't yet iterate per unit.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- GOAL 4 -->
+  <div class="goal" id="g4">
+    <div class="goal-head"><span class="goal-num">4</span><h3>Verifier as a true Adversary</h3><span class="badge partial"><span class="d"></span>Partial</span><span class="badge inflight"><span class="d"></span>In flight</span></div>
+    <blockquote>Adversarial quality gate; verifier may use a different LLM than the producer; validates deterministically against contracts/tests/schemas/policies; self-healing loop governed by a budget (max iterations/tokens), escalating to Human-in-the-Loop with full context when exhausted.</blockquote>
+    <div class="lane">
+      <h4><span class="d ship"></span>Shipped</h4>
+      <ul class="items">
+        <li class="l-ship">Reviewer iteration loop with budget + HITL escalation: <code>reviewer_max_iterations</code> (default 2); NOT-READY re-invokes the builder to the cap, then escalates to the human at the gate with unresolved findings. <span class="src">stage-protocol.md:885 · aidlc-stage-schema.ts:42</span></li>
+        <li class="l-ship">Different model than producer: reviewer personas pin <code>modelOverride: sonnet</code> while lead/orchestrator default to Opus (xhigh); Codex maps overrides to its slugs.</li>
+        <li class="l-ship">Deterministic sensors (advisory): <code>required-sections</code>, <code>upstream-coverage</code>, <code>linter</code>, <code>type-check</code>. Reviewer field validation.</li>
+      </ul>
+    </div>
+    <div class="lane">
+      <h4><span class="d fly"></span>In flight</h4>
+      <ul class="items">
+        <li class="l-fly">Reviewer wired across harnesses.</li>
+      </ul>
+    </div>
+    <div class="lane">
+      <h4><span class="d gap"></span>Gap to North Star <span class="ver patch">2.2.0</span></h4>
+      <ul class="items">
+        <li class="l-plan"><b>Budget by tokens, not just iterations.</b> Today the cap is iteration count; North Star calls for a token/iteration budget.</li>
+        <li class="l-plan"><b>Reviewer runs domain-aware validation tools</b> (validate-domain-model / entities / rules) against explicit contracts &amp; schemas — designed, not built. <span class="src">wip/unified-feature-requirements.md (Feature 2)</span></li>
+        <li class="l-plan"><b>Explicit adversarial framing</b> — reviewer prompted to refute, not confirm.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- GOAL 5 -->
+  <div class="goal" id="g5">
+    <div class="goal-head"><span class="goal-num">5</span><h3>Support for Cyclic, Directional Flows</h3><span class="badge partial"><span class="d"></span>Partial</span></div>
+    <blockquote>Forward progression plus controlled, governed feedback loops: a verifier may send an artefact back to a producer; a downstream stage may expose gaps in an upstream design. The cycles must be directional and governed.</blockquote>
+    <div class="lane">
+      <h4><span class="d ship"></span>Shipped</h4>
+      <ul class="items">
+        <li class="l-ship">Governed within-stage feedback loop: the reviewer↔builder iteration (Goal 4) is a bounded, directional cycle.</li>
+        <li class="l-ship">Human-initiated re-entry: Operation → next Ideation cycle via the <code>feedback-optimization</code> artefact and the final gate's "Start New Ideation Cycle" option.</li>
+      </ul>
+    </div>
+    <div class="lane">
+      <h4><span class="d fly"></span>In flight <span class="ver patch">2.0.x</span> — loop-integrity / HITL hardening</h4>
+      <ul class="items">
+        <li class="l-fly">Stop-hook infinite-block loop.</li>
+        <li class="l-fly">Approve has no artifact verification.</li>
+        <li class="l-fly">Stop hook incentivizes rubber-stamping.</li>
+      </ul>
+    </div>
+    <div class="lane">
+      <h4><span class="d gap"></span>Gap to North Star <span class="ver">2.5.0</span></h4>
+      <ul class="items">
+        <li class="l-plan"><b>Cross-stage backward edges.</b> The stage graph is a strict acyclic DAG (cycles rejected at compile); a downstream stage exposing an upstream gap cannot trigger an engine-managed return to that upstream stage. <code>requires_stage</code> is forward-only.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- GOAL 6 -->
+  <div class="goal" id="g6">
+    <div class="goal-head"><span class="goal-num">6</span><h3>Preserve Artefact Traceability</h3><span class="badge partial"><span class="d"></span>Partial</span></div>
+    <blockquote>Artefacts flow forward and accumulate technical depth; downstream stages enrich upstream artefacts (e.g. a Domain Model later gains ER diagrams, schema, API contracts) rather than spawning disconnected new ones.</blockquote>
+    <div class="lane">
+      <h4><span class="d ship"></span>Shipped</h4>
+      <ul class="items">
+        <li class="l-ship">Forward artefact graph via <code>produces/consumes/requires_stage</code> edges, with a deterministic <code>upstream-coverage</code> sensor checking each output references its declared upstream inputs. <span class="src">core/tools/aidlc-sensor-upstream-coverage.ts</span></li>
+      </ul>
+    </div>
+    <div class="lane">
+      <h4><span class="d gap"></span>Gap to North Star <span class="ver">2.6.0</span></h4>
+      <ul class="items">
+        <li class="l-plan"><b>True progressive enrichment</b> — downstream stages enriching the <i>same</i> upstream artefact in place vs. emitting a linked-but-separate file — is partial.</li>
+        <li class="l-plan">Per-stage traceability enforcement as a deterministic JSON sensor.</li>
+        <li class="l-plan">Cross-unit discovery propagation (build-time discoveries shared across units beyond declared deps).</li>
+        <li class="l-plan">Design-vs-code artefact hygiene (keep design stages design-level; de-dupe unit-test generation).</li>
+        <li class="l-plan">ADRs as a core design artefact.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- GOAL 7 -->
+  <div class="goal" id="g7">
+    <div class="goal-head"><span class="goal-num">7</span><h3>Organizational, Not Project-Local, Artefact Repository</h3><span class="badge inflight"><span class="d"></span>In flight</span></div>
+    <blockquote>A shared org knowledge layer (<code>/org-ai-kb</code>, <code>/aidlc-docs</code>) spanning multiple projects, intents, and repositories without artefacts overwriting each other; reverse-engineered knowledge versioned and discoverable across teams. Scenarios: multi-repo intent; Day-2 second intent; concurrent intents in one codebase; greenfield needing brownfield knowledge; mixed; brownfield multi-repo.</blockquote>
+    <div class="lane">
+      <h4><span class="d gap"></span>Today (v2)</h4>
+      <ul class="items">
+        <li class="l-plan">Project-local, flat, <b>single-intent</b> <code>aidlc-docs/</code> tree; <code>--init --force</code> wipes prior state. No spaces / intents / multi-repo. <span class="src">core/tools/aidlc-lib.ts</span></li>
+      </ul>
+    </div>
+    <div class="lane">
+      <h4><span class="d fly"></span>In flight <span class="ver patch">2.1.0</span> — the major effort: <code>feature/workspace-anchor</code> (+34 commits)</h4>
+      <ul class="items">
+        <li class="l-fly"><b>Spaces + intents model</b>: <code>aidlc/spaces/&lt;space&gt;/intents/&lt;slug&gt;-&lt;id8&gt;/</code>; retire <code>--init</code> for auto-birth; <code>intent</code>/<code>space</code> list/switch/create verbs.</li>
+        <li class="l-fly"><b>Multiple concurrent intents</b> in one codebase; orchestrator offers a 2nd intent on unrelated new work.</li>
+        <li class="l-fly"><b>Multi-repo per intent</b> (<code>--repos</code> at birth; <code>--repo</code> threaded through worktree/swarm/bolt); per-repo code KB at <code>aidlc/codekb/&lt;repo&gt;/</code>.</li>
+        <li class="l-fly"><b>Space-level domain knowledge</b>, learnings→practices collapse, per-intent audit shards (no merge conflicts), crash-safe flat→namespaced migration.</li>
+        <li class="l-fly"><b>Shared org-KB layer</b>: knowledge and reverse-engineered artefacts live in a clonable, team-scoped <code>org-ai-kb/&lt;team&gt;/</code> repo that compounds across intents and is shareable across teams. <span class="src">wip/unified-feature-requirements.md (Feature 1 — org-ai-kb)</span></li>
+      </ul>
+    </div>
+    <div class="card note"><span class="label">Coverage</span>The workspace-anchor design (<code>wip/unified-feature-requirements.md</code>, Feature 1 / P0) addresses all six North Star scenarios — multi-repo, Day-2, concurrent intents, greenfield-needing-brownfield, mixed, brownfield multi-repo — and the shared org-KB layer, so Goal 7 lands wholly in <code>2.1.0</code>.</div>
+  </div>
+
+  <!-- RELEASE NOTES -->
+  <h2 class="section">Release notes — per minor</h2>
+  <p class="lede">What each cut delivers, in order. <code>2.0.x</code> is the current hardening line; <code>2.1.0</code> onward is one major feature per minor.</p>
+
+  <div class="rel">
+    <div class="card"><span class="label">2.0.x — Hardening · in flight · current line</span>Corrections and small features on the 2.0 GA Preview baseline; no architectural change. Reviewer wired across all harnesses; reviewer field validation (landed); stop-hook loop integrity; stage-level rules layer. <span class="goalref">G1 G2 G4 G5</span></div>
+
+    <div class="card hl"><span class="label">2.1.0 — Per-intent workspace · next minor</span>The workspace replaces the project as the anchor. Spaces hold multiple coexisting intents; an intent can span multiple repos; domain knowledge and practices live in a shared, clonable, team-scoped org-KB (<code>org-ai-kb/&lt;team&gt;/</code>) that compounds across intents and is shareable across teams; audit is sharded per-intent (no merge conflicts); flat <code>aidlc-docs/</code> projects auto-migrate. Wholly delivers Goal 7 — all six scenarios plus the org-KB layer. <span class="src">feature/workspace-anchor</span> <span class="goalref">G7</span></div>
+
+    <div class="card"><span class="label">2.2.0 — Reviewer-as-verifier</span>Promotes the reviewer from advisory to a true adversary: domain-aware validation tools (validate-domain-model / entities / rules) checking against explicit contracts and schemas; a token/iteration budget governing the self-heal loop; reviewer prompted to refute, not confirm. <span class="goalref">G4</span></div>
+
+    <div class="card hl"><span class="label">2.3.0 — Adaptive workflows · Full GA</span>Stage composition stops being hard-wired: the engine assesses accumulated context and remaining uncertainty at each boundary to decide the next stage(s); per-unit <code>for_each</code> iteration lands; scale-in triages external reports (e.g. SonarQube) into a compact Fix→Test→PR run. <b>This cut declares full GA</b> — per-intent workspace (2.1.0), reviewer-as-verifier (2.2.0), and adaptive workflows are all in place. <span class="goalref">G3</span></div>
+
+    <div class="card"><span class="label">2.4.0 — Three-role ensemble</span>Owner → <b>Contributor</b> → Reviewer: contributors become independent subagents (not inline voices), and the collaboration pattern (pipeline / swarm / review-loop / mob) becomes a per-stage selectable knob. <span class="goalref">G1</span></div>
+
+    <div class="card"><span class="label">2.5.0 — Governed cyclic flows</span>Controlled, directional backward edges across stages: a downstream stage that exposes an upstream gap can trigger a governed return to that upstream stage, within the engine (not just a human re-init). <span class="goalref">G5</span></div>
+
+    <div class="card"><span class="label">2.6.0 — Progressive enrichment</span>Downstream stages enrich the <i>same</i> upstream artefact in place rather than emitting linked-but-separate files; ADRs become a core design artefact. <span class="goalref">G6</span></div>
+  </div>
+
+  <footer>
+    <p>Verification basis: file/line references cited against <code>core/</code> on <code>v2</code> (v2.0.2); branch positions from
+    <code>git worktree list</code> and <code>git rev-list --count v2..&lt;branch&gt;</code>.
+    Design intent for unbuilt items: <code>wip/unified-feature-requirements.md</code>.</p>
+    <p>Source goals: AI-DLC Workflows 2.0 North Star Functional Goals. Companion markdown: <code>ROADMAP.md</code>.</p>
+  </footer>
+
+</div>
+</body>
+</html>
