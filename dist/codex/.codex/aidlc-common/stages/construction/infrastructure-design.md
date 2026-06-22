@@ -49,7 +49,7 @@ scopes:
   - infra
   - workshop
 inputs: NFR design artifacts, application design, functional design
-outputs: "aidlc-docs/construction/{unit-name}/infrastructure-design/ (deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, CONDITIONAL: shared-infrastructure.md)"
+outputs: "deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, CONDITIONAL: shared-infrastructure.md (under this stage's per-unit record dir, engine-resolved)"
 ---
 
 # Infrastructure Design
@@ -81,14 +81,14 @@ Load aidlc-aws-platform-agent (lead) persona from `agents/aidlc-aws-platform-age
 ### Step 2: Read Prior Artifacts
 
 Read all prior design artifacts for context:
-- NFR design from `aidlc-docs/construction/{unit-name}/nfr-design/` (if exists)
-- Functional design from `aidlc-docs/construction/{unit-name}/functional-design/` (if exists)
-- Application design from `aidlc-docs/inception/application-design/`
-- NFR requirements from `aidlc-docs/construction/{unit-name}/nfr-requirements/` (if exists)
+- NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
+- Functional design from `<record>/construction/{unit-name}/functional-design/` (if exists)
+- Application design from `<record>/inception/application-design/`
+- NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
 
 ### Step 3: Generate Infrastructure Questions
 
-Create a questions file at `aidlc-docs/construction/{unit-name}/infrastructure-design/infrastructure-design-questions.md` with context-appropriate questions using [Answer]: tags.
+Create a questions file at `<record>/construction/{unit-name}/infrastructure-design/infrastructure-design-questions.md` with context-appropriate questions using [Answer]: tags.
 
 Focus areas:
 - Deployment strategy (containerized, serverless, hybrid, multi-region)
@@ -118,7 +118,7 @@ Design infrastructure across four areas:
 
 ### Step 6: Generate Artifacts
 
-Generate the following in `aidlc-docs/construction/{unit-name}/infrastructure-design/`:
+Generate the following in `<record>/construction/{unit-name}/infrastructure-design/`:
 
 - **deployment-architecture.md**: Compute resources, networking, storage, environment definitions, infrastructure-as-code approach, resource sizing
 - **infrastructure-services.md**: Database design, caching layer, messaging infrastructure, external service integrations, service discovery
@@ -128,7 +128,7 @@ Generate the following in `aidlc-docs/construction/{unit-name}/infrastructure-de
 
 ### Step 7: Update State
 
-Update `aidlc-docs/aidlc-state.md`: mark Infrastructure Design for {unit-name} as `[x]` completed and update "Current Status".
+Update `<record>/aidlc-state.md`: mark Infrastructure Design for {unit-name} as `[x]` completed and update "Current Status".
 
 ### Step 8: Completion
 
@@ -141,14 +141,14 @@ Present completion message and approval gate:
 Summary of infrastructure decisions and service selections, then:
 
 ```
-**Review:** `aidlc-docs/construction/{unit-name}/infrastructure-design/`
+**Review:** `<record>/construction/{unit-name}/infrastructure-design/`
 ```
 
 Approval gate: strictly 2-option (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown design artefacts under `aidlc-docs/construction/infrastructure-design/`. Some sections include code samples that the code-shape sensors can also flag.
+This stage's outputs are markdown design artefacts under `<record>/construction/{unit-name}/infrastructure-design/`. Some sections include code samples that the code-shape sensors can also flag.
 
 The imported sensors check those outputs:
 
@@ -157,12 +157,12 @@ The imported sensors check those outputs:
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
 
-Failure modes land in `aidlc-docs/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
+Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

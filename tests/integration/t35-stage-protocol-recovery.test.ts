@@ -54,9 +54,9 @@
 //   .sh  8 (resume: INCEPTION)            -> "resume context covers INCEPTION"
 //   .sh  9 (resume: CONSTRUCTION)         -> "resume context covers CONSTRUCTION"
 //   .sh 10 (resume: OPERATION)            -> "resume context covers OPERATION"
-//   .sh 11 (ideation artifacts dir)       -> "resume references aidlc-docs/ideation/"
-//   .sh 12 (inception artifacts dir)      -> "resume references aidlc-docs/inception/"
-//   .sh 13 (operation artifacts dir)      -> "resume references aidlc-docs/operation/"
+//   .sh 11 (ideation artifacts dir)       -> "resume references <record>/ideation/"
+//   .sh 12 (inception artifacts dir)      -> "resume references <record>/inception/"
+//   .sh 13 (operation artifacts dir)      -> "resume references <record>/operation/"
 //   .sh 14 (### Corrupted state recovery) -> "corrupted state file recovery subsection exists"
 //   .sh 15 (aidlc-state.md.bak)           -> "creates aidlc-state.md.bak backup before recovery"
 //   .sh 16 (Rebuild...artifact evidence)  -> "rebuilds state from artifact evidence"
@@ -151,16 +151,20 @@ describe("§6 Error Recovery — session resume + context loading", () => {
     expect(recovery).toContain("OPERATION stages");
   });
 
-  test("resume references aidlc-docs/ideation/ [.sh 11]", () => {
-    expect(recovery).toContain("aidlc-docs/ideation/");
+  test("resume references <record>/ideation/ [.sh 11]", () => {
+    // Rerooted: flat aidlc-docs/<phase>/ -> per-intent <record>/<phase>/. The
+    // resume prose now loads `<record>/ideation/` artifacts (recovery.md:61).
+    expect(recovery).toContain("<record>/ideation/");
   });
 
-  test("resume references aidlc-docs/inception/ [.sh 12]", () => {
-    expect(recovery).toContain("aidlc-docs/inception/");
+  test("resume references <record>/inception/ [.sh 12]", () => {
+    // recovery.md:65,76,81 — `<record>/inception/...` resume-context loads.
+    expect(recovery).toContain("<record>/inception/");
   });
 
-  test("resume references aidlc-docs/operation/ [.sh 13]", () => {
-    expect(recovery).toContain("aidlc-docs/operation/");
+  test("resume references <record>/operation/ [.sh 13]", () => {
+    // recovery.md:103 — `<record>/operation/` artifacts completed so far.
+    expect(recovery).toContain("<record>/operation/");
   });
 });
 

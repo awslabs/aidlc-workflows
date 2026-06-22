@@ -35,12 +35,12 @@ MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
 
 ### Step 1: Update State
 
-1. Update `aidlc-docs/aidlc-state.md`: set `Current Stage` to `detecting workspace`
+1. Update `<record>/aidlc-state.md`: set `Current Stage` to `detecting workspace`
 2. Mark workspace-detection as `[-]` in progress
 
 ### Step 2: Scan Workspace
 
-The scanner walks the project directory one level deep plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`), excluding the harness directories (`.claude/`, `.kiro/`, `.codex/`), `aidlc-docs/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`.
+The scanner walks the project directory one level deep plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`), excluding the harness directories (`.claude/`, `.kiro/`, `.codex/`), `aidlc/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`.
 
 Scan signals:
 - Directory structure (top-level and key subdirectories)
@@ -53,7 +53,7 @@ Scan signals:
 
 **Exclude from analysis** (framework scaffolding, not application code):
 - The harness directory (`.claude/`, `.kiro/`, or `.codex/`) — AI-DLC framework files (skills, agents, hooks, tools, knowledge)
-- `aidlc-docs/` — AI-DLC artifact directory (scaffolded by --init)
+- `aidlc/` — AI-DLC workspace root (the space tree at `aidlc/spaces/<space>/...`)
 - `node_modules/`, `.git/`
 
 ### Step 3: Detect Project Type
@@ -72,11 +72,11 @@ Classify based on the scanner's evidence:
 - No package manifest, OR manifest with only scaffolding/dev tooling
 - No application source directories
 
-Does NOT make a project brownfield: README, .gitignore, LICENSE, editor configs, empty directories, CI/CD boilerplate without application code, the harness directory (`.claude/`, `.kiro/`, or `.codex/`, AI-DLC framework), `aidlc-docs/` directory (AI-DLC artifacts).
+Does NOT make a project brownfield: README, .gitignore, LICENSE, editor configs, empty directories, CI/CD boilerplate without application code, the harness directory (`.claude/`, `.kiro/`, or `.codex/`, AI-DLC framework), `aidlc/` directory (AI-DLC workspace artifacts).
 
 ### Step 4: Verify Classification
 
-The deterministic scanner applies the rules in Step 3 directly — no override path is needed in normal operation. If a user believes the classification is wrong (e.g. a `create-next-app` scaffold they intend to treat as greenfield), they can edit `aidlc-docs/aidlc-state.md` by hand or re-run with `/aidlc --init --force` after cleaning up.
+The deterministic scanner applies the rules in Step 3 directly — no override path is needed in normal operation. If a user believes the classification is wrong (e.g. a `create-next-app` scaffold they intend to treat as greenfield), they can edit `<record>/aidlc-state.md` by hand or re-run with `/aidlc --init --force` after cleaning up.
 
 ### Step 5: Identify Technology Stack
 
@@ -88,9 +88,9 @@ From the scan results, identify:
 
 ### Step 6: Update State and Audit
 
-1. Mark workspace-detection as `[x]` completed in `aidlc-docs/aidlc-state.md`
+1. Mark workspace-detection as `[x]` completed in `<record>/aidlc-state.md`
 2. Update Workspace State section with detected languages, frameworks, build system
-3. Append WORKSPACE_SCANNED event to `aidlc-docs/audit.md` with scan results and classification
+3. Append WORKSPACE_SCANNED event to `<record>/audit/<host>-<clone>.md` with scan results and classification
 
 ### Step 7: Auto-Proceed
 
@@ -109,7 +109,7 @@ will populate `sensors_applicable` at the next compile.
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

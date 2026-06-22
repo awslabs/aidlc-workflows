@@ -31,7 +31,7 @@ scopes:
   - infra
   - workshop
 inputs: Infrastructure design from infrastructure-design stage, CD pipeline config from deployment-pipeline stage
-outputs: aidlc-docs/operation/environment-provisioning/environment-inventory.md, aidlc-docs/operation/environment-provisioning/validation-report.md, aidlc-docs/operation/environment-provisioning/environment-provisioning-questions.md
+outputs: environment-inventory.md, validation-report.md, environment-provisioning-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Environment Provisioning
@@ -46,8 +46,8 @@ Load aidlc-aws-platform-agent persona from `agents/aidlc-aws-platform-agent.md` 
 
 ### Step 2: Load Prior Context
 
-- Read infrastructure design from `aidlc-docs/construction/infrastructure-design/`
-- Read security requirements from `aidlc-docs/construction/nfr-requirements/`
+- Read infrastructure design from `<record>/construction/infrastructure-design/`
+- Read security requirements from `<record>/construction/nfr-requirements/`
 
 ### Step 3: Generate Clarifying Questions
 
@@ -69,27 +69,27 @@ Create provisioned environment inventory, infrastructure validation report, secr
 
 ### Step 6: Update State
 
-Mark environment-provisioning as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Mark environment-provisioning as `[x]` completed in `<record>/aidlc-state.md`.
 
 ### Step 7: Present Completion & Request Approval
 
 Completion emoji: :cloud:
-Review path: `aidlc-docs/operation/environment-provisioning/`
+Review path: `<record>/operation/environment-provisioning/`
 Standard 2-option approval (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/operation/environment-provisioning/`.
+This stage's outputs are markdown artefacts under `<record>/operation/environment-provisioning/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `deployment-architecture`, `infrastructure-services`, `cd-config`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

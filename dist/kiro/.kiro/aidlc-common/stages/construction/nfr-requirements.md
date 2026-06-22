@@ -44,7 +44,7 @@ scopes:
   - security-patch
   - workshop
 inputs: functional design artifacts, requirements.md, RE artifacts
-outputs: aidlc-docs/construction/{unit-name}/nfr-requirements/ (performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md)
+outputs: performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md (under this stage's per-unit record dir, engine-resolved)
 ---
 
 # NFR Requirements
@@ -75,7 +75,7 @@ Load aidlc-architect-agent (lead) persona from `agents/aidlc-architect-agent.md`
 
 ### Step 2: Read Prior Artifacts
 
-Read functional design artifacts from `aidlc-docs/construction/{unit-name}/functional-design/` (if they exist). Read `aidlc-docs/inception/requirements-analysis/requirements.md` and any reverse engineering artifacts from `aidlc/codekb/<repo>/`.
+Read functional design artifacts from `<record>/construction/{unit-name}/functional-design/` (if they exist). Read `<record>/inception/requirements-analysis/requirements.md` and any reverse engineering artifacts from `aidlc/codekb/<repo>/`.
 
 ### Step 3: Assess NFR Categories
 
@@ -88,7 +88,7 @@ Analyze the unit across NFR categories:
 
 ### Step 4: Generate Questions
 
-Create a questions file at `aidlc-docs/construction/{unit-name}/nfr-requirements/nfr-requirements-questions.md` for unclear NFR areas using [Answer]: tags. Focus on quantifiable targets and specific constraints.
+Create a questions file at `<record>/construction/{unit-name}/nfr-requirements/nfr-requirements-questions.md` for unclear NFR areas using [Answer]: tags. Focus on quantifiable targets and specific constraints.
 
 ### Step 5: Collect and Analyze Answers
 
@@ -101,7 +101,7 @@ If ANY ambiguity found: create follow-up questions and resolve before proceeding
 
 ### Step 6: Generate Artifacts
 
-Generate the following in `aidlc-docs/construction/{unit-name}/nfr-requirements/`:
+Generate the following in `<record>/construction/{unit-name}/nfr-requirements/`:
 
 - **performance-requirements.md**: Response time targets, throughput requirements, latency budgets, resource constraints, benchmarks
 - **security-requirements.md**: Authentication requirements, authorization model, data protection, compliance, threat considerations
@@ -111,7 +111,7 @@ Generate the following in `aidlc-docs/construction/{unit-name}/nfr-requirements/
 
 ### Step 7: Update State
 
-Update `aidlc-docs/aidlc-state.md`: mark NFR Requirements for {unit-name} as `[x]` completed and update "Current Status".
+Update `<record>/aidlc-state.md`: mark NFR Requirements for {unit-name} as `[x]` completed and update "Current Status".
 
 ### Step 8: Completion
 
@@ -124,14 +124,14 @@ Present completion message and approval gate:
 Summary of NFR categories addressed and key targets, then:
 
 ```
-**Review:** `aidlc-docs/construction/{unit-name}/nfr-requirements/`
+**Review:** `<record>/construction/{unit-name}/nfr-requirements/`
 ```
 
 Approval gate: strictly 2-option (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown design artefacts under `aidlc-docs/construction/nfr-requirements/`. Some sections include code samples that the code-shape sensors can also flag.
+This stage's outputs are markdown design artefacts under `<record>/construction/{unit-name}/nfr-requirements/`. Some sections include code samples that the code-shape sensors can also flag.
 
 The imported sensors check those outputs:
 
@@ -140,12 +140,12 @@ The imported sensors check those outputs:
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
 
-Failure modes land in `aidlc-docs/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
+Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

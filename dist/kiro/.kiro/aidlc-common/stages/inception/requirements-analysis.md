@@ -42,8 +42,8 @@ scopes:
   - refactor
   - infra
   - workshop
-inputs: RE artifacts (if brownfield), user's project description (from audit.md)
-outputs: aidlc-docs/inception/requirements-analysis/requirements.md, aidlc-docs/inception/requirements-analysis/requirements-analysis-questions.md
+inputs: RE artifacts (if brownfield), user's project description (from <record>/audit/<host>-<clone>.md)
+outputs: requirements.md, requirements-analysis-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Requirements Analysis
@@ -59,7 +59,7 @@ Load aidlc-product-agent persona from `agents/aidlc-product-agent.md` and knowle
 ### Step 2: Load Prior Context
 
 - If brownfield: Read RE artifacts from `aidlc/codekb/<repo>/`
-- Read user's project description from `aidlc-docs/audit.md`
+- Read user's project description from `<record>/audit/<host>-<clone>.md`
 
 ### Step 3: Analyze User Request
 
@@ -100,14 +100,14 @@ Identify gaps in each dimension.
 
 PROACTIVE: Always generate clarifying questions unless requirements are exceptionally clear and complete across all six dimensions.
 
-Create `aidlc-docs/inception/requirements-analysis/requirements-analysis-questions.md` using the [Answer]: tag format from stage-protocol.md. Include context-appropriate questions with A-E options. EVERY question MUST end with `X. Other (please specify)` as the final option. Leave all [Answer]: tags blank.
+Create `<record>/inception/requirements-analysis/requirements-analysis-questions.md` using the [Answer]: tag format from stage-protocol.md. Include context-appropriate questions with A-E options. EVERY question MUST end with `X. Other (please specify)` as the final option. Leave all [Answer]: tags blank.
 
 Then follow the unified question flow from stage-protocol.md section 3: offer the user a choice between guided (interactive) and self-guided (file edit) modes. In either case, ensure all answers are written to the file before proceeding.
 
 ### Step 8: Collect and Analyze Answers
 
 After all answers are collected:
-1. Read `aidlc-docs/inception/requirements-analysis/requirements-analysis-questions.md`
+1. Read `<record>/inception/requirements-analysis/requirements-analysis-questions.md`
 2. Confirm ALL `[Answer]:` tags are filled in. If any are blank, present the unanswered questions as structured questions and write answers back. Do NOT proceed with partial answers.
 3. Then proceed with ambiguity detection and contradiction analysis on the full answer set.
 
@@ -124,7 +124,7 @@ If ANY ambiguity, vagueness, or contradictions found in Step 8:
 
 ### Step 10: Generate Requirements
 
-Create `aidlc-docs/inception/requirements-analysis/requirements.md` containing:
+Create `<record>/inception/requirements-analysis/requirements.md` containing:
 - **Intent analysis** — What the user is trying to achieve (goals, not just features)
 - **Functional requirements** — Organized by feature area or domain
 - **Non-functional requirements** — Performance, security, scalability targets
@@ -135,7 +135,7 @@ Create `aidlc-docs/inception/requirements-analysis/requirements.md` containing:
 
 ### Step 11: Update State
 
-Update `aidlc-docs/aidlc-state.md`:
+Update `<record>/aidlc-state.md`:
 - Mark Requirements Analysis as `[x]` completed
 - Update current stage and next stage
 
@@ -143,7 +143,7 @@ Update `aidlc-docs/aidlc-state.md`:
 
 Use stage-protocol.md completion template with completion emoji: :mag:
 - Summary of requirements produced
-- Review path: `aidlc-docs/inception/requirements-analysis/`
+- Review path: `<record>/inception/requirements-analysis/`
 IF User Stories is set to SKIP in the execution state:
 ```question
 prompt: "Requirements Analysis complete. How would you like to proceed?"
@@ -163,17 +163,17 @@ IF User Stories is NOT set to SKIP: use standard 2-option approval (Approve / Re
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/inception/requirements-analysis/`.
+This stage's outputs are markdown artefacts under `<record>/inception/requirements-analysis/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `intent-statement`, `scope-document`, `team-practices`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

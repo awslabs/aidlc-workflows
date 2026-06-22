@@ -37,7 +37,7 @@ scopes:
   - mvp
   - workshop
 inputs: Rough mockups from rough-mockups stage, user stories from user-stories stage, requirements from requirements-analysis stage
-outputs: aidlc-docs/inception/refined-mockups/mockups.md, aidlc-docs/inception/refined-mockups/interaction-spec.md, aidlc-docs/inception/refined-mockups/design-system-mapping.md, aidlc-docs/inception/refined-mockups/accessibility-checklist.md, aidlc-docs/inception/refined-mockups/refined-mockups-questions.md
+outputs: mockups.md, interaction-spec.md, design-system-mapping.md, accessibility-checklist.md, refined-mockups-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Refined Mockups & UX Design
@@ -52,13 +52,13 @@ Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledg
 
 ### Step 2: Load Prior Context
 
-- Read rough mockups from `aidlc-docs/ideation/rough-mockups/` (if exists)
-- Read user stories from `aidlc-docs/inception/user-stories/`
-- Read requirements from `aidlc-docs/inception/requirements-analysis/`
+- Read rough mockups from `<record>/ideation/rough-mockups/` (if exists)
+- Read user stories from `<record>/inception/user-stories/`
+- Read requirements from `<record>/inception/requirements-analysis/`
 
 ### Step 3: Generate Clarifying Questions
 
-Create `aidlc-docs/inception/refined-mockups/refined-mockups-questions.md` with questions:
+Create `<record>/inception/refined-mockups/refined-mockups-questions.md` with questions:
 - How should each user story be represented in the UI?
 - What interaction patterns are needed (modals, inline edits, wizards, progressive disclosure)?
 - What states must each screen handle (loading, empty, error, success, partial)?
@@ -81,27 +81,27 @@ For non-UI: create API developer experience specification.
 
 ### Step 6: Update State
 
-Mark refined-mockups as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Mark refined-mockups as `[x]` completed in `<record>/aidlc-state.md`.
 
 ### Step 7: Present Completion & Request Approval
 
 Completion emoji: :art:
-Review path: `aidlc-docs/inception/refined-mockups/`
+Review path: `<record>/inception/refined-mockups/`
 Standard approval gate (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/inception/refined-mockups/`.
+This stage's outputs are markdown artefacts under `<record>/inception/refined-mockups/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `wireframes`, `user-flow`, `stories`, `requirements`, `team-practices`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

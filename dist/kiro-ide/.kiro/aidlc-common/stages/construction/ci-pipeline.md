@@ -31,7 +31,7 @@ scopes:
   - infra
   - workshop
 inputs: Code generation output from code-generation stage, build/test results from build-and-test stage
-outputs: aidlc-docs/construction/ci-pipeline/ci-config.md, aidlc-docs/construction/ci-pipeline/quality-gates.md, aidlc-docs/construction/ci-pipeline/ci-pipeline-questions.md
+outputs: ci-config.md, quality-gates.md, ci-pipeline-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # CI Pipeline
@@ -46,13 +46,13 @@ Load aidlc-pipeline-deploy-agent persona from `agents/aidlc-pipeline-deploy-agen
 
 ### Step 2: Load Prior Context
 
-- Read build/test results from `aidlc-docs/construction/build-and-test/`
-- Read infrastructure design from `aidlc-docs/construction/infrastructure-design/` (if exists)
+- Read build/test results from `<record>/construction/build-and-test/`
+- Read infrastructure design from `<record>/construction/infrastructure-design/` (if exists)
 - Read workspace profile for existing CI configuration
 
 ### Step 3: Generate Clarifying Questions
 
-Create `aidlc-docs/construction/ci-pipeline/ci-pipeline-questions.md` with questions:
+Create `<record>/construction/ci-pipeline/ci-pipeline-questions.md` with questions:
 - What CI tool is in use (CodePipeline, CodeBuild, GitHub Actions, Jenkins)?
 - What is the branch strategy?
 - What quality gates are required before merge?
@@ -74,21 +74,21 @@ Run Construction → Operation verification check:
 - Architecture → Code → Tests alignment
 - All code traces to design
 - Test coverage against acceptance criteria
-- Write results to `aidlc-docs/verification/phase-check-construction.md`
+- Write results to `<record>/verification/phase-check-construction.md`
 
 ### Step 7: Update State
 
-Mark ci-pipeline as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Mark ci-pipeline as `[x]` completed in `<record>/aidlc-state.md`.
 
 ### Step 8: Present Completion & Request Approval
 
 Completion emoji: :gear:
-Review path: `aidlc-docs/construction/ci-pipeline/`
+Review path: `<record>/construction/ci-pipeline/`
 Standard 2-option approval (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown design artefacts under `aidlc-docs/construction/ci-pipeline/`. Some sections include code samples that the code-shape sensors can also flag.
+This stage's outputs are markdown design artefacts under `<record>/construction/ci-pipeline/`. Some sections include code samples that the code-shape sensors can also flag.
 
 The imported sensors check those outputs:
 
@@ -97,12 +97,12 @@ The imported sensors check those outputs:
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
 
-Failure modes land in `aidlc-docs/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
+Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

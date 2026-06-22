@@ -36,7 +36,7 @@ scopes:
   - security-patch
   - workshop
 inputs: ALL code generation outputs across all units
-outputs: aidlc-docs/construction/build-and-test/ (build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md)
+outputs: build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md (under this stage's record dir, engine-resolved)
 ---
 
 # Build and Test
@@ -51,11 +51,11 @@ Load aidlc-quality-agent (lead) persona from `agents/aidlc-quality-agent.md` and
 
 ### Step 2: Analyze Testing Requirements
 
-Read code generation outputs across all units from `aidlc-docs/construction/*/code-generation/code-summary.md`. Review NFR requirements across units (if they exist) to identify performance and security testing needs. Catalog all test types required.
+Read code generation outputs across all units from `<record>/construction/*/code-generation/code-summary.md`. Review NFR requirements across units (if they exist) to identify performance and security testing needs. Catalog all test types required.
 
 ### Step 3: Generate Build Instructions
 
-Create `aidlc-docs/construction/build-and-test/build-instructions.md`:
+Create `<record>/construction/build-and-test/build-instructions.md`:
 - Dependency installation steps
 - Environment setup (env vars, config files, local services)
 - Build commands (compile, bundle, transpile)
@@ -80,7 +80,7 @@ Consult the active test strategy from `aidlc-state.md` → `**Test Strategy**` (
 - `security-test-instructions.md` (IF NFR security requirements exist): SAST/DAST, auth testing, injection testing
 - Additional types as applicable (contract tests, E2E, accessibility) — create specifically named files
 
-All files go in `aidlc-docs/construction/build-and-test/`.
+All files go in `<record>/construction/build-and-test/`.
 
 Each instruction file should include:
 - Test framework setup and configuration
@@ -92,7 +92,7 @@ These are soft guidelines — the LLM can generate additional test types at any 
 
 ### Step 9: Generate Build and Test Summary
 
-Create `aidlc-docs/construction/build-and-test/build-and-test-summary.md`:
+Create `<record>/construction/build-and-test/build-and-test-summary.md`:
 - Overall build status and prerequisites
 - Test type inventory (which test types were generated)
 - Coverage expectations per unit
@@ -106,7 +106,7 @@ Attempt to execute the build and test commands documented in the instruction fil
 1. **Build**: Run the build commands from `build-instructions.md` via Bash. Capture output.
 2. **Unit tests**: Run the unit test command from `unit-test-instructions.md` via Bash. Capture pass/fail counts.
 3. **Integration tests** (if applicable): Run integration test commands. Capture results.
-4. **Report results**: Create or update `aidlc-docs/construction/build-and-test/test-results.md` with:
+4. **Report results**: Create or update `<record>/construction/build-and-test/test-results.md` with:
    - Build status (success/failure + output)
    - Test results (total, passed, failed, skipped)
    - Failure details (test name, assertion, stack trace)
@@ -123,7 +123,7 @@ Attempt to execute the build and test commands documented in the instruction fil
 
 ### Step 11: Update State
 
-Update `aidlc-docs/aidlc-state.md`: mark Build and Test as `[x]` completed and update "Current Status". Mark CONSTRUCTION phase as complete.
+Update `<record>/aidlc-state.md`: mark Build and Test as `[x]` completed and update "Current Status". Mark CONSTRUCTION phase as complete.
 
 ### Step 12: Completion
 
@@ -136,7 +136,7 @@ Present completion message and approval gate:
 Summary of all test instruction sets generated, readiness assessment, then:
 
 ```
-**Review:** `aidlc-docs/construction/build-and-test/`
+**Review:** `<record>/construction/build-and-test/`
 ```
 
 Approval gate: strictly 2-option (Approve / Request Changes).
@@ -144,7 +144,7 @@ Approval gate: strictly 2-option (Approve / Request Changes).
 ## Sensors
 
 This stage produces test-instruction markdown files under
-`aidlc-docs/construction/build-and-test/` and runs the project's build
+`<record>/construction/build-and-test/` and runs the project's build
 and test commands as part of execution. The instruction artefacts are
 the agent-authored outputs the markdown-shape sensors check; the build
 itself emits exit codes and a results report.
@@ -166,7 +166,7 @@ build's own exit code is the load-bearing signal.
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

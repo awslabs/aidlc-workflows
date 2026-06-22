@@ -199,41 +199,52 @@ describe("reverse-engineering conditional execution", () => {
 });
 
 // ============================================================
-// Tests 5-8: Ideation outputs use aidlc-docs/ideation/ (.sh:96-105)
-// One assertion per slug; the .sh grep -q "aidlc-docs/ideation/" each outputs
-// scalar.
+// Tests 5-8: Ideation outputs declare their per-intent record dir (.sh:96-105)
+// The flat aidlc-docs/ideation/ root was rerooted to the active intent's
+// per-intent <record>/<phase>/<stage>/ tree, and the `outputs:` frontmatter was
+// rewritten to RELATIVE artifact names plus the engine-resolution clause
+// "(under this stage's record dir, engine-resolved)" — the path root no longer
+// lives in `outputs:`. One assertion per slug, preserving the original intent
+// (every ideation stage declares its output location) repointed to the new
+// canonical declaration.
 // ============================================================
-describe("ideation stages output to aidlc-docs/ideation/", () => {
+describe("ideation stages declare their per-intent record dir in outputs", () => {
   for (const slug of ["intent-capture", "market-research", "feasibility", "scope-definition"]) {
-    test(`${slug} outputs to aidlc-docs/ideation/`, () => {
+    test(`${slug} outputs declare "under this stage's record dir, engine-resolved"`, () => {
       const v = out(slug);
       expect(v).not.toBeNull();
-      expect(v!).toContain("aidlc-docs/ideation/");
+      expect(v!).toContain("under this stage's record dir, engine-resolved");
     });
   }
 });
 
 // ============================================================
-// Tests 9-11: Inception outputs use aidlc-docs/inception/ (.sh:107-116)
+// Tests 9-11: Inception outputs declare their per-intent record dir (.sh:107-116)
+// Same reroot as the ideation block: the flat aidlc-docs/inception/ root moved
+// to the per-intent <record>/inception/<stage>/ tree, and `outputs:` now carries
+// relative artifact names plus the "(under this stage's record dir,
+// engine-resolved)" clause.
 // ============================================================
-describe("inception stages output to aidlc-docs/inception/", () => {
-  // reverse-engineering was PROMOTED out of aidlc-docs/inception/ to the durable
-  // per-repo code knowledge base aidlc/codekb/<repo>/ (P0 codekb promotion), so
-  // it is asserted separately below; the other inception stages still write their
-  // own artifacts under aidlc-docs/inception/.
+describe("inception stages declare their per-intent record dir in outputs", () => {
+  // reverse-engineering was PROMOTED out of the inception artifact tree to the
+  // durable per-repo code knowledge base aidlc/codekb/<repo>/ (P0 codekb
+  // promotion), so it is asserted separately below; the other inception stages
+  // declare their own artifacts under the engine-resolved record dir.
   for (const slug of ["requirements-analysis", "application-design"]) {
-    test(`${slug} outputs to aidlc-docs/inception/`, () => {
+    test(`${slug} outputs declare "under this stage's record dir, engine-resolved"`, () => {
       const v = out(slug);
       expect(v).not.toBeNull();
-      expect(v!).toContain("aidlc-docs/inception/");
+      expect(v!).toContain("under this stage's record dir, engine-resolved");
     });
   }
 
-  test("reverse-engineering outputs to the per-repo codekb (aidlc/codekb/<repo>/), not aidlc-docs/inception/", () => {
+  test("reverse-engineering outputs to the per-repo codekb (aidlc/codekb/<repo>/), not the inception record dir", () => {
     const v = out("reverse-engineering");
     expect(v).not.toBeNull();
     expect(v!).toContain("aidlc/codekb/<repo>/");
-    expect(v!).not.toContain("aidlc-docs/inception/");
+    // Post-reroot the inception artifact tree is the per-intent <record>/inception/;
+    // RE must NOT write there (it lives in the durable codekb instead).
+    expect(v!).not.toContain("<record>/inception/");
   });
 });
 
@@ -241,9 +252,18 @@ describe("inception stages output to aidlc-docs/inception/", () => {
 // Test 12: Most per-unit Construction stages reference {unit-name} (.sh:118-128)
 // The .sh counted the 5 per-unit stages whose outputs contain "{unit-name}" and
 // asserted assert_gt COUNT 3 (i.e. >3 -> at least 4 of 5).
+//
+// REROOT: with the flat aidlc-docs/ tree retired, the `{unit-name}` per-unit key
+// no longer lives in the `outputs:` frontmatter — that line now carries relative
+// artifact names plus "(under this stage's per-unit record dir, engine-resolved)".
+// The literal `{unit-name}` segment moved into the BODY prose, where each stage
+// writes to `<record>/construction/{unit-name}/<stage>/`. The test's intent —
+// per-unit construction stages anchor their output location to {unit-name} — is
+// preserved by counting stages whose BODY cites that per-unit path. All 5 do
+// (4-8 occurrences each), so the original ">3 of 5" threshold still holds.
 // ============================================================
 describe("per-unit construction stages reference {unit-name}", () => {
-  test("more than 3 of the 5 per-unit stages reference {unit-name} in outputs", () => {
+  test("more than 3 of the 5 per-unit stages key their output path to {unit-name}", () => {
     const unitStages = [
       "functional-design",
       "nfr-requirements",
@@ -251,7 +271,10 @@ describe("per-unit construction stages reference {unit-name}", () => {
       "infrastructure-design",
       "code-generation",
     ];
-    const count = unitStages.filter((s) => (out(s) ?? "").includes("{unit-name}")).length;
+    const count = unitStages.filter((s) => {
+      const f = findStageFile(s);
+      return f !== null && readFileSync(f, "utf8").includes("<record>/construction/{unit-name}/");
+    }).length;
     expect(count).toBeGreaterThan(3);
   });
 });
@@ -320,32 +343,51 @@ describe("scope-definition -> team-formation edge", () => {
 // Test 17: application-design outputs -> units-generation inputs (.sh:192-205)
 // The .sh: ad_outputs grep -qi "application-design" AND ug_inputs grep -qi
 // "application-design\|design".
+//
+// REROOT: the old `outputs:` carried the path root
+// aidlc-docs/inception/application-design/..., so the literal "application-design"
+// appeared in the output scalar. With the reroot the path root left `outputs:` —
+// application-design's outputs now name the design artifacts directly
+// (components.md, component-methods.md, services.md, component-dependency.md,
+// decisions.md ... engine-resolved). The downstream consumer still cites the
+// producer by name: units-generation `inputs:` reads
+// `<record>/inception/application-design/ (all design artifacts)`. So the
+// edge-citation intent (producer emits the design artifacts, consumer reads
+// application-design's design output) is preserved: assert the producer names a
+// design artifact (components.md is the keystone, also pinned by t44 test 5) and
+// the consumer cites application-design/design.
 // ============================================================
 describe("application-design -> units-generation edge", () => {
-  test("application-design outputs and units-generation inputs cite the design artifact", () => {
+  test("application-design outputs name the design artifacts; units-generation inputs cite the design", () => {
     const adOut = out("application-design");
     const ugIn = inp("units-generation");
     expect(adOut).not.toBeNull();
     expect(ugIn).not.toBeNull();
-    expect(adOut!).toMatch(/application-design/i);
+    expect(adOut!).toMatch(/components|design/i);
     expect(ugIn!).toMatch(/application-design|design/i);
   });
 });
 
 // ============================================================
-// Test 18: Operation phase outputs use aidlc-docs/operation/ (.sh:207-217)
+// Test 18: Operation phase outputs declare their per-intent record dir (.sh:207-217)
 // The .sh counted the 4 checked operation stages whose outputs contain
-// "aidlc-docs/operation/" and asserted the count == 4.
+// "aidlc-docs/operation/" and asserted the count == 4. Post-reroot the flat
+// aidlc-docs/operation/ root moved to the per-intent <record>/operation/ tree and
+// `outputs:` carries the "(under this stage's record dir, engine-resolved)"
+// clause instead of the path root. Same intent (all 4 declare their output
+// location), repointed to the new canonical declaration; still an all-4 check.
 // ============================================================
-describe("operation stages output to aidlc-docs/operation/", () => {
-  test("all 4 checked operation stages output under aidlc-docs/operation/", () => {
+describe("operation stages declare their per-intent record dir in outputs", () => {
+  test("all 4 checked operation stages declare their engine-resolved record dir", () => {
     const opStages = [
       "deployment-pipeline",
       "environment-provisioning",
       "deployment-execution",
       "observability-setup",
     ];
-    const offenders = opStages.filter((s) => !(out(s) ?? "").includes("aidlc-docs/operation/"));
+    const offenders = opStages.filter(
+      (s) => !(out(s) ?? "").includes("under this stage's record dir, engine-resolved"),
+    );
     expect(offenders).toEqual([]);
   });
 });

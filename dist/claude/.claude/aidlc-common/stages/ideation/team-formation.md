@@ -27,7 +27,7 @@ scopes:
   - enterprise
   - feature
 inputs: Scope definition, intent backlog, feasibility assessment
-outputs: aidlc-docs/ideation/team-formation/team-assessment.md, aidlc-docs/ideation/team-formation/skill-matrix.md, aidlc-docs/ideation/team-formation/mob-composition.md, aidlc-docs/ideation/team-formation/team-formation-questions.md
+outputs: team-assessment.md, skill-matrix.md, mob-composition.md, team-formation-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Team Formation & Mob Planning
@@ -42,13 +42,13 @@ Load aidlc-delivery-agent persona from `agents/aidlc-delivery-agent.md` and know
 
 ### Step 2: Load Prior Context
 
-- Read scope definition from `aidlc-docs/ideation/scope-definition/`
+- Read scope definition from `<record>/ideation/scope-definition/`
 - Read feasibility assessment and constraint register (if exist)
 - Read intent backlog for work volume estimation
 
 ### Step 3: Generate Clarifying Questions
 
-Create `aidlc-docs/ideation/team-formation/team-formation-questions.md` with questions:
+Create `<record>/ideation/team-formation/team-formation-questions.md` with questions:
 - What teams and individuals are available?
 - What is the current capacity and utilization?
 - What skills are required vs. available?
@@ -70,27 +70,27 @@ Create team availability assessment, skill matrix (with gap analysis), mob compo
 
 ### Step 6: Update State
 
-Mark team-formation as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Mark team-formation as `[x]` completed in `<record>/aidlc-state.md`.
 
 ### Step 7: Present Completion & Request Approval
 
 Completion emoji: :people_holding_hands:
-Review path: `aidlc-docs/ideation/team-formation/`
+Review path: `<record>/ideation/team-formation/`
 Standard approval gate (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/ideation/team-formation/`.
+This stage's outputs are markdown artefacts under `<record>/ideation/team-formation/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `scope-document`, `intent-backlog`, `feasibility-assessment`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

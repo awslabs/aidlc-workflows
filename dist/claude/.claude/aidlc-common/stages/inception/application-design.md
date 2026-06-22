@@ -40,8 +40,8 @@ scopes:
   - feature
   - mvp
   - workshop
-inputs: aidlc-docs/inception/requirements-analysis/requirements.md, aidlc-docs/inception/user-stories/stories.md (if produced), RE artifacts (if brownfield)
-outputs: aidlc-docs/inception/application-design/components.md, aidlc-docs/inception/application-design/component-methods.md, aidlc-docs/inception/application-design/services.md, aidlc-docs/inception/application-design/component-dependency.md, aidlc-docs/inception/application-design/decisions.md
+inputs: <record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced), RE artifacts (if brownfield)
+outputs: components.md, component-methods.md, services.md, component-dependency.md, decisions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Application Design
@@ -58,13 +58,13 @@ Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledg
 
 ### Step 2: Load Prior Context
 
-- Read `aidlc-docs/inception/requirements-analysis/requirements.md`
-- Read `aidlc-docs/inception/user-stories/stories.md` (if produced)
+- Read `<record>/inception/requirements-analysis/requirements.md`
+- Read `<record>/inception/user-stories/stories.md` (if produced)
 - If brownfield: Read relevant RE artifacts (especially architecture.md, component-inventory.md, dependencies.md)
 
 ### Step 3: Create Design Plan with Questions
 
-Create `aidlc-docs/inception/application-design/application-design-questions.md` with context-appropriate questions using [Answer]: tag format:
+Create `<record>/inception/application-design/application-design-questions.md` with context-appropriate questions using [Answer]: tag format:
 - Component boundary decisions
 - Architectural style preferences (if not already decided)
 - Service communication patterns (sync vs. async, REST vs. gRPC vs. events)
@@ -81,7 +81,7 @@ Collect answers following stage-protocol.md §3 question flow (offer interaction
 
 ### Step 5: Generate Design Artifacts
 
-Create 5 design artifacts in `aidlc-docs/inception/application-design/`:
+Create 5 design artifacts in `<record>/inception/application-design/`:
 
 **components.md:**
 - Component names and purposes
@@ -130,7 +130,7 @@ When only one option is viable, state why and skip the block.
 
 ### Step 6: Update State
 
-Update `aidlc-docs/aidlc-state.md`:
+Update `<record>/aidlc-state.md`:
 - Mark Application Design as `[x]` completed
 - Update current stage and next stage
 
@@ -139,7 +139,7 @@ Update `aidlc-docs/aidlc-state.md`:
 Use stage-protocol.md completion template with completion emoji: :building_construction:
 - Summary of design artifacts produced
 - Key architectural decisions highlighted
-- Review path: `aidlc-docs/inception/application-design/`
+- Review path: `<record>/inception/application-design/`
 - Structured approval question with options:
   - Approve (continue to next stage)
   - Request Changes (provide revision feedback)
@@ -147,17 +147,17 @@ Use stage-protocol.md completion template with completion emoji: :building_const
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/inception/application-design/`.
+This stage's outputs are markdown artefacts under `<record>/inception/application-design/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `requirements`, `stories`, `team-practices`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

@@ -44,7 +44,7 @@ scopes:
   - infra
   - workshop
 inputs: NFR requirements artifacts, functional design artifacts
-outputs: aidlc-docs/construction/{unit-name}/nfr-design/ (performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md)
+outputs: performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md (under this stage's per-unit record dir, engine-resolved)
 ---
 
 # NFR Design
@@ -75,11 +75,11 @@ Load aidlc-architect-agent (lead) persona from `agents/aidlc-architect-agent.md`
 
 ### Step 2: Read Prior Artifacts
 
-Read NFR requirements from `aidlc-docs/construction/{unit-name}/nfr-requirements/`. Read functional design artifacts from `aidlc-docs/construction/{unit-name}/functional-design/` (if they exist). Read application design from `aidlc-docs/inception/application-design/` for architectural context.
+Read NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/`. Read functional design artifacts from `<record>/construction/{unit-name}/functional-design/` (if they exist). Read application design from `<record>/inception/application-design/` for architectural context.
 
 ### Step 3: Generate Design Questions
 
-Create a questions file at `aidlc-docs/construction/{unit-name}/nfr-design/nfr-design-questions.md` with context-appropriate questions using [Answer]: tags.
+Create a questions file at `<record>/construction/{unit-name}/nfr-design/nfr-design-questions.md` with context-appropriate questions using [Answer]: tags.
 
 Focus areas:
 - Resilience patterns (circuit breakers, bulkheads, fallback strategies)
@@ -108,7 +108,7 @@ Design concrete solutions for each NFR category:
 
 ### Step 6: Generate Artifacts
 
-Generate the following in `aidlc-docs/construction/{unit-name}/nfr-design/`:
+Generate the following in `<record>/construction/{unit-name}/nfr-design/`:
 
 - **performance-design.md**: Caching architecture, optimization strategies, resource pooling, async patterns, performance budgets
 - **security-design.md**: Authentication/authorization architecture, encryption design, input validation strategy, security headers, compliance controls
@@ -118,7 +118,7 @@ Generate the following in `aidlc-docs/construction/{unit-name}/nfr-design/`:
 
 ### Step 7: Update State
 
-Update `aidlc-docs/aidlc-state.md`: mark NFR Design for {unit-name} as `[x]` completed and update "Current Status".
+Update `<record>/aidlc-state.md`: mark NFR Design for {unit-name} as `[x]` completed and update "Current Status".
 
 ### Step 8: Completion
 
@@ -131,14 +131,14 @@ Present completion message and approval gate:
 Summary of design decisions per NFR category, then:
 
 ```
-**Review:** `aidlc-docs/construction/{unit-name}/nfr-design/`
+**Review:** `<record>/construction/{unit-name}/nfr-design/`
 ```
 
 Approval gate: strictly 2-option (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown design artefacts under `aidlc-docs/construction/nfr-design/`. Some sections include code samples that the code-shape sensors can also flag.
+This stage's outputs are markdown design artefacts under `<record>/construction/{unit-name}/nfr-design/`. Some sections include code samples that the code-shape sensors can also flag.
 
 The imported sensors check those outputs:
 
@@ -147,12 +147,12 @@ The imported sensors check those outputs:
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
 
-Failure modes land in `aidlc-docs/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
+Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

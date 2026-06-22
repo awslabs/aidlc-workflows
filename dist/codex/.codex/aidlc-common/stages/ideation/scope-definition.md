@@ -29,7 +29,7 @@ scopes:
   - feature
   - mvp
 inputs: Intent statement, feasibility assessment, constraint register
-outputs: aidlc-docs/ideation/scope-definition/scope-document.md, aidlc-docs/ideation/scope-definition/intent-backlog.md, aidlc-docs/ideation/scope-definition/scope-definition-questions.md
+outputs: scope-document.md, intent-backlog.md, scope-definition-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Scope Definition & Prioritization
@@ -44,13 +44,13 @@ Load aidlc-product-agent persona from `agents/aidlc-product-agent.md` and knowle
 
 ### Step 2: Load Prior Context
 
-- Read intent statement from `aidlc-docs/ideation/intent-capture/`
-- Read feasibility assessment from `aidlc-docs/ideation/feasibility/` (if exists)
+- Read intent statement from `<record>/ideation/intent-capture/`
+- Read feasibility assessment from `<record>/ideation/feasibility/` (if exists)
 - Read constraint register and RAID log (if exist)
 
 ### Step 3: Generate Clarifying Questions
 
-Create `aidlc-docs/ideation/scope-definition/scope-definition-questions.md` with questions:
+Create `<record>/ideation/scope-definition/scope-definition-questions.md` with questions:
 - What is the minimum viable scope that delivers value?
 - What capabilities are must-have vs. nice-to-have?
 - What are the dependencies between capabilities?
@@ -69,27 +69,27 @@ Create scope definition document (in/out boundary), prioritized intent backlog (
 
 ### Step 6: Update State
 
-Mark scope-definition as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Mark scope-definition as `[x]` completed in `<record>/aidlc-state.md`.
 
 ### Step 7: Present Completion & Request Approval
 
 Completion emoji: :dart:
-Review path: `aidlc-docs/ideation/scope-definition/`
+Review path: `<record>/ideation/scope-definition/`
 Standard approval gate (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/ideation/scope-definition/`.
+This stage's outputs are markdown artefacts under `<record>/ideation/scope-definition/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `intent-statement`, `feasibility-assessment`, `constraint-register`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

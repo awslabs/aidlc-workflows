@@ -34,7 +34,7 @@ scopes:
   - security-patch
   - workshop
 inputs: CD pipeline config from deployment-pipeline stage, provisioned environments from environment-provisioning stage, built artifacts from Construction
-outputs: aidlc-docs/operation/deployment-execution/deployment-log.md, aidlc-docs/operation/deployment-execution/smoke-test-results.md, aidlc-docs/operation/deployment-execution/health-check-report.md, aidlc-docs/operation/deployment-execution/deployment-execution-questions.md
+outputs: deployment-log.md, smoke-test-results.md, health-check-report.md, deployment-execution-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Deployment Execution
@@ -49,8 +49,8 @@ Load aidlc-pipeline-deploy-agent persona from `agents/aidlc-pipeline-deploy-agen
 
 ### Step 2: Load Prior Context
 
-- Read CD pipeline config from `aidlc-docs/operation/deployment-pipeline/`
-- Read environment inventory from `aidlc-docs/operation/environment-provisioning/`
+- Read CD pipeline config from `<record>/operation/deployment-pipeline/`
+- Read environment inventory from `<record>/operation/environment-provisioning/`
 - Read rollback runbook
 
 ### Step 3: Pre-Deployment Checks
@@ -73,27 +73,27 @@ Create deployment execution log, smoke test results, health check validation rep
 
 ### Step 6: Update State
 
-Mark deployment-execution as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Mark deployment-execution as `[x]` completed in `<record>/aidlc-state.md`.
 
 ### Step 7: Present Completion & Request Approval
 
 Completion emoji: :package:
-Review path: `aidlc-docs/operation/deployment-execution/`
+Review path: `<record>/operation/deployment-execution/`
 Standard 2-option approval (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/operation/deployment-execution/`.
+This stage's outputs are markdown artefacts under `<record>/operation/deployment-execution/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `cd-config`, `deployment-strategy`, `environment-inventory`, `build-test-results`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

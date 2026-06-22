@@ -33,7 +33,7 @@ scopes:
   - security-patch
   - workshop
 inputs: CI pipeline config from ci-pipeline stage, infrastructure design from infrastructure-design stage
-outputs: aidlc-docs/operation/deployment-pipeline/cd-config.md, aidlc-docs/operation/deployment-pipeline/deployment-strategy.md, aidlc-docs/operation/deployment-pipeline/rollback-runbook.md, aidlc-docs/operation/deployment-pipeline/deployment-pipeline-questions.md
+outputs: cd-config.md, deployment-strategy.md, rollback-runbook.md, deployment-pipeline-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Deployment Pipeline Configuration
@@ -48,9 +48,9 @@ Load aidlc-pipeline-deploy-agent persona from `agents/aidlc-pipeline-deploy-agen
 
 ### Step 2: Load Prior Context
 
-- Read CI pipeline config from `aidlc-docs/construction/ci-pipeline/`
-- Read infrastructure design from `aidlc-docs/construction/infrastructure-design/`
-- Read NFR design (deployment-related NFRs) from `aidlc-docs/construction/nfr-design/`
+- Read CI pipeline config from `<record>/construction/ci-pipeline/`
+- Read infrastructure design from `<record>/construction/infrastructure-design/`
+- Read NFR design (deployment-related NFRs) from `<record>/construction/nfr-design/`
 
 ### Step 3: Generate Clarifying Questions
 
@@ -69,27 +69,27 @@ Create CD pipeline configuration, deployment strategy document, rollback runbook
 
 ### Step 5: Update State
 
-Mark deployment-pipeline as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Mark deployment-pipeline as `[x]` completed in `<record>/aidlc-state.md`.
 
 ### Step 6: Present Completion & Request Approval
 
 Completion emoji: :rocket:
-Review path: `aidlc-docs/operation/deployment-pipeline/`
+Review path: `<record>/operation/deployment-pipeline/`
 Standard 2-option approval (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/operation/deployment-pipeline/`.
+This stage's outputs are markdown artefacts under `<record>/operation/deployment-pipeline/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `ci-config`, `quality-gates`, `deployment-architecture`, `cicd-pipeline`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

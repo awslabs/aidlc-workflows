@@ -31,7 +31,7 @@ scopes:
   - feature
   - mvp
 inputs: Intent statement, scope definition, intent backlog
-outputs: aidlc-docs/ideation/rough-mockups/wireframes.md, aidlc-docs/ideation/rough-mockups/user-flow.md, aidlc-docs/ideation/rough-mockups/rough-mockups-questions.md
+outputs: wireframes.md, user-flow.md, rough-mockups-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Rough Mockups & Concept Visualization
@@ -46,12 +46,12 @@ Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledg
 
 ### Step 2: Load Prior Context
 
-- Read intent statement from `aidlc-docs/ideation/intent-capture/`
-- Read scope definition and intent backlog from `aidlc-docs/ideation/scope-definition/`
+- Read intent statement from `<record>/ideation/intent-capture/`
+- Read scope definition and intent backlog from `<record>/ideation/scope-definition/`
 
 ### Step 3: Generate Clarifying Questions
 
-Create `aidlc-docs/ideation/rough-mockups/rough-mockups-questions.md` with questions:
+Create `<record>/ideation/rough-mockups/rough-mockups-questions.md` with questions:
 - What are the primary user entry points and key screens/views?
 - What is the core user flow (happy path)?
 - What does the information hierarchy look like?
@@ -76,27 +76,27 @@ All diagrams follow ASCII diagram standards from stage-protocol.md.
 
 ### Step 6: Update State
 
-Mark rough-mockups as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Mark rough-mockups as `[x]` completed in `<record>/aidlc-state.md`.
 
 ### Step 7: Present Completion & Request Approval
 
 Completion emoji: :pencil2:
-Review path: `aidlc-docs/ideation/rough-mockups/`
+Review path: `<record>/ideation/rough-mockups/`
 Standard approval gate (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/ideation/rough-mockups/`.
+This stage's outputs are markdown artefacts under `<record>/ideation/rough-mockups/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `intent-statement`, `scope-document`, `intent-backlog`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

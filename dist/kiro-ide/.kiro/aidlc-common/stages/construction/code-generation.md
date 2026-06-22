@@ -48,7 +48,7 @@ scopes:
   - security-patch
   - workshop
 inputs: ALL prior design artifacts for this unit
-outputs: application code + aidlc-docs/construction/{unit-name}/code-generation/ (code-generation-plan.md, code-summary.md)
+outputs: application code + code-generation-plan.md, code-summary.md (under this stage's per-unit record dir, engine-resolved)
 ---
 
 # Code Generation
@@ -59,24 +59,24 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ### Critical Rules
 
-- Application code goes to workspace root, NEVER to aidlc-docs/
+- Application code goes to workspace root, NEVER to the record dir
 - Brownfield: modify files in-place. NEVER create duplicates like ClassName_modified.java
 - Add data-testid attributes to interactive UI elements for test automation
 
 ### Step 1: Read All Unit Artifacts
 
 Read all design artifacts for the current unit:
-- Functional design from `aidlc-docs/construction/{unit-name}/functional-design/` (if exists)
-- NFR requirements from `aidlc-docs/construction/{unit-name}/nfr-requirements/` (if exists)
-- NFR design from `aidlc-docs/construction/{unit-name}/nfr-design/` (if exists)
-- Infrastructure design from `aidlc-docs/construction/{unit-name}/infrastructure-design/` (if exists)
-- Application design from `aidlc-docs/inception/application-design/`
-- Unit definition from `aidlc-docs/inception/units-generation/unit-of-work.md`
-- Story map from `aidlc-docs/inception/units-generation/unit-of-work-story-map.md`
+- Functional design from `<record>/construction/{unit-name}/functional-design/` (if exists)
+- NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
+- NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
+- Infrastructure design from `<record>/construction/{unit-name}/infrastructure-design/` (if exists)
+- Application design from `<record>/inception/application-design/`
+- Unit definition from `<record>/inception/units-generation/unit-of-work.md`
+- Story map from `<record>/inception/units-generation/unit-of-work-story-map.md`
 
 ### Step 2: PART 1 — Planning
 
-Create a detailed code generation plan at `aidlc-docs/construction/{unit-name}/code-generation/code-generation-plan.md` with checkboxes for each implementation step. Include story-to-code-step traceability — map each plan step back to the user story it implements.
+Create a detailed code generation plan at `<record>/construction/{unit-name}/code-generation/code-generation-plan.md` with checkboxes for each implementation step. Include story-to-code-step traceability — map each plan step back to the user story it implements.
 
 Plan should cover (as applicable to the unit):
 - [ ] Business logic implementation
@@ -149,7 +149,7 @@ The subagent generates all code, test files, and configuration artifacts in the 
 
 ### Step 5: Generate Code Summary
 
-After subagent completes, create `aidlc-docs/construction/{unit-name}/code-generation/code-summary.md` documenting:
+After subagent completes, create `<record>/construction/{unit-name}/code-generation/code-summary.md` documenting:
 - Files created/modified
 - Key implementation decisions
 - Test coverage summary
@@ -157,7 +157,7 @@ After subagent completes, create `aidlc-docs/construction/{unit-name}/code-gener
 
 ### Step 6: Update State
 
-Update `aidlc-docs/aidlc-state.md`: mark Code Generation for {unit-name} as `[x]` completed and update "Current Status".
+Update `<record>/aidlc-state.md`: mark Code Generation for {unit-name} as `[x]` completed and update "Current Status".
 
 ### Step 7: Completion
 
@@ -170,7 +170,7 @@ Present completion message and approval gate:
 Summary of code produced (files, tests, key decisions), then:
 
 ```
-**Review:** `aidlc-docs/construction/{unit-name}/code-generation/`
+**Review:** `<record>/construction/{unit-name}/code-generation/`
 ```
 
 Approval gate: strictly 2-option (Approve / Request Changes).
@@ -181,15 +181,15 @@ Approval gate: strictly 2-option (Approve / Request Changes).
 
 This stage produces TypeScript/JavaScript code in the active Bolt
 worktree. Generated code lives at the workspace root (NEVER under
-`aidlc-docs/`); the planning + summary artefacts (`code-generation-plan.md`,
-`code-summary.md`) live under `aidlc-docs/construction/<unit>/code-generation/`.
+the record dir); the planning + summary artefacts (`code-generation-plan.md`,
+`code-summary.md`) live under `<record>/construction/{unit-name}/code-generation/`.
 
 The imported sensors check the code outputs:
 
 - **`linter`** wraps the project's configured linter (eslint by default).
   Fires on every Write/Edit matching its `matches: "**/*.{ts,js}"` filter.
   Failure mode: lint violations land as `SENSOR_FAILED` audit rows with
-  detail at `aidlc-docs/.aidlc-sensors/code-generation/linter-<iso>.md`.
+  detail at `<record>/.aidlc-sensors/code-generation/linter-<iso>.md`.
 - **`type-check`** wraps the project's configured type-checker (tsc by
   default). Fires on `**/*.{ts,tsx}`. Failure mode: type errors emit
   `SENSOR_FAILED` with similar detail.
@@ -202,7 +202,7 @@ markdown would import all four.
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

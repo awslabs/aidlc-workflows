@@ -39,7 +39,7 @@ scopes:
   - feature
   - workshop
 inputs: All Operation phase artifacts, production monitoring data
-outputs: aidlc-docs/operation/feedback-optimization/slo-report.md, aidlc-docs/operation/feedback-optimization/cost-analysis.md, aidlc-docs/operation/feedback-optimization/drift-report.md, aidlc-docs/operation/feedback-optimization/feedback-loop.md, aidlc-docs/operation/feedback-optimization/feedback-optimization-questions.md
+outputs: slo-report.md, cost-analysis.md, drift-report.md, feedback-loop.md, feedback-optimization-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Continuous Feedback & Optimization
@@ -54,8 +54,8 @@ Load aidlc-operations-agent persona from `agents/aidlc-operations-agent.md` and 
 
 ### Step 2: Load Prior Context
 
-- Read observability setup from `aidlc-docs/operation/observability-setup/`
-- Read performance validation results from `aidlc-docs/operation/performance-validation/`
+- Read observability setup from `<record>/operation/observability-setup/`
+- Read performance validation results from `<record>/operation/performance-validation/`
 - Read SLO/SLI configuration
 - Read infrastructure design for drift comparison
 
@@ -76,30 +76,30 @@ Create SLO compliance report, AWS Cost Explorer analysis & optimization recommen
 
 ### Step 5: Update State
 
-Mark feedback-optimization as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Mark feedback-optimization as `[x]` completed in `<record>/aidlc-state.md`.
 Mark OPERATION phase complete.
 
 ### Step 6: Present Completion & Request Approval
 
 Completion emoji: :recycle:
-Review path: `aidlc-docs/operation/feedback-optimization/`
+Review path: `<record>/operation/feedback-optimization/`
 Approval gate: Approve (workflow complete) / Request Changes / Start New Ideation Cycle.
 
 This is the final stage. Upon approval, the full AI-DLC workflow is complete. The feedback loop document feeds insights back into the next Ideation cycle if the user chooses to continue iterating.
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/operation/feedback-optimization/`.
+This stage's outputs are markdown artefacts under `<record>/operation/feedback-optimization/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `dashboards`, `alarms`, `slo-config`, `deployment-log`, `load-test-results`, `incident-plan`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

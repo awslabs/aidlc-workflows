@@ -38,8 +38,8 @@ scopes:
   - feature
   - mvp
   - workshop
-inputs: aidlc-docs/inception/application-design/ (all design artifacts), aidlc-docs/inception/requirements-analysis/requirements.md, aidlc-docs/inception/user-stories/stories.md (if produced)
-outputs: aidlc-docs/inception/units-generation/unit-of-work.md, aidlc-docs/inception/units-generation/unit-of-work-dependency.md, aidlc-docs/inception/units-generation/unit-of-work-story-map.md
+inputs: <record>/inception/application-design/ (all design artifacts), <record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced)
+outputs: unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md (under this stage's record dir, engine-resolved)
 ---
 
 # Units Generation
@@ -61,13 +61,13 @@ Load aidlc-delivery-agent persona from `agents/aidlc-delivery-agent.md` and know
 
 ### Step 2: Load Prior Context
 
-- Read all artifacts from `aidlc-docs/inception/application-design/` (components.md, component-methods.md, services.md, component-dependency.md, decisions.md)
-- Read `aidlc-docs/inception/requirements-analysis/requirements.md`
-- Read `aidlc-docs/inception/user-stories/stories.md` (if produced)
+- Read all artifacts from `<record>/inception/application-design/` (components.md, component-methods.md, services.md, component-dependency.md, decisions.md)
+- Read `<record>/inception/requirements-analysis/requirements.md`
+- Read `<record>/inception/user-stories/stories.md` (if produced)
 
 ### Step 3: Create Decomposition Plan with Questions
 
-Create `aidlc-docs/inception/units-generation/units-generation-questions.md` with questions using [Answer]: tag format:
+Create `<record>/inception/units-generation/units-generation-questions.md` with questions using [Answer]: tag format:
 - Unit boundary strategy (by service, by feature, by domain, by deployment target)
 - Unit granularity preference (coarse-grained vs. fine-grained)
 - Dependency ordering preferences (strict topological only, or allow parallelism between independent units)
@@ -95,7 +95,7 @@ Present the decomposition plan to the user as a structured question:
 
 ### Step 6: Execute Plan — Generate Unit Artifacts
 
-Based on the approved plan, generate 3 artifacts in `aidlc-docs/inception/units-generation/`:
+Based on the approved plan, generate 3 artifacts in `<record>/inception/units-generation/`:
 
 **unit-of-work.md:**
 - Unit definitions (name, description, boundaries)
@@ -130,7 +130,7 @@ NOTE: This artifact describes topology only. It does NOT pick a single "recommen
 
 ### Step 7: Update State
 
-Update `aidlc-docs/aidlc-state.md`:
+Update `<record>/aidlc-state.md`:
 - Mark Units Generation as `[x]` completed
 - Update current stage and next stage
 - Record unit list for Construction phase
@@ -139,22 +139,22 @@ Update `aidlc-docs/aidlc-state.md`:
 
 Use stage-protocol.md completion template with completion emoji: :wrench:
 - Summary of units defined, dependencies mapped, stories assigned
-- Review path: `aidlc-docs/inception/units-generation/`
+- Review path: `<record>/inception/units-generation/`
 - Structured approval question with options: Approve (continue to Construction phase) / Request Changes
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/inception/units-generation/`.
+This stage's outputs are markdown artefacts under `<record>/inception/units-generation/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings), and — for `unit-of-work-dependency.md` specifically — that the required fenced `yaml` edge block is present, well-formed, and cycle-free. Failure mode: missing headings or an absent/malformed/cyclic edge block emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings), and — for `unit-of-work-dependency.md` specifically — that the required fenced `yaml` edge block is present, well-formed, and cycle-free. Failure mode: missing headings or an absent/malformed/cyclic edge block emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `components`, `component-methods`, `services`, `component-dependency`, `decisions`, `requirements`, `stories`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

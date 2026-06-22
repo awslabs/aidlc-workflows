@@ -34,8 +34,8 @@ scopes:
   - feature
   - mvp
   - workshop
-inputs: aidlc-docs/inception/requirements-analysis/requirements.md, RE artifacts (if brownfield)
-outputs: aidlc-docs/inception/user-stories/stories.md, aidlc-docs/inception/user-stories/personas.md, aidlc-docs/inception/user-stories/user-stories-assessment.md
+inputs: <record>/inception/requirements-analysis/requirements.md, RE artifacts (if brownfield)
+outputs: stories.md, personas.md, user-stories-assessment.md (under this stage's record dir, engine-resolved)
 ---
 
 # User Stories
@@ -55,7 +55,7 @@ Assess whether user stories add value for this project. Provide reasoning:
 - **Execute if**: user-facing features, multiple user personas, complex business logic, cross-team coordination needed
 - **Skip if**: pure refactoring, isolated bug fixes, infrastructure-only, developer tooling
 
-Create `aidlc-docs/inception/user-stories/user-stories-assessment.md` documenting the assessment:
+Create `<record>/inception/user-stories/user-stories-assessment.md` documenting the assessment:
 - Decision: Execute or Skip
 - Rationale: Why user stories are or are not needed for this project
 - Factors considered: project type, user-facing scope, complexity signals
@@ -66,7 +66,7 @@ If skipping, update aidlc-state.md with skip reason and proceed to next stage.
 
 ### Step 3: Load Prior Context
 
-- Read `aidlc-docs/inception/requirements-analysis/requirements.md`
+- Read `<record>/inception/requirements-analysis/requirements.md`
 - If brownfield: Read relevant RE artifacts from `aidlc/codekb/<repo>/`
 
 ---
@@ -75,7 +75,7 @@ If skipping, update aidlc-state.md with skip reason and proceed to next stage.
 
 ### Step 4: Create Story Plan with Questions
 
-Create a story plan in `aidlc-docs/inception/user-stories/user-stories-questions.md` containing:
+Create a story plan in `<record>/inception/user-stories/user-stories-questions.md` containing:
 - **Persona development approach** — Who are the users? What are their goals?
 - **Story format** — Using INVEST criteria (Independent, Negotiable, Valuable, Estimable, Small, Testable)
 - **Story prioritization** — Assign MoSCoW priority (Must Have / Should Have / Could Have / Won't Have) to each story based on requirements analysis. The MVP boundary will be formally decided during Delivery Planning; story priorities inform that decision.
@@ -108,11 +108,11 @@ If the user interjects with feedback before generation completes, treat it as a 
 
 Based on the approved plan, generate:
 
-**aidlc-docs/inception/user-stories/personas.md:**
+**`<record>/inception/user-stories/personas.md`:**
 - User persona definitions (name, role, goals, pain points, context)
 - Persona relationships and priority ranking
 
-**aidlc-docs/inception/user-stories/stories.md:**
+**`<record>/inception/user-stories/stories.md`:**
 - User stories in standard format: "As a [persona], I want [goal], so that [benefit]"
 - Acceptance criteria for each story
 - Story priority (Must Have / Should Have / Could Have / Won't Have)
@@ -121,7 +121,7 @@ Based on the approved plan, generate:
 
 ### Step 9: Update State
 
-Update `aidlc-docs/aidlc-state.md`:
+Update `<record>/aidlc-state.md`:
 - Mark User Stories as `[x]` completed
 - Update current stage and next stage
 
@@ -129,22 +129,22 @@ Update `aidlc-docs/aidlc-state.md`:
 
 Use stage-protocol.md completion template with completion emoji: :books:
 - Summary of personas and stories produced
-- Review path: `aidlc-docs/inception/user-stories/`
+- Review path: `<record>/inception/user-stories/`
 - Structured approval question with options: Approve (continue to Delivery Planning) / Request Changes
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/inception/user-stories/`.
+This stage's outputs are markdown artefacts under `<record>/inception/user-stories/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `requirements`, `team-practices`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

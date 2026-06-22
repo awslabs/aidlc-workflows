@@ -34,7 +34,7 @@ scopes:
   - feature
   - workshop
 inputs: NFR requirements from nfr-requirements stage, NFR design from nfr-design stage, deployed application, observability data from observability-setup stage
-outputs: aidlc-docs/operation/performance-validation/load-test-plan.md, aidlc-docs/operation/performance-validation/test-results.md, aidlc-docs/operation/performance-validation/nfr-validation-matrix.md, aidlc-docs/operation/performance-validation/performance-validation-questions.md
+outputs: load-test-plan.md, test-results.md, nfr-validation-matrix.md, performance-validation-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Performance Validation & Load Testing
@@ -49,9 +49,9 @@ Load aidlc-quality-agent persona from `agents/aidlc-quality-agent.md` and knowle
 
 ### Step 2: Load Prior Context
 
-- Read NFR requirements from `aidlc-docs/construction/nfr-requirements/`
-- Read NFR design from `aidlc-docs/construction/nfr-design/`
-- Read observability configuration from `aidlc-docs/operation/observability-setup/`
+- Read NFR requirements from `<record>/construction/nfr-requirements/`
+- Read NFR design from `<record>/construction/nfr-design/`
+- Read observability configuration from `<record>/operation/observability-setup/`
 
 ### Step 3: Generate Clarifying Questions
 
@@ -73,27 +73,27 @@ Create load test plan, performance test results (latency, throughput, error rate
 
 ### Step 6: Update State
 
-Mark performance-validation as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Mark performance-validation as `[x]` completed in `<record>/aidlc-state.md`.
 
 ### Step 7: Present Completion & Request Approval
 
 Completion emoji: :zap:
-Review path: `aidlc-docs/operation/performance-validation/`
+Review path: `<record>/operation/performance-validation/`
 Standard 2-option approval (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/operation/performance-validation/`.
+This stage's outputs are markdown artefacts under `<record>/operation/performance-validation/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `performance-requirements`, `scalability-requirements`, `performance-design`, `scalability-design`, `dashboards`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

@@ -251,22 +251,30 @@ describe("t44 stage-instruction completeness — parseStageFrontmatter (migrated
   }
 
   // ============================================================
-  // Tests 31-34: construction stages mention aidlc-docs/construction/
+  // Tests 31-34: construction stages mention <record>/construction/
   // ============================================================
 
+  // Rerooted: flat aidlc-docs/construction/ -> per-intent <record>/construction/.
+  // The per-unit construction stages now write under
+  // `<record>/construction/{unit-name}/<stage>/` (e.g. functional-design.md:103,
+  // nfr-requirements.md, nfr-design.md, code-generation.md), so the body cites
+  // `<record>/construction` rather than the old flat root.
   for (const slug of ["functional-design", "nfr-requirements", "nfr-design", "code-generation"]) {
-    test(`construction dir: ${slug} mentions aidlc-docs/construction/`, () => {
-      expect(fileMatches(findStageFile(slug), /aidlc-docs\/construction/i)).toBe(true);
+    test(`construction dir: ${slug} mentions <record>/construction/`, () => {
+      expect(fileMatches(findStageFile(slug), /<record>\/construction/i)).toBe(true);
     });
   }
 
   // ============================================================
-  // Tests 35-37: operation stages mention aidlc-docs/operation/
+  // Tests 35-37: operation stages mention <record>/operation/
   // ============================================================
 
+  // Rerooted: flat aidlc-docs/operation/ -> per-intent <record>/operation/. The
+  // operation stages now cite `<record>/operation` in their body prose
+  // (deployment-pipeline.md, observability-setup.md, incident-response.md).
   for (const slug of ["deployment-pipeline", "observability-setup", "incident-response"]) {
-    test(`operation dir: ${slug} mentions aidlc-docs/operation/`, () => {
-      expect(fileMatches(findStageFile(slug), /aidlc-docs\/operation/i)).toBe(true);
+    test(`operation dir: ${slug} mentions <record>/operation/`, () => {
+      expect(fileMatches(findStageFile(slug), /<record>\/operation/i)).toBe(true);
     });
   }
 

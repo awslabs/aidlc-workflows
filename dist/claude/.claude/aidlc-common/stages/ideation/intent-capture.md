@@ -22,7 +22,7 @@ scopes:
   - mvp
   - poc
 inputs: User's project description ($ARGUMENTS), scope selection
-outputs: aidlc-docs/ideation/intent-capture/intent-statement.md, aidlc-docs/ideation/intent-capture/stakeholder-map.md, aidlc-docs/ideation/intent-capture/intent-capture-questions.md
+outputs: intent-statement.md, stakeholder-map.md, intent-capture-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Intent Capture & Framing
@@ -38,13 +38,13 @@ Load aidlc-architect-agent persona from `agents/aidlc-architect-agent.md` for te
 
 ### Step 2: Load Prior Context
 
-- Read user's project description from $ARGUMENTS or audit.md
-- Check for existing `aidlc-docs/` artifacts from prior sessions
+- Read user's project description from $ARGUMENTS or `<record>/audit/<host>-<clone>.md`
+- Check for existing `<record>/` artifacts from prior sessions
 - Load guardrails from `.claude/rules/`
 
 ### Step 3: Generate Clarifying Questions
 
-Create `aidlc-docs/ideation/intent-capture/intent-capture-questions.md` with questions:
+Create `<record>/ideation/intent-capture/intent-capture-questions.md` with questions:
 - What business problem are we solving?
 - Who is the customer (internal/external)? What pain are they experiencing?
 - What does success look like? What metrics matter?
@@ -63,21 +63,21 @@ After all answers collected:
 
 ### Step 5: Generate Artifacts
 
-Create `aidlc-docs/ideation/intent-capture/intent-statement.md` containing:
+Create `<record>/ideation/intent-capture/intent-statement.md` containing:
 - **Problem Statement** — What business problem is being solved
 - **Target Customer** — Who benefits and how
 - **Success Metrics** — Measurable outcomes
 - **Initiative Trigger** — Why now
 - **Initial Scope Signal** — Early indication of scope (enterprise, feature, mvp, poc, etc.)
 
-Create `aidlc-docs/ideation/intent-capture/stakeholder-map.md` containing:
+Create `<record>/ideation/intent-capture/stakeholder-map.md` containing:
 - Key stakeholders and their interests
 - Decision-makers vs. influencers
 - Communication requirements
 
 ### Step 6: Update State
 
-Update `aidlc-docs/aidlc-state.md`:
+Update `<record>/aidlc-state.md`:
 - Mark intent-capture as `[x]` completed
 - Update current stage and next stage
 
@@ -85,22 +85,22 @@ Update `aidlc-docs/aidlc-state.md`:
 
 Use stage-protocol.md completion template with completion emoji: :bulb:
 - Summary of intent statement and stakeholder map
-- Review path: `aidlc-docs/ideation/intent-capture/`
+- Review path: `<record>/ideation/intent-capture/`
 - Standard approval gate (Approve / Request Changes)
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/ideation/intent-capture/`.
+This stage's outputs are markdown artefacts under `<record>/ideation/intent-capture/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. This stage declares no upstream artefacts; the sensor still runs but reports zero unreferenced inputs by default.
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

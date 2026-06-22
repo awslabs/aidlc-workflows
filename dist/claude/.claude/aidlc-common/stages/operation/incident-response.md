@@ -32,7 +32,7 @@ scopes:
   - feature
   - workshop
 inputs: Observability setup from observability-setup stage, NFR design from nfr-design stage, infrastructure design from infrastructure-design stage
-outputs: aidlc-docs/operation/incident-response/runbooks.md, aidlc-docs/operation/incident-response/incident-plan.md, aidlc-docs/operation/incident-response/escalation-matrix.md, aidlc-docs/operation/incident-response/incident-response-questions.md
+outputs: runbooks.md, incident-plan.md, escalation-matrix.md, incident-response-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Incident Response & Runbook Generation
@@ -47,9 +47,9 @@ Load aidlc-operations-agent persona from `agents/aidlc-operations-agent.md` and 
 
 ### Step 2: Load Prior Context
 
-- Read observability setup from `aidlc-docs/operation/observability-setup/`
-- Read NFR design from `aidlc-docs/construction/nfr-design/`
-- Read infrastructure design from `aidlc-docs/construction/infrastructure-design/`
+- Read observability setup from `<record>/operation/observability-setup/`
+- Read NFR design from `<record>/construction/nfr-design/`
+- Read infrastructure design from `<record>/construction/infrastructure-design/`
 
 ### Step 3: Generate Clarifying Questions
 
@@ -68,27 +68,27 @@ Create SSM Automation runbook library, incident response plan (integrated with A
 
 ### Step 5: Update State
 
-Mark incident-response as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Mark incident-response as `[x]` completed in `<record>/aidlc-state.md`.
 
 ### Step 6: Present Completion & Request Approval
 
 Completion emoji: :fire_engine:
-Review path: `aidlc-docs/operation/incident-response/`
+Review path: `<record>/operation/incident-response/`
 Standard 2-option approval (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/operation/incident-response/`.
+This stage's outputs are markdown artefacts under `<record>/operation/incident-response/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `dashboards`, `alarms`, `reliability-design`, `security-design`, `deployment-architecture`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

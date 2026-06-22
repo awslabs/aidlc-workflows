@@ -42,7 +42,7 @@ scopes:
   - refactor
   - workshop
 inputs: unit-of-work.md, unit-of-work-story-map.md, requirements.md, application design artifacts
-outputs: "aidlc-docs/construction/{unit-name}/functional-design/ (business-logic-model.md, business-rules.md, domain-entities.md, CONDITIONAL: frontend-components.md)"
+outputs: "business-logic-model.md, business-rules.md, domain-entities.md, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved)"
 ---
 
 # Functional Design
@@ -73,11 +73,11 @@ Load aidlc-architect-agent (lead) persona from `agents/aidlc-architect-agent.md`
 
 ### Step 2: Read Unit Context
 
-Read the unit definition from `aidlc-docs/inception/units-generation/unit-of-work.md` and assigned stories from `aidlc-docs/inception/units-generation/unit-of-work-story-map.md`. Read `aidlc-docs/inception/requirements-analysis/requirements.md` and any application design artifacts from `aidlc-docs/inception/application-design/`.
+Read the unit definition from `<record>/inception/units-generation/unit-of-work.md` and assigned stories from `<record>/inception/units-generation/unit-of-work-story-map.md`. Read `<record>/inception/requirements-analysis/requirements.md` and any application design artifacts from `<record>/inception/application-design/`.
 
 ### Step 3: Create Functional Design Plan
 
-Analyze the unit's scope and create a functional design questions file at `aidlc-docs/construction/{unit-name}/functional-design/functional-design-questions.md` with context-appropriate questions using [Answer]: tags.
+Analyze the unit's scope and create a functional design questions file at `<record>/construction/{unit-name}/functional-design/functional-design-questions.md` with context-appropriate questions using [Answer]: tags.
 
 Focus areas:
 - Business logic workflows and algorithms
@@ -100,7 +100,7 @@ If ANY ambiguity found: create follow-up questions and resolve before proceeding
 
 ### Step 5: Generate Artifacts
 
-Generate the following in `aidlc-docs/construction/{unit-name}/functional-design/`:
+Generate the following in `<record>/construction/{unit-name}/functional-design/`:
 
 - **business-logic-model.md**: Detailed algorithms, workflows, data transformations, processing sequences, and decision trees for the unit's business logic
 - **business-rules.md**: Decision rules, validation logic, constraints, policies, conditional behavior, and business invariants
@@ -109,7 +109,7 @@ Generate the following in `aidlc-docs/construction/{unit-name}/functional-design
 
 ### Step 6: Update State
 
-Update `aidlc-docs/aidlc-state.md`: mark Functional Design for {unit-name} as `[x]` completed and update "Current Status".
+Update `<record>/aidlc-state.md`: mark Functional Design for {unit-name} as `[x]` completed and update "Current Status".
 
 ### Step 7: Completion
 
@@ -122,14 +122,14 @@ Present completion message and approval gate:
 Summary of artifacts produced, then:
 
 ```
-**Review:** `aidlc-docs/construction/{unit-name}/functional-design/`
+**Review:** `<record>/construction/{unit-name}/functional-design/`
 ```
 
 Approval gate: strictly 2-option (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown design artefacts under `aidlc-docs/construction/functional-design/`. Some sections include code samples that the code-shape sensors can also flag.
+This stage's outputs are markdown design artefacts under `<record>/construction/{unit-name}/functional-design/`. Some sections include code samples that the code-shape sensors can also flag.
 
 The imported sensors check those outputs:
 
@@ -138,12 +138,12 @@ The imported sensors check those outputs:
 - **`linter`** runs against any TypeScript/JavaScript snippets the design includes (matches `**/*.{ts,js}`).
 - **`type-check`** runs against any TypeScript/TSX snippets the design includes (matches `**/*.{ts,tsx}`).
 
-Failure modes land in `aidlc-docs/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
+Failure modes land in `<record>/.aidlc-sensors/<stage-slug>/` as `SENSOR_FAILED` audit rows with per-sensor detail files.
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

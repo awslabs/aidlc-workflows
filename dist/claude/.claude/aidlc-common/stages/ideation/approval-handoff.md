@@ -41,7 +41,7 @@ scopes:
   - enterprise
   - feature
 inputs: All Ideation phase artifacts (intent, market research, feasibility, scope, team, mockups)
-outputs: aidlc-docs/ideation/approval-handoff/initiative-brief.md, aidlc-docs/ideation/approval-handoff/decision-log.md, aidlc-docs/ideation/approval-handoff/approval-handoff-questions.md
+outputs: initiative-brief.md, decision-log.md, approval-handoff-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Initiative Approval & Handoff
@@ -57,16 +57,16 @@ Load aidlc-delivery-agent persona from `agents/aidlc-delivery-agent.md` and know
 ### Step 2: Load Prior Context
 
 Read ALL Ideation phase artifacts:
-- Intent statement and stakeholder map from `aidlc-docs/ideation/intent-capture/`
-- Market research from `aidlc-docs/ideation/market-research/` (if exists)
-- Feasibility assessment, constraint register, RAID log from `aidlc-docs/ideation/feasibility/` (if exists)
-- Scope definition and intent backlog from `aidlc-docs/ideation/scope-definition/`
-- Team formation artifacts from `aidlc-docs/ideation/team-formation/` (if exists)
-- Mockups/wireframes from `aidlc-docs/ideation/rough-mockups/` (if exists)
+- Intent statement and stakeholder map from `<record>/ideation/intent-capture/`
+- Market research from `<record>/ideation/market-research/` (if exists)
+- Feasibility assessment, constraint register, RAID log from `<record>/ideation/feasibility/` (if exists)
+- Scope definition and intent backlog from `<record>/ideation/scope-definition/`
+- Team formation artifacts from `<record>/ideation/team-formation/` (if exists)
+- Mockups/wireframes from `<record>/ideation/rough-mockups/` (if exists)
 
 ### Step 3: Generate Approval Questions
 
-Create `aidlc-docs/ideation/approval-handoff/approval-handoff-questions.md` with questions:
+Create `<record>/ideation/approval-handoff/approval-handoff-questions.md` with questions:
 - Do all stakeholders agree on the intent and scope?
 - Have all critical risks been acknowledged with mitigations?
 - Is there budget/resource commitment?
@@ -78,7 +78,7 @@ Follow stage-protocol.md question flow.
 
 ### Step 4: Compile Initiative Brief
 
-Create `aidlc-docs/ideation/approval-handoff/initiative-brief.md` — a one-pager combining:
+Create `<record>/ideation/approval-handoff/initiative-brief.md` — a one-pager combining:
 - Intent and problem statement
 - Market validation summary
 - Feasibility and risk highlights
@@ -87,39 +87,39 @@ Create `aidlc-docs/ideation/approval-handoff/initiative-brief.md` — a one-page
 - Team plan
 - Go/no-go recommendation
 
-Create `aidlc-docs/ideation/approval-handoff/decision-log.md` — record of all decisions made during Ideation.
+Create `<record>/ideation/approval-handoff/decision-log.md` — record of all decisions made during Ideation.
 
 ### Step 5: Phase Boundary Verification
 
 Run Ideation → Inception verification check:
 - Intent → Scope → Intent Backlog consistency
 - All scope items have feasibility backing
-- Write results to `aidlc-docs/verification/phase-check-ideation.md`
+- Write results to `<record>/verification/phase-check-ideation.md`
 
 ### Step 6: Update State
 
-Mark approval-handoff as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Mark approval-handoff as `[x]` completed in `<record>/aidlc-state.md`.
 Update Lifecycle Phase to INCEPTION.
 
 ### Step 7: Present Completion & Request Approval
 
 Completion emoji: :white_check_mark:
-Review path: `aidlc-docs/ideation/approval-handoff/`
+Review path: `<record>/ideation/approval-handoff/`
 Approval gate: Approve (proceed to Inception) / Request Changes / Reject Initiative (end workflow).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/ideation/approval-handoff/`.
+This stage's outputs are markdown artefacts under `<record>/ideation/approval-handoff/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `intent-statement`, `scope-document`, `intent-backlog`, `competitive-analysis`, `feasibility-assessment`, `constraint-register`, `team-assessment`, `wireframes`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

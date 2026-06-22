@@ -45,8 +45,8 @@ scopes:
   - mvp
   - infra
   - workshop
-inputs: aidlc-docs/aidlc-state.md + (brownfield) reverse-engineering's 8 artifacts
-outputs: "aidlc-docs/inception/practices-discovery/ (4 artifacts: team-practices.md, discovered-rules.md, evidence.md, practices-discovery-timestamp.md). On affirmation, content is promoted to the harness rule layer's aidlc-team.md and aidlc-project.md."
+inputs: <record>/aidlc-state.md + (brownfield) reverse-engineering's 8 artifacts
+outputs: "team-practices.md, discovered-rules.md, evidence.md, practices-discovery-timestamp.md (4 artifacts under this stage's record dir, engine-resolved). On affirmation, content is promoted to the harness rule layer's aidlc-team.md and aidlc-project.md."
 ---
 
 # Practices Discovery
@@ -59,7 +59,7 @@ This stage discovers how the team works — way of working, walking-skeleton sta
 
 ### Step 1: Check Conditions
 
-Read `aidlc-docs/aidlc-state.md` to determine project type:
+Read `<record>/aidlc-state.md` to determine project type:
 
 - **Brownfield**: run Step 2 (multi-agent evidence scan) before the interview.
 - **Greenfield**: skip Step 2; the interview asks all five practice areas using `aidlc-org.md` defaults as suggested answers.
@@ -78,7 +78,7 @@ The orchestrator issues four `Task` invocations in a single assistant message (p
 
 4. **aidlc-devsecops-agent** — Reads its KB on CI/security. Scans linting config, SAST/DAST tooling, secret scanning, dependency-update automation. Returns: security posture, lint/format rules, supply-chain controls.
 
-**Dispatch shape**: single assistant message with four `Task` calls. Subagent personas and KB load automatically — do NOT inject them manually. Pass `aidlc-docs/aidlc-state.md` and the relevant reverse-engineering artifacts as context. Collect all four findings before proceeding to Step 3.
+**Dispatch shape**: single assistant message with four `Task` calls. Subagent personas and KB load automatically — do NOT inject them manually. Pass `<record>/aidlc-state.md` and the relevant reverse-engineering artifacts as context. Collect all four findings before proceeding to Step 3.
 
 ### Step 3: Interview (Always)
 
@@ -96,7 +96,7 @@ Log each question via `bun .codex/tools/aidlc-log.ts decision` BEFORE presenting
 
 ### Step 4: Consolidate
 
-Write four artifacts to `aidlc-docs/inception/practices-discovery/`:
+Write four artifacts to `<record>/inception/practices-discovery/`:
 
 1. **team-practices.md** — descriptive, team voice. Five sections matching `aidlc-team.md` headings (`## Way of Working`, `## Walking Skeleton`, `## Testing Posture`, `## Deployment`, `## Code Style`). Each section is 1-3 sentences of plain prose synthesising Step 2 evidence + Step 3 answers.
 
@@ -116,7 +116,7 @@ Compliance with `stage-protocol.md` checklist:
 2. `bun .codex/tools/aidlc-log.ts decision` for the affirmation question.
 3. A structured question presents `team-practices.md` and `discovered-rules.md` for review. Options:
    - **Approve** — promote affirmed content to `.codex/aidlc-rules/aidlc-team.md` and `.codex/aidlc-rules/aidlc-project.md` (Step 6).
-   - **Edit-then-approve** — user revises the artifacts in `aidlc-docs/inception/practices-discovery/`, then re-enters this gate.
+   - **Edit-then-approve** — user revises the artifacts in `<record>/inception/practices-discovery/`, then re-enters this gate.
    - **Reject and rewrite** — discard the drafts, re-run Step 2 (if brownfield) or restart Step 3.
 4. `bun .codex/tools/aidlc-log.ts answer` after the user answers.
 5. `bun .codex/tools/aidlc-orchestrate.ts report --stage practices-discovery --result approved --user-input "<exact label>"` (or `bun .codex/tools/aidlc-state.ts reject practices-discovery --feedback "<text>"`) — auto-emits the gate-approved/gate-rejected audit events through the owning tools.
@@ -130,8 +130,8 @@ Run:
 
 ```
 bun .codex/tools/aidlc-state.ts practices-promote \
-  --team-practices aidlc-docs/inception/practices-discovery/team-practices.md \
-  --discovered-rules aidlc-docs/inception/practices-discovery/discovered-rules.md \
+  --team-practices <record>/inception/practices-discovery/team-practices.md \
+  --discovered-rules <record>/inception/practices-discovery/discovered-rules.md \
   --affirming-user "<user>"
 ```
 
@@ -148,7 +148,7 @@ The subcommand:
 After Step 6 succeeds (the subcommand prints `{"emitted":"PRACTICES_AFFIRMED",...}` and exits 0):
 
 1. `PRACTICES_AFFIRMED` was already emitted by the Step 6 subcommand — do NOT re-emit it.
-2. Update `Practices Affirmed Timestamp` in `aidlc-docs/aidlc-state.md` via `bun .codex/tools/aidlc-state.ts set "Practices Affirmed Timestamp=NOW"` (the `NOW` literal expands to the current ISO 8601 timestamp; the field is part of the v7 state template).
+2. Update `Practices Affirmed Timestamp` in `<record>/aidlc-state.md` via `bun .codex/tools/aidlc-state.ts set "Practices Affirmed Timestamp=NOW"` (the `NOW` literal expands to the current ISO 8601 timestamp; the field is part of the v7 state template).
 3. Mark practices-discovery as `[x]` completed in the INCEPTION phase block.
 
 If Step 6 failed (`PRACTICES_OVERRIDE` was emitted by the subcommand and exit was non-zero), abort Step 7 entirely. Do NOT update the timestamp or mark the stage complete. The user re-enters the gate after addressing the failure.
@@ -156,22 +156,22 @@ If Step 6 failed (`PRACTICES_OVERRIDE` was emitted by the subcommand and exit wa
 Use the stage-protocol.md completion template:
 - Announcement with completion summary
 - Summary of all 4 artifacts produced + the two cross-row promotion targets
-- Review path: `aidlc-docs/inception/practices-discovery/` AND `.codex/aidlc-rules/aidlc-team.md` AND `.codex/aidlc-rules/aidlc-project.md`
+- Review path: `<record>/inception/practices-discovery/` AND `.codex/aidlc-rules/aidlc-team.md` AND `.codex/aidlc-rules/aidlc-project.md`
 - Structured approval question with options: Approve (continue to Requirements Analysis) / Request Changes
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/inception/practices-discovery/`.
+This stage's outputs are markdown artefacts under `<record>/inception/practices-discovery/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. This stage declares no upstream artefacts; the sensor still runs but reports zero unreferenced inputs by default.
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

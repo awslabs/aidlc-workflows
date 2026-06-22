@@ -32,7 +32,7 @@ scopes:
   - refactor
   - security-patch
   - workshop
-inputs: aidlc-docs/aidlc-state.md
+inputs: <record>/aidlc-state.md
 outputs: "aidlc/codekb/<repo>/ (9 artifacts: business-overview.md, architecture.md, code-structure.md, api-documentation.md, component-inventory.md, technology-stack.md, dependencies.md, code-quality-assessment.md, reverse-engineering-timestamp.md)"
 ---
 
@@ -44,7 +44,7 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ### Step 1: Check Conditions
 
-Read `aidlc-docs/aidlc-state.md` to confirm:
+Read `<record>/aidlc-state.md` to confirm:
 - Project type is brownfield
 
 If project is not brownfield, skip this stage and update aidlc-state.md with skip reason.
@@ -112,7 +112,7 @@ All artifacts written to `aidlc/codekb/<repo>/`, the durable per-repo code knowl
 
 ### Step 4: Update State
 
-Update `aidlc-docs/aidlc-state.md`:
+Update `<record>/aidlc-state.md`:
 - Mark Reverse Engineering as `[x]` completed
 - Update current stage and next stage
 
@@ -131,13 +131,13 @@ This stage's outputs are markdown artefacts under `aidlc/codekb/<repo>/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. This stage declares no upstream artefacts; the sensor still runs but reports zero unreferenced inputs by default.
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

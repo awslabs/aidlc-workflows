@@ -92,7 +92,7 @@ options:
     description: Archive current version and move on
 ```
 
-If "Accept as-is" selected: log the decision in audit.md ("User accepted stage output as-is after [N] revision cycles"), mark stage complete, and proceed. This overrides the NO EMERGENT BEHAVIOR RULE for Construction stages only when the revision threshold is reached.
+If "Accept as-is" selected: log the decision in `<record>/audit/<host>-<clone>.md` ("User accepted stage output as-is after [N] revision cycles"), mark stage complete, and proceed. This overrides the NO EMERGENT BEHAVIOR RULE for Construction stages only when the revision threshold is reached.
 
 After the 2nd revision cycle (before the escape hatch activates), include a note in the approval question: "After one more revision, an 'Accept as-is' option will become available."
 
@@ -194,7 +194,7 @@ Structured bullet-point summary of what was produced:
 
 ### Part 3: Review + Approval (mandatory)
 ```markdown
-**Review:** `aidlc-docs/[path to artifacts]`
+**Review:** `<record>/[path to artifacts]`
 ```
 Then present the structured approval question as defined above.
 
@@ -245,7 +245,7 @@ When TEST_RUN_MODE is active:
 
 **The questions file is always the source of truth.** Regardless of how many questions a stage has, the flow is:
 
-**Step 1: Create the questions file** in the appropriate `aidlc-docs/` directory with full [Answer]: tag format:
+**Step 1: Create the questions file** in the appropriate `<record>/` directory with full [Answer]: tag format:
 - Include options A-E as appropriate for each question
 - EVERY question MUST end with `X. Other (please specify)` as the final option — no exceptions
 - Leave all `[Answer]:` tags blank
@@ -293,14 +293,14 @@ options:
     description: Discuss freely — I'll extract decisions from our conversation
 ```
 
-Log the user's mode choice to `aidlc-docs/audit.md` using the Question interaction log format.
+Log the user's mode choice to `<record>/audit/<host>-<clone>.md` using the Question interaction log format.
 
 **Step 3a: If "Guide me" (interactive mode):**
 - Present questions as structured questions in batches (batching limits are harness-specific — see the question-rendering annex)
 - For questions with 5+ options (single-select or multi-select): present ALL answer options, splitting across multiple structured questions if the harness's per-question option limit requires it (e.g., options A-D first, then options E+ in a follow-up). The user must see every option to make an informed choice. The file retains the full option set as the authoritative record.
 - Every structured question offers an "Other" escape (built into the harness UI or rendered as an explicit option per the annex). In interactive mode, if the user selects "Other" for any question, treat it as a request to discuss that question further — engage in conversation, then ask for their final answer before continuing the batch. Explicitly tell the user this before the first batch: "Select 'Other' on any question to discuss it before answering."
 - After each batch of answers, IMMEDIATELY write the answers back to the questions file (update each `[Answer]:` tag)
-- Log each batch to `aidlc-docs/audit.md` using the Question interaction log format. Generate a fresh ISO timestamp for each batch entry.
+- Log each batch to `<record>/audit/<host>-<clone>.md` using the Question interaction log format. Generate a fresh ISO timestamp for each batch entry.
   CRITICAL: Each batch entry requires its own `date -u` Bash call. Do NOT reuse the timestamp from the mode choice or prior batch.
 - Continue until all questions are answered
 - **Consolidated summary before generation**: After all questions have been answered, present a consolidated summary of all answers in a clear list and ask: "Does this all look correct before I generate the artifact?" Wait for user confirmation. If the user requests changes, update the relevant `[Answer]:` tags in the questions file and re-present the summary. Only proceed to artifact generation after the user confirms.
@@ -376,7 +376,7 @@ When contradictions are detected:
 - When a user defers to AI judgment, reframe: "I want to make sure the design reflects YOUR priorities. Could you tell me [specific aspect]?"
 
 ### Plan and question file location
-Plan files and question files are co-located with their stage artifacts, not in a centralized `plans/` directory. For example, user story plan questions live at `aidlc-docs/inception/user-stories/user-stories-questions.md` alongside the user story artifacts. This co-location improves discoverability — all inputs, questions, and outputs for a stage are found in the same directory.
+Plan files and question files are co-located with their stage artifacts, not in a centralized `plans/` directory. For example, user story plan questions live at `<record>/inception/user-stories/user-stories-questions.md` alongside the user story artifacts. This co-location improves discoverability — all inputs, questions, and outputs for a stage are found in the same directory.
 
 ### Within-Bolt Question Collection (Construction)
 
@@ -591,12 +591,12 @@ Use these templates for non-standard events. Each provides structured fields for
 ```
 
 ### Audit log rules
-- ALWAYS append to `aidlc-docs/audit.md` — NEVER overwrite or truncate existing content.
+- ALWAYS append to this clone's audit shard `<record>/audit/<host>-<clone>.md` — NEVER overwrite or truncate existing content.
 - CRITICAL: The "User Input" field in audit entries MUST contain the user's COMPLETE, UNMODIFIED input. NEVER summarize, paraphrase, or truncate user responses. This is a compliance and traceability requirement — the exact wording may carry nuance that summaries lose.
 - Log all approval prompts BEFORE showing them to the user. This ensures the audit trail captures what was presented, not just what was answered.
 - Log all user responses with ISO timestamps immediately after receiving them.
-- If audit.md does not exist, create it with a header: `# AI-DLC Audit Log`
-- If audit.md appears corrupted (no valid markdown structure), create a backup (`audit.md.bak`) and start a new audit log noting the corruption.
+- If this clone's audit shard does not exist, create it with a header: `# AI-DLC Audit Log`
+- If this clone's audit shard appears corrupted (no valid markdown structure), create a backup (`<record>/audit/<host>-<clone>.md.bak`) and start a new shard noting the corruption.
 - `ERROR_LOGGED` and `RECOVERY_COMPLETED` are declared in the taxonomy but reserved for the recovery workflow (not yet implemented). Do not hand-write them via `aidlc-audit.ts append` — the recovery flow will ship its own emitter. Canonical state transitions go through the state/log/bolt tools (see §4 "Silent bookkeeping writes").
 
 ---
@@ -738,7 +738,7 @@ Key terms used throughout AI-DLC documentation:
 | **Planning** | Stages that analyze, question, and design (produce markdown artifacts) |
 | **Generation** | Stages that produce executable code (Code Generation, Build and Test) |
 | **Depth** | Scale of detail: Minimal, Standard, or Comprehensive — determined by scope and user override |
-| **Artifact** | A versioned markdown file in `aidlc-docs/` recording a decision, design, or analysis |
+| **Artifact** | A versioned markdown file under the active intent's record dir `<record>/` recording a decision, design, or analysis |
 | **Guardrail** | A learned behavioral rule (org-level or project-level) stored in `.claude/rules/` |
 | **AIDLC** | AI-Driven Development Life Cycle — the methodology this system implements |
 
@@ -854,7 +854,7 @@ If a Task tool call fails (timeout, error, or returns truncated/incomplete outpu
 2. If the retry also fails, **inform the user** and offer two options via a structured question:
    - "Run inline" — execute the stage work directly in the orchestrator conversation (slower but avoids subagent issues)
    - "Skip and revisit" — mark the stage as incomplete and continue; return to it later
-3. Log the failure and resolution in `aidlc-docs/audit.md` using the Error log format
+3. Log the failure and resolution in `<record>/audit/<host>-<clone>.md` using the Error log format
 
 ---
 
@@ -870,7 +870,7 @@ If the `run-stage` directive includes a `reviewer` field (non-null), the orchest
 
 1. **Invoke reviewer sub-agent.** Delegate to the reviewer agent named in `directive.reviewer`. Pass:
    - The stage definition file path (`directive.stage_file`)
-   - The Q&A file path (e.g., `aidlc-docs/<phase>/<stage>/<stage>-questions.md`)
+   - The Q&A file path (e.g., `<record>/<phase>/<stage>/<stage>-questions.md`)
    - All artifact file paths produced by the stage (the `produces` artifacts)
    - The validation tools list from the stage definition's frontmatter (if any)
 
@@ -928,7 +928,7 @@ Trigger after Step N-1 (completion message rendered) and before Step N (approval
 
 ### The ritual
 
-1. **Maintain a per-stage memory file as you work.** Append entries to `aidlc-docs/<phase>/<stage>/memory.md` (created at stage start if absent). Use four standard H2 headings:
+1. **Maintain a per-stage memory file as you work.** Append entries to `<record>/<phase>/<stage>/memory.md` (created at stage start if absent). Use four standard H2 headings:
    - **Interpretations** — choices made where the stage prose was ambiguous
    - **Deviations** — places where you intentionally departed from the stage prose, and why
    - **Tradeoffs** — alternatives considered and why you picked what you did

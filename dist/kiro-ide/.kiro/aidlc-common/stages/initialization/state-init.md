@@ -22,7 +22,7 @@ scopes:
   - security-patch
   - workshop
 inputs: workspace classification from workspace-detection, scope from orchestrator
-outputs: aidlc-docs/aidlc-state.md (full populated version)
+outputs: <record>/aidlc-state.md (full populated version, engine-resolved)
 ---
 
 # State Initialization
@@ -35,14 +35,14 @@ MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
 
 ### Step 1: Update State
 
-1. Update `aidlc-docs/aidlc-state.md`: set `Current Stage` to `initializing state`
+1. Update `<record>/aidlc-state.md`: set `Current Stage` to `initializing state`
 2. Mark state-init as `[-]` in progress
 
 ### Step 2: Create Full State File
 
 Read the state template from `.kiro/knowledge/aidlc-shared/state-template.md`.
-Overwrite `aidlc-docs/aidlc-state.md` with the full populated version:
-- Project description (from orchestrator's $ARGUMENTS or audit.md)
+Overwrite `<record>/aidlc-state.md` with the full populated version:
+- Project description (from orchestrator's $ARGUMENTS or `<record>/audit/<host>-<clone>.md`)
 - Project type (greenfield/brownfield from workspace-detection)
 - Workspace state (languages, frameworks, build system from workspace-detection)
 - Start date — run `date -u +'%Y-%m-%dT%H:%M:%SZ'` via Bash
@@ -87,8 +87,8 @@ Update aidlc-state.md with the routing decision:
 
 ### Step 5: Update State and Audit
 
-1. Mark state-init as `[x]` completed in `aidlc-docs/aidlc-state.md`
-2. Append WORKSPACE_INITIALISED event to `aidlc-docs/audit.md` with project type and tech stack summary
+1. Mark state-init as `[x]` completed in `<record>/aidlc-state.md`
+2. Append WORKSPACE_INITIALISED event to `<record>/audit/<host>-<clone>.md` with project type and tech stack summary
 
 ### Step 6: Auto-Proceed
 
@@ -96,7 +96,7 @@ This stage has NO approval gate — it auto-proceeds to the first post-initializ
 
 ## Sensors
 
-This stage writes `aidlc-docs/aidlc-state.md` deterministically through
+This stage writes `<record>/aidlc-state.md` deterministically through
 `aidlc-state.ts`. The state file is a structured manifest, not the kind
 of free-form artefact the markdown-shape sensors target — so the
 frontmatter `sensors:` list is empty.
@@ -107,7 +107,7 @@ fields) would land as its own manifest, imported here via `sensors:`.
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

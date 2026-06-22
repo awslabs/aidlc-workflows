@@ -41,7 +41,7 @@ scopes:
   - mvp
   - workshop
 inputs: All Inception artifacts (requirements, stories, mockups, architecture, units)
-outputs: aidlc-docs/inception/delivery-planning/bolt-plan.md, aidlc-docs/inception/delivery-planning/team-allocation.md, aidlc-docs/inception/delivery-planning/risk-and-sequencing-rationale.md, aidlc-docs/inception/delivery-planning/external-dependency-map.md, aidlc-docs/inception/delivery-planning/delivery-planning-questions.md
+outputs: bolt-plan.md, team-allocation.md, risk-and-sequencing-rationale.md, external-dependency-map.md, delivery-planning-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Delivery Planning
@@ -58,11 +58,11 @@ Load aidlc-architect-agent for build order validation.
 ### Step 2: Load Prior Context
 
 Read all Inception phase artifacts:
-- Requirements from `aidlc-docs/inception/requirements-analysis/`
-- User stories from `aidlc-docs/inception/user-stories/`
-- Application design from `aidlc-docs/inception/application-design/`
-- Units from `aidlc-docs/inception/units-generation/`
-- Team formation from `aidlc-docs/ideation/team-formation/` (if exists)
+- Requirements from `<record>/inception/requirements-analysis/`
+- User stories from `<record>/inception/user-stories/`
+- Application design from `<record>/inception/application-design/`
+- Units from `<record>/inception/units-generation/`
+- Team formation from `<record>/ideation/team-formation/` (if exists)
 
 **If practices-discovery executed**, read `.codex/aidlc-rules/aidlc-team.md` via `extractMarkdownSection` for three sections that influence Bolt planning:
 - `## Branching` — base/target branch and merge strategy for Construction worktrees
@@ -81,7 +81,7 @@ This stage plans the Bolt sequence — the order in which Units of Work are exec
 - **WSJF** (Reinertsen / SAFe) — Weighted Shortest Job First. Sequence score = (user-business value + time criticality + risk-reduction value) ÷ job size. Higher score ships first.
 - **Walking skeleton** (Cockburn) — the first Bolt is a minimal end-to-end slice touching every architectural layer that proves the architecture works; features come in later Bolts.
 
-Create `aidlc-docs/inception/delivery-planning/delivery-planning-questions.md` with questions. Strategic questions (one answer per project):
+Create `<record>/inception/delivery-planning/delivery-planning-questions.md` with questions. Strategic questions (one answer per project):
 
 - Which sequencing heuristic applies: risk-first, value-first, walking-skeleton-first, or hybrid? If hybrid, name which heuristics apply to which Bolts.
 - Is a WSJF-style scoring model used? If so, what weightings on risk, value, and job size?
@@ -110,7 +110,7 @@ Validate the chosen Bolt sequence respects 2.7's dependency DAG (with aidlc-arch
 
 ### Step 5: Generate Artifacts
 
-Create four artifacts in `aidlc-docs/inception/delivery-planning/`:
+Create four artifacts in `<record>/inception/delivery-planning/`:
 
 - `bolt-plan.md` — the ordered sequence of Bolts. Each Bolt entry: included Unit(s) of Work, walking-skeleton marker if applicable, Definition of Done for that Bolt, confidence hypothesis ("what will shipping this Bolt prove?"), expected demo.
 - `team-allocation.md` — Bolt-to-mob assignment. References teams from 1.5 when 1.5 ran (enterprise, feature). When 1.5 is SKIP (mvp, workshop), states that all Bolts are executed by aidlc-developer-agent (AI). When team count > 1, this is the Program Board analog.
@@ -123,32 +123,32 @@ Run Inception → Construction verification check:
 - Requirements → Stories → Architecture alignment
 - All stories trace to requirements
 - Architecture covers all stories
-- Write results to `aidlc-docs/verification/phase-check-inception.md`
+- Write results to `<record>/verification/phase-check-inception.md`
 
 ### Step 7: Update State
 
-Mark delivery-planning as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Mark delivery-planning as `[x]` completed in `<record>/aidlc-state.md`.
 Update Lifecycle Phase to CONSTRUCTION.
 
 ### Step 8: Present Completion & Request Approval
 
 Completion emoji: :calendar:
-Review path: `aidlc-docs/inception/delivery-planning/`
+Review path: `<record>/inception/delivery-planning/`
 Approval gate: Approve (proceed to Construction) / Request Changes.
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/inception/delivery-planning/`.
+This stage's outputs are markdown artefacts under `<record>/inception/delivery-planning/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `requirements`, `stories`, `mockups`, `components`, `unit-of-work`, `unit-of-work-dependency`, `unit-of-work-story-map`, `team-practices`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous

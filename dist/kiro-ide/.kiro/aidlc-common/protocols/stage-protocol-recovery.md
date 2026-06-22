@@ -12,19 +12,21 @@ This is a supplement to `stage-protocol.md` — the main protocol still applies.
 A fresh session — after compaction, a crash, or a clean restart — reconstructs
 where the workflow stands by reading five sources, in this order:
 
-1. **Artefact tree** (`aidlc-docs/<phase>/<stage>/*.md`) — the decisions
+1. **Artefact tree** (`<record>/<phase>/<stage>/*.md`) — the decisions
    themselves, in finished form. Read first: it is the durable record of what
    was actually agreed.
-2. **`memory.md` per stage** (`aidlc-docs/<phase>/<stage>/memory.md`) — what
+2. **`memory.md` per stage** (`<record>/<phase>/<stage>/memory.md`) — what
    got noticed during the decision-making (interpretations, deviations,
    trade-offs, open questions).
-3. **Audit log** (`aidlc-docs/audit.md`) — when each event happened and which
-   gates the user approved. This is the canonical, append-only source of truth
-   for "what happened"; reconcile the other four against it on any disagreement.
-4. **State docs** (`aidlc-docs/aidlc-state.md`, plus any per-stage state) —
+3. **Audit log** (`<record>/audit/<host>-<clone>.md`, glob `<record>/audit/*.md`) —
+   when each event happened and which gates the user approved. This is the
+   canonical, append-only source of truth for "what happened"; the trail is
+   per-clone sharded, so glob `audit/*.md` and merge-sort by timestamp.
+   Reconcile the other four against it on any disagreement.
+4. **State docs** (`<record>/aidlc-state.md`, plus any per-stage state) —
    where in the workflow we are right now: the current/next stage and the
    completed-stage checklist.
-5. **`runtime-graph.json`** (`aidlc-docs/runtime-graph.json`) — the cross-stage
+5. **`runtime-graph.json`** (`<record>/runtime-graph.json`) — the cross-stage
    summary (durations, sensor firings, learnings counts).
 
 Read outputs first, notes second, timeline third, current cursor fourth, the
@@ -56,31 +58,31 @@ When resuming, load context appropriate to the current phase and stage type:
 - State Init reads workspace classification from Workspace Detection
 
 **IDEATION stages (1.1–1.7):**
-- Load `aidlc-docs/ideation/` artifacts completed so far (intent capture, market research, feasibility, scope)
+- Load `<record>/ideation/` artifacts completed so far (intent capture, market research, feasibility, scope)
 - Load guardrails from `.kiro/steering/`
 
 **INCEPTION — RE (Reverse Engineering) stages:**
-- Load `aidlc-docs/inception/reverse-engineering/` artifacts (codebase analysis, component inventory)
+- Load `<record>/inception/reverse-engineering/` artifacts (codebase analysis, component inventory)
 - Load ideation artifacts (scope, feasibility) for context
 
 **INCEPTION — Practices Discovery (stage 2.2):**
-- Load `aidlc-docs/inception/reverse-engineering/` artifacts (brownfield evidence inputs)
-- Load `aidlc-docs/inception/practices-discovery/` if partially complete (team-practices.md, discovered-rules.md, evidence.md drafts awaiting affirmation)
+- Load `<record>/inception/reverse-engineering/` artifacts (brownfield evidence inputs)
+- Load `<record>/inception/practices-discovery/` if partially complete (team-practices.md, discovered-rules.md, evidence.md drafts awaiting affirmation)
 - Load `.kiro/steering/aidlc-team.md` if affirmation already happened (re-run pre-fill from prior affirmed sections)
 - Load `.kiro/steering/aidlc-org.md` for greenfield default suggestions
 
 **INCEPTION — Requirements stages:**
 - Load RE artifacts (if RE was performed)
-- Load `aidlc-docs/inception/requirements-analysis/` (functional requirements, NFRs, user stories)
+- Load `<record>/inception/requirements-analysis/` (functional requirements, NFRs, user stories)
 
 **INCEPTION — Design stages (App Design, Refined Mockups, Units Generation):**
 - Load requirements artifacts
 - Load user stories
-- Load `aidlc-docs/inception/application-design/` (app design, component designs)
+- Load `<record>/inception/application-design/` (app design, component designs)
 
 **INCEPTION — Delivery Planning:**
 - Load all inception artifacts (requirements, design, units)
-- Load `aidlc-docs/inception/delivery-planning/` if partially complete
+- Load `<record>/inception/delivery-planning/` if partially complete
 
 **CONSTRUCTION — Code Generation stages:**
 - Load all design artifacts for the current unit being implemented
@@ -98,7 +100,7 @@ When resuming, load context appropriate to the current phase and stage type:
 
 **OPERATION stages (4.1–4.7):**
 - Load construction outputs (built code, infrastructure design, CI pipeline)
-- Load `aidlc-docs/operation/` artifacts completed so far
+- Load `<record>/operation/` artifacts completed so far
 - For later stages (4.4+), load deployment outputs from 4.1–4.3
 
 ### Stage re-run
@@ -117,11 +119,11 @@ After compaction, the orchestrator can re-read state and continue.
 ### Corrupted state file recovery
 If `aidlc-state.md` exists but cannot be parsed (missing required sections, invalid checkbox syntax, contradictory state):
 1. Create a backup: copy `aidlc-state.md` to `aidlc-state.md.bak`
-2. Scan `aidlc-docs/` for existing artifacts to determine which stages actually completed
+2. Scan `<record>/` for existing artifacts to determine which stages actually completed
 3. Rebuild `aidlc-state.md` from artifact evidence:
-   - If `aidlc-docs/inception/reverse-engineering/` has analysis files, mark RE stages complete
-   - If `aidlc-docs/inception/requirements-analysis/` has requirement docs, mark requirements stages complete
-   - If `aidlc-docs/inception/application-design/` has design docs, mark design stages complete
+   - If `<record>/inception/reverse-engineering/` has analysis files, mark RE stages complete
+   - If `<record>/inception/requirements-analysis/` has requirement docs, mark requirements stages complete
+   - If `<record>/inception/application-design/` has design docs, mark design stages complete
    - If application code exists matching story designs, mark code gen stages complete
 4. Set "Current Status" to the first stage that lacks artifact evidence
 5. Inform the user: "State file was corrupted. Rebuilt from artifacts. Please verify the recovered state."
@@ -149,7 +151,7 @@ When errors or issues are detected during workflow execution, classify them by s
 **Escalation guidelines:**
 - **Critical / High**: Stop and ask the user immediately. Do not attempt to proceed or guess.
 - **Medium**: Attempt resolution (e.g., re-read artifacts, infer from context). If unresolved, ask the user.
-- **Low**: Handle silently and log in `audit.md`. No user interruption needed.
+- **Low**: Handle silently and log in `<record>/audit/<host>-<clone>.md`. No user interruption needed.
 
 ### Contradictory inputs recovery
 If user inputs from different stages contradict each other (detected during execution):
@@ -157,7 +159,7 @@ If user inputs from different stages contradict each other (detected during exec
 2. Do NOT attempt to resolve the contradiction by choosing one interpretation
 3. Ask the user which input takes priority
 4. Update the overridden artifact to reflect the user's resolution
-5. Log the resolution in audit.md
+5. Log the resolution in `<record>/audit/<host>-<clone>.md`
 
 ---
 
@@ -205,15 +207,15 @@ Generation.
 4. Update aidlc-state.md to reflect re-run
 
 ### Scope changes (new requirements):
-1. Document the change in audit.md
+1. Document the change in `<record>/audit/<host>-<clone>.md`
 2. Return to requirements-analysis or delivery-planning as appropriate
 3. Re-plan execution from that point forward
 4. If scope change affects which stages execute (e.g., expanding from `poc` to `feature`), update scope configuration in aidlc-state.md
 
 ### Archive before change
 Before any major change that would overwrite existing artifacts:
-1. Create `aidlc-docs/archive/` if it does not exist
-2. Copy affected artifacts to `aidlc-docs/archive/[ISO-date]-[stage-name]/`
+1. Create `<record>/archive/` if it does not exist
+2. Copy affected artifacts to `<record>/archive/[ISO-date]-[stage-name]/`
 3. Proceed with the change
 This ensures no prior work is permanently lost.
 

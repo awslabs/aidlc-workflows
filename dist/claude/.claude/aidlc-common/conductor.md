@@ -61,7 +61,7 @@ other — only you, the conductor, delegate.
 ## Keeping the diary (memory.md)
 
 Every stage keeps an observation diary at the `memory_path` the `run-stage`
-directive carries (`aidlc-docs/<phase>/<stage>/memory.md`):
+directive carries (`<record>/<phase>/<stage>/memory.md`):
 
 1. At stage start, if `memory.md` does not exist at that path, copy
    `.claude/knowledge/aidlc-shared/memory-template.md` to it. Idempotent —

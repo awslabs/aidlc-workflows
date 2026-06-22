@@ -33,7 +33,7 @@ scopes:
   - feature
   - mvp
 inputs: Intent statement from intent-capture stage, market research from market-research stage (if executed)
-outputs: aidlc-docs/ideation/feasibility/feasibility-assessment.md, aidlc-docs/ideation/feasibility/constraint-register.md, aidlc-docs/ideation/feasibility/raid-log.md, aidlc-docs/ideation/feasibility/feasibility-questions.md
+outputs: feasibility-assessment.md, constraint-register.md, raid-log.md, feasibility-questions.md (under this stage's record dir, engine-resolved)
 ---
 
 # Feasibility & Constraint Analysis
@@ -49,13 +49,13 @@ Orchestrator will separately invoke aidlc-aws-platform-agent and aidlc-complianc
 
 ### Step 2: Load Prior Context
 
-- Read intent statement from `aidlc-docs/ideation/intent-capture/`
-- Read market research from `aidlc-docs/ideation/market-research/` (if exists)
+- Read intent statement from `<record>/ideation/intent-capture/`
+- Read market research from `<record>/ideation/market-research/` (if exists)
 - Load guardrails from `.kiro/steering/`
 
 ### Step 3: Generate Clarifying Questions
 
-Create `aidlc-docs/ideation/feasibility/feasibility-questions.md` with questions:
+Create `<record>/ideation/feasibility/feasibility-questions.md` with questions:
 - What existing systems must this integrate with?
 - Are there regulatory/compliance requirements (PCI, HIPAA, SOC2, data residency)?
 - What is the team's current tech stack and skill profile?
@@ -77,27 +77,27 @@ The orchestrator will pass these artifacts to aidlc-aws-platform-agent for AWS l
 
 ### Step 6: Update State
 
-Mark feasibility as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Mark feasibility as `[x]` completed in `<record>/aidlc-state.md`.
 
 ### Step 7: Present Completion & Request Approval
 
 Completion emoji: :test_tube:
-Review path: `aidlc-docs/ideation/feasibility/`
+Review path: `<record>/ideation/feasibility/`
 Standard approval gate (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/ideation/feasibility/`.
+This stage's outputs are markdown artefacts under `<record>/ideation/feasibility/`.
 
 The imported sensors check those outputs:
 
-- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
+- **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `intent-statement`, `competitive-analysis`, `market-trends`, `build-vs-buy`).
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under four standard headings:
 
 - **Interpretations** — choices made where the stage prose was ambiguous
