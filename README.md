@@ -1,7 +1,7 @@
 # AI-DLC — one core, many harnesses
 
 > [!WARNING]
-> **GA Preview — under active development.** AI-DLC Workflows 2.0 is a GA Preview release. Interfaces, stage definitions, the agent roster, and the install model are still evolving, and breaking changes can land between releases. Expect rough edges, pin a known-good version for anything you depend on, and review all generated output before you act on it. See the [roadmap](roadmap.html) for what's shipped, in flight, and planned.
+> **GA Preview — under active development.** AI-DLC Workflows 2.0 is a GA Preview release. Interfaces, stage definitions, the agent roster, and the install model are still evolving, and breaking changes can land between releases. Expect rough edges, pin a known-good version for anything you depend on, and review all generated output before you act on it. See the [roadmap](https://awslabs.github.io/aidlc-workflows/roadmap.html) for what's shipped, in flight, and planned.
 > **For production use, stay on the stable [`main`](https://github.com/awslabs/aidlc-workflows/tree/main) branch.**
 
 A native implementation of the **AI-DLC methodology** (AI-Driven Development Life Cycle) that runs on **many harnesses from one source of truth** — today Claude Code, Kiro IDE, Kiro CLI, and Codex CLI, and any capable harness you port it to. Run a full software-development lifecycle — 11 domain-expert agents working through a 32-stage workflow, and you approve every gate — in whichever harness you use.
