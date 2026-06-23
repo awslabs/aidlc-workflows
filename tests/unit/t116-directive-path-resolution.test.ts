@@ -15,6 +15,9 @@
 //
 // Source under test (dist/claude/.claude/tools/aidlc-orchestrate.ts):
 //   :619 resolveArtifactPath(name, owner, unit)
+//          - codekb owner: aidlc/spaces/<space>/codekb/<repo>/<name>.md (the
+//            isCodekb arm — fires for produces[] AND consumes[] of a codekb stage
+//            like reverse-engineering, dropping the per-intent record tail).
 //          - non-per-unit: aidlc-docs/<owner.phase>/<owner.slug>/<name>.md
 //          - per-unit:     aidlc-docs/construction/<unit>/<owner.slug>/<name>.md
 //   :639 resolveConsumePath(name, node, unit) — keys on producersOf(name)[0],
@@ -104,6 +107,15 @@ const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures");
 // so the record prefix is deterministic. Every expected directive path below is
 // rooted here (was the flat `aidlc-docs/` prefix pre-P9).
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
+
+// The reverse-engineering stage's artifacts live in the SPACE-LEVEL codekb store
+// (`aidlc/spaces/<space>/codekb/<repo>/`), NOT under any intent's record dir —
+// the codekb-determinism placement fix (isCodekb resolver branch). A consume of
+// an RE-produced artifact therefore resolves under this prefix keyed by the
+// repo NAME, which for these no-repo fixtures is basename(projectDir) (a dynamic
+// temp dir name). We assert the SPACE PREFIX + artifact filename rather than the
+// full path so the assertion is robust to the per-emit temp basename.
+const CODEKB_PREFIX = `aidlc/spaces/${DEFAULT_SPACE}/codekb/`;
 
 // reset_aidlc_env (t116 sources fixtures.sh): clear AWS_AIDLC_DEFAULT_SCOPE so
 // the fixture's own scope drives stages-in-scope, not a leaked shell export.
@@ -214,20 +226,28 @@ describe("t116 brownfield application-design (migrated from t116-directive-path-
   });
 
   // .sh test 4: conditional_on:brownfield consume 'architecture' is PRESENT for a
-  // Brownfield project and resolves UNDER ITS PRODUCER reverse-engineering — NOT
-  // the consuming application-design dir.
-  test("4: brownfield consume 'architecture' → reverse-engineering/architecture.md (producer-keyed)", () => {
-    expect(BF.consumes).toContain(
-      `${RP}/inception/reverse-engineering/architecture.md`,
+  // Brownfield project and — because reverse-engineering is its PRODUCER and RE
+  // is a codekb stage — resolves under the SPACE-LEVEL codekb store
+  // (`aidlc/spaces/<space>/codekb/<repo>/architecture.md`), NOT the per-intent
+  // record dir and NOT the consuming application-design dir (the isCodekb
+  // resolver branch, codekb-determinism placement fix).
+  test("4: brownfield consume 'architecture' → space-level codekb/<repo>/architecture.md (codekb-keyed)", () => {
+    const hit = BF.consumes.find(
+      (p) => p.startsWith(CODEKB_PREFIX) && p.endsWith("/architecture.md"),
     );
+    expect(hit, `no codekb-resolved architecture.md in ${JSON.stringify(BF.consumes)}`).toBeDefined();
+    // It must NOT carry the old record-dir RE tail.
+    expect(BF.consumes).not.toContain(`${RP}/inception/reverse-engineering/architecture.md`);
   });
 
   // .sh test 5: the second conditional_on:brownfield consume 'component-inventory'
-  // is PRESENT for Brownfield and ALSO resolves under its producer.
-  test("5: brownfield consume 'component-inventory' → reverse-engineering/component-inventory.md", () => {
-    expect(BF.consumes).toContain(
-      `${RP}/inception/reverse-engineering/component-inventory.md`,
+  // is PRESENT for Brownfield and ALSO resolves under the space-level codekb store.
+  test("5: brownfield consume 'component-inventory' → space-level codekb/<repo>/component-inventory.md", () => {
+    const hit = BF.consumes.find(
+      (p) => p.startsWith(CODEKB_PREFIX) && p.endsWith("/component-inventory.md"),
     );
+    expect(hit, `no codekb-resolved component-inventory.md in ${JSON.stringify(BF.consumes)}`).toBeDefined();
+    expect(BF.consumes).not.toContain(`${RP}/inception/reverse-engineering/component-inventory.md`);
   });
 
   // .sh test 12: the NON-conditional required consume 'requirements' also resolves

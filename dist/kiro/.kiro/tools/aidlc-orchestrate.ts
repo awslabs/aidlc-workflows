@@ -83,6 +83,7 @@ import {
 import {
   activeSpace,
   type CheckboxLine,
+  codekbRepoName,
   errorMessage,
   firstInScopeStageOfPhase,
   getField,
@@ -93,6 +94,7 @@ import {
   PHASE_NUMBERS,
   PHASES,
   READ_ONLY_FLAGS,
+  relativeCodekbDir,
   relativeRecordDir,
   relativeSpaceRecordPrefix,
   resolveProjectDir,
@@ -690,6 +692,32 @@ function isPerUnit(node: GraphStage): boolean {
   return node.for_each === PER_UNIT_FOR_EACH || KNOWN_PER_UNIT_STAGES.has(node.slug);
 }
 
+// The KNOWN SET of stages whose artifacts live in the durable, space-level
+// code knowledge base (`aidlc/spaces/<space>/codekb/<repo>/`) rather than under
+// a per-intent record dir. Keyed on the slug ALONE — deliberately NOT a stage
+// frontmatter marker: aidlc-stage-schema.ts OPTIONAL_FIELDS omits `codekb`, so a
+// `codekb: true` field would trip the schema's unknown-key rule and fail the
+// stage compile. reverse-engineering is the sole member today (it builds the
+// brownfield code understanding the whole space reuses); a future codekb stage
+// joins by adding its slug here, no schema change.
+const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set(["reverse-engineering"]);
+
+// True when the node's artifacts belong in the space-level codekb (see set
+// above). Pure predicate over the slug — the per-repo/per-space placement is
+// resolved by the CodekbCtx threaded into resolveArtifactPath.
+function isCodekb(node: GraphStage): boolean {
+  return KNOWN_CODEKB_STAGES.has(node.slug);
+}
+
+// The small, fs-free payload that lets resolveArtifactPath build a codekb path
+// without reading the disk itself (the resolver stays PURE — the conductor's
+// chokepoint computes these once where projectDir is live, exactly as
+// recordPrefix is). `codekbRepo` is the deterministic repo NAME from
+// codekbRepoName(projectDir); `space` is the active-space cursor. When absent
+// (a non-codekb caller, e.g. a test invoking buildRunStageDirective with
+// defaults) the codekb branch never fires and the record-dir path stands.
+type CodekbCtx = { projectDir: string; space: string; codekbRepo: string };
+
 // Resolve a single artifact vocabulary name to its canonical aidlc-docs/... path
 // UNDER THE STAGE THAT OWNS THE FILE. Non-per-unit stages map to
 // `aidlc-docs/<phase>/<stage-slug>/<name>.md`; per-unit Construction stages
@@ -715,7 +743,18 @@ function resolveArtifactPath(
   owner: GraphStage,
   unit: string,
   recordPrefix: string | null,
+  codekbCtx?: CodekbCtx,
 ): string {
+  // Codekb artifacts live in the space-level codekb dir, keyed by repo — NOT
+  // under the per-intent record dir. This arm fires for BOTH produces[] (owner
+  // is the directive's own node) AND consumes[] (owner is the producing stage
+  // resolved via producersOf — so a consume of an RE artifact also lands here).
+  // It drops the intents/<slug> tail and keeps only the aidlc/spaces/<space>/
+  // stem, mirroring relativeCodekbDir. Guarded on the ctx being present so a
+  // ctx-less caller (defaults) falls through to the record-dir arms below.
+  if (isCodekb(owner) && codekbCtx) {
+    return `${relativeCodekbDir(codekbCtx.projectDir, codekbCtx.codekbRepo, codekbCtx.space)}/${name}.md`;
+  }
   const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
   if (isPerUnit(owner)) {
     return `${prefix}/construction/${unit}/${owner.slug}/${name}.md`;
@@ -737,9 +776,10 @@ function resolveConsumePath(
   node: GraphStage,
   unit: string,
   recordPrefix: string | null,
+  codekbCtx?: CodekbCtx,
 ): string {
   const producer = producersOf(name)[0];
-  return resolveArtifactPath(name, producer ?? node, unit, recordPrefix);
+  return resolveArtifactPath(name, producer ?? node, unit, recordPrefix, codekbCtx);
 }
 
 // Normalise the workflow's Project Type to the lowercase token the graph's
@@ -770,6 +810,7 @@ function resolveConsumes(
   projectType: "brownfield" | "greenfield" | null,
   unit: string,
   recordPrefix: string | null,
+  codekbCtx?: CodekbCtx,
 ): string[] {
   const paths: string[] = [];
   for (const consume of consumes) {
@@ -780,16 +821,21 @@ function resolveConsumes(
     ) {
       continue;
     }
-    paths.push(resolveConsumePath(consume.artifact, node, unit, recordPrefix));
+    paths.push(resolveConsumePath(consume.artifact, node, unit, recordPrefix, codekbCtx));
   }
   return paths;
 }
 
 // Resolve a node's produces[] (always bare names, even for per-unit stages) to
 // canonical paths. produces has no conditional_on axis, so every name resolves.
-function resolveProduces(node: GraphStage, unit: string, recordPrefix: string | null): string[] {
+function resolveProduces(
+  node: GraphStage,
+  unit: string,
+  recordPrefix: string | null,
+  codekbCtx?: CodekbCtx,
+): string[] {
   return (node.produces ?? []).map((name) =>
-    resolveArtifactPath(name, node, unit, recordPrefix),
+    resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx),
   );
 }
 
@@ -844,6 +890,7 @@ function buildRunStageDirective(
   scope: string = DEFAULT_SCOPE,
   stateContent: string | null = null,
   recordPrefix: string | null = null,
+  codekbCtx?: CodekbCtx,
 ): RunStageDirective {
   const directive: RunStageDirective = {
     kind: "run-stage",
@@ -858,8 +905,8 @@ function buildRunStageDirective(
     mode: node.mode as RunStageDirective["mode"],
     gate: computeGate(node, scope, stateContent),
     memory_path: memoryPathFor(node.phase, node.slug, recordPrefix),
-    consumes: resolveConsumes(node.consumes ?? [], node, projectType, unit, recordPrefix),
-    produces: resolveProduces(node, unit, recordPrefix),
+    consumes: resolveConsumes(node.consumes ?? [], node, projectType, unit, recordPrefix, codekbCtx),
+    produces: resolveProduces(node, unit, recordPrefix, codekbCtx),
     rules_in_context: (node.rules_in_context ?? []).map((r) => r.path),
     sensors_applicable: (node.sensors_applicable ?? []).map((s) => s.id),
     stage_file: stageFileFor(node.phase, node.slug),
@@ -996,6 +1043,16 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // `aidlc-docs` prefix (a pre-workspace project not yet migrated/born). Resolved
   // once here where projectDir is known; the resolvers themselves take no pd.
   const recordPrefix = relativeRecordDir(pd);
+  // The space-level codekb context, resolved on the SAME live projectDir as
+  // recordPrefix and threaded down the same spine. Lets resolveArtifactPath
+  // place a KNOWN_CODEKB_STAGES artifact under aidlc/spaces/<space>/codekb/
+  // <repo>/ (dropping the intents/<slug> tail) without re-reading the disk in
+  // the pure resolver. codekbRepoName is read-only (intentRepos never throws).
+  const codekbCtx: CodekbCtx = {
+    projectDir: pd,
+    space: activeSpace(pd),
+    codekbRepo: codekbRepoName(pd),
+  };
 
   // (Branch 3 — the legacy `--init` flag — retired in P4. There is no longer a
   // user-facing `/aidlc --init`: the workspace shell ships in dist/ (SEED) and
@@ -1084,7 +1141,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    emitSingleRunStage(flags.stage, scope, projectType, recordPrefix);
+    emitSingleRunStage(flags.stage, scope, projectType, recordPrefix, codekbCtx);
     return;
   }
 
@@ -1331,7 +1388,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // invoke-swarm directive (and returns true) only when all trigger
     // conditions hold; otherwise the normal run-stage emit fires.
     if (!tryEmitSwarm(currentSlug, scope, stateContent, pd)) {
-      emitRunStageForSlug(currentSlug, projectType, scope, stateContent, recordPrefix);
+      emitRunStageForSlug(currentSlug, projectType, scope, stateContent, recordPrefix, codekbCtx);
     }
     return;
   }
@@ -1354,7 +1411,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // Same swarm guard on the advance path: an eligible per-unit build stage
   // under autonomy fans out as a batch rather than a single run-stage.
   if (!tryEmitSwarm(next.slug, scope, stateContent, pd)) {
-    emitRunStageForSlug(next.slug, projectType, scope, stateContent, recordPrefix);
+    emitRunStageForSlug(next.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
   }
 }
 
@@ -1438,6 +1495,7 @@ function emitRunStageForSlug(
   scope: string = DEFAULT_SCOPE,
   stateContent: string | null = null,
   recordPrefix: string | null = null,
+  codekbCtx?: CodekbCtx,
 ): void {
   const node = nodeForSlug(slug);
   if (!node) {
@@ -1447,7 +1505,7 @@ function emitRunStageForSlug(
     });
     return;
   }
-  emit(buildRunStageDirective(node, projectType, UNIT_NAME_PLACEHOLDER, scope, stateContent, recordPrefix));
+  emit(buildRunStageDirective(node, projectType, UNIT_NAME_PLACEHOLDER, scope, stateContent, recordPrefix, codekbCtx));
 }
 
 // --- --single stage-runner mode ---
@@ -1478,6 +1536,7 @@ function emitSingleRunStage(
   scope: string,
   projectType: "brownfield" | "greenfield" | null,
   recordPrefix: string | null = null,
+  codekbCtx?: CodekbCtx,
 ): void {
   const node = nodeForSlug(slug);
   if (!node) {
@@ -1509,6 +1568,7 @@ function emitSingleRunStage(
     scope,
     null,
     recordPrefix,
+    codekbCtx,
   );
   if (directive.conductor_persona === undefined) {
     const persona = readConductorPersona();
@@ -1636,8 +1696,15 @@ function emitJumpDirective(
     // No-state jump: pass scope for the gate computation; stateContent stays
     // null (no workflow yet → no skeleton round-trip, no persona delivery —
     // both correct, this is a degenerate "start here" before init). recordPrefix
-    // resolves the active intent's relative dir (null on a fresh workspace).
-    emitRunStageForSlug(first.slug, projectType, scope, null, relativeRecordDir(projectDir));
+    // resolves the active intent's relative dir (null on a fresh workspace). The
+    // codekb ctx is computed from the same live projectDir (no handleNext-cached
+    // value reaches this inline site), so a codekb stage jumped-to here still
+    // resolves under aidlc/spaces/<space>/codekb/<repo>/.
+    emitRunStageForSlug(first.slug, projectType, scope, null, relativeRecordDir(projectDir), {
+      projectDir,
+      space: activeSpace(projectDir),
+      codekbRepo: codekbRepoName(projectDir),
+    });
     return;
   }
 
@@ -1672,7 +1739,13 @@ function emitJumpDirective(
     return;
   }
   // No-state jump: scope feeds the gate; stateContent is null (no workflow yet).
-  emit(buildRunStageDirective(node, projectType, UNIT_NAME_PLACEHOLDER, scope, null, relativeRecordDir(projectDir)));
+  // codekb ctx computed off the same live projectDir as the inline recordPrefix
+  // (same rationale as the --phase inline site above).
+  emit(buildRunStageDirective(node, projectType, UNIT_NAME_PLACEHOLDER, scope, null, relativeRecordDir(projectDir), {
+    projectDir,
+    space: activeSpace(projectDir),
+    codekbRepo: codekbRepoName(projectDir),
+  }));
 }
 
 // Pull `target_slug` AND `direction` out of `aidlc-jump.ts resolve`'s stdout

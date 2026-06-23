@@ -38,6 +38,8 @@ import {
   hooksHealthDir,
   isoTimestamp,
   isPackageJson,
+  codekbRepoName,
+  relativeCodekbDir,
   listIntents,
   listSpaces,
   loadAgents,
@@ -158,6 +160,7 @@ Utilities:
   space             List spaces (read-only; --json for structured output)
   space <name>      Switch the active space (team)
   space-create <name>  Create a new space (team) seeded from the framework baseline
+  codekb-path       Print the deterministic per-repo codekb directory (read-only)
   --doctor          Run health check on hooks, settings, and directory structure
   --stage <id>      Jump to a specific stage (by slug or number, e.g., code-generation or 3.5)
   --phase <name>    Jump to the first in-scope stage of a phase (e.g., construction or 3)
@@ -2560,6 +2563,24 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   process.stdout.write(`Active space → ${target}\n`);
 }
 
+// `/aidlc codekb-path [--repo <name>] [--json]` — read-only. Prints the
+// deterministic space-level per-repo codekb directory (forward-slash, workspace-
+// relative) the reverse-engineering stage writes its 9 artifacts into. The repo
+// is the caller-supplied --repo, else the engine-resolved codekbRepoName (the
+// lone recorded repo, or basename(projectDir) when none is recorded). No mkdir,
+// no state read, no audit — mirrors the intent/space read-only query arms.
+function handleCodekbPath(projectDir: string, flags: Record<string, string>): void {
+  const asJson = flags.json === "true";
+  const space = activeSpace(projectDir);
+  const repo = flags.repo && flags.repo.length > 0 ? flags.repo : codekbRepoName(projectDir, space);
+  const dir = relativeCodekbDir(projectDir, repo, space);
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify({ space, repo, dir })}\n`);
+    return;
+  }
+  process.stdout.write(`${dir}/\n`);
+}
+
 // `/aidlc space-create <name>` — seed a NEW space's memory. org.md is copied
 // from spaces/default/memory/org.md (the always-present SEED baseline), plus
 // fresh empty team.md/project.md/phases stubs + the templates/ floor. A new team
@@ -3275,6 +3296,12 @@ function main(): void {
     case "space-create":
       handleSpaceCreate(projectDir, positional, flags);
       break;
+    // codekb-path — read-only query verb. Prints the deterministic
+    // space-level per-repo codekb dir the RE stage writes into. Mirrors the
+    // read-only intent/space query arms: no mutation, no audit, no mkdir.
+    case "codekb-path":
+      handleCodekbPath(projectDir, flags);
+      break;
     // init / state-init — deprecated aliases kept for back-compat only (not in
     // usage/help). The user-facing `/aidlc --init` is retired in P4: the
     // workspace shell ships in dist/ (SEED) and the engine auto-births the
@@ -3309,7 +3336,7 @@ function main(): void {
       break;
     default:
       die(
-        `Usage: aidlc-utility <help|version|status|doctor|intent-birth|intent|space|space-create|scope-change|config-change|set-status|enable-test-run|detect-scope|resolve-env-scope|scope-table> [--project-dir <path>] [--scope <scope>] [--json]`
+        `Usage: aidlc-utility <help|version|status|doctor|intent-birth|intent|space|space-create|codekb-path|scope-change|config-change|set-status|enable-test-run|detect-scope|resolve-env-scope|scope-table> [--project-dir <path>] [--scope <scope>] [--json]`
       );
   }
 }

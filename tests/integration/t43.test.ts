@@ -227,9 +227,11 @@ describe("ideation stages declare their per-intent record dir in outputs", () =>
 // ============================================================
 describe("inception stages declare their per-intent record dir in outputs", () => {
   // reverse-engineering was PROMOTED out of the inception artifact tree to the
-  // durable per-repo code knowledge base aidlc/codekb/<repo>/ (P0 codekb
-  // promotion), so it is asserted separately below; the other inception stages
-  // declare their own artifacts under the engine-resolved record dir.
+  // durable per-repo code knowledge base (P0 codekb promotion), which the
+  // codekb-determinism placement fix then made SPACE-scoped
+  // (aidlc/spaces/<active-space>/codekb/<repo>/), so it is asserted separately
+  // below; the other inception stages declare their own artifacts under the
+  // engine-resolved record dir.
   for (const slug of ["requirements-analysis", "application-design"]) {
     test(`${slug} outputs declare "under this stage's record dir, engine-resolved"`, () => {
       const v = out(slug);
@@ -238,10 +240,12 @@ describe("inception stages declare their per-intent record dir in outputs", () =
     });
   }
 
-  test("reverse-engineering outputs to the per-repo codekb (aidlc/codekb/<repo>/), not the inception record dir", () => {
+  test("reverse-engineering outputs to the space-level per-repo codekb (aidlc/spaces/<active-space>/codekb/<repo>/), not the inception record dir", () => {
     const v = out("reverse-engineering");
     expect(v).not.toBeNull();
-    expect(v!).toContain("aidlc/codekb/<repo>/");
+    // The codekb-determinism placement fix made the per-repo codekb store
+    // SPACE-scoped (a sibling of intents/), the dir `codekb-path` resolves.
+    expect(v!).toContain("aidlc/spaces/<active-space>/codekb/<repo>/");
     // Post-reroot the inception artifact tree is the per-intent <record>/inception/;
     // RE must NOT write there (it lives in the durable codekb instead).
     expect(v!).not.toContain("<record>/inception/");

@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 381,
+    "total": 385,
     "enumeratedByClass": {
-      "function": 175,
+      "function": 178,
       "audit": 67,
       "scope": 9,
       "stage": 32,
       "hook": 10,
-      "subcommand": 81,
+      "subcommand": 82,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 74,
+      "function": 77,
       "audit": 27,
       "scope": 9,
       "stage": 8,
       "hook": 10,
-      "subcommand": 68,
+      "subcommand": 69,
       "render-surface": 7
     }
   },
@@ -1004,6 +1004,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:codekbDir",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t182-codekb-placement.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:codekbRepoName",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t182-codekb-placement.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:compileStageGraph",
       "minMechanism": "none",
       "coveredBy": [
@@ -1875,6 +1899,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:relativeCodekbDir",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t182-codekb-placement.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3096,6 +3132,10 @@
       "minMechanism": "none",
       "coveredBy": [
         {
+          "file": "tests/integration/t183-codekb-placement-reverify.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/integration/t72-stage-reverse-engineering.test.ts",
           "mechanism": "sdk"
         }
@@ -4044,6 +4084,18 @@
         },
         {
           "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility codekb-path",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t182-codekb-placement.test.ts",
           "mechanism": "cli"
         }
       ],

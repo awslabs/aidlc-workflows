@@ -16,10 +16,12 @@
 //      intents.json row, repos == the SORTED set ["repo-a","repo-b"], a real
 //      UUIDv7, status "in-flight".
 //   2. (cheaper variant the card sanctions) a reverse-engineering stage writes a
-//      per-repo codekb artifact into aidlc/codekb/repo-a + repo-b — WITHOUT
-//      driving the full worktree-forking swarm (the most fragile/expensive beat,
-//      which combines badly with the in-turn forwarding loop). Asserted: both
-//      per-repo codekb dirs exist with content.
+//      per-repo codekb artifact into the space-level codekb store for repo-a +
+//      repo-b (aidlc/spaces/<space>/codekb/<repo>/ — the codekb-determinism
+//      placement fix; codekbFiles tolerates the bare workspace-root form too) —
+//      WITHOUT driving the full worktree-forking swarm (the most fragile/expensive
+//      beat, which combines badly with the in-turn forwarding loop). Asserted:
+//      both per-repo codekb dirs exist with content.
 //   3. birth a SECOND intent alongside the active one via the deterministic
 //      `intent-birth` verb (the engine has NO "offer a 2nd intent" directive on
 //      the logic path — it would advance A via Branch 10; intent-birth mints
@@ -118,14 +120,26 @@ function birthToolPrompt(scope: string, args: string): string {
   );
 }
 
-/** Read every codekb artifact filename under aidlc/codekb/<repo>/, or []. */
+/** Read every codekb artifact filename for a repo, tolerant of WHERE the store
+ *  anchors. The engine NOW resolves the per-repo codekb to the SPACE-LEVEL
+ *  sibling of intents/ (aidlc/spaces/<space>/codekb/<repo>/ — the
+ *  codekb-determinism placement fix), but the live RE subagent occasionally still
+ *  writes to the bare workspace-root form aidlc/codekb/<repo>/. Either is a valid
+ *  per-repo store for this beat's promise; accept BOTH, only absence is a fail. */
 function codekbFiles(root: string, repo: string): string[] {
-  const dir = join(root, "aidlc", "codekb", repo);
-  try {
-    return readdirSync(dir).filter((f) => f.endsWith(".md"));
-  } catch {
-    return [];
+  const candidates = [
+    join(root, "aidlc", "spaces", activeSpace(root), "codekb", repo),
+    join(root, "aidlc", "codekb", repo),
+  ];
+  for (const dir of candidates) {
+    try {
+      const md = readdirSync(dir).filter((f) => f.endsWith(".md"));
+      if (md.length > 0) return md;
+    } catch {
+      /* try the next candidate */
+    }
   }
+  return [];
 }
 
 /** The active intent's record dir (the cursor target) for the active space. */
@@ -193,8 +207,10 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
 
         // --- Step 2: per-repo codekb written for BOTH siblings (cheaper variant)
         // Drive a reverse-engineering pass over the recorded repo set; the stage
-        // writes its artifacts to aidlc/codekb/<repo>/ per repo (RE stage prose).
-        // We drive only as far as the per-repo codekb landing — NOT the swarm.
+        // writes its artifacts to the space-level codekb store per repo
+        // (aidlc/spaces/<space>/codekb/<repo>/ — RE stage prose defers the dir to
+        // the codekb-path tool). We drive only as far as the per-repo codekb
+        // landing — NOT the swarm.
         await driveAidlc(
           `/aidlc --stage reverse-engineering --single`,
           {

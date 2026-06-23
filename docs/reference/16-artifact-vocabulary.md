@@ -167,6 +167,17 @@ frontmatter field — the five Construction stages that run once per Unit carry
 it; the rest omit it. A future helper could compute the path mechanically from
 stage graph + canonical name.
 
+**Codekb is the space-level exception.** Reverse-engineering's 9 artifacts
+(`business-overview`, `architecture`, `code-structure`, `api-documentation`,
+`component-inventory`, `technology-stack`, `dependencies`,
+`code-quality-assessment`, `reverse-engineering-timestamp`) do **not** resolve
+under the per-intent record dir. They land in the durable, per-repo code
+knowledge base at `aidlc/spaces/<space>/codekb/<repo>/` — a store shared across
+every intent in the space, keyed by repo rather than by intent. The path is
+resolved outside the record-relative rule via the `isCodekb` branch in
+`resolveArtifactPath` (`dist/claude/.claude/tools/aidlc-orchestrate.ts`), and
+the same directory is printed by the read-only `/aidlc codekb-path` command.
+
 **Canonical name ≠ filename for collisions.** Where a collision is split
 (see above), the on-disk filename may keep the pre-split form
 (`test-results.md`) while the canonical name is the disambiguated

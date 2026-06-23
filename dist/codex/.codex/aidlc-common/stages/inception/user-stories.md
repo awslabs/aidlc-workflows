@@ -67,7 +67,7 @@ If skipping, update aidlc-state.md with skip reason and proceed to next stage.
 ### Step 3: Load Prior Context
 
 - Read `<record>/inception/requirements-analysis/requirements.md`
-- If brownfield: Read relevant RE artifacts from `aidlc/codekb/<repo>/`
+- If brownfield: Read relevant RE artifacts from `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints)
 
 ---
 

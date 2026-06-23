@@ -84,6 +84,8 @@ For handlers that require no LLM reasoning (print text, read/format files, check
 
 The `--help`, `--version`, `--status`, and `--doctor` handlers are reference implementations.
 
+The `codekb-path` handler is a read-only **query verb** (like `intent <name>` and `space`): it is dispatched from stage prose, emits NO audit event, drives NO SKILL.md task tracking, and creates NO directory (`mkdir`). It simply prints the canonical per-repo codekb directory the reverse-engineering stage writes its artifacts into, so prose never hand-derives that path.
+
 ### LLM-driven handlers
 For handlers that benefit from agent reasoning (filesystem scanning, decision-making):
 1. **Task tracking** -- Create tasks via `TaskCreate` for each logical step, transition them with `TaskUpdate` (`in_progress` -> `completed`) as work progresses. This drives the task sidebar in Claude Code.

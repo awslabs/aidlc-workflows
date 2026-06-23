@@ -22,13 +22,14 @@
 // Scope=bugfix, Completed=3) + the brownfield-todo stub (a React/Vite/TypeScript Todo
 // app). Plain `/aidlc` resumes that current stage directly; jump routing for
 // `--stage` is covered by t25/t26. The RE stage: step 2 delegates a developer
-// code scan, step 3 the architect synthesises 9 artifacts into
-// aidlc-docs/inception/reverse-engineering/ (reverse-engineering.md:36,78-89), step 4
-// updates state, step 5 renders the AskUserQuestion approval gate. We stop at step 5.
+// code scan, step 3 the architect synthesises 9 artifacts into the SPACE-LEVEL
+// per-repo codekb store aidlc/spaces/<space>/codekb/<repo>/ (the dir codekb-path
+// resolves — reverse-engineering.md step 3), step 4 updates state, step 5 renders
+// the AskUserQuestion approval gate. We stop at step 5.
 //
 // ASSERTION MAP (.sh test -> deterministic SDK surface, equal-or-stronger):
 //   1 RE directory created
-//       -> existsSync(aidlc-docs/inception/reverse-engineering) on disk.
+//       -> existsSync(aidlc/spaces/<space>/codekb/<repo>/) on disk (codekbReDir).
 //   2 RE dir has >= 4 .md artifacts
 //       -> readdirSync(reDir).filter(.md).length > 3 (the .sh's assert_gt 3).
 //   6 at least one RE artifact > 200 bytes
@@ -67,7 +68,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   cleanupTestProject,
   sedReplaceInFile,
@@ -76,6 +77,19 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import { driveAidlc, readStateField } from "../harness/sdk-drive.ts";
+import { activeSpace } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// The space-level per-repo codekb dir the RE stage now writes into
+// (aidlc/spaces/<space>/codekb/<repo>/ — the codekb-determinism placement fix).
+// This single-repo brownfield fixture records NO repos row, so the engine keys
+// the store by basename(projectDir) (codekbRepoName's 0-repo case). Tolerant of
+// the bare workspace-root form too (the live RE subagent occasionally writes
+// there), mirroring the t-acp-kiro / journey codekbFiles helpers.
+function codekbReDir(proj: string): string {
+  const spaceScoped = join(proj, "aidlc", "spaces", activeSpace(proj), "codekb", basename(proj));
+  const bare = join(proj, "aidlc", "codekb", basename(proj));
+  return existsSync(spaceScoped) ? spaceScoped : bare;
+}
 
 // ---------------------------------------------------------------------------
 // Timeout budget — the .sh set AIDLC_TEST_TIMEOUT=900 (RE is a HEAVY multi-agent
@@ -126,10 +140,14 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
         // completion step (no vacuous pass). stopAfterAskUserQuestion fired.
         expect(r.askedQuestions.length).toBeGreaterThan(0);
 
-        // .sh test 1: the RE artifact directory was created (under the seeded
-        // per-intent record the RE stage writes into — flat aidlc-docs/ retired).
-        const reDir = join(seededRecordDir(proj), "inception", "reverse-engineering");
+        // .sh test 1: the RE artifact directory was created. RE now writes to the
+        // SPACE-LEVEL per-repo codekb store, NOT the per-intent record dir (the
+        // codekb-determinism placement fix). Enumerate that dir; also assert RE
+        // did NOT scatter artifacts into the old record-dir location.
+        const reDir = codekbReDir(proj);
         expect(existsSync(reDir) && statSync(reDir).isDirectory()).toBe(true);
+        const oldRecordReDir = join(seededRecordDir(proj), "inception", "reverse-engineering");
+        expect(existsSync(oldRecordReDir)).toBe(false);
 
         // .sh test 2: >= 4 .md artifacts (the .sh's assert_gt 3).
         const reFiles = readdirSync(reDir).filter((f) => f.endsWith(".md"));

@@ -467,6 +467,36 @@ export function relativeRecordDir(
   return `aidlc/spaces/${sp}/intents/${slug}`;
 }
 
+// `aidlc/spaces/<space>/codekb/<repo>/` — the durable per-repo code
+// knowledge base, a space-level sibling of memory/knowledge/intents (vision
+// §Spaces; committed glob aidlc/spaces/*/codekb/**). NOT per-intent: it is keyed
+// by repo and shared across every intent in the space, so it must NOT carry the
+// intents/<slug> tail. Mirrors knowledgeDir's space-aware shape.
+export function codekbDir(projectDir: string, repo: string, space?: string): string {
+  const sp = space ?? activeSpace(projectDir);
+  return join(workspaceRoot(projectDir), "spaces", sp, "codekb", repo);
+}
+
+// Relative analog of codekbDir (posix slashes), the engine-emitted form
+// the conductor/subagent reads. Mirrors relativeRecordDir (takes projectDir so it
+// can read the active-space cursor — NOT relativeSpaceRecordPrefix, which is
+// pinned to the default space).
+export function relativeCodekbDir(projectDir: string, repo: string, space?: string): string {
+  const sp = space ?? activeSpace(projectDir);
+  return `aidlc/spaces/${sp}/codekb/${repo}`;
+}
+
+// The deterministic repo NAME for codekb keying (NOT the intent slug):
+//   1 recorded repo  -> that name
+//   0 recorded repos (workspace root IS the repo) -> basename(projectDir)
+//   >1 recorded      -> caller loops per repo (this returns basename as a safe
+//                       default; callers that know the repo pass --repo explicitly).
+// basename done here (lib has basename imported) so callers never inline it.
+export function codekbRepoName(projectDir: string, space?: string): string {
+  const repos = intentRepos(projectDir, undefined, space);
+  return repos.length === 1 ? repos[0] : basename(projectDir);
+}
+
 // The bare SPACE record root: `aidlc/spaces/<space>/intents/`. The absolute path
 // helpers resolve here when no intent record exists (activeIntent → null) — a
 // fresh SEED shell before auto-birth, or a flat project still awaiting migration.

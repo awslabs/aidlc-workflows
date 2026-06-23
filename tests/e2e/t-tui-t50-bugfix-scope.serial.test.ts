@@ -95,15 +95,26 @@ import { describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import * as os from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   auditFilePathFor,
-  recordDirFor,
   spaceKnowledgeDirFor,
   stateFilePathFor,
 } from "../harness/sdk-drive.ts";
 import { gridHasMenu, resolveWinNode } from "../harness/tui-drive.ts";
 import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import { activeSpace } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+
+// The space-level per-repo codekb dir the RE stage writes into
+// (aidlc/spaces/<space>/codekb/<repo>/ — the codekb-determinism placement fix).
+// This single-repo brownfield sandbox records NO repos row, so the engine keys
+// the store by basename(sandbox) (codekbRepoName's 0-repo case). Tolerant of the
+// bare workspace-root form too, mirroring the journey / t-acp-kiro helpers.
+function codekbReDir(sandbox: string): string {
+  const spaceScoped = join(sandbox, "aidlc", "spaces", activeSpace(sandbox), "codekb", basename(sandbox));
+  const bare = join(sandbox, "aidlc", "codekb", basename(sandbox));
+  return existsSync(spaceScoped) ? spaceScoped : bare;
+}
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
@@ -369,8 +380,10 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         // .sh tests 18-19, 22-23: the reverse-engineering directory exists with
         // >= 4 `.md` artifacts, carries markdown headings, and at least one is
         // > 200 bytes. bugfix on a brownfield workspace ALWAYS runs RE, so this is
-        // a hard scaffold assertion, not a soft probe.
-        const reDir = join(recordDirFor(sandbox), "inception", "reverse-engineering");
+        // a hard scaffold assertion, not a soft probe. RE now writes to the
+        // SPACE-LEVEL per-repo codekb store, NOT the per-intent record dir (the
+        // codekb-determinism placement fix).
+        const reDir = codekbReDir(sandbox);
         expect(existsSync(reDir) && statSync(reDir).isDirectory()).toBe(true);
         const reFiles = readdirSync(reDir).filter((f) => f.endsWith(".md"));
         // .sh test 19: >= 4 RE .md artifacts (assert_gt 3).

@@ -33,7 +33,7 @@ scopes:
   - security-patch
   - workshop
 inputs: <record>/aidlc-state.md
-outputs: "aidlc/codekb/<repo>/ (9 artifacts: business-overview.md, architecture.md, code-structure.md, api-documentation.md, component-inventory.md, technology-stack.md, dependencies.md, code-quality-assessment.md, reverse-engineering-timestamp.md)"
+outputs: "aidlc/spaces/<active-space>/codekb/<repo>/ (9 artifacts: business-overview.md, architecture.md, code-structure.md, api-documentation.md, component-inventory.md, technology-stack.md, dependencies.md, code-quality-assessment.md, reverse-engineering-timestamp.md)"
 ---
 
 # Reverse Engineering
@@ -63,7 +63,8 @@ intent's registry row before scanning:
    unrecorded set means the workspace root is itself the single repo.)
 3. **Multi-repo:** if `repos` has more than one entry, run Steps 2–3 **once per
    repo**, scanning that repo's sibling directory (`<workspace>/<repo>/`) and writing
-   its 9 artifacts to `aidlc/codekb/<repo>/`. Each repo's codekb is independent;
+   its 9 artifacts to the directory `codekb-path --repo <repo>` prints (the
+   space-level `aidlc/spaces/<active-space>/codekb/<repo>/`; see Step 3). Each repo's codekb is independent;
    nothing in one repo's scan blocks another's, so the per-repo scans may run as
    parallel subagents.
 
@@ -108,7 +109,19 @@ Architect synthesizes scan results into 9 artifacts:
 8. **code-quality-assessment.md** — Test coverage, linting, CI/CD, documentation quality, tech debt
 9. **reverse-engineering-timestamp.md** — Records when reverse engineering was performed (date, commit hash if available, scope of analysis). This is the freshness/staleness marker for the per-repo codekb store — a stale timestamp triggers a rerun (see the `condition` frontmatter: "Always rerun for freshness").
 
-All artifacts written to `aidlc/codekb/<repo>/`, the durable per-repo code knowledge base shared across intents.
+**Resolve the write directory with the engine, do NOT compose the path yourself.**
+Run the read-only tool
+
+```
+bun .claude/tools/aidlc-utility.ts codekb-path --repo <repo>
+```
+
+(omit `--repo` for a single/unrecorded repo — the engine resolves the repo name).
+It prints ONE line: the exact directory, e.g. `aidlc/spaces/<active-space>/codekb/<repo>/`.
+Write all 9 artifacts into the directory the tool printed — verbatim, creating it if
+absent. This is the durable per-repo code knowledge base, a space-level store shared
+across every intent in the space. Never substitute the intent slug, the record dir, or
+a hand-composed path for what the tool prints.
 
 ### Step 4: Update State
 
@@ -121,13 +134,14 @@ Update `<record>/aidlc-state.md`:
 Use stage-protocol.md completion template:
 - Announcement with completion summary
 - Summary of all 9 artifacts produced **per repo** (for a multi-repo intent, list
-  each repo's `aidlc/codekb/<repo>/` set)
-- Review path: `aidlc/codekb/<repo>/` for each repo in the set
+  each repo's `aidlc/spaces/<active-space>/codekb/<repo>/` set — the directory
+  `codekb-path --repo <repo>` printed in Step 3)
+- Review path: `aidlc/spaces/<active-space>/codekb/<repo>/` for each repo in the set
 - Structured approval question with options: Approve (continue to Requirements Analysis) / Request Changes
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc/codekb/<repo>/`.
+This stage's outputs are markdown artefacts under `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` resolves).
 
 The imported sensors check those outputs:
 
