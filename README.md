@@ -25,17 +25,17 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 
 ## Key Features
 
-- **[5 phases, 32 stages](docs/guide/03-phases-and-stages.md)** — Initialization, Ideation, Inception, Construction, Operation
-- **[11 domain-expert agents](docs/guide/05-agents.md)** — product, design, delivery, architect, aws-platform, compliance, devsecops, developer, quality, pipeline-deploy, operations
-- **[9 adaptive scopes](docs/guide/04-scopes-and-depth.md)** (enterprise through workshop) with auto-detection from freeform intent
-- **[3 depth levels](docs/guide/04-scopes-and-depth.md#the-3-depth-levels)** (Minimal/Standard/Comprehensive) — control artifact detail per stage
-- **[3 test strategy levels](docs/guide/04-scopes-and-depth.md#the-3-test-strategy-levels)** (Minimal/Standard/Comprehensive) — independent of depth for flexible test coverage
-- **[CLI utilities](docs/guide/11-cli-commands.md)** — jump to any stage or phase, check status, change scope/depth/test strategy mid-workflow
-- **[Approval gates at every stage](docs/guide/06-interaction-modes.md)** — you stay in control of all decisions
-- **[Two-tier knowledge system](docs/guide/07-knowledge.md)** — methodology knowledge ships with the framework; team knowledge is user-managed
-- **[Rules and a learning loop](docs/guide/08-rules-and-the-learning-loop.md)** — human corrections become persistent behavioral rules
-- **[67-event audit trail](docs/guide/09-state-and-audit.md)** — structured logging for enterprise traceability
-- **[Session resume](docs/guide/10-session-management.md)** — continue from checkpoint, redo, jump to stage, or start fresh
+- **[5 phases, 32 stages](docs/guide/04-phases-and-stages.md)** — Initialization, Ideation, Inception, Construction, Operation
+- **[11 domain-expert agents](docs/guide/06-agents.md)** — product, design, delivery, architect, aws-platform, compliance, devsecops, developer, quality, pipeline-deploy, operations
+- **[9 adaptive scopes](docs/guide/05-scopes-and-depth.md)** (enterprise through workshop) with auto-detection from freeform intent
+- **[3 depth levels](docs/guide/05-scopes-and-depth.md#the-3-depth-levels)** (Minimal/Standard/Comprehensive) — control artifact detail per stage
+- **[3 test strategy levels](docs/guide/05-scopes-and-depth.md#the-3-test-strategy-levels)** (Minimal/Standard/Comprehensive) — independent of depth for flexible test coverage
+- **[CLI utilities](docs/guide/12-cli-commands.md)** — jump to any stage or phase, check status, change scope/depth/test strategy mid-workflow
+- **[Approval gates at every stage](docs/guide/07-interaction-modes.md)** — you stay in control of all decisions
+- **[Two-tier knowledge system](docs/guide/08-knowledge.md)** — methodology knowledge ships with the framework; team knowledge is user-managed
+- **[Rules and a learning loop](docs/guide/09-rules-and-the-learning-loop.md)** — human corrections become persistent behavioral rules
+- **[67-event audit trail](docs/guide/10-state-and-audit.md)** — structured logging for enterprise traceability
+- **[Session resume](docs/guide/11-session-management.md)** — continue from checkpoint, redo, jump to stage, or start fresh
 
 ## Methodology and implementation
 

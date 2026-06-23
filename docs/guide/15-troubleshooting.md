@@ -153,7 +153,7 @@ The next `/aidlc` invocation (or any hook-triggered write) creates a fresh shard
 
 ### Git considerations
 
-The `audit/` shards are committed (not gitignored) — see [What to Commit vs. Gitignore](13-artifacts-reference.md#what-to-commit-vs-gitignore). Each clone writes its own `<host>-<clone>.md` shard, so concurrent appends never merge-conflict; consider archiving (see above) before commits to keep diffs manageable.
+The `audit/` shards are committed (not gitignored) — see [What to Commit vs. Gitignore](14-artifacts-reference.md#what-to-commit-vs-gitignore). Each clone writes its own `<host>-<clone>.md` shard, so concurrent appends never merge-conflict; consider archiving (see above) before commits to keep diffs manageable.
 
 ---
 
@@ -219,13 +219,13 @@ The `--doctor` utility command validates your setup. Run it whenever something s
 
 It checks: prerequisite (`bun`), hook availability (every hook `settings.json` wires — all 10 framework hooks — must exist in `.claude/hooks/`, and a wired-but-missing hook fails loudly), project structure (`settings.json`), workspace shell readiness (`.claude/` + `aidlc/spaces/default/memory/`), state/audit consistency, hook heartbeats, graph integrity (no cycles, every graph entry has a file), scope validation across all 9 scopes, stage schema + graph references, and keyword overlap across scopes. It also surfaces two advisory rows that always pass (they never change the exit code): **Rule drift** (team/project rules that overlap a populated org-policy heading, flagged for contradiction review) and **Paired sensor coverage** (rules carrying a `pairing:` whose named Sensor resolves to a stage). Exits 0 on full pass, 1 on any failure; the report writes to stdout either way. `--doctor` is **read-only**: on a fresh shell with no intent yet it creates nothing — safe to run before the first intent is born, as the first thing you try when something seems off. Once an intent exists it records a `HEALTH_CHECKED` (and `GUARDRAIL_LOADED`) audit row.
 
-See [CLI Commands](11-cli-commands.md#aidlc---doctor--health-check) for full details on what each check validates and how to fix failures.
+See [CLI Commands](12-cli-commands.md#aidlc---doctor--health-check) for full details on what each check validates and how to fix failures.
 
 ---
 
 ## Next Steps
 
-- [State Tracking and Audit Trail](09-state-and-audit.md) — State file structure
-- [Session Management](10-session-management.md) — Resume options after compaction
-- [CLI Commands](11-cli-commands.md) — `--doctor`, `--status`, `--stage` usage
+- [State Tracking and Audit Trail](10-state-and-audit.md) — State file structure
+- [Session Management](11-session-management.md) — Resume options after compaction
+- [CLI Commands](12-cli-commands.md) — `--doctor`, `--status`, `--stage` usage
 - [Glossary](glossary.md) — Definitions for compaction, recovery breadcrumb, hook

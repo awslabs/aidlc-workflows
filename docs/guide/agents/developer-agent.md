@@ -1,6 +1,6 @@
 # Developer Agent
 
-> **Agent deep dive** · [User Guide](../00-introduction.md) › [Agents](../05-agents.md) › [deep dives](README.md) · Technical reference: [developer-agent](../../reference/agents/developer-agent.md)
+> **Agent deep dive** · [User Guide](../00-introduction.md) › [Agents](../06-agents.md) › [deep dives](README.md) · Technical reference: [developer-agent](../../reference/agents/developer-agent.md)
 
 The aidlc-developer-agent is your senior software developer. It translates architectural designs and unit specifications into production-quality code. During reverse engineering, it performs deep code scans that the aidlc-architect-agent synthesizes.
 

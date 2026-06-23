@@ -5,7 +5,7 @@ Rules are the standing decisions your team carries into every workflow — the
 run. As a harness engineer you author them in two ways: by editing a rule file
 directly, or by letting the **learning loop** promote an in-workflow correction
 into a durable rule for you. This chapter is the authoring-side companion to the
-[Rules and the Learning Loop](../guide/08-rules-and-the-learning-loop.md) chapter
+[Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md) chapter
 in the User Guide, which covers the loop conceptually and walks the ANZ banking
 example end to end. Here the focus is operational: which file you edit for what,
 how the strict-additive model behaves when you stack a rule, and how to run the
@@ -114,7 +114,7 @@ writes it for you. That is the learning loop. Most stage runs add nothing, which
 is healthy; the loop fires only when something during the stage is worth keeping.
 
 The mechanics are covered in the
-[User Guide chapter](../guide/08-rules-and-the-learning-loop.md). The
+[User Guide chapter](../guide/09-rules-and-the-learning-loop.md). The
 harness-engineer view is what the loop produces and where it lands:
 
 1. **The diary records during the stage.** The conductor (the live `/aidlc`

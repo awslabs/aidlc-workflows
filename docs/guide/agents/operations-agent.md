@@ -1,6 +1,6 @@
 # Operations Agent
 
-> **Agent deep dive** · [User Guide](../00-introduction.md) › [Agents](../05-agents.md) › [deep dives](README.md) · Technical reference: [operations-agent](../../reference/agents/operations-agent.md)
+> **Agent deep dive** · [User Guide](../00-introduction.md) › [Agents](../06-agents.md) › [deep dives](README.md) · Technical reference: [operations-agent](../../reference/agents/operations-agent.md)
 
 The aidlc-operations-agent is your site reliability engineer and incident manager. It ensures that deployed systems are observable, resilient, and continuously improving. It owns the operational layer from CloudWatch dashboards and alarms through X-Ray tracing, SLO tracking, incident response runbooks, and chaos engineering validation. Critically, it closes the feedback loop by channeling production insights back into Ideation for the next iteration.
 

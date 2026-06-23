@@ -1,6 +1,6 @@
 # Quality Agent
 
-> **Agent deep dive** · [User Guide](../00-introduction.md) › [Agents](../05-agents.md) › [deep dives](README.md) · Technical reference: [quality-agent](../../reference/agents/quality-agent.md)
+> **Agent deep dive** · [User Guide](../00-introduction.md) › [Agents](../06-agents.md) › [deep dives](README.md) · Technical reference: [quality-agent](../../reference/agents/quality-agent.md)
 
 The aidlc-quality-agent is your QA engineer and performance specialist. It defines test strategy, generates test suites (unit, integration, contract, security), validates coverage against acceptance criteria, designs and executes load tests, and validates non-functional requirement targets. It ensures every implemented unit meets its acceptance criteria and the overall system meets quality gates.
 

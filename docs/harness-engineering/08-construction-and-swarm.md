@@ -254,9 +254,9 @@ and the `bolt_dag` node schema is in
 
 The user-facing side of what your posture rule governs — the walking-skeleton
 gate, the ladder prompt, the autonomy mode — is walked in
-[Phases and Stages § Construction](../guide/03-phases-and-stages.md) in the User
+[Phases and Stages § Construction](../guide/04-phases-and-stages.md) in the User
 Guide, and the six `SWARM_*` audit events you will see in the log are catalogued
-in [State and Audit](../guide/09-state-and-audit.md).
+in [State and Audit](../guide/10-state-and-audit.md).
 
 ---
 

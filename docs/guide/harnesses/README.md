@@ -1,9 +1,9 @@
 # Running on other harnesses
 
 AI-DLC is one harness-neutral core rendered onto the CLI you use. The
-methodology — the [phases and stages](../03-phases-and-stages.md), the
-[agents](../05-agents.md), the [scopes](../04-scopes-and-depth.md), the
-[approval gates](../06-interaction-modes.md) — is identical on every harness.
+methodology — the [phases and stages](../04-phases-and-stages.md), the
+[agents](../06-agents.md), the [scopes](../05-scopes-and-depth.md), the
+[approval gates](../07-interaction-modes.md) — is identical on every harness.
 What differs is the *shell*: how gates render, how subagents are dispatched,
 which session events fire, where config lives. Each chapter here covers one
 harness's install steps, prerequisites, and the handful of behaviours that
@@ -27,4 +27,4 @@ adapter, `emit.ts`), see the Harness Engineer Guide's
 
 Whichever harness you run, the methodology is the same — start with
 [Your First Workflow](../02-your-first-workflow.md) and the
-[Phases and Stages](../03-phases-and-stages.md) tour.
+[Phases and Stages](../04-phases-and-stages.md) tour.

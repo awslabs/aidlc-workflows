@@ -480,4 +480,4 @@ main's location. Its lifecycle is:
 - **The audit log this graph is derived from** — the 67-event taxonomy
   and the emitter registry. See [State Machine](12-state-machine.md)
   and the User Guide's [State and Audit
-  Trail](../guide/09-state-and-audit.md).
+  Trail](../guide/10-state-and-audit.md).

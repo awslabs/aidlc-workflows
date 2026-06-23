@@ -329,7 +329,7 @@ Under `--test-run`, a Bolt failure is a test error (no silent auto-retry) so reg
 - Within each Bolt, questions for stages 3.1–3.4 are collected in a single interactive pass across the Bolt's Units before any artifacts generate. A single Bolt-level answers gate confirms all answers before design artifacts begin.
 - The per-Unit approval gate inside `stages/construction/code-generation.md` is **suppressed by the conductor** during normal Bolt execution. A single Bolt-level (or batch-level) gate replaces it.
 - The ladder prompt fires exactly once per workflow — after the walking-skeleton gate. Your answer is recorded as `Construction Autonomy Mode` in `aidlc-state.md` and honoured on session resume.
-- Parallel batches require multiple `Task`-capable subagent slots to be available — see [Agents](05-agents.md) for concurrency constraints.
+- Parallel batches require multiple `Task`-capable subagent slots to be available — see [Agents](06-agents.md) for concurrency constraints.
 
 ---
 
@@ -413,7 +413,7 @@ If verification fails, the conductor reports the issues and asks whether to proc
 
 ## Next Steps
 
-- [Scopes, Depth, and Test Strategy](04-scopes-and-depth.md) — how scopes control which stages execute
-- [Agents](05-agents.md) — the 11 agents and their roles
+- [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) — how scopes control which stages execute
+- [Agents](06-agents.md) — the 11 agents and their roles
 - [Your First Workflow](02-your-first-workflow.md) — annotated walkthrough
 - [Glossary](glossary.md) — terminology reference

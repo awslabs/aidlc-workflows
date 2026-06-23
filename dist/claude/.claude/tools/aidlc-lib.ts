@@ -1181,7 +1181,7 @@ export function stateFilePath(projectDir: string, intent?: string, space?: strin
   return join(dir, "aidlc-state.md");
 }
 
-// Per-clone audit SHARD path: `…/intents/<slug>-<id8>/audit/<host>-<pid>.md`.
+// Per-clone audit SHARD path: `…/intents/<slug>-<id8>/audit/<host>-<clone>.md`.
 // The audit trail is committed (vision §5.1) but each clone writes its OWN
 // shard so git never merge-conflicts concurrent appends (merge=union was proven
 // to corrupt the multi-line blocks). Readers glob `audit/*.md` and merge-sort by

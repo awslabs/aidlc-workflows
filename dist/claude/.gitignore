@@ -48,7 +48,7 @@ aidlc/spaces/*/intents/*/.aidlc-*
 # for these): aidlc/spaces/*/memory/** · aidlc/spaces/*/codekb/** ·
 # aidlc/spaces/*/intents/intents.json · aidlc/spaces/*/intents/*/aidlc-state.md ·
 # aidlc/spaces/*/intents/*/audit/*.md (the audit trail, committed as PER-CLONE
-# SHARDS: each machine appends to audit/<host>-<pid>.md so git never merges
+# SHARDS: each machine appends to audit/<host>-<clone>.md so git never merges
 # concurrent appends — there is intentionally NO .gitattributes merge=union,
 # which was proven to corrupt the multi-line audit blocks) ·
 # aidlc/spaces/*/intents/*/<phase>/<stage>/*.md (artifacts + diary).

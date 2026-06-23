@@ -4,7 +4,7 @@ The `workshop` scope is the only AI-DLC scope designed for *facilitated group se
 
 This chapter is a **manual recipe**: it documents the workshop flow using primitives that already ship today (`aidlc-worktree`, `aidlc-bolt`, plus ordinary git). There is no dedicated `--claim-bolt` CLI yet — claim semantics ride on `git push` to the shared remote, and the recipe makes that contract explicit. A future release may automate the moves this chapter describes; for now, the recipe is the contract.
 
-For the scope's depth/test-strategy/skip-list, see [Scopes and Depth § workshop](04-scopes-and-depth.md#workshop). For the per-Bolt worktree mechanics this chapter assumes, see [State and Audit](09-state-and-audit.md) and the orchestrator's [Construction flow](../reference/03-orchestrator.md). New facilitator? Run through [Getting Started](01-getting-started.md) first — bun and your harness's framework copy must already be in place before any workshop step below.
+For the scope's depth/test-strategy/skip-list, see [Scopes and Depth § workshop](05-scopes-and-depth.md#workshop). For the per-Bolt worktree mechanics this chapter assumes, see [State and Audit](10-state-and-audit.md) and the orchestrator's [Construction flow](../reference/03-orchestrator.md). New facilitator? Run through [Getting Started](01-getting-started.md) first — bun and your harness's framework copy must already be in place before any workshop step below.
 
 > **Harness note.** This recipe is harness-neutral: it drives the `aidlc-worktree`
 > and `aidlc-bolt` tools (shared across every harness) plus ordinary git. The
@@ -52,7 +52,7 @@ Launch Claude Code in the project (`cd workshop-project && claude`), then birth 
 
 Naming the scope on a fresh workspace births the first intent and stamps `Scope: workshop` and `Default Test Strategy: Minimal` into that intent's `aidlc-state.md`. Push the born intent's state to the shared remote so participants clone a project that already knows it's a workshop.
 
-Per-project default scopes can be set via `AWS_AIDLC_DEFAULT_SCOPE=workshop` in `.claude/settings.json`. With this set, every participant who runs `/aidlc` in a clone gets the workshop routing automatically without remembering the flag — see [Customization § Per-Project Default Scope](12-customization.md#per-project-default-scope).
+Per-project default scopes can be set via `AWS_AIDLC_DEFAULT_SCOPE=workshop` in `.claude/settings.json`. With this set, every participant who runs `/aidlc` in a clone gets the workshop routing automatically without remembering the flag — see [Customization § Per-Project Default Scope](13-customization.md#per-project-default-scope).
 
 ### Run Inception solo
 
@@ -132,7 +132,7 @@ Once the claim is published, run the Bolt the normal way — in the Claude Code 
 /aidlc
 ```
 
-The orchestrator picks up at the per-Bolt loop. Because the worktree already exists and the branch is already on origin, the participant works exactly as in any single-developer scope — state and audit fork into the worktree (see [State and Audit § Construction worktrees](09-state-and-audit.md)), Construction stages run inside the worktree, and the mandatory gate at the end of the Bolt opens for group review.
+The orchestrator picks up at the per-Bolt loop. Because the worktree already exists and the branch is already on origin, the participant works exactly as in any single-developer scope — state and audit fork into the worktree (see [State and Audit § Construction worktrees](10-state-and-audit.md)), Construction stages run inside the worktree, and the mandatory gate at the end of the Bolt opens for group review.
 
 ### 4. Merge and push
 
@@ -343,8 +343,8 @@ Practices and autonomy mode are explicit committed artifacts in the shared repo 
 
 ## Related reading
 
-- [Scopes and Depth § workshop](04-scopes-and-depth.md#workshop) — the scope's stage list, depth, and test strategy
-- [State and Audit](09-state-and-audit.md) — how Construction worktrees fork state and audit
-- [CLI Commands](11-cli-commands.md) — `aidlc-worktree` and `aidlc-bolt` subcommand reference
+- [Scopes and Depth § workshop](05-scopes-and-depth.md#workshop) — the scope's stage list, depth, and test strategy
+- [State and Audit](10-state-and-audit.md) — how Construction worktrees fork state and audit
+- [CLI Commands](12-cli-commands.md) — `aidlc-worktree` and `aidlc-bolt` subcommand reference
 - [Orchestrator: Construction flow](../reference/03-orchestrator.md) — what happens inside each Bolt
 - [Branching Strategies (knowledge file)](../../core/knowledge/aidlc-pipeline-deploy-agent/branching-strategies.md) — aidlc-pipeline-deploy-agent's merge-dispatch contract

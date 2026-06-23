@@ -85,7 +85,7 @@ flowchart TD
 
 ## The 11 Agents
 
-> **Customizing what a shipped agent knows?** Do not edit the shipped 11 agent files at `.claude/agents/*.md` — they're framework files and get overwritten on upgrade. Add your company standards to the space-level `aidlc/knowledge/<agent-name>/` instead. See [Knowledge](07-knowledge.md) for the full workflow. Teams that want a *new* agent (not just knowledge for the existing 11) can drop a file at `.claude/agents/<slug>.md` with the required frontmatter — that file is user-owned. See [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
+> **Customizing what a shipped agent knows?** Do not edit the shipped 11 agent files at `.claude/agents/*.md` — they're framework files and get overwritten on upgrade. Add your company standards to the space-level `aidlc/knowledge/<agent-name>/` instead. See [Knowledge](08-knowledge.md) for the full workflow. Teams that want a *new* agent (not just knowledge for the existing 11) can drop a file at `.claude/agents/<slug>.md` with the required frontmatter — that file is user-owned. See [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
 
 Each agent below has a **deep-dive page** — its full responsibilities, the stages it leads and supports, and the knowledge it loads. The [agent deep-dive index](agents/README.md) lists all 11; the per-agent links are inline under each heading.
 
@@ -284,7 +284,7 @@ say.
 
 ## Next Steps
 
-- [Phases and Stages](03-phases-and-stages.md) — see agents in context of the full stage flow
-- [Knowledge](07-knowledge.md) — how agents load methodology and team knowledge
-- [Rules and the Learning Loop](08-rules-and-the-learning-loop.md) — behavioral rules that constrain agent behavior
+- [Phases and Stages](04-phases-and-stages.md) — see agents in context of the full stage flow
+- [Knowledge](08-knowledge.md) — how agents load methodology and team knowledge
+- [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) — behavioral rules that constrain agent behavior
 - [Glossary](glossary.md) — terminology reference

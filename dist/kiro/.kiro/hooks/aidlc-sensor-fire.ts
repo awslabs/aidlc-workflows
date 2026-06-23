@@ -150,7 +150,7 @@ writeFileSync(
 
 // Step 8b — First-fire banner. On the first invocation against a
 // workspace (no .first-fired marker yet), print a one-line stderr
-// pointer at the learning-loop guide chapter, then touch the marker so
+// pointer to the AI-DLC documentation, then touch the marker so
 // it never repeats. Stderr only — never stdout — so it stays advisory
 // and can't be mistaken for hook output. Marker write failure is
 // non-fatal: at worst the banner repeats, which is harmless. The
@@ -159,8 +159,8 @@ const firstFiredMarker = join(healthDir, ".first-fired");
 if (!existsSync(firstFiredMarker)) {
   process.stderr.write(
     "[aidlc] Sensors are now watching this workspace. " +
-      "Learn how rules and the learning loop work: " +
-      "docs/guide/08-rules-and-the-learning-loop.md\n"
+      "See the AI-DLC documentation to learn how rules and " +
+      "the learning loop work.\n"
   );
   try {
     writeFileSync(firstFiredMarker, isoTimestamp(), "utf-8");

@@ -89,7 +89,7 @@ When a kept learning is a **sensor binding** rather than a rule (you want a new 
 
 Before a kept learning lands on disk, the framework runs a section-level check against `memory/org.md`. If your proposed entry contradicts an org rule under the same heading, the gate stops and quotes the conflicting org sentence inline. You then choose to revise the entry, skip it, or escalate to the org-rule owner. The conflicting rule never lands with the contradiction in it, so the runtime resolver stays simple — it only ever sees rules that already passed the conflict check.
 
-The same section-level check guards the practices-discovery affirmation gate. And when org policy changes *after* a team or project rule is already on disk, `/aidlc --doctor` surfaces the resulting drift on demand: it names the file, the section, and the conflicting org sentence so the team can act on it. The doctor check is advisory and never blocks. The two doctor advisory rows are described in [CLI Commands](11-cli-commands.md) and [Troubleshooting](15-troubleshooting.md).
+The same section-level check guards the practices-discovery affirmation gate. And when org policy changes *after* a team or project rule is already on disk, `/aidlc --doctor` surfaces the resulting drift on demand: it names the file, the section, and the conflicting org sentence so the team can act on it. The doctor check is advisory and never blocks. The two doctor advisory rows are described in [CLI Commands](12-cli-commands.md) and [Troubleshooting](15-troubleshooting.md).
 
 ### Applies next workflow, not mid-run
 
@@ -141,7 +141,7 @@ A sensor result is **advisory** in this release. A failing sensor produces an au
 
 ### What you see in the audit log
 
-Sensor activity shows up in the intent's `audit/` shards as `Sensor Fired`, `Sensor Passed`, and `Sensor Failed` rows. A failed row links to a detail file (for example `<record>/.aidlc-sensors/<stage-slug>/required-sections-<timestamp>.md`) that lists the specific gap — the missing headings, the unreferenced upstream artifact, the lint error. The audit log is covered in [State and Audit](09-state-and-audit.md).
+Sensor activity shows up in the intent's `audit/` shards as `Sensor Fired`, `Sensor Passed`, and `Sensor Failed` rows. A failed row links to a detail file (for example `<record>/.aidlc-sensors/<stage-slug>/required-sections-<timestamp>.md`) that lists the specific gap — the missing headings, the unreferenced upstream artifact, the lint error. The audit log is covered in [State and Audit](10-state-and-audit.md).
 
 ### The four framework sensors
 
@@ -154,7 +154,7 @@ Four sensors ship with the framework:
 | `linter` | `.ts` / `.js` code outputs | Wraps your configured linter (ESLint by default) |
 | `type-check` | `.ts` / `.tsx` code outputs | Wraps your configured type-checker (`tsc` by default) |
 
-Each stage declares which sensors fire on its outputs. You can add your own sensors — author a manifest under `.claude/sensors/`, then add its id to the stages that should run it. The learning loop can also install a sensor for you when you confirm one at a gate. The manifest format, the per-stage matrix, and the authoring walkthrough live in [Sensor System](../reference/07-sensor-system.md). For adding one to your own project, see [Customization](12-customization.md).
+Each stage declares which sensors fire on its outputs. You can add your own sensors — author a manifest under `.claude/sensors/`, then add its id to the stages that should run it. The learning loop can also install a sensor for you when you confirm one at a gate. The manifest format, the per-stage matrix, and the authoring walkthrough live in [Sensor System](../reference/07-sensor-system.md). For adding one to your own project, see [Customization](13-customization.md).
 
 ---
 
@@ -176,10 +176,10 @@ As a user you mostly touch one horizontal slice at a time — running a workflow
 
 ## Next Steps
 
-- [Knowledge](07-knowledge.md) — the two-tier knowledge system that informs (rather than constrains) agent behavior
-- [Customization](12-customization.md) — add a rule, add a sensor, extend the loop, add a stage or agent
-- [Interaction Modes](06-interaction-modes.md) — how corrections happen during a stage
-- [State and Audit](09-state-and-audit.md) — how the learning loop's events are logged
-- [CLI Commands](11-cli-commands.md) — the doctor rule-drift and paired-coverage advisory rows
+- [Knowledge](08-knowledge.md) — the two-tier knowledge system that informs (rather than constrains) agent behavior
+- [Customization](13-customization.md) — add a rule, add a sensor, extend the loop, add a stage or agent
+- [Interaction Modes](07-interaction-modes.md) — how corrections happen during a stage
+- [State and Audit](10-state-and-audit.md) — how the learning loop's events are logged
+- [CLI Commands](12-cli-commands.md) — the doctor rule-drift and paired-coverage advisory rows
 - [Rule System](../reference/08-rule-system.md) · [Sensor System](../reference/07-sensor-system.md) · [Plane Architecture](../reference/02-plane-architecture.md) — the schema- and design-level reference
 - [Glossary](glossary.md) — terminology reference

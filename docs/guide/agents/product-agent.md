@@ -1,6 +1,6 @@
 # Product Agent
 
-> **Agent deep dive** · [User Guide](../00-introduction.md) › [Agents](../05-agents.md) › [deep dives](README.md) · Technical reference: [product-agent](../../reference/agents/product-agent.md)
+> **Agent deep dive** · [User Guide](../00-introduction.md) › [Agents](../06-agents.md) › [deep dives](README.md) · Technical reference: [product-agent](../../reference/agents/product-agent.md)
 
 The aidlc-product-agent is your product manager and business analyst. It transforms raw business needs, user requests, and domain knowledge into structured requirements, prioritized user stories, and well-defined scope boundaries. It ensures that every downstream artifact traces back to a validated requirement, bridging the gap between what stakeholders want and what developers build.
 

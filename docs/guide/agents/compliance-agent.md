@@ -1,6 +1,6 @@
 # Compliance Agent
 
-> **Agent deep dive** · [User Guide](../00-introduction.md) › [Agents](../05-agents.md) › [deep dives](README.md) · Technical reference: [compliance-agent](../../reference/agents/compliance-agent.md)
+> **Agent deep dive** · [User Guide](../00-introduction.md) › [Agents](../06-agents.md) › [deep dives](README.md) · Technical reference: [compliance-agent](../../reference/agents/compliance-agent.md)
 
 The aidlc-compliance-agent is your GRC (Governance, Risk, and Compliance) analyst. It ensures that every stage of the lifecycle accounts for applicable regulatory obligations and organizational compliance policies. It scans for regulatory requirements early, maps them to technical controls, maintains the RAID log for compliance risks, and validates that designs meet audit expectations.
 

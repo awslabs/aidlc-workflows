@@ -2,7 +2,7 @@
 
 > Audience: Tier 2/3 (team adopter, framework contributor).
 
-This chapter is the schema-level reference for the v0.5.0 rule system: where rule files live, how scope is derived, how the inheritance chain resolves, and which frontmatter fields are valid. It is the spec the resolver (`aidlc-graph.ts compile`) and the doctor rule-drift check read against. Rules are the feedforward half of the control loop; [Sensor System](07-sensor-system.md) covers the deterministic-verification half they pair with. For the user-facing walkthrough — the learning-loop ritual, the ANZ worked example, and how a confirmed learning lands in a rule file — see [Rules and the Learning Loop](../guide/08-rules-and-the-learning-loop.md) in the User Guide.
+This chapter is the schema-level reference for the v0.5.0 rule system: where rule files live, how scope is derived, how the inheritance chain resolves, and which frontmatter fields are valid. It is the spec the resolver (`aidlc-graph.ts compile`) and the doctor rule-drift check read against. Rules are the feedforward half of the control loop; [Sensor System](07-sensor-system.md) covers the deterministic-verification half they pair with. For the user-facing walkthrough — the learning-loop ritual, the ANZ worked example, and how a confirmed learning lands in a rule file — see [Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md) in the User Guide.
 
 ## Layout
 
@@ -104,7 +104,7 @@ Pre-v0.5.0 rule files load unchanged after the rename + flatten lands; migration
   See [Plane Architecture](02-plane-architecture.md).
 - **The learning loop in practice** — the `memory.md` diary, the
   approval-gate ritual, and the ANZ worked example. See [Rules and the
-  Learning Loop](../guide/08-rules-and-the-learning-loop.md) in the User
+  Learning Loop](../guide/09-rules-and-the-learning-loop.md) in the User
   Guide.
 - **The two-axis configuration model** — the broader routing principle
   this five-layer chain operationalises. See

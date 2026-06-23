@@ -102,7 +102,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `workshop` | 25 / 32 | Standard | **Minimal** | AI-DLC workshop or training session |
 | (auto-detect) | Varies | Varies | Varies | AI determines from freeform intent |
 
-> **Per-project default scope:** teams can pre-set the default scope for a project by setting `AWS_AIDLC_DEFAULT_SCOPE` in `.claude/settings.json` — useful for workshops where every participant should start at `workshop` without remembering the flag. See [Customization § Per-Project Default Scope](12-customization.md#per-project-default-scope).
+> **Per-project default scope:** teams can pre-set the default scope for a project by setting `AWS_AIDLC_DEFAULT_SCOPE` in `.claude/settings.json` — useful for workshops where every participant should start at `workshop` without remembering the flag. See [Customization § Per-Project Default Scope](13-customization.md#per-project-default-scope).
 
 ---
 
@@ -325,8 +325,8 @@ When in doubt, start with `feature` — it includes all 32 stages, and you can s
 
 ## Next Steps
 
-- [Phases and Stages](03-phases-and-stages.md) — what each stage does
-- [Agents](05-agents.md) — which agents participate in which scopes
+- [Phases and Stages](04-phases-and-stages.md) — what each stage does
+- [Agents](06-agents.md) — which agents participate in which scopes
 - [Skills and Runner Commands](17-skills.md) — the one-word `/aidlc-<scope>` runners for bugfix, feature, mvp, and security-patch
-- [CLI Commands](11-cli-commands.md) — full command reference
+- [CLI Commands](12-cli-commands.md) — full command reference
 - [Glossary](glossary.md) — terminology reference

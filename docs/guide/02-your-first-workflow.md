@@ -61,7 +61,7 @@ Detected scope: feature (Standard depth, Standard test strategy, all 32 stages)
 > Yes
 ```
 
-You can accept the detected scope, change to a different scope (e.g., `mvp`), or adjust the depth level or test strategy. See [Scopes, Depth, and Test Strategy](04-scopes-and-depth.md) for guidance.
+You can accept the detected scope, change to a different scope (e.g., `mvp`), or adjust the depth level or test strategy. See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) for guidance.
 
 ---
 
@@ -92,7 +92,7 @@ The aidlc-product-agent asks you to choose an interaction mode:
 - **Edit File** opens the artifact for direct editing
 - **Chat** lets you discuss freely; the agent extracts decisions
 
-See [Interaction Modes](06-interaction-modes.md) for details on each mode. You can switch modes mid-stage.
+See [Interaction Modes](07-interaction-modes.md) for details on each mode. You can switch modes mid-stage.
 
 ### Approval Gate
 
@@ -113,7 +113,7 @@ After the agent completes its work, you see a completion summary and an approval
   (2) Request Changes — Provide revision feedback
 ```
 
-Choose **Approve** to continue, or **Request Changes** to provide feedback. See [Interaction Modes](06-interaction-modes.md) for details on the revision process.
+Choose **Approve** to continue, or **Request Changes** to provide feedback. See [Interaction Modes](07-interaction-modes.md) for details on the revision process.
 
 After approval, a progress line appears:
 
@@ -272,7 +272,8 @@ Throughout the workflow, the terminal status line shows your current position:
 
 ## Next Steps
 
-- [Phases and Stages](03-phases-and-stages.md) — detailed breakdown of all 5 phases and 32 stages
-- [Interaction Modes](06-interaction-modes.md) — Guide Me, Edit File, and Chat explained
-- [Session Management](10-session-management.md) — resuming, redoing, and jumping between stages
+- [Spaces and Intents](03-spaces-and-intents.md) — how the workspace holds many runs, and how to start and switch between them
+- [Phases and Stages](04-phases-and-stages.md) — detailed breakdown of all 5 phases and 32 stages
+- [Interaction Modes](07-interaction-modes.md) — Guide Me, Edit File, and Chat explained
+- [Session Management](11-session-management.md) — resuming, redoing, and jumping between stages
 - [Glossary](glossary.md) — terminology reference

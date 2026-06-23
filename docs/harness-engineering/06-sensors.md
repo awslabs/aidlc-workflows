@@ -47,7 +47,7 @@ A failed row links to a detail file under
 `<record>/.aidlc-sensors/<stage-slug>/` (in the intent's record dir) that names the specific gap: the
 missing headings, the unreferenced upstream artifact, the lint error. The
 user-facing tour of how this looks during a run is in
-[Rules and the Learning Loop](../guide/08-rules-and-the-learning-loop.md) in the
+[Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md) in the
 User Guide.
 
 ---
@@ -203,7 +203,7 @@ emits a **`SENSOR_PROPOSED`** audit row, so no binding is ever installed
 silently. The loop and its `SENSOR_PROPOSED` row are covered in
 [Rules and the Learning Loop](05-rules-and-the-loop.md); the user-facing
 walk-through is in
-[Rules and the Learning Loop](../guide/08-rules-and-the-learning-loop.md) in the
+[Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md) in the
 User Guide.
 
 The hand-authored path in this chapter and the loop-installed path produce the

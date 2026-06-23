@@ -13,7 +13,7 @@ stage node.
 This chapter covers the manifest *file format* — what a sensor manifest
 contains, how stages import sensors, and how the four shipped manifests
 are configured. For the user-facing view of how sensors fire during a
-workflow, see [Rules and the Learning Loop](../guide/08-rules-and-the-learning-loop.md)
+workflow, see [Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md)
 in the User Guide.
 
 > **Path convention.** `<record>/` below = the active intent's record dir,
@@ -390,7 +390,7 @@ is an author error that the parser rejects.
 - **The user-facing learning loop** — how sensor proposals are surfaced
   and confirmed at the gate, and how a confirmed proposal scaffolds a
   new manifest. See [Rules and the Learning
-  Loop](../guide/08-rules-and-the-learning-loop.md) in the User Guide.
+  Loop](../guide/09-rules-and-the-learning-loop.md) in the User Guide.
 - **The compile boundary** — how `sensors_applicable` is resolved once
   at workflow start and read off the graph node at fire time. See
   [Plane Architecture](02-plane-architecture.md).

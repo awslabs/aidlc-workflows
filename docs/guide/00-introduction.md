@@ -36,9 +36,9 @@ The engine owns the routing (which stage is next, which scope, when to stop); th
 
 This guide is for anyone **using** AI-DLC to build software:
 
-- **New users** — Start with [Getting Started](01-getting-started.md) and [Your First Workflow](02-your-first-workflow.md)
-- **Regular users** — Reference [CLI Commands](11-cli-commands.md), [Scopes, Depth, and Test Strategy](04-scopes-and-depth.md), and [Troubleshooting](15-troubleshooting.md)
-- **Team leads** — See [Knowledge](07-knowledge.md) and [Rules and the Learning Loop](08-rules-and-the-learning-loop.md) for customizing AI-DLC to your team's standards
+- **New users** — Start with [Getting Started](01-getting-started.md), [Your First Workflow](02-your-first-workflow.md), and [Spaces and Intents](03-spaces-and-intents.md)
+- **Regular users** — Reference [CLI Commands](12-cli-commands.md), [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md), and [Troubleshooting](15-troubleshooting.md)
+- **Team leads** — See [Knowledge](08-knowledge.md) and [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for customizing AI-DLC to your team's standards
 
 To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, author rules and sensors, or add team knowledge (all configuration, no code) — see the [Harness Engineer Guide](../harness-engineering/00-overview.md). For changing the AI-DLC codebase itself, see the [Developer Reference](../reference/00-overview.md).
 
@@ -60,18 +60,19 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 |---------|------------------|
 | [Getting Started](01-getting-started.md) | Prerequisites, installation, first health check |
 | [Your First Workflow](02-your-first-workflow.md) | Annotated walkthrough of a complete run |
-| [Phases and Stages](03-phases-and-stages.md) | The 5 phases and 32 stages explained |
-| [Scopes, Depth, and Test Strategy](04-scopes-and-depth.md) | How to choose and override scope/depth/test strategy |
-| [Agents](05-agents.md) | The 11 agents: who does what and when |
+| [Spaces and Intents](03-spaces-and-intents.md) | The workspace layout: running many pieces of work across spaces and intents |
+| [Phases and Stages](04-phases-and-stages.md) | The 5 phases and 32 stages explained |
+| [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) | How to choose and override scope/depth/test strategy |
+| [Agents](06-agents.md) | The 11 agents: who does what and when |
 | [Agent deep dives](agents/README.md) | Per-agent reference pages: responsibilities, stages, knowledge |
-| [Interaction Modes](06-interaction-modes.md) | Guide Me / Edit File / Chat and approval gates |
-| [Knowledge](07-knowledge.md) | Adding company standards and conventions |
-| [Rules and the Learning Loop](08-rules-and-the-learning-loop.md) | Self-learning behavioral rules |
-| [State and Audit](09-state-and-audit.md) | How progress and decisions are tracked |
-| [Session Management](10-session-management.md) | Resume, redo, jump, recovery, and session reporting skills |
-| [CLI Commands](11-cli-commands.md) | Complete flag reference with examples |
-| [Customization](12-customization.md) | Settings, scope config, agent tuning |
-| [Artifacts Reference](13-artifacts-reference.md) | The per-intent record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/`) explained |
+| [Interaction Modes](07-interaction-modes.md) | Guide Me / Edit File / Chat and approval gates |
+| [Knowledge](08-knowledge.md) | Adding company standards and conventions |
+| [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) | Self-learning behavioral rules |
+| [State and Audit](10-state-and-audit.md) | How progress and decisions are tracked |
+| [Session Management](11-session-management.md) | Resume, redo, jump, recovery, and session reporting skills |
+| [CLI Commands](12-cli-commands.md) | Complete flag reference with examples |
+| [Customization](13-customization.md) | Settings, scope config, agent tuning |
+| [Artifacts Reference](14-artifacts-reference.md) | The per-intent record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/`) explained |
 | [Troubleshooting](15-troubleshooting.md) | Symptom-based problem solving |
 | [Worked Examples](16-worked-examples.md) | Full bugfix and feature walkthroughs |
 | [Skills and Runner Commands](17-skills.md) | The `/aidlc-*` stage- and scope-runner commands and the author-your-own-runner path |

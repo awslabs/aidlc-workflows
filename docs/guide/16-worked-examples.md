@@ -347,7 +347,7 @@ Configures CI pipeline with lint, build, test, and security scan stages. Quality
 
 ## Next Steps
 
-- [Scopes, Depth, and Test Strategy](04-scopes-and-depth.md) — How scopes determine which stages run
-- [How a Stage Runs](03-phases-and-stages.md) — Stage protocol details
-- [Agents](05-agents.md) — Agent personas and responsibilities
-- [Artifacts Reference](13-artifacts-reference.md) — Complete artifact directory tree
+- [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) — How scopes determine which stages run
+- [How a Stage Runs](04-phases-and-stages.md) — Stage protocol details
+- [Agents](06-agents.md) — Agent personas and responsibilities
+- [Artifacts Reference](14-artifacts-reference.md) — Complete artifact directory tree

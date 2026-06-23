@@ -1,6 +1,6 @@
 # Design Agent
 
-> **Agent deep dive** · [User Guide](../00-introduction.md) › [Agents](../05-agents.md) › [deep dives](README.md) · Technical reference: [design-agent](../../reference/agents/design-agent.md)
+> **Agent deep dive** · [User Guide](../00-introduction.md) › [Agents](../06-agents.md) › [deep dives](README.md) · Technical reference: [design-agent](../../reference/agents/design-agent.md)
 
 The aidlc-design-agent is your UX/UI designer. It produces wireframes and concept sketches during Ideation, then evolves them into high-fidelity mockups with interaction specifications during Inception. It defines information architecture, navigation design, responsive behavior, and accessibility requirements. For non-UI projects, it produces system context diagrams and API experience designs.
 

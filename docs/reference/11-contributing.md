@@ -136,7 +136,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 
 7. **Verify plan parity (optional but recommended)** — `AIDLC_GRAPH_RESOLVE=1 bun .claude/tools/aidlc-graph.ts resolve hotfix --stdout` emits the scope's plan; eyeball that the EXECUTE set matches what you tagged.
 
-8. **Update scope-aware documentation** — `docs/guide/04-scopes-and-depth.md` (full scope reference), `docs/guide/12-customization.md` (valid values list and scope table), and `docs/reference/03-orchestrator.md` (scope-to-stage mapping) all enumerate scopes explicitly. Per the documentation policy at the end of this chapter, update them in the same PR.
+8. **Update scope-aware documentation** — `docs/guide/05-scopes-and-depth.md` (full scope reference), `docs/guide/13-customization.md` (valid values list and scope table), and `docs/reference/03-orchestrator.md` (scope-to-stage mapping) all enumerate scopes explicitly. Per the documentation policy at the end of this chapter, update them in the same PR.
 
 9. **Add a scope-routing workflow test** — if the scope has behavior that differs from existing scopes (new phase skipping pattern, new depth combination), add a routed journey test modeled after `tests/e2e/t53.test.ts` (sdk scope routing) or `tests/e2e/t-tui-t50-bugfix-scope.serial.test.ts` (tui scope run-through).
 

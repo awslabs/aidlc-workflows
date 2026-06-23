@@ -163,8 +163,8 @@ Each skill needs a compiled `runtime-graph.json` to read. If you run one before 
 
 ## Next Steps
 
-- [State Tracking and Audit Trail](09-state-and-audit.md) — State file structure and checkpoint notation
+- [State Tracking and Audit Trail](10-state-and-audit.md) — State file structure and checkpoint notation
 - [Skills and Runner Commands](17-skills.md) — The read-only session views (`/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack`) and the runner family
-- [CLI Commands](11-cli-commands.md) — Full reference for `--stage`, `--phase`, and other flags
+- [CLI Commands](12-cli-commands.md) — Full reference for `--stage`, `--phase`, and other flags
 - [Troubleshooting](15-troubleshooting.md) — Compaction recovery and state corruption
 - [Glossary](glossary.md) — Definitions for compaction, recovery breadcrumb, session

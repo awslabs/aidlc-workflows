@@ -4,7 +4,7 @@ Technical reference for the 11 AI-DLC agents: configuration, stage ownership,
 collaboration patterns, and comparison data.
 
 For design philosophy and rationale, see the
-[Agents chapter in the User Guide](../../guide/05-agents.md).
+[Agents chapter in the User Guide](../../guide/06-agents.md).
 
 ---
 
@@ -255,5 +255,5 @@ aidlc-operations-agent
 - [Orchestrator](../03-orchestrator.md)
 - [Agent System](../05-agent-system.md)
 - [Stage Documentation](../04-stages/)
-- [Agents chapter in the User Guide (philosophy and rationale)](../../guide/05-agents.md)
+- [Agents chapter in the User Guide (philosophy and rationale)](../../guide/06-agents.md)
 - [SKILL.md (Conductor)](../../../dist/claude/.claude/skills/aidlc/SKILL.md) -- the forwarding loop that acts on engine directives; carries a human-readable stage-graph mirror

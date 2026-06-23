@@ -386,6 +386,64 @@ dist/claude/.claude/
                 +-- feedback-optimization.md
 ```
 
+### The workspace: spaces and intents
+
+The tree above is the **engine** — harness-specific, never browsed by the user.
+Everything the engine *reads and writes at runtime* lives in a separate, neutral
+`aidlc/` directory at the project root, organized as a two-level container:
+**space → intent**. (For the end-user orientation, see the User Guide's
+[Spaces and Intents](../guide/03-spaces-and-intents.md); this section is the
+data model the engine resolves against.)
+
+```
+aidlc/                                    # neutral, harness-independent, committed to git
++-- active-space                          # cursor: active space name (gitignored, per-user)
++-- spaces/
+    +-- default/                          # one space per team; "default" is auto-resolved
+        +-- memory/                        # the method — org.md/team.md/project.md, phases/, templates/
+        +-- knowledge/                     # space-level domain knowledge (free-form)
+        +-- codekb/<repo>/                 # per-repo code knowledge base
+        +-- intents/
+            +-- active-intent              # cursor: active intent record dir (gitignored, per-user)
+            +-- intents.json               # the registry: [{ uuid, slug, scope, repos, status }]
+            +-- <slug>-<id8>/              # one record dir per intent
+                +-- aidlc-state.md          # per-intent workflow state
+                +-- audit/<host>-<clone>.md # per-clone audit shards (glob-and-merge by timestamp)
+                +-- <phase>/<stage>/*.md    # artifacts + the per-stage memory.md diary
+```
+
+**Resolution.** Two per-user cursors select context; neither ever errors (a
+missing cursor falls back to a default):
+
+- **Space** — `aidlc/active-space`, precedence `explicit arg > cursor > "default"`
+  (`DEFAULT_SPACE`, `core/tools/aidlc-lib.ts:285`; resolver `activeSpace()`,
+  `aidlc-lib.ts:354-366`). `listSpaces()` always reports `default` even with
+  nothing on disk (`aidlc-lib.ts:713-728`).
+- **Intent** — `aidlc/spaces/<space>/intents/active-intent`, precedence
+  `explicit arg > cursor (if it names a real record holding aidlc-state.md) >
+  lone-intent > null` (`activeIntent`, `aidlc-lib.ts:411-435`). A `null` intent
+  means "no record yet" — the signal the orchestrator uses to auto-birth the
+  first intent.
+
+The path helpers — `intentsDir`, `knowledgeDir`, `codekbDir` (`aidlc-lib.ts`),
+and `memoryDirFor` (`aidlc-graph.ts:234`) — all default their space argument to
+`activeSpace(projectDir)`, so AI-DLC's own resolvers follow the cursor; switching
+spaces with `/aidlc space <name>` also
+re-points each harness-native rule include (the Claude `@`-import stub described
+above, Kiro's resources glob, Codex's rules dir) at the switched space's
+`memory/`. At `default` the re-point is a byte-identical no-op, so a single-team
+committed tree never churns.
+
+**Committed vs gitignored.** `aidlc/` is checked in so a team shares its work.
+The split (`harness/claude/dot-gitignore:34-54`): the two cursors
+(`active-space`, `active-intent`), per-clone runtime (`.aidlc-clone-id`,
+`.aidlc-sessions/`), and derived state (`runtime-graph.json`, `.aidlc-*` under a
+record) are **gitignored**; the method (`memory/**`), knowledge (`knowledge/**`,
+`codekb/**`), the `intents.json` registry, each record's `aidlc-state.md`, the
+`audit/` shards, and artifacts are **committed**. Audit is committed as per-clone
+shards (`audit/<host>-<clone>.md`) precisely so git never has to merge concurrent
+appends — there is intentionally no `merge=union` attribute.
+
 ## Key Design Decisions
 
 1. **Hybrid execution model (inline + subagent)** -- Stages requiring user interaction (questions, clarifications, approval iteration) run inline where the conductor has direct conversation access. Stages performing focused, autonomous work (code scanning, code generation) delegate to subagents. A pure-subagent model would prevent mid-stage user interaction; a pure-inline model would not benefit from focused agent specialization.

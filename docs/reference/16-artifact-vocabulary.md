@@ -255,7 +255,7 @@ at tag time and the registry at HEAD is a one-line `diff`.
 - [State Machine](12-state-machine.md) — parallel derivation pattern
   for audit events: the canonical enum lives in `aidlc-audit.ts`, not in
   the doc.
-- [User Guide — Artifacts Reference](../guide/13-artifacts-reference.md)
+- [User Guide — Artifacts Reference](../guide/14-artifacts-reference.md)
   — user-facing artifact lifecycle and directory layout.
 - `dist/claude/.claude/tools/aidlc-graph.ts` — the derivation tool
   (`artifactsRegistry()` + `artifacts` CLI subcommand).

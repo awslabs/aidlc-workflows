@@ -348,4 +348,4 @@ mechanics seen through it.
   Graph](13-runtime-graph.md).
 - **The user-facing view** — control/data/management framed for someone
   running a workflow rather than building the framework. See [Rules and
-  the Learning Loop](../guide/08-rules-and-the-learning-loop.md).
+  the Learning Loop](../guide/09-rules-and-the-learning-loop.md).

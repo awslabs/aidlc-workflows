@@ -100,8 +100,8 @@ Installed and activated? The methodology is the same on every harness — keep
 going with the neutral chapters:
 
 - [Your First Workflow](../02-your-first-workflow.md) — an annotated end-to-end run.
-- [Phases and Stages](../03-phases-and-stages.md) — the 5 phases and 32 stages.
-- [Scopes, Depth, and Test Strategy](../04-scopes-and-depth.md) — right-sizing a run.
+- [Phases and Stages](../04-phases-and-stages.md) — the 5 phases and 32 stages.
+- [Scopes, Depth, and Test Strategy](../05-scopes-and-depth.md) — right-sizing a run.
 - [Glossary](../glossary.md) — every term defined.
 
 Other harnesses: [AI-DLC on Codex CLI](codex-cli.md) · [the harness family index](README.md).

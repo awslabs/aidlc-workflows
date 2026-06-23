@@ -63,7 +63,7 @@ Ships with the framework. Contains shared principles and per-agent methodology r
 └── ...                              # One directory per agent
 ```
 
-> **Do NOT edit Tier 1 files to inject your team's knowledge.** `.claude/knowledge/` and `.claude/agents/*.md` are framework files — they are overwritten on every upgrade, and your changes will disappear. If you want to add company standards, architectural preferences, or domain context, add them to **Tier 2** (below). If you want to constrain agent behavior, add a **rule** (see [Rules and the Learning Loop](08-rules-and-the-learning-loop.md)).
+> **Do NOT edit Tier 1 files to inject your team's knowledge.** `.claude/knowledge/` and `.claude/agents/*.md` are framework files — they are overwritten on every upgrade, and your changes will disappear. If you want to add company standards, architectural preferences, or domain context, add them to **Tier 2** (below). If you want to constrain agent behavior, add a **rule** (see [Rules and the Learning Loop](09-rules-and-the-learning-loop.md)).
 
 ### Tier 2: Team Knowledge
 
@@ -269,7 +269,7 @@ A useful rule of thumb: **if a human reviewer would reject a stage's output when
 
 Rules and knowledge sit on different planes, and that is why their loading behaves differently. Knowledge files are reference material that agents weigh during a stage. Rules resolve through a strict-additive chain — org, then team, then project, then phase, then stage — that the framework compiles ahead of the workflow; every applicable rule reaches the agent, and nothing is silently dropped. Conflicts between layers are caught at admission time, when a team or project rule is first written, rather than reconciled mid-stage.
 
-For the full rule model — file locations, the five-layer chain, the learning loop, and admission-time conflict checks — see [Rules and the Learning Loop](08-rules-and-the-learning-loop.md).
+For the full rule model — file locations, the five-layer chain, the learning loop, and admission-time conflict checks — see [Rules and the Learning Loop](09-rules-and-the-learning-loop.md).
 
 ---
 
@@ -329,7 +329,7 @@ sequenceDiagram
 - Steps 1-5 load from files on disk
 - Step 6 is context added by the orchestrator at runtime based on the current stage's declared inputs
 - Steps 4-5 only load if the directories exist and contain files
-- [Rules](08-rules-and-the-learning-loop.md) are behavioral constraints, not reference material — the resolved chain loads first and every applicable rule reaches the agent
+- [Rules](09-rules-and-the-learning-loop.md) are behavioral constraints, not reference material — the resolved chain loads first and every applicable rule reaches the agent
 
 ---
 
@@ -349,7 +349,7 @@ Knowledge files are loaded at every stage start. Outdated or contradictory knowl
 
 ### Don't duplicate Tier 1 content
 
-If you want to **constrain** how the agent applies a methodology principle, add a rule instead of duplicating the Tier 1 file. See [Rules and the Learning Loop](08-rules-and-the-learning-loop.md).
+If you want to **constrain** how the agent applies a methodology principle, add a rule instead of duplicating the Tier 1 file. See [Rules and the Learning Loop](09-rules-and-the-learning-loop.md).
 
 ### Don't edit agent files to inject team context
 
@@ -363,7 +363,7 @@ The space-level `aidlc/knowledge/` directory is empty at bootstrap — you creat
 
 ## Next Steps
 
-- [Rules and the Learning Loop](08-rules-and-the-learning-loop.md) — the strict-additive rule chain and how the framework learns new rules across workflows
+- [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) — the strict-additive rule chain and how the framework learns new rules across workflows
 - [Getting Started](01-getting-started.md) — the workspace shell and where knowledge directories appear
-- [Customization](12-customization.md) — full customization guide
+- [Customization](13-customization.md) — full customization guide
 - [Glossary](glossary.md) — terminology reference

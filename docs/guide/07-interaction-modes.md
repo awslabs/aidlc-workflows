@@ -180,7 +180,7 @@ Beyond the approval gate, you have additional navigation options:
 | `/aidlc --stage <name>` | Jump to a specific stage (intervening stages marked `[S]`) |
 | `/aidlc --phase <name>` | Jump to the start of a phase |
 
-See [Session Management](10-session-management.md) and [CLI Commands](11-cli-commands.md) for details.
+See [Session Management](11-session-management.md) and [CLI Commands](12-cli-commands.md) for details.
 
 ---
 
@@ -202,6 +202,6 @@ This shows:
 ## Next Steps
 
 - [Your First Workflow](02-your-first-workflow.md) — see interaction modes in context
-- [State and Audit](09-state-and-audit.md) — how decisions are tracked
-- [Session Management](10-session-management.md) — resume, redo, jump
+- [State and Audit](10-state-and-audit.md) — how decisions are tracked
+- [Session Management](11-session-management.md) — resume, redo, jump
 - [Glossary](glossary.md) — terminology reference

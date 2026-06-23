@@ -77,7 +77,7 @@ level — `aidlc/spaces/<space>/knowledge/` (a sibling of `intents/`) — so it
 accumulates across every intent in the space rather than being trapped in one
 intent's record. The engine creates it empty; the team adds free-form files
 under an optional `aidlc-shared/` and per-agent subdirectories. See
-[Knowledge](07-knowledge.md).
+[Knowledge](08-knowledge.md).
 
 **Per-stage memory diary.** Each executed stage also keeps a committed
 `memory.md` alongside its artifacts (e.g.
@@ -85,7 +85,7 @@ under an optional `aidlc-shared/` and per-agent subdirectories. See
 stage's observation diary — auto-created from a template at stage start,
 maintained by the orchestrator during the stage, and read by the §13
 Learnings Ritual at the approval gate. It is never hand-edited. See
-[Rules and the Learning Loop](08-rules-and-the-learning-loop.md) for how
+[Rules and the Learning Loop](09-rules-and-the-learning-loop.md) for how
 the diary feeds the learning loop.
 
 **Code lives in sibling repos, not the record dir.** The `aidlc/` tree holds only
@@ -96,7 +96,7 @@ children of the workspace root (each with its own `.git`). An intent records the
 repos it touches at birth — auto-discovered, or scoped with `--repos a,b` — in its
 `intents.json` row (`repos: [...]`); Construction anchors each git operation to one
 of them. An intent with no recorded `repos` is the single-repo default. See
-[CLI Commands](11-cli-commands.md).
+[CLI Commands](12-cli-commands.md).
 
 ---
 
@@ -257,6 +257,6 @@ At each phase transition, a verification check runs to confirm traceability:
 
 ## Next Steps
 
-- [State Tracking and Audit Trail](09-state-and-audit.md) — State file and audit trail details
-- [How a Stage Runs](03-phases-and-stages.md) — Stage execution and artifact production
+- [State Tracking and Audit Trail](10-state-and-audit.md) — State file and audit trail details
+- [How a Stage Runs](04-phases-and-stages.md) — Stage execution and artifact production
 - [Glossary](glossary.md) — Definitions for artifact, phase boundary verification, question file

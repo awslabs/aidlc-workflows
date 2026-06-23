@@ -173,7 +173,7 @@ If the state file is corrupted, you can reconstruct it from the audit trail by r
 
 ## Next Steps
 
-- [Session Management](10-session-management.md) — How state is used for session resume
-- [Artifacts Reference](13-artifacts-reference.md) — What gets stored in the intent's record dir
+- [Session Management](11-session-management.md) — How state is used for session resume
+- [Artifacts Reference](14-artifacts-reference.md) — What gets stored in the intent's record dir
 - [Troubleshooting](15-troubleshooting.md) — State corruption repair
 - [Glossary](glossary.md) — Definitions for state file, audit trail, checkpoint, compaction

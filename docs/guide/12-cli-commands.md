@@ -131,7 +131,7 @@ Run with no arguments when a state file exists to resume.
 /aidlc
 ```
 
-**Behavior:** Reads `aidlc-state.md`, checks `.aidlc-recovery.md` for corruption, then presents four resume options: resume from checkpoint, redo current stage, jump to stage, or start fresh. See [Session Management](10-session-management.md) for details.
+**Behavior:** Reads `aidlc-state.md`, checks `.aidlc-recovery.md` for corruption, then presents four resume options: resume from checkpoint, redo current stage, jump to stage, or start fresh. See [Session Management](11-session-management.md) for details.
 
 If no state file exists, the framework treats this as a new workflow and asks for scope/description.
 
@@ -170,7 +170,7 @@ engine runs for you — not `/aidlc` flags you type. During Construction, each g
 operation (worktree, swarm, Bolt) targets one repo; the conductor passes
 `--repo <name>` to anchor it, required only when an intent spans more than one
 repo. An intent with no recorded repos is the single-repo default (git runs in the
-workspace/project dir). See [Artifacts Reference](13-artifacts-reference.md).
+workspace/project dir). See [Artifacts Reference](14-artifacts-reference.md).
 
 ---
 
@@ -368,7 +368,7 @@ Override the test volume strategy independently of depth.
 - **Standard:** 5-8 tests per component, unit + integration
 - **Comprehensive:** 10-15 tests per component, all test types
 
-See [Scopes, Depth, and Test Strategy](04-scopes-and-depth.md#the-3-test-strategy-levels) for full details on each level, defaulting behavior, and common combinations.
+See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md#the-3-test-strategy-levels) for full details on each level, defaulting behavior, and common combinations.
 
 **Examples:**
 
@@ -426,7 +426,7 @@ Run any of them with `bun .claude/tools/<tool>.ts <subcommand>`.
 
 ### `aidlc-sensor` — inspect and fire Sensors
 
-Sensors are deterministic checks that run after every `Write` or `Edit` to a stage output (see [Rules and the Learning Loop](08-rules-and-the-learning-loop.md) and reference [Sensor System](../reference/07-sensor-system.md)). The PostToolUse hook fires them for you; this tool lets you list, describe, and manually fire one.
+Sensors are deterministic checks that run after every `Write` or `Edit` to a stage output (see [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) and reference [Sensor System](../reference/07-sensor-system.md)). The PostToolUse hook fires them for you; this tool lets you list, describe, and manually fire one.
 
 | Subcommand | What it does |
 |------------|--------------|
@@ -469,7 +469,7 @@ The runtime graph (`runtime-graph.json` in the intent's record dir) is the data-
 bun .claude/tools/aidlc-runtime.ts read requirements-analysis
 ```
 
-`runtime-graph.json` is gitignored. See [Artifacts Reference](13-artifacts-reference.md) for the artifact's shape and the [Runtime Graph](../reference/13-runtime-graph.md) reference chapter for the full schema.
+`runtime-graph.json` is gitignored. See [Artifacts Reference](14-artifacts-reference.md) for the artifact's shape and the [Runtime Graph](../reference/13-runtime-graph.md) reference chapter for the full schema.
 
 ### Session skills — report on a workflow
 
@@ -481,7 +481,7 @@ Three read-only skills surface what `aidlc-runtime summary` reports, wrapped in 
 | `/aidlc-replay` | Readable session narrative for async review. Terminal only |
 | `/aidlc-outcomes-pack` | Handover document for the team. Writes `OUTCOMES.md` |
 
-All three are read-only — no stage advance, no audit emit — and source every number from `aidlc-runtime summary --json`. See [Session Management § Session Skills](10-session-management.md#session-skills) for the full walkthrough.
+All three are read-only — no stage advance, no audit emit — and source every number from `aidlc-runtime summary --json`. See [Session Management § Session Skills](11-session-management.md#session-skills) for the full walkthrough.
 
 ---
 
@@ -505,14 +505,14 @@ Pre-set the default scope for a project. Read from `.claude/settings.json` `env`
 
 **Precedence:** explicit CLI flag > keyword detection > `AWS_AIDLC_DEFAULT_SCOPE` > hard-coded fallback.
 
-**Scope of effect:** applies at workflow initialization only. Once the intent's `aidlc-state.md` exists, the state file is authoritative. See [Customization § Per-Project Default Scope](12-customization.md#per-project-default-scope) for the full walkthrough.
+**Scope of effect:** applies at workflow initialization only. Once the intent's `aidlc-state.md` exists, the state file is authoritative. See [Customization § Per-Project Default Scope](13-customization.md#per-project-default-scope) for the full walkthrough.
 
 ---
 
 ## Next Steps
 
 - [Skills and Runner Commands](17-skills.md) — The typeable `/aidlc-<scope>` and `/aidlc-<stage>` runners, and what `--single` does
-- [Session Management](10-session-management.md) — Resume options and stage jumps in detail
-- [Scopes, Depth, and Test Strategy](04-scopes-and-depth.md) — Scope definitions, stage mappings, and test strategy levels
+- [Session Management](11-session-management.md) — Resume options and stage jumps in detail
+- [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) — Scope definitions, stage mappings, and test strategy levels
 - [Troubleshooting](15-troubleshooting.md) — When commands don't behave as expected
 - [Glossary](glossary.md) — Definitions for command, utility command, scope

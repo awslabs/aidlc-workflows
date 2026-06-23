@@ -1187,7 +1187,7 @@ After the final Bolt completes:
 Bolts can run in parallel batches as the dependency graph allows; the
 walking-skeleton Bolt always runs first as a single-Bolt batch to verify
 the end-to-end shape before parallel batches kick off. See
-`docs/guide/03-phases-and-stages.md:263-293` for the full Bolt-by-Bolt
+`docs/guide/04-phases-and-stages.md:263-293` for the full Bolt-by-Bolt
 narrative.
 
 ### Cross-References

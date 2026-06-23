@@ -2,7 +2,7 @@
 
 A page per agent: its domain, the stages it leads and supports, the knowledge it
 loads, and how it collaborates. These expand on the roster in the
-[Agents chapter](../05-agents.md) — start there for the philosophy (why 11 broad
+[Agents chapter](../06-agents.md) — start there for the philosophy (why 11 broad
 agents, not 30 narrow ones) and read here for the detail on one agent.
 
 For the technical reference (frontmatter contract, tool allowlists, the
@@ -25,4 +25,4 @@ comparison matrix), see the Developer Reference's
 
 ---
 
-← Back to the [User Guide](../00-introduction.md) · [Agents chapter](../05-agents.md)
+← Back to the [User Guide](../00-introduction.md) · [Agents chapter](../06-agents.md)

@@ -12,7 +12,7 @@ This chapter walks the workflow: what a persona file is, the judgment calls in
 its frontmatter, and the two-step truth that an agent which is *visible* is not
 yet *active*. For the field-by-field contract, it links down to the Developer
 Reference. For who these agents are from a user's seat, see the [User Guide —
-Agents](../guide/05-agents.md).
+Agents](../guide/06-agents.md).
 
 ---
 

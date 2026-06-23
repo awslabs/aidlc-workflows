@@ -1,6 +1,6 @@
 # Architect Agent
 
-> **Agent deep dive** · [User Guide](../00-introduction.md) › [Agents](../05-agents.md) › [deep dives](README.md) · Technical reference: [architect-agent](../../reference/agents/architect-agent.md)
+> **Agent deep dive** · [User Guide](../00-introduction.md) › [Agents](../06-agents.md) › [deep dives](README.md) · Technical reference: [architect-agent](../../reference/agents/architect-agent.md)
 
 The aidlc-architect-agent is your solutions architect. It translates requirements into robust system architectures, produces Architecture Decision Records (ADRs), designs domain models, and decomposes projects into implementable units of work. It thinks in patterns and trade-offs, producing designs that developers can implement directly.
 

@@ -70,7 +70,7 @@ Why only scope and not depth or test-strategy? Each scope already declares its o
 
 ## Scope Configuration
 
-Scopes control which stages execute and at what depth and test strategy. AI-DLC provides 9 named scopes; the full table (EXECUTE/total stage counts, default depth, test strategy, and use case for each) is the single source in [Scopes, Depth, and Test Strategy § The 9 Scopes](04-scopes-and-depth.md#the-9-scopes). This section covers *configuring* and overriding them.
+Scopes control which stages execute and at what depth and test strategy. AI-DLC provides 9 named scopes; the full table (EXECUTE/total stage counts, default depth, test strategy, and use case for each) is the single source in [Scopes, Depth, and Test Strategy § The 9 Scopes](05-scopes-and-depth.md#the-9-scopes). This section covers *configuring* and overriding them.
 
 ### Choosing a scope
 
@@ -204,14 +204,14 @@ If your change is to the framework's *code* — the orchestrator, a hook, a CLI 
 
 For details on the two-tier knowledge system and the rule/learning-loop system, see:
 
-- [Knowledge](07-knowledge.md) — Team knowledge directories and methodology reference files
-- [Rules and the Learning Loop](08-rules-and-the-learning-loop.md) — Behavioral rules and the self-learning flow
+- [Knowledge](08-knowledge.md) — Team knowledge directories and methodology reference files
+- [Rules and the Learning Loop](09-rules-and-the-learning-loop.md) — Behavioral rules and the self-learning flow
 
 ---
 
 ## Next Steps
 
-- [Scopes, Depth, and Test Strategy](04-scopes-and-depth.md) — Full scope-to-stage mapping
-- [Agents](05-agents.md) — Agent permissions and capabilities
+- [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) — Full scope-to-stage mapping
+- [Agents](06-agents.md) — Agent permissions and capabilities
 - [Troubleshooting](15-troubleshooting.md) — Statusline issues, hook configuration
 - [Glossary](glossary.md) — Definitions for scope, depth, guardrail, knowledge

@@ -123,7 +123,7 @@ Put `CONTEXT7_API_KEY` (and any other secret env) in `.claude/settings.local.jso
 
 The four AWS servers authenticate with the same default AWS SDK credential chain Claude Code already uses for Bedrock (see [AWS Bedrock Setup](#aws-bedrock-setup)). Once `uvx` is installed and AWS credentials resolve, those servers come up automatically; `context7` comes up once `CONTEXT7_API_KEY` is set. Because the servers are inherited at the session level, every agent reaches every declared server — there is no per-agent grant to perform.
 
-> **Restricting an agent (advanced):** inheritance is additive — declaring a server makes it available to all agents, and you cannot grant servers per-agent. To *prevent* a specific agent from using a server, narrow that agent's `tools:` allowlist to the fully-qualified `mcp__<server>__<tool>` ids it may call (a bare `mcp__<server>` token is not honoured). See [Agents](05-agents.md) for how agent tool access works.
+> **Restricting an agent (advanced):** inheritance is additive — declaring a server makes it available to all agents, and you cannot grant servers per-agent. To *prevent* a specific agent from using a server, narrow that agent's `tools:` allowlist to the fully-qualified `mcp__<server>__<tool>` ids it may call (a bare `mcp__<server>` token is not honoured). See [Agents](06-agents.md) for how agent tool access works.
 
 ### Not using these?
 
@@ -173,9 +173,13 @@ Team knowledge lives one level up, at the space level —
 across every intent in the space. The engine creates it empty; you add free-form
 files under an optional `aidlc-shared/` and per-agent subdirectories.
 
-To add [team knowledge](07-knowledge.md) or team practices before your first run,
+To add [team knowledge](08-knowledge.md) or team practices before your first run,
 edit the shipped `aidlc/spaces/default/memory/` files; the space-level
 `aidlc/knowledge/` directory is created (empty) once your first `/aidlc` runs.
+
+For the full picture of the workspace layout — how it holds many intents at once,
+what spaces are for, and the commands to move between them — see
+[Spaces and Intents](03-spaces-and-intents.md).
 
 ---
 
@@ -292,13 +296,13 @@ Inside the Claude Code session:
 
 The included `.claude/settings.json` pre-approves Claude Code tools (Read, Edit, Write, Bash, Glob, Grep, Task, WebSearch) so workflows run without per-call permission prompts. Review this file before use and adjust to your security requirements.
 
-See [Customization](12-customization.md) for details on modifying tool permissions.
+See [Customization](13-customization.md) for details on modifying tool permissions.
 
 ---
 
 ## Next Steps
 
 - [Your First Workflow](02-your-first-workflow.md) — annotated walkthrough of a complete run
-- [Scopes, Depth, and Test Strategy](04-scopes-and-depth.md) — choosing the right scope for your task
+- [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) — choosing the right scope for your task
 - [Troubleshooting](15-troubleshooting.md) — common issues and fixes
 - [Glossary](glossary.md) — terminology reference

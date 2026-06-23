@@ -2,7 +2,7 @@
 
 This chapter documents the agent architecture: how agents are structured, configured, loaded by the framework, and how to add or modify them.
 
-For user-facing agent descriptions, see the [User Guide -- Agents](../guide/05-agents.md).
+For user-facing agent descriptions, see the [User Guide -- Agents](../guide/06-agents.md).
 
 ---
 

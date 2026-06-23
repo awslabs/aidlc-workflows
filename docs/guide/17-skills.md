@@ -19,7 +19,7 @@ Every command this implementation ships is a skill under `.claude/skills/`. They
 - **Scope-runners** — `/aidlc-bugfix`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch`. Same full workflow, with a scope fixed and scope detection skipped.
 - **Stage-runners** — `/aidlc-application-design`, `/aidlc-code-generation`, and 27 more. Run one stage in isolation, never touching your main workflow.
 - **`/aidlc-init`** — birth the first intent (run the whole Initialization phase) in one step; opt-in packaging over the engine's auto-birth.
-- **Session skills** — `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack`. Read-only views over a workflow; covered in [Session Management](10-session-management.md).
+- **Session skills** — `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack`. Read-only views over a workflow; covered in [Session Management](11-session-management.md).
 
 Everything a runner does is reachable from `/aidlc` with a flag. The runners are packaging — typing `/aidlc-bugfix` and seeing it in your `/` menu is good ergonomics, nothing more. Delete every runner and the shortcuts go; the capability stays, reachable through `/aidlc` flags.
 
@@ -50,7 +50,7 @@ You can pass a description and flags straight through, exactly as you would to `
 /aidlc-feature --status
 ```
 
-**Only four scopes ship a runner** — the high-traffic ones. The framework defines nine scopes total (see [Scopes, Depth, and Test Strategy](04-scopes-and-depth.md)); every other one — `enterprise`, `poc`, `infra`, `refactor`, `workshop` — is always reachable through the orchestrator:
+**Only four scopes ship a runner** — the high-traffic ones. The framework defines nine scopes total (see [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md)); every other one — `enterprise`, `poc`, `infra`, `refactor`, `workshop` — is always reachable through the orchestrator:
 
 ```
 /aidlc --scope enterprise
@@ -104,7 +104,7 @@ The three bootstrap **initialization** stages ship no stage-runner — birthing 
 | Scope-runner | `/aidlc-bugfix`, `/aidlc-feature`, `/aidlc-mvp`, `/aidlc-security-patch` | Full workflow, scope fixed, no detection | `/aidlc --scope <name>` |
 | Stage-runner | `/aidlc-application-design`, `/aidlc-code-generation`, … (29 total) | One stage in isolation, never advances your workflow | `/aidlc --stage <slug> --single` |
 | Init wrapper | `/aidlc-init` | Birth the first intent (run Initialization) | `/aidlc` on a fresh workspace |
-| Session views | `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack` | Read-only workflow reports | see [Session Management](10-session-management.md) |
+| Session views | `/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack` | Read-only workflow reports | see [Session Management](11-session-management.md) |
 
 There's one stage-runner for every runnable stage in the lifecycle. To see the full set, list your skills directory:
 
@@ -139,7 +139,7 @@ bun .claude/tools/aidlc-runner-gen.ts scopes --check   # scope-runner drift
 
 A stage added to the graph without a regenerated runner — or an orphan runner for a stage that's gone — fails loudly with a diff. Adding a stage file and regenerating is the whole authoring path; the runner follows as a consequence the generator maintains for you.
 
-For the mechanics of writing a stage file, see [Customization](12-customization.md) and [Phases and Stages](03-phases-and-stages.md). For the engine, the directive contract, and how a runner shell drives `next`/`report` under the hood, see the reference chapter on the [Skill System](../reference/17-skill-system.md).
+For the mechanics of writing a stage file, see [Customization](13-customization.md) and [Phases and Stages](04-phases-and-stages.md). For the engine, the directive contract, and how a runner shell drives `next`/`report` under the hood, see the reference chapter on the [Skill System](../reference/17-skill-system.md).
 
 ---
 
@@ -164,4 +164,4 @@ bun .claude/tools/aidlc-runner-gen.ts write
 bun .claude/tools/aidlc-runner-gen.ts scopes
 ```
 
-See also: [CLI Commands](11-cli-commands.md) · [Scopes, Depth, and Test Strategy](04-scopes-and-depth.md) · [Customization](12-customization.md)
+See also: [CLI Commands](12-cli-commands.md) · [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) · [Customization](13-customization.md)

@@ -68,7 +68,7 @@ Reach for `aidlc-shared/` only when a standard genuinely applies across all 11
 agents. A pattern that matters to the architect and no one else belongs in
 `aidlc-architect-agent/`, where it adds context to architecture stages without
 diluting every other agent's window. The
-[Adding Company Standards worked example](../guide/07-knowledge.md) in the User
+[Adding Company Standards worked example](../guide/08-knowledge.md) in the User
 Guide carries a full end-to-end walk-through — create the directory, write,
 verify — that's worth reading once before you author your first file.
 
@@ -136,7 +136,7 @@ belongs in the space memory layer (`aidlc/spaces/<space>/memory/`), where the fr
 authoring rules across the layer chain and letting the learning loop promote
 corrections into them, see
 [Rules and the Learning Loop](05-rules-and-the-loop.md). The User Guide's
-[Knowledge vs Rules table](../guide/07-knowledge.md) covers the same call with
+[Knowledge vs Rules table](../guide/08-knowledge.md) covers the same call with
 more examples.
 
 ---
@@ -167,6 +167,41 @@ the same steps 4 and 5. The mental model from the
 [overview](00-overview.md) holds: the stage names the agent and the agent
 reads the knowledge, and you shape all of it by editing data rather than
 writing code.
+
+---
+
+## Spaces: knowledge for more than one team
+
+Everything above assumes one team. When **more than one team shares a project**,
+AI-DLC keeps each team's method, knowledge, and record in its own **space** — a
+`aidlc/spaces/<name>/` of identical shape (`memory/`, `knowledge/`, `codekb/`,
+`intents/`). The `aidlc/knowledge/` shorthand you've been using throughout this
+chapter is really `aidlc/spaces/<active-space>/knowledge/`; with a single team
+that active space is always `default` and the distinction never surfaces. (The
+[User Guide's Spaces and Intents chapter](../guide/03-spaces-and-intents.md) is
+the end-user orientation; this section is the harness-engineering angle.)
+
+What this means for the knowledge and rules you author:
+
+- **Team knowledge is per-space.** The `aidlc/knowledge/aidlc-<agent>-agent/`
+  files you populate live inside one space. A second team gets its own empty
+  `knowledge/` tree to fill — your files do not leak across the boundary, and
+  theirs do not dilute your agents' context.
+- **The method layer is per-space too.** The rules in `aidlc/spaces/<space>/memory/`
+  (`org.md` → `team.md` → `project.md`) resolve within the active space. A new
+  space is seeded from the framework baseline — `org.md` copied in, fresh empty
+  `team.md` / `project.md` — so a new team starts from the framework's defaults
+  and earns its own practices rather than inheriting another team's.
+- **You don't author spaces in `core/`.** A space is runtime team data, created
+  with `/aidlc space-create <name>` in an installed project — the same
+  data-not-code line that separates team knowledge from framework source. There
+  is nothing to add to `core/` or regenerate to support multiple teams; the
+  capability ships in the engine.
+
+The mental model from this chapter holds inside each space unchanged: the stage
+names the agent, the agent reads the knowledge, and you shape it all by editing
+data. A space simply scopes *whose* data — so two teams can run AI-DLC in one
+project without their context, practices, or records colliding.
 
 ## Next
 
