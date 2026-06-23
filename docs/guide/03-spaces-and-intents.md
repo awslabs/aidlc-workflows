@@ -16,18 +16,24 @@ how that works and where everything lives.
 
 ## One workspace, organized by what you're working on
 
-When you install AI-DLC you copy the `.claude/` engine into your project. From
-then on, everything AI-DLC produces lives under one neutral `aidlc/` directory at
-your project root — organized by *what you're working on*, not by which harness
-you happen to run. You browse `aidlc/`; you never need to open `.claude/`.
+When you install AI-DLC you copy its engine into your project — a single
+harness-specific directory (`.claude/` on Claude Code, `.kiro/` on Kiro,
+`.codex/` on Codex). That directory is the *only* part of the layout that
+differs by harness. From then on, everything AI-DLC produces lives under one
+neutral `aidlc/` directory at your project root — organized by *what you're
+working on*, not by which harness you happen to run. You browse `aidlc/`; you
+never need to open the engine directory.
 
-Here is a complete workspace with two teams and a few intents in flight. Read it
-top to bottom — it is the mental model the rest of this chapter builds on:
+Here is a complete workspace with two teams and a few intents in flight (the
+engine directory is shown as `.claude/` — read it as `.kiro/` or `.codex/` on
+those harnesses). Read it top to bottom — it is the mental model the rest of
+this chapter builds on:
 
 ```
 my-project/
 │
 ├── .claude/                      THE ENGINE — tools, hooks, skills, agents.
+│                                 (or .kiro/ / .codex/ — the one harness-specific dir)
 │                                 You never browse this; it just runs /aidlc.
 │
 ├── aidlc/                        EVERYTHING AI-DLC — neutral, browsable, committed to git
