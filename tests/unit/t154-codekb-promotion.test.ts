@@ -49,6 +49,11 @@ import { parseStageFrontmatter } from "../../dist/claude/.claude/tools/aidlc-lib
 // the same one t05/t87 read. Assert on the DIST output so a stale dist (a core
 // edit not re-packaged) is caught here as well as by `package.ts --check`.
 const STAGES_DIR = join(AIDLC_SRC, "aidlc-common", "stages");
+// Knowledge tree (per-agent reference docs). RE artifact templates live here
+// (aidlc-developer-agent/re-artifacts.md), so the bare-codekb sweep must cover
+// it too — a stale shorthand here is live knowledge the RE stage reads, and it
+// previously escaped because the sweep was stages-only.
+const KNOWLEDGE_DIR = join(AIDLC_SRC, "knowledge");
 
 // The codekb store is a SPACE-LEVEL sibling of intents/ — the engine resolves it
 // to `aidlc/spaces/<space>/codekb/<repo>/` and the stage prose names it with the
@@ -169,5 +174,26 @@ describe("t154 codekb promotion — RE outputs land at aidlc/spaces/<active-spac
     }
     expect(oldOffenders).toEqual([]);
     expect(bareOffenders).toEqual([]);
+  });
+
+  // ── 7: the bare codekb form must not survive in the KNOWLEDGE tree either ──
+  // RE artifact templates (aidlc-developer-agent/re-artifacts.md) are live
+  // knowledge the RE stage reads; the bare `aidlc/codekb/<repo>/` shorthand
+  // previously lingered here because test 6 swept only stages. Walk the whole
+  // knowledge tree (nested per-agent) so the space-scoped contract holds there too.
+  test("no shipped knowledge .md retains the bare aidlc/codekb/<repo>/ path", () => {
+    const offenders: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir).sort()) {
+        const path = join(dir, entry);
+        if (statSync(path).isDirectory()) {
+          walk(path);
+        } else if (entry.endsWith(".md") && readFileSync(path, "utf8").includes(NO_BARE_CODEKB_PATH)) {
+          offenders.push(path.slice(KNOWLEDGE_DIR.length + 1));
+        }
+      }
+    };
+    walk(KNOWLEDGE_DIR);
+    expect(offenders).toEqual([]);
   });
 });

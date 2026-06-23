@@ -2,7 +2,7 @@
 
 ## Output Structure
 
-All RE artifacts are created under `aidlc/codekb/<repo>/` — the durable per-repo code knowledge base shared across intents.
+All RE artifacts are created under `aidlc/spaces/<active-space>/codekb/<repo>/` — the durable per-repo code knowledge base shared across intents (the space-level directory the `codekb-path --repo <repo>` tool resolves).
 
 ### Required Artifacts
 
