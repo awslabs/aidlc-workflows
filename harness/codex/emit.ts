@@ -72,11 +72,13 @@ profile = "default"
 region = "us-east-1"
 
 # The AIDLC method (the markdown rule layers: org/team/project + phases/) now
-# lives at the workspace root under aidlc/spaces/default/memory/ — the single
+# lives at the workspace root under aidlc/spaces/<space>/memory/ — the single
 # hand-editable source of truth, identical on every harness (NOT a per-harness
-# copy under .codex/). The core tools' AIDLC_RULES_DIR env seam points the
-# resolver there; Codex also auto-merges the root AGENTS.md and the orchestrator
-# injects an @aidlc/spaces/default/memory/... prompt mention to pull specific
+# copy under .codex/). The AIDLC_RULES_DIR seam below ships pointed at the
+# always-present default space; /aidlc space <name> re-points it IN PLACE so
+# the next session's resolver follows the active space (a byte-identical no-op at
+# default). Codex also auto-merges the root AGENTS.md and the orchestrator
+# injects an @aidlc/spaces/<space>/memory/... prompt mention to pull specific
 # method files into context on demand. (.codex/rules/ remains Codex's native
 # Starlark permission-rules dir — D-10 — distinct from the AIDLC method.)
 [shell_environment_policy]

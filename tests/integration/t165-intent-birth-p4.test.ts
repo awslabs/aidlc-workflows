@@ -365,7 +365,12 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
     expect(existsSync(join(mem, "team.md"))).toBe(true);
     expect(existsSync(join(mem, "project.md"))).toBe(true);
 
-    // Switching the active space is a pure cursor write.
+    // Switching the active space writes the cursor AND surgically re-points the
+    // harness-native rule includes so the next turn loads the switched space's
+    // method. Here the temp project has no committed include files, so the
+    // re-point is a graceful no-op — the cursor write is the load-bearing
+    // assertion. (The include re-point itself is unit-tested in
+    // t-active-space-includes against the real committed surfaces.)
     expect(util(["space", "payments"]).status).toBe(0);
     expect(activeSpace(proj)).toBe("payments");
   });

@@ -30,9 +30,7 @@
     },
     "fs_write": {
       "allowedPaths": [
-        "aidlc-docs/**",
         "aidlc/spaces/**",
-        ".kiro/steering/**",
         ".kiro/sensors/**"
       ]
     },

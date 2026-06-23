@@ -37,6 +37,7 @@ import { dirname, isAbsolute, join, resolve as pathResolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+	frameworkTemplatesDir,
 	loadGraph,
 	loadSensors,
 	memoryTemplatesDir,
@@ -303,6 +304,11 @@ function handleFire(args: string[]): void {
 			process.env.AIDLC_TEMPLATES_DIR ?? memoryTemplatesDir(projectDir);
 		scriptArgs.push("--templates-dir", templatesDir);
 		scriptArgs.push("--template-eligible", eligible.join(","));
+		// §10 MIDDLE branch: the framework-default templates dir (engine-shipped,
+		// read-only, space-independent). The sensor consults it ONLY when the team
+		// override above misses, so resolution is team → framework-default → floor.
+		// Ships zero files at GA → the branch gracefully falls through to the floor.
+		scriptArgs.push("--framework-templates-dir", frameworkTemplatesDir());
 	}
 	const detailDir = join(sensorsDir(projectDir), stageSlug);
 	const detailPath = join(detailDir, `${id}-${fireId}.md`);

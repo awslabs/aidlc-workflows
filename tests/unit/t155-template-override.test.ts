@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-sensor-required-sections, function:templateEligibleArtifacts, function:memoryTemplatesDir
+// covers: subcommand:aidlc-sensor-required-sections, function:templateEligibleArtifacts, function:memoryTemplatesDir, function:frameworkTemplatesDir
 //
 // t155 — TPL: the template-override layer (one file, two readers).
 //
@@ -61,17 +61,25 @@ afterAll(() => {
   for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
 });
 
-// A fresh temp workspace: an output dir and a templates dir (the source of
-// truth aidlc/memory/templates/). Torn down in afterAll.
-function makeWorkspace(): { root: string; outDir: string; templatesDir: string } {
+// A fresh temp workspace: an output dir, the TEAM templates dir (the override
+// source aidlc/memory/templates/), and the FRAMEWORK-default templates dir (the
+// engine-shipped middle tier). Torn down in afterAll.
+function makeWorkspace(): {
+  root: string;
+  outDir: string;
+  templatesDir: string;
+  frameworkDir: string;
+} {
   let root = mkdtempSync(join(tmpdir(), "aidlc-t155-"));
   root = toPortablePath(root);
   tempDirs.push(root);
   const outDir = join(root, "out");
   const templatesDir = join(root, "aidlc", "memory", "templates");
+  const frameworkDir = join(root, "framework-templates");
   mkdirSync(outDir, { recursive: true });
   mkdirSync(templatesDir, { recursive: true });
-  return { root, outDir, templatesDir };
+  mkdirSync(frameworkDir, { recursive: true });
+  return { root, outDir, templatesDir, frameworkDir };
 }
 
 function writeFile(path: string, body: string): void {
@@ -99,11 +107,17 @@ function runSensor(opts: {
   stage: string;
   outputPath: string;
   templatesDir?: string;
+  frameworkTemplatesDir?: string;
   eligible?: string[];
 }): SensorResult {
   const args = [SENSOR, "--stage", opts.stage, "--output-path", opts.outputPath];
   if (opts.templatesDir !== undefined) {
     args.push("--templates-dir", opts.templatesDir);
+  }
+  if (opts.frameworkTemplatesDir !== undefined) {
+    args.push("--framework-templates-dir", opts.frameworkTemplatesDir);
+  }
+  if (opts.templatesDir !== undefined || opts.frameworkTemplatesDir !== undefined) {
     args.push("--template-eligible", (opts.eligible ?? []).join(","));
   }
   const res = spawnSync(BUN, args, { encoding: "utf-8" });
@@ -259,6 +273,95 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
     expect(r.h2_count).toBe(1);
     expect(r.pass).toBe(false); // <2 H2 fails the generic floor
     expect(r.findings_count).toBe(1);
+  });
+
+  // --- §10 MIDDLE branch: framework-default templates (team → framework → floor) ---
+
+  // 5 — framework default applies when the team dir misses (the new middle tier).
+  test("framework-default template applies when team dir has none → template:applied", () => {
+    const ws = makeWorkspace();
+    // team dir empty; framework dir ships requirements.md.
+    writeFile(
+      join(ws.frameworkDir, "requirements.md"),
+      "# Requirements\n\n## Functional Requirements\n\n## Constraints\n",
+    );
+    const out = join(ws.outDir, "requirements.md");
+    writeFile(out, "# Requirements\n\n## Functional Requirements\nF1\n"); // missing Constraints
+    const r = runSensor({
+      stage: "requirements-analysis",
+      outputPath: out,
+      templatesDir: ws.templatesDir, // exists, no requirements.md
+      frameworkTemplatesDir: ws.frameworkDir,
+      eligible: ["requirements"],
+    });
+    expect(r.template).toBe("applied");
+    expect(r.template_expected).toEqual(["## Functional Requirements", "## Constraints"]);
+    expect(r.template_missing).toEqual(["## Constraints"]);
+    expect(r.pass).toBe(false);
+  });
+
+  // 6 — override-before-default: TEAM template WINS over framework default.
+  test("team template overrides framework default (first hit wins)", () => {
+    const ws = makeWorkspace();
+    writeFile(
+      join(ws.templatesDir, "requirements.md"),
+      "# Team\n\n## Team Section A\n\n## Team Section B\n",
+    );
+    writeFile(
+      join(ws.frameworkDir, "requirements.md"),
+      "# Framework\n\n## Framework Only\n",
+    );
+    const out = join(ws.outDir, "requirements.md");
+    writeFile(out, "# Requirements\n\n## Team Section A\nx\n## Team Section B\ny\n");
+    const r = runSensor({
+      stage: "requirements-analysis",
+      outputPath: out,
+      templatesDir: ws.templatesDir,
+      frameworkTemplatesDir: ws.frameworkDir,
+      eligible: ["requirements"],
+    });
+    // Expected set is the TEAM headings, not the framework's.
+    expect(r.template).toBe("applied");
+    expect(r.template_expected).toEqual(["## Team Section A", "## Team Section B"]);
+    expect(r.pass).toBe(true);
+  });
+
+  // 7 — GA reality: framework dir present but EMPTY (zero default files) → floor.
+  test("empty framework dir (GA default) falls through to the generic floor", () => {
+    const ws = makeWorkspace();
+    const out = join(ws.outDir, "requirements.md");
+    writeFile(out, "# Requirements\n\n## One\n\n## Two\n");
+    const r = runSensor({
+      stage: "requirements-analysis",
+      outputPath: out,
+      templatesDir: ws.templatesDir, // empty
+      frameworkTemplatesDir: ws.frameworkDir, // empty (the shipped GA state)
+      eligible: ["requirements"],
+    });
+    expect(r.template).toBeUndefined();
+    expect(r.h2_count).toBe(2);
+    expect(r.pass).toBe(true);
+  });
+
+  // 8 — eligibility gate still applies to a framework-default resolution.
+  test("framework default for an ineligible artifact is ignored + config_warning, floor kept", () => {
+    const ws = makeWorkspace();
+    writeFile(
+      join(ws.frameworkDir, "intent-questions.md"),
+      "## Q1\n\n## Q2\n\n## Q3\n",
+    );
+    const out = join(ws.outDir, "intent-questions.md");
+    writeFile(out, "# Q\n\n## Only One\n");
+    const r = runSensor({
+      stage: "intent-capture",
+      outputPath: out,
+      frameworkTemplatesDir: ws.frameworkDir,
+      eligible: [], // intent-questions NOT eligible
+    });
+    expect(r.template).toBe("ineligible");
+    expect(r.config_warning).toBeDefined();
+    // keeps the generic floor: 1 H2 → fails
+    expect(r.pass).toBe(false);
   });
 
   // 5 — eligibility gating (the MUST-FIX hazard). A team drops a template for

@@ -291,8 +291,14 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         // do NOT leak into a new team).
         expect(readFileSync(join(teamBMemory, "team.md"), "utf-8")).toBe("# Team practices\n");
         expect(readFileSync(join(teamBMemory, "project.md"), "utf-8")).toBe("# Project overrides\n");
-        // space-create provisions memory/ + intents/ ONLY — no knowledge/ yet.
-        expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(false);
+        // space-create (#5) provisions the FULL space shape — memory/ + intents/
+        // PLUS the codekb/ and knowledge/ siblings (with .gitkeep floors) — so a
+        // new space matches default's committed shape immediately (vision §11.2).
+        const teamBRoot = join(root, "aidlc", "spaces", TEAM_B_SLUG);
+        expect(existsSync(join(teamBRoot, "knowledge"))).toBe(true);
+        expect(existsSync(join(teamBRoot, "knowledge", ".gitkeep"))).toBe(true);
+        expect(existsSync(join(teamBRoot, "codekb"))).toBe(true);
+        expect(existsSync(join(teamBRoot, "codekb", ".gitkeep"))).toBe(true);
 
         // Switch into teamB and birth an intent there. The plain `/aidlc space
         // teamB` is forwarded to `next`, which (with intent A active in default)

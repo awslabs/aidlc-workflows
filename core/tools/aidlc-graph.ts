@@ -33,6 +33,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   _resetScopeMappingForTests,
+  activeSpace,
   type AgentMetadata,
   errorMessage,
   loadAgents,
@@ -175,12 +176,30 @@ function stageGraphPath(): string {
 // WORKSPACE ROOT under aidlc/spaces/<space>/memory/, NOT inside the harness
 // dir — one hand-editable copy, read by every harness via its own native
 // include (Claude @-stub, Kiro resources glob, Codex AGENTS.md/@-mention).
-// `default` is the always-present space; the resolver follows the active-space
-// cursor in a later phase (GA ships pointed at default — the include and this
-// default both resolve there). The segments below are joined under the
-// workspace root so a bare `aidlc/memory/…` means `aidlc/spaces/default/…`.
+// `default` is the always-present space and the zero-cursor fallback.
+//
+// Two resolution families share these segments:
+//   • The COMPILE/DISPLAY family — rulesDir()/memoryDisplayPath() — stays pinned
+//     to `default`. rules_in_context is frozen into stage-graph.json at PACKAGE
+//     time (compileStageGraph) pointed at default; it is a list of display PATHS,
+//     not rule content, so it is correct to ship default-pinned and is never
+//     re-resolved at runtime. AIDLC_RULES_DIR still overrides rulesDir() outright.
+//   • The PROJECT family — memoryDirFor()/memoryTemplatesDir() — FOLLOWS the
+//     active-space cursor. These feed the learnings/practices WRITERS and the
+//     templates sensor — the load-bearing channel for a non-default space — so a
+//     learning promoted while active-space=teamB lands under teamB/memory, and
+//     the templates sensor reads teamB's templates. A cursorless resolve still
+//     yields `default` (activeSpace() falls back to DEFAULT_SPACE).
 const MEMORY_SPACE = "default";
 const MEMORY_SEGMENTS = ["aidlc", "spaces", MEMORY_SPACE, "memory"] as const;
+
+/** Method ("memory") path segments for an explicit space — the active-space
+ *  analog of the default-pinned MEMORY_SEGMENTS. Keeps the `aidlc/spaces/<space>/
+ *  memory` shape in one place so the project-family resolvers can never drift
+ *  from the compile/display family's layout. */
+function memorySegmentsForSpace(space: string): string[] {
+  return ["aidlc", "spaces", space, "memory"];
+}
 
 /** Resolve the method ("memory") directory — the single source of truth for
  *  the layered practices (org/team/project + phases/). AIDLC_RULES_DIR env-var
@@ -202,23 +221,44 @@ function memoryDisplayPath(rel: string): string {
   return toPosix(join(...MEMORY_SEGMENTS, rel));
 }
 
-/** The method ("memory") directory under a given workspace root, derived from
- *  the SAME `MEMORY_SEGMENTS` the resolver + display path use — so the rules
- *  resolver, the packager's emit, the native includes, and the TPL template
- *  lookup can never drift to different roots. `<projectDir>/aidlc/spaces/<space>/memory`.
- *  (The TPL templates dir is this + "templates"; see `memoryTemplatesDir`.) */
-export function memoryDirFor(projectDir: string): string {
-  return join(projectDir, ...MEMORY_SEGMENTS);
+/** The method ("memory") directory under a given workspace root:
+ *  `<projectDir>/aidlc/spaces/<space>/memory`. FOLLOWS the active-space cursor —
+ *  `space` defaults to `activeSpace(projectDir)` (which itself falls back to
+ *  `default` when no cursor is set), mirroring the `space?`/`?? activeSpace`
+ *  shape of codekbDir()/knowledgeDir()/intentsDir() in aidlc-lib.ts. So the
+ *  learnings/practices writers that resolve through here land under the active
+ *  space, while a cursorless resolve still yields `default`. The path layout
+ *  stays byte-aligned with the packager's emit and the native includes via
+ *  `memorySegmentsForSpace`. (The TPL templates dir is this + "templates"; see
+ *  `memoryTemplatesDir`.) */
+export function memoryDirFor(projectDir: string, space?: string): string {
+  return join(projectDir, ...memorySegmentsForSpace(space ?? activeSpace(projectDir)));
 }
 
 /** The TPL template-override source-of-truth dir for a workspace:
  *  `<projectDir>/aidlc/spaces/<space>/memory/templates` — where SEED ships the
  *  `templates/` floor and a team drops `<artifact>.md` overrides. Used by the
- *  `required-sections` sensor dispatcher as the default `--templates-dir`. Kept
- *  here (not hardcoded in the dispatcher) so it stays byte-aligned with where
- *  the packager emits and the resolver reads. */
-export function memoryTemplatesDir(projectDir: string): string {
-  return join(projectDir, ...MEMORY_SEGMENTS, "templates");
+ *  `required-sections` sensor dispatcher as the default `--templates-dir`. Like
+ *  `memoryDirFor`, FOLLOWS the active-space cursor (defaults to
+ *  `activeSpace(projectDir)`, cursorless → `default`) so a team in space teamB
+ *  gets teamB's templates. Kept here (not hardcoded in the dispatcher) so it
+ *  stays byte-aligned with where the packager emits and the resolver reads. */
+export function memoryTemplatesDir(projectDir: string, space?: string): string {
+  return join(projectDir, ...memorySegmentsForSpace(space ?? activeSpace(projectDir)), "templates");
+}
+
+/** The FRAMEWORK-DEFAULT templates dir — the read-only, engine-shipped middle
+ *  tier of the §10 templates resolution order (team override → framework default
+ *  → generic floor). Ships at `<harness>/tools/data/templates/` beside the
+ *  compiled data, resolved relative to THIS tool's location (like DATA_DIR), so
+ *  it is harness-correct and space-INDEPENDENT (a framework default is the same
+ *  for every space — it's the baseline a team optionally overrides per-space via
+ *  `memoryTemplatesDir`). The framework ships zero default files at GA, so this
+ *  dir resolves but holds only a marker → the sensor's middle branch misses and
+ *  falls through to the floor. AIDLC_FRAMEWORK_TEMPLATES_DIR is a test/relocation
+ *  seam mirroring AIDLC_TEMPLATES_DIR. */
+export function frameworkTemplatesDir(): string {
+  return process.env.AIDLC_FRAMEWORK_TEMPLATES_DIR ?? join(DATA_DIR, "templates");
 }
 
 /** Resolve the sensors directory. AIDLC_SENSORS_DIR env-var seam mirrors

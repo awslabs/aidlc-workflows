@@ -35,12 +35,17 @@ interface Result {
 interface Flags {
 	stage?: string;
 	outputPath?: string;
-	// Absolute path to the templates source-of-truth dir
-	// (aidlc/spaces/<space>/memory/templates/). Threaded by the dispatcher / fire hook, which
-	// hold projectDir; the script never resolves projectDir itself. Absent →
-	// no template lookup (graceful third branch: P5/SEED has not shipped the
-	// dir, or the caller is a bare invocation).
+	// Absolute path to the TEAM templates source-of-truth dir
+	// (aidlc/spaces/<space>/memory/templates/) — the OVERRIDE tier. Threaded by
+	// the dispatcher / fire hook, which hold projectDir; the script never
+	// resolves projectDir itself. Absent → no team lookup.
 	templatesDir?: string;
+	// Absolute path to the FRAMEWORK-DEFAULT templates dir
+	// (<harness>/tools/data/templates/) — the engine-shipped MIDDLE tier,
+	// consulted only when the team dir misses. Threaded by the dispatcher.
+	// Absent or a clean miss → fall through to the generic ≥2-H2 floor. The
+	// framework ships zero defaults at GA, so this normally misses.
+	frameworkTemplatesDir?: string;
 	// Comma-joined set of artifact NAMES (output-filename stems) this stage
 	// declares template-eligible — the `produces` entries that are NOT
 	// questions/timestamp markers. Threaded from the dispatcher, which holds the
@@ -60,6 +65,8 @@ function parseFlags(argv: string[]): Flags {
 			out.outputPath = argv[++i];
 		} else if (arg === "--templates-dir") {
 			out.templatesDir = argv[++i];
+		} else if (arg === "--framework-templates-dir") {
+			out.frameworkTemplatesDir = argv[++i];
 		} else if (arg === "--template-eligible") {
 			out.templateEligible = (argv[++i] ?? "")
 				.split(",")
@@ -84,6 +91,20 @@ function parseH2Headings(body: string): string[] {
 		headings.push(line);
 	}
 	return headings;
+}
+
+// Resolve the template file for an artifact stem in §10 override-before-default
+// order: team dir first, then the framework-default dir; the FIRST existing
+// `<stem>.md` wins. Returns its absolute path, or null when neither tier has one
+// (→ the generic ≥2-H2 floor). A dir flag that is absent or whose `<stem>.md`
+// is missing is simply skipped — graceful fall-through, no error.
+function resolveTemplatePath(stem: string, flags: Flags): string | null {
+	for (const dir of [flags.templatesDir, flags.frameworkTemplatesDir]) {
+		if (!dir) continue;
+		const p = join(dir, `${stem}.md`);
+		if (existsSync(p)) return p;
+	}
+	return null;
 }
 
 function fail(msg: string): never {
@@ -132,9 +153,16 @@ function main(): void {
 	// present in the output (expected ⊆ output); the missing ones are precise
 	// findings. Whole-doc, no merge. No LLM — byte-reproducible.
 	//
-	// Resolution = strip(".md", basename(outputPath)) → <templates-dir>/<stem>.md.
+	// Resolution (vision §10), override-before-default, FIRST hit wins:
+	//   1. team template      <templates-dir>/<stem>.md             (--templates-dir)
+	//   2. framework default   <framework-templates-dir>/<stem>.md  (--framework-templates-dir)
+	//   3. else                the generic ≥2-H2 floor              (no template)
 	// The artifact name IS the output filename stem (the X→X.md convention;
 	// resolveArtifactPath builds `<...>/${name}.md`, aidlc-orchestrate.ts:649).
+	// The framework ships zero defaults at GA, so tier 2 normally misses and the
+	// behaviour is identical to today (everything hits the floor) — but the
+	// branch exists so a later PR can drop in a default <stem>.md without touching
+	// resolution. The agent reads the SAME order (stage-protocol.md) — no drift.
 	//
 	// ELIGIBILITY GATE (required, not optional): the stem==artifact key is
 	// unsound for questions/timestamp markers (a `*-questions.md` Q&A file is
@@ -143,37 +171,35 @@ function main(): void {
 	// template applies ONLY when the stem ∈ that set; otherwise it is ignored
 	// and an advisory config warning is emitted (the output keeps its floor).
 	const stem = basename(flags.outputPath).replace(/\.md$/, "");
-	if (flags.templatesDir) {
-		const templatePath = join(flags.templatesDir, `${stem}.md`);
-		if (existsSync(templatePath)) {
-			const eligible = (flags.templateEligible ?? []).includes(stem);
-			if (!eligible) {
-				// Template resolves but the artifact is not declared eligible —
-				// ignore it (keep the floor) + surface a config warning.
-				result.template = "ineligible";
-				result.config_warning =
-					`template ${stem}.md resolved but artifact "${stem}" is not ` +
-					`template-eligible for stage "${flags.stage ?? "?"}" ` +
-					`(questions/timestamp markers are excluded); template ignored, ` +
-					`keeping the generic >=2-H2 floor.`;
-			} else {
-				let templateBody: string;
-				try {
-					templateBody = readFileSync(templatePath, "utf-8");
-				} catch (err) {
-					fail(
-						`failed to read template ${templatePath}: ${errorMessage(err)}`,
-					);
-				}
-				const expected = parseH2Headings(templateBody);
-				const present = new Set(headings);
-				const missing = expected.filter((h) => !present.has(h));
-				pass = missing.length === 0;
-				findings_count = missing.length;
-				result.template = "applied";
-				result.template_expected = expected;
-				result.template_missing = missing;
+	const templatePath = resolveTemplatePath(stem, flags);
+	if (templatePath) {
+		const eligible = (flags.templateEligible ?? []).includes(stem);
+		if (!eligible) {
+			// Template resolves but the artifact is not declared eligible —
+			// ignore it (keep the floor) + surface a config warning.
+			result.template = "ineligible";
+			result.config_warning =
+				`template ${stem}.md resolved but artifact "${stem}" is not ` +
+				`template-eligible for stage "${flags.stage ?? "?"}" ` +
+				`(questions/timestamp markers are excluded); template ignored, ` +
+				`keeping the generic >=2-H2 floor.`;
+		} else {
+			let templateBody: string;
+			try {
+				templateBody = readFileSync(templatePath, "utf-8");
+			} catch (err) {
+				fail(
+					`failed to read template ${templatePath}: ${errorMessage(err)}`,
+				);
 			}
+			const expected = parseH2Headings(templateBody);
+			const present = new Set(headings);
+			const missing = expected.filter((h) => !present.has(h));
+			pass = missing.length === 0;
+			findings_count = missing.length;
+			result.template = "applied";
+			result.template_expected = expected;
+			result.template_missing = missing;
 		}
 	}
 

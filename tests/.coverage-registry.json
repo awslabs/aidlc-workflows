@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 385,
+    "total": 386,
     "enumeratedByClass": {
-      "function": 178,
+      "function": 179,
       "audit": 67,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 77,
+      "function": 78,
       "audit": 27,
       "scope": 9,
       "stage": 8,
@@ -1265,6 +1265,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:frameworkTemplatesDir",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t155-template-override.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",

@@ -18,6 +18,7 @@ import {
   memoryDirFor,
   validateScope,
 } from "./aidlc-graph.ts";
+import { repointHarnessIncludes } from "./aidlc-includes.ts";
 import {
   activeIntent,
   activeSpace,
@@ -597,7 +598,13 @@ function handleDoctor(projectDir: string): void {
   // native include resolves). When both are present the first /aidlc auto-births
   // with no ceremony; a missing piece means the dist/ copy was incomplete.
   const harnessEngineDir = join(projectDir, harnessDir());
-  const defaultMemoryDir = memoryDirFor(projectDir);
+  // Pin to the DEFAULT space explicitly: readiness is "did the dist/ shell copy
+  // in?", and `default` is the always-shipped space. memoryDirFor() now follows
+  // the active-space cursor, so pass DEFAULT_SPACE to keep this probe checking
+  // the shipped baseline rather than a (possibly absent) switched-to space. The
+  // harness includes are committed (generated-on-demand only for their pointer),
+  // so their presence is not part of shell-readiness.
+  const defaultMemoryDir = memoryDirFor(projectDir, DEFAULT_SPACE);
   const shellReady = existsSync(harnessEngineDir) && existsSync(defaultMemoryDir);
   results.push({
     pass: shellReady,
@@ -1976,6 +1983,11 @@ function ensureWorkspaceDirs(projectDir: string): void {
   // engine's per-agent METHODOLOGY knowledge ships separately under
   // <harness>/knowledge/ (untouched). Lazy ensure-exists — never SEED.
   mkdirSync(knowledgeDir(projectDir), { recursive: true });
+  // Align the harness-native includes with the active space at bootstrap (first
+  // /aidlc). A no-op when they already point there (the common default-cursor
+  // case) — so this never dirties a single-team committed tree; it self-heals a
+  // tree whose cursor and includes drifted out of sync.
+  repointHarnessIncludes(projectDir, activeSpace(projectDir));
 }
 
 // intent-birth — the deterministic mutation behind the engine's birth
@@ -2538,10 +2550,14 @@ function handleIntent(projectDir: string, positional: string[], flags: Record<st
 }
 
 // `/aidlc space` (list) · `/aidlc space <name>` (switch the active-space
-// cursor). Per the plan, switching a space ALSO re-points the ambient harness
-// include — but that ambient re-point is a §2 FAST-FOLLOW (out of scope here);
-// the cursor write itself IS in scope. Switching to a non-existent space errors
-// (use space-create). --json on the bare list emits the structured shape.
+// cursor). Switching a space does TWO per-user writes: move the gitignored
+// active-space cursor, then SURGICALLY repoint the harness-native rule includes
+// in place so the next turn loads the switched space's method (the ambient
+// channel — Claude @-stub / Kiro resources glob / Codex AIDLC_RULES_DIR). Both
+// are per-user: the cursor is gitignored, and the include re-point is a no-op at
+// `default` (so a single-team user never dirties the committed tree). Switching
+// to a non-existent space errors (use space-create). --json on the bare list
+// emits the structured shape.
 function handleSpace(projectDir: string, positional: string[], flags: Record<string, string>): void {
   const asJson = flags.json === "true";
   const raw = positional[1];
@@ -2560,7 +2576,15 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
     );
   }
   setActiveSpaceCursor(projectDir, target);
+  // Re-point the harness-native includes at the switched space so the NEXT turn
+  // loads its method into ambient context (the cursor alone only moves AIDLC's
+  // own resolver; the CLI-native include is the ambient channel). Surgical
+  // in-place rewrite of the pointer segment only — preserves all engine wiring.
+  const repointed = repointHarnessIncludes(projectDir, target);
   process.stdout.write(`Active space → ${target}\n`);
+  if (repointed.length > 0) {
+    process.stdout.write(`  repointed ${repointed.length} harness include(s) → ${target}\n`);
+  }
 }
 
 // `/aidlc codekb-path [--repo <name>] [--json]` — read-only. Prints the
@@ -2599,6 +2623,15 @@ function handleSpaceCreate(projectDir: string, positional: string[], _flags: Rec
   mkdirSync(join(memoryDest, "phases"), { recursive: true });
   mkdirSync(join(memoryDest, "templates"), { recursive: true });
   mkdirSync(join(dest, "intents"), { recursive: true });
+  // #5 — a new space gets the FULL space shape so it matches default's
+  // committed layout (vision §11.2 "identical shape"): the space-level codekb/
+  // and knowledge/ siblings of memory/intents. Built as bare parents — the
+  // per-repo codekb/<repo>/ subdir is authored later by RE/codekb-path (no repo
+  // is recorded at create time, so codekbDir() can't be called here), and
+  // knowledge/ is free-form/empty at bootstrap. .gitkeep floors so the empty
+  // dirs track (codekb output is COMMITTED, so the floor is not gitignored).
+  mkdirSync(join(dest, "codekb"), { recursive: true });
+  mkdirSync(knowledgeDir(projectDir, name), { recursive: true });
 
   // Copy the org.md baseline from the default space (the always-present SEED
   // shell). If absent (a malformed shell), fall back to an empty stub rather
@@ -2620,9 +2653,14 @@ function handleSpaceCreate(projectDir: string, positional: string[], _flags: Rec
   // templates/ floor marker so the empty dir is tracked (mirrors SEED's floor).
   const floor = join(memoryDest, "templates", ".gitkeep");
   if (!existsSync(floor)) writeFileSync(floor, "", "utf-8");
+  // codekb/ + knowledge/ floors so the empty siblings track (both committed).
+  const codekbFloor = join(dest, "codekb", ".gitkeep");
+  if (!existsSync(codekbFloor)) writeFileSync(codekbFloor, "", "utf-8");
+  const knowledgeFloor = join(knowledgeDir(projectDir, name), ".gitkeep");
+  if (!existsSync(knowledgeFloor)) writeFileSync(knowledgeFloor, "", "utf-8");
 
   process.stdout.write(
-    `Space created: ${name}\n  memory/org.md (copied from default), team.md, project.md, phases/, templates/\nSwitch to it with /aidlc space ${name}.\n`
+    `Space created: ${name}\n  memory/org.md (copied from default), team.md, project.md, phases/, templates/, codekb/, knowledge/\nSwitch to it with /aidlc space ${name}.\n`
   );
 }
 

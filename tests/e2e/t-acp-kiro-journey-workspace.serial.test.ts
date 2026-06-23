@@ -336,7 +336,10 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         expect(readFileSync(join(teamBMemory, "org.md"), "utf-8")).toBe(defaultOrg);
         expect(readFileSync(join(teamBMemory, "team.md"), "utf-8")).toBe("# Team practices\n");
         expect(readFileSync(join(teamBMemory, "project.md"), "utf-8")).toBe("# Project overrides\n");
-        expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(false);
+        // space-create (#5) provisions the full space shape incl. the codekb/ +
+        // knowledge/ siblings (with .gitkeep floors), matching default.
+        expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);
+        expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "codekb"))).toBe(true);
 
         // 4b: switch to teamB (terminal verb — seam-dispatched, drive to end_turn).
         await driveKiroAcp({

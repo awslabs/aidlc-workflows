@@ -296,7 +296,7 @@ dist/claude/.claude/
 |   +-- aidlc-session-end.ts
 |   +-- aidlc-statusline.ts
 +-- rules/
-|   +-- aidlc.md                  # @-import stub -> ../../aidlc/spaces/default/memory/ (NOT a copy)
+|   +-- aidlc.md                  # @-import stub -> ../../aidlc/spaces/<space>/memory/ (NOT a copy; re-pointed in place on `space` switch)
 +-- agents/
 |   +-- aidlc-product-agent.md
 |   +-- aidlc-design-agent.md

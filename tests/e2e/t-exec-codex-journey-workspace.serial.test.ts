@@ -262,7 +262,10 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
         expect(readFileSync(join(teamBMemory, "org.md"), "utf-8")).toBe(defaultOrg);
         expect(readFileSync(join(teamBMemory, "team.md"), "utf-8")).toBe("# Team practices\n");
         expect(readFileSync(join(teamBMemory, "project.md"), "utf-8")).toBe("# Project overrides\n");
-        expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(false);
+        // space-create (#5) provisions the full space shape incl. the codekb/ +
+        // knowledge/ siblings (with .gitkeep floors), matching default.
+        expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);
+        expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "codekb"))).toBe(true);
 
         const r4b = execCodex(root, home, `Use the $aidlc skill to run: /aidlc space teamB`);
         expect(r4b.rc).toBe(0);

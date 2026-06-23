@@ -22,6 +22,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
+import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
 import {
   activeIntentUuid,
   activeSpace,
@@ -41,6 +42,19 @@ import {
 } from "../tools/aidlc-lib.ts";
 
 const projectDir = resolveProjectDirFromHook(import.meta.url);
+
+// Idempotent ensure-step (P0.1 robustness): align the harness-native includes
+// with the active space at session start, BEFORE the no-workflow early-exit, so
+// turn-1 on a fresh clone (no aidlc-state.md yet) still has the includes pointed
+// at the active space. A no-op at `default` (the common case) and whenever the
+// cursor + includes already agree — so it never dirties a single-team committed
+// tree. Best-effort: a failure here must never break session startup.
+try {
+  repointHarnessIncludes(projectDir, activeSpace(projectDir));
+} catch {
+  // non-fatal — includes self-heal on the next /aidlc / switch / --doctor
+}
+
 const stateFile = stateFilePath(projectDir);
 
 // No workflow active — do nothing
