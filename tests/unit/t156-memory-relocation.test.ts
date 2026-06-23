@@ -13,8 +13,9 @@
 //               NOT glob — verified against code.claude.com/docs memory.md).
 //   - Kiro    → agent JSON resources glob file://aidlc/spaces/default/memory/**/*.md
 //   - Codex   → AGENTS.md auto-merge + AIDLC_RULES_DIR seam + orchestrator
-//               @-mention (DOC-VERIFIED ONLY — the spike's codex exec hung at
-//               exit 124, so the include is flagged untested, not green-probed).
+//               @-mention (the static seam is asserted here; the LIVE @-mention
+//               probe lives in the gated e2e tests/e2e/
+//               t-exec-codex-memory-include.serial.test.ts — green 2026-06-24).
 //
 // Three contracts land here:
 //   (1) RESOLVER reads the renamed source + tolerates empty team/project stubs
@@ -22,9 +23,10 @@
 //       laid out as the relocated tree: org/team/project.md + phases/<p>.md).
 //   (2) 3-WAY native-include resolution in the shipped dist trees: the Claude
 //       @-stub resolves the relocated path (packaging/parity); the Kiro globs
-//       point at the active space; the Codex include is present but FLAGGED
-//       untested (the seam is wired — AIDLC_RULES_DIR + AGENTS.md — but no
-//       empirical token probe is asserted here).
+//       point at the active space; the Codex static seam is wired
+//       (AIDLC_RULES_DIR + AGENTS.md). The Codex LIVE @-mention probe is the
+//       gated e2e t-exec-codex-memory-include.serial.test.ts (no token probe
+//       here — unit tier stays zero-LLM).
 //   (3) THE ONE-COPY INVARIANT: exactly one HAND-EDITABLE rule copy exists
 //       (core/memory/), and no second hand-editable copy lives under a harness
 //       rule dir. The dist copies are GENERATED (drift-guarded by package.ts
@@ -244,12 +246,15 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     expect(checkedAgents).toBeGreaterThanOrEqual(10);
   });
 
-  test("8: Codex include is wired (AIDLC_RULES_DIR seam + AGENTS.md) — FLAGGED untested", () => {
-    // DOC-VERIFIED ONLY: the spike's `codex exec` hung (exit 124), so the
-    // @-mention/AGENTS.md-merge include is NOT empirically probed. This asserts
-    // the STATIC seam is wired (the resolver env override re-points at the
-    // relocated tree, and the root AGENTS.md ships for auto-merge), NOT that a
-    // token resolved at runtime. Re-run the probe on a working codex to finalize.
+  test("8: Codex include is wired (AIDLC_RULES_DIR seam + AGENTS.md)", () => {
+    // This asserts the STATIC seam here (unit tier, zero tokens): the resolver
+    // env override re-points at the relocated tree, and the root AGENTS.md ships
+    // for auto-merge. The LIVE empirical probe — that `codex exec` actually
+    // resolves an @aidlc/spaces/default/memory/<file> mention and pulls its
+    // content into context — now lives in the gated e2e test
+    // tests/e2e/t-exec-codex-memory-include.serial.test.ts (verified green
+    // 2026-06-24, codex-cli 0.139.0 on Bedrock; the earlier spike's exit-124
+    // hang is resolved). So the seam is no longer doc-verified-only.
     const config = readFileSync(
       join(REPO_ROOT, "dist", "codex", ".codex", "config.toml"),
       "utf-8",
