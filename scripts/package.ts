@@ -135,6 +135,17 @@ const HARNESS_DATA = "tools/data/harness.json";
 const MEMORY_SRC = "memory";
 const MEMORY_DST = join("aidlc", "spaces", "default", "memory");
 
+// Engine-only-install self-heal: the SAME method content (core/memory/) ALSO emitted
+// INSIDE the engine dir at <harnessDir>/tools/data/memory-seed/, mirroring how
+// tools/data/templates ships (an engine-bundled, copy-out-at-runtime data dir
+// resolved relative to the running tool — see frameworkTemplatesDir/DATA_DIR in
+// aidlc-graph.ts). This lets an ENGINE-ONLY install (a user who copies only
+// dist/<h>/.<engine>/ and NOT the sibling aidlc/ shell) self-heal: the first
+// /aidlc seeds aidlc/spaces/default/memory/ from this bundled copy if (and only
+// if) it is absent (see ensureWorkspaceDirs). The sibling MEMORY_DST shell STILL
+// ships for normal installs — this is an additive fallback, not a replacement.
+const MEMORY_SEED_DST = join("tools", "data", "memory-seed");
+
 // The active-space CURSOR shipped as part of the workspace shell (SEED). It
 // lives at aidlc/active-space (ABOVE spaces/, not inside memory/) and holds the
 // name of the space the next /aidlc resolves against. Ships pointed at the
@@ -179,6 +190,24 @@ function emitMemory(outRoot: string, harnessDir: string, rulesRename: string | n
     written.push(outPath);
   }
   return written;
+}
+
+// Engine-only-install self-heal: emit the SAME core/memory/ tree a SECOND time,
+// INSIDE the engine dir at <treeRoot>/tools/data/memory-seed/, so an engine-only
+// install carries the method content with it (the first /aidlc copies it out via
+// ensureWorkspaceDirs/frameworkMemorySeedDir). Mirrors emitMemory's transform
+// (a no-op on the neutral method files) but writes into treeRoot (the harness
+// engine dir), so the normal in-harness walk + byte-diff covers it — no
+// outsideHarness bookkeeping needed. Same source as emitMemory, different dst.
+function emitMemorySeed(treeRoot: string, harnessDir: string, rulesRename: string | null): void {
+  const srcDir = join(CORE_ROOT, MEMORY_SRC);
+  if (!existsSync(srcDir)) return;
+  for (const file of walk(srcDir)) {
+    const rel = relative(srcDir, file);
+    const outPath = join(treeRoot, MEMORY_SEED_DST, rel);
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, transform(file, readFileSync(file), harnessDir, rulesRename));
+  }
 }
 
 // Emit the active-space CURSOR (aidlc/active-space -> "default") into the dist
@@ -279,6 +308,13 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   //     the shipped shell so a fresh copy resolves the default space with no
   //     ceremony (SEED). Outside <harnessDir>, like the memory tree.
   outsideHarness.push(emitActiveSpace(outRoot));
+
+  // 2e. Engine-only-install self-heal: bundle the SAME method content INSIDE the
+  //     engine dir at <harnessDir>/tools/data/memory-seed/, so an engine-only
+  //     install (no sibling aidlc/ shell) can self-heal — the first /aidlc copies
+  //     it out via ensureWorkspaceDirs. Inside <harnessDir>, so the in-harness
+  //     walk byte-diffs it under --check (no outsideHarness entry).
+  emitMemorySeed(treeRoot, harnessDir, m.rulesRename);
 
   // 3. Compile the stage graph into the assembled tree (writes harness-correct
   //    stage-graph.json + scope-grid.json). compileStageGraph() bootstraps each

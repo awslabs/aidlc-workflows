@@ -12,6 +12,7 @@ Moves AI-DLC from a single flat `aidlc-docs/` record to a per-intent **workspace
 * `--repo`/`--repos` make an intent multi-repo: the repo set is captured at birth and Construction worktrees fork against the right sibling repo.
 * The record tree, audit shards, `intents.json`, memory, codekb, and knowledge are committed; the per-user cursors (`active-space`, `active-intent`) and machine-local runtime are gitignored.
 * **CI/scripts (breaking):** the flat `aidlc-docs/` path no longer resolves for new projects — resolve state/audit/artifacts under `aidlc/spaces/<space>/intents/<slug>-<id8>/` (the migration keys on `aidlc-docs/aidlc-state.md` as its sole detection trigger).
+* Engine-only installs self-heal: if the `aidlc/` workspace shell wasn't copied alongside the engine dir, the first `/aidlc` seeds `aidlc/spaces/default/memory/` from a copy bundled in the engine (idempotent — a normal install that copied `aidlc/` is left untouched).
 
 **Navigation verbs**
 

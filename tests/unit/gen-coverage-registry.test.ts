@@ -797,6 +797,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "e2e/t-tui-custom-harness.serial.test.ts",
     "e2e/t-tui-render-colour.serial.test.ts",
     "unit/gen-coverage-registry.test.ts",
+    "unit/t-memory-seed.test.ts",
     "unit/t07-hook-audit-logger.test.ts",
     "unit/t08.test.ts",
     "unit/t09.test.ts",

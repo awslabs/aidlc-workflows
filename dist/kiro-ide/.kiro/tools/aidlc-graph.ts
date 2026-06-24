@@ -261,6 +261,19 @@ export function frameworkTemplatesDir(): string {
   return process.env.AIDLC_FRAMEWORK_TEMPLATES_DIR ?? join(DATA_DIR, "templates");
 }
 
+/** Engine-only-install self-heal: the ENGINE-BUNDLED method ("memory") seed — the
+ *  core/memory/ tree copied INSIDE the engine at <harness>/tools/data/memory-seed/
+ *  by the packager (mirrors frameworkTemplatesDir's tools/data/templates). It
+ *  exists so an ENGINE-ONLY install (a user who copies only the harness engine
+ *  dir, NOT the sibling aidlc/ workspace shell) can self-heal: the first /aidlc
+ *  copies this OUT to aidlc/spaces/default/memory/ via ensureWorkspaceDirs IF that
+ *  default tree is absent. Resolved relative to THIS tool's location (DATA_DIR),
+ *  like frameworkTemplatesDir, so it is harness-correct on every harness.
+ *  AIDLC_MEMORY_SEED_DIR is a test/relocation seam mirroring AIDLC_FRAMEWORK_TEMPLATES_DIR. */
+export function frameworkMemorySeedDir(): string {
+  return process.env.AIDLC_MEMORY_SEED_DIR ?? join(DATA_DIR, "memory-seed");
+}
+
 /** Resolve the sensors directory. AIDLC_SENSORS_DIR env-var seam mirrors
  *  AIDLC_RULES_DIR so t89's fixture-driven import tests can isolate from
  *  the real .claude/sensors/ tree. Evaluated at call time. */

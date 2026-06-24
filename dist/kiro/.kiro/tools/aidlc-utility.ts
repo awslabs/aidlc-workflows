@@ -1,4 +1,5 @@
 import {
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -13,6 +14,7 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   artifactsRegistry,
   findCycles,
+  frameworkMemorySeedDir,
   loadGraph,
   loadRules,
   memoryDirFor,
@@ -1983,6 +1985,26 @@ function ensureWorkspaceDirs(projectDir: string): void {
   // engine's per-agent METHODOLOGY knowledge ships separately under
   // <harness>/knowledge/ (untouched). Lazy ensure-exists — never SEED.
   mkdirSync(knowledgeDir(projectDir), { recursive: true });
+  // Engine-only-install self-heal: recover an ENGINE-ONLY install. Normally the
+  // workspace shell (aidlc/spaces/default/memory/) ships as a SIBLING of the
+  // engine dir (the packager's emitMemory → MEMORY_DST), so a complete dist/
+  // copy already carries it and the lines below leave it untouched. But a user
+  // who copies ONLY the harness engine dir (e.g. dist/kiro/.kiro/) and NOT the
+  // sibling aidlc/ shell lands with NO default-space method tree → doctor's
+  // "workspace shell ready" check fails and the rule resolver loads zero rules.
+  // To recover, seed the default-space memory tree from the copy the packager
+  // bundled INSIDE the engine at tools/data/memory-seed/ (frameworkMemorySeedDir,
+  // mirroring the tools/data/templates pattern) — but ONLY if the default tree is
+  // ABSENT. The existsSync guard makes this strictly idempotent: a normal install
+  // that copied aidlc/ already has the dir, so the seed never fires and the
+  // committed default tree never churns (preserving the "default tree never
+  // churns" invariant). This is a deliberate, GUARDED exception to the
+  // "never SEED" rule the rest of this function follows.
+  const defaultMemory = memoryDirFor(projectDir, DEFAULT_SPACE);
+  if (!existsSync(defaultMemory)) {
+    const seed = frameworkMemorySeedDir();
+    if (existsSync(seed)) cpSync(seed, defaultMemory, { recursive: true });
+  }
   // Align the harness-native includes with the active space at bootstrap (first
   // /aidlc). A no-op when they already point there (the common default-cursor
   // case) — so this never dirties a single-team committed tree; it self-heals a
