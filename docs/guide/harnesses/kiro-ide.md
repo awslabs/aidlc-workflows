@@ -32,8 +32,14 @@ hook wiring, activation) differs.
 
 ```bash
 cp -r dist/kiro-ide/.kiro your-project/.kiro
+cp -r dist/kiro-ide/aidlc your-project/aidlc        # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
 cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have one
 ```
+
+The `aidlc/` directory is the workspace shell — it ships the pre-built
+`aidlc/spaces/default/memory/` method tree the engine reads. It is a **sibling**
+of `.kiro/`, so copy it separately (or copy the whole `dist/kiro-ide/` tree at
+once). `/aidlc --doctor` fails its "workspace shell ready" check if it is missing.
 
 Open `your-project/` in Kiro IDE. The install ships:
 

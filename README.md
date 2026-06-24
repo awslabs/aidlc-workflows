@@ -45,10 +45,10 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 
 | Harness | Install (copy into your project) | Invoke | Install & usage guide |
 | --- | --- | --- | --- |
-| **Kiro IDE** | `dist/kiro-ide/.kiro/` → `<project>/.kiro/` (+ `dist/kiro-ide/AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro IDE](docs/guide/harnesses/kiro-ide.md). |
-| **Kiro CLI** (≥ 2.6) | `dist/kiro/.kiro/` → `<project>/.kiro/` (+ `dist/kiro/AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro CLI](docs/guide/harnesses/kiro-cli.md). |
-| **Claude Code** | `dist/claude/.claude/` → `<project>/.claude/` | `/aidlc` | [Quick Start](#quick-start) below + [Getting Started](docs/guide/01-getting-started.md). |
-| **Codex CLI** (≥ 0.139.0) | `dist/codex/` → `<project>/` (`.codex/` + `.agents/` + `AGENTS.md`) | `$aidlc` (or `/skills` → aidlc) | [Quick Start](#quick-start) below + [AI-DLC on Codex CLI](docs/guide/harnesses/codex-cli.md). |
+| **Kiro IDE** | `dist/kiro-ide/.kiro/` + `dist/kiro-ide/aidlc/` → `<project>/` (+ `dist/kiro-ide/AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro IDE](docs/guide/harnesses/kiro-ide.md). |
+| **Kiro CLI** (≥ 2.6) | `dist/kiro/.kiro/` + `dist/kiro/aidlc/` → `<project>/` (+ `dist/kiro/AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro CLI](docs/guide/harnesses/kiro-cli.md). |
+| **Claude Code** | `dist/claude/.claude/` + `dist/claude/aidlc/` → `<project>/` | `/aidlc` | [Quick Start](#quick-start) below + [Getting Started](docs/guide/01-getting-started.md). |
+| **Codex CLI** (≥ 0.139.0) | `dist/codex/` → `<project>/` (`.codex/` + `.agents/` + `aidlc/` + `AGENTS.md`) | `$aidlc` (or `/skills` → aidlc) | [Quick Start](#quick-start) below + [AI-DLC on Codex CLI](docs/guide/harnesses/codex-cli.md). |
 
 The deterministic engine — state machine, audit log, and the referee that coordinates parallel agents — is byte-identical across every harness; only the shell differs. Each section in the [Quick Start](#quick-start) installs one harness end to end, and its guide above goes deeper on prerequisites and differences.
 
@@ -100,8 +100,11 @@ With bun in place, pick your harness below and expand it — each section instal
 
 ```bash
 cp -r dist/kiro-ide/.kiro your-project/.kiro
+cp -r dist/kiro-ide/aidlc your-project/aidlc        # the workspace shell — a sibling of .kiro/, not inside it
 cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have one
 ```
+
+The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it.
 
 Open `your-project/` in Kiro IDE. The install ships `.kiro/settings/cli.json` with `chat.defaultAgent` set to `aidlc` and registers the framework hooks as `.kiro/hooks/*.kiro.hook` files (the IDE's hook mechanism). In the chat panel, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start.
 
@@ -124,9 +127,12 @@ kiro-cli login
 
 ```bash
 cp -r dist/kiro/.kiro your-project/.kiro
+cp -r dist/kiro/aidlc your-project/aidlc       # the workspace shell — a sibling of .kiro/, not inside it
 cp dist/kiro/AGENTS.md your-project/AGENTS.md   # merge if you already have one
 cd your-project && kiro-cli chat
 ```
+
+The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it.
 
 The install ships `.kiro/settings/cli.json` with `chat.defaultAgent` set to `aidlc`, so `/aidlc` is active by default. Inside the session, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start. The [Kiro CLI guide](docs/guide/harnesses/kiro-cli.md) has the full prerequisites and harness differences.
 
@@ -160,10 +166,13 @@ curl -fsSL https://claude.ai/install.cmd -o install.cmd && install.cmd && del in
 **2. Set up your project**
 
 ```bash
-# Copy the implementation into your project, then launch
+# Copy the implementation (engine + the workspace shell sibling), then launch
 cp -r dist/claude/.claude/ your-project/.claude/
+cp -r dist/claude/aidlc/   your-project/aidlc/     # the workspace shell — a sibling of .claude/, not inside it
 cd your-project && claude
 ```
+
+The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it.
 
 Then, inside the Claude Code session:
 
@@ -192,8 +201,11 @@ The shipped `config.toml` runs on **Amazon Bedrock**; set your AWS profile and r
 ```bash
 cp -r dist/codex/.codex/  your-project/.codex/
 cp -r dist/codex/.agents/ your-project/.agents/
+cp -r dist/codex/aidlc/   your-project/aidlc/      # the workspace shell — a sibling of .codex/, not inside it
 cp dist/codex/AGENTS.md   your-project/AGENTS.md   # or merge into yours
 ```
+
+The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `$aidlc --doctor` fails its "workspace shell ready" check without it.
 
 After copying, apply the `.gitignore` entries from the shipped `AGENTS.md` before your first workflow, pre-seed hook trust, then verify:
 

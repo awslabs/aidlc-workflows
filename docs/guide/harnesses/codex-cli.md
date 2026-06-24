@@ -29,8 +29,15 @@ never hand-edit it (the drift guard fails CI).
    ```bash
    cp -r dist/codex/.codex/  your-project/.codex/
    cp -r dist/codex/.agents/ your-project/.agents/
+   cp -r dist/codex/aidlc/   your-project/aidlc/      # the workspace shell (spaces/default/memory) — a sibling of .codex/, not inside it
    cp dist/codex/AGENTS.md   your-project/AGENTS.md   # or merge into yours
    ```
+
+   The `aidlc/` directory is the workspace shell — it ships the pre-built
+   `aidlc/spaces/default/memory/` method tree the engine reads. It is a
+   **sibling** of `.codex/`, so copy it separately (or copy the whole
+   `dist/codex/` tree at once). `$aidlc --doctor` fails its "workspace shell
+   ready" check if it is missing.
 
 2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
    Integration" **before** starting a workflow — the per-clone audit shards

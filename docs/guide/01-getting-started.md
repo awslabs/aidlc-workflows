@@ -139,9 +139,10 @@ AI-DLC installs by copying its distribution for your harness into your project. 
 
 ```bash
 cp -r dist/claude/.claude/ your-project/.claude/
+cp -r dist/claude/aidlc/   your-project/aidlc/     # the workspace shell — a sibling of .claude/, not inside it
 ```
 
-This copies the orchestrator, stage files, agent personas, hooks, knowledge files, and default settings into your project.
+The first line copies the engine — the orchestrator, stage files, agent personas, hooks, knowledge files, and default settings. The second copies the **workspace shell**: the pre-built `aidlc/spaces/default/memory/` method tree the engine reads. It ships as a **sibling** of `.claude/` (not inside it), so it must be copied separately — or copy the whole `dist/claude/` tree at once. `/aidlc --doctor` fails its "workspace shell ready" check if `aidlc/spaces/default/memory/` is missing.
 
 ### Step 2: Navigate to your project
 
@@ -273,8 +274,9 @@ In your shell:
 command -v claude >/dev/null && echo "✓ Claude Code" || echo "✗ Claude Code"
 command -v bun    >/dev/null && echo "✓ bun"          || echo "✗ bun"
 
-# Install
+# Install (engine + the workspace shell sibling)
 cp -r dist/claude/.claude/ your-project/.claude/
+cp -r dist/claude/aidlc/   your-project/aidlc/
 
 # Launch Claude Code in your project
 cd your-project && claude

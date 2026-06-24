@@ -22,8 +22,14 @@ configs, hook wiring, activation) differs.
 
 ```bash
 cp -r dist/kiro/.kiro your-project/.kiro
+cp -r dist/kiro/aidlc your-project/aidlc       # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
 cp dist/kiro/AGENTS.md your-project/AGENTS.md   # merge if you already have one
 ```
+
+The `aidlc/` directory is the workspace shell — it ships the pre-built
+`aidlc/spaces/default/memory/` method tree the engine reads. It is a **sibling**
+of `.kiro/`, so copy it separately (or copy the whole `dist/kiro/` tree at once).
+`/aidlc --doctor` fails its "workspace shell ready" check if it is missing.
 
 Then start a session in your project:
 
