@@ -84,7 +84,7 @@ slow if its job permits.
 ## 3. Mapping to AI-DLC
 
 The mapping is closer than it sounds. (`<record>/` below = the active intent's
-record dir, `aidlc/spaces/<space>/intents/<slug>-<id8>/`; the audit trail is a
+record dir, `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`; the audit trail is a
 dir of per-clone shards under `<record>/audit/`.)
 
 | Networking | AI-DLC analog |

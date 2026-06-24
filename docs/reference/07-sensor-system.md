@@ -17,7 +17,9 @@ workflow, see [Rules and the Learning Loop](../guide/09-rules-and-the-learning-l
 in the User Guide.
 
 > **Path convention.** `<record>/` below = the active intent's record dir,
-> `aidlc/spaces/<space>/intents/<slug>-<id8>/`. Note the two document-shape
+> `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (a compact UTC date prefix
+> plus a short kebab-case label, so record dirs sort chronologically; the
+> canonical id is the UUIDv7 stored in the `intents.json` registry row). Note the two document-shape
 > sensors' `matches` glob in the shipped manifests still carries the legacy
 > artifact-tree path (quoted verbatim below where the schema is documented).
 
@@ -260,7 +262,7 @@ intent's record dir is dispatched as:
 ```
 bun .claude/tools/aidlc-sensor-required-sections.ts \
   --stage requirements-analysis \
-  --output-path aidlc/spaces/default/intents/<slug>-<id8>/inception/requirements-analysis/requirements.md
+  --output-path aidlc/spaces/default/intents/260624-inventory-api/inception/requirements-analysis/requirements.md
 ```
 
 The manifest does not encode the per-fire flags. The dispatcher

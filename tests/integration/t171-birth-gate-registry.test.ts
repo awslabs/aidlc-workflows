@@ -23,6 +23,7 @@ import {
   createTestProject,
   removeWorkspaceRecord,
 } from "../harness/fixtures.ts";
+import { readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -101,7 +102,7 @@ describe("t171 birth gate consults the intent registry (Blocker B1)", () => {
     };
 
     test("Branch 9a (explicit --scope flag) emits an `ask` listing the existing intents, not a birth print", () => {
-      const records = seedTwoIntentsNoCursor();
+      seedTwoIntentsNoCursor();
       const r = next(["--scope", "poc"]);
       const d = JSON.parse(r.stdout.trim());
       // NOT a birth print: the gate must not name intent-birth here.
@@ -110,8 +111,14 @@ describe("t171 birth gate consults the intent registry (Blocker B1)", () => {
       expect(d.message ?? "").not.toContain("intent-birth");
       // It prompts to pick an existing intent by slug via `/aidlc intent <slug>`.
       expect(d.question).toContain("/aidlc intent <slug>");
-      // The two existing intent slugs are named in the prompt.
-      const slugs = records.map((dir) => dir.replace(/-[0-9a-f]+$/, ""));
+      // The two existing intent slugs are named in the prompt. The engine lists
+      // the registry `slug` values (aidlc-orchestrate.ts intentPickPrompt →
+      // intents.map(i => i.slug)), NOT the dir names — so derive the expected
+      // slugs from the registry, not by stripping the (now date-prefixed, no-hex)
+      // dir name. These births passed no description, so each slug is its scope
+      // token ("poc", "feature").
+      const slugs = readIntentRegistry(proj).map((e) => e.slug);
+      expect(slugs.length).toBe(2);
       for (const s of slugs) expect(d.question).toContain(s);
       // Read-only: no third intent was born; the cursor is still unset.
       expect(recordDirs(proj).length).toBe(2);

@@ -564,6 +564,70 @@ export function slugify(text: string, maxLength = 48): string {
   return s;
 }
 
+// --- Intent record dir name: <YYMMDD>-<short-label> ---------------------------
+//
+// SPIKE (date-prefix). The record dir name leads with a compact UTC date so the
+// records sort CHRONOLOGICALLY in any file browser / `ls` (the time token is a
+// PREFIX, where lexicographic sort = creation order — a suffix would sort by the
+// label). The label is a SHORT human slug (cap 24, vs the old 48) — the
+// orchestrator is expected to pass a 2-3 word essence ("simple calc"), not the
+// full request sentence. Uniqueness within the space is the caller's collision
+// loop (a -N counter), NOT this name: the canonical, collision-proof id stays the
+// UUIDv7 in the registry row, and the row now stores this dirName verbatim (so the
+// readers never reconstruct it from slug+uuid).
+
+// The human-readable LABEL for a record dir name, for display/orphan rows when
+// no registry row supplies a slug. SPIKE (date-prefix): strip a leading `YYMMDD-`
+// date prefix; else strip a legacy trailing `-<hex>` id8. Falls back to the whole
+// name if neither shape matches.
+export function displaySlugFromDirName(dirName: string): string {
+  const dated = /^\d{6}-(.+)$/.exec(dirName);
+  if (dated) return dated[1];
+  return dirName.replace(/-[0-9a-f]+$/, "");
+}
+
+// Compact UTC date stamp YYMMDD. UTC (not local) so the stamp is reproducible
+// regardless of the clone's timezone — matches isoTimestamp's UTC basis.
+export function dateStamp(date: Date = new Date()): string {
+  const yy = String(date.getUTCFullYear()).slice(-2);
+  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(date.getUTCDate()).padStart(2, "0");
+  return `${yy}${mm}${dd}`;
+}
+
+// Build the BASE record dir name `<YYMMDD>-<short-label>` (pre-collision). The
+// label is slugified with the tighter 24-char cap. Starts with a DIGIT — legal,
+// since no SLUG_RE validates the intent dir name (those guard the bolt/stage/
+// artifact slugs). The collision loop appends `-2`, `-3`, … to this base.
+export function intentDirNameBase(label: string, date: Date = new Date()): string {
+  return `${dateStamp(date)}-${slugify(label, 24)}`;
+}
+
+// Resolve a within-space dir clash by appending a numeric counter: `<base>`,
+// `<base>-2`, `<base>-3`, … (the date prefix has no hex tail to extend, unlike the
+// pre-spike scheme). Two intents born the same day with the same short label is
+// the only collision case; the counter keeps the readable name AND uniqueness, and
+// the canonical id is still the row's UUIDv7. Returns the first free name.
+//
+// Bounded by MAX_DIR_COLLISIONS: 998 same-day same-label intents is not a real
+// workflow — it is a bug or a pathological caller (e.g. a script birthing in a
+// loop with a constant label). Fail LOUD with a diagnostic rather than spin, so
+// the cause surfaces. Safe to throw here: the caller holds the workspace lock via
+// withAuditLock, which releases in its `finally` (and an on-exit net), so the
+// throw unwinds without leaking the lock.
+export function resolveUniqueIntentDir(intentsRoot: string, base: string): string {
+  if (!existsSync(join(intentsRoot, base))) return base;
+  const MAX_DIR_COLLISIONS = 1000;
+  for (let n = 2; n < MAX_DIR_COLLISIONS; n++) {
+    const candidate = `${base}-${n}`;
+    if (!existsSync(join(intentsRoot, candidate))) return candidate;
+  }
+  throw new Error(
+    `Could not find a free intent record dir for "${base}" after ${MAX_DIR_COLLISIONS} attempts in ${intentsRoot}. ` +
+      `This many same-day intents with the same label indicates a bug or a runaway caller — pass a distinct --label.`,
+  );
+}
+
 // --- Flat-layout migration (one-time, lock-guarded, crash-safe) ---------------
 //
 // A pre-workspace project keeps its record at the flat `aidlc-docs/` root. This
@@ -647,9 +711,27 @@ export function anyIntentRecordExists(projectDir: string): boolean {
 export interface IntentRegistryEntry {
   uuid: string;
   slug: string;
+  // The on-disk record dir name. SPIKE (date-prefix): stored verbatim at birth so
+  // readers join a row to its dir DIRECTLY, never reconstructing it from slug+uuid
+  // (the date-prefixed name `<YYMMDD>-<label>` is not derivable from {slug,uuid}).
+  // Optional for back-compat: pre-spike rows (and hand-written fixtures) omit it,
+  // and recordDirMatches() falls back to the legacy `<slug>-<id8>` hex match.
+  dirName?: string;
   scope?: string;
   repos?: string[];
   status: string;
+}
+
+// Does record dir `dirName` belong to registry row `entry`? The single shared
+// join rule for every row→dir matcher (listIntents/updateIntentStatus/intentRepos).
+// SPIKE (date-prefix): prefer the stored `entry.dirName` (exact match); fall back
+// to the legacy `<slug>-<id8>` shape (slug prefix + trailing hex that is a prefix
+// of the uuid's id-suffix) so pre-spike rows and fixtures still resolve.
+export function recordDirMatches(entry: IntentRegistryEntry, dirName: string): boolean {
+  if (entry.dirName) return entry.dirName === dirName;
+  if (!dirName.startsWith(`${entry.slug}-`)) return false;
+  const suffix = dirName.slice(entry.slug.length + 1);
+  return /^[0-9a-f]+$/.test(suffix) && idSuffix(entry.uuid, suffix.length) === suffix;
 }
 
 export function intentsRegistryPath(projectDir: string, space?: string): string {
@@ -751,14 +833,9 @@ export function listIntents(projectDir: string, space?: string): IntentInfo[] {
   const activeDir = activeIntent(projectDir, sp);
   const claimedDirs = new Set<string>();
   const infos: IntentInfo[] = registry.map((entry) => {
-    // Match the row to its record dir by the `<slug>-<id8...>` shape: same slug
-    // prefix AND the dir's trailing hex is a prefix of the uuid's id-suffix.
-    const dirName =
-      dirs.find((d) => {
-        if (!d.startsWith(`${entry.slug}-`)) return false;
-        const suffix = d.slice(entry.slug.length + 1);
-        return /^[0-9a-f]+$/.test(suffix) && idSuffix(entry.uuid, suffix.length) === suffix;
-      }) ?? null;
+    // Match the row to its record dir via the shared join rule (stored dirName,
+    // else the legacy `<slug>-<id8>` shape).
+    const dirName = dirs.find((d) => recordDirMatches(entry, d)) ?? null;
     if (dirName) claimedDirs.add(dirName);
     return {
       uuid: entry.uuid,
@@ -775,7 +852,7 @@ export function listIntents(projectDir: string, space?: string): IntentInfo[] {
     if (claimedDirs.has(d)) continue;
     infos.push({
       uuid: "",
-      slug: d.replace(/-[0-9a-f]+$/, ""),
+      slug: displaySlugFromDirName(d),
       status: "unknown",
       dirName: d,
       active: d === activeDir,
@@ -946,19 +1023,20 @@ export interface BornIntent {
 
 export function birthIntent(
   projectDir: string,
-  slug: string,
+  label: string,
   space: string,
   scope?: string,
   repos?: string[],
 ): BornIntent {
   const uuid = uuidv7();
   const intentsRoot = intentsDir(projectDir, space);
-  let dirName = `${slug}-${idSuffix(uuid)}`;
-  // Disambiguate a within-space dir clash by the next-longer prefix of the SAME
-  // uuid (never re-mint) — mirrors migrateFlatLayout's disambiguation.
-  for (let len = 8; existsSync(join(intentsRoot, dirName)) && len <= 32; len += 2) {
-    dirName = `${slug}-${idSuffix(uuid, len)}`;
-  }
+  // SPIKE (date-prefix): the dir name is `<YYMMDD>-<short-label>`, the `label` arg
+  // being the orchestrator's 2-3 word essence. Normalize it ONCE to the slug shape
+  // so the stored row `slug`, the dir-name label, and the display all agree even
+  // when the caller passes raw text (cap 24). A same-day same-label clash resolves
+  // by a numeric counter (never re-mints).
+  const slug = slugify(label, 24);
+  const dirName = resolveUniqueIntentDir(intentsRoot, `${dateStamp()}-${slug}`);
   const recordPath = join(intentsRoot, dirName);
   mkdirSync(recordPath, { recursive: true });
   // BIND the record so the resolvers recognize it immediately: activeIntent()
@@ -979,7 +1057,7 @@ export function birthIntent(
     // or fresh-greenfield case) records NO repos row; the lone repo is inferred on
     // the construction path (resolveConstructionRepo). Only a non-empty set is
     // persisted, so existing single-repo + flat-legacy intents stay byte-identical.
-    { uuid, slug, scope, repos: repos && repos.length > 0 ? repos : undefined, status: "in-flight" },
+    { uuid, slug, dirName, scope, repos: repos && repos.length > 0 ? repos : undefined, status: "in-flight" },
     space,
   );
   setActiveIntentCursor(projectDir, dirName, space);
@@ -1002,11 +1080,8 @@ export function updateIntentStatus(
   const list = readIntentRegistry(projectDir, sp);
   let changed = false;
   for (const entry of list) {
-    // The record dir for a row is `<slug>-<id8...>`; match the active dirName by
-    // the same slug-prefix + id-suffix rule listIntents() uses.
-    if (!dirName.startsWith(`${entry.slug}-`)) continue;
-    const suffix = dirName.slice(entry.slug.length + 1);
-    if (!/^[0-9a-f]+$/.test(suffix) || idSuffix(entry.uuid, suffix.length) !== suffix) continue;
+    // Match the active dirName via the shared join rule listIntents() uses.
+    if (!recordDirMatches(entry, dirName)) continue;
     if (entry.status !== status) {
       entry.status = status;
       changed = true;
@@ -1060,15 +1135,11 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
     }
 
     const uuid = uuidv7();
-    const id8 = idSuffix(uuid);
     const space = DEFAULT_SPACE;
-    let intentDirName = `${slug}-${id8}`;
     const intentsRoot = intentsDir(projectDir, space);
-    // Disambiguate a within-space dir clash by the next-longer prefix of the
-    // SAME uuid (never re-mint).
-    for (let len = 8; existsSync(join(intentsRoot, intentDirName)) && len <= 32; len += 2) {
-      intentDirName = `${slug}-${idSuffix(uuid, len)}`;
-    }
+    // SPIKE (date-prefix): same `<YYMMDD>-<short-label>` shape as birthIntent, with
+    // a numeric-counter collision resolve.
+    const intentDirName = resolveUniqueIntentDir(intentsRoot, intentDirNameBase(slug));
     const leaf = join(intentsRoot, intentDirName);
 
     // (1) Stage a COPY of the whole flat tree into a temp dir UNDER the workspace
@@ -1149,7 +1220,7 @@ export function migrateFlatLayout(projectDir: string): FlatMigrationResult | nul
     // (4) Append to intents.json + set the active-intent cursor (workspace bucket).
     appendIntentToRegistry(
       projectDir,
-      { uuid, slug, scope: undefined, repos: undefined, status: "in-flight" },
+      { uuid, slug, dirName: intentDirName, scope: undefined, repos: undefined, status: "in-flight" },
       space,
     );
     try {
@@ -1421,9 +1492,7 @@ export function intentRepos(
   const dirName = intentDirName ?? activeIntent(projectDir, sp);
   if (!dirName) return [];
   for (const entry of readIntentRegistry(projectDir, sp)) {
-    if (!dirName.startsWith(`${entry.slug}-`)) continue;
-    const suffix = dirName.slice(entry.slug.length + 1);
-    if (!/^[0-9a-f]+$/.test(suffix) || idSuffix(entry.uuid, suffix.length) !== suffix) continue;
+    if (!recordDirMatches(entry, dirName)) continue;
     return entry.repos ?? [];
   }
   return [];

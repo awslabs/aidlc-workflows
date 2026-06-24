@@ -71,7 +71,7 @@ The state file is created during Initialization or when a scope is provided to `
 
 The `validate-state.ts` hook checks for two required sections on every compaction: `## Stage Progress` and `## Current Status`. To manually repair:
 
-1. Open the active intent's `aidlc-state.md` (under `aidlc/spaces/<space>/intents/<slug>-<id8>/`)
+1. Open the active intent's `aidlc-state.md` (under `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`)
 2. Verify these sections exist: Project Information, Scope Configuration, Workspace State, Stage Progress, Current Status, Session Resume Point
 3. Compare against the template at `.claude/knowledge/aidlc-shared/state-template.md`
 4. Restore missing sections from the template, filling in values from the `audit/` shard history

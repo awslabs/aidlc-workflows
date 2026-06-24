@@ -242,6 +242,7 @@ interface ParsedFlags {
   resume?: boolean; // --resume: re-enter an existing workflow (resume choice)
   testRun?: boolean; // --test-run: CI/automation mode (rides through to a jump's execute)
   single?: boolean; // --single: run ONE stage under a synthetic workflow id, never touching the main pointer
+  newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME birth directive (with the --label seam) the fresh-start path uses, instead of constructing intent-birth from SKILL.md prose
   intent?: string; // freeform request text (no leading --flag)
   workspaceVerb?: { verb: string; arg?: string }; // leading workspace verb (space/space-create/intent) + optional <name> arg
   projectDir?: string;
@@ -281,6 +282,8 @@ function parseNextFlags(args: string[]): ParsedFlags {
       flags.testRun = true;
     } else if (a === "--single") {
       flags.single = true;
+    } else if (a === "--new-intent") {
+      flags.newIntent = true;
     } else if (a === "--scope" && i + 1 < args.length) {
       flags.scope = args[i + 1];
       i++;
@@ -323,15 +326,23 @@ function parseNextFlags(args: string[]): ParsedFlags {
 // names the right tree on every harness (.claude/.kiro/.codex).
 function birthPrintDirective(scope: string, flags: ParsedFlags, description?: string): PrintDirective {
   const cmd = [`intent-birth --scope ${scope}`];
+  let labelHint = "";
   if (description && description.length > 0) {
     // Shell-quote the freeform description so multi-word intents survive intact.
     cmd.push(`--arguments ${JSON.stringify(description)}`);
+    // The conductor (LLM) condenses the description into the short dir-name label
+    // — the engine can't summarize. Name the missing --label in the directive so
+    // the conductor adds it; the dir name becomes `<YYMMDD>-<label>`. (A bare run
+    // without --label still births a sane name by truncating --arguments.)
+    cmd.push(`--label "<2-3 word kebab essence>"`);
+    labelHint =
+      ` Replace \`--label\` with a 2-3 word kebab essence of the description (e.g. "simple calc") — it becomes the readable record dir name.`;
   }
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
   if (flags.testRun) cmd.push("--test-run");
   return printDirective(
-    `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\` to start the workflow, then re-run \`next\` to continue.`,
+    `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\` to start the workflow, then re-run \`next\` to continue.${labelHint}`,
   );
 }
 
@@ -1103,6 +1114,29 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   if (!validScopes().has(scope)) {
     const valid = [...validScopes()].join(", ");
     emit(errorDirective(`Unknown scope "${scope}". Valid scopes: ${valid}.`));
+    return;
+  }
+
+  // Branch 4a — --new-intent: the conductor recognized NEW WORK alongside an
+  // already-active intent, ran the SKILL.md offer (AskUserQuestion), and the human
+  // confirmed. Rather than have the conductor CONSTRUCT the intent-birth command
+  // from SKILL.md prose — a weak signal the live model dropped the --label seam on
+  // (the 2nd/3rd intents truncated where the 1st, driven by this directive, got a
+  // clean LLM label) — the engine emits the SAME birthPrintDirective the fresh-
+  // start path (Branch 7b/9a) uses, so BOTH births carry the --label placeholder
+  // identically. The human-yes gate already happened conductor-side; this is the
+  // run-then-continue print that performs it. Precedes every continuation branch
+  // so an active intent's state never routes the new-work birth into "advance the
+  // current stage". The freeform new-work text rides in flags.intent (the same
+  // slot Branch 9a threads as the description).
+  if (flags.newIntent) {
+    // Use the EXPLICIT --scope, not the precedence-ladder `scope` (which lets the
+    // ACTIVE intent's state scope win — wrong for a brand-new intent: the offer
+    // confirmed a scope for the NEW work, independent of what's in flight). Fall
+    // back to the resolved scope only when no flag was passed. Both were already
+    // validated above (Branch 3b validates flags.scope; the unknown-scope check
+    // validates the resolved scope).
+    emit(birthPrintDirective(flags.scope ?? scope, flags, flags.intent));
     return;
   }
 

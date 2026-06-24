@@ -1594,6 +1594,55 @@ function handleDoctor(projectDir: string): void {
   }
   results.push({ pass: true, label: coverageLabel });
 
+  // ---------------------------------------------------------------------------
+  // Check 7 — Intent registry ⇄ record-dir reconciliation
+  //
+  // The record dir name is the join key between a registry row and its on-disk
+  // dir; a HAND-RENAME of the dir (e.g. in a file tree) breaks that pairing in
+  // two directions, both of which listIntents() already surfaces:
+  //   (a) a registry row whose stored dirName no longer resolves on disk
+  //       (listIntents → dirName: null) — the intent's status/repos detach,
+  //       and in a multi-intent space its cursor can no longer resolve it.
+  //   (b) a record dir on disk with no registry row (listIntents → an orphan
+  //       row with empty uuid + status "unknown").
+  // Advisory (pass=true): a rename is a user action, not a framework fault, and
+  // the lone-intent fallback keeps a single renamed intent working. The fix
+  // names the editable repair: set the row's `dirName` (or rename the dir back).
+  // Runs across EVERY space so a rename in a non-active space is still surfaced.
+  // ---------------------------------------------------------------------------
+  try {
+    const danglingRows: string[] = []; // registry rows whose dir vanished
+    const orphanDirs: string[] = []; // on-disk dirs with no registry row
+    for (const sp of listSpaces(projectDir)) {
+      for (const i of listIntents(projectDir, sp.name)) {
+        if (i.uuid !== "" && i.dirName === null) {
+          danglingRows.push(`${sp.name}/${i.slug} (uuid ${i.uuid.slice(0, 8)}…)`);
+        } else if (i.uuid === "" && i.status === "unknown") {
+          orphanDirs.push(`${sp.name}/${i.dirName}`);
+        }
+      }
+    }
+    const total = danglingRows.length + orphanDirs.length;
+    if (total === 0) {
+      results.push({ pass: true, label: "Intent registry: all rows ⇄ record dirs reconciled" });
+    } else {
+      const detail = [
+        danglingRows.length > 0 ? `${danglingRows.length} row(s) with a missing dir [${danglingRows.join(", ")}]` : "",
+        orphanDirs.length > 0 ? `${orphanDirs.length} dir(s) with no row [${orphanDirs.join(", ")}]` : "",
+      ].filter(Boolean).join("; ");
+      results.push({
+        pass: true,
+        label: `Intent registry: ${total} record-dir mismatch (advisory — likely a hand-renamed intent dir): ${detail}. Fix: set the row's \`dirName\` in the space's intents.json to the on-disk dir name, or rename the dir back.`,
+      });
+    }
+  } catch (e) {
+    results.push({
+      pass: false,
+      label: "Intent registry: reconciliation check failed",
+      fix: errorMessage(e),
+    });
+  }
+
   // Cold-safe gate: only emit audit when an audit trail already exists. On a
   // pristine project (no audit shard / flat audit.md) doctor prints its health
   // report and creates NOTHING — it stays a pure read-only diagnostic. On an
@@ -2094,14 +2143,22 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
       return;
     }
 
-    // (2) MINT THE INTENT. Slug from the freeform description (--arguments), else
-    // the scope token. birthIntent mints a UUIDv7, creates the record dir + a
-    // bind stub, appends the {uuid,slug,scope,status:"in-flight"} registry row,
-    // and sets the active-intent cursor — all under the lock we already hold.
-    // After this the default-resolving state/audit helpers (stateFilePath/
-    // auditFilePath/appendAuditEvent/writeStateFile) resolve into THIS record.
+    // (2) MINT THE INTENT. SPIKE (date-prefix): the dir name is `<YYMMDD>-<label>`.
+    // TWO seams, by the three-concerns split:
+    //   • KNOWLEDGE→LLM: the conductor passes a short 2-3 word essence via --label
+    //     ("simple calc"). This is the dir-name label — the readable, condensed half
+    //     no deterministic tool can produce from a long sentence.
+    //   • DETERMINISM→TOOL: --label is slugified (cap 24), the date prefix + collision
+    //     counter are appended, the dirName is stored in the registry row.
+    // Fallback chain so a NON-LLM caller (direct tool invocation, scripts, or a
+    // conductor that omits --label) still births a sane name: --label, else the
+    // freeform --arguments (truncated — may cut mid-phrase, the pre-LLM behaviour),
+    // else the scope token. The full --arguments text still flows to the audit
+    // Request + state Project fields below (verbose prose belongs there, not the dir).
     const description = flags.arguments?.trim();
-    const slug = slugify(description && description.length > 0 ? description : scope);
+    const label = flags.label?.trim();
+    const slugSource = label || description || scope;
+    const slug = slugify(slugSource, 24);
     birthIntent(projectDir, slug, activeSpace(projectDir), scope, repos);
 
     const ts = isoTimestamp();

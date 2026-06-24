@@ -146,7 +146,7 @@ Each file carries topical `##` headings (Way of Working, Testing Posture, Deploy
 
 The rule files are not static — the v0.5.0 learning loop turns an in-workflow correction into a standing rule for next time. The division of labor is deliberate: the LLM's only job is to write observations to the stage's `memory.md` diary while the stage runs (Interpretations / Deviations / Tradeoffs / Open questions). Everything else is a deterministic tool or a human decision:
 
-1. **Diary (LLM).** During the stage, observations accumulate in the intent's record dir at `<record>/<phase>/<stage>/memory.md` (`<record>/` = `aidlc/spaces/<space>/intents/<slug>-<id8>/`).
+1. **Diary (LLM).** During the stage, observations accumulate in the intent's record dir at `<record>/<phase>/<stage>/memory.md` (`<record>/` = `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`).
 2. **Surface (tool).** At the approval gate, `aidlc-learnings.ts surface` reads the diary and emits structured candidates — the LLM does not re-parse or classify.
 3. **Confirm (human).** The conductor renders the candidates; you pick which to keep and, for free-text additions, pick the single heading that derives the destination.
 4. **Admission check (knowledge).** Each kept learning is checked against `org.md`'s matching section; a contradiction is surfaced for you to revise, skip, or escalate.
@@ -168,7 +168,7 @@ The user-facing walk-through (with a worked example) is in [Rules and the Learni
 |---------|----------|
 | Prerequisites | `bun` (only runtime dependency); `mkdir`-based locking |
 | AI-DLC Structure | Skill, agent, rules, knowledge, and hook locations |
-| Conventions | Artifacts go to the intent's record dir under `aidlc/spaces/<space>/intents/<slug>-<id8>/`; application code goes to workspace root |
+| Conventions | Artifacts go to the intent's record dir under `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`; application code goes to workspace root |
 | Session Resumption | Check for `aidlc-state.md` on startup, offer resume options |
 | Git Integration | Commit policy (see below) |
 

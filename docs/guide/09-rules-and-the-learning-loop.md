@@ -54,7 +54,7 @@ The loop has four user-visible moments: the agent keeps a diary while the stage 
 
 ### The memory.md diary
 
-While a stage runs, the framework keeps a running observation log at `<record>/<phase>/<stage>/memory.md` — under the intent's record dir, `aidlc/spaces/<space>/intents/<slug>-<id8>/`. It is created automatically at stage start and maintained for you — never hand-edited. Entries land under four standard headings:
+While a stage runs, the framework keeps a running observation log at `<record>/<phase>/<stage>/memory.md` — under the intent's record dir, `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`. It is created automatically at stage start and maintained for you — never hand-edited. Entries land under four standard headings:
 
 - **Interpretations** — choices the agent made where the stage prose was ambiguous
 - **Deviations** — places the agent intentionally departed from the stage prose, and why

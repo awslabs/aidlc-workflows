@@ -49,7 +49,7 @@ stages — `intent-capture` and `feasibility` respectively).
 Things that are **not** artifacts in this registry:
 
 - **File paths.** `<record>/ideation/scope-definition/scope-document.md`
-  (where `<record>/` is the intent's record dir, `aidlc/spaces/<space>/intents/<slug>-<id8>/`)
+  (where `<record>/` is the intent's record dir, `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`)
   is a filesystem location; the canonical name is `scope-document`. See
   "Filesystem mapping" below.
 - **Filenames.** The on-disk `.md` file and the canonical name don't have

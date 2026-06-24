@@ -6,7 +6,7 @@ AI-DLC maintains two persistent files that together provide full traceability fr
 
 ## State File (`aidlc-state.md`)
 
-Each intent has its own state file at `aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md` (under the intent's record dir) — the single source of truth for that intent's workflow progress. The engine reads the active intent's state file on every session start to determine what has been completed, what is in progress, and what comes next.
+Each intent has its own state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md` (under the intent's record dir) — the single source of truth for that intent's workflow progress. The engine reads the active intent's state file on every session start to determine what has been completed, what is in progress, and what comes next.
 
 ### What it contains
 
@@ -75,7 +75,7 @@ stateDiagram-v2
 
 ## Audit Trail (`audit/`)
 
-The audit trail lives in the intent's record dir at `aidlc/spaces/<space>/intents/<slug>-<id8>/audit/`. It is an append-only event log written as **per-clone shards** (`<host>-<clone>.md`): each clone appends only to its own shard, so concurrent appends from sibling worktrees never git-conflict. Readers glob `audit/*.md` and merge-sort by ISO timestamp to reconstruct the full chronological history of decisions and events.
+The audit trail lives in the intent's record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/audit/`. It is an append-only event log written as **per-clone shards** (`<host>-<clone>.md`): each clone appends only to its own shard, so concurrent appends from sibling worktrees never git-conflict. Readers glob `audit/*.md` and merge-sort by ISO timestamp to reconstruct the full chronological history of decisions and events.
 
 ### 67-event taxonomy
 

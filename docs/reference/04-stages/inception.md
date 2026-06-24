@@ -14,11 +14,15 @@ boundary verification check at Stage 2.8 (Delivery Planning) before handing
 off to Construction.
 
 > **Path convention.** Each workflow's artifacts live under its **intent record
-> dir** — `aidlc/spaces/<space>/intents/<slug>-<id8>/` (where `<space>` is
-> `default` unless a non-default space is in play, and `<slug>-<id8>` is the
-> intent directory). Below, `<record>/` is shorthand for that dir; e.g.
+> dir** — `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (where `<space>` is
+> `default` unless a non-default space is in play, `<YYMMDD>` is a compact UTC
+> date prefix so records sort chronologically, and `<label>` is a short
+> kebab-case essence of the request; same-day collisions get a numeric counter).
+> The canonical, collision-proof id is the UUIDv7 recorded in the `intents.json`
+> registry row — the dir name is just a human-readable label. Below, `<record>/`
+> is shorthand for that dir; e.g.
 > `<record>/inception/requirements-analysis/requirements.md` expands to
-> `aidlc/spaces/default/intents/<slug>-<id8>/inception/requirements-analysis/requirements.md`.
+> `aidlc/spaces/default/intents/<YYMMDD>-<label>/inception/requirements-analysis/requirements.md`.
 > (Projects created before the per-intent layout used a flat tree; the engine
 > migrates them on first run.)
 

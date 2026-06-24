@@ -35,12 +35,12 @@ The three initialization stages run deterministically inside `aidlc-utility init
 
 ### Stage 0.1: Workspace Scaffold
 
-The framework births the first intent and creates its record dir at `aidlc/spaces/<space>/intents/<slug>-<id8>/` (the `<space>` is `default` unless you use a named space):
+The framework births the first intent and creates its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `<space>` is `default` unless you use a named space):
 
 ```
 Intent born — record dir scaffolded:
-  aidlc/spaces/default/intents/<slug>-<id8>/initialization/   (3 stage artifact dirs)
-  aidlc/spaces/default/intents/<slug>-<id8>/ideation/         (7 stage artifact dirs)
+  aidlc/spaces/default/intents/<YYMMDD>-<label>/initialization/   (3 stage artifact dirs)
+  aidlc/spaces/default/intents/<YYMMDD>-<label>/ideation/         (7 stage artifact dirs)
   ...
 Space-level dirs ensured:
   aidlc/spaces/default/knowledge/                             (team knowledge — empty; you add files)
@@ -234,10 +234,10 @@ sequenceDiagram
 
 ## Artifacts Produced
 
-By the end of a `feature`-scoped workflow, the intent's record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/`) contains:
+By the end of a `feature`-scoped workflow, the intent's record dir (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`) contains:
 
 ```
-aidlc/spaces/<space>/intents/<slug>-<id8>/
+aidlc/spaces/<space>/intents/<YYMMDD>-<label>/
 ├── aidlc-state.md          # Workflow state (all stages marked [x])
 ├── audit/                  # Full decision audit trail (per-clone shards, merged by timestamp)
 ├── ideation/               # Intent, market research, scope, mockups

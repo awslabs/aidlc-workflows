@@ -80,7 +80,7 @@ Configuration in this repo partitions along **two orthogonal axes**, not one.
 ### Axis 2 — when is it consumed?
 
 - **Loaded continuously (harness configuration)** — read at session start; available to every stage in every workflow run in this workspace. Lives under `.claude/`.
-- **Per-workflow artefact** — produced by a specific stage as output, read by later stages as input. Lives under the intent's record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/`, written `<record>/` below). Re-produced on each workflow run.
+- **Per-workflow artefact** — produced by a specific stage as output, read by later stages as input. Lives under the intent's record dir (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`, written `<record>/` below). Re-produced on each workflow run.
 
 ### The four quadrants
 
@@ -405,8 +405,8 @@ aidlc/                                    # neutral, harness-independent, commit
         +-- codekb/<repo>/                 # per-repo code knowledge base
         +-- intents/
             +-- active-intent              # cursor: active intent record dir (gitignored, per-user)
-            +-- intents.json               # the registry: [{ uuid, slug, scope, repos, status }]
-            +-- <slug>-<id8>/              # one record dir per intent
+            +-- intents.json               # the registry: [{ uuid, slug, dirName, scope, repos, status }]
+            +-- <YYMMDD>-<label>/          # one record dir per intent (date-prefixed, short kebab label; UUIDv7 carries identity in intents.json)
                 +-- aidlc-state.md          # per-intent workflow state
                 +-- audit/<host>-<clone>.md # per-clone audit shards (glob-and-merge by timestamp)
                 +-- <phase>/<stage>/*.md    # artifacts + the per-stage memory.md diary

@@ -53,7 +53,7 @@ knowledge ships separately and read-only under `.codex/knowledge/`.)
 ### Step 3: Ensure Stage Artifact Directories
 
 Ensure-exists the empty per-intent stage artifact directories under the active
-intent's record dir `aidlc/spaces/<space>/intents/<slug>-<id8>/` (no READMEs) —
+intent's record dir `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (no READMEs) —
 idempotent (created on demand):
 
 - `<record>/initialization/` — workspace-scaffold/, workspace-detection/, state-init/

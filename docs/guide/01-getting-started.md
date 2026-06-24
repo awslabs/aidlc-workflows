@@ -163,7 +163,7 @@ practices and learnings live). You do not run any init command.
 
 The first time you run `/aidlc` (or describe what to build), the engine
 **auto-births** the first intent into the active space. Each intent gets its own
-record dir at `aidlc/spaces/<space>/intents/<slug>-<id8>/`, which holds:
+record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`, which holds:
 
 - `aidlc-state.md` — the per-intent workflow state
 - `audit/` — the audit trail, written as per-clone shards (`<host>-<clone>.md`)

@@ -126,7 +126,7 @@ NAMES, not rooted paths — the engine resolves the root (see below).
 
 A stage emits relative artifact **names** (its `produces[]`); the engine
 resolves them to canonical write paths at directive-emit time, **against the
-active intent's record dir** — `aidlc/spaces/<space>/intents/<slug>-<id8>/<phase>/<stage>/<name>.md`
+active intent's record dir** — `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/<phase>/<stage>/<name>.md`
 (a pre-workspace project is migrated to this layout on first touch — there is no
 flat-root resolution path post-migration). The resolver is `resolveArtifactPath` / `memoryPathFor` in
 `aidlc-orchestrate.ts`, threaded with the active intent's relative record dir

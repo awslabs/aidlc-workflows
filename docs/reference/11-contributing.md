@@ -5,7 +5,7 @@
 Contributions to this implementation are welcome. This guide covers prerequisites, development workflow, testing, and how to submit changes.
 
 > **Path convention.** `<record>/` below = a born intent's record dir,
-> `aidlc/spaces/<space>/intents/<slug>-<id8>/` — where per-intent state, audit
+> `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` — where per-intent state, audit
 > shards, knowledge, and artifacts live.
 
 ## Prerequisites

@@ -233,16 +233,19 @@ describe("t160 flat-layout migration — crash-safe, idempotent", () => {
     const res = migrateFlatLayout(proj);
     expect(res).not.toBeNull();
     const r = res as NonNullable<typeof res>;
-    // The slug derived from the flat state's Workflow field.
-    expect(r.intentDirName.startsWith("build-auth-service-")).toBe(true);
+    // `<YYMMDD>-<label>`; the label is the slugified flat-state Workflow field
+    // ("build auth service" → "build-auth-service", ≤24 chars so it survives whole).
+    expect(r.intentDirName).toMatch(/^\d{6}-build-auth-service$/);
     // The state moved into the per-intent record.
     const newState = join(intentsDir(proj, "default"), r.intentDirName, "aidlc-state.md");
     expect(existsSync(newState)).toBe(true);
     expect(readFileSync(newState, "utf-8")).toContain("Current Stage");
-    // The registry got the entry.
+    // The registry got the entry — and stores the dirName verbatim (the readers
+    // join the row to its dir by this field, not by reconstructing it).
     const registry = JSON.parse(readFileSync(join(intentsDir(proj, "default"), "intents.json"), "utf-8"));
     expect(registry.length).toBe(1);
     expect(registry[0].uuid).toBe(r.uuid);
+    expect(registry[0].dirName).toBe(r.intentDirName);
     expect(registry[0].status).toBe("in-flight");
     // The marker is written.
     expect(existsSync(migratedMarkerPath(proj))).toBe(true);

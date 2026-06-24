@@ -8,10 +8,13 @@
 // exercised is the CONVERSATIONAL beat the vision promised: with an intent
 // already active, describing a GENUINELY NEW, UNRELATED piece of work prompts
 // the orchestrator to OFFER a second intent (you confirm), rather than blindly
-// advancing the active intent. That offer is conductor PROSE (knowledge→LLM) —
-// it lives in skills/aidlc/SKILL.md, NOT the read-only engine — so it can only
-// be verified LIVE, the way the codebase verifies every conductor behaviour:
-// the Claude Agent SDK driver answering the offer Y/n on a structured callback.
+// advancing the active intent. RECOGNISING new-work + phrasing the offer is
+// conductor PROSE (knowledge→LLM, in skills/aidlc/SKILL.md); on CONFIRM the prose
+// routes through `next --new-intent`, so the read-only engine emits the SAME
+// birth directive the fresh-start path does (carrying the `--label` seam) rather
+// than the conductor hand-building intent-birth. Either way it can only be
+// verified LIVE, the way the codebase verifies every conductor behaviour: the
+// Claude Agent SDK driver answering the offer Y/n on a structured callback.
 //
 // Journey (one interactive run):
 //   seed:      ONE active intent mid-ideation (subject: a widget feature) +
@@ -139,6 +142,30 @@ describe("t176 P4 new-work offer (orchestrator offers a 2nd intent, sdk live)", 
         // active space; the registry carries both rows).
         const reg = readIntentRegistry(proj);
         expect(reg.length).toBe(2);
+
+        // (d) The 2nd intent's record dir is `<YYMMDD>-<short-label>` AND the
+        // label is a CONDENSED essence, not a truncated copy of the new-work
+        // sentence. This is the offer-birth `--label` proof: the offer routes
+        // through `next --new-intent`, which emits the SAME birthPrintDirective
+        // the fresh-start path uses (carrying the `--label "<2-3 word kebab
+        // essence>"` placeholder), so the conductor supplies a real label here
+        // exactly as it does on the first birth. WITHOUT that routing the
+        // conductor fell back to truncating --arguments (e.g. the NOAA sentence →
+        // "build-a-standalone-pytho", a mid-word 24-char cut with leading filler).
+        // The seeded intent A has no registry dirName (legacy fixture record), so
+        // the NEW row is the one with a date-prefixed dirName.
+        const born = reg.find((e) => /^\d{6}-/.test(e.dirName ?? ""));
+        expect(born).toBeDefined();
+        const label = (born?.dirName ?? "").replace(/^\d{6}-/, "");
+        // Concise (the cap is 24; a real essence is well under it) and free of the
+        // leading filler words a raw truncation of NEW_WORK would carry ("build",
+        // "a", "standalone") — a condensation drops them. Tolerant of model
+        // wording variance: we assert SHAPE (short, no leading filler), not an
+        // exact string. The registry slug equals the dir label (birthIntent
+        // normalizes once), so this also pins slug↔dirName agreement.
+        expect(label.length).toBeLessThanOrEqual(24);
+        expect(label).toMatch(/^[a-z][a-z0-9-]*$/);
+        expect(born?.slug).toBe(label);
       } finally {
         cleanupTestProject(proj);
       }

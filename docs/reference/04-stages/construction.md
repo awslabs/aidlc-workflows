@@ -16,13 +16,16 @@ All stages follow `stage-protocol.md` for approval gates, question format,
 completion messages, and state tracking.
 
 > **Path convention.** Each workflow's artifacts live under its **intent record
-> dir** — `aidlc/spaces/<space>/intents/<slug>-<id8>/` (where `<space>` is
-> `default` unless a non-default space is in play, and `<slug>-<id8>` is the
-> intent directory). Below, `<record>/` is shorthand for that dir; e.g.
+> dir** — `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (where `<space>` is
+> `default` unless a non-default space is in play, and `<YYMMDD>-<label>` is the
+> intent directory: a compact UTC date prefix like `260624` plus a short
+> kebab-case label so records sort chronologically). Below, `<record>/` is
+> shorthand for that dir; e.g.
 > `<record>/construction/{unit-name}/functional-design/` expands to
-> `aidlc/spaces/default/intents/<slug>-<id8>/construction/{unit-name}/functional-design/`.
-> (Projects created before the per-intent layout used a flat tree; the engine
-> migrates them on first run.)
+> `aidlc/spaces/default/intents/<YYMMDD>-<label>/construction/{unit-name}/functional-design/`.
+> The dir name is a human-readable label; the canonical identity is the UUIDv7
+> stored in the `intents.json` registry row. (Projects created before the
+> per-intent layout used a flat tree; the engine migrates them on first run.)
 
 ---
 

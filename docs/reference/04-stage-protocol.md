@@ -10,7 +10,7 @@ Section references (e.g., "Protocol Section 1") map to the source file.
 > execution behaviour.
 
 > **Path convention.** Artifacts, state, and the audit trail live under the
-> active intent's **record dir** — `aidlc/spaces/<space>/intents/<slug>-<id8>/`,
+> active intent's **record dir** — `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`,
 > written `<record>/` below. The audit trail is a directory of per-clone shards
 > at `<record>/audit/<host>-<clone>.md` (readers glob and merge by timestamp),
 > not a single file.

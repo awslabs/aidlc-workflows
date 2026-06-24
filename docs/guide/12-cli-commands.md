@@ -145,7 +145,7 @@ and the engine **auto-births** the first intent on your first `/aidlc` (or when
 you describe what to build). Birth runs the three Initialization stages
 (Workspace Scaffold, Workspace Detection, State Init) as a single deterministic
 tool call: it creates the intent's record dir at
-`aidlc/spaces/<space>/intents/<slug>-<id8>/` (the `audit/` shard dir, the
+`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (the `audit/` shard dir, the
 per-phase artifact dirs, `verification/`) and the empty space-level
 `aidlc/knowledge/` directory, runs a rule-based workspace scan, and writes that
 intent's `aidlc-state.md` with the scope plan.
@@ -441,7 +441,7 @@ bun .claude/tools/aidlc-sensor.ts list
 bun .claude/tools/aidlc-sensor.ts describe required-sections
 bun .claude/tools/aidlc-sensor.ts fire required-sections \
   --stage requirements-analysis \
-  --output-path aidlc/spaces/default/intents/<slug>-<id8>/inception/requirements-analysis/requirements.md
+  --output-path aidlc/spaces/default/intents/<YYMMDD>-<label>/inception/requirements-analysis/requirements.md
 ```
 
 ### `aidlc-learnings` — the learning-gate tool

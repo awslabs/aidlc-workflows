@@ -2,7 +2,7 @@
 
 This document contains all Mermaid diagrams that visualize the AI-DLC (AI-Driven Development Life Cycle) methodology. Each section includes a brief explanation followed by a rendered diagram. These diagrams are derived from the engine and conductor (`aidlc-orchestrate.ts` + `SKILL.md`), stage protocol (`stage-protocol.md`), stage files, and agent definitions.
 
-> **Note:** These diagrams are also embedded inline in their relevant reference chapters. This file serves as a consolidated index of all diagrams in one place. `<record>/` in the diagrams below = the active intent's record dir, `aidlc/spaces/<space>/intents/<slug>-<id8>/`.
+> **Note:** These diagrams are also embedded inline in their relevant reference chapters. This file serves as a consolidated index of all diagrams in one place. `<record>/` in the diagrams below = the active intent's record dir, `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`.
 >
 > - Diagrams 1 and 7: [Architecture](01-architecture.md)
 > - Diagram 8: [Orchestrator](03-orchestrator.md) -- Session Management section
@@ -246,7 +246,7 @@ flowchart TD
 
 ## 6. Agent Collaboration Map
 
-The AI-DLC system uses 11 domain-expert agents. The conductor (SKILL.md) performs each agent invocation as the engine directs; agents never invoke each other directly. Information flows between agents through artifacts stored in the intent's record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/`). The diagram below shows the primary information flows between agents, culminating in the feedback loop from aidlc-operations-agent back to aidlc-product-agent.
+The AI-DLC system uses 11 domain-expert agents. The conductor (SKILL.md) performs each agent invocation as the engine directs; agents never invoke each other directly. Information flows between agents through artifacts stored in the intent's record dir (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`). The diagram below shows the primary information flows between agents, culminating in the feedback loop from aidlc-operations-agent back to aidlc-product-agent.
 
 ```mermaid
 flowchart TD

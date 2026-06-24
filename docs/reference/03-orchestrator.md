@@ -6,7 +6,7 @@ This chapter documents the workflow behaviour from the conductor's side — entr
 
 > **Ownership note.** Throughout this chapter, the behaviours described — argument resolution, scope detection, jump validation, resume branching — are computed by the **engine** on each `next` and delivered to the conductor as a directive. Where older prose said "the orchestrator does X," read it as "the engine decides X and emits a directive; the conductor carries it out." The decision logic is deterministic tool code, never SKILL.md prose.
 
-> **Path convention.** Each intent's state, audit trail, and artifacts live under its **record dir** — `aidlc/spaces/<space>/intents/<slug>-<id8>/`, written `<record>/` below. The audit trail is a directory of per-clone shards under `<record>/audit/`, not a single file.
+> **Path convention.** Each intent's state, audit trail, and artifacts live under its **record dir** — `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`, written `<record>/` below. The audit trail is a directory of per-clone shards under `<record>/audit/`, not a single file.
 
 ---
 
@@ -65,7 +65,7 @@ When the argument is freeform text (not a known scope keyword):
 
 Read-only command that inspects the current workflow without advancing it:
 
-1. Reads the active intent's `aidlc-state.md` (under `aidlc/spaces/<space>/intents/<slug>-<id8>/`).
+1. Reads the active intent's `aidlc-state.md` (under `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`).
 2. Displays: current phase, current stage, completion percentage, pending decisions, and active agent.
 3. If verification is needed, runs the phase boundary check per stage-protocol-governance.md section 13.
 4. Does NOT advance the workflow -- strictly read-only.
@@ -104,7 +104,7 @@ Overrides the test volume strategy (minimal, standard, comprehensive) independen
 
 ### Intent birth -- the Initialization phase
 
-There is no separate scaffold command (the earlier `init` flag was retired; the workspace shell ships pre-built in `dist/<harness>/`). The three Initialization stages (workspace-scaffold, workspace-detection, state-init) run deterministically inside `aidlc-utility intent-birth` — auto-invoked on the first `/aidlc` (or `/aidlc <description>`), or explicitly via the `/aidlc-init` packaging. Birth mints the intent's record dir at `aidlc/spaces/<space>/intents/<slug>-<id8>/` with state initialised, scope routing applied, and the workflow positioned at the first post-Initialization stage:
+There is no separate scaffold command (the earlier `init` flag was retired; the workspace shell ships pre-built in `dist/<harness>/`). The three Initialization stages (workspace-scaffold, workspace-detection, state-init) run deterministically inside `aidlc-utility intent-birth` — auto-invoked on the first `/aidlc` (or `/aidlc <description>`), or explicitly via the `/aidlc-init` packaging. Birth mints the intent's record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` with state initialised, scope routing applied, and the workflow positioned at the first post-Initialization stage:
 
 1. Creates the record dir tree (idempotent -- skips existing directories/files): the `audit/` shard dir, stage artifact directories (empty), and the verification directory.
 2. Creates the empty space-level `aidlc/knowledge/` directory (a sibling of the space's `intents/`). It is free-form with no fixed file set — birth seeds no per-agent subdirectories and no READMEs; the team adds files itself.
@@ -187,7 +187,7 @@ flowchart TD
 
 ### State File Schema
 
-The state file at `aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md` (the intent's record dir) is created from the template at `.claude/knowledge/aidlc-shared/state-template.md`. It uses State Version 7 and contains:
+The state file at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/aidlc-state.md` (the intent's record dir) is created from the template at `.claude/knowledge/aidlc-shared/state-template.md`. It uses State Version 7 and contains:
 
 | Section | Contents |
 |---------|----------|

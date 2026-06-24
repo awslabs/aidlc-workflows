@@ -44,7 +44,7 @@ You respond:
 
 The 3 Initialization stages run as a single deterministic tool call (`aidlc-utility init`) in well under a second, without user interaction:
 
-- **0.1 Workspace Scaffold** — Auto-births the first intent and creates its record dir at `aidlc/spaces/<space>/intents/<slug>-<id8>/` (written `<record>/` below)
+- **0.1 Workspace Scaffold** — Auto-births the first intent and creates its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (written `<record>/` below) — `<YYMMDD>` is a compact UTC date prefix so records sort chronologically, and `<label>` is the conductor's short kebab-case essence of the request; the canonical id is a UUIDv7 carried in the `intents.json` registry row
 - **0.2 Workspace Detection** — Rule-based scan identifies Java 17, Spring Boot 3.2, Maven, brownfield project
 - **0.3 State Init** — Initializes `aidlc-state.md` with scope `bugfix`, depth `Minimal`, and the domain stages marked for execution
 
@@ -143,7 +143,7 @@ Results captured in `<record>/construction/build-and-test/test-results.md`: 89 t
 ### End state
 
 ```
-aidlc/spaces/default/intents/bugfix-null-display-name-<id8>/
+aidlc/spaces/default/intents/260624-null-display-fix/
   aidlc-state.md              # All 7 stages marked [x]
   audit/                      # Full decision trail (per-clone shards)
   inception/

@@ -201,15 +201,21 @@ no standalone meaning.
    (\`--scope <name>\`/\`--depth <level>\`/\`--test-strategy <level>\`/\`--test-run\`)
    as-is, and pass any freeform description text via \`--arguments "<text>"\`
    (\`intent-birth\` reads the description from the \`--arguments\` flag, NOT a
-   positional — forwarding it bare would silently drop it):
+   positional — forwarding it bare would silently drop it). ALSO derive a short
+   **\`--label\`**: a 2-3 word kebab-case essence of what's being built
+   (\`"I would like to build a simple calculator application"\` → \`--label
+   "simple calc"\`). The label becomes the readable, date-prefixed record dir name
+   (\`<YYMMDD>-simple-calc\`); the full \`--arguments\` text is preserved separately
+   in the audit + state. Omit \`--label\` only when there is no description (the
+   tool then falls back to the scope token):
 
    \`\`\`bash
-   bun ${harnessDir()}/tools/aidlc-utility.ts intent-birth --scope <name> --arguments "<description>"
+   bun ${harnessDir()}/tools/aidlc-utility.ts intent-birth --scope <name> --arguments "<description>" --label "<2-3 word essence>"
    \`\`\`
 
    \`--scope\` seeds the initial scope (defaults to \`poc\`); omit \`--arguments\`
-   when the user gave no description. Print the tool's output and stop. This does
-   not advance a stage; run \`/aidlc\` afterwards to continue the workflow.
+   and \`--label\` when the user gave no description. Print the tool's output and
+   stop. This does not advance a stage; run \`/aidlc\` afterwards to continue.
 `;
 }
 

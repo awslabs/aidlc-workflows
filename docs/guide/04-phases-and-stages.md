@@ -72,7 +72,7 @@ Initialization stages run **automatically** without approval gates. All three ex
 
 | # | Stage | Lead | Key Artifacts | Condition |
 |---|-------|------|---------------|-----------|
-| 0.1 | Workspace Scaffold | orchestrator | first intent's record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/`) | ALWAYS |
+| 0.1 | Workspace Scaffold | orchestrator | first intent's record dir (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`) | ALWAYS |
 | 0.2 | Workspace Detection | orchestrator | `aidlc-state.md` (workspace state) | ALWAYS |
 | 0.3 | State Initialization | orchestrator | `aidlc-state.md`, `audit/` shards | ALWAYS |
 

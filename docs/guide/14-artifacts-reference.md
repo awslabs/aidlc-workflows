@@ -1,8 +1,8 @@
 # Artifacts Reference
 
 Every AI-DLC workflow produces artifacts under its **intent record dir** —
-`aidlc/spaces/<space>/intents/<slug>-<id8>/` (where `<space>` is `default`
-unless a non-default space is in play, and `<slug>-<id8>` is the intent dir;
+`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (where `<space>` is `default`
+unless a non-default space is in play, and `<YYMMDD>-<label>` is the intent dir;
 written `<record>/` below). This chapter is a complete reference for the
 directory structure, per-artifact descriptions, lifecycle, and git policy.
 
@@ -11,7 +11,7 @@ directory structure, per-artifact descriptions, lifecycle, and git policy.
 ## Directory Tree
 
 ```
-aidlc/spaces/<space>/intents/<slug>-<id8>/   # one record dir per intent
+aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
   aidlc-state.md                    # Workflow state (commit)
   audit/                            # Audit trail — per-clone shards (commit)
     <host>-<clone>.md               # this clone's shard; readers glob + merge by timestamp

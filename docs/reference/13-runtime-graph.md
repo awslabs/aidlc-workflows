@@ -22,7 +22,7 @@ workflow runs.
 which stages have started, which have approved, what each stage's
 memory.md looks like, what sensors fired. One file per workflow, lives
 at `<record>/runtime-graph.json` — `<record>/` = the intent's record dir,
-`aidlc/spaces/<space>/intents/<slug>-<id8>/`. Same node shape as
+`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`. Same node shape as
 `stage-graph.json`, populated with telemetry instead of structure.
 
 It exists so consumers (milestone 11's Bolt fork/merge, milestone 12's gate ritual,

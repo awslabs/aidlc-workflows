@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import {
   activeIntent,
   activeSpace,
+  displaySlugFromDirName,
   listIntents,
   listSpaces,
   loadAgents,
@@ -189,7 +190,7 @@ function orientationPrefix(projectDir: string): string {
   if (activeDir === null) return ""; // flat-legacy / no record → no prefix
   const intents = listIntents(projectDir, space);
   const match = intents.find((i) => i.dirName === activeDir);
-  const slug = match?.slug || activeDir.replace(/-[0-9a-f]+$/, "");
+  const slug = match?.slug || displaySlugFromDirName(activeDir);
   const segments: string[] = [];
   if (listSpaces(projectDir).length > 1) segments.push(space);
   segments.push(slug);

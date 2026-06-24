@@ -93,7 +93,7 @@ You will see a "Run Command Hook" line in chat each time one fires.
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped |
 
 Everything else — state machine, audit trail, artifacts under the per-intent
-record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/`), the learnings
+record dir (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`), the learnings
 ritual, sensors, scopes, depth/test-strategy — behaves identically, because it
 IS identical: the same tools run from `.kiro/tools/`.
 

@@ -73,7 +73,7 @@ runner skills are installed.
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped, and the Kiro MCP config mechanism is not yet documented here — Claude-only today in practice |
 
 Everything else — state machine, audit trail, artifacts under the intent
-record dirs (`aidlc/spaces/<space>/intents/<slug>-<id8>/`), the learnings
+record dirs (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`), the learnings
 ritual, sensors, scopes, depth/test-strategy — behaves identically, because it
 IS identical: the same tools run from `.kiro/tools/`.
 

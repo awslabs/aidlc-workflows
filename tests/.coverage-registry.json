@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 387,
+    "total": 392,
     "enumeratedByClass": {
-      "function": 180,
+      "function": 185,
       "audit": 67,
       "scope": 9,
       "stage": 32,
@@ -1078,6 +1078,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:dateStamp",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:DEFAULT_LOCK_STALE_MS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1108,6 +1115,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:displaySlugFromDirName",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -1339,6 +1353,13 @@
     {
       "unitClass": "function",
       "unitId": "function:idSuffix",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:intentDirNameBase",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -1912,6 +1933,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:recordDirMatches",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:recordHookDrop",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2097,6 +2125,13 @@
     {
       "unitClass": "function",
       "unitId": "function:resolveStage",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveUniqueIntentDir",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

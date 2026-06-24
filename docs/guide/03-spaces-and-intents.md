@@ -55,8 +55,8 @@ my-project/
 │       │   └── intents/          THE RECORD — one subdir per piece of work
 │       │       ├── active-intent   ← cursor: which intent is current (gitignored)
 │       │       ├── intents.json    the registry: every intent + its scope/repos/status
-│       │       ├── inventory-api-9f8e7d6c/      ✓ a completed intent
-│       │       └── export-bug-1a2b3c4d/         ◷ an in-flight intent
+│       │       ├── 260620-inventory-api/        ✓ a completed intent
+│       │       └── 260624-export-bug/           ◷ an in-flight intent
 │       │           ├── aidlc-state.md             where this intent is in the lifecycle
 │       │           ├── audit/                     the decision trail
 │       │           └── inception/requirements-analysis/requirements.md   …artifacts
@@ -74,9 +74,11 @@ Three things are worth pulling out of that tree, because they are the whole idea
   (`memory/`), its knowledge, its code knowledge, and its record of every intent.
   You get `spaces/default/` for free and, as a solo developer or single team,
   never look past it.
-- **`intents/<slug>-<id8>/`** is one piece of work — the per-run record that
-  [Your First Workflow](02-your-first-workflow.md) filled in. The `<slug>` is a
-  human-readable name; the `<id8>` keeps two same-named intents distinct.
+- **`intents/<YYMMDD>-<label>/`** is one piece of work — the per-run record that
+  [Your First Workflow](02-your-first-workflow.md) filled in. The `<YYMMDD>` is a
+  compact UTC date so records sort chronologically; the `<label>` is a short,
+  human-readable name. Identity itself is carried by a UUIDv7 in the registry, not
+  the dir name, so two same-day same-label intents stay distinct.
 - **Two cursors** — `active-space` and `active-intent` — record *where you are
   right now*. They are per-user (gitignored), so two teammates can sit in
   different intents at the same time without fighting over a shared file.
@@ -91,9 +93,10 @@ Three things are worth pulling out of that tree, because they are the whole idea
 ## Intents — one per piece of work
 
 An **intent** is a single run of the AI-DLC lifecycle, scoped to one task. Every
-intent owns a row in the space's `intents.json` registry — `{uuid, slug, scope,
-repos, status}` — and a **record dir** holding that run's state, audit trail, and
-artifacts.
+intent owns a row in the space's `intents.json` registry — `{uuid, slug, dirName,
+scope, repos, status}` — and a **record dir** holding that run's state, audit
+trail, and artifacts. The `uuid` (a UUIDv7) is the canonical, collision-proof
+identity; `dirName` records the human-readable record-dir name verbatim.
 
 You never create an intent with a special command. The first time you describe
 work, the engine **auto-births** an intent for you:
@@ -103,7 +106,7 @@ work, the engine **auto-births** an intent for you:
 ```
 
 On a fresh workspace this mints the intent, creates its record dir at
-`aidlc/spaces/default/intents/inventory-api-<id8>/`, makes it the active intent,
+`aidlc/spaces/default/intents/260624-inventory-api/`, makes it the active intent,
 and starts the first stage — exactly the run you saw in the previous chapter.
 
 ### Starting a second piece of work

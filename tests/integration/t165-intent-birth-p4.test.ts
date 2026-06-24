@@ -119,8 +119,10 @@ describe("t164 auto-birth (intent-birth) on an empty workspace", () => {
     expect(r.status).toBe(0);
     const dir = activeIntent(proj);
     expect(dir).not.toBeNull();
-    // <slug>-<id8>; slug derived from the description.
-    expect(dir).toMatch(/^build-the-auth-service-[0-9a-f]{8}$/);
+    // <YYMMDD>-<short-label>; the label is the slugified description (≤24 chars,
+    // so "build the auth service" survives whole). Date prefix → chronological
+    // sort; no trailing hex (the canonical id is the UUIDv7 in the registry row).
+    expect(dir).toMatch(/^\d{6}-build-the-auth-service$/);
   });
 
   test("the engine NAMES intent-birth on a fresh workspace (read-only — no state written)", () => {
