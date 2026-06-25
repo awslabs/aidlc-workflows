@@ -22,6 +22,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
+import { stageGraphDrift } from "../tools/aidlc-graph.ts";
 import { repointHarnessIncludes } from "../tools/aidlc-includes.ts";
 import {
   activeIntentUuid,
@@ -29,6 +30,7 @@ import {
   errorMessage,
   findIntentByUuid,
   getField,
+  harnessDir,
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
@@ -193,6 +195,24 @@ const recovery = existsSync(recoveryFile)
   ? "NOTE: A compaction recovery breadcrumb exists at .aidlc-recovery.md — check if state was preserved correctly.\n"
   : "";
 
+// Stage-graph drift advisory (issue #364). The runtime resolves stages from
+// the compiled stage-graph.json only, a stage `.md` added to disk without a
+// recompile is silently never executed. Surface it once at session start so the
+// operator isn't left guessing why a new stage never runs. Fail-open: a drift
+// check that throws (e.g. a malformed graph) must never block session startup,
+// so it degrades to no advisory.
+let driftNote = "";
+try {
+  const { uncompiledStages } = stageGraphDrift();
+  if (uncompiledStages.length > 0) {
+    driftNote =
+      `NOTE: ${uncompiledStages.length} stage file(s) on disk are not in the compiled stage graph and will NOT execute: ${uncompiledStages.join(", ")}. ` +
+      `Run \`bun ${harnessDir()}/tools/aidlc-graph.ts compile\` to include them, then start a fresh workflow (an in-flight workflow keeps its original stage set).\n`;
+  }
+} catch {
+  // Drift check failed, never block startup over an advisory.
+}
+
 const context = `AIDLC WORKFLOW ACTIVE
 ${rebindOffer}Scope: ${scope}
 Lifecycle Phase: ${phase}
@@ -201,7 +221,7 @@ Status: ${status}
 Active Agent: ${agent}
 Last Completed: ${last}
 Next Action: ${next}
-${recovery}On resume: offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Check the active intent's aidlc-state.md for full context.
+${recovery}${driftNote}On resume: offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Check the active intent's aidlc-state.md for full context.
 
 FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
 - The engine binary (\`aidlc-orchestrate.ts\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, you commit with \`report\`, you repeat. You never re-derive routing yourself.

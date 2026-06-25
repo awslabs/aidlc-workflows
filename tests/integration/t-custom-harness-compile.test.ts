@@ -405,10 +405,12 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
     }
   });
 
-  // E4 — a stage .md exists but has no {slug,number,name} row pre-seeded in
-  // stage-graph.json (the pre-seed contract for adding a new stage).
+  // E4 — a stage .md exists with no {slug,number,name} row in stage-graph.json.
+  // This used to be a hard error (the pre-seed contract). It is now AUTO-SEEDED:
+  // compile assigns the next free index in the stage's phase and a title-cased
+  // default name, so "drop a stage file, run compile" works end-to-end (#364).
   // Guard: compileStageGraph in aidlc-graph.ts.
-  test("E4: a stage .md with no stage-graph.json row fails compile (pre-seed contract)", () => {
+  test("E4: a stage .md with no stage-graph.json row is auto-seeded on compile (#364)", () => {
     const proj = setupIntegrationProject({ customHarness: true });
     try {
       // Write a new stage file WITHOUT pre-seeding its graph row.
@@ -418,7 +420,7 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
 slug: unseeded-stage
 phase: ${SNAPSHOT_STAGE_PHASE}
 execution: ALWAYS
-condition: never seeded into stage-graph.json
+condition: auto-seeded on first compile
 lead_agent: orchestrator
 support_agents: []
 mode: inline
@@ -432,9 +434,28 @@ outputs: none
 `,
       );
       const r = graph(proj, ["compile"]);
-      expect(r.status).not.toBe(0);
-      expect(r.stderr).toContain("not found in stage-graph.json");
-      expect(r.stderr).toContain("unseeded-stage");
+      // Compile now succeeds, the new stage is auto-seeded, not rejected.
+      expect(r.status).toBe(0);
+      const compiled = JSON.parse(
+        readFileSync(join(proj, ".claude", "tools", "data", "stage-graph.json"), "utf8"),
+      ) as Array<{ slug: string; number: string; name: string; phase: string }>;
+      const seeded = compiled.find((s) => s.slug === "unseeded-stage");
+      expect(seeded).toBeDefined();
+      // Number = next free index in the inception phase (prefix 2); name defaults
+      // to the title-cased slug. (The exact index depends on the fixture's
+      // inception stages, so assert the shape + phase, not a hard-coded index.)
+      expect(seeded?.phase).toBe(SNAPSHOT_STAGE_PHASE);
+      expect(seeded?.number).toMatch(/^2\.\d+$/);
+      expect(seeded?.name).toBe("Unseeded Stage");
+      // A second compile is idempotent, the seeded number/name are now pinned.
+      const r2 = graph(proj, ["compile"]);
+      expect(r2.status).toBe(0);
+      const recompiled = JSON.parse(
+        readFileSync(join(proj, ".claude", "tools", "data", "stage-graph.json"), "utf8"),
+      ) as Array<{ slug: string; number: string; name: string }>;
+      const reseeded = recompiled.find((s) => s.slug === "unseeded-stage");
+      expect(reseeded?.number).toBe(seeded?.number);
+      expect(reseeded?.name).toBe(seeded?.name);
     } finally {
       cleanupTestProject(proj);
     }

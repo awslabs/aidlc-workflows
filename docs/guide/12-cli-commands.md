@@ -211,6 +211,7 @@ Validate that all of this implementation's prerequisites, configuration, and sta
 | State drift | the active intent's `aidlc-state.md` matches the last `WORKFLOW_COMPLETED` in the audit |
 | Cycle detection | `stage-graph.json` has no cycles |
 | Orphan stage files | Every slug in the graph has a matching `<phase>/<slug>.md` on disk |
+| Uncompiled stage files | Surfaces any stage `.md` on disk whose slug is not in the compiled graph, it will not execute until you run `aidlc-graph.ts compile` (advisory, never fails) |
 | Scope validation | All 9 scopes (from `.claude/scopes/*.md`) walk cleanly (advisories for scope-truncation gaps are expected) |
 | Schema validation | Every stage's YAML frontmatter passes `validateStageFrontmatter` |
 | Graph references | Every `consumes[].artifact` and `requires_stage[]` target resolves |
@@ -236,6 +237,7 @@ Validate that all of this implementation's prerequisites, configuration, and sta
 ✓ State matches last audit event (no drift)
 ✓ Cycle detection: 0 cycles
 ✓ Orphan stage files: 32 graph entries all have files
+✓ Uncompiled stage files: 0 stage files missing from the compiled graph
 ✓ Scope validation: 9 scopes valid (29 advisories)
 ✓ Schema validation: 32/32 stages valid
 ✓ Graph references: 122 artifacts + edges resolved
