@@ -27,13 +27,14 @@ Every directive is validated against the frozen contract in `aidlc-directive.ts`
 
 ## 2. The typed directive contract
 
-`aidlc-directive.ts` defines a discriminated union over **eight** directive kinds, keyed on the `kind` field. Each directive carries exactly the fields its kind needs, enforced by per-kind allowed-key sets (a field outside its kind's set is rejected as an unknown key). The engine **emits six kinds today**; two are documented placeholders that keep the loop complete-shaped until later waves wire them.
+`aidlc-directive.ts` defines a discriminated union over **nine** directive kinds, keyed on the `kind` field. Each directive carries exactly the fields its kind needs, enforced by per-kind allowed-key sets (a field outside its kind's set is rejected as an unknown key). The engine **emits seven kinds today**; two are documented placeholders that keep the loop complete-shaped until later waves wire them.
 
 | `kind` | Emitted today? | What the conductor does |
 |--------|----------------|--------------------------|
 | `print` | Yes | Do exactly what `directive.message` says — it is authoritative. Two shapes: **terminal** (names a read-only utility such as status/help/doctor/version; run it, print stdout verbatim, STOP) and **run-then-continue** (names a mutating tool such as a scope change, a jump `execute`, or the workflow-birth `init --scope <scope>` emitted when the user explicitly names a scope — flag or positional — on a fresh workspace; run it, then return to step 1 of the loop). The mutation lives in the named tool, never in `next`. |
 | `error` | Yes | Print `directive.message` verbatim and STOP. Do not recover or smooth it over — the message is the user-facing error. |
 | `done` | Yes | The workflow (or single-stage run) is complete. Present the completion summary and STOP. |
+| `parked` | Yes | The workflow was parked mid-flow at a clean inter-stage boundary (`directive.stage`) for a later session. Tell the user it is parked and how to resume (`/aidlc --resume`), then STOP. Emitted on a plain `next` while a `Parked` marker is set (written by `aidlc-orchestrate park`); no stage is advanced. The Stop hook treats `parked` as a terminal allow, so the conductor parks instead of rubber-stamping stages to reach `done` (#367). |
 | `run-stage` | Yes | Load the lead agent's persona plus any `support_agents`, read `directive.stage_file`, run the stage body, write `produces`, keep the diary at `directive.memory_path`, then branch on `directive.gate` (see [Orchestrator](03-orchestrator.md)). Carries the resolved routing fields straight off the graph node: `lead_agent`, `support_agents`, `mode`, `gate`, `consumes`, `produces`, `rules_in_context`, `sensors_applicable`, `stage_file`. |
 | `ask` | Yes | Render `directive.question` via `AskUserQuestion`, then feed the human's answer back on the next `report` via `--user-input`. The engine never calls `AskUserQuestion` itself — it defers the human turn to the conductor. |
 | `invoke-swarm` | Yes | The engine granted an eligible Construction batch to the swarm. The conductor fans out the units in `directive.units` and runs the convergence loop, consulting the swarm referee (see §6). Emitted only for an eligible Construction batch under an `autonomous` grant. |
@@ -114,7 +115,7 @@ The referee is **stateless** — no iteration counter, no persisted progress —
 | `check <unit> --check-cmd <cmd> [--test-file <path>]` | Stateless single-unit verdict: run the project's own check command (exit 0 = green, the authoritative signal — a worker's self-claim is never trusted) plus an anti-tamper compare of the protected file against its forked-git baseline. Prints `{converged, tampered, reason}`; exits 0 iff genuinely converged. | None (advisory; informs the conductor's retry decision). |
 | `finalize --batch <n> --units <a,b,c> --claimed <a,b> --check-cmd <cmd> [--test-file <path>] [--reasons <unit>=<reason>,…]` | The authoritative gate: **re-run the check on every claimed unit** before any merge (a unit named in `--claimed` but red on disk is refused the merge and lands in the failure envelope — the lying-conductor guard), then serialised HOLD-MERGE merge-back of the genuine passes. Exits 0 (batch converged and merged) or 2 (failure envelope). | `SWARM_UNIT_CONVERGED` / `SWARM_UNIT_FAILED` / `SWARM_BATON_RETURNED` / `SWARM_COMPLETED`. |
 
-These six `SWARM_*` events are part of the 67-event audit taxonomy (see [State Machine](12-state-machine.md)). On an exit-2 envelope the conductor takes the baton back — failure always halts and re-engages the human regardless of autonomy mode.
+These six `SWARM_*` events are part of the 69-event audit taxonomy (see [State Machine](12-state-machine.md)). On an exit-2 envelope the conductor takes the baton back - failure always halts and re-engages the human regardless of autonomy mode.
 
 **The driver seam.** `AIDLC_USE_SWARM=1` selects an inline Dynamic Workflow driver (the conductor authors a `Workflow` whose JS owns the per-unit pipeline and the iteration cap); unset selects the subagent floor (N parallel `Task` calls in one message, one per unit). If `=1` but the Workflow tool is unavailable, the conductor **loud-degrades** to the floor and passes `--degraded-from ultracode` so the referee emits `SWARM_DEGRADED`. The runaway backstop is not a cap inside the tool — it is the harness's 8-block Stop-hook ceiling (§3).
 
@@ -126,6 +127,6 @@ These six `SWARM_*` events are part of the 67-event audit taxonomy (see [State M
 
 - **The conductor's own chapter** — the forwarding loop, the gate ritual, and the learnings ritual in full. See [Orchestrator](03-orchestrator.md).
 - **The execution-truth artefact the engine and swarm read** — `runtime-graph.json` and its `bolt_dag` node. See [Runtime Graph](13-runtime-graph.md).
-- **The transitions `report` commits** — the workflow / phase / stage machines and the 67-event audit taxonomy. See [State Machine](12-state-machine.md).
+- **The transitions `report` commits** - the workflow / phase / stage machines and the 69-event audit taxonomy. See [State Machine](12-state-machine.md).
 - **The deterministic spine** — the Stop hook and the other framework hooks and tools. See [Hooks and Tools](06-hooks-and-tools.md).
 - **Using the runners day to day** — the typeable `/aidlc-<stage>` and `/aidlc-<scope>` commands. See the User Guide's [Skills and Runner Commands](../guide/17-skills.md).

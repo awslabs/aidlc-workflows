@@ -19,6 +19,11 @@ export interface StageFrontmatter {
   support_agents: string[];
   mode: "inline" | "subagent" | "agent-team";
   for_each?: string;
+  // workspace_requires - true for stages that must write source code to the
+  // workspace root (not just planning docs under the per-intent record dir).
+  // Read by the stage-completion artifact guard in aidlc-state.ts (issue #366).
+  // Absent -> false.
+  workspace_requires?: boolean;
   produces: string[];
   consumes: Array<{
     artifact: string;
@@ -107,7 +112,7 @@ const REQUIRED_FIELDS = [
   "outputs",
 ] as const;
 
-const OPTIONAL_FIELDS = ["for_each", "sensors", "scopes", "reviewer", "reviewer_max_iterations"] as const;
+const OPTIONAL_FIELDS = ["for_each", "workspace_requires", "sensors", "scopes", "reviewer", "reviewer_max_iterations"] as const;
 
 const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 
@@ -187,6 +192,17 @@ export function validateStageFrontmatter(
   if ("for_each" in o && o.for_each !== undefined) {
     if (typeof o.for_each !== "string") {
       errors.push(`for_each must be string, got ${describe(o.for_each)}`);
+    }
+  }
+
+  // workspace_requires - optional. Absent -> valid (treated as false). Present ->
+  // must be boolean. The parser coerces the "true"/"false" token to a real
+  // boolean, so a string here means a malformed source value.
+  if ("workspace_requires" in o && o.workspace_requires !== undefined) {
+    if (typeof o.workspace_requires !== "boolean") {
+      errors.push(
+        `workspace_requires must be boolean, got ${describe(o.workspace_requires)}`
+      );
     }
   }
 

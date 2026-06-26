@@ -132,6 +132,10 @@ stateDiagram-v2
 
 The `approve` command owns the full post-gate transition: it emits `GATE_APPROVED + STAGE_COMPLETED`, then auto-advances to the next in-scope stage (delegating to `handleAdvance`) emitting `STAGE_STARTED` plus any `PHASE_*` events at phase boundaries. On the final in-scope stage, approve delegates to `complete-workflow` instead, emitting `PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED` and setting Status=Completed. The conductor does NOT call `advance` after `approve` — approve owns everything from gate-response through to the next stage's `[-]`. The `advance` command remains for non-gated transitions (Initialization stages, construction bolts) and is idempotent on an already-`[x]` slug (suppresses the duplicate `STAGE_COMPLETED`).
 
+**Artifact guard (issue #366).** Every transition that marks a stage `[x]` (`approve`, `advance`, `finalize`, and `complete-workflow`) runs a deterministic artifact check before completing it, so a stage cannot be marked `[x]` without evidence of work on disk (no completing subcommand is an unguarded backdoor). A stage that declares `produces[]` must have at least one of those artifacts present (under the active intent's record dir `aidlc/spaces/<space>/intents/<slug>-<id8>/<phase>/<slug>/`, or that record's `construction/<unit>/<slug>/` for per-unit Construction stages, or `aidlc/spaces/<space>/codekb/<repo>/` for codekb stages); a stage with `workspace_requires: true` must additionally show evidence of real source work outside the `aidlc/` workspace tree and the harness dir. In a git workspace that means an uncommitted/untracked non-doc change or a non-doc path in the last commit (so it distinguishes this session's code from a brownfield baseline and still passes commit-then-approve); otherwise a shell-free filesystem-existence check. If the check fails the command exits non-zero and writes nothing: the transition is refused (`Refusing to complete "<slug>": ...`). Stages that declare no `produces[]` (the Initialization phase) pass vacuously. Bypass with `--test-run` (accepted by `advance`/`finalize`/`complete-workflow` too) or `AIDLC_SKIP_ARTIFACT_GUARD=1`.
+
+**Park (issue #365/#367).** `aidlc-orchestrate park` writes a `Parked` / `Parked At Stage` runtime marker (via `aidlc-state.ts park`, which emits `WORKFLOW_PARKED`) without advancing any stage; a subsequent plain `next` re-emits a terminal `parked` directive and the Stop hook lets the turn end, so a long workflow can pause across sessions instead of rubber-stamping the remaining stages to reach `done`. `/aidlc --resume` clears the marker (`unpark` emits `WORKFLOW_UNPARKED`) before continuing. An unattended autonomous Construction run (`Construction Autonomy Mode: autonomous`) refuses to park: both the tool and the Stop hook's `parked` allow decline under autonomous mode, so the loop keeps moving with no human to resume it.
+
 ### Revision loop
 
 ```
@@ -167,7 +171,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**67 events**, grouped below into 17 categories (the canonical `audit-format.md` registry splits the same 67 into 18 — the grouping is presentational, the event set is the invariant). Every event has exactly one tool or hook emitter, except for events pre-registered for an upcoming release whose Emitter cell reads `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` — these are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**69 events**, grouped below into 17 categories (the canonical `audit-format.md` registry splits the same 69 into 18 - the grouping is presentational, the event set is the invariant). Every event has exactly one tool or hook emitter, except for events pre-registered for an upcoming release whose Emitter cell reads `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` - these are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -175,6 +179,8 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 |---|---|---|
 | `WORKFLOW_STARTED` | `tools/aidlc-utility.ts` | Mandatory first event on every intent birth |
 | `WORKFLOW_COMPLETED` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | `Reason=test-run-stopped-at-<target>` for `--test-run` early stops |
+| `WORKFLOW_PARKED` | `tools/aidlc-state.ts` | `park` - workflow parked mid-flow for a later session; no stage advanced |
+| `WORKFLOW_UNPARKED` | `tools/aidlc-state.ts` | `unpark` - park marker cleared on explicit `--resume` re-entry |
 
 ### Phase lifecycle
 

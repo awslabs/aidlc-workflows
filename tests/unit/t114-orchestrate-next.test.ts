@@ -88,6 +88,7 @@ import {
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
+const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const SKILL_MD = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 
 const MID_IDEATION = join(FIXTURES_DIR, "state-mid-ideation.md");
@@ -460,5 +461,59 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
     proj = createTestProject();
     const out = runNext(proj, ["add", "a", "settings", "space"]).out;
     expect(out).not.toContain("aidlc-utility.ts space");
+  });
+});
+
+// ===========================================================================
+// Parked workflow (#367) - the persisted-field branch the Stop hook relies on.
+// `park` writes the marker via aidlc-state.ts; a PLAIN `next` then re-emits the
+// `parked` directive (Branch 2.5). Explicit re-entry self-disables it, and a
+// stale marker (Current Stage moved past Parked At Stage) is ignored.
+// ===========================================================================
+describe("t114 parked branch (#367)", () => {
+  function park(p: string): void {
+    spawnSync(BUN, [STATE, "park", "--project-dir", p], { encoding: "utf-8", cwd: p });
+  }
+
+  test("plain next on a parked workflow -> parked directive", () => {
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    park(proj);
+    const out = runNext(proj, []).out;
+    expect(out).toContain('"kind":"parked"');
+    expect(out).toContain('"stage":"feasibility"');
+  });
+
+  test("--resume on a parked workflow self-disables (names unpark, not parked)", () => {
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    park(proj);
+    const out = runNext(proj, ["--resume"]).out;
+    expect(out).not.toContain('"kind":"parked"');
+    expect(out).toContain("unpark");
+  });
+
+  test("stale parked (Current Stage advanced past Parked At Stage) is ignored", () => {
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    park(proj);
+    // Advance Current Stage past the parked slug - the marker is now stale.
+    spawnSync(BUN, [STATE, "set", "Current Stage=scope-definition", "--project-dir", proj], {
+      encoding: "utf-8",
+      cwd: proj,
+    });
+    const out = runNext(proj, []).out;
+    expect(out).not.toContain('"kind":"parked"');
+    expect(out).toContain('"kind":"run-stage"');
+  });
+
+  test("after unpark, a plain next no longer parks", () => {
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    park(proj);
+    spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], { encoding: "utf-8", cwd: proj });
+    const out = runNext(proj, []).out;
+    expect(out).not.toContain('"kind":"parked"');
+    expect(out).toContain('"kind":"run-stage"');
   });
 });

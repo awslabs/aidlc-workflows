@@ -59,8 +59,9 @@ const AUDIT_TS = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md");
 
 // The canonical baseline pinned by .sh test 7. Bump WITH the source when an
-// event is added (e.g. v0.6.0 Wave 4 milestone 16: +SWARM_DEGRADED took this to 67).
-const CANONICAL_COUNT = 67;
+// event is added (v0.6.0 Wave 4 milestone 16: +SWARM_DEGRADED took this to 67;
+// v2.1.2 #367: +WORKFLOW_PARKED +WORKFLOW_UNPARKED took it to 69).
+const CANONICAL_COUNT = 69;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
  *  next line matching `end` (inclusive of both), reproducing `sed -n

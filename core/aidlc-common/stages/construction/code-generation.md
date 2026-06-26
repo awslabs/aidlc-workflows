@@ -9,6 +9,7 @@ mode: subagent
 reviewer: aidlc-architecture-reviewer-agent
 reviewer_max_iterations: 2
 for_each: unit-of-work
+workspace_requires: true
 produces:
   - code-generation-plan
   - code-summary

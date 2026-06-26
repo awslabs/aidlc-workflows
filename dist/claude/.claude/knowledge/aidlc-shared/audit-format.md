@@ -8,14 +8,16 @@
 
 All event names follow `SUBJECT_PAST_VERB` — every event answers "what happened?"
 
-## Event Registry (67 events, 18 categories)
+## Event Registry (69 events, 18 categories)
 
-### Workflow Lifecycle (2 events)
+### Workflow Lifecycle (4 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | ✓ `WORKFLOW_STARTED` | Scope determined, workflow begins | Timestamp, Scope, Request | `tools/aidlc-utility.ts init` |
 | ✓ `WORKFLOW_COMPLETED` | All in-scope stages done, or test-run stop | Timestamp, Scope, Details, optional `Reason=test-run-stopped-at-<target>` | `tools/aidlc-state.ts complete-workflow`, `tools/aidlc-jump.ts execute --test-run` |
+| ✓ `WORKFLOW_PARKED` | Workflow parked mid-flow for a later session (no stage advanced) | Stage, Timestamp | `tools/aidlc-state.ts park` |
+| ✓ `WORKFLOW_UNPARKED` | Park marker cleared on explicit `--resume` re-entry | Timestamp | `tools/aidlc-state.ts unpark` |
 
 ### Phase Lifecycle (4 events)
 

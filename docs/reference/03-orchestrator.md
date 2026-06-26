@@ -1,6 +1,6 @@
 # Orchestrator
 
-Orchestration is split across two pieces. A deterministic **engine** (`aidlc-orchestrate.ts`, subcommands `next`/`report`) owns every between-stage decision — scope determination, stage routing, jump resolution, resume and init guards, gate status, and workflow completion — and emits a typed **directive** on each `next`. The **conductor** (`.claude/skills/aidlc/SKILL.md`, invoked via `/aidlc`) is a thin forwarding loop that acts on each directive — running the named stage, asking the human a question, fanning out a swarm — and reports the outcome with `report`. SKILL.md is not the control plane: the routing decisions live in the engine and the compiled data it reads (`tools/data/stage-graph.json`, `tools/data/scope-grid.json`), while SKILL.md owns execution quality inside the move the engine names.
+Orchestration is split across two pieces. A deterministic **engine** (`aidlc-orchestrate.ts`, subcommands `next`/`report`/`park`) owns every between-stage decision - scope determination, stage routing, jump resolution, resume and init guards, gate status, and workflow completion - and emits a typed **directive** on each `next`. The **conductor** (`.claude/skills/aidlc/SKILL.md`, invoked via `/aidlc`) is a thin forwarding loop that acts on each directive - running the named stage, asking the human a question, fanning out a swarm - and reports the outcome with `report`. SKILL.md is not the control plane: the routing decisions live in the engine and the compiled data it reads (`tools/data/stage-graph.json`, `tools/data/scope-grid.json`), while SKILL.md owns execution quality inside the move the engine names.
 
 This chapter documents the workflow behaviour from the conductor's side — entry points, session management, scope-to-stage mapping, the stage execution and advancement protocol, and the deliberate deviations. For the engine internals — the `next`/`report` contract, the typed directive union, the conductor persona, plural skills, scope shape, and the swarm referee — see [Engine and Skill System](17-skill-system.md). For user-facing command usage, see the [User Guide -- CLI Commands](../guide/12-cli-commands.md).
 
@@ -476,14 +476,14 @@ The state tool owns every transition above. The orchestrator never writes checkb
 
 ### When a stage completes (user approves via the gate)
 
-1. **Run completion verification** — check artifacts exist on disk, guardrails respected. This is a correctness check, not a state transition.
+1. **Run completion verification** - check artifacts exist on disk, guardrails respected. This is a correctness check, not a state transition. This is also enforced deterministically: `approve` refuses a gated stage whose declared `produces` artifacts are missing (unless `--test-run`), so a stage cannot be marked complete without its outputs (#366). Per-unit Construction stages are verified by the swarm referee instead.
 
 2. **Enter the gate** (optional): `bun .claude/tools/aidlc-state.ts gate-start <slug>`. Marks `[-]` → `[?]`, emits `STAGE_AWAITING_APPROVAL`, makes `/aidlc --status` show "Awaiting your approval on \<stage\>". If skipped, the engine's `report` / `reject` paths backfill the missing `STAGE_AWAITING_APPROVAL` row (tagged `Recovered=true`) before recording the outcome.
 
 3. **Present the approval gate** (AskUserQuestion). Under `--test-run`, skip the prompt.
 
 4. **Record the user's response**:
-   - **Approve** → `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` (add `--test-run` under test-run). Emits any missing gate row, then `GATE_APPROVED` + `STAGE_COMPLETED`, and advances.
+   - **Approve** -> `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` (add `--test-run` under test-run). Emits any missing gate row, then `GATE_APPROVED` + `STAGE_COMPLETED`, and advances. Refuses with a missing-produced-artifact error if the stage's `produces` outputs are absent (unless `--test-run`).
    - **Request Changes** → `bun .claude/tools/aidlc-state.ts reject <slug> --feedback "<text>"`. Emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, increments Revision Count.
    - After re-running work for a `[R]` stage, call `bun .claude/tools/aidlc-state.ts revise <slug>` to re-enter the gate (emits a fresh `STAGE_AWAITING_APPROVAL`, marks `[R]` → `[?]`).
 

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-state:get, subcommand:aidlc-state:set, subcommand:aidlc-state:checkbox, subcommand:aidlc-state:count, subcommand:aidlc-state:advance, subcommand:aidlc-state:lookup, subcommand:aidlc-state:finalize, subcommand:aidlc-state:complete-workflow, subcommand:aidlc-state:resume, subcommand:aidlc-state:gate-start, subcommand:aidlc-state:approve, subcommand:aidlc-state:reject, subcommand:aidlc-state:revise, subcommand:aidlc-state:skip, subcommand:aidlc-state:reuse-artifact
+// covers: subcommand:aidlc-state:get, subcommand:aidlc-state:set, subcommand:aidlc-state:checkbox, subcommand:aidlc-state:count, subcommand:aidlc-state:advance, subcommand:aidlc-state:lookup, subcommand:aidlc-state:finalize, subcommand:aidlc-state:complete-workflow, subcommand:aidlc-state:resume, subcommand:aidlc-state:gate-start, subcommand:aidlc-state:approve, subcommand:aidlc-state:reject, subcommand:aidlc-state:revise, subcommand:aidlc-state:skip, subcommand:aidlc-state:reuse-artifact, subcommand:aidlc-state:park, subcommand:aidlc-state:unpark, audit:WORKFLOW_PARKED, audit:WORKFLOW_UNPARKED
 //
 // bun:test port of tests/unit/t17-tool-state.sh (TAP plan 83), mechanism = cli.
 // Faithful 1:1 migration of the aidlc-state.ts CLI-contract test — EQUAL fidelity,
@@ -35,7 +35,7 @@
 // gate row is never tagged; a terminal-state slug still rejects. Test 51 now
 // uses a [ ] pending slug (reject accepts [?] AND [-]).
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -1052,5 +1052,105 @@ describe("t17 cross-phase advance idempotency", () => {
     expect(countEvent(audit2, "PHASE_COMPLETED")).toBe(completedBefore);
     expect(countEvent(audit2, "PHASE_VERIFIED")).toBe(verifiedBefore);
     expect(countEvent(audit2, "PHASE_STARTED")).toBe(startedBefore);
+  });
+});
+
+// ===========================================================================
+// park / unpark (#365, #367) + the autonomy guard.
+// ===========================================================================
+describe("t17 park/unpark", () => {
+  let proj: string;
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION); // Current Stage: feasibility
+    seedAuditFile(proj);
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  test("park writes Parked + Parked At Stage and emits WORKFLOW_PARKED", () => {
+    const r = runState(proj, ["park"]);
+    expect(r.rc).toBe(0);
+    const s = readState(proj);
+    expect(s).toContain("- **Parked**:");
+    expect(s).toContain("- **Parked At Stage**: feasibility");
+    expect(countEvent(readAudit(proj), "WORKFLOW_PARKED")).toBe(1);
+    // park does NOT advance the pointer or flip any checkbox.
+    expect(runState(proj, ["get", "Current Stage"]).combined.trim()).toBe("feasibility");
+  });
+
+  test("unpark clears the markers and emits WORKFLOW_UNPARKED", () => {
+    runState(proj, ["park"]);
+    const r = runState(proj, ["unpark"]);
+    expect(r.rc).toBe(0);
+    const s = readState(proj);
+    expect(s).not.toContain("- **Parked**:");
+    expect(s).not.toContain("- **Parked At Stage**:");
+    expect(countEvent(readAudit(proj), "WORKFLOW_UNPARKED")).toBe(1);
+  });
+
+  test("unpark is idempotent (no-op + was_parked:false when not parked)", () => {
+    const r = runState(proj, ["unpark"]);
+    expect(r.rc).toBe(0);
+    expect(r.combined).toContain('"was_parked":false');
+    expect(countEvent(readAudit(proj), "WORKFLOW_UNPARKED")).toBe(0);
+  });
+
+  test("park REFUSES under Construction Autonomy Mode=autonomous", () => {
+    // `set` only replaces an existing bullet (no insert), and the fixture has no
+    // autonomy line, so inject the field directly under ## Runtime State.
+    const path = stateMd(proj);
+    const injected = readFileSync(path, "utf-8").replace(
+      "## Runtime State",
+      "## Runtime State\n- **Construction Autonomy Mode**: autonomous",
+    );
+    writeFileSync(path, injected, "utf-8");
+    const r = runState(proj, ["park"]);
+    expect(r.rc).not.toBe(0);
+    expect(r.combined).toContain("autonomous");
+    // State untouched: no Parked marker written.
+    expect(readState(proj)).not.toContain("- **Parked**:");
+  });
+});
+
+// ===========================================================================
+// approve artifact verification (#366) - the rubber-stamp guard refuses an
+// artifact-less approve. (Full coverage of per-unit + workspace_requires +
+// bypasses lives in t185; this pins the approve wording change here.)
+// ===========================================================================
+describe("t17 approve artifact guard (#366)", () => {
+  let proj: string;
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION); // Current Stage: feasibility
+    seedAuditFile(proj);
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  // Drive with the artifact guard ENABLED (the rest of this file rubber-stamps
+  // bare fixtures under the suite-wide AIDLC_SKIP_ARTIFACT_GUARD=1, so clear it
+  // here to exercise the real refusal - same pattern as t185's guarded()).
+  function guarded(args: string[]): RunResult {
+    const env = { ...process.env };
+    delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+    const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", proj], {
+      encoding: "utf-8",
+      cwd: proj,
+      env,
+    });
+    const stdout = res.stdout ?? "";
+    const stderr = res.stderr ?? "";
+    return { rc: res.status ?? -1, stdout, stderr, combined: `${stdout}${stderr}` };
+  }
+
+  test("approve REFUSES feasibility with no produced artifacts", () => {
+    guarded(["checkbox", "feasibility=in-progress"]);
+    guarded(["gate-start", "feasibility"]);
+    const r = guarded(["approve", "feasibility", "--user-input", "ok"]);
+    expect(r.rc).not.toBe(0);
+    expect(r.combined).toContain("Refusing to complete");
+    // State untouched: not marked [x].
+    expect(readState(proj)).not.toContain("[x] feasibility");
   });
 });

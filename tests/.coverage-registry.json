@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 393,
+    "total": 397,
     "enumeratedByClass": {
       "function": 186,
-      "audit": 67,
+      "audit": 69,
       "scope": 9,
       "stage": 32,
       "hook": 10,
-      "subcommand": 82,
+      "subcommand": 84,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 80,
-      "audit": 27,
+      "function": 79,
+      "audit": 29,
       "scope": 9,
       "stage": 8,
       "hook": 10,
-      "subcommand": 69,
+      "subcommand": 71,
       "render-surface": 7
     }
   },
@@ -627,6 +627,18 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "WORKFLOW_PARKED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "WORKFLOW_STARTED",
       "minMechanism": "none",
       "coveredBy": [
@@ -637,6 +649,18 @@
         {
           "file": "tests/e2e/t54-workflow-audit-completeness.test.ts",
           "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "WORKFLOW_UNPARKED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2012,6 +2036,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:removeField",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:removeSlug",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2264,18 +2295,6 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:stageGraphDrift",
-      "minMechanism": "none",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t184-stage-graph-drift.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2678,10 +2697,6 @@
         },
         {
           "file": "tests/unit/t169-session-resume-rebind.test.ts",
-          "mechanism": "cli"
-        },
-        {
-          "file": "tests/unit/t184-stage-graph-drift.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4046,6 +4061,18 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-state park",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-state practices-event",
       "minMechanism": "cli",
       "coveredBy": [
@@ -4166,6 +4193,18 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-state unpark",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-utility codekb-path",
       "minMechanism": "cli",
       "coveredBy": [
@@ -4239,10 +4278,6 @@
         },
         {
           "file": "tests/unit/t103.test.ts",
-          "mechanism": "cli"
-        },
-        {
-          "file": "tests/unit/t184-stage-graph-drift.test.ts",
           "mechanism": "cli"
         },
         {

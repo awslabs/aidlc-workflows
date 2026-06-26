@@ -235,16 +235,16 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
   });
 
   // --- Test 3: t28 audit count unchanged BY THIS PR's discriminator reuse ---
-  test("3: framework event count pinned at 67 (no bump from this PR's discriminator reuse)", () => {
-    // The .sh read t28's pinned $TS_COUNT (== 67). Under milestone 4, t28 is now a
+  test("3: framework event count pinned at 69 (no bump from this PR's discriminator reuse)", () => {
+    // The .sh read t28's pinned $TS_COUNT. Under milestone 4, t28 is now a
     // .test.ts (no `assert_eq N "$TS_COUNT"` line to grep), so pin the SAME
     // observable against the SOURCE OF TRUTH instead — VALID_EVENT_TYPES in
     // aidlc-audit.ts — which is stronger (it asserts the real count, not a
     // sibling test's transcription of it). bolt-plan-marker-conflict reuses
     // PRACTICES_OVERRIDE (discriminator-field disambiguation) and registers no
-    // new event; the framework total stays at the v0.6.0 Wave 4 milestone 16 baseline
-    // of 67 (SWARM_DEGRADED was the last event born live, after the five
-    // SWARM_* lifecycle pre-registrations).
+    // new event. The framework total is 69 since v2.1.2 added WORKFLOW_PARKED +
+    // WORKFLOW_UNPARKED (the #367 park/unpark lifecycle); the prior baseline was
+    // 67 (SWARM_DEGRADED was the last event born before that).
     const auditSrc = readFileSync(
       join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-audit.ts"),
       "utf-8",
@@ -252,7 +252,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     const block = auditSrc.match(/const VALID_EVENT_TYPES = new Set\(\[([\s\S]*?)\]\)/);
     expect(block).not.toBeNull();
     const count = (block ? block[1].match(/"[A-Z0-9_]+"/g) : null)?.length ?? -1;
-    expect(count).toBe(67);
+    expect(count).toBe(69);
   });
 
   // --- Test 4: milestone 8 write-failure path coexists (different Reason value) ---

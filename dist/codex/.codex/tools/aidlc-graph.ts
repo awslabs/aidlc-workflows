@@ -365,6 +365,7 @@ const FIELD_ORDER = [
   "support_agents",
   "mode",
   "for_each",
+  "workspace_requires",
   "produces",
   "consumes",
   "requires_stage",
@@ -1426,6 +1427,9 @@ function buildGraphStage(
   }
   if (parsed.for_each !== undefined) {
     stage.for_each = parsed.for_each;
+  }
+  if (parsed.workspace_requires !== undefined) {
+    stage.workspace_requires = parsed.workspace_requires;
   }
   if (parsed.sensors !== undefined) {
     stage.sensors = parsed.sensors;

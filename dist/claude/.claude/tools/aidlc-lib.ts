@@ -32,6 +32,12 @@ export interface StageEntry {
   inputs?: string;
   outputs?: string;
   for_each?: string;
+  // True for stages that must write source code to the workspace root (not just
+  // planning docs under the per-intent record dir). The stage-completion artifact
+  // guard (aidlc-state.ts) uses this to require a non-doc workspace file before
+  // approve/advance: a code-generation stage that wrote only its markdown
+  // produces[] docs but no actual code must not pass (issue #366).
+  workspace_requires?: boolean;
 }
 
 export interface ScopeDefinition {
@@ -1970,6 +1976,19 @@ export function setOrInsertField(
   return appendUnderHeading(content, heading, `- **${field}**: ${value}\n`);
 }
 
+// removeField: delete the `- **Field**: ...` bullet line if present; a no-op
+// otherwise. The inverse of setOrInsertField, for runtime-only fields that are
+// cleared rather than reset (e.g. the `Parked` / `Parked At Stage` markers an
+// `unpark` removes). Matches the bullet at line start and drops the whole line
+// including its trailing newline so no blank line is left behind.
+export function removeField(content: string, field: string): string {
+  const regex = new RegExp(
+    `^- \\*\\*${escapeRegex(field)}\\*\\*:[ \\t]*.*(?:\\r?\\n)?`,
+    "m"
+  );
+  return content.replace(regex, "");
+}
+
 // --- Refs-list field operations (Bolt Refs in v7 state template) ---
 //
 // `Bolt Refs` is a list-shaped single-line value with a literal `[empty list]`
@@ -3044,6 +3063,18 @@ export function parseStageFrontmatter(
     }
   }
 
+  // workspace_requires is the one boolean scalar field. The generic scalar loop
+  // above captured it as a string ("true"/"false"); coerce to a real boolean so
+  // StageEntry/GraphStage and the schema validator see the typed value (mirrors
+  // consumes.required's "true"/"false" coercion in objectListField). A non-boolean
+  // token is left as the string so validateStageFrontmatter rejects it loudly.
+  if (typeof obj.workspace_requires === "string") {
+    const raw = obj.workspace_requires;
+    if (raw === "true" || raw === "false") {
+      obj.workspace_requires = raw === "true";
+    }
+  }
+
   return obj;
 }
 
@@ -3273,6 +3304,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "reviewer",
     "reviewer_max_iterations",
     "for_each",
+    "workspace_requires",
     "produces",
     "consumes",
     "requires_stage",
@@ -3326,6 +3358,11 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
       // how stages author it on disk (`reviewer_max_iterations: 2`). Without
       // this branch the numeric value the parser now returns (V1) would be
       // dropped on emit, breaking the parse -> emit -> parse contract (t65).
+      lines.push(`${key}: ${v}`);
+    } else if (typeof v === "boolean") {
+      // workspace_requires round-trips as an unquoted boolean (the parser
+      // coerces the "true"/"false" token to a real boolean), so emit it
+      // unquoted to preserve the parse -> emit -> parse contract.
       lines.push(`${key}: ${v}`);
     }
   }

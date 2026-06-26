@@ -1849,6 +1849,7 @@
     "support_agents": [],
     "mode": "subagent",
     "for_each": "unit-of-work",
+    "workspace_requires": true,
     "produces": [
       "code-generation-plan",
       "code-summary"

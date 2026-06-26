@@ -1,5 +1,6 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
@@ -7,6 +8,7 @@ import {
   appendSlug,
   appendUnderHeading,
   type CheckboxState,
+  codekbDir,
   countCheckboxes,
   emitError,
   errorMessage,
@@ -26,8 +28,10 @@ import {
   parseStateStageSuffixes,
   readAllAuditShards,
   readStateFile,
+  recordDir,
   relativeMemoryPath,
   relativeRecordDir,
+  removeField,
   removeSlug,
   replaceSection,
   resolveProjectDir,
@@ -60,6 +64,33 @@ const VALID_CHECKBOX_STATES: CheckboxState[] = [
 function isCheckboxState(s: string): s is CheckboxState {
   return (VALID_CHECKBOX_STATES as readonly string[]).includes(s);
 }
+
+// Top-level dirs the artifact guard treats as "not source code" - the whole
+// `aidlc/` workspace tree holds the per-intent records + planning artifacts +
+// memory + codekb, the harness dirs hold the framework, .git is VCS. (On v2 the
+// flat `aidlc-docs/` root is gone - every record lives under aidlc/spaces/...,
+// so skipping `aidlc` skips all planning docs.) Used by workspaceHasSourceFile
+// (the top-level dir skip) and isNonDocPath (the git first-segment skip).
+// Declared at module top (not beside verifyStageArtifacts) because the command
+// dispatch runs at top level: a const declared lower in the file would be in
+// its temporal dead zone when an approve/advance dispatch calls the guard.
+const HARNESS_DOC_DIRS = new Set([
+  "aidlc",
+  ".claude",
+  ".kiro",
+  ".codex",
+  ".git",
+]);
+
+// The codekb stages - their produces live in the space-level codekb dir, keyed
+// by repo, NOT under a per-intent record dir. Mirrors KNOWN_CODEKB_STAGES in
+// aidlc-orchestrate.ts (kept local because that set is not exported and the
+// guard has no engine context at approve/advance time). reverse-engineering is
+// the sole member; a future codekb stage joins both sets. Declared at module
+// top (not beside verifyStageArtifacts) for the same TDZ reason as
+// HARNESS_DOC_DIRS: the command dispatch runs at top level, so a const declared
+// lower in the file would be in its temporal dead zone when the guard runs.
+const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set(["reverse-engineering"]);
 
 // --- Audit emission helper ---
 // Uses the throw-on-error appendAuditEntry (not handleAppend which writes JSON to stdout).
@@ -252,9 +283,15 @@ function main(): void {
       case "merge":
         handleMerge(args.slice(1));
         break;
+      case "park":
+        handlePark(args.slice(1));
+        break;
+      case "unpark":
+        handleUnpark(args.slice(1));
+        break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge`
+          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, park, unpark`
         );
     }
   } catch (e) {
@@ -359,6 +396,75 @@ function handleSetSkeletonStance(args: string[]): void {
   });
 }
 
+// park - persist a `Parked` runtime field so the next `aidlc-orchestrate next`
+// emits a terminal `parked` directive and the Stop hook lets the turn end
+// (issue #367: a clean multi-session exit, so the agent never rubber-stamps
+// stages to reach `done`). `Parked` and `Parked At Stage` are runtime-only
+// fields (like Skeleton Stance) inserted under `## Runtime State`. Refuses a
+// completed workflow (nothing to park). Emits WORKFLOW_PARKED - a recorded
+// state event, audit-first under the lock.
+//
+// AUTONOMY GUARD (issue #365, salvaged from the suspend branch): an unattended
+// autonomous Construction run must never park, so the tool refuses `park`
+// outright under `Construction Autonomy Mode: autonomous`. This is
+// defence-in-depth beside the Stop hook's identical guard: the hook protects
+// the unattended turn-end path, this tool refusal protects a direct/scripted
+// `aidlc-state.ts park` invocation in an autonomous run. (#365's suspend
+// mechanism had no first-class tool verb a swarm could call, so it could guard
+// hook-side only; park's `aidlc-state.ts park` is directly invocable, so the
+// tool refusal closes a path #365 did not have.)
+function handlePark(_args: string[]): void {
+  const pd = resolveProjectDir(projectDir);
+  withAuditLock(pd, () => {
+    let content = readStateFile(pd);
+    if (getField(content, "Construction Autonomy Mode")?.trim() === "autonomous") {
+      error(
+        "Refusing to park: Construction Autonomy Mode is autonomous. An unattended " +
+          "autonomous run has no human to resume it and must keep moving - do not park it.",
+      );
+    }
+    const status = getField(content, "Status");
+    if (status === "Completed") {
+      error("Workflow is already Completed - nothing to park.");
+    }
+    const currentSlug = getField(content, "Current Stage") ?? "";
+    if (currentSlug.length === 0) {
+      error("State file has no Current Stage - cannot park.");
+    }
+    const timestamp = isoTimestamp();
+    emitAudit(pd, "WORKFLOW_PARKED", {
+      Stage: currentSlug,
+      Timestamp: timestamp,
+    });
+    content = setOrInsertField(content, "## Runtime State", "Parked", timestamp);
+    content = setOrInsertField(content, "## Runtime State", "Parked At Stage", currentSlug);
+    content = setField(content, "Last Updated", timestamp);
+    writeStateFile(pd, content);
+    console.log(JSON.stringify({ parked: true, stage: currentSlug, timestamp }));
+  });
+}
+
+// unpark - clear the `Parked` / `Parked At Stage` fields on explicit re-entry
+// (the resume flow calls this), so subsequent plain `next` calls no longer
+// emit `parked`. Idempotent: clearing absent fields is a no-op.
+function handleUnpark(_args: string[]): void {
+  const pd = resolveProjectDir(projectDir);
+  withAuditLock(pd, () => {
+    let content = readStateFile(pd);
+    const wasParked = (getField(content, "Parked") ?? "").trim().length > 0;
+    // Remove both runtime markers (no-op if absent - unpark is idempotent).
+    content = removeField(content, "Parked");
+    content = removeField(content, "Parked At Stage");
+    if (wasParked) {
+      const ts = isoTimestamp();
+      emitAudit(pd, "WORKFLOW_UNPARKED", { Timestamp: ts });
+      content = setField(content, "Last Updated", ts);
+    }
+    writeStateFile(pd, content);
+    console.log(JSON.stringify({ unparked: true, was_parked: wasParked }));
+  });
+}
+
 function handleCheckbox(args: string[]): void {
   if (args.length < 1) error("Usage: aidlc-state.ts checkbox <slug=state> ...");
   const pd = resolveProjectDir(projectDir);
@@ -407,10 +513,276 @@ function handleCount(args: string[]): void {
   console.log(countCheckboxes(content, stateStr));
 }
 
+// --- Stage-completion artifact guard (issue #366) ---------------------------
+//
+// The state machine's transitions were purely ceremonial: approve/advance
+// marked a stage [x] without verifying ANY work landed on disk, so an agent
+// could rubber-stamp all 32 stages (gate-start->approve, or pure advance) with
+// zero artifacts. This guard makes a forward stage-completion CONTINGENT on
+// evidence of work - the same principle the swarm referee already applies at
+// the merge gate (aidlc-swarm.ts finalize is authoritative, so a red unit
+// cannot merge even if the conductor lies).
+//
+// It lives in aidlc-state.ts because that is the ONE seam every transition
+// passes through: the issue's repro calls `aidlc-state.ts approve/advance`
+// directly, so a guard only in orchestrate's `report` dispatcher is bypassable.
+//
+// V2 PATH RE-AUTHOR (workspace refactor #429): the flat `aidlc-docs/<phase>/<slug>/`
+// layout is gone - a stage's produces[] artifacts now live under the ACTIVE
+// intent's per-intent record dir (`aidlc/spaces/<space>/intents/<slug>-<id8>/
+// <phase>/<stage>/`), per-unit Construction artifacts under that record's
+// `construction/<unit>/<stage>/`, and codekb stages (reverse-engineering) under
+// the space-level `aidlc/spaces/<space>/codekb/<repo>/`. This guard resolves
+// against those live seams (recordDir / codekbDir), mirroring
+// resolveArtifactPath in aidlc-orchestrate.ts so the two cannot drift on shape.
+//
+// Two layers:
+//   1. produces-existence - a stage that declares produces[] must have at least
+//      one of them on disk. Empty-produces stages (init phase) are exempt.
+//   2. workspace_requires - a code-producing stage (frontmatter flag) must also
+//      have a real file OUTSIDE the aidlc/ workspace tree and the harness dir.
+//      Catches the code-generation case where only the two markdown produces[]
+//      docs were written but no actual source code (issue #366 Update 2).
+//
+// Bypass: --test-run (CLI) or AIDLC_SKIP_ARTIFACT_GUARD=1 (env, set by the test
+// runner for synthetic tiers that drive transitions against bare fixtures).
+// (KNOWN_CODEKB_STAGES is declared at module top alongside HARNESS_DOC_DIRS to
+// dodge the TDZ - the dispatch that calls this guard runs at module load.)
+
+function artifactGuardDisabled(testRun: boolean): boolean {
+  return testRun || process.env.AIDLC_SKIP_ARTIFACT_GUARD === "1";
+}
+
+// Resolve the directories a stage's produces[] artifacts would live under,
+// mirroring aidlc-orchestrate.ts's resolveArtifactPath against the v2 per-intent
+// seams. Three placement classes:
+//   - codekb (reverse-engineering): the produces live DIRECTLY under each repo
+//     dir beneath the space-level codekb root (no <slug> subdir - see the codekb
+//     arm of resolveArtifactPath). We glob every repo dir under the codekb root.
+//   - per-unit Construction (for_each: unit-of-work): the {unit} segment is
+//     unknown at approve/advance time, so we glob every
+//     <record>/construction/<unit>/<slug>/ instead of resolving one.
+//   - everything else: <record>/<phase>/<slug>/.
+// Returns [] when no active intent record resolves (recordDir null) - a stage
+// that declares produces then vacuously fails the existence check, which is the
+// correct refusal (there is no record to have written them to).
+function producesDirsForStage(
+  pd: string,
+  stage: { slug: string; phase: string; for_each?: string }
+): string[] {
+  if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
+    // codekbDir(pd, "<repo>") is `<pd>/aidlc/spaces/<space>/codekb/<repo>`; its
+    // parent is the codekb root we glob. Built off the seam so the path is not
+    // re-hardcoded here.
+    const codekbRoot = join(codekbDir(pd, "_"), "..");
+    if (!existsSync(codekbRoot)) return [];
+    const dirs: string[] = [];
+    for (const repo of readdirSync(codekbRoot)) {
+      const d = join(codekbRoot, repo);
+      try {
+        if (statSync(d).isDirectory()) dirs.push(d);
+      } catch {
+        /* unreadable entry - skip */
+      }
+    }
+    return dirs;
+  }
+  const rec = recordDir(pd);
+  if (rec === null) return [];
+  const perUnit = stage.for_each === "unit-of-work";
+  if (perUnit) {
+    const ctorRoot = join(rec, "construction");
+    if (!existsSync(ctorRoot)) return [];
+    const dirs: string[] = [];
+    for (const unit of readdirSync(ctorRoot)) {
+      const d = join(ctorRoot, unit, stage.slug);
+      if (existsSync(d)) dirs.push(d);
+    }
+    return dirs;
+  }
+  return [join(rec, stage.phase, stage.slug)];
+}
+
+// True when at least one declared produces[] artifact exists on disk under the
+// stage's resolved directory. A stage with empty produces[] vacuously passes.
+function producesArtifactsExist(
+  pd: string,
+  stage: { slug: string; phase: string; for_each?: string; produces?: string[] }
+): boolean {
+  const produces = stage.produces ?? [];
+  if (produces.length === 0) return true; // nothing declared -> nothing to verify
+  for (const dir of producesDirsForStage(pd, stage)) {
+    for (const name of produces) {
+      if (existsSync(join(dir, `${name}.md`))) return true;
+    }
+  }
+  return false;
+}
+
+// True when any non-doc file exists in the workspace - a file outside the
+// aidlc/ workspace tree and the harness dirs. Bounded shallow walk (one level
+// into each top-level dir is enough to detect src/<file>); avoids a full
+// recursive scan.
+function workspaceHasSourceFile(pd: string): boolean {
+  let entries: string[];
+  try {
+    entries = readdirSync(pd);
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    if (HARNESS_DOC_DIRS.has(entry)) continue;
+    const p = join(pd, entry);
+    let st;
+    try {
+      st = statSync(p);
+    } catch {
+      continue;
+    }
+    if (st.isFile()) return true; // a file at workspace root counts
+    if (st.isDirectory()) {
+      // Any file anywhere beneath a non-harness top-level dir (e.g. src/).
+      try {
+        if (dirHasFile(p)) return true;
+      } catch {
+        /* unreadable dir - skip */
+      }
+    }
+  }
+  return false;
+}
+
+// Recursive existence probe: does this directory contain any file? Short-
+// circuits on the first file found.
+function dirHasFile(dir: string): boolean {
+  for (const entry of readdirSync(dir)) {
+    const p = join(dir, entry);
+    const st = statSync(p);
+    if (st.isFile()) return true;
+    if (st.isDirectory() && dirHasFile(p)) return true;
+  }
+  return false;
+}
+
+// A git-reported path (status --porcelain or diff --name-only output) counts as
+// "source work" when its FIRST segment is not a harness/doc dir - i.e. it is a
+// real workspace file (src/..., a root file), not an aidlc/ planning doc or
+// framework file. Mirrors HARNESS_DOC_DIRS, the same set the FS walk skips.
+function isNonDocPath(p: string): boolean {
+  const rel = p.trim().replace(/^"|"$/g, ""); // git -z not used; strip any quoting
+  if (rel.length === 0) return false;
+  const firstSeg = rel.split("/")[0];
+  return !HARNESS_DOC_DIRS.has(firstSeg);
+}
+
+// Run git in the workspace, fail-safe: returns null on any spawn/exec problem so
+// callers fall back to the filesystem check rather than trapping.
+function git(pd: string, args: string[]): string | null {
+  try {
+    const r = spawnSync("git", args, {
+      cwd: pd,
+      encoding: "utf-8",
+      timeout: 30_000,
+    });
+    if (r.status !== 0 || typeof r.stdout !== "string") return null;
+    return r.stdout;
+  } catch {
+    return null;
+  }
+}
+
+// True when `pd` is inside a git work tree. (`--is-inside-work-tree` prints
+// "true"/"false"; a non-repo exits non-zero -> git() returns null -> false.)
+function isGitRepo(pd: string): boolean {
+  return git(pd, ["rev-parse", "--is-inside-work-tree"])?.trim() === "true";
+}
+
+// Git-aware "did this workspace get real source work?" signal (issue #366
+// Update 3). Distinguishes "code produced this session" from a brownfield repo's
+// pre-existing src/ - which the bare filesystem check cannot. True when EITHER:
+//   1. the working tree has an uncommitted/untracked non-doc change
+//      (`git status --porcelain`), OR
+//   2. the last commit touched a non-doc path (`git diff --name-only HEAD~1 HEAD`)
+//      - so commit-then-approve (clean tree) still passes, closing Update 3's
+//      clean-working-tree false-block.
+// Returns null (NOT false) on any git error or a 0-commit repo's HEAD~1 miss, so
+// the caller falls back to the filesystem check rather than wrongly refusing.
+function gitHasSourceWork(pd: string): boolean | null {
+  const porcelain = git(pd, ["status", "--porcelain"]);
+  if (porcelain === null) return null;
+  // `XY <path>` per line; renames are `orig -> new` (take the new path).
+  for (const line of porcelain.split("\n")) {
+    if (line.trim().length === 0) continue;
+    const pathPart = line.slice(3);
+    const candidate = pathPart.includes(" -> ")
+      ? pathPart.split(" -> ")[1]
+      : pathPart;
+    if (isNonDocPath(candidate)) return true;
+  }
+  // Clean (or doc-only) working tree - check whether the LAST commit added code,
+  // covering the commit-then-approve pattern. HEAD~1 is absent on the very first
+  // commit; that diff errors -> git() null -> we treat it as "no recent code".
+  const lastCommit = git(pd, ["diff", "--name-only", "HEAD~1", "HEAD"]);
+  if (lastCommit !== null) {
+    for (const line of lastCommit.split("\n")) {
+      if (isNonDocPath(line)) return true;
+    }
+  }
+  return false;
+}
+
+// The workspace_requires signal: git-aware when the workspace is a git repo
+// (precise - tells session-produced code from a brownfield baseline), else the
+// filesystem-existence fallback (shell-free, reliable in non-git workspaces and
+// the test fixtures). Fail-open: a git error falls back to the FS check.
+function workspaceHasWork(pd: string): boolean {
+  if (isGitRepo(pd)) {
+    const gitVerdict = gitHasSourceWork(pd);
+    if (gitVerdict !== null) return gitVerdict;
+  }
+  return workspaceHasSourceFile(pd);
+}
+
+// The guard itself. Called from approve/advance/finalize/complete-workflow
+// BEFORE any state mutation, so a refusal (error() -> process.exit) leaves state
+// untouched. `stage` is the StageEntry being completed. No-op when bypass active.
+function verifyStageArtifacts(
+  pd: string,
+  stage: { slug: string; name: string; phase: string; for_each?: string; produces?: string[]; workspace_requires?: boolean },
+  testRun: boolean
+): void {
+  if (artifactGuardDisabled(testRun)) return;
+
+  if (!producesArtifactsExist(pd, stage)) {
+    error(
+      `Refusing to complete "${stage.slug}": none of its declared artifacts exist ` +
+        `under the intent's record directory. The stage protocol requires ${stage.name} ` +
+        `to produce output before the gate. Produce the artifacts, or pass --test-run ` +
+        `for CI. (declared: ${(stage.produces ?? []).join(", ") || "none"})`
+    );
+  }
+
+  if (stage.workspace_requires && !workspaceHasWork(pd)) {
+    error(
+      `Refusing to complete "${stage.slug}": it is a code-producing stage ` +
+        `(workspace_requires) but no source work is evident outside the aidlc/ ` +
+        `workspace tree. In a git workspace this means no uncommitted change and no ` +
+        `code in the last commit; otherwise no source file exists. Planning docs alone ` +
+        `do not satisfy ${stage.name} - write the code to the workspace, or pass ` +
+        `--test-run for CI.`
+    );
+  }
+}
+
 function handleAdvance(args: string[]): void {
-  if (args.length < 1)
-    error("Usage: aidlc-state.ts advance <completed-slug> [<next-slug>]");
-  const completedSlug = args[0];
+  // Separate the --test-run boolean from the positional <completed-slug>
+  // [<next-slug>] so the flag can appear in any position without being misread
+  // as the next slug.
+  const testRun = args.includes("--test-run");
+  const positional = args.filter((a) => !a.startsWith("--"));
+  if (positional.length < 1)
+    error("Usage: aidlc-state.ts advance <completed-slug> [<next-slug>] [--test-run]");
+  const completedSlug = positional[0];
 
   const pd = resolveProjectDir(projectDir);
   // C2b lost-update safety: the whole read→decide→emit-audit→write critical
@@ -471,8 +843,8 @@ function handleAdvance(args: string[]): void {
   // overrides) and per-stage checkbox state take precedence over the
   // scope-mapping.json defaults.
   let nextSlug: string;
-  if (args.length >= 2) {
-    nextSlug = args[1];
+  if (positional.length >= 2) {
+    nextSlug = positional[1];
     // Validate the caller-supplied next slug is in scope AND not already
     // SKIP-stamped in the state file. Symmetric with single-arg form.
     const stateOverrides = parseStateStageSuffixes(content);
@@ -529,6 +901,16 @@ function handleAdvance(args: string[]): void {
       })
     );
     return;
+  }
+
+  // Artifact guard (issue #366). Only enforce when THIS advance is the
+  // transition that completes the stage - i.e. it was not already [x]. When
+  // approve delegates here the slug is already [x] and approve ran the guard
+  // itself, so skip to avoid a double check. A direct `advance <active-slug>`
+  // (the gate-skipping attack path) is NOT alreadyMarkedCompleted, so it is
+  // guarded. Runs before any mutation; error() exits leaving state untouched.
+  if (!alreadyMarkedCompleted) {
+    verifyStageArtifacts(pd, completedStage, testRun);
   }
 
   // Detect phase boundary (for PHASE_COMPLETED/VERIFIED/STARTED emissions)
@@ -609,9 +991,12 @@ function handleAdvance(args: string[]): void {
 }
 
 function handleFinalize(args: string[]): void {
-  if (args.length < 1)
-    error("Usage: aidlc-state.ts finalize <completed-slug>");
-  const completedSlug = args[0];
+  // --test-run can appear in any position; keep <completed-slug> positional.
+  const testRun = args.includes("--test-run");
+  const positional = args.filter((a) => !a.startsWith("--"));
+  if (positional.length < 1)
+    error("Usage: aidlc-state.ts finalize <completed-slug> [--test-run]");
+  const completedSlug = positional[0];
 
   const pd = resolveProjectDir(projectDir);
   // C2b lost-update safety: read→decide→write under one lock (no audit here).
@@ -620,6 +1005,17 @@ function handleFinalize(args: string[]): void {
 
   const completedStage = findStageBySlug(completedSlug);
   if (!completedStage) error(`Unknown stage: ${completedSlug}`);
+
+  // Artifact guard (issue #366). finalize also marks a stage [x], so it is a
+  // completing transition that must not rubber-stamp. Guard only when the slug
+  // is not already [x] (an idempotent re-finalize already passed the guard or
+  // was test-run), and before any mutation so a refusal leaves state untouched.
+  const alreadyMarkedCompleted =
+    parseCheckboxes(content).find((c) => c.slug === completedSlug)?.state ===
+    "completed";
+  if (!alreadyMarkedCompleted) {
+    verifyStageArtifacts(pd, completedStage, testRun);
+  }
 
   // 1. Mark completed
   content = setCheckbox(content, completedSlug, "completed");
@@ -676,13 +1072,21 @@ function handleFinalize(args: string[]): void {
 }
 
 function handleCompleteWorkflow(args: string[]): void {
-  if (args.length < 1)
-    error("Usage: aidlc-state.ts complete-workflow <completed-slug> [--reason <text>]");
-  const completedSlug = args[0];
+  // --test-run can appear in any position; keep <completed-slug> positional and
+  // distinct from the --reason value. --reason takes a value, so its argument is
+  // excluded from positionals too.
+  const testRun = args.includes("--test-run");
+  const reasonIdx = args.indexOf("--reason");
+  const reasonValueIdx = reasonIdx !== -1 ? reasonIdx + 1 : -1;
+  const positional = args.filter(
+    (a, i) => !a.startsWith("--") && i !== reasonValueIdx,
+  );
+  if (positional.length < 1)
+    error("Usage: aidlc-state.ts complete-workflow <completed-slug> [--reason <text>] [--test-run]");
+  const completedSlug = positional[0];
 
   // Optional --reason flag for test-run early stops
   let reason: string | undefined;
-  const reasonIdx = args.indexOf("--reason");
   if (reasonIdx !== -1 && reasonIdx + 1 < args.length) {
     reason = args[reasonIdx + 1];
   }
@@ -706,6 +1110,16 @@ function handleCompleteWorkflow(args: string[]): void {
     "completed";
   const stageCompletedAlreadyAudited =
     alreadyMarkedCompleted && hasStageAuditEvent(pd, "STAGE_COMPLETED", completedSlug);
+
+  // Artifact guard (issue #366). complete-workflow marks the FINAL stage [x], so
+  // it is a completing transition too. Guard only when the slug is not already
+  // [x]: approve delegates here AFTER marking the slug [x] and running the guard
+  // itself, so this skips the double-check on that path while still refusing a
+  // direct `complete-workflow <active-slug>` that never produced artifacts. Runs
+  // before any mutation so a refusal leaves state untouched.
+  if (!alreadyMarkedCompleted) {
+    verifyStageArtifacts(pd, completedStage, testRun);
+  }
 
   // 1. Mark completed
   content = setCheckbox(content, completedSlug, "completed");
@@ -875,6 +1289,16 @@ function handleApprove(args: string[]): void {
   const stage = findStageBySlug(slug);
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, "awaiting-approval");
+
+  // Artifact guard (issue #366): a stage cannot be approved without evidence of
+  // work on disk. Runs BEFORE any mutation so a refusal (error() -> exit) leaves
+  // state untouched. The nested handleAdvance / handleCompleteWorkflow below see
+  // the slug as already [x] and skip their own guard, so this is the single
+  // enforcement point on the approve path. Bypass via --test-run /
+  // AIDLC_SKIP_ARTIFACT_GUARD. Covers per-unit Construction stages (globs the
+  // record's construction/<unit>/<slug>/) and code-producing stages
+  // (workspace_requires).
+  verifyStageArtifacts(pd, stage, testRun);
 
   const timestamp = isoTimestamp();
 

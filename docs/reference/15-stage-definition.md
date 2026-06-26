@@ -118,6 +118,38 @@ it runs once after all five Construction `for_each` stages have iterated
 across Units, consuming their aggregated outputs. No explicit `fan_in` or
 aggregation field — graph traversal figures it out.
 
+### `workspace_requires`
+
+Boolean, default `false`. Set `true` on stages that must write **source code to
+the workspace root**, not just planning documents under the per-intent record dir.
+
+Why it exists: a stage's `produces[]` artifacts always resolve to markdown under
+the record dir (the only place the path resolver writes them). So a "do the
+produces exist?" check is satisfied by a `code-generation` stage that wrote its
+`code-generation-plan.md` and `code-summary.md` but never emitted a line of
+actual code (issue #366). `workspace_requires: true` closes that gap: the
+stage-completion artifact guard (`aidlc-state.ts` approve/advance/finalize/
+complete-workflow) additionally requires evidence of real source work outside
+the `aidlc/` workspace tree and the harness directory before the stage may
+complete.
+
+How "source work" is detected depends on the workspace:
+- **Git workspace** - the guard asks git, so it can tell this session's code
+  from a brownfield repo's pre-existing `src/`. It passes when there is an
+  uncommitted or untracked non-doc change (`git status --porcelain`) or the last
+  commit touched a non-doc path (`git diff --name-only HEAD~1 HEAD`). The second
+  clause means commit-then-approve (a clean working tree, code in the last
+  commit) still passes, closing the clean-tree false-block from #366 Update 3.
+- **Non-git workspace** (or any git error) - the guard falls back to a shell-free
+  filesystem-existence check: at least one file must exist outside the `aidlc/`
+  workspace tree and the harness dirs.
+
+Today only `code-generation` declares it (it is the one stage whose body writes
+application code to the workspace root). A team that adds its own code- or
+config-emitting stage (a contract generator, an IaC executor) should set
+`workspace_requires: true` on it so the same guard applies. Bypass it for CI
+with `--test-run` or `AIDLC_SKIP_ARTIFACT_GUARD=1`.
+
 ### `consumes[].required`
 
 Boolean per consume entry. Semantically **scoped to the active plan**,

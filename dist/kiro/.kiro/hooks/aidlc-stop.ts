@@ -457,7 +457,10 @@ function continuationReason(kind: string, stage: string): string {
     "You haven't finished the forwarding loop yet. Run " +
     `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`, act on the directive it ` +
     "emits, then run `aidlc-orchestrate report --stage <stage> --result <outcome>` to commit " +
-    "the transition. Repeat until the engine answers `done`."
+    "the transition. Repeat until the engine answers `done`. " +
+    "If instead you mean to pause this workflow for now (and resume in a later " +
+    `session), run \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts park\` to park it ` +
+    "cleanly at this inter-stage boundary - never mark stages complete just to end the turn."
   );
 }
 
@@ -511,6 +514,34 @@ if (kind === null) {
 if (kind === "done") {
   resetGuard();
   allowStop();
+}
+
+// `parked` -> the workflow was intentionally parked mid-flow (issue #367); a
+// human resumes it later with /aidlc --resume. This is the SUPPORTED
+// multi-session exit: allow the turn to end and clear the guard exactly like
+// `done`, so the conductor parks at a clean inter-stage boundary instead of
+// rubber-stamping the remaining stages to force a `done`. Terminal allow only
+// (never a new block), so it can never trap a session.
+//
+// AUTONOMY GUARD (salvaged from the #365 suspend branch): an unattended
+// autonomous Construction run (`Construction Autonomy Mode: autonomous`) MUST
+// keep moving and never self-park. There is no human to resume it later, so a
+// park would strand the swarm/Bolt run waiting on someone who was told they
+// weren't needed. When autonomous, decline the parked allow and fall through to
+// the cap-bounded block below (the loop stays alive; a genuine hang still
+// releases via the no-progress cap). This mirrors isPendingQuestionStop's
+// identical guard (:391) for consistency across every carve-out in this hook.
+if (kind === "parked") {
+  if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      "parked directive seen under autonomous Construction; declining the parked allow (an unattended run must not self-park), falling through to the cap-bounded block",
+    );
+  } else {
+    resetGuard();
+    allowStop();
+  }
 }
 
 // `ask` → the engine is explicitly waiting for human input (resume re-entry or

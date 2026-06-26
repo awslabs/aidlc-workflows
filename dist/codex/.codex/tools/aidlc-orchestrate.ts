@@ -76,6 +76,7 @@ import {
   type ErrorDirective,
   GATE_UNRESOLVED,
   type GateValue,
+  type ParkedDirective,
   type PrintDirective,
   type RunStageDirective,
   validateDirective,
@@ -228,6 +229,13 @@ function printDirective(message: string): PrintDirective {
 
 function errorDirective(message: string): ErrorDirective {
   return { kind: "error", message };
+}
+
+// parked - the terminal directive a parked workflow emits (issue #367). Carries
+// the slug it parked at; the Stop hook treats `parked` as a terminal allow so
+// the conductor can end its turn at a clean inter-stage boundary.
+function parkedDirective(reason: string, stage: string): ParkedDirective {
+  return { kind: "parked", reason, stage };
 }
 
 // --- Flag parsing ---
@@ -1068,6 +1076,57 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // <repo>/ (dropping the intents/<slug> tail) without re-reading the disk in
   // the pure resolver. codekbRepoName is read-only (intentRepos never throws).
   const codekbCtx = codekbCtxFor(pd);
+
+  // Branch 2.5 - PARKED workflow (issue #367). The `park` subcommand persists a
+  // `Parked` runtime field (via aidlc-state.ts park) without advancing any
+  // stage; on a PLAIN `next` (no explicit re-entry flag) the engine emits a
+  // terminal `parked` directive that the Stop hook honours as a clean turn-end,
+  // so a long workflow can pause across sessions instead of rubber-stamping the
+  // remaining stages to reach `done`. Two self-disabling conditions keep this
+  // narrow:
+  //   1. SELF-DISABLE on explicit re-entry - a `--resume` / `--stage` / `--phase`
+  //      next is a deliberate continuation, handled by the unpark branch below
+  //      (resume) or the jump path (stage/phase), so it never re-emits `parked`.
+  //   2. STALE-BY-PROGRESS - only emit `parked` while `Parked At Stage` still
+  //      equals `Current Stage`. If the workflow has advanced past the parked
+  //      slug (a stale marker), ignore it and fall through to the normal route.
+  if (
+    stateContent &&
+    !flags.resume &&
+    !flags.stage &&
+    !flags.phase &&
+    (getField(stateContent, "Parked") ?? "").trim().length > 0
+  ) {
+    const parkedAt = (getField(stateContent, "Parked At Stage") ?? "").trim();
+    const currentSlug = (getField(stateContent, "Current Stage") ?? "").trim();
+    if (parkedAt.length > 0 && parkedAt === currentSlug) {
+      emit(parkedDirective(
+        `Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`,
+        parkedAt,
+      ));
+      return;
+    }
+  }
+
+  // Branch 2.6 - unpark on RESUME (issue #367). A `--resume` over a parked
+  // workflow must CLEAR the marker before continuing, else the next plain `next`
+  // would re-park. Clearing is a MUTATION, so - exactly like Branch 5b's
+  // test-run re-stamp - `next` NAMES the move (a run-then-continue print) and the
+  // conductor runs the tool; `next` itself writes nothing. Fires before Branch 6
+  // (the resume-choice ask) so the marker is cleared first.
+  if (
+    stateContent &&
+    flags.resume &&
+    !flags.stage &&
+    !flags.phase &&
+    (getField(stateContent, "Parked") ?? "").trim().length > 0
+  ) {
+    emit(printDirective(
+      `This workflow is parked. Run \`bun ${harnessDir()}/tools/aidlc-state.ts unpark\` ` +
+        "to clear the park marker, then re-run `next --resume` to continue.",
+    ));
+    return;
+  }
 
   // (Branch 3 — the legacy `--init` flag — retired in P4. There is no longer a
   // user-facing `/aidlc --init`: the workspace shell ships in dist/ (SEED) and
@@ -2551,6 +2610,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       const completeArgs = ["complete-workflow", slug];
       if (flags.reason) completeArgs.push("--reason", flags.reason);
+      if (flags.testRun) completeArgs.push("--test-run");
       sequence.push(completeArgs);
     } else {
       // Stale re-report guard. If the workflow has already moved on — Current
@@ -2593,6 +2653,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   } else if (isFinal) {
     const completeArgs = ["complete-workflow", slug];
     if (flags.reason) completeArgs.push("--reason", flags.reason);
+    if (flags.testRun) completeArgs.push("--test-run");
     sequence.push(completeArgs);
   } else {
     sequence.push(["advance", slug]);
@@ -2634,6 +2695,32 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   });
 }
 
+// The `park` handler (issue #367). Parks the workflow at the current inter-stage
+// boundary: it shells out to `aidlc-state.ts park` (which persists the
+// Parked/Parked At Stage runtime markers, emits WORKFLOW_PARKED, and refuses
+// under autonomous Construction), then emits the terminal `parked` directive the
+// Stop hook honours as a clean turn-end. Mutation lives entirely in the spawned
+// subcommand - the engine itself writes nothing, mirroring report's discipline.
+// A non-zero exit (e.g. the autonomy refusal, or an already-completed workflow)
+// is relayed verbatim as an error directive.
+function handlePark(_args: string[], projectDir: string | undefined): void {
+  const pd = resolveProjectDir(projectDir);
+  const res = spawnState(pd, ["park"]);
+  if (res.exitCode !== 0) {
+    const detail = (res.stderr || res.stdout).trim();
+    emit(errorDirective(`Cannot park the workflow${detail ? `: ${detail}` : "."}`));
+    return;
+  }
+  const stateContent = loadStateFileIfPresent(pd);
+  const parkedAt = stateContent
+    ? (getField(stateContent, "Parked At Stage") ?? "").trim()
+    : "";
+  emit(parkedDirective(
+    `Workflow parked at "${parkedAt}". Resume with /aidlc --resume.`,
+    parkedAt,
+  ));
+}
+
 // --- CLI entry point ---
 
 function main(): void {
@@ -2661,11 +2748,14 @@ function main(): void {
     case "report":
       handleReport(subArgs, projectDir);
       break;
+    case "park":
+      handlePark(subArgs, projectDir);
+      break;
     default:
       // Unknown / missing subcommand — usage to stderr, exit 1. Matches the
       // stderr-only usage shape the sibling tools use for a bad subcommand.
       console.error(
-        `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: next, report`,
+        `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: next, report, park`,
       );
       process.exit(1);
   }

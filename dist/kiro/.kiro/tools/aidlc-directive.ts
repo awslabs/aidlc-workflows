@@ -1,7 +1,7 @@
 // Directive schema — the frozen engine↔conductor interface. The engine
 // (aidlc-orchestrate.ts) answers "what's next?" with exactly one typed
 // `Directive`; the conductor reads its `kind` and does the one move it names.
-// This module defines the discriminated union over the 8 kinds the engine can
+// This module defines the discriminated union over the 9 kinds the engine can
 // emit, plus a runtime validator. Sibling of aidlc-stage-schema.ts and
 // aidlc-sensor-schema.ts — same tool-boundary discipline: a refused or
 // malformed directive is a clear signal, not a silent miss.
@@ -37,7 +37,7 @@ import { isPlainObject } from "./aidlc-lib.ts";
 export const GATE_UNRESOLVED = "unresolved" as const;
 export type GateValue = boolean | typeof GATE_UNRESOLVED;
 
-// The 8 kinds, keyed on the `kind` discriminator.
+// The 9 kinds, keyed on the `kind` discriminator.
 export type DirectiveKind =
   | "run-stage"
   | "dispatch-subagent"
@@ -46,7 +46,8 @@ export type DirectiveKind =
   | "ask"
   | "print"
   | "error"
-  | "done";
+  | "done"
+  | "parked";
 
 // run-stage — load lead + support agents, load `consumes` artifacts, run the
 // stage body, write `produces`, keep memory.md. Routing fields (lead_agent,
@@ -182,6 +183,18 @@ export interface DoneDirective {
   reason: string;
 }
 
+// parked - the workflow was intentionally parked mid-flow (a human resumes it
+// later via /aidlc --resume). Distinct from `done` (which means "workflow
+// complete"): a parked workflow has in-scope stages still pending. The Stop
+// hook treats `parked` as a terminal allow, so the conductor can end its turn
+// at a clean inter-stage boundary instead of rubber-stamping stages to reach
+// `done` (issue #367). `stage` names the slug the workflow parked at.
+export interface ParkedDirective {
+  kind: "parked";
+  reason: string;
+  stage: string;
+}
+
 // The Directive union — the engine emits exactly one of these per `next`.
 export type Directive =
   | RunStageDirective
@@ -191,7 +204,8 @@ export type Directive =
   | AskDirective
   | PrintDirective
   | ErrorDirective
-  | DoneDirective;
+  | DoneDirective
+  | ParkedDirective;
 
 export type ValidationResult =
   | { valid: true; data: Directive }
@@ -199,7 +213,7 @@ export type ValidationResult =
 
 // --- Exported constants (imported by tests) ---
 
-// The 8 kinds, in the engine design's catalogue order. Used both for the unknown-kind
+// The 9 kinds, in the engine design's catalogue order. Used both for the unknown-kind
 // error message and as the discriminator allowlist.
 export const VALID_KINDS = [
   "run-stage",
@@ -210,6 +224,7 @@ export const VALID_KINDS = [
   "print",
   "error",
   "done",
+  "parked",
 ] as const;
 
 // The mode enum carried by run-stage / dispatch-subagent. Mirrors
@@ -250,6 +265,7 @@ const ASK_FIELDS = ["kind", "question"] as const;
 const PRINT_FIELDS = ["kind", "message"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason"] as const;
+const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
 
 const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> = {
   "run-stage": RUN_STAGE_FIELDS,
@@ -260,6 +276,7 @@ const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> =
   print: PRINT_FIELDS,
   error: ERROR_FIELDS,
   done: DONE_FIELDS,
+  parked: PARKED_FIELDS,
 };
 
 // --- Validator ---
@@ -333,6 +350,10 @@ export function validateDirective(obj: unknown): ValidationResult {
       break;
     case "done":
       checkString(o, "reason", kind, errors);
+      break;
+    case "parked":
+      checkString(o, "reason", kind, errors);
+      checkString(o, "stage", kind, errors);
       break;
     // No default: the union is exhaustive — every member of DirectiveKind has a
     // case above. TS flags a missing case at compile time if a kind is added.
@@ -503,10 +524,10 @@ function checkEnum(
 
 // --- CLI self-check ---
 //
-// `bun aidlc-directive.ts` constructs one well-formed example of each of the 8
+// `bun aidlc-directive.ts` constructs one well-formed example of each of the 9
 // kinds, validates each, prints one line per kind ("<kind>: VALID" or the
-// errors), and exits 0 iff all 8 validate. Satisfies the acceptance check
-// "bun .../aidlc-directive.ts validates the 8 kinds".
+// errors), and exits 0 iff all 9 validate. Satisfies the acceptance check
+// "bun .../aidlc-directive.ts validates the 9 kinds".
 if (import.meta.main) {
   // One well-formed example per kind. run-stage mirrors the engine design's example
   // directive verbatim (application-design); the others follow the same catalogue table.
@@ -567,6 +588,7 @@ if (import.meta.main) {
     { kind: "print", message: "AIDLC framework version 0.0.0" },
     { kind: "error", message: 'Unknown scope: "frobnicate"' },
     { kind: "done", reason: "Workflow complete — all in-scope stages approved." },
+    { kind: "parked", reason: 'Workflow parked at "feasibility". Resume with /aidlc --resume.', stage: "feasibility" },
     // The classify-round-trip skeleton case: gate is the unresolved sentinel,
     // and the first run-stage of a workflow also carries the conductor persona.
     {

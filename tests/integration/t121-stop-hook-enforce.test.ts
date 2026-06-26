@@ -154,6 +154,8 @@ const MOCK_ENGINE = `// t121 mock engine: emit one directive of kind=$MOCK_KIND.
 const kind = process.env.MOCK_KIND ?? "run-stage";
 if (kind === "done") {
   console.log(JSON.stringify({ kind: "done", reason: "Workflow complete." }));
+} else if (kind === "parked") {
+  console.log(JSON.stringify({ kind: "parked", reason: "Workflow parked at \\"requirements-analysis\\".", stage: "requirements-analysis" }));
 } else if (kind === "__nonzero__") {
   process.stderr.write("mock engine failure\\n");
   process.exit(1);
@@ -383,6 +385,48 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
     seedActive(proj, "requirements-analysis");
     const r = runHook(proj, '{"stop_hook_active":false}', "done");
     expect(r.out).toBe("");
+  }, 30000);
+
+  // =========================================================================
+  // (b2) `parked` directive -> stop ALLOWED (no block), like `done` (#367).
+  // The intentional multi-session exit: the hook must let the turn end rather
+  // than re-feed the forwarding-loop nudge, so the agent never rubber-stamps.
+  // =========================================================================
+  test("(b2) parked directive exits 0 and emits nothing (stop allowed)", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = runHook(proj, '{"stop_hook_active":false}', "parked");
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, 30000);
+
+  test("(b2) parked resets the no-progress guard (like done)", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // Pre-seed a no-progress streak; a parked allow must clear it.
+    mkdirSync(join(seededRecordDir(proj), ".aidlc-stop-hook"), { recursive: true });
+    writeFileSync(
+      guardFilePath(proj),
+      JSON.stringify({ signature: "requirements-analysis::1", count: 5 }),
+      "utf-8",
+    );
+    runHook(proj, '{"stop_hook_active":false}', "parked");
+    expect(guardCount(proj)).toBe(0);
+  }, 30000);
+
+  // (b2)(3) AUTONOMY GUARD - salvaged from #365. A `parked` directive under
+  // autonomous Construction must NOT release the stop: an unattended swarm/Bolt
+  // run has no human to resume it, so the parked allow is suppressed and the
+  // turn falls through to the cap-bounded block (the loop stays alive). Mirror
+  // of the (f) pending-question autonomy guard.
+  test("(b2) parked under Construction Autonomy Mode=autonomous still BLOCKS", () => {
+    const proj = makeProject();
+    // Seed an active workflow flagged autonomous (reuse the autonomy seed).
+    seedInProgressWithQuestions(proj, { autonomy: "autonomous" });
+    const r = runHook(proj, '{"stop_hook_active":false}', "parked");
+    expect(r.rc).toBe(0);
+    // The parked allow is declined; the hook blocks instead.
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
 
   // =========================================================================

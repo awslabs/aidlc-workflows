@@ -15,7 +15,7 @@ import {
   worktreePath,
 } from "./aidlc-lib.ts";
 
-// --- Canonical event types (67) ---
+// --- Canonical event types (69) ---
 // See docs/reference/12-state-machine.md for the state transitions that emit each event.
 
 const VALID_EVENT_TYPES = new Set([
@@ -34,6 +34,8 @@ const VALID_EVENT_TYPES = new Set([
   // Workflow lifecycle
   "WORKFLOW_STARTED",
   "WORKFLOW_COMPLETED",
+  "WORKFLOW_PARKED",
+  "WORKFLOW_UNPARKED",
   // Session events (hook-owned)
   "SESSION_STARTED",
   "SESSION_RESUMED",
@@ -129,6 +131,8 @@ const EVENT_HEADINGS: Record<string, string> = {
   PHASE_SKIPPED: "Phase Skip",
   WORKFLOW_STARTED: "Workflow Start",
   WORKFLOW_COMPLETED: "Workflow Completion",
+  WORKFLOW_PARKED: "Workflow Parked",
+  WORKFLOW_UNPARKED: "Workflow Unparked",
   SESSION_STARTED: "Session Start",
   SESSION_RESUMED: "Session Resume",
   SESSION_COMPACTED: "Session Compacted",

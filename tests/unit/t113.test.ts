@@ -106,6 +106,10 @@ function done(): Record<string, unknown> {
   return { kind: "done", reason: "Workflow complete." };
 }
 
+function parked(): Record<string, unknown> {
+  return { kind: "parked", reason: "Parked at feasibility.", stage: "feasibility" };
+}
+
 // Mirror of the .sh run_validator helper (t113-directive-schema.sh:60-67):
 // call the validator and reduce the failure case to the pipe-joined error
 // string the original asserted against. On success return "VALID".
@@ -159,6 +163,10 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
 
   test("done well-formed -> VALID", () => {
     expect(validateDirective(done()).valid).toBe(true);
+  });
+
+  test("parked well-formed -> VALID", () => {
+    expect(validateDirective(parked()).valid).toBe(true);
   });
 
   // ============================================================
@@ -230,6 +238,12 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     const d = done();
     delete d.reason;
     expect(errs(d)).toContain("done: missing required field: reason");
+  });
+
+  test("parked missing stage -> error", () => {
+    const d = parked();
+    delete d.stage;
+    expect(errs(d)).toContain("parked: missing required field: stage");
   });
 
   // ============================================================
