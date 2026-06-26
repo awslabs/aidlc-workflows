@@ -301,9 +301,13 @@ function buildForward(): Forward {
     }
 
     case "stop":
-      // Kiro provides no stop_hook_active signal; the core hook's own
-      // 8-block no-progress ceiling is the loop guard (it defaults the flag
-      // to false). The {"decision":"block"} stdout contract is identical.
+      // Kiro provides neither stop_hook_active NOR a transcript_path, so the
+      // core hook's run-mode-aware no-progress ceiling is the loop guard here
+      // (it defaults stop_hook_active to false). With no transcript the core
+      // hook's conversational carve-out is inert on Kiro, so a chatting or
+      // pausing human is released by the INTERACTIVE cap (default 2; 8 under
+      // autonomous Construction) instead, after one nudge rather than eight. The
+      // {"decision":"block"} stdout contract is identical.
       return {
         hook: "aidlc-stop.ts",
         input: { hook_event_name: "Stop", stop_hook_active: false },
