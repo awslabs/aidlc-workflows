@@ -89,10 +89,14 @@ describe("t186 park + conversational carve-out (sdk): a conductor asked to pause
         // to pause and resume in a later session and NOT to complete or advance
         // any stage: the supported response is `park`. Default answer policy
         // (option 1) covers any gate the conductor might surface.
+        // Lead with `/aidlc` so the conductor loads the orchestrator skill (the
+        // SKILL.md that teaches `park`); a bare prose prompt leaves the model
+        // outside conductor mode and it never discovers the park verb (it just
+        // hand-edits state). This mirrors t183 / t122, which both drive `/aidlc`.
         const r = await driveAidlc(
-          "I need to step away, please PAUSE this AI-DLC workflow so I can resume " +
-            "it in a later session. Do NOT complete, advance, or mark any stage as " +
-            "done; just park the workflow cleanly at the current point and stop.",
+          "/aidlc I need to step away. PAUSE this workflow so I can resume it in a " +
+            "later session. Do NOT complete, advance, or mark any stage as done; " +
+            "park it cleanly at the current point and then stop.",
           {
             projectDir: proj,
             timeoutMs: DRIVE_TIMEOUT_MS,

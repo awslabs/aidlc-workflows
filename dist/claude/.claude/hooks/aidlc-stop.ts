@@ -472,13 +472,31 @@ function isPendingQuestionStop(stateContent: string): boolean {
 // that answered the human disqualifies the turn from the conversational carve-out
 // (a conductor that ran the engine and then quit mid-loop must still be nudged).
 function isEngineToolCall(name: string, input: unknown): boolean {
-  if (/aidlc/i.test(name)) return true;
-  if (name === "Bash" || name === "Shell" || name === "execute_bash") {
-    const cmd =
-      input !== null && typeof input === "object"
-        ? String((input as Record<string, unknown>).command ?? "")
-        : "";
-    return /aidlc-orchestrate|aidlc-state/.test(cmd);
+  const cmd =
+    input !== null && typeof input === "object"
+      ? String((input as Record<string, unknown>).command ?? "")
+      : "";
+  // The command text to inspect: a Bash/Shell command, or (for harnesses that
+  // surface the tool by name) the tool name itself.
+  const text = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
+  // Only aidlc-orchestrate / aidlc-state calls touch the forwarding loop at all.
+  if (!/aidlc-orchestrate|aidlc-state/.test(text)) return false;
+  // READ-ONLY queries do NOT engage the workflow: a human chatting may well ask
+  // "what stage am I on?" which the conductor answers with `--status` / `next
+  // --status` / `--doctor` / `--help` / `--version` or a read-only utility call.
+  // These must NOT disqualify the turn from the conversational carve-out. Only a
+  // LOOP-ADVANCING or STATE-MUTATING call (a bare `next` that fetches a directive
+  // to act on, or `report`/`approve`/`advance`/`finalize`/`complete-workflow`/
+  // `gate-start`/`checkbox`/`park`) means the conductor engaged the workflow.
+  if (/--status|--doctor|--help|--version/.test(text)) return false;
+  // A bare `aidlc-orchestrate next` (no read-only flag) fetches the next
+  // directive: that IS engagement. `report` likewise commits a transition.
+  if (/aidlc-orchestrate\b/.test(text)) {
+    return /\bnext\b|\breport\b/.test(text);
+  }
+  // aidlc-state: the completing/mutating subcommands engage the workflow.
+  if (/aidlc-state\b/.test(text)) {
+    return /\b(approve|advance|finalize|complete-workflow|gate-start|checkbox|park|unpark|set)\b/.test(text);
   }
   return false;
 }
@@ -516,10 +534,34 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
       const role = message.role;
       const content = message.content;
       if (type === "user" && role === "user") {
+        // SKIP synthetic / non-human user turns. Claude Code records several
+        // things as `type:"user"` that are NOT the human talking:
+        //   - `isMeta: true` entries: the Stop hook's OWN injected block-feedback
+        //     ("Stop hook feedback: ...") and command-message wrappers. Counting
+        //     these as a human prompt would let the hook's own nudge masquerade
+        //     as the human, so an engine-engaged turn could be misread as chat.
+        //   - tool_result arrays: a tool's output, not a prompt.
+        // Both must be excluded so "the most recent genuine human prompt" is the
+        // human, not the harness.
+        if (entry.isMeta === true) continue;
         const isToolResult =
           Array.isArray(content) &&
           content.some((x) => (x as Record<string, unknown>)?.type === "tool_result");
         if (isToolResult) continue; // a tool_result is not a human prompt
+        // Defence-in-depth: the hook's continuation text is injected as a user
+        // turn; exclude it by content even if a future build drops `isMeta`.
+        const asText =
+          typeof content === "string"
+            ? content
+            : Array.isArray(content)
+              ? content
+                  .map((x) => {
+                    const b = x as Record<string, unknown>;
+                    return b?.type === "text" ? String(b.text ?? "") : "";
+                  })
+                  .join("")
+              : "";
+        if (asText.startsWith("Stop hook feedback:")) continue;
         // A genuine human prompt: string content, or an array with a text block.
         const isHuman =
           typeof content === "string" ||
@@ -546,6 +588,21 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
       if (ptype === "message" && payload.role === "user") {
         // input_text blocks are the human prompt; tool output rides function_call_output.
         const content = payload.content;
+        // Exclude the hook's own injected continuation (delivered as a user
+        // message on a re-prompt) so it is not mistaken for the human, mirroring
+        // the Claude reader's `Stop hook feedback:` guard.
+        const asText =
+          typeof content === "string"
+            ? content
+            : Array.isArray(content)
+              ? content
+                  .map((x) => {
+                    const b = x as Record<string, unknown>;
+                    return b?.type === "input_text" || b?.type === "text" ? String(b.text ?? "") : "";
+                  })
+                  .join("")
+              : "";
+        if (asText.startsWith("Stop hook feedback:")) continue;
         const isHuman =
           typeof content === "string" ||
           (Array.isArray(content) &&
@@ -560,15 +617,29 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
         const name = String(payload.name ?? (ptype === "local_shell_call" ? "Shell" : ""));
         const args = payload.arguments ?? payload.action ?? {};
         // function_call arguments are a JSON string on Codex; parse leniently.
-        let parsedArgs: unknown = args;
+        let parsedArgs: Record<string, unknown> = {};
         if (typeof args === "string") {
           try {
-            parsedArgs = JSON.parse(args);
+            const j = JSON.parse(args);
+            parsedArgs = j !== null && typeof j === "object" ? (j as Record<string, unknown>) : { command: args };
           } catch {
             parsedArgs = { command: args };
           }
+        } else if (args !== null && typeof args === "object") {
+          parsedArgs = args as Record<string, unknown>;
         }
-        const engineCall = isEngineToolCall(name, parsedArgs) || /aidlc-orchestrate|aidlc-state/.test(String(args));
+        // Normalise the command field so isEngineToolCall sees the full command
+        // text (Codex may key it `command`, or carry it as the raw arguments
+        // string). Routing it ALL through isEngineToolCall keeps the read-only
+        // exemption (--status etc.) consistent across both transcript formats,
+        // rather than a loose regex that would re-flag a read-only query.
+        if (typeof parsedArgs.command !== "string") {
+          parsedArgs = { ...parsedArgs, command: typeof args === "string" ? args : JSON.stringify(args) };
+        }
+        const engineCall = isEngineToolCall(
+          /^(bash|shell|execute_bash|local_shell_call)$/i.test(name) ? "Bash" : name,
+          parsedArgs,
+        );
         turns.push({ role: "assistant", engineCall, humanPrompt: false });
       }
     }
