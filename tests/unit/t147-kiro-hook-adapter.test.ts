@@ -318,4 +318,114 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // --- Stop-hook run-mode cap on Kiro (issue #365/#367 cross-harness coverage) ---
+  //
+  // Kiro's stop adapter (case "stop", aidlc-kiro-adapter.ts:303-314) synthesizes
+  // {hook_event_name:"Stop", stop_hook_active:false} with NO transcript_path. So
+  // the core hook's conversational carve-out (tier 3) is structurally inert on
+  // Kiro: the RUN-MODE-AWARE no-progress cap (blockCap, aidlc-stop.ts:122-137) is
+  // the ONLY release path for a chatting / pausing human. These two tests pin
+  // that contract deterministically:
+  //   - interactive (no autonomy field) -> cap 2: a 2nd identical no-progress
+  //     stop RELEASES (the human is freed after one nudge).
+  //   - autonomous Construction -> cap 8: still blocks on call 3 (an unattended
+  //     run keeps the loop alive; only a real hang ever hits 8).
+  // The per-project guard counter persists under the active record's
+  // .aidlc-stop-hook/block-count.json (stopHookDir, aidlc-lib.ts:1620), so the
+  // SAME scratch project is reused across the repeated calls - consecutive
+  // no-progress blocks at one unchanging signature, which is exactly what the
+  // counter measures.
+
+  /** Run the kiro adapter stop target with CLAUDE_CODE_STOP_HOOK_BLOCK_CAP
+   *  explicitly REMOVED, so the mode-aware default cap applies regardless of the
+   *  test runner's environment (a leaked override would mask the contract). The
+   *  adapter itself never sets the var (verified: aidlc-kiro-adapter.ts builds
+   *  {hook_event_name,stop_hook_active} only), and the core hook reads it from
+   *  the inherited process env (aidlc-stop.ts:123). */
+  function runStopNoCapEnv(projectDir: string): { stdout: string; code: number } {
+    const env = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
+    delete (env as Record<string, string | undefined>).CLAUDE_CODE_STOP_HOOK_BLOCK_CAP;
+    const r = spawnSync(
+      "bun",
+      [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "stop"],
+      {
+        cwd: projectDir,
+        // The kiro adapter ignores stdin for the stop target (it synthesizes the
+        // payload itself), but feed an empty object for shape parity.
+        input: "{}",
+        encoding: "utf-8",
+        env,
+        timeout: 30_000,
+      },
+    );
+    return { stdout: r.stdout ?? "", code: r.status ?? -1 };
+  }
+
+  test("12: INTERACTIVE CAP RELEASE - Kiro stop blocks once then releases at the default cap 2 (no transcript -> cap is the chat release path)", () => {
+    // Interactive: state has NO Construction Autonomy Mode field, so the
+    // mode-aware default cap is INTERACTIVE_BLOCK_CAP=2. The brownfield-feature
+    // fixture (Current Stage requirements-analysis [-], no [?]/[R] carve-out, no
+    // questions file) yields a pending run-stage, so without the cap the hook
+    // would block forever. Repeated identical no-progress stops at the same
+    // signature: block on call 1, RELEASE on call 2 (count reaches 2 == cap).
+    const dir = scratchProject(true);
+    try {
+      // Guard the premise: the override must NOT be set in this process (the
+      // adapter never sets it, and runStopNoCapEnv strips it for the subprocess).
+      expect(process.env.CLAUDE_CODE_STOP_HOOK_BLOCK_CAP).toBeUndefined();
+
+      const first = runStopNoCapEnv(dir);
+      expect(first.code).toBe(0);
+      const out1 = JSON.parse(first.stdout) as { decision?: string; reason?: string };
+      expect(out1.decision).toBe("block");
+      expect(out1.reason ?? "").not.toBe("");
+
+      const second = runStopNoCapEnv(dir);
+      expect(second.code).toBe(0);
+      // At cap 2 the 2nd no-progress block RELEASES: silent allow, no decision.
+      expect(second.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("13: AUTONOMOUS KEEPS CAP 8 - Kiro stop still blocks on call 3 under autonomous Construction (the long ceiling, not the interactive 2)", () => {
+    // Autonomous Construction (Construction Autonomy Mode: autonomous) keeps the
+    // long ceiling AUTONOMOUS_BLOCK_CAP=8. Same brownfield-feature engine state
+    // (pending run-stage) but the autonomy field injected, so the carve-outs are
+    // all gated off and only the cap can release. Three consecutive no-progress
+    // stops: all three BLOCK (count 1,2,3 < 8). We bound the loop well short of 8.
+    const dir = scratchProject(true);
+    try {
+      expect(process.env.CLAUDE_CODE_STOP_HOOK_BLOCK_CAP).toBeUndefined();
+      // Inject the autonomy field as a bullet line in ## Current Status (getField
+      // matches `- **Field**: value`, aidlc-lib.ts:1913). The base fixture has no
+      // such field; adding it flips defaultBlockCap to 8 without changing the
+      // engine's pending directive (Current Stage is unchanged).
+      const statePath = seededStateFile(dir);
+      const base = readFileSync(statePath, "utf-8");
+      writeFileSync(
+        statePath,
+        base.replace(
+          /^- \*\*Status\*\*: Running$/m,
+          "- **Status**: Running\n- **Construction Autonomy Mode**: autonomous",
+        ),
+        "utf-8",
+      );
+      // Confirm the field landed (premise guard).
+      expect(/Construction Autonomy Mode\*\*: autonomous/.test(readFileSync(statePath, "utf-8"))).toBe(
+        true,
+      );
+
+      for (let call = 1; call <= 3; call++) {
+        const r = runStopNoCapEnv(dir);
+        expect(r.code).toBe(0);
+        const out = JSON.parse(r.stdout) as { decision?: string };
+        expect(`call${call}:${out.decision}`).toBe(`call${call}:block`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

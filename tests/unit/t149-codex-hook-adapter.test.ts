@@ -437,4 +437,127 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // --- Stop-hook conversational carve-out on Codex (issue #365 cross-harness) ---
+  //
+  // Codex's stop adapter (case "stop", aidlc-codex-adapter.ts:336-343) pipes the
+  // RAW stdin verbatim to the core hook, and Codex's stop payload carries a real
+  // transcript_path (a date-sharded `rollout-*.jsonl`) + stop_hook_active. So the
+  // core hook's conversational carve-out (tier 3, aidlc-stop.ts:886-904) fires
+  // from the actual transcript, classifying the ending turn:
+  //   - human's last prompt answered with NO loop-advancing engine call -> ALLOW.
+  //   - a loop-advancing aidlc-orchestrate call after that prompt -> BLOCK.
+  //   - a READ-ONLY query (next --status) is NOT engagement -> still ALLOW.
+  // The core hook detects the Codex format by the rollout-*.jsonl path shape
+  // (aidlc-stop.ts:792), so the transcript file the test writes MUST be named
+  // rollout-*.jsonl and live in the scratch dir (the adapter reads a REAL file).
+  // The seeded brownfield-feature state (Current Stage requirements-analysis [-],
+  // not [?]/[R], no questions file) yields a pending run-stage and trips none of
+  // the OTHER carve-outs, so the conversational classifier alone governs the
+  // decision.
+
+  /** Write a Codex rollout transcript (response_item shape) and return its path.
+   *  `assistant` is either a plain message turn or a function_call turn - the two
+   *  shapes the core hook's Codex reader classifies (aidlc-stop.ts:582-645). */
+  function writeCodexTranscript(
+    dir: string,
+    humanPrompt: string,
+    assistant:
+      | { kind: "message"; text: string }
+      | { kind: "call"; name: string; command: string },
+  ): string {
+    const lines: string[] = [
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "message", role: "user", content: [{ type: "input_text", text: humanPrompt }] },
+      }),
+    ];
+    if (assistant.kind === "message") {
+      lines.push(
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: assistant.text }],
+          },
+        }),
+      );
+    } else {
+      lines.push(
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "function_call",
+            name: assistant.name,
+            arguments: JSON.stringify({ command: assistant.command }),
+          },
+        }),
+      );
+    }
+    // The path MUST match the core hook's Codex-format detector
+    // (/[/\\]rollout-[^/\\]*\.jsonl$/), so name it rollout-*.jsonl.
+    const path = join(dir, "rollout-2026-06-26T00-00-00.jsonl");
+    writeFileSync(path, `${lines.join("\n")}\n`, "utf-8");
+    return path;
+  }
+
+  /** Build the Codex stop payload pointing at a real transcript file, in the
+   *  same withCwd shape the other stop tests use (the adapter pipes it verbatim,
+   *  so cwd selects the scratch project's state). */
+  function codexStopWithTranscript(dir: string, transcriptPath: string): Record<string, unknown> {
+    return withCwd({ ...FIXTURES.stop, transcript_path: transcriptPath }, dir);
+  }
+
+  test("13: CONVERSATIONAL ALLOW - Codex stop allows when the human's last prompt was answered with no engine call", () => {
+    const dir = scratchProject(true);
+    try {
+      const transcript = writeCodexTranscript(dir, "what stage am I on?", {
+        kind: "message",
+        text: "You are on requirements-analysis.",
+      });
+      const r = runAdapter(dir, "stop", codexStopWithTranscript(dir, transcript));
+      expect(r.code).toBe(0);
+      // Conversational ending turn -> ALLOW (silent, no decision:block).
+      expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("14: ENGAGED BLOCK - Codex stop blocks when a loop-advancing aidlc-orchestrate call followed the human prompt", () => {
+    const dir = scratchProject(true);
+    try {
+      const transcript = writeCodexTranscript(dir, "ok, continue the workflow", {
+        kind: "call",
+        name: "Bash",
+        command: "bun .codex/tools/aidlc-orchestrate.ts next",
+      });
+      const r = runAdapter(dir, "stop", codexStopWithTranscript(dir, transcript));
+      expect(r.code).toBe(0);
+      const out = JSON.parse(r.stdout) as { decision?: string; reason?: string };
+      // The conductor engaged the workflow then quit mid-loop -> still nudged.
+      expect(out.decision).toBe("block");
+      expect(out.reason ?? "").not.toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("15: READ-ONLY ALLOW - Codex stop allows when the only post-prompt call was a read-only status query (not engagement)", () => {
+    const dir = scratchProject(true);
+    try {
+      const transcript = writeCodexTranscript(dir, "what stage am I on?", {
+        kind: "call",
+        name: "Bash",
+        command: "bun .codex/tools/aidlc-orchestrate.ts next --status",
+      });
+      const r = runAdapter(dir, "stop", codexStopWithTranscript(dir, transcript));
+      expect(r.code).toBe(0);
+      // A read-only query does NOT engage the loop -> conversational ALLOW.
+      expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
