@@ -479,26 +479,73 @@ function isEngineToolCall(name: string, input: unknown): boolean {
   // The command text to inspect: a Bash/Shell command, or (for harnesses that
   // surface the tool by name) the tool name itself.
   const text = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
-  // Only aidlc-orchestrate / aidlc-state calls touch the forwarding loop at all.
-  if (!/aidlc-orchestrate|aidlc-state/.test(text)) return false;
-  // READ-ONLY queries do NOT engage the workflow: a human chatting may well ask
-  // "what stage am I on?" which the conductor answers with `--status` / `next
-  // --status` / `--doctor` / `--help` / `--version` or a read-only utility call.
-  // These must NOT disqualify the turn from the conversational carve-out. Only a
-  // LOOP-ADVANCING or STATE-MUTATING call (a bare `next` that fetches a directive
-  // to act on, or `report`/`approve`/`advance`/`finalize`/`complete-workflow`/
-  // `gate-start`/`checkbox`/`park`) means the conductor engaged the workflow.
-  if (/--status|--doctor|--help|--version/.test(text)) return false;
-  // A bare `aidlc-orchestrate next` (no read-only flag) fetches the next
-  // directive: that IS engagement. `report` likewise commits a transition.
-  if (/aidlc-orchestrate\b/.test(text)) {
-    return /\bnext\b|\breport\b/.test(text);
-  }
-  // aidlc-state: the completing/mutating subcommands engage the workflow.
-  if (/aidlc-state\b/.test(text)) {
-    return /\b(approve|advance|finalize|complete-workflow|gate-start|checkbox|park|unpark|set)\b/.test(text);
+  // Fast reject: no AIDLC engine/state/workspace tool named at all -> not a
+  // workflow engagement (a chat turn that ran git/cat/ls etc.).
+  if (!/aidlc-(orchestrate|state|jump|bolt|swarm)\b/.test(text)) return false;
+  // Split on shell separators so a CHAINED command is judged per sub-command,
+  // not as one blob. Otherwise a read-only flag anywhere in the line
+  // (`... --status && aidlc-orchestrate report ...`) would wrongly exempt a
+  // mutating call elsewhere in the same line. Each segment is judged on its own.
+  const segments = text.split(/&&|\|\||[;|\n]/);
+  for (const seg of segments) {
+    if (isEngineEngagementSegment(seg)) return true;
   }
   return false;
+}
+
+// One shell sub-command. True when it ENGAGES the forwarding loop or MUTATES
+// workflow state, false for a read-only query. A human chatting may legitimately
+// ask "what stage am I on?" answered with `--status` / `next --status` /
+// `--doctor` / `--help` / `--version` or a read-only utility call: those must
+// NOT disqualify the conversational carve-out. Anything that advances the loop
+// (`next` fetching a directive, `report` committing a transition) or mutates
+// state (aidlc-state completing/transition verbs; a checkbox/jump/bolt/swarm
+// move) DOES count as engagement. Fail-toward-engagement: an aidlc-orchestrate/
+// state/jump/bolt/swarm verb we do not specifically recognise is treated as
+// engagement (BLOCK), so an unrecognised mutating verb can never leak through as
+// "chat" - the conservative direction for loop integrity.
+function isEngineEngagementSegment(seg: string): boolean {
+  if (!/aidlc-(orchestrate|state|jump|bolt|swarm)\b/.test(seg)) return false;
+  // A PURE read-only query: a read-only flag present AND no mutating/advancing
+  // verb in the SAME segment. `next --status` is read-only; `report --status`
+  // (nonsensical, but) still has `report` so is engagement.
+  const hasReadOnlyFlag = /--status\b|--doctor\b|--help\b|--version\b/.test(seg);
+  if (/aidlc-orchestrate\b/.test(seg)) {
+    const advances = /\bnext\b|\breport\b/.test(seg);
+    if (!advances) return false; // e.g. an orchestrate invocation with only a read-only flag
+    // `next --status` is the read-only status query; a bare `next` (or any
+    // `report`) advances. So: advancing verb present -> engagement UNLESS the
+    // ONLY advancing token is `next` and it carries a read-only flag.
+    if (hasReadOnlyFlag && /\bnext\b/.test(seg) && !/\breport\b/.test(seg)) return false;
+    return true;
+  }
+  if (/aidlc-state\b/.test(seg)) {
+    // The mutating / completing subcommands. (Read-only aidlc-state reads like
+    // `get`/`show` are not here, so they fall through to non-engagement.)
+    return /\b(approve|advance|finalize|complete-workflow|gate-start|checkbox|park|unpark|set|skip|reject|revise|resume)\b/.test(seg);
+  }
+  // aidlc-jump / aidlc-bolt / aidlc-swarm: a read-only query (--help/--status)
+  // is not engagement; anything else mutates (jump moves the pointer, bolt forks/
+  // merges, swarm runs Construction) so counts as engagement.
+  if (hasReadOnlyFlag) return false;
+  return true;
+}
+
+// True when a user-role transcript entry's text is actually the hook's OWN
+// injected continuation (a re-prompt after a block), not the human talking.
+// Two shapes: Claude Code wraps the block reason as "Stop hook feedback: ..."
+// (isMeta:true), but other harnesses (Codex) may re-inject the RAW reason text
+// with no wrapper. continuationReason() (below) always opens with "The AIDLC
+// workflow has a pending step" and names "the forwarding loop", so match either
+// signature. Excluding these is what keeps an engine-engaged turn whose last
+// user entry is the hook's nudge from being misread as a fresh human prompt.
+function isInjectedHookFeedback(text: string): boolean {
+  const t = text.trimStart();
+  return (
+    t.startsWith("Stop hook feedback:") ||
+    (t.startsWith("The AIDLC workflow has a pending step") &&
+      /forwarding loop/.test(t))
+  );
 }
 
 // Read the transcript and classify the ending turn as conversational. Supports
@@ -561,7 +608,7 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
                   })
                   .join("")
               : "";
-        if (asText.startsWith("Stop hook feedback:")) continue;
+        if (isInjectedHookFeedback(asText)) continue;
         // A genuine human prompt: string content, or an array with a text block.
         const isHuman =
           typeof content === "string" ||
@@ -602,7 +649,7 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
                   })
                   .join("")
               : "";
-        if (asText.startsWith("Stop hook feedback:")) continue;
+        if (isInjectedHookFeedback(asText)) continue;
         const isHuman =
           typeof content === "string" ||
           (Array.isArray(content) &&
