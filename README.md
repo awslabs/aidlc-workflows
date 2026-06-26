@@ -89,7 +89,7 @@ On Windows, use *either* PowerShell *or* CMD, not both — your prompt shows `PS
 > [!TIP]
 > bun has to be on the PATH that *non-interactive* shells see, since that's what a harness uses to run a hook or tool. Those shells read `~/.zshenv` (zsh) or `~/.bashrc` (bash), not `~/.zshrc` — but the bun installer writes to `~/.zshrc`. So if `which bun` works in your terminal yet the harness can't find bun, copy the `BUN_INSTALL`/`PATH` export into `~/.zshenv` (or `~/.bashrc` for bash and Git Bash).
 
-Every harness runs on **AWS Bedrock**, so set Bedrock up before your first run — enable model access in your AWS account and make sure the harness can see working AWS credentials. Each harness section below has the specifics.
+Every harness supports **AWS Bedrock** as an optional backend. Claude Code works with either the direct Anthropic API or Bedrock; Codex and Kiro harnesses default to Bedrock. If using Bedrock, enable model access in your AWS account and make sure the harness can see working AWS credentials. Each harness section below has the specifics.
 
 ### Install a harness
 
@@ -185,7 +185,27 @@ Then, inside the Claude Code session:
 /aidlc Build a task management API with user authentication   # start a workflow
 ```
 
-The shipped `.claude/settings.json` runs on **AWS Bedrock** (`AWS_REGION=us-east-1`, Fable/Opus/Sonnet/Haiku pinned). Before your first run, enable Anthropic model access in your AWS account and have AWS credentials on your SDK credential chain — see [Getting Started § AWS Bedrock Setup](docs/guide/01-getting-started.md#aws-bedrock-setup) for the model-access form, IAM policy, credential options, and how to change the region. The full prerequisites table, PATH troubleshooting, and Bedrock configuration are in [Getting Started](docs/guide/01-getting-started.md).
+The shipped `.claude/settings.json` works with **plain Claude Code** (direct Anthropic API) out of the box — no additional configuration needed.
+
+<details>
+<summary><b>Optional: Using Amazon Bedrock</b></summary>
+
+To run on AWS Bedrock instead of the direct Anthropic API, add the following to your `.claude/settings.json` `env` block:
+
+```json
+"CLAUDE_CODE_USE_BEDROCK": "1",
+"AWS_REGION": "us-east-1",
+"ANTHROPIC_DEFAULT_FABLE_MODEL": "global.anthropic.claude-fable-5",
+"ANTHROPIC_DEFAULT_OPUS_MODEL": "global.anthropic.claude-opus-4-8",
+"ANTHROPIC_DEFAULT_SONNET_MODEL": "global.anthropic.claude-sonnet-4-6",
+"ANTHROPIC_DEFAULT_HAIKU_MODEL": "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+```
+
+And update the `model` field to use the Bedrock model format (e.g., `"model": "opus[1m]"`).
+
+Enable Anthropic model access in your AWS account and have AWS credentials on your SDK credential chain — see [Getting Started § AWS Bedrock Setup](docs/guide/01-getting-started.md#aws-bedrock-setup) for the model-access form, IAM policy, credential options, and how to change the region.
+
+</details>
 
 </details>
 

@@ -124,9 +124,9 @@ describe("statusLine [.sh test 10]", () => {
 });
 
 describe("orchestrator model pin [.sh test 11]", () => {
-  test("model is pinned to opus[1m]", () => {
-    // .sh asserted exact string equality (`[ "$MODEL" = "opus[1m]" ]`).
-    expect(settings.model).toBe("opus[1m]");
+  test("model is pinned to opus", () => {
+    // Default uses plain Claude Code (no Bedrock suffix).
+    expect(settings.model).toBe("opus");
   });
 });
 
@@ -140,37 +140,21 @@ describe("orchestrator reasoning-effort pin", () => {
   });
 });
 
-describe("Bedrock env block [.sh tests 12-16 + Fable pin]", () => {
+describe("Bedrock env block — optional (#428)", () => {
   const env = settings.env ?? {};
 
-  test("env.CLAUDE_CODE_USE_BEDROCK is 1 [.sh test 12]", () => {
-    expect(env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
+  test("env does NOT include Bedrock vars by default (#428)", () => {
+    // Bedrock configuration is optional — plain Claude Code users should not
+    // need to configure AWS credentials to get started.
+    expect(env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+    expect(env.AWS_REGION).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBeUndefined();
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBeUndefined();
   });
 
-  test("env.AWS_REGION is set [.sh test 13]", () => {
-    // .sh asserted non-empty (`[ -n "$AWS_REGION_VAL" ]`) — Bedrock requires
-    // a region; Claude Code does not read it from ~/.aws.
-    expect(typeof env.AWS_REGION).toBe("string");
-    expect((env.AWS_REGION ?? "").length).toBeGreaterThan(0);
-  });
-
-  test("env.ANTHROPIC_DEFAULT_FABLE_MODEL is pinned", () => {
-    expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("global.anthropic.claude-fable-5");
-  });
-
-  test("env.ANTHROPIC_DEFAULT_OPUS_MODEL is pinned [.sh test 14]", () => {
-    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("global.anthropic.claude-opus-4-8");
-  });
-
-  test("env.ANTHROPIC_DEFAULT_SONNET_MODEL is pinned [.sh test 15]", () => {
-    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe(
-      "global.anthropic.claude-sonnet-4-6",
-    );
-  });
-
-  test("env.ANTHROPIC_DEFAULT_HAIKU_MODEL is pinned [.sh test 16]", () => {
-    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe(
-      "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-    );
+  test("env.AWS_AIDLC_DEFAULT_SCOPE is set", () => {
+    expect(env.AWS_AIDLC_DEFAULT_SCOPE).toBe("workshop");
   });
 });
