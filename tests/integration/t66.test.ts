@@ -39,7 +39,8 @@
 //     --check drift, designer export byte-identical-to-golden + counts + determinism +
 //     env-seam + export --check, concurrency (two PARALLEL compiles serialise byte-equal).
 //   GREP-THE-SOURCE (port as readFileSync + includes / regex count):
-//     'Pre-seed new rows' present; '${filePath}:' >= 2 sites.
+//     'Pre-seed new rows' GONE + 'maxIndexByPhasePrefix' present (#364 auto-seed);
+//     '${filePath}:' >= 2 sites.
 //
 // FIXTURE DISCIPLINE: every mktemp/heredoc the .sh built is rebuilt here with
 // mkdtempSync(tmpdir(), ...) + writeFileSync and torn down in afterEach. NOTHING is
@@ -784,14 +785,23 @@ describe("t66 edge-local invariant (in-process)", () => {
 });
 
 // =============================================================================
-// Compile bootstrap error message (.sh:730-735, 1 assertion)
-// GREP-THE-SOURCE: readFileSync(GRAPH_TS) + .includes('Pre-seed new rows').
+// Compile auto-seeds a new stage rather than requiring a pre-seeded row (#364).
+// The old pre-seed contract (compile threw "Pre-seed new rows" for a new slug)
+// was replaced by auto-seeding: a slug on disk with no JSON row gets the next
+// free per-phase index + a title-cased default name. This source-grep guards
+// that the old throw is gone and the auto-seed path is present.
 // =============================================================================
 
-describe("t66 compile bootstrap error message (source grep)", () => {
-  test("compile bootstrap error message mentions 'Pre-seed new rows'", () => {
+describe("t66 compile auto-seeds new stages (source grep)", () => {
+  test("the old 'Pre-seed new rows' throw is gone from compileStageGraph", () => {
     const src = readFileSync(GRAPH_TS, "utf8");
-    expect(src.includes("Pre-seed new rows")).toBe(true);
+    expect(src.includes("Pre-seed new rows")).toBe(false);
+  });
+
+  test("compile derives the next free per-phase index for a new stage", () => {
+    const src = readFileSync(GRAPH_TS, "utf8");
+    // The auto-seed allocator lives in compileStageGraph (maxIndexByPhasePrefix).
+    expect(src.includes("maxIndexByPhasePrefix")).toBe(true);
   });
 });
 

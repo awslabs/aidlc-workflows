@@ -18,6 +18,7 @@ import {
   loadGraph,
   loadRules,
   memoryDirFor,
+  stageGraphDrift,
   validateScope,
 } from "./aidlc-graph.ts";
 import { repointHarnessIncludes } from "./aidlc-includes.ts";
@@ -1277,28 +1278,35 @@ function handleDoctor(projectDir: string): void {
     });
   }
 
-  // Orphan stage files (graph→disk direction only). Every slug in
-  // stage-graph.json must have a matching <phase>/<slug>.md on disk.
-  // Disk→graph direction not checked — stages are migrated atomically so
-  // rogue-file drift isn't a realistic failure mode.
+  // Stage-graph <-> disk drift, both directions (stageGraphDrift()):
+  //   - graph->disk (missingFiles): a slug in stage-graph.json with no
+  //     <phase>/<slug>.md on disk. Real runtime breakage (conductor handed a
+  //     path to a missing file) -> hard FAIL.
+  //   - disk->graph (uncompiledStages): a <phase>/<slug>.md whose slug is absent
+  //     from the compiled graph. The runtime resolves stages from the compiled
+  //     graph only, so the file is silently never executed (issue #364). The
+  //     file is inert, not corrupt, and recompiling is a deliberate authoring
+  //     act -> ADVISORY (pass:true; does not fail the doctor exit code, mirroring
+  //     the rule-drift / MERGE_DISPATCH advisory rows).
   try {
-    const stagesDir = join(TOOLS_DIR, "..", "aidlc-common", "stages");
-    const graphSlugs = new Set(loadStageGraph().map((s) => s.slug));
-    const diskSlugs = new Set<string>();
-    for (const phase of PHASES) {
-      const dir = join(stagesDir, phase);
-      if (!existsSync(dir)) continue;
-      for (const f of readdirSync(dir)) {
-        if (f.endsWith(".md")) diskSlugs.add(f.replace(/\.md$/, ""));
-      }
-    }
-    const missingFiles = [...graphSlugs].filter((s) => !diskSlugs.has(s));
+    const { missingFiles, uncompiledStages, graphCount } = stageGraphDrift();
     results.push({
       pass: missingFiles.length === 0,
       label: missingFiles.length === 0
-        ? `Orphan stage files: ${graphSlugs.size} graph entries all have files`
+        ? `Orphan stage files: ${graphCount} graph entries all have files`
         : `Orphan stage files: ${missingFiles.length} graph entries have no file on disk`,
       fix: missingFiles.length > 0 ? `missing files: ${missingFiles.join(", ")}` : undefined,
+    });
+    // Advisory row (pass:true), the detail must live in the LABEL, not the
+    // `fix` field: the report renderer only prints `fix` on a FAILED (pass:false)
+    // row (see the render loop below). Fold the slug list + the compile hint into
+    // the label so the operator can act on it, mirroring the MERGE_DISPATCH /
+    // rule-drift advisory rows that carry their detail inline.
+    results.push({
+      pass: true,
+      label: uncompiledStages.length === 0
+        ? "Uncompiled stage files: 0 stage files missing from the compiled graph"
+        : `Uncompiled stage files: ${uncompiledStages.length} stage file(s) not in the compiled graph (advisory, will not execute until recompiled): ${uncompiledStages.join(", ")} - run \`bun ${harnessDir()}/tools/aidlc-graph.ts compile\` to include them`,
     });
   } catch (e) {
     results.push({

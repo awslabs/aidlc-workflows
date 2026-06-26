@@ -21,10 +21,23 @@
 //
 // Compile is the YAML -> JSON transform. It bootstraps number + name
 // from today's stage-graph.json so YAML stays the authored source of
-// truth for everything else while computed fields stay computed. Adding
-// a new stage requires pre-seeding {slug, number, name} in
-// stage-graph.json before the first compile; renumbering existing
-// stages similarly edits those rows then recompiles.
+// truth for everything else while computed fields stay computed. number
+// and name are NOT authorable frontmatter keys (the stage schema rejects
+// them as unknown), they are derived, then pinned in the JSON so they
+// stay byte-stable across recompiles.
+//
+// A NEW stage slug (a .md on disk with no row in stage-graph.json yet) is
+// auto-seeded on compile rather than rejected: its number is the next free
+// index in its phase (`<PHASES.indexOf(phase)>.<maxIndexInPhase + 1>`) and
+// its name defaults to the title-cased slug. Both are written into the
+// regenerated JSON, so the FIRST compile assigns them and every subsequent
+// compile harvests the pinned values, the assignment happens once and is
+// stable thereafter. An author who wants a hand-tuned display name (e.g.
+// "NFR Requirements", "CI Pipeline") edits that one JSON field after the
+// seeding compile; the next compile preserves it. Renumbering an existing
+// stage is still an explicit JSON edit. (Auto-seed only ever ADDS rows and
+// fills the next free per-phase index, it never renumbers a stage that
+// already has a row, so an in-flight workflow's slug-keyed state is safe.)
 //
 // See docs/reference/16-artifact-vocabulary.md for artifact naming.
 
@@ -39,6 +52,8 @@ import {
   loadAgents,
   loadScopeMapping,
   harnessDir,
+  PHASES,
+  type Phase,
   loadStageGraph,
   mustGet,
   mustPop,
@@ -1136,6 +1151,58 @@ export function numericStageOrder(a: string, b: string): number {
   return aI - bI;
 }
 
+/** Two-direction drift between the on-disk stage `.md` files and the compiled
+ *  stage-graph.json. Pure set-difference over slugs, no YAML parse, no graph
+ *  rebuild, so it is cheap enough to run on the session-start hot path.
+ *
+ *  - `missingFiles`: graph->disk. A slug in stage-graph.json with no matching
+ *    `<phase>/<slug>.md` on disk, a real runtime breakage (the conductor is
+ *    handed a path to a file that does not exist). The doctor reports it as a
+ *    hard fail.
+ *  - `uncompiledStages`: disk->graph. A `<phase>/<slug>.md` whose slug is absent
+ *    from the compiled graph, the issue #364 case. The runtime resolves stages
+ *    from the compiled graph only (loadGraph), so this file is silently never
+ *    executed until `aidlc-graph compile` regenerates the graph. Advisory: the
+ *    file is inert, not corrupt, and recompiling is a deliberate authoring act.
+ *  - `graphCount`: how many slugs the compiled graph holds. Returned here so a
+ *    caller (the doctor) can label the in-sync case without a second
+ *    loadStageGraph() call.
+ *
+ *  Honours the AIDLC_STAGES_DIR (stagesDir) and AIDLC_STAGE_GRAPH
+ *  (loadStageGraph) seams so a test can point both sources at a temp tree. */
+export function stageGraphDrift(): {
+  missingFiles: string[];
+  uncompiledStages: string[];
+  graphCount: number;
+} {
+  const graphSlugs = new Set(loadStageGraph().map((s) => s.slug));
+  const diskSlugs = new Set<string>();
+  const root = stagesDir();
+  for (const phase of PHASES) {
+    const dir = join(root, phase);
+    if (!existsSync(dir)) continue;
+    for (const f of readdirSync(dir)) {
+      if (f.endsWith(".md")) diskSlugs.add(f.replace(/\.md$/, ""));
+    }
+  }
+  return {
+    missingFiles: [...graphSlugs].filter((s) => !diskSlugs.has(s)).sort(),
+    uncompiledStages: [...diskSlugs].filter((s) => !graphSlugs.has(s)).sort(),
+    graphCount: graphSlugs.size,
+  };
+}
+
+/** Default display name for an auto-seeded stage: title-cased slug
+ *  ("my-custom-stage" -> "My Custom Stage"). A one-time default only,
+ *  compile pins it into stage-graph.json, so an author can refine the name
+ *  there afterwards (e.g. "NFR Requirements") and the next compile keeps it. */
+function titleCaseSlug(slug: string): string {
+  return slug
+    .split("-")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
+
 /** Regenerate stage-graph.json from the 31 YAML stage files.
  *  Bootstraps number + name from the existing JSON (the "computed
  *  not authored" contract — see stage-definition.md). Asserts the
@@ -1149,12 +1216,27 @@ export function compileStageGraph(): {
   gridJson: string;
   stages: GraphStage[];
 } {
-  // Harvest number + name mappings from existing JSON. Adding a new
-  // stage requires pre-seeding a {slug, number, name} row before first
-  // compile; renumbering existing stages is an explicit JSON edit.
+  // Harvest number + name mappings from existing JSON. A slug already in
+  // the JSON keeps its pinned number + name (the "computed not authored,
+  // stable thereafter" contract); a NEW slug is auto-seeded below.
   const existing = loadStageGraph();
   const numberBySlug = new Map(existing.map((s) => [s.slug, s.number]));
   const nameBySlug = new Map(existing.map((s) => [s.slug, s.name]));
+
+  // Highest index already used in each phase (keyed by numeric prefix),
+  // so a new stage in that phase gets the next free index. Seeded from the
+  // existing JSON, then bumped as new stages in the same phase are seeded
+  // within this compile, so adding several new stages to one phase at once
+  // assigns distinct, contiguous indices rather than colliding.
+  const maxIndexByPhasePrefix = new Map<number, number>();
+  for (const s of existing) {
+    const [prefix, index] = s.number.split(".").map((n) => parseInt(n, 10));
+    if (!Number.isFinite(prefix) || !Number.isFinite(index)) continue;
+    maxIndexByPhasePrefix.set(
+      prefix,
+      Math.max(maxIndexByPhasePrefix.get(prefix) ?? 0, index)
+    );
+  }
 
   const stages: GraphStage[] = [];
   // Track slug-to-first-file so duplicate-slug errors name both files.
@@ -1171,7 +1253,7 @@ export function compileStageGraph(): {
   for (const phase of readdirSync(stagesRoot)) {
     const pdir = join(stagesRoot, phase);
     if (!statSync(pdir).isDirectory()) continue;
-    for (const f of readdirSync(pdir).filter((f) => f.endsWith(".md"))) {
+    for (const f of readdirSync(pdir).filter((f) => f.endsWith(".md")).sort()) {
       const filePath = join(pdir, f);
       const raw = readFileSync(filePath, "utf-8");
 
@@ -1212,14 +1294,25 @@ export function compileStageGraph(): {
       }
       slugToFile.set(slug, filePath);
 
-      const number = numberBySlug.get(slug);
-      const name = nameBySlug.get(slug);
+      // Existing slug -> keep its pinned number + name. New slug -> auto-seed
+      // both: number = next free index in this phase, name = title-cased slug.
+      let number = numberBySlug.get(slug);
+      let name = nameBySlug.get(slug);
       if (!number || !name) {
-        throw new Error(
-          `Stage "${slug}" (${filePath}) not found in stage-graph.json. ` +
-            `Pre-seed new rows and edit renumbered rows in stage-graph.json ` +
-            `before compile.`
-        );
+        const prefix = PHASES.indexOf(phase as Phase);
+        if (prefix < 0) {
+          // A stage directory whose name is not one of the five canonical
+          // phases can't be placed on the numeric spine, fail loud rather
+          // than invent a prefix.
+          throw new Error(
+            `Stage "${slug}" (${filePath}) is in an unknown phase directory ` +
+              `"${phase}". Stage phase directories must be one of: ${PHASES.join(", ")}.`
+          );
+        }
+        const nextIndex = (maxIndexByPhasePrefix.get(prefix) ?? 0) + 1;
+        maxIndexByPhasePrefix.set(prefix, nextIndex);
+        number = number ?? `${prefix}.${nextIndex}`;
+        name = name ?? titleCaseSlug(slug);
       }
 
       stages.push(buildGraphStage(validation.data, phase, number, name));

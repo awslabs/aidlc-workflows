@@ -50,9 +50,13 @@
 //   - sensor manifest shape ........... sensors/aidlc-required-sections.md +
 //     aidlc-sensor-schema.ts (id,kind,command,default_severity,description,
 //     matches?; NO applies_to — that's a fossil)
-//   - stage-graph pre-seed contract ... aidlc-graph.ts:944-952 (compile harvests
-//     {slug,number,name} from existing JSON; a NEW stage must be pre-seeded
-//     there or compile throws "not found in stage-graph.json")
+//   - stage-graph seeding ............. compileStageGraph harvests {number,name}
+//     from existing JSON for known slugs; a NEW slug is AUTO-SEEDED (next free
+//     per-phase index + title-cased name). This fixture still pre-seeds explicit
+//     {slug,number,name} rows so the custom stages land at DETERMINISTIC numbers
+//     that satisfy the edge-local invariant below, auto-seed would append them
+//     at the end of their phase, which is fine for leaf stages but not for the
+//     hand-chosen ordering this fixture asserts.
 //   - agent lookup ................... aidlc-graph.ts compile calls loadAgents()
 //     and validates lead_agent/support_agents against the copied .claude/agents/
 //     directory; the custom agent must be written before stage compile.
