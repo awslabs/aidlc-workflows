@@ -1289,8 +1289,7 @@ function handleDoctor(projectDir: string): void {
   //     act -> ADVISORY (pass:true; does not fail the doctor exit code, mirroring
   //     the rule-drift / MERGE_DISPATCH advisory rows).
   try {
-    const { missingFiles, uncompiledStages } = stageGraphDrift();
-    const graphCount = loadStageGraph().length;
+    const { missingFiles, uncompiledStages, graphCount } = stageGraphDrift();
     results.push({
       pass: missingFiles.length === 0,
       label: missingFiles.length === 0

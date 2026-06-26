@@ -1164,12 +1164,16 @@ export function numericStageOrder(a: string, b: string): number {
  *    from the compiled graph only (loadGraph), so this file is silently never
  *    executed until `aidlc-graph compile` regenerates the graph. Advisory: the
  *    file is inert, not corrupt, and recompiling is a deliberate authoring act.
+ *  - `graphCount`: how many slugs the compiled graph holds. Returned here so a
+ *    caller (the doctor) can label the in-sync case without a second
+ *    loadStageGraph() call.
  *
  *  Honours the AIDLC_STAGES_DIR (stagesDir) and AIDLC_STAGE_GRAPH
  *  (loadStageGraph) seams so a test can point both sources at a temp tree. */
 export function stageGraphDrift(): {
   missingFiles: string[];
   uncompiledStages: string[];
+  graphCount: number;
 } {
   const graphSlugs = new Set(loadStageGraph().map((s) => s.slug));
   const diskSlugs = new Set<string>();
@@ -1184,6 +1188,7 @@ export function stageGraphDrift(): {
   return {
     missingFiles: [...graphSlugs].filter((s) => !diskSlugs.has(s)).sort(),
     uncompiledStages: [...diskSlugs].filter((s) => !graphSlugs.has(s)).sort(),
+    graphCount: graphSlugs.size,
   };
 }
 
