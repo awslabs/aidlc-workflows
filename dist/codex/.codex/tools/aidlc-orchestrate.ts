@@ -729,6 +729,14 @@ function isCodekb(node: GraphStage): boolean {
 // defaults) the codekb branch never fires and the record-dir path stands.
 type CodekbCtx = { projectDir: string; space: string; codekbRepo: string };
 
+// Build the CodekbCtx for a live projectDir, resolving the active-space cursor
+// and the deterministic codekb repo name (both read-only). One place so the
+// `next` happy path, the jump paths, and the report-side per-unit coverage guard
+// share the same construction instead of repeating the object literal.
+function codekbCtxFor(pd: string): CodekbCtx {
+  return { projectDir: pd, space: activeSpace(pd), codekbRepo: codekbRepoName(pd) };
+}
+
 // Resolve a single artifact vocabulary name to its canonical aidlc-docs/... path
 // UNDER THE STAGE THAT OWNS THE FILE. Non-per-unit stages map to
 // `aidlc-docs/<phase>/<stage-slug>/<name>.md`; per-unit Construction stages
@@ -1059,11 +1067,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // place a KNOWN_CODEKB_STAGES artifact under aidlc/spaces/<space>/codekb/
   // <repo>/ (dropping the intents/<slug> tail) without re-reading the disk in
   // the pure resolver. codekbRepoName is read-only (intentRepos never throws).
-  const codekbCtx: CodekbCtx = {
-    projectDir: pd,
-    space: activeSpace(pd),
-    codekbRepo: codekbRepoName(pd),
-  };
+  const codekbCtx = codekbCtxFor(pd);
 
   // (Branch 3 — the legacy `--init` flag — retired in P4. There is no longer a
   // user-facing `/aidlc --init`: the workspace shell ships in dist/ (SEED) and
@@ -1420,9 +1424,13 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     // Under an autonomy grant, an eligible per-unit build stage fans out as a
     // swarm batch instead of a single run-stage. tryEmitSwarm emits the
     // invoke-swarm directive (and returns true) only when all trigger
-    // conditions hold; otherwise the normal run-stage emit fires.
+    // conditions hold; otherwise emitForSlug fires, which itself drives the
+    // engine's per-unit for_each loop for a per-unit Construction stage (one
+    // unit per `next`, gate suppressed on every uncovered unit with the real
+    // gate only on the all-covered re-entry; issue #368) and emits a single
+    // directive for every other stage.
     if (!tryEmitSwarm(currentSlug, scope, stateContent, pd)) {
-      emitRunStageForSlug(currentSlug, projectType, scope, stateContent, recordPrefix, codekbCtx);
+      emitForSlug(currentSlug, projectType, scope, stateContent, recordPrefix, codekbCtx, pd);
     }
     return;
   }
@@ -1443,9 +1451,12 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     return;
   }
   // Same swarm guard on the advance path: an eligible per-unit build stage
-  // under autonomy fans out as a batch rather than a single run-stage.
+  // under autonomy fans out as a batch rather than a single run-stage. Off the
+  // swarm path, emitForSlug drives the engine's per-unit for_each loop for a
+  // per-unit Construction stage (issue #368) and emits a single directive
+  // otherwise.
   if (!tryEmitSwarm(next.slug, scope, stateContent, pd)) {
-    emitRunStageForSlug(next.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
+    emitForSlug(next.slug, projectType, scope, stateContent, recordPrefix, codekbCtx, pd);
   }
 }
 
@@ -1540,6 +1551,178 @@ function emitRunStageForSlug(
     return;
   }
   emit(buildRunStageDirective(node, projectType, UNIT_NAME_PLACEHOLDER, scope, stateContent, recordPrefix, codekbCtx));
+}
+
+// --- Per-unit iteration (issue #368): the engine drives the for_each loop ---
+//
+// A per-unit Construction stage (for_each: unit-of-work) runs ONCE PER Unit of
+// Work, but the state file carries ONE checkbox row per stage slug (the engine
+// never duplicates rows, verified). So a single checkbox cannot, on its own,
+// track "stage done for 3 of 9 units". The COVERAGE LEDGER is the per-unit
+// ARTIFACTS on disk: a unit is "covered" for this stage once all of the stage's
+// produces[] exist under <recordPrefix>/construction/<unit>/<slug>/. The engine
+// walks the ordered unit list (the compiled Bolt DAG, flattened to topo order),
+// finds the FIRST uncovered unit, and emits a run-stage for THAT concrete unit,
+// with the gate SUPPRESSED (false) on EVERY not-yet-covered unit. The conductor
+// completes the unit's body, writes its artifacts, and re-runs `next` WITHOUT
+// reporting; the single checkbox stays in-flight and the engine hands back the
+// next uncovered unit. Once the LAST unit's artifacts land on disk, the next
+// `next` re-enters with no uncovered units and presents the stage's real gate
+// (see emitPerUnitRunStage's pick === null branch), so the human approves once
+// (covering all units, only after every unit is built) and the checkbox flips.
+// No unit DAG (a scope that SKIPs units-generation, or pre-compile) degrades to
+// today's single {unit-name} directive, zero behaviour change.
+
+// The ordered Unit-of-Work list for the active intent: the compiled Bolt DAG's
+// batches flattened to topological order (each batch is already lexicographically
+// sorted by computeBatches). [] when there is no compiled DAG (degrade path).
+function orderedUnits(projectDir: string): string[] {
+  const batches = readBoltDagBatches(projectDir);
+  if (!batches) return [];
+  return batches.flat();
+}
+
+// True when `unit` is COVERED for `node`, every artifact in node.produces[]
+// exists on disk under the resolved per-unit path
+// (<recordPrefix>/construction/<unit>/<owner.slug>/<name>.md). The resolved path
+// is workspace-RELATIVE with forward slashes, so we re-root it absolutely under
+// projectDir (splitting on "/" so the join is OS-correct). A stage with no
+// produces can never be "covered" by artifacts, but all five per-unit stages
+// declare >=2 produces (verified), so the empty case is unreachable in practice;
+// we treat empty-produces as NOT covered so the engine never silently skips a
+// unit it cannot prove it ran.
+function unitCovered(
+  projectDir: string,
+  node: GraphStage,
+  unit: string,
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+): boolean {
+  const names = node.produces ?? [];
+  if (names.length === 0) return false;
+  for (const name of names) {
+    const rel = resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx);
+    const abs = join(projectDir, ...rel.split("/"));
+    if (!existsSync(abs)) return false;
+  }
+  return true;
+}
+
+// Walk the ordered unit list and find the units whose artifacts are not all
+// present on disk. Returns {unit, uncovered} where `unit` is the FIRST uncovered
+// unit (the one the engine emits next) and `uncovered` is the full ordered list
+// of not-yet-covered units (so the caller can name them without re-scanning the
+// disk), or null when EVERY unit is already covered (the stage's per-unit work is
+// complete; the caller then presents the final gate, see emitPerUnitRunStage).
+// Order is the topo order from orderedUnits, so the engine produces unit
+// dependencies before their dependents.
+function nextUncoveredUnit(
+  projectDir: string,
+  node: GraphStage,
+  units: string[],
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+): { unit: string; uncovered: string[] } | null {
+  const uncovered = units.filter(
+    (u) => !unitCovered(projectDir, node, u, recordPrefix, codekbCtx),
+  );
+  if (uncovered.length === 0) return null;
+  return { unit: uncovered[0], uncovered };
+}
+
+// Emit ONE iteration of a per-unit Construction stage. The engine owns the
+// for_each loop here: it resolves the next uncovered unit, substitutes the real
+// unit name for {unit-name} in every path, and suppresses the gate for EVERY
+// not-yet-covered unit. The stage's real gate is presented exactly once, on the
+// all-covered re-entry (pick === null), after the last unit's artifacts exist on
+// disk. See the ledger note above emitRunStageForSlug's per-unit section.
+function emitPerUnitRunStage(
+  node: GraphStage,
+  projectType: "brownfield" | "greenfield" | null,
+  scope: string,
+  stateContent: string | null,
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+  projectDir: string,
+): void {
+  // GATE precedence: never iterate per-unit until the walking-skeleton gate is
+  // RESOLVED. If this is the skeleton-gate stage and no stance is recorded yet,
+  // buildRunStageDirective would emit gate:"unresolved" (the classify
+  // round-trip). The conductor must classify the stance FIRST, there is no
+  // per-unit work to do while the gate is undetermined, so emit the normal
+  // single directive (with the {unit-name} placeholder + the unresolved gate)
+  // and return. The follow-up `next` (after `report --skeleton-stance`) resolves
+  // the gate and re-enters here to begin per-unit iteration.
+  if (isSkeletonGateStage(node, scope) && readSkeletonStance(stateContent) === null) {
+    emitRunStageForSlug(node.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
+    return;
+  }
+
+  // No compiled unit DAG (a scope that SKIPs units-generation, refactor /
+  // security-patch / infra / bugfix / poc, or a pre-compile moment): degrade to
+  // today's single {unit-name} directive. Zero behaviour change off this path.
+  const units = orderedUnits(projectDir);
+  if (units.length === 0) {
+    emitRunStageForSlug(node.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
+    return;
+  }
+
+  const pick = nextUncoveredUnit(projectDir, node, units, recordPrefix, codekbCtx);
+  if (pick === null) {
+    // Every unit is already covered, but the checkbox is still in-flight: the
+    // conductor wrote the LAST unit's artifacts and re-ran `next` to settle the
+    // stage. There is nothing left to PRODUCE, so present the stage gate now (its
+    // REAL computed gate) on the last unit, so the human approves once and the
+    // engine advances. This is the ONLY directive on which the gate fires, so the
+    // approval is reached only after every unit's artifacts exist (closing the
+    // last-unit hole: no unit, not even the final one, can be skipped). It is also
+    // the re-entry after a "request changes" that re-ran a unit and then
+    // everything is covered again.
+    const lastUnit = units[units.length - 1];
+    const directive = buildRunStageDirective(
+      node, projectType, lastUnit, scope, stateContent, recordPrefix, codekbCtx,
+    );
+    directive.unit = lastUnit;
+    emit(directive);
+    return;
+  }
+
+  const directive = buildRunStageDirective(
+    node, projectType, pick.unit, scope, stateContent, recordPrefix, codekbCtx,
+  );
+  // Suppress the gate on EVERY not-yet-covered unit. A per-unit directive with an
+  // uncovered unit carries gate:false: the conductor completes the body, writes
+  // the unit's artifacts, and re-runs `next` (NO report-approve), so the checkbox
+  // stays in-flight and the engine emits the next uncovered unit. Once the LAST
+  // unit's artifacts land on disk, the next `next` takes the pick === null branch
+  // above and presents the stage's real gate, so the single human approval covers
+  // the whole stage only after all units are built. We override AFTER building so
+  // the rest of the directive (paths, reviewer, persona) is unchanged.
+  directive.gate = false;
+  directive.unit = pick.unit;
+  emit(directive);
+}
+
+// Route a slug to its emit path: a per-unit Construction stage drives the
+// engine's for_each loop (emitPerUnitRunStage); every other stage emits the
+// single {unit-name}-or-non-per-unit directive (emitRunStageForSlug). Called
+// from BOTH handleNext sites AFTER tryEmitSwarm has returned false, so
+// autonomous code-gen still swarms and only the non-swarm path reaches here.
+function emitForSlug(
+  slug: string,
+  projectType: "brownfield" | "greenfield" | null,
+  scope: string,
+  stateContent: string | null,
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+  projectDir: string,
+): void {
+  const node = nodeForSlug(slug);
+  if (node && isPerUnit(node)) {
+    emitPerUnitRunStage(node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir);
+    return;
+  }
+  emitRunStageForSlug(slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
 }
 
 // --- --single stage-runner mode ---
@@ -1734,11 +1917,7 @@ function emitJumpDirective(
     // codekb ctx is computed from the same live projectDir (no handleNext-cached
     // value reaches this inline site), so a codekb stage jumped-to here still
     // resolves under aidlc/spaces/<space>/codekb/<repo>/.
-    emitRunStageForSlug(first.slug, projectType, scope, null, relativeRecordDir(projectDir), {
-      projectDir,
-      space: activeSpace(projectDir),
-      codekbRepo: codekbRepoName(projectDir),
-    });
+    emitRunStageForSlug(first.slug, projectType, scope, null, relativeRecordDir(projectDir), codekbCtxFor(projectDir));
     return;
   }
 
@@ -1775,11 +1954,7 @@ function emitJumpDirective(
   // No-state jump: scope feeds the gate; stateContent is null (no workflow yet).
   // codekb ctx computed off the same live projectDir as the inline recordPrefix
   // (same rationale as the --phase inline site above).
-  emit(buildRunStageDirective(node, projectType, UNIT_NAME_PLACEHOLDER, scope, null, relativeRecordDir(projectDir), {
-    projectDir,
-    space: activeSpace(projectDir),
-    codekbRepo: codekbRepoName(projectDir),
-  }));
+  emit(buildRunStageDirective(node, projectType, UNIT_NAME_PLACEHOLDER, scope, null, relativeRecordDir(projectDir), codekbCtxFor(projectDir)));
 }
 
 // Pull `target_slug` AND `direction` out of `aidlc-jump.ts resolve`'s stdout
@@ -2283,6 +2458,57 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     return;
   }
   const isGated = node.phase !== "initialization";
+
+  // Per-unit coverage gate (issue #368), DETERMINISTIC enforcement on the
+  // approve path. The engine only PRESENTS the stage's real gate once every unit
+  // is covered (emitPerUnitRunStage suppresses gate:false on every uncovered unit
+  // and fires the real gate only on the all-covered re-entry), but a hand-flipped
+  // checkbox or a conductor that reported the wrong directive could still try to
+  // approve early and complete the stage for only some of N units. So before
+  // committing a gated per-unit stage's transition, require that EVERY unit is
+  // covered. If any unit is still uncovered, refuse with an error naming the
+  // remaining units, the conductor must run `next` to finish them first. Only
+  // enforced when a unit DAG exists (units.length>0); no DAG = single-iteration =
+  // no guard (matches the degrade path in emitPerUnitRunStage).
+  //
+  // Scoped to a NOT-yet-completed stage: an already-[x] stage is an idempotent
+  // re-report (a recovery replay) that the completed-stage branch below absorbs,
+  // and its artifacts may legitimately be absent (a fresh clone, moved files), so
+  // the guard must not turn a harmless replay into an error.
+  //
+  // Scoped to the INLINE per-unit loop, NOT the autonomous code-generation swarm.
+  // The swarm advances ONE Bolt BATCH at a time (tryEmitSwarm emits batches[0])
+  // and gates per BATCH (stage-protocol.md: "a single Bolt-level gate (or
+  // batch-level gate for parallel batches)"), with the swarm referee
+  // (aidlc-swarm.ts finalize) verifying each batch's convergence before its merge.
+  // An all-units coverage check is WRONG there: after batch 1 of a multi-batch
+  // DAG merges, the later batches' units are legitimately still uncovered, so
+  // requiring every unit would refuse the batch-1 approve AND `next` would
+  // re-emit batch 1 (no batch-advance), deadlocking the run. So we exclude the
+  // swarm condition (per-unit + mode:subagent + autonomous) verbatim from
+  // tryEmitSwarm's trigger and let the swarm's own per-batch verification stand.
+  // The guard remains for every inline per-unit stage (the four design stages,
+  // and code-generation when it falls back to the inline path off the swarm).
+  const isAutonomousSwarm =
+    node.mode === SWARM_MODE && readAutonomyMode(stateContent) === "autonomous";
+  if (isGated && isPerUnit(node) && stageCheckbox.state !== "completed" && !isAutonomousSwarm) {
+    const recordPrefix = relativeRecordDir(pd);
+    const codekbCtx = codekbCtxFor(pd);
+    const units = orderedUnits(pd);
+    if (units.length > 0) {
+      const pick = nextUncoveredUnit(pd, node, units, recordPrefix, codekbCtx);
+      if (pick !== null) {
+        emit({
+          kind: "error",
+          message:
+            `Stage "${slug}" is per-unit (for_each: unit-of-work) and ${pick.uncovered.length} of ` +
+            `${units.length} units are not yet complete (${pick.uncovered.join(", ")}). ` +
+            "Run `next` to continue the remaining units before approving.",
+        });
+        return;
+      }
+    }
+  }
 
   // Finality — is there an in-scope stage after this one? (state-override aware,
   // so EXECUTE/SKIP suffixes and prior [x]/[S] checkboxes are honoured.)

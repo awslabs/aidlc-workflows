@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.2] - 2026-06-28
+
+Fixes issue #368: a multi-unit Construction phase now runs every Unit of Work through each per-unit design stage before that stage completes, instead of producing artifacts for only the first unit. The orchestration engine now drives the per-unit `for_each` loop for the inline per-unit Construction stages (functional-design, nfr-requirements, nfr-design, infrastructure-design) the same way it already did for the code-generation swarm: on each `next` it emits one `run-stage` directive for the next unit whose artifacts are not yet on disk, carries the resolved unit name in a new `directive.unit` field, and suppresses the approval gate on every uncovered unit, so the stage's single approval gate is presented only once every unit is built. The non-autonomous code-generation fallback iterates the same way (the autonomous swarm path is unchanged). **Upgrade:** re-copy your `dist/<harness>/` shell into the project to pick up the engine and skill changes; in-flight workflows continue iterating from wherever their per-unit artifacts left off (the artifacts on disk are the coverage ledger, so no state migration is needed).
+
+* Per-unit Construction stages (functional-design, nfr-requirements, nfr-design, infrastructure-design) now iterate across every Unit of Work; the conductor runs each unit and re-runs `next` to get the following one, and the single stage approval is presented only after every unit is built.
+* `run-stage` directives gain an optional `unit` field naming the concrete Unit of Work the engine resolved for a per-unit stage (absent on non-per-unit stages and when no compiled unit list exists).
+* Approving a per-unit stage early is now refused: `report --result approved` errors and names the units still outstanding until every unit's artifacts are present.
+* A scope with no compiled unit list (refactor, security-patch, infra, bugfix, poc) is unchanged: the stage runs once, exactly as before.
+
 ## [2.1.1] - 2026-06-26
 
 Makes custom stages work end-to-end and surfaces stage-graph drift (issue #364). The runtime resolves stages from the compiled `stage-graph.json` only, so a stage `.md` dropped into `aidlc-common/stages/<phase>/` without a recompile was silently never executed, and `aidlc-graph compile` then rejected the new stage until its `{slug, number, name}` row was hand-edited into the JSON first. Compile now auto-seeds a new slug instead of throwing, and `/aidlc --doctor` plus session start now warn when on-disk stages are missing from the compiled graph. No new commands or flags, no breaking changes; compile stays a deliberate manual step (no auto-compile on session start). **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

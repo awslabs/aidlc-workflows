@@ -85,6 +85,19 @@ export interface RunStageDirective {
   // in-context, with no skill referencing that file by path. Absent on every
   // later directive (the persona persists in the session once delivered).
   conductor_persona?: string;
+  // unit: present ONLY on a per-unit Construction directive (for_each:
+  // unit-of-work) that the engine resolved to a CONCRETE Unit of Work; absent
+  // otherwise, and absent when the engine fell back to the {unit-name}
+  // placeholder (no compiled unit DAG). It is informational for the conductor
+  // (the produces/consumes/memory paths already carry the unit segment) AND a
+  // marker that this run-stage is ONE iteration of N: the engine drives the
+  // per-unit loop, re-emitting the next uncovered unit on each `next` and
+  // suppressing the gate (gate:false) on EVERY not-yet-covered unit. The stage's
+  // real gate is presented only once, on the re-entry after the last unit's
+  // artifacts land on disk (no uncovered units remain), so the conductor must
+  // build a gate:false unit and re-run `next` rather than approve it. See
+  // aidlc-orchestrate.ts emitPerUnitRunStage.
+  unit?: string;
 }
 
 // dispatch-subagent — same as run-stage, but the stage runs via a Task call to
@@ -225,6 +238,7 @@ const RUN_STAGE_FIELDS = [
   "reviewer",
   "reviewer_max_iterations",
   "conductor_persona",
+  "unit",
 ] as const;
 
 // dispatch-subagent = run-stage fields + `worker`.
@@ -365,6 +379,10 @@ function checkRunStageShared(
   // an optional string, reviewer_max_iterations an optional positive integer.
   checkOptionalString(o, "reviewer", kind, errors);
   checkOptionalPositiveInteger(o, "reviewer_max_iterations", kind, errors);
+  // unit: optional on a run-stage directive (present only on a per-unit
+  // Construction directive resolved to a concrete Unit of Work). A present
+  // value must be a string; absent is valid.
+  checkOptionalString(o, "unit", kind, errors);
 }
 
 // --- Helpers (mirror aidlc-stage-schema.ts: presence first, then type) ---
