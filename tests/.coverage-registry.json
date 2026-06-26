@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 397,
+    "total": 398,
     "enumeratedByClass": {
-      "function": 186,
+      "function": 187,
       "audit": 69,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 79,
+      "function": 80,
       "audit": 29,
       "scope": 9,
       "stage": 8,
@@ -2298,6 +2298,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:stageGraphDrift",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t184-stage-graph-drift.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:stageIndex",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2697,6 +2709,10 @@
         },
         {
           "file": "tests/unit/t169-session-resume-rebind.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t184-stage-graph-drift.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4282,6 +4298,10 @@
         },
         {
           "file": "tests/unit/t103.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t184-stage-graph-drift.test.ts",
           "mechanism": "cli"
         },
         {

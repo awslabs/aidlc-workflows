@@ -1327,4 +1327,192 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
     expect(r.rc).toBe(0);
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
+
+  // =========================================================================
+  // (i) CLASSIFIER-LEAK REGRESSIONS (commit e9b6e48). Three precision fixes to
+  // isEngineToolCall (aidlc-stop.ts:474) / isEngineEngagementSegment (:507) /
+  // isInjectedHookFeedback (:542), all closing 'wrong-allow' leaks an adversarial
+  // review of the tier-3 conversational carve-out found. They could let an
+  // engine-engaged turn be misread as chat (ALLOW) when it should BLOCK:
+  //
+  //   1. PRECEDENCE - a command is split on shell separators (&& || ; | newline)
+  //      and each segment judged on its own (aidlc-stop.ts:489). A read-only flag
+  //      (--status/--doctor/--help/--version) now exempts ONLY the segment it
+  //      appears in, so a chained `... --status && aidlc-orchestrate report ...`,
+  //      or a `report --reason '...--status...'` whose --status is inside an
+  //      argument, is ENGAGEMENT (BLOCK), not exempt.
+  //   2. MISSED COMMANDS - aidlc-jump / aidlc-bolt / aidlc-swarm (conductor-run,
+  //      state-mutating) and aidlc-state skip/reject/revise/resume now count as
+  //      engagement (:525,:531); an unrecognised aidlc-* verb fails TOWARD
+  //      engagement (BLOCK). A read-only `aidlc-bolt --help` stays chat (ALLOW).
+  //   3. CODEX RAW CONTINUATION - the hook's own injected nudge is excluded from
+  //      human-prompt detection not just by the Claude "Stop hook feedback:"
+  //      wrapper but also by the RAW continuationReason body ("The AIDLC workflow
+  //      has a pending step" + "forwarding loop"; aidlc-stop.ts:546-548), in BOTH
+  //      readers. So an engine-engaged turn whose last user entry is that raw
+  //      nudge (no wrapper) still BLOCKS - the nudge must not reset the human
+  //      anchor.
+  //
+  // Each BLOCK-expecting case uses a FRESH makeProject() (the interactive cap is
+  // 2; a reused project's counter would release on the 2nd no-progress call and
+  // mask a real BLOCK - see the (a)/(h) pattern).
+  // =========================================================================
+
+  // --- (i.1) PRECEDENCE: per-segment judgement of chained / argument-embedded flags ---
+  test("(i) chained `aidlc-utility --status && aidlc-orchestrate report` after the human prompt BLOCKS (per-segment precedence)", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // The read-only --status is in the FIRST segment (aidlc-utility, not even an
+    // engine verb); the SECOND segment runs a mutating `report`. Pre-fix the
+    // line-level --status wrongly exempted the whole chain; now each segment is
+    // judged on its own, so the report segment is engagement -> BLOCK.
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "looks fine" },
+      {
+        kind: "bash",
+        command:
+          "bun .claude/tools/aidlc-utility.ts --status && bun .claude/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result approved",
+      },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(i) `aidlc-orchestrate report --reason \"checked --status earlier\"` BLOCKS (flag inside an argument is not an exemption)", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // The --status token only appears INSIDE the --reason argument of a single
+    // `report` segment. Pre-fix the line-level scan saw --status and exempted the
+    // turn; now the lone segment carries `report` (advancing) -> engagement -> BLOCK.
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "proceed" },
+      {
+        kind: "bash",
+        command:
+          'bun .claude/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result approved --reason "checked --status earlier"',
+      },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  // --- (i.2) MISSED COMMANDS: jump / state-skip count as engagement; bolt --help does not ---
+  test("(i) engaged: `aidlc-jump.ts execute application-design` after the human prompt BLOCKS", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // aidlc-jump moves the pointer (state-mutating); pre-fix it was not in the
+    // engagement set, so a jump-then-bail was misread as chat. Now it BLOCKS.
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "jump ahead" },
+      { kind: "bash", command: "bun .claude/tools/aidlc-jump.ts execute application-design" },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(i) engaged: `aidlc-state.ts skip foo` after the human prompt BLOCKS", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // skip is a state-mutating aidlc-state verb newly recognised as engagement
+    // (aidlc-stop.ts:525); a skip-then-bail must be nudged.
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "skip this one" },
+      { kind: "bash", command: "bun .claude/tools/aidlc-state.ts skip foo" },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(i) read-only `aidlc-bolt.ts --help` after a chat prompt allows the stop (read-only verb is not engagement)", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // The complement to the engagement cases: aidlc-bolt is in the engagement
+    // set, but a read-only --help on it is NOT engagement (aidlc-stop.ts:530), so
+    // a chatting human who asked about bolt and got --help stays conversational.
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "how does bolt work?" },
+      { kind: "bash", command: "bun .claude/tools/aidlc-bolt.ts --help" },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe(""); // allowed: read-only --help is not engagement
+  }, 30000);
+
+  // --- (i.3) CODEX RAW CONTINUATION: the raw nudge body must not reset the human anchor ---
+  // The hook's continuationReason body (aidlc-stop.ts:781-792) is excluded from
+  // human-prompt detection by isInjectedHookFeedback's RAW-body branch
+  // (:546-548): starts "The AIDLC workflow has a pending step" AND contains
+  // "forwarding loop". So a turn that engaged the engine (bare `next` after the
+  // real "continue") whose LAST user entry is that raw nudge (no "Stop hook
+  // feedback:" wrapper) must STILL BLOCK: were the raw nudge counted as the
+  // latest human prompt, the anchor would move past the engine call and the
+  // engaged run would be misread as chat (wrong ALLOW).
+  const RAW_NUDGE =
+    "The AIDLC workflow has a pending step (a run-stage directive). " +
+    "You haven't finished the forwarding loop yet. Run `bun .claude/tools/aidlc-orchestrate.ts next`, " +
+    "act on the directive it emits, then report.";
+
+  test("(i) Claude: a RAW continuation body (no 'Stop hook feedback:' wrapper) does NOT reset the human anchor; the engaged turn still BLOCKS", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // Genuine human prompt "continue"; conductor ran the engine (bare next) then
+    // bailed; the hook re-injected its RAW nudge as a user entry (no wrapper).
+    // The classifier must exclude the raw nudge by body, keeping the anchor at
+    // "continue" with the engine call after it -> NOT conversational -> BLOCK.
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "continue" },
+      { kind: "bash", command: "bun .claude/tools/aidlc-orchestrate.ts next" },
+      { kind: "userText", text: RAW_NUDGE },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(i) Codex: a RAW continuation body (no wrapper) does NOT reset the human anchor; the engaged turn still BLOCKS", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // The codex reader applies the same isInjectedHookFeedback raw-body guard
+    // (aidlc-stop.ts:652), so the raw nudge is excluded there too.
+    const tp = seedTranscriptEntries(proj, "codex", [
+      { kind: "human", text: "continue" },
+      { kind: "bash", command: "bun .codex/tools/aidlc-orchestrate.ts next" },
+      { kind: "userText", text: RAW_NUDGE },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
 });

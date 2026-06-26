@@ -196,7 +196,7 @@ the Unit may merge.
 
 ---
 
-## The driver seam — `AIDLC_USE_SWARM`
+## The driver seam - `AIDLC_USE_SWARM`
 
 How the swarm physically fans out is selected by an environment variable, and it
 is worth being plain that this is an **operator knob**. It is not a `.claude/`
@@ -212,9 +212,11 @@ shapes.
 
 Both drivers run the same five per-Unit stages and converge against the same
 project check. The difference is purely how the parallel work is dispatched. The
-runaway backstop lives in the harness's 8-block **Stop-hook ceiling**
-(`core/hooks/aidlc-stop.ts`, the `blockCap()` / `DEFAULT_BLOCK_CAP` pair, exposed
-as `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`, default 8), outside the swarm tool itself. The
+runaway backstop lives in the harness's **Stop-hook ceiling**
+(`core/hooks/aidlc-stop.ts`, the `blockCap()` / `defaultBlockCap()` pair, exposed
+as `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`), outside the swarm tool itself. On this
+autonomous-Construction path the default ceiling is **8 blocks** (the interactive
+default is 2; an explicit `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` overrides both). The
 driver seam contract is in
 [Skill System § 6](../reference/17-skill-system.md#6-the-swarm-referee-the-driver-seam-and-the-bolt-dag).
 
