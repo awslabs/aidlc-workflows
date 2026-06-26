@@ -371,6 +371,160 @@ function seedTranscript(
   return path;
 }
 
+/**
+ * A flexible transcript builder for the (h) classifier-refinement cases. Where
+ * seedTranscript above writes a fixed 2-entry shape, this one takes an ORDERED
+ * list of high-level entries and emits the matching JSONL line per harness, so a
+ * single test can model multi-turn transcripts (a human prompt, the hook's own
+ * isMeta re-prompt, an engine call with a specific command, plain text, ...).
+ *
+ * Entry kinds (the hook's transcriptIsConversational classifies them via
+ * isEngineToolCall, aidlc-stop.ts:474/508):
+ *   - {kind:"human", text}        a genuine human prompt (the anchor the hook
+ *                                 answers; string content).
+ *   - {kind:"text"}               an assistant TEXT-only turn (no engine call).
+ *   - {kind:"bash", command}      an assistant turn that runs a Bash tool with
+ *                                 `command`; the hook routes the command string
+ *                                 through isEngineToolCall (read-only `--status`
+ *                                 / `aidlc-utility` are NOT engagement; a bare
+ *                                 `next` / `report` / `aidlc-state approve` ARE).
+ *   - {kind:"meta", text}         a `type:"user"` entry with `isMeta:true`
+ *                                 (Claude only): the Stop hook's own injected
+ *                                 continuation, which the classifier must SKIP
+ *                                 so it does not reset the human-prompt anchor.
+ *   - {kind:"userText", text}     a `type:"user"` entry WITHOUT isMeta (Claude)
+ *                                 / a plain user message (Codex). Used to model
+ *                                 the hook-feedback turn excluded purely by its
+ *                                 "Stop hook feedback:" content prefix.
+ *
+ * Mirrors seedTranscript's file-naming contract: the codex variant is written as
+ * `rollout-*.jsonl` (so the hook picks the codex reader, aidlc-stop.ts:792); the
+ * claude variant as `transcript.jsonl`.
+ */
+type TranscriptEntry =
+  | { kind: "human"; text: string }
+  | { kind: "text" }
+  | { kind: "bash"; command: string }
+  | { kind: "meta"; text: string }
+  | { kind: "userText"; text: string };
+
+function seedTranscriptEntries(
+  proj: string,
+  format: "claude" | "codex",
+  entries: TranscriptEntry[],
+): string {
+  const lines: string[] = [];
+  for (const e of entries) {
+    if (format === "claude") {
+      switch (e.kind) {
+        case "human":
+          lines.push(
+            JSON.stringify({ type: "user", message: { role: "user", content: e.text } }),
+          );
+          break;
+        case "userText":
+          // A type:"user" entry with NO isMeta, excluded only if its content
+          // starts with "Stop hook feedback:" (the content guard).
+          lines.push(
+            JSON.stringify({ type: "user", message: { role: "user", content: e.text } }),
+          );
+          break;
+        case "meta":
+          // The Stop hook's own re-prompt: isMeta:true AND the content prefix.
+          lines.push(
+            JSON.stringify({
+              type: "user",
+              isMeta: true,
+              message: { role: "user", content: e.text },
+            }),
+          );
+          break;
+        case "text":
+          lines.push(
+            JSON.stringify({
+              type: "assistant",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "Sure, here is the answer."}],
+              },
+            }),
+          );
+          break;
+        case "bash":
+          lines.push(
+            JSON.stringify({
+              type: "assistant",
+              message: {
+                role: "assistant",
+                content: [{ type: "tool_use", name: "Bash", input: { command: e.command } }],
+              },
+            }),
+          );
+          break;
+      }
+    } else {
+      switch (e.kind) {
+        case "human":
+        case "userText":
+          lines.push(
+            JSON.stringify({
+              type: "response_item",
+              payload: {
+                type: "message",
+                role: "user",
+                content: [{ type: "input_text", text: e.text }],
+              },
+            }),
+          );
+          break;
+        case "meta":
+          // Codex has no isMeta flag; the hook excludes the hook-feedback turn by
+          // its content prefix only, so a "meta" entry on codex is a plain user
+          // message whose text carries the "Stop hook feedback:" prefix.
+          lines.push(
+            JSON.stringify({
+              type: "response_item",
+              payload: {
+                type: "message",
+                role: "user",
+                content: [{ type: "input_text", text: e.text }],
+              },
+            }),
+          );
+          break;
+        case "text":
+          lines.push(
+            JSON.stringify({
+              type: "response_item",
+              payload: {
+                type: "message",
+                role: "assistant",
+                content: [{ type: "output_text", text: "Sure, here is the answer."}],
+              },
+            }),
+          );
+          break;
+        case "bash":
+          lines.push(
+            JSON.stringify({
+              type: "response_item",
+              payload: {
+                type: "function_call",
+                name: "Bash",
+                arguments: JSON.stringify({ command: e.command }),
+              },
+            }),
+          );
+          break;
+      }
+    }
+  }
+  const name = format === "codex" ? "rollout-2026-06-26T00-00-00.jsonl" : "transcript.jsonl";
+  const path = join(proj, name);
+  writeFileSync(path, `${lines.join("\n")}\n`, "utf-8");
+  return path;
+}
+
 interface HookResult {
   rc: number;
   out: string; // stdout only (the .sh discarded stderr with 2>/dev/null)
@@ -949,5 +1103,228 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
     const n = runHook(proj, '{"stop_hook_active":false}', "__nonzero__");
     expect(n.rc).toBe(0);
     expect(n.out).toBe("");
+  }, 30000);
+
+  // =========================================================================
+  // (h) CLASSIFIER REFINEMENTS (commit 92b94a2): two hardenings of the tier-3
+  // conversational carve-out, pinned deterministically against the real hook:
+  //
+  //   1. READ-ONLY ENGINE QUERIES are NOT workflow engagement. isEngineToolCall
+  //      (aidlc-stop.ts:474) returns FALSE for `--status` / `--doctor` / `--help`
+  //      / `--version` / `aidlc-orchestrate next --status` and ANY aidlc-utility
+  //      call, even though they name aidlc-orchestrate/aidlc-state. It returns
+  //      TRUE only for loop-advancing / state-mutating calls: bare
+  //      `aidlc-orchestrate next`, `aidlc-orchestrate report`, and `aidlc-state`
+  //      with approve/advance/finalize/complete-workflow/gate-start/checkbox/
+  //      park/unpark/set. So a chat turn whose conductor ANSWERED with a
+  //      read-only query stays conversational (ALLOW); a turn that ran a
+  //      loop-advancing / mutating call then bailed BLOCKS.
+  //   2. The hook's OWN injected continuation is NOT a human prompt. Claude
+  //      records it as a `type:"user"` entry with `isMeta:true` whose content
+  //      starts "Stop hook feedback:" (aidlc-stop.ts:546,564). The classifier
+  //      SKIPS it (by isMeta AND by the content prefix) so the human-prompt
+  //      anchor stays the human's, not the hook's. Codex has no isMeta, so the
+  //      content guard alone excludes it there (aidlc-stop.ts:605).
+  //
+  // Each case uses a FRESH makeProject() (so the per-project no-progress counter
+  // starts at 0 and a BLOCK is a real first block at the interactive cap of 2,
+  // never masked by a released counter from a prior call; see the (a) pattern).
+  // =========================================================================
+
+  // --- (h.1) read-only engine queries are conversational (ALLOW) ---
+  test("(h) chat + read-only `aidlc-orchestrate next --status` after the human prompt allows the stop", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // A chatting human asks "what stage am I on?"; the conductor answers with a
+    // read-only `next --status`. isEngineToolCall returns false on --status, so
+    // the turn is still conversational.
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "what stage am I on?" },
+      { kind: "bash", command: "bun .claude/tools/aidlc-orchestrate.ts next --status" },
+      { kind: "text" },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe(""); // allowed: read-only query is not engagement
+  }, 30000);
+
+  test("(h) chat + `aidlc-utility status` after the human prompt allows the stop", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // aidlc-utility names neither aidlc-orchestrate nor aidlc-state, so
+    // isEngineToolCall returns false at its first gate (:483): not engagement.
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "show me the workflow status" },
+      { kind: "bash", command: "bun .claude/tools/aidlc-utility.ts status" },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, 30000);
+
+  test("(h) chat + `aidlc-orchestrate --doctor` / `--help` / `--version` each allow the stop", () => {
+    for (const flag of ["--doctor", "--help", "--version"]) {
+      const proj = makeProject(); // fresh per flag: counter starts at 0
+      seedActive(proj, "requirements-analysis");
+      const tp = seedTranscriptEntries(proj, "claude", [
+        { kind: "human", text: "is the workflow healthy?" },
+        { kind: "bash", command: `bun .claude/tools/aidlc-orchestrate.ts ${flag}` },
+      ]);
+      const r = runHook(
+        proj,
+        JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+        "run-stage",
+      );
+      expect(r.rc).toBe(0);
+      expect(r.out).toBe(""); // each read-only flag stays conversational
+    }
+  }, 30000);
+
+  // --- (h.1) loop-advancing / mutating calls are engagement (BLOCK) ---
+  test("(h) engaged: bare `aidlc-orchestrate next` after the human prompt BLOCKS", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // A bare `next` (no read-only flag) fetches the next directive to act on;
+    // that IS engagement, so a conductor that ran it then bailed must be nudged.
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "continue" },
+      { kind: "bash", command: "bun .claude/tools/aidlc-orchestrate.ts next" },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(h) engaged: `aidlc-orchestrate report --stage x --result approved` BLOCKS", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "looks good, proceed" },
+      {
+        kind: "bash",
+        command:
+          "bun .claude/tools/aidlc-orchestrate.ts report --stage requirements-analysis --result approved",
+      },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(h) engaged: `aidlc-state approve foo` BLOCKS", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "approve it" },
+      { kind: "bash", command: "bun .claude/tools/aidlc-state.ts approve foo" },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  // --- (h.2) the hook's own re-prompt is excluded from "genuine human prompt" ---
+  test("(h) isMeta exclusion: an isMeta 'Stop hook feedback:' re-prompt does NOT reset the human anchor; engine call after the REAL prompt still BLOCKS", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // The REAL human prompt is "continue"; the conductor engaged the engine
+    // (bare next), produced text, then the hook injected its OWN re-prompt as a
+    // type:"user" isMeta entry, then the conductor ran the engine again. The
+    // classifier MUST skip the isMeta entry rather than treat it as the latest
+    // human prompt: the genuine anchor stays at "continue", and an engine call
+    // (bare next) appears after it, so the turn is NOT conversational -> BLOCK.
+    // Were the isMeta entry counted as the human prompt, the anchor would move
+    // past the first next and the engaged run could be misread as chat.
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "continue" },
+      { kind: "bash", command: "bun .claude/tools/aidlc-orchestrate.ts next" },
+      { kind: "text" },
+      { kind: "meta", text: "Stop hook feedback: The AIDLC workflow has a pending step." },
+      { kind: "bash", command: "bun .claude/tools/aidlc-orchestrate.ts next" },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(h) content exclusion (no isMeta): a 'Stop hook feedback:' user entry is excluded by content, so the last GENUINE prompt was a chat answer -> ALLOW", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // No isMeta flag this time. The genuine human prompt is "explain X", answered
+    // with TEXT only (no engine call). A later type:"user" entry whose content
+    // starts "Stop hook feedback:" is excluded BY CONTENT, so it must not become
+    // the new anchor; the last genuine prompt stays "explain X" -> conversational.
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "explain what this stage does" },
+      { kind: "text" },
+      { kind: "userText", text: "Stop hook feedback: The AIDLC workflow has a pending step." },
+      { kind: "text" },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe(""); // allowed: feedback entry excluded by content prefix
+  }, 30000);
+
+  // --- (h) Codex-format equivalents (read-only ALLOW + bare-next BLOCK) ---
+  test("(h) Codex: chat + read-only `aidlc-orchestrate next --status` allows the stop", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // The codex reader routes the function_call arguments through isEngineToolCall
+    // too (aidlc-stop.ts:639), so the read-only exemption holds across formats.
+    const tp = seedTranscriptEntries(proj, "codex", [
+      { kind: "human", text: "what stage am I on?" },
+      { kind: "bash", command: "bun .codex/tools/aidlc-orchestrate.ts next --status" },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, 30000);
+
+  test("(h) Codex: engaged bare `aidlc-orchestrate next` BLOCKS", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const tp = seedTranscriptEntries(proj, "codex", [
+      { kind: "human", text: "continue" },
+      { kind: "bash", command: "bun .codex/tools/aidlc-orchestrate.ts next" },
+    ]);
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, 30000);
 });
