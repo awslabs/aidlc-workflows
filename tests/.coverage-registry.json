@@ -2746,6 +2746,10 @@
         {
           "file": "tests/integration/t131-hooks-settings-fire.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t186-park-conversational.sdk.test.ts",
+          "mechanism": "sdk"
         }
       ],
       "status": "covered"

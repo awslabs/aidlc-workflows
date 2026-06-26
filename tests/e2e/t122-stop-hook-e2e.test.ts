@@ -80,6 +80,28 @@
 //          test 4, the open question is the only difference, and it flips
 //          block -> allow. t121 owns the autonomy-guard / answered / no-file
 //          matrix.
+//   9 PARK against the REAL engine (NEW, issue #367, the requested gap)
+//       -> seed the Running final stage, run the REAL `aidlc-orchestrate park`
+//          (exit 0, emits a `parked` directive). Park does NOT advance: the
+//          feedback-optimization checkbox stays [-] and Parked / Parked At Stage
+//          are written (aidlc-state.ts:418-441). The real hook then sees the
+//          engine re-emit `parked` and ALLOWS the stop (empty stdout, exit 0;
+//          aidlc-stop.ts:760-771), the supported multi-session exit.
+//   10 PARK under autonomous Construction is REFUSED (NEW, issue #365 guard)
+//       -> inject `Construction Autonomy Mode: autonomous`; the REAL
+//          `aidlc-state.ts park` refuses (NON-ZERO exit, stderr names the
+//          autonomous refusal, aidlc-state.ts:420-424). Defence-in-depth: with
+//          Parked markers injected by hand, the hook's parked branch DECLINES
+//          the allow under autonomous and falls through to the cap-bounded BLOCK
+//          (aidlc-stop.ts:760-771).
+//   11 CONVERSATIONAL carve-out (tier 3) against the REAL engine (NEW, issue
+//      #365 broader reading)
+//       -> keep the final stage [-] (engine emits a pending run-stage, as test
+//          4 proved BLOCKS). With a Claude chat transcript (human prompt
+//          answered with TEXT only, no engine call) the hook ALLOWS (empty
+//          stdout, exit 0); with an aidlc-orchestrate Bash call after the prompt
+//          the SAME fixture still BLOCKS (engine engaged -> mid-loop bail).
+//          t121 owns the codex / autonomy / fail-closed matrix.
 //
 // The human-stop carve-out (Esc) needs no test: SPIKE 1 confirmed Stop hooks
 // do not fire on user interrupt (the .sh's closing note, kept).
@@ -422,6 +444,224 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         // BLOCKS without a question); the blank [Answer]: now releases it.
         expect(r.rc).toBe(0);
         expect(r.out).toBe("");
+      } finally {
+        cleanupTestProject(proj);
+      }
+    },
+    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+  );
+
+  // =========================================================================
+  // (9) PARK against the REAL engine (issue #367, the explicitly-requested
+  // gap). Seed the Running final-stage workflow (the same fixture test 4 proved
+  // BLOCKS a pending run-stage), then run the REAL `aidlc-orchestrate park`. It
+  // shells out to `aidlc-state.ts park` which persists Parked / Parked At Stage
+  // and emits WORKFLOW_PARKED (aidlc-state.ts:418-441), WITHOUT advancing any
+  // stage. The real hook then consults the engine, which now re-emits the
+  // terminal `parked` directive (aidlc-orchestrate.ts:1094-1102), and ALLOWS the
+  // turn to end (aidlc-stop.ts:760-771), the supported multi-session exit, so
+  // the agent never rubber-stamps the remaining stages to force a `done`. We
+  // also pin that park did NOT flip the feedback-optimization checkbox (still
+  // [-]) and DID write the Parked / Parked At Stage runtime markers.
+  // Deterministic (no model in the loop). t121 owns the mock-engine matrix.
+  // =========================================================================
+  test(
+    "(real engine) park allows the stop: real park keeps the stage [-] and writes Parked markers, then the hook allows (empty stdout, exit 0)",
+    () => {
+      const proj = setupIntegrationProject({
+        withState: "state-final-stage.md",
+        withAudit: true,
+      });
+      try {
+        // Run the REAL park (mirrors runRealHook's spawn pattern; the engine
+        // resolves the workspace via --project-dir). Park exits 0 and emits a
+        // `parked` directive on stdout.
+        const park = spawnSync(
+          BUN,
+          [
+            join(proj, ".claude", "tools", "aidlc-orchestrate.ts"),
+            "park",
+            "--project-dir",
+            proj,
+          ],
+          { encoding: "utf-8", timeout: HOOK_SPAWN_TIMEOUT_MS },
+        );
+        expect(park.status).toBe(0);
+        const parkOut = JSON.parse((park.stdout ?? "").trim()) as {
+          kind: string;
+          stage: string;
+        };
+        expect(parkOut.kind).toBe("parked");
+        expect(parkOut.stage).toBe(PENDING_STAGE);
+
+        // Park must NOT advance the workflow: the final stage stays [-]
+        // in-progress (parking is an inter-stage pause, never a stage
+        // completion), and the runtime markers are written.
+        const state = readFileSync(seededStateFile(proj), "utf-8");
+        expect(state).toContain(`- [-] ${PENDING_STAGE} — EXECUTE`);
+        expect(state).toMatch(/\*\*Parked\*\*:/);
+        expect(state).toMatch(/\*\*Parked At Stage\*\*:\s*feedback-optimization/);
+
+        // The real hook consults the engine (now `parked`) and ALLOWS the stop:
+        // empty stdout, exit 0, the turn ends cleanly.
+        const r = runRealHook(proj, '{"stop_hook_active":true}');
+        expect(r.rc).toBe(0);
+        expect(r.out).toBe("");
+      } finally {
+        cleanupTestProject(proj);
+      }
+    },
+    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+  );
+
+  // =========================================================================
+  // (10) PARK under autonomous Construction is REFUSED (issue #365 guard,
+  // salvaged from the suspend branch). An unattended autonomous run has no human
+  // to resume it, so `park` must refuse outright. Two deterministic surfaces:
+  //   - the REAL `aidlc-state.ts park` exits NON-ZERO with stderr naming the
+  //     autonomous refusal (aidlc-state.ts:420-424);
+  //   - even if the Parked markers were somehow present, the hook's parked
+  //     branch DECLINES the allow under autonomous and falls through to the
+  //     cap-bounded BLOCK (aidlc-stop.ts:760-771), defence-in-depth beside the
+  //     tool refusal. We inject Parked markers + autonomous mode and assert the
+  //     real hook still BLOCKS (the real engine re-emits `parked`, but the hook
+  //     declines it). Deterministic (no model in the loop).
+  // =========================================================================
+  test(
+    "(real engine) park under Construction Autonomy Mode=autonomous: state.ts park refuses (non-zero, stderr names autonomous) and the hook declines a parked allow",
+    () => {
+      const proj = setupIntegrationProject({
+        withState: "state-final-stage.md",
+        withAudit: true,
+      });
+      try {
+        // Flag the run autonomous (insert under Runtime State, mirroring the
+        // skeleton-stance / parked runtime fields aidlc-state.ts writes there).
+        sedReplaceInFile(
+          seededStateFile(proj),
+          "## Runtime State\n- **Revision Count**: 0",
+          "## Runtime State\n- **Revision Count**: 0\n- **Construction Autonomy Mode**: autonomous",
+        );
+
+        // The REAL state-tool park refuses outright: non-zero exit, stderr names
+        // the autonomous refusal (aidlc-state.ts:420-424).
+        const park = spawnSync(
+          BUN,
+          [
+            join(proj, ".claude", "tools", "aidlc-state.ts"),
+            "park",
+            "--project-dir",
+            proj,
+          ],
+          { encoding: "utf-8", timeout: HOOK_SPAWN_TIMEOUT_MS },
+        );
+        expect(park.status).not.toBe(0);
+        expect((park.stderr ?? "").toLowerCase()).toContain("autonomous");
+
+        // Defence-in-depth: even with the Parked markers present, the hook's
+        // parked branch declines the allow under autonomous. Inject the markers
+        // by hand (the tool refused to write them) and confirm the hook BLOCKS:
+        // the real engine re-emits `parked`, but the autonomy guard
+        // (aidlc-stop.ts:760-771) falls through to the cap-bounded block.
+        const sf = seededStateFile(proj);
+        sedReplaceInFile(
+          sf,
+          "- **Construction Autonomy Mode**: autonomous",
+          "- **Construction Autonomy Mode**: autonomous\n- **Parked**: 2026-06-26T00:00:00Z\n- **Parked At Stage**: feedback-optimization",
+        );
+        const r = runRealHook(proj, '{"stop_hook_active":false}');
+        expect(r.rc).toBe(0);
+        expect((JSON.parse(r.out) as { decision?: string }).decision).toBe(
+          "block",
+        );
+      } finally {
+        cleanupTestProject(proj);
+      }
+    },
+    HOOK_SPAWN_TIMEOUT_MS + 30_000,
+  );
+
+  // =========================================================================
+  // (11) CONVERSATIONAL carve-out (tier 3, issue #365 broader reading) against
+  // the REAL engine. The final stage stays [-] in-progress (so the real engine
+  // emits a pending run-stage, as test 4 proved BLOCKS), but the ending turn was
+  // CONVERSATIONAL: a Claude transcript whose most recent human prompt was
+  // answered with TEXT only, no workflow-engine call. The real hook ALLOWS the
+  // stop (empty stdout, exit 0). The complement: the SAME fixture with an
+  // aidlc-orchestrate Bash call after the human prompt still BLOCKS (a conductor
+  // that engaged the engine and then quit mid-loop must still be nudged).
+  // Deterministic (no model in the loop). t121 owns the codex / autonomy /
+  // fail-closed matrix.
+  // =========================================================================
+  test(
+    "(real engine) a conversational turn allows the stop: chat transcript -> empty stdout; an engine Bash call after the prompt still BLOCKS",
+    () => {
+      const proj = setupIntegrationProject({
+        withState: "state-final-stage.md",
+        withAudit: true,
+      });
+      try {
+        // Claude-format chat transcript: a human prompt answered with TEXT only.
+        const chatPath = join(proj, "transcript.jsonl");
+        writeFileSync(
+          chatPath,
+          `${JSON.stringify({
+            type: "user",
+            message: { role: "user", content: "Why does this stage matter?" },
+          })}\n${JSON.stringify({
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "It closes the feedback loop." }],
+            },
+          })}\n`,
+          "utf-8",
+        );
+        const allowed = runRealHook(
+          proj,
+          JSON.stringify({ stop_hook_active: false, transcript_path: chatPath }),
+        );
+        // The real engine STILL returns a pending run-stage (the [-] stage is
+        // in-flight); the conversational carve-out is what releases.
+        expect(allowed.rc).toBe(0);
+        expect(allowed.out).toBe("");
+
+        // Complement: the responding turn ran the engine -> a mid-loop bail that
+        // must still be nudged. Same fixture, only the transcript differs.
+        const enginePath = join(proj, "transcript-engine.jsonl");
+        writeFileSync(
+          enginePath,
+          `${JSON.stringify({
+            type: "user",
+            message: { role: "user", content: "Continue the workflow." },
+          })}\n${JSON.stringify({
+            type: "assistant",
+            message: {
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  name: "Bash",
+                  input: {
+                    command: "bun .claude/tools/aidlc-orchestrate.ts next",
+                  },
+                },
+              ],
+            },
+          })}\n`,
+          "utf-8",
+        );
+        const blocked = runRealHook(
+          proj,
+          JSON.stringify({
+            stop_hook_active: false,
+            transcript_path: enginePath,
+          }),
+        );
+        expect(blocked.rc).toBe(0);
+        expect((JSON.parse(blocked.out) as { decision?: string }).decision).toBe(
+          "block",
+        );
       } finally {
         cleanupTestProject(proj);
       }
