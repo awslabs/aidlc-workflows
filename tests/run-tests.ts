@@ -471,10 +471,10 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
 
   // Disable the stage-completion artifact guard (issue #366) for the suite by
   // default: most state/orchestrate tests drive approve/advance against bare
-  // fixtures that intentionally produce no artifacts, and threading --test-run
-  // through every call site would be brittle. The dedicated guard test
-  // (t185-stage-artifact-guard) re-enables it by clearing this var in its own
-  // tool spawns, so enforcement is still covered.
+  // fixtures that intentionally produce no artifacts, so the suite sets the env
+  // bypass globally. The dedicated guard test (t185-stage-artifact-guard)
+  // re-enables the guard by clearing this var in its own tool spawns, so
+  // enforcement is still covered.
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AIDLC_TEST_NAME: base,

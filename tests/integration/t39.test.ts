@@ -4,7 +4,7 @@
 // plan 27), mechanism = cli. Equal-or-stronger migration: the .sh is a
 // data-driven sweep over all 9 canonical scopes (enterprise, feature, mvp,
 // poc, bugfix, refactor, infra, security-patch, workshop), running `bun
-// aidlc-utility.ts init --scope <s> --project-dir <p> --test-run` once per
+// aidlc-utility.ts init --scope <s> --project-dir <p>` once per
 // scope and asserting 3 observables per scope (27 total). Every one of those
 // observables is preserved here by SPAWNING the real CLI via
 // node:child_process spawnSync (BUN + the tool .ts path) and asserting on the
@@ -121,18 +121,17 @@ interface InitResult {
 }
 
 /**
- * Spawn `bun aidlc-utility.ts init --scope <scope> --project-dir <p>
- * --test-run`. Mirrors the .sh's
+ * Spawn `bun aidlc-utility.ts init --scope <scope> --project-dir <p>`.
+ * Mirrors the .sh's
  *   AIDLC_WORKFLOW_INTENT="phase sequence test" bun "$UTIL" init --scope ...
  * The .sh exported AIDLC_WORKFLOW_INTENT defensively (the tool does not read
  * it — grep-verified — but workshop's flow historically needed an intent), so
- * we carry it through the env for byte-for-byte parity. --test-run avoids
- * interactive prompts, exactly as the .sh.
+ * we carry it through the env for byte-for-byte parity.
  */
 function runInit(scope: string, p: string): InitResult {
   const res = spawnSync(
     BUN,
-    [UTIL, "init", "--scope", scope, "--project-dir", p, "--test-run"],
+    [UTIL, "init", "--scope", scope, "--project-dir", p],
     {
       encoding: "utf-8",
       env: { ...process.env, AIDLC_WORKFLOW_INTENT: "phase sequence test" },

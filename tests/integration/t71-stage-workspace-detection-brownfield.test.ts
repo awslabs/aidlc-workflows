@@ -14,7 +14,7 @@
 // the flat tree into a record and RETURNS without running the scan), which would
 // skip the very WORKSPACE_SCANNED classification this test pins. A clean birth on
 // the brownfield stub runs the scan and writes the classification (mirrors how
-// t70.test.ts was migrated for greenfield). NO --test-run — the birth path has no
+// t70.test.ts was migrated for greenfield). The birth path has no
 // gate to auto-approve (it prints state and STOPs). Asserts ONLY on deterministic
 // surfaces — Bash tool_result bytes, on-disk per-intent state fields, audit events
 // — NEVER on assistantText.
@@ -129,8 +129,8 @@ describe("t71 workspace detection — brownfield classification writes state (sd
   // -------------------------------------------------------------------------
   // A CLEAN birth (`/aidlc --scope poc "build a todo app"`) over a brownfield
   // stub — NO --init --force, NO seeded state (a seeded flat state would trigger
-  // birth's migrate-flat short-circuit and skip the scan; see header). NO
-  // --test-run — the birth path has no gate. handleIntentBirth runs the scan +
+  // birth's migrate-flat short-circuit and skip the scan; see header). The
+  // birth path has no gate. handleIntentBirth runs the scan +
   // state write deterministically; the scan classifies the stub Brownfield and
   // the written per-intent state + audit carry the result. We assert on the
   // verbatim birth stdout (proves the dispatch fired), then on the on-disk

@@ -7,13 +7,13 @@
 // deterministic surfaces — the jump tool's verbatim stdout JSON, the on-disk
 // state fields, and the parsed audit events — NEVER on assistantText.
 //
-// ⛔ NO --test-run (TRAP 2). The .sh drove `--stage reverse-engineering --scope
-// bugfix --test-run`. Per the governing decision (user 2026-06-05) --test-run is
-// RETIRED from every kept journey. We assert the deterministic jump EMISSION
+// ⛔ TRAP 2 (no headless auto-approve). The .sh drove `--stage reverse-engineering
+// --scope bugfix` to completion under a headless auto-approve mode the refactor
+// kills. We assert the deterministic jump EMISSION
 // (the tool's own stdout JSON + the audit bytes + the post-jump state the tool
 // wrote), stopping the SDK the instant the jump JSON lands — so the
-// continuation is never asserted (the t26/t25/t57 pattern) and the --test-run
-// terminal-stop is not needed.
+// continuation is never asserted (the t26/t25/t57 pattern) and no
+// terminal-stop is needed.
 //
 // ⚠️ JOURNEY RE-BASED ON v0.6.x (FINDING, surfaced not softened). The .sh ran
 // `--stage reverse-engineering --scope bugfix` against a STATELESS project and
@@ -133,6 +133,11 @@ const JUMP_TARGET_JSON = `"target":"${TARGET_SLUG}"`; // jump.ts:409
 const JUMP_DIRECTION_JSON = '"direction":"forward"'; // jump.ts:407
 const JUMP_TARGET_PHASE_JSON = `"target_phase":"${TARGET_PHASE}"`; // jump.ts:410
 const JUMP_SKIPPED_JSON = `"stages_skipped":["${SKIPPED_SLUG}"]`; // jump.ts:411 (known answer)
+// #369: a forward jump NEVER auto-terminates the workflow (the Test-Run terminal
+// branch was removed). The tool always reports workflow_stopped:false and emits
+// STAGE_STARTED, never WORKFLOW_COMPLETED. This is the deterministic guard that
+// the deleted t54-compaction-and-test-run test used to carry for the test-run case.
+const JUMP_NOT_STOPPED_JSON = '"workflow_stopped":false'; // jump.ts:388
 const STOP_AFTER_JUMP = { toolName: "Bash", resultIncludes: JUMP_TARGET_JSON } as const;
 const AUDIT_DIRECTION_LINE = "**Direction**: FORWARD"; // jump.ts:375
 const AUDIT_TARGET_LINE = `**Target**: ${TARGET_SLUG}`; // jump.ts:377
@@ -144,7 +149,6 @@ describe("t56 /aidlc --stage requirements-analysis forward jump (sdk)", () => {
   // jump: the in-flight intermediate is marked [S], the pointer pivots, and
   // STAGE_JUMPED/FORWARD lands in the audit. All eight .sh assertions
   // re-expressed on the jump tool's stdout JSON + the post-run state + audit.
-  // NO --test-run.
   // -------------------------------------------------------------------------
   test(
     "forward jump marks reverse-engineering [S], pivots to requirements-analysis, logs STAGE_JUMPED/FORWARD, phase stays INCEPTION",
@@ -184,6 +188,10 @@ describe("t56 /aidlc --stage requirements-analysis forward jump (sdk)", () => {
         // .sh test 8 (tool half): the target's phase, the origin of the state
         // rewrite (jump.ts:410).
         expect(jumpCall?.resultText).toContain(JUMP_TARGET_PHASE_JSON);
+        // #369: the forward jump did NOT auto-terminate. workflow_stopped is
+        // false (the Test-Run terminal branch is gone, so this is now the only
+        // possible outcome of a forward jump).
+        expect(jumpCall?.resultText).toContain(JUMP_NOT_STOPPED_JSON);
 
         // .sh test 3: state file present post-run (the jump tool rewrote it).
         expect(r.stateFile).toBeDefined();
@@ -206,6 +214,11 @@ describe("t56 /aidlc --stage requirements-analysis forward jump (sdk)", () => {
         const auditRaw = readFileSync(auditFilePathFor(proj), "utf8");
         expect(auditRaw).toContain(AUDIT_DIRECTION_LINE);
         expect(auditRaw).toContain(AUDIT_TARGET_LINE);
+        // #369: the jump emitted STAGE_STARTED for the target and did NOT emit a
+        // WORKFLOW_COMPLETED (the test-run terminal-stop is removed). Pins the
+        // post-removal behavior the deleted t54-compaction test used to guard.
+        expect(auditRaw).toContain("**Event**: STAGE_STARTED");
+        expect(auditRaw).not.toContain("**Event**: WORKFLOW_COMPLETED");
 
         // .sh test 8 (state half): lifecycle phase is INCEPTION (jump.ts:312).
         expect(readStateField(state, "Lifecycle Phase")).toBe(TARGET_PHASE);

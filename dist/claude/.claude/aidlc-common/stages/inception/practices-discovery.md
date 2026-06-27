@@ -90,8 +90,6 @@ Present structured questions to surface five practice areas, one per `aidlc-team
 
 **Re-run pre-fill**: if `aidlc-team.md` already has affirmed content, read each section via `extractMarkdownSection(content, "## Way of Working")` etc. and present the existing text as the default option.
 
-**Test-run mode**: per `stage-protocol.md`, skip the structured questions. For greenfield, use `aidlc-org.md` defaults verbatim. For brownfield, use evidence-only findings. Log via `bun .claude/tools/aidlc-log.ts answer --test-run` for each implied answer.
-
 Log each question via `bun .claude/tools/aidlc-log.ts decision` BEFORE presenting it. Log each answer via `bun .claude/tools/aidlc-log.ts answer` after the user responds.
 
 ### Step 4: Consolidate
@@ -120,7 +118,6 @@ Compliance with `stage-protocol.md` checklist:
    - **Reject and rewrite** — discard the drafts, re-run Step 2 (if brownfield) or restart Step 3.
 4. `bun .claude/tools/aidlc-log.ts answer` after the user answers.
 5. `bun .claude/tools/aidlc-orchestrate.ts report --stage practices-discovery --result approved --user-input "<exact label>"` (or `bun .claude/tools/aidlc-state.ts reject practices-discovery --feedback "<text>"`) — auto-emits the gate-approved/gate-rejected audit events through the owning tools.
-6. **Test-run mode**: `bun .claude/tools/aidlc-orchestrate.ts report --stage practices-discovery --result approved --user-input "Approve (test-run)" --test-run`.
 
 ### Step 6: Promote (On Approve Only)
 

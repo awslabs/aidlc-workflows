@@ -24,15 +24,13 @@
 //
 // Source under test:
 //   dist/claude/.claude/tools/aidlc-learnings.ts
-//     surface  (:166) — test-run skip emits {"skipped":"test-run-mode"} (:181-190);
-//                        else JSON {schema_version, stage_slug, phase,
-//                        memory_entries_total, candidates[], parked_open_questions[]}
-//                        (:228-236). Candidate carries {id "c<n>", source_heading,
-//                        ts, summary, context, default_scope:"project"} (:218-225);
-//                        Open-questions entries are parked, not candidates (:213-216).
-//     persist  — one withAuditLock body (decide-inside-lock). auditTestRun
-//                        skips ALL writes when the most-recent audit block
-//                        carries **Test-Run**: true. Appends a practice line under
+//     surface  — JSON {schema_version, stage_slug, phase,
+//                        memory_entries_total, candidates[], parked_open_questions[]}.
+//                        Candidate carries {id "c<n>", source_heading,
+//                        ts, summary, context, default_scope:"project"};
+//                        Open-questions entries are parked, not candidates.
+//     persist  — one withAuditLock body (decide-inside-lock). Appends a
+//                        practice line under
 //                        the orchestrator-routed heading in the relocated
 //                        {project,team}.md (aidlc/spaces/<space>/memory/ via
 //                        memoryDirFor — a learning IS a practice, vision §6; the
@@ -59,8 +57,8 @@
 //   .sh assert 2  (Case 1: project pick lands in project-learnings)  -> "Case 1: project pick lands in aidlc-project-learnings.md"
 //   .sh assert 3  (Case 1: team pick lands in team-learnings)        -> "Case 1: team-scoped pick lands in aidlc-team-learnings.md"
 //   .sh assert 4  (Case 1: two RULE_LEARNED rows)                    -> "Case 1: two RULE_LEARNED audit rows"
-//   .sh assert 5  (Case 2: surface skipped in test-run mode)         -> "Case 2: surface skipped in test-run mode"
-//   .sh assert 6  (Case 2: persist refuses in test-run)              -> "Case 2: persist refuses in test-run — no learnings file written"
+//   .sh asserts 5-6 (Case 2: surface + persist skipped in test-run mode) were DROPPED
+//                 per #369 when the test-run mechanism was removed.
 //   .sh assert 7  (Case 3: manifest parses via parseSensorManifest)  -> "Case 3: project-tier manifest parses + carries matches glob"
 //   .sh assert 8  (Case 3: compile binds id into sensors_applicable) -> "Case 3: next compile binds the id into user-stories sensors_applicable"
 //   .sh assert 9  (Case 3: SENSOR_PROPOSED Destinations array)       -> "Case 3: SENSOR_PROPOSED row carries Destinations array [user-stories]"
@@ -82,7 +80,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
   AIDLC_SRC,
   createTestProject,
@@ -119,9 +117,7 @@ afterAll(() => {
 /**
  * mkproj — mirrors the .sh mkproj(): a fresh temp project with a full
  * dist/claude/.claude copy, a user-stories state file, and a runtime-graph
- * pointing the stage at its memory.md. The default state is the live
- * (non-test-run) one; callers override aidlc-state.md when they need
- * Test-Run Mode.
+ * pointing the stage at its memory.md.
  */
 function mkproj(): string {
   const pd = createTestProject();
@@ -318,60 +314,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     expect(ruleLearnedRows(pd)).toBe(2);
   }, TIMEOUT);
 
-  // ===========================================================================
-  // Case 2 — test-run end-to-end → surface skipped + persist refuses.
-  // ===========================================================================
-  test("Case 2: surface skipped in test-run mode [.sh 5]", () => {
-    const pd = mkproj();
-    seedMemoryMixed(pd);
-    writeFileSync(
-      seededStateFile(pd),
-      "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Test Run Mode**: true\n",
-    );
-    const r = surface(pd);
-    expect(r.status).toBe(0);
-    // .sh: assert_contains "$SURF" '"skipped":"test-run-mode"'.
-    expect(r.stdout).toContain('"skipped":"test-run-mode"');
-    // STRONGER: the parsed payload surfaces zero candidates.
-    const j = JSON.parse(r.stdout);
-    expect(j.candidates).toEqual([]);
-  }, TIMEOUT);
-
-  test("Case 2: persist refuses in test-run — no learnings file written [.sh 6]", () => {
-    const pd = mkproj();
-    seedMemoryMixed(pd);
-    writeFileSync(
-      seededStateFile(pd),
-      "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Test Run Mode**: true\n",
-    );
-    // The most-recent audit block flags Test-Run → persist refuses (auditTestRun).
-    // Seed the per-clone shard the persist subprocess resolves (seededAuditShard).
-    const trShard = seededAuditShard(pd);
-    mkdirSync(dirname(trShard), { recursive: true });
-    writeFileSync(
-      trShard,
-      "\n## Stage Start\n**Timestamp**: 2026-05-29T10:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: user-stories\n**Test-Run**: true\n\n---\n",
-    );
-    const sel = join(pd, "sel2.json");
-    writeJson(sel, {
-      stage_slug: "user-stories",
-      selections: [
-        {
-          candidate_id: "c1",
-          type: "learning",
-          scope: "project",
-          heading: "Corrections",
-          text: "should not write",
-          source: "orchestrator",
-        },
-      ],
-    });
-    expect(persist(pd, sel).status).toBe(0);
-    // .sh: assert_file_not_exists project-learnings.md.
-    expect(existsSync(projectPractices(pd))).toBe(false);
-    // STRONGER: zero RULE_LEARNED rows emitted either.
-    expect(ruleLearnedRows(pd)).toBe(0);
-  }, TIMEOUT);
+  // Case 2 (surface + persist skipped in test-run mode) was dropped per #369
+  // when the test-run mechanism was removed.
 
   // ===========================================================================
   // Case 3 — sensor proposal → project-tier manifest + frontmatter bind →

@@ -19,7 +19,7 @@
 // live seams via seededRecordDir, NOT a flat aidlc-docs/ tree.
 //
 // Source under test (dist/claude/.claude/tools/aidlc-state.ts):
-//   verifyStageArtifacts(pd, stage, testRun) - two layers:
+//   verifyStageArtifacts(pd, stage) - two layers:
 //     1. producesArtifactsExist - a stage that declares produces[] must have at
 //        least one declared .md on disk under <record>/<phase>/<slug>/ (or
 //        <record>/construction/<unit>/<slug>/ for per-unit stages, or
@@ -29,7 +29,7 @@
 //        code-generation) must ALSO have a file outside the aidlc/ workspace
 //        tree + harness dirs (issue #366 Update 2: docs-only code-generation
 //        must not pass).
-//   Bypass: --test-run (CLI) or AIDLC_SKIP_ARTIFACT_GUARD=1 (env).
+//   Bypass: AIDLC_SKIP_ARTIFACT_GUARD=1 (env).
 //
 // CRITICAL test-harness note: run-tests.ts sets AIDLC_SKIP_ARTIFACT_GUARD=1 for
 // the whole suite (most state tests rubber-stamp bare fixtures by design). This
@@ -148,10 +148,10 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     expect(field(proj, "Current Stage")).toBe(slug);
   });
 
-  test("finalize --test-run bypasses the guard (no artifacts)", () => {
+  test("finalize bypasses the guard under AIDLC_SKIP_ARTIFACT_GUARD (no artifacts)", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
-    const r = guarded(proj, ["finalize", slug, "--test-run"]);
+    const r = bypassed(proj, ["finalize", slug]);
     expect(r.rc).toBe(0);
   });
 
@@ -168,11 +168,11 @@ describe("t185: stage-completion artifact guard (#366)", () => {
 
   // --- Bypasses --------------------------------------------------------------
 
-  test("--test-run bypasses the guard (no artifacts)", () => {
+  test("approve bypasses the guard under AIDLC_SKIP_ARTIFACT_GUARD (no artifacts)", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     guarded(proj, ["gate-start", slug]);
-    const r = guarded(proj, ["approve", slug, "--test-run"]);
+    const r = bypassed(proj, ["approve", slug, "--user-input", "ok"]);
     expect(r.rc).toBe(0);
   });
 

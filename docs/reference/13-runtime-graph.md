@@ -154,9 +154,7 @@ conductor and filters cheaply:
 5. **Event-class filter** — match
    `**Event**: (GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|WORKFLOW_COMPLETED)`
    against any of the 3 blocks. Exit on no match.
-6. **Test-Run extraction** — if any of the last 3 blocks carries
-   `**Test-Run**: true`, propagate `--test-run` to the compile.
-7. **Dispatch** — `spawnSync("bun", [".claude/tools/aidlc-runtime.ts", "compile", ...])`.
+6. **Dispatch** — `spawnSync("bun", [".claude/tools/aidlc-runtime.ts", "compile", ...])`.
 
 `WORKFLOW_COMPLETED` is in the transition set so the final-stage
 approve fires the compile. `handleCompleteWorkflow` at
@@ -333,7 +331,7 @@ worktrees per `aidlc-bolt.ts` to surface a recovery prompt for those.
 
 ```bash
 # Walk audit + memory.md, write runtime-graph.json (invoked by hook).
-bun .claude/tools/aidlc-runtime.ts compile [--test-run]
+bun .claude/tools/aidlc-runtime.ts compile
 
 # Print one stage row from runtime-graph.json (debug/test surface).
 bun .claude/tools/aidlc-runtime.ts read <stage-slug>
@@ -477,7 +475,7 @@ main's location. Its lifecycle is:
 - **The lifecycle that triggers compile** — the workflow / phase /
   stage transitions whose audit emits drive the compile hook. See
   [State Machine](12-state-machine.md).
-- **The audit log this graph is derived from** - the 69-event taxonomy
+- **The audit log this graph is derived from** - the 68-event taxonomy
   and the emitter registry. See [State Machine](12-state-machine.md)
   and the User Guide's [State and Audit
   Trail](../guide/10-state-and-audit.md).

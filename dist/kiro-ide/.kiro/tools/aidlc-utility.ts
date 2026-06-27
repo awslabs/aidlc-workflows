@@ -175,7 +175,6 @@ Utilities:
   --help            Show this help message
 
 Other:
-  --test-run        Auto-approve all gates (for automated testing only)
   <description>     Describe what to build — scope is auto-detected
   (no arguments)    Resume existing workflow, or start fresh if none exists
 
@@ -2429,7 +2428,6 @@ function handleIntentBirthStateBuild(
 
 ## Runtime State
 - **Revision Count**: 0
-${flags["test-run"] === "true" ? "- **Test Run Mode**: true\n" : ""}
 
 ## Phase Progress
 <!-- Status values: Pending, Active, Verified, Skipped -->
@@ -3040,37 +3038,6 @@ function handleSetStatus(projectDir: string, flags: Record<string, string>): voi
 }
 
 // ---------------------------------------------------------------------------
-// enable-test-run — persist Test Run Mode flag in existing state file
-// ---------------------------------------------------------------------------
-
-function handleEnableTestRun(projectDir: string): void {
-  const sp = stateFilePath(projectDir);
-  if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
-
-  let content = readStateFile(projectDir);
-
-  // Already present — no-op
-  if (/\*\*Test Run Mode\*\*/.test(content)) {
-    process.stdout.write("Test Run Mode already set in state file.\n");
-    return;
-  }
-
-  // Insert after Revision Count line in Runtime State section
-  content = content.replace(
-    /^(- \*\*Revision Count\*\*:.*)$/m,
-    "$1\n- **Test Run Mode**: true"
-  );
-
-  writeStateFile(projectDir, content);
-
-  appendAuditEvent(projectDir, "TEST_RUN_MODE_ENABLED", {
-    Details: "Test Run Mode persisted to state file on resume",
-  });
-
-  process.stdout.write("Test Run Mode enabled in state file.\n");
-}
-
-// ---------------------------------------------------------------------------
 // Scope inference from freeform text
 //
 // The keyword sets live in each scope's `.claude/scopes/aidlc-<name>.md`
@@ -3447,9 +3414,6 @@ function main(): void {
     case "set-status":
       handleSetStatus(projectDir, flags);
       break;
-    case "enable-test-run":
-      handleEnableTestRun(projectDir);
-      break;
     case "detect-scope":
       handleDetectScope(projectDir, flags);
       break;
@@ -3461,7 +3425,7 @@ function main(): void {
       break;
     default:
       die(
-        `Usage: aidlc-utility <help|version|status|doctor|intent-birth|intent|space|space-create|codekb-path|scope-change|config-change|set-status|enable-test-run|detect-scope|resolve-env-scope|scope-table> [--project-dir <path>] [--scope <scope>] [--json]`
+        `Usage: aidlc-utility <help|version|status|doctor|intent-birth|intent|space|space-create|codekb-path|scope-change|config-change|set-status|detect-scope|resolve-env-scope|scope-table> [--project-dir <path>] [--scope <scope>] [--json]`
       );
   }
 }

@@ -176,7 +176,7 @@ if (target === "pretool-block") {
   // them here is a harmless superset).
   const ADVANCING_FLAGS = new Set([
     "--stage", "--phase", "--scope", "--resume", "--depth",
-    "--test-strategy", "--single", "--init", "--force", "--test-run",
+    "--test-strategy", "--single", "--init", "--force",
   ]);
   const isBareAdvancing =
     m !== null &&

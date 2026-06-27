@@ -133,7 +133,7 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
         // new scoped workflow. The invariant remains the full-workflow audit
         // check below; we just avoid measuring the model's recovery strategy.
         const init = await driveAidlc(
-          `/aidlc --init --scope ${SCOPE} --test-run`,
+          `/aidlc --init --scope ${SCOPE}`,
           {
             projectDir: proj,
             timeoutMs: Math.min(120_000, DRIVE_TIMEOUT_MS),
@@ -146,7 +146,7 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
         assertToolResultContains(init, "Bash", "State initialized:");
         expect(init.stateFile).toContain(`- **Scope**: ${SCOPE}`);
 
-        const r = await driveAidlc(`/aidlc ${SCOPE} --test-run`, {
+        const r = await driveAidlc(`/aidlc ${SCOPE}`, {
           projectDir: proj,
           timeoutMs: DRIVE_TIMEOUT_MS,
         });

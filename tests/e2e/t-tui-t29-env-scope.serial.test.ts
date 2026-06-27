@@ -3,10 +3,9 @@
 // t-tui-t29-env-scope.serial.tui.test.ts — the AWS_AIDLC_DEFAULT_SCOPE
 // project-default-scope mechanism, driven through a REAL claude TUI (Pattern A:
 // "landed + rendered", §5-A1 / spec §"TWO DRIVING PATTERNS"). A keystroke port
-// of tests/integration/t29-integration-env-scope.sh, which used `--test-run` to
-// auto-approve gates so the interactive journey a user actually lives was never
-// exercised. This drives the painted TUI like a human and terminates on the
-// on-disk landed artifact — NO --test-run anywhere.
+// of tests/integration/t29-integration-env-scope.sh, which auto-approved gates so
+// the interactive journey a user actually lives was never exercised. This drives
+// the painted TUI like a human and terminates on the on-disk landed artifact.
 //
 // WHAT IT PROVES (the t29 mechanism, reconciled to v0.6.1):
 //   - Case A (bare command + env default): with NO --scope flag, NO intent, and
@@ -315,9 +314,8 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
   // bare freeform `/aidlc feature` — covered in the SEPARATE disambiguation-gate
   // case below — which does NOT contain `--scope`, so step 0 synthesizes
   // `--scope workshop` from env and the orchestrator renders a feature-vs-workshop
-  // gate. The .sh used the bare form and only "passed" because --test-run
-  // auto-approved that gate; the explicit flag is the honest deterministic
-  // scope contract.)
+  // gate. The .sh used the bare form and only "passed" because it auto-approved
+  // that gate; the explicit flag is the honest deterministic scope contract.)
   test.skipIf(SKIP_REASON !== null)(
     `explicit --scope feature flag wins over env default -> Scope=feature on disk${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {

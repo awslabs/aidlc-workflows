@@ -24,6 +24,6 @@ engine owns all routing; the conductor persona arrives on the first directive's
 4. Repeat from step 1 until `directive.kind == done`.
 
 Pass `$ARGUMENTS` through verbatim after `--scope bugfix`; the engine parses
-any flags (`--status`, `--stage`, `--test-run`, …) and the `--scope` from the
+any flags (`--status`, `--stage`, …) and the `--scope` from the
 state file always wins on an existing workflow, so re-running a started workflow
 resumes it. To run a different scope, use `/aidlc --scope <other>` instead.

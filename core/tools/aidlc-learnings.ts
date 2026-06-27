@@ -165,16 +165,6 @@ function assertActiveStage(stateContent: string, slug: string): void {
   }
 }
 
-// state's test-run signal. Stored as `- **Test Run Mode**: true` in the state
-// file (aidlc-utility.ts init/enable-test-run write that exact field name; the
-// orchestrate/jump/sensor-fire readers all match the SPACE spelling). The field
-// name MUST match those writers verbatim — a hyphenated "Test-Run Mode" here
-// silently never matches, leaving the test-run skip below dead.
-function isTestRunMode(stateContent: string): boolean {
-  const v = getField(stateContent, "Test Run Mode");
-  return v !== null && v.trim().toLowerCase() === "true";
-}
-
 function handleSurface(args: string[], projectDir: string): void {
   const flags = parseFlags(args);
   const slug = flags.slug;
@@ -187,18 +177,6 @@ function handleSurface(args: string[], projectDir: string): void {
     stateContent = readStateFile(projectDir);
   } catch (e) {
     fail(`could not read state: ${errorMessage(e)}`, 1);
-  }
-
-  // Test-run mode: surface nothing.
-  if (isTestRunMode(stateContent)) {
-    console.log(
-      JSON.stringify({
-        candidates: [],
-        parked_open_questions: [],
-        skipped: "test-run-mode",
-      })
-    );
-    return;
   }
 
   assertActiveStage(stateContent, slug);
@@ -361,31 +339,6 @@ function parseSelectionsFile(path: string): SelectionsFile {
   };
 }
 
-// Most-recent audit block carries Test-Run: true → skip all writes/emits.
-// "Most-recent" is CHRONOLOGICAL, not buffer-order: readAllAuditShards
-// concatenates per-clone shards in FILENAME order, so the last buffer block is
-// the lexically-last shard's tail, NOT necessarily the newest event. Pick the
-// block with the greatest **Timestamp** (ISO-8601 sorts lexicographically; ties
-// break to the later buffer position to keep a single shard's order stable).
-function auditTestRun(auditContent: string): boolean {
-  const blocks = auditContent.replace(/\r\n/g, "\n").split(/\n---\n/).filter((b) => b.trim() !== "");
-  if (blocks.length === 0) return false;
-  const tsRegex = /^\*\*Timestamp\*\*:\s*(\S+)/m;
-  let newest = "";
-  let newestTs = "";
-  for (const block of blocks) {
-    const m = block.match(tsRegex);
-    const ts = m ? m[1] : "";
-    // >= so that on a timestamp tie the LATER buffer block wins (within one
-    // shard, later position == later append == newer).
-    if (newest === "" || ts >= newestTs) {
-      newest = block;
-      newestTs = ts;
-    }
-  }
-  return /^\*\*Test-Run\*\*:\s*true\s*$/m.test(newest);
-}
-
 // A prior RULE_LEARNED / SENSOR_PROPOSED row for this (Stage, Candidate-ID)?
 function priorAuditRow(
   auditContent: string,
@@ -471,11 +424,6 @@ function handlePersist(args: string[], projectDir: string): void {
     lockResult = withAuditLock(projectDir, () => {
       // Read across every per-clone audit shard (single shard in the common case).
       const auditContent = readAllAuditShards(projectDir);
-
-      // Test-run skip: most-recent audit block Test-Run: true → no writes.
-      if (auditTestRun(auditContent)) {
-        return { rule_learned: 0, sensor_proposed: 0, bound_stages: [] };
-      }
 
       let ruleLearned = 0;
       let sensorProposed = 0;

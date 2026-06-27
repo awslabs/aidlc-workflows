@@ -2,11 +2,11 @@
 //
 // t-tui-t27-depth-override.serial.tui.test.ts — drive the `/aidlc --depth <level>`
 // config-override journey through a REAL claude TUI and prove the depth change
-// LANDS on disk + RENDERS, with NO --test-run anywhere. A faithful port of
-// tests/integration/t27-integration-depth-override.sh (plan 7), which used
-// `--test-run` purely to keep the headless run from blocking — the depth override
-// itself never needed gate auto-approval, so dropping `--test-run` changes nothing
-// about the landed surface. Pattern A (landed + rendered, NO answer-gate).
+// LANDS on disk + RENDERS. A faithful port of
+// tests/integration/t27-integration-depth-override.sh (plan 7). The depth override
+// is a pure one-shot config edit that never needs gate auto-approval, so the
+// landed surface is unaffected by how the run is driven. Pattern A (landed +
+// rendered, NO answer-gate).
 //
 // WHAT IT PROVES (equal-or-stronger than the .sh, on the same on-disk surface):
 //   Case A — depth override on an EXISTING workflow:
@@ -235,7 +235,7 @@ function sendSlash(session: string, command: string): void {
   drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
 }
 
-describe("t-tui-t27 depth override (config-change lands + renders, no --test-run)", () => {
+describe("t-tui-t27 depth override (config-change lands + renders)", () => {
   // --- Case A: --depth minimal lands Depth=Minimal + DEPTH_CHANGED on disk ----
   test.skipIf(SKIP_REASON !== null)(
     `--depth minimal lands Depth=Minimal + DEPTH_CHANGED and renders the change${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
@@ -248,7 +248,7 @@ describe("t-tui-t27 depth override (config-change lands + renders, no --test-run
         // the DEPTH_CHANGED delta is Standard -> Minimal, not a no-op).
         expect(readFileSync(statePath, "utf8")).toMatch(/-\s*\*\*Depth\*\*:\s*Standard/);
 
-        // type the override — NO --test-run
+        // type the override
         sendSlash(session, "/aidlc --depth minimal");
 
         // --- TERMINATE on the DETERMINISTIC on-disk signal, NOT screen prose -----
@@ -311,7 +311,7 @@ describe("t-tui-t27 depth override (config-change lands + renders, no --test-run
         // md5-before). A full-content compare is strictly stronger than md5.
         const before = readFileSync(statePath, "utf8");
 
-        // type the invalid override — NO --test-run
+        // type the invalid override
         sendSlash(session, "/aidlc --depth extreme");
 
         // --- RENDERED: the invalid-depth recovery menu surfaces. v0.6.1 now

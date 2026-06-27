@@ -20,14 +20,14 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 398,
+    "total": 396,
     "enumeratedByClass": {
       "function": 187,
-      "audit": 69,
+      "audit": 68,
       "scope": 9,
       "stage": 32,
       "hook": 10,
-      "subcommand": 84,
+      "subcommand": 83,
       "render-surface": 7
     },
     "coveredByClass": {
@@ -36,7 +36,7 @@
       "scope": 9,
       "stage": 8,
       "hook": 10,
-      "subcommand": 71,
+      "subcommand": 70,
       "render-surface": 7
     }
   },
@@ -588,13 +588,6 @@
     },
     {
       "unitClass": "audit",
-      "unitId": "TEST_RUN_MODE_ENABLED",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "audit",
       "unitId": "TEST_STRATEGY_CHANGED",
       "minMechanism": "none",
       "coveredBy": [
@@ -616,10 +609,6 @@
       "coveredBy": [
         {
           "file": "tests/e2e/t113.test.ts",
-          "mechanism": "cli"
-        },
-        {
-          "file": "tests/integration/t54-compaction-and-test-run.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3675,10 +3664,6 @@
           "mechanism": "sdk"
         },
         {
-          "file": "tests/integration/t54-compaction-and-test-run.test.ts",
-          "mechanism": "cli"
-        },
-        {
           "file": "tests/unit/t19.test.ts",
           "mechanism": "cli"
         }
@@ -4322,18 +4307,6 @@
         },
         {
           "file": "tests/unit/t85.test.ts",
-          "mechanism": "cli"
-        }
-      ],
-      "status": "covered"
-    },
-    {
-      "unitClass": "subcommand",
-      "unitId": "aidlc-utility enable-test-run",
-      "minMechanism": "cli",
-      "coveredBy": [
-        {
-          "file": "tests/unit/t27.test.ts",
           "mechanism": "cli"
         }
       ],

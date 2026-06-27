@@ -14,9 +14,8 @@
 // and terminates with process.exit (hook :53,:63,:67,:74,:85,:90,:98,:104,
 // :123,:166,:177,:180,:185,:269). Its whole contract is process-boundary
 // side-effects: it spawns `bun <proj>/.claude/tools/aidlc-sensor.ts fire <id>
-// --stage <slug> --output-path <path>` per matching sensor (hook :195-222),
-// touches the heartbeat sensor-fire.last (hook :134-139), and appends to
-// sensor-fire.skipped under Test Run Mode (hook :112-124). None of that is
+// --stage <slug> --output-path <path>` per matching sensor (hook :195-222) and
+// touches the heartbeat sensor-fire.last (hook :134-139). None of that is
 // observable in-process, so every case SPAWNS the real hook via the bun runtime
 // (spawnSync, input: JSON) and asserts on the exit code + the bytes/existence
 // the subprocess leaves behind. spawnCount = all.
@@ -25,9 +24,8 @@
 // <proj>/.claude/tools/aidlc-sensor.ts (the exact path the hook joins at :195)
 // records its argv to T94_SPAWN_LOG. The hook's only spawn target is that path,
 // so the ABSENCE of the log file after a hook run is positive proof the per-entry
-// dispatch loop never fired. The heartbeat file (sensor-fire.last) and skipped
-// file (sensor-fire.skipped) under aidlc-docs/.aidlc-hooks-health/ are checked
-// directly on disk.
+// dispatch loop never fired. The heartbeat file (sensor-fire.last) under
+// aidlc-docs/.aidlc-hooks-health/ is checked directly on disk.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/hooks/aidlc-sensor-fire.ts):
 //   :53      TTY guard — process.stdin.isTTY -> exit 0.
@@ -36,10 +34,8 @@
 //   :81-86   recursion guard — path under aidlc-docs/.aidlc-sensors/ -> exit 0.
 //   :90      pre-init guard — no audit.md -> exit 0 (BEFORE heartbeat).
 //   :98      state-existence guard — no aidlc-state.md -> exit 0 (BEFORE heartbeat).
-//   :110-124 Test Run Mode skip (G2) — append isoTimestamp()+"\n" to
-//            sensor-fire.skipped, then exit 0; NO heartbeat, NO spawn.
 //   :134-139 heartbeat (G3) — writes isoTimestamp() to sensor-fire.last. Placed
-//            AFTER the test-run guard but BEFORE the active-stage/graph guards,
+//            AFTER the state guard but BEFORE the active-stage/graph guards,
 //            so it IS written for the "valid-but-no-fire" cases (missing graph,
 //            empty sensors_applicable).
 //   :165-166 active-stage early-exit — missing Current Stage / "none" -> exit 0.
@@ -59,7 +55,8 @@
 // injected via AIDLC_STAGE_GRAPH. All temp dirs cleaned in afterAll; nothing
 // under tests/fixtures/**.
 //
-// Old TAP -> new test parity (1:1, 18 .sh asserts -> 18 expect()-bearing test()):
+// Old TAP -> new test parity (the 18 .sh asserts map here, less .sh cases 9a/9b
+// which were dropped with the Test Run Mode mechanism per #369):
 //   .sh case 1  TTY/empty-stdin guard -> exit 0               -> "TTY/empty-stdin guard exits 0"
 //   .sh case 2  malformed JSON -> exit 0, no spawn            -> "malformed JSON stdin exits 0 with no spawn"
 //   .sh case 3  valid payload + applicable sensors -> spawn   -> "valid payload + applicable sensors fires the dispatcher"
@@ -68,9 +65,8 @@
 //   .sh case 6  non-aidlc path -> no glob match -> no spawn   -> "non-aidlc path -> no glob match -> no spawn"
 //   .sh case 7  no audit.md -> exit 0, no heartbeat, no spawn -> "no audit.md -> exit 0, no heartbeat, no spawn"
 //   .sh case 8  no state.md (audit present) -> no heartbeat   -> "no aidlc-state.md -> exit 0, no heartbeat (guard precedes heartbeat)"
-//   .sh case 9a Test Run Mode true -> skipped appended        -> "Test Run Mode true -> skipped-file appended, no heartbeat, no spawn"
-//   .sh case 9b skipped line is an ISO timestamp              -> "Test Run Mode skipped-file line carries an ISO timestamp"
-//   .sh case 10 Test Run Mode false -> heartbeat written      -> "Test Run Mode false -> continues; heartbeat written, no spawn (path filter)"
+//   .sh cases 9a/9b (Test Run Mode sensor-fire skip) were DROPPED per #369.
+//   .sh case 10 non-matching path -> heartbeat written        -> "non-matching path -> continues; heartbeat written, no spawn (path filter)"
 //   .sh case 11 heartbeat carries an ISO timestamp            -> "heartbeat file carries an ISO timestamp"
 //   .sh case 12 missing Current Stage -> no spawn             -> "missing Current Stage -> no spawn"
 //   .sh case 13 Current Stage: none -> no spawn               -> "Current Stage: none -> no spawn"
@@ -214,9 +210,6 @@ function spawnLogPath(proj: string): string {
 }
 function heartbeatPath(proj: string): string {
   return join(seededRecordDir(proj), ".aidlc-hooks-health", "sensor-fire.last");
-}
-function skippedPath(proj: string): string {
-  return join(seededRecordDir(proj), ".aidlc-hooks-health", "sensor-fire.skipped");
 }
 
 interface HookRun {
@@ -396,50 +389,20 @@ describe("t94 aidlc-sensor-fire hook — guards + early exits (migrated from t94
     expect(existsSync(spawnLogPath(proj))).toBe(false);
   });
 
-  // ===========================================================================
-  // G2 — Test Run Mode skip.
-  // ===========================================================================
-
-  test("Test Run Mode true -> skipped-file appended, no heartbeat, no spawn [.sh case 9a]", () => {
-    const proj = makeProject();
-    seedAudit(proj);
-    seedState(
-      proj,
-      "- **Current Stage**: requirements-analysis\n- **Test Run Mode**: true\n",
-    );
-    const r = runHook(proj, inceptionMd(proj));
-    expect(r.status).toBe(0);
-    expect(existsSync(skippedPath(proj))).toBe(true);
-    expect(existsSync(heartbeatPath(proj))).toBe(false);
-    expect(existsSync(spawnLogPath(proj))).toBe(false);
-  });
-
-  test("Test Run Mode skipped-file line carries an ISO timestamp [.sh case 9b]", () => {
-    const proj = makeProject();
-    seedAudit(proj);
-    seedState(
-      proj,
-      "- **Current Stage**: requirements-analysis\n- **Test Run Mode**: true\n",
-    );
-    runHook(proj, inceptionMd(proj));
-    const firstLine = readFileSync(skippedPath(proj), "utf-8").split("\n")[0];
-    expect(ISO_RE.test(firstLine)).toBe(true);
-  });
+  // (.sh cases 9a/9b exercised the now-removed Test Run Mode sensor-fire skip
+  // and were dropped per #369. Sensors now always dispatch on a matching path.)
 
   // ===========================================================================
   // Step 8 — heartbeat (G3) written for valid-but-no-fire flows.
   // ===========================================================================
 
-  test("Test Run Mode false -> continues; heartbeat written, no spawn (path filter) [.sh case 10]", () => {
+  test("non-matching path -> continues; heartbeat written, no spawn (path filter) [.sh case 10]", () => {
     const proj = makeProject();
     seedAudit(proj);
-    seedState(
-      proj,
-      "- **Current Stage**: requirements-analysis\n- **Test Run Mode**: false\n",
-    );
-    // A non-aidlc path passes the test-run guard + writes the heartbeat, but the
-    // glob never matches so no sensor fires.
-    const r = runHook(proj, join(tmpdir(), "scratch-trm-false", "x.txt"));
+    seedState(proj, "- **Current Stage**: requirements-analysis\n");
+    // A non-aidlc path passes the active-workflow guard + writes the heartbeat,
+    // but the glob never matches so no sensor fires.
+    const r = runHook(proj, join(tmpdir(), "scratch-no-match", "x.txt"));
     expect(r.status).toBe(0);
     expect(existsSync(heartbeatPath(proj))).toBe(true);
     expect(existsSync(spawnLogPath(proj))).toBe(false);

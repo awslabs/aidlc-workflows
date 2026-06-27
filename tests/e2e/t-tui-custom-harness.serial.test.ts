@@ -17,8 +17,8 @@
 // {sdk, tui} TWO-DRIVER test (§5-B). It calls BOTH driveAidlc() (sdk) AND spawns
 // tui-drive.ts (tui) over ONE customHarness project, so the derive-by-driver
 // registry (Phase 0 mechanismsOf) reads the set {sdk, tui} — the concrete
-// two-driver case the old single-label filename suffix could not express. NO
-// --test-run anywhere: the journey is driven the way a human drives it (answer
+// two-driver case the old single-label filename suffix could not express. The
+// journey is driven the way a human drives it (answer
 // the gate by keystroke), and the sdk half is a genuine one-shot read of the
 // tool-emitted audit.
 //
@@ -56,8 +56,8 @@
 //      the orchestrator write a produced artefact under aidlc-docs/, which trips
 //      the custom sensor's matches glob while a custom stage is active ->
 //      SENSOR_FIRED audit row + a detail dir under aidlc-docs/.aidlc-sensors/.
-//      (The sensor hook SKIPS under --test-run, aidlc-sensor-fire.ts:110-124 —
-//      so this is ONLY provable by a real human-driven run, which is the point.)
+//      (This is provable only by a real human-driven run that actually answers
+//      the gate so the artefact lands, which is the point.)
 //   3. CUSTOM RULE REACHES THE AGENT — two ways, both data: (a) the compiled
 //      stage-graph node carries aidlc/spaces/default/memory/project.md in
 //      rules_in_context AND that file carries the unique custom-rule marker (the
@@ -92,7 +92,6 @@
 //     aidlc-utility.ts:2087-2112 (verified: init --scope data-migration writes
 //     Lifecycle Phase: INCEPTION, Current Stage: schema-snapshot).
 //   - SENSOR_FIRED event string + detail path: aidlc-sensor.ts:296 / :268-270.
-//   - sensor hook skips under test-run: aidlc-sensor-fire.ts:110-124.
 //   - statusline raw-slug fallback: aidlc-statusline.ts:220.
 //   - F1 freeform vs --scope dispatch: SKILL.md:110 (--scope) vs detect-scope.
 //
@@ -432,8 +431,8 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
   );
 
   // ===================== tui journey (surfaces 2 + 3b + 4-in-motion + chain) ===
-  // Drive the REAL claude TUI through BOTH custom-stage gates by KEYSTROKE (no
-  // --test-run). Answering makes the orchestrator write each produced artefact
+  // Drive the REAL claude TUI through BOTH custom-stage gates by KEYSTROKE.
+  // Answering makes the orchestrator write each produced artefact
   // under aidlc-docs/ — those writes trip the custom sensor while a custom stage
   // is active (SENSOR_FIRED), the artefacts cite the custom rule marker (the rule
   // reached the agent), and reaching the migration-strategy artefact proves the
@@ -524,7 +523,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
         // The custom sensor is wired to BOTH stages and its matches glob covers
         // the aidlc-docs tree, so each stage's artefact write trips it: SENSOR_FIRED
         // is the deterministic proof the harness engineer's custom sensor ran in a
-        // real (non-test-run) execution — and this is the FIRST live driver of that
+        // real execution, and this is the FIRST live driver of that
         // audit event.
         //
         // FINDING (verified against aidlc-sensor.ts:267-271 + :319-326 + :581 — NOT

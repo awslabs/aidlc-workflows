@@ -2,7 +2,7 @@
 //
 // t-tui-t24-stage-jump.serial.tui.test.ts — the TUI journey port of
 // tests/integration/t24-integration-stage-jump.sh (a forward `--stage` jump),
-// driven through a REAL claude TUI with NO --test-run (§5-A1, Phase 3, Pattern A
+// driven through a REAL claude TUI (§5-A1, Phase 3, Pattern A
 // "landed + rendered").
 //
 // WHAT IT PROVES
@@ -22,11 +22,9 @@
 //   was BLIND to — the old .sh only grepped the state/audit bytes.
 //
 // WHY PATTERN A (landed + rendered, NO answer-gate) — and the gate we DESIGN OUT
-//   A forward `--stage` jump is a single deterministic transition. WITHOUT
-//   --test-run the jump sets Status=Running (not Completed — aidlc-jump.ts:316
-//   writes Status=`willTerminate ? "Completed" : "Running"`, and willTerminate
-//   (:310) is true only in the --test-run forward branch) and
-//   the orchestrator keeps going past the jump. So the journey NEVER reaches a
+//   A forward `--stage` jump is a single deterministic transition. The jump
+//   sets Status=Running (aidlc-jump.ts:309) and the orchestrator keeps going
+//   past the jump. So the journey NEVER reaches a
 //   terminal state we could wait on; asserting terminal completion would be racy
 //   (the Phase-2 lesson). We instead terminate on the LANDED signal — the
 //   statusline re-rendering "> Approval & Handoff" — and read the on-disk audit +
@@ -49,8 +47,8 @@
 //   valid state"). Verified live 2026-06-06 by driving this journey TWICE: the gate
 //   fired both un-seeded (default ❯ Cancel) and with-required-seeded (default ❯
 //   Continue, optionals still flagged) — proving the gate keyed off optionals too.
-//   That was an IMPLEMENTATION fault the new harness surfaced (the old .sh's
-//   --test-run auto-approve had always masked it). SKILL.md step 10 now gates only
+//   That was an IMPLEMENTATION fault the new harness surfaced. SKILL.md step 10
+//   now gates only
 //   on missing `required: true` artifacts, matching the graph. With that fix +
 //   the required seed, this jump is genuinely gateless = clean Pattern A.
 //
@@ -60,13 +58,12 @@
 //   team-formation [S], intent-capture still [x], Completed counter == [x] count,
 //   Last Updated has a timestamp, audit STAGE_JUMPED + FORWARD + ISO timestamp.
 //   This port ADDS the rendered statusline assertion the .sh could not make.
-//   It also DROPS the .sh's --test-run (the whole point of the migration), which
-//   means the on-disk Status here is "Running", not the .sh's --test-run
-//   "Completed" — a faithfulness gain, not a weakening.
+//   The on-disk Status here is "Running": a forward jump lands Running and the
+//   orchestrator continues past it.
 //
 // FINDING (surfaced, not chased — AUTHORING-SPEC product-question #1)
 //   SKILL.md:255 step 13c: after a jump the orchestrator AUTO-CONTINUES rather
-//   than landing-and-awaiting. With --test-run gone, the post-jump
+//   than landing-and-awaiting. The post-jump
 //   approval-handoff stage will keep running and may eventually mutate Current
 //   Stage / Completed past the landed values. This test deliberately TERMINATES
 //   the observation the instant the statusline paints "> Approval & Handoff"
@@ -189,7 +186,7 @@ describe("t-tui-t24 stage-jump (forward --stage lands on disk + re-renders statu
         ideationArtifacts: true,
       });
       try {
-        // --- launch the claude TUI (no --test-run anywhere) -------------------
+        // --- launch the claude TUI -------------------------------------------
         expect(
           drive([
             "start",
@@ -238,7 +235,7 @@ describe("t-tui-t24 stage-jump (forward --stage lands on disk + re-renders statu
         // aidlc-statusline.ts:72,243). --stable-ms 0: the screen streams (live
         // token counter / spinner during the orchestrator turn), so match the
         // instant the landed stage name appears, NOT byte-stability. We do NOT
-        // wait on terminal completion — without --test-run the jump leaves
+        // wait on terminal completion: the jump leaves
         // Status=Running and the orchestrator auto-continues (FINDING in header).
         const sawLanded = waitFor(session, "> Approval & Handoff", 180000, 0);
         const pane = drive(["capture", "--session", session]).stdout;

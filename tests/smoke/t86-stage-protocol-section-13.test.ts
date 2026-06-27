@@ -40,9 +40,9 @@
 //     :65  `### Branching a \`run-stage\` on its gate` (the wiring's new home
 //          after the engine cutover; the old `## Stage Advancement` section's
 //          transition prose is now the engine's `report` job)
-//     :73  the gated run-stage branch calls `aidlc-learnings.ts surface` AND
-//          `persist`, guarded by "Unless in test-run mode"
-//     :78  the Test-Run block declares the §13 learnings ritual skipped
+//     the gated run-stage branch calls `aidlc-learnings.ts surface` AND
+//          `persist` unconditionally (the "Unless in test-run mode" guard and
+//          the Test-Run block were removed per #369).
 //
 // Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
 //   .sh test 1 (§13 H2 heading)                     -> "stage-protocol.md carries the '## 13. Learnings Ritual' H2"
@@ -51,8 +51,9 @@
 //   .sh test 4 (MEMORY_EMPTY in three sources)      -> "MEMORY_EMPTY registered in audit-format.md + 12-state-machine.md (prose)"
 //                                                      + STRONGER "aidlc-audit CLI accepts MEMORY_EMPTY (registered in the live VALID_EVENT_TYPES Set)"
 //   .sh test 5 ('Why stage files stay immutable')   -> "§13 carries the 'Why stage files stay immutable' invariant H3"
-//   .sh test 6 (SKILL.md wires the §13 gate)        -> "SKILL.md run-stage gate branch wires the §13 gate (surface + persist, test-run-guarded)"
-//   .sh test 7 (Test-Run block declares skip)       -> "SKILL.md Test-Run block declares the §13 learnings ritual skipped"
+//   .sh test 6 (SKILL.md wires the §13 gate)        -> "SKILL.md run-stage gate branch wires the §13 gate (surface + persist, unconditional)"
+//   .sh test 7 (Test-Run block declares skip) was dropped per #369: the SKILL.md
+//              Test-Run block was removed and the §13 ritual is now unconditional.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -195,7 +196,7 @@ describe("t86 stage-protocol §13 + MEMORY_EMPTY + SKILL.md gate wiring (migrate
   });
 
   // --- .sh test 6 ----------------------------------------------------------
-  test("SKILL.md run-stage gate branch wires the §13 gate (surface + persist, test-run-guarded) [.sh test 6]", () => {
+  test("SKILL.md run-stage gate branch wires the §13 gate (surface + persist, unconditional) [.sh test 6]", () => {
     // §13's prose (tests 1-5) and the aidlc-learnings.ts tool can both be
     // perfect while the orchestrator never CALLS the gate. This pins the one
     // place that makes it run — deleting it would be a silent feature-death.
@@ -203,17 +204,10 @@ describe("t86 stage-protocol §13 + MEMORY_EMPTY + SKILL.md gate wiring (migrate
     expect(span.length).toBeGreaterThan(0); // the heading must exist
     expect(/aidlc-learnings\.ts surface/.test(span)).toBe(true);
     expect(/aidlc-learnings\.ts persist/.test(span)).toBe(true);
-    // Test-run guard: the call must be gated on test-run mode (case-insensitive).
-    expect(/test-run mode|test-run/i.test(span)).toBe(true);
+    // The ritual is now UNCONDITIONAL: the test-run guard was removed per #369.
   });
 
-  // --- .sh test 7 ----------------------------------------------------------
-  test("SKILL.md Test-Run block declares the §13 learnings ritual skipped [.sh test 7]", () => {
-    // The complement to test 6: under --test-run there is no human in the loop,
-    // so the gate must be explicitly declared skipped.
-    const body = read(SKILL);
-    expect(
-      /Learnings ritual.*Skipped|Skipped.*learnings/i.test(body),
-    ).toBe(true);
-  });
+  // .sh test 7 (SKILL.md Test-Run block declares the §13 learnings ritual
+  // skipped) was dropped per #369: the SKILL.md Test-Run block was removed and
+  // the §13 ritual is now unconditional.
 });

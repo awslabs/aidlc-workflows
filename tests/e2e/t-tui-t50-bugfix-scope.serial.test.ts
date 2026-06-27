@@ -4,18 +4,17 @@
 // through a REAL claude TUI and prove that answering its rendered AskUserQuestion
 // gates by keystroke advances the bugfix lifecycle to a real on-disk milestone
 // (§5.1). A REWRITE (not a port) of tests/e2e/t50-workflow-bugfix-scope.sh,
-// which ran the whole journey under `--test-run` so every gate AUTO-APPROVED — the
+// which ran the whole journey headlessly so every gate AUTO-APPROVED, so the
 // interactive bugfix journey a user actually lives was never tested. This drives the
 // painted TUI like a human, answers each gate by Enter (the Recommended default),
 // and TERMINATES on the on-disk Completed counter crossing the post-init milestone.
-// NO --test-run anywhere.
 //
 // What it proves (PATTERN B — multi-gate journey, answer-gate --until-state-field):
 //   - a bugfix workflow starts from `/aidlc bugfix` on a fresh BROWNFIELD workspace
 //     (statusline leaves `ready` for a live phase),
 //   - the answer-gate clears the Initialization + Inception gates (bugfix SKIPS all
 //     of Ideation per scope-mapping.json) by taking the Recommended default per
-//     menu, with NO --test-run auto-approve,
+//     menu, with NO auto-approve,
 //   - answering advances REAL state on disk — the SAME milestone the .sh asserted
 //     (the .sh never claimed full completion; its strongest stage assertion was
 //     "more than 4 stages completed" = init 3 + >= 2 post-init, plus "at least one
@@ -45,7 +44,7 @@
 // WHY PATTERN B (not A): bugfix is a MULTI-STEP journey (Initialization +
 // Inception run-through, gate-by-gate), not a single landed jump. Per the
 // driver-split invariant, every multi-step journey is TUI-driven; a one-shot SDK
-// check would have to rebuild the --test-run auto-approve fake the mission kills.
+// check would have to rebuild the headless auto-approve fake the mission kills.
 //
 // WHY a MILESTONE terminator (not full bugfix completion): the .sh ITSELF never
 // asserted full bugfix completion — its strongest stage assertion (test 13) was
@@ -60,10 +59,10 @@
 // through Construction is a SEPARATE, longer journey and the unreachable-in-budget
 // gap is a finding to surface, not a thing to weaken the milestone to.
 //
-// REMOVED vs the .sh (faithfully, because --test-run is gone): the .sh's test 10
-// (`**Test-Run**: true` on canonical audit events) and test 15 (`Test Run Mode:
-// true` in state) are --test-run artifacts with no place in a real interactive
-// journey, so they are dropped (not weakened). The RE-artifact "mentions React" /
+// REMOVED vs the .sh (faithfully): the .sh's test 10 and test 15 asserted a
+// state field and a canonical-audit field that no longer exist (artifacts of a
+// headless auto-approve mode the engine no longer has), so they are dropped (not
+// weakened). The RE-artifact "mentions React" /
 // "mentions Todo" checks (.sh tests 17, 20, 21) were domain-word probes that the
 // .sh tied to the brownfield-todo stub; the faithful equal-or-stronger assertion is
 // on STRUCTURE (>= 4 artifacts, headings, size) — LLM-authored RE output varies in
@@ -73,7 +72,7 @@
 //
 // COST: spends real Bedrock tokens (minutes-long LLM turns across Initialization +
 // the reverse-engineering + requirements-analysis Inception stages). RE is a HEAVY
-// stage (the Phase-2 note measured it > 9 min under --test-run; on the slow Windows
+// stage (the Phase-2 note measured it > 9 min; on the slow Windows
 // box it ran ~7min+ before its gate painted). The overall answer-gate deadline is
 // the suite-wide UNIFORM wedge-ceiling AIDLC_TEST_TIMEOUT (default 2400s) minus a
 // 30s teardown margin — a generous hang-backstop, NOT a per-stage budget (per-gate
@@ -228,7 +227,7 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         // Fresh project (no seeded state) -> the no-workflow "ready" line.
         expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
 
-        // --- submit the bugfix workflow command (NO --test-run) ----------------
+        // --- submit the bugfix workflow command --------------------------------
         // Use the EXPLICIT `--scope bugfix` flag, not the bare freeform `bugfix`
         // keyword. The shipped distributable settings.json pins
         // AWS_AIDLC_DEFAULT_SCOPE=workshop, so a bare freeform `/aidlc bugfix ...`

@@ -148,7 +148,7 @@ Today only `code-generation` declares it (it is the one stage whose body writes
 application code to the workspace root). A team that adds its own code- or
 config-emitting stage (a contract generator, an IaC executor) should set
 `workspace_requires: true` on it so the same guard applies. Bypass it for CI
-with `--test-run` or `AIDLC_SKIP_ARTIFACT_GUARD=1`.
+with `AIDLC_SKIP_ARTIFACT_GUARD=1`.
 
 ### `consumes[].required`
 

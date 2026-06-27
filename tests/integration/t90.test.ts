@@ -24,8 +24,8 @@
 // (the materialised field value), expressed against the actual return shape
 // rather than its jq projection. Cases that grep `^\*\*Event\*\*: MEMORY_EMPTY`
 // become a line-filter count over the same audit.md the tool appended to.
-// Case 6's awk-scoped Test-Run check becomes a block-scoped scan of the
-// `## Memory Empty` heading. STRONGER additions are noted inline (S1..S3).
+// (The .sh's Case 6 --test-run check was dropped per #369 when the test-run
+// mechanism was removed.) STRONGER additions are noted inline (S1..S3).
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's make_project + mktemp -d + rm -rf):
 //   - Each case uses a FRESH temp project dir (mkdtempSync) wrapped in
@@ -329,30 +329,8 @@ describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-
     expect(memoryEmptyCount(proj)).toBe(1);
   });
 
-  // --- Case 6: --test-run -> MEMORY_EMPTY carries Test-Run: true ---
-  test("6: --test-run -> MEMORY_EMPTY row carries Test-Run: true", () => {
-    const proj = makeProject(AUDIT_ONE_APPROVED, STATE_FEATURE);
-    writeMemory(proj, "ideation", "intent-capture", "\n");
-    runCompile(proj, "--test-run");
-    // Block-scoped scan: the .sh used `awk '/^## Memory Empty$/,/^---$/'`
-    // then `grep -c '^\*\*Test-Run\*\*: true$'`. Here: split the audit into
-    // `## Memory Empty` blocks (heading .. ---) and count Test-Run: true.
-    const lines = readAudit(proj).split("\n");
-    let inBlock = false;
-    let trCount = 0;
-    for (const line of lines) {
-      if (line === "## Memory Empty") {
-        inBlock = true;
-        continue;
-      }
-      if (line === "---") {
-        inBlock = false;
-        continue;
-      }
-      if (inBlock && line === "**Test-Run**: true") trCount++;
-    }
-    expect(trCount).toBe(1);
-  });
+  // Case 6 (--test-run -> MEMORY_EMPTY carries Test-Run: true) was dropped per
+  // #369: the engine removed both --test-run on compile and the Test-Run stamp.
 
   // --- Case 7: idempotency -> byte-equivalent runtime-graph.json ---
   test("7: two compiles -> byte-equivalent runtime-graph.json", () => {

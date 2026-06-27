@@ -15,7 +15,7 @@ import {
   worktreePath,
 } from "./aidlc-lib.ts";
 
-// --- Canonical event types (69) ---
+// --- Canonical event types (68) ---
 // See docs/reference/12-state-machine.md for the state transitions that emit each event.
 
 const VALID_EVENT_TYPES = new Set([
@@ -62,7 +62,6 @@ const VALID_EVENT_TYPES = new Set([
   "SCOPE_CHANGED",
   "DEPTH_CHANGED",
   "TEST_STRATEGY_CHANGED",
-  "TEST_RUN_MODE_ENABLED",
   // Jump events owned by STAGE_JUMPED — JUMP_COMPLETED was deleted as a
   // redundant alias.
   // Error/Recovery
@@ -153,7 +152,6 @@ const EVENT_HEADINGS: Record<string, string> = {
   SCOPE_CHANGED: "Scope Change",
   DEPTH_CHANGED: "Depth Change",
   TEST_STRATEGY_CHANGED: "Test Strategy Change",
-  TEST_RUN_MODE_ENABLED: "Test-Run Mode Enabled",
   ERROR_LOGGED: "Error Logged",
   RECOVERY_COMPLETED: "Recovery Completed",
   BOLT_STARTED: "Bolt Started",

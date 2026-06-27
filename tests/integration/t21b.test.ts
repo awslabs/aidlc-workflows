@@ -20,7 +20,7 @@
 // WORKFLOW_STARTED, without clobbering the first. (Mirrors tests/unit/t20.test.ts
 // "17-19" and tests/integration/t165-intent-birth-p4.test.ts new-work-while-active.)
 //
-// NO --test-run. The birth path is gate-free (it prints state and STOPs), so
+// The birth path is gate-free (it prints state and STOPs), so
 // there is no auto-approve to drop.
 //
 // THE TWO-BIRTH JOURNEY (verified against the SHIPPED handler):

@@ -3,7 +3,7 @@
 // data-plane mirror of stage-graph.json (which is structural truth).
 //
 // Subcommands:
-//   compile [--test-run]          Walk audit + memory, write runtime-graph.json
+//   compile                       Walk audit + memory, write runtime-graph.json
 //   read    <stage-slug>          Print one stage row from runtime-graph.json
 //
 // The compile subcommand is invoked by the PostToolUse Bash hook
@@ -132,7 +132,6 @@ interface RuntimeGraph {
 // --- Compile ---
 
 interface CompileOptions {
-  testRun: boolean;
   projectDir: string;
 }
 
@@ -315,7 +314,7 @@ function computeBoltDag(projectDir: string): BoltDag | undefined {
 // --- Compile core ---
 
 function compile(opts: CompileOptions): { skipped?: string; written?: string } {
-  const { projectDir, testRun } = opts;
+  const { projectDir } = opts;
 
   // Env-misconfig fallback per plan §97-102.
   const statePath = stateFilePath(projectDir);
@@ -785,9 +784,6 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
       if (alreadyEmitted) continue;
 
       const fields: Record<string, string> = { Stage: ze.slug };
-      if (testRun) {
-        fields["Test-Run"] = "true";
-      }
       appendAuditEntryUnlocked("MEMORY_EMPTY", fields, projectDir);
     }
     writeFileAtomic(runtimeGraphPath(projectDir), `${JSON.stringify(graph, null, 2)}\n`);
@@ -1294,7 +1290,7 @@ function printHelp(): void {
   console.log(`Usage: aidlc-runtime <subcommand>
 
 Subcommands:
-  compile [--test-run]              Walk audit + memory, write runtime-graph.json
+  compile                           Walk audit + memory, write runtime-graph.json
   read <stage-slug>                 Print one stage row from runtime-graph.json
   summary [--json]                  Print deterministic aggregates over runtime-graph.json
                                     (stage/phase outcomes, memory, sensors, learnings,
@@ -1338,9 +1334,8 @@ function tryRun(label: string, handler: SubcommandHandler): SubcommandHandler {
   };
 }
 
-const handleCompile: SubcommandHandler = (rest, projectDir) => {
-  const testRun = rest.includes("--test-run");
-  const result = compile({ testRun, projectDir });
+const handleCompile: SubcommandHandler = (_rest, projectDir) => {
+  const result = compile({ projectDir });
   if (result.skipped) {
     process.exit(0);
   }

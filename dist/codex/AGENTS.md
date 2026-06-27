@@ -8,7 +8,7 @@ byte-identical to every other harness distribution; only the shell differs. Run
 `$aidlc --status` for progress, `$aidlc --help` for usage, `$aidlc intent`
 to list intents, `$aidlc --doctor` to validate setup, and
 `$aidlc --stage <slug>` / `--phase <name>` / `--depth <level>` /
-`--test-strategy <level>` / `--test-run` for the usual overrides.
+`--test-strategy <level>` for the usual overrides.
 
 ## Prerequisites
 
@@ -58,10 +58,6 @@ This is the same AI-DLC core that ships to every harness, rendered onto Codex CL
 ## Session Resumption
 
 On startup, resolve the active intent (the `aidlc/spaces/<space>/intents/active-intent` cursor) and check for its `<record>/aidlc-state.md`. If found, load prior context and offer to resume from last checkpoint. (A brand-new workspace has no intent yet — the engine auto-births the first one on your first `$aidlc`.)
-## Automated Testing
-
-The `--test-run` flag (`$aidlc bugfix --test-run`) auto-approves all approval gates and question stages for automated testing. It is intended for CI/test environments only — not for interactive use. State tracking, audit logging, and artifact generation all continue normally.
-
 ## Git Integration
 
 Commit the `aidlc/` workspace tree — the record (state, the per-clone audit shards under `<record>/audit/`, `intents.json`), memory, codekb, and knowledge are all version-controlled. The shipped `.gitignore` excludes the per-user cursors and machine-local runtime (these may be per-clone or contain sensitive data):

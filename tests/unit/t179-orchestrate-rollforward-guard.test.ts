@@ -30,7 +30,7 @@
 // Source cites (core/tools/aidlc-orchestrate.ts):
 //   :900 the exemption gate — Branch 0 runs ONLY when none of readOnly/
 //        workspaceVerb/stage/phase/scope/intent/resume/depth/testStrategy/
-//        single/testRun is set (so --status and --single both skip it).
+//        single is set (so --status and --single both skip it).
 //   :910 reads aidlc/.aidlc-turn-counter (integer); absent -> counter stays -1.
 //   :914 reads aidlc/.aidlc-readonly-latch (JSON {turn,flag,source}).
 //   :922 fires {kind:"done"} only when counter>=0 AND latchTurn===counter.

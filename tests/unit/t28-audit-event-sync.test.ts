@@ -21,7 +21,7 @@
 //       :19-113  const VALID_EVENT_TYPES = new Set([ "STAGE_STARTED", ... ]);
 //       :117-185 const EVENT_HEADINGS: Record<string,string> = { TYPE: "...", };
 //   - dist/claude/.claude/knowledge/aidlc-shared/audit-format.md
-//       "## Event Registry (67 events, 18 categories)" .. "## Hook-Generated"
+//       "## Event Registry (68 events, 18 categories)" .. "## Hook-Generated"
 //       — backtick-delimited `EVENT_TYPE` cells in the registry tables.
 //
 // Extraction parity with the .sh (so the sets are byte-identical to what the
@@ -36,7 +36,7 @@
 // Test-design note (house style): assert the OBSERVABLE cross-file contract
 // the .sh asserted against the real bytes on disk — never re-declare the
 // taxonomy here. The expected sets are DERIVED from the files, not hard-coded;
-// only the canonical COUNT (67) is pinned as a literal, exactly as the .sh's
+// only the canonical COUNT (68) is pinned as a literal, exactly as the .sh's
 // test 7 baseline did.
 //
 // Old TAP -> new test parity (1:1, no guarantee dropped):
@@ -46,7 +46,7 @@
 //   .sh test 4 (every MD event in TS)                 -> "every audit-format.md event appears in aidlc-audit.ts"
 //   .sh test 5 (EVENT_HEADINGS has every TS event)    -> "EVENT_HEADINGS maps every VALID_EVENT_TYPES member"
 //   .sh test 6 (assert_eq TS_COUNT MD_COUNT)          -> "event counts match across the two files"
-//   .sh test 7 (assert_eq 67 TS_COUNT — baseline pin) -> "VALID_EVENT_TYPES.size === 67 (v0.6.0 Wave 4 milestone 16 baseline)"
+//   .sh test 7 (assert_eq TS_COUNT - baseline pin)    -> "VALID_EVENT_TYPES.size === 68 (baseline pin)"
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -60,8 +60,9 @@ const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md")
 
 // The canonical baseline pinned by .sh test 7. Bump WITH the source when an
 // event is added (v0.6.0 Wave 4 milestone 16: +SWARM_DEGRADED took this to 67;
-// v2.1.2 #367: +WORKFLOW_PARKED +WORKFLOW_UNPARKED took it to 69).
-const CANONICAL_COUNT = 69;
+// v2.1.3 #367: +WORKFLOW_PARKED +WORKFLOW_UNPARKED took it to 69; v2.1.4 #369:
+// -TEST_RUN_MODE_ENABLED took it to 68).
+const CANONICAL_COUNT = 68;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
  *  next line matching `end` (inclusive of both), reproducing `sed -n
@@ -161,9 +162,10 @@ describe("t28 audit event-type sync (migrated from t28-audit-event-sync.sh, plan
     expect(MD_EVENTS).toEqual(TS_EVENTS); // both deduped + sorted; full set parity.
   });
 
-  // .sh test 7: assert_eq 67 TS_COUNT — the canonical baseline pin, bumped when
-  // events are added. (v0.6.0 Wave 4 milestone 16: +SWARM_DEGRADED.)
-  test("VALID_EVENT_TYPES.size === 67 (v0.6.0 Wave 4 milestone 16 baseline) [.sh test 7]", () => {
+  // .sh test 7: assert_eq TS_COUNT - the canonical baseline pin, bumped when
+  // events are added or removed. (#367 added WORKFLOW_PARKED/UNPARKED -> 69;
+  // #369 removed TEST_RUN_MODE_ENABLED -> 68.)
+  test("VALID_EVENT_TYPES.size === 68 (baseline pin) [.sh test 7]", () => {
     expect(TS_EVENTS.length).toBe(CANONICAL_COUNT);
   });
 });

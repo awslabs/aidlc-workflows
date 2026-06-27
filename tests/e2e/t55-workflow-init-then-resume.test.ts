@@ -8,8 +8,7 @@
 // assistantText. The subject is SESSION CONTINUITY: the 2nd turn RESUMES from the
 // 1st turn's state rather than re-initialising from scratch.
 //
-// ⛔ NO --test-run (TRAP 2). The .sh's phase 2 was `/aidlc bugfix --test-run`.
-// --test-run is the auto-approve fakery the refactor kills. Its phase-2 subject is
+// ⛔ TRAP 2 (no headless auto-approve). The phase-2 subject is
 // RESUME continuity (the 2nd session reads the 1st session's state and the
 // workflow advances), which is deterministic at the resume DISPATCH: a `--scope
 // bugfix` on a project that ALREADY has state does NOT re-init (init refuses on
@@ -17,17 +16,15 @@
 // turns, stop each at its first deterministic landed signal, and assert the
 // continuity on disk: the 1st turn's init stages survive into the 2nd turn's
 // state, and the audit GREW across the two sessions. The DEEP multi-stage
-// progression under auto-approve (the .sh's test 4 ">4 completed" / test 5
+// progression (the .sh's test 4 ">4 completed" / test 5
 // "bugfix stages progressed") is the live tui bugfix journey's surface
-// (t-tui-t50-bugfix-scope, gate-by-gate to Completed>=5, NO --test-run); deep
+// (t-tui-t50-bugfix-scope, gate-by-gate to Completed>=5); deep
 // progression is NOT chased here (the moving-target lesson).
 //
 // THE ONE DROPPED .sh ASSERTION (faithfully, not weakened). The .sh's test 8
-// (`Test Run Mode: true` in state) is a --test-run ARTIFACT — it only exists when
-// auto-approve is on. The Test-Run state flag + its terminal effects are covered
-// DETERMINISTICALLY by the cli twin feature/t54-compaction-and-test-run.test.ts
-// (the --test-run recognition seam + terminal state). So dropping it here loses no
-// coverage.
+// asserted a state field that the engine no longer writes, so there is nothing
+// left to assert. Dropping it here loses no coverage: the field is gone from
+// the engine entirely.
 //
 // THE JOURNEY (verified against the SHIPPED tool). Turn 1 `/aidlc --init` on a
 // fresh `--no-aidlc-docs` project writes aidlc-state.md with the 3 init stages [x]
@@ -52,10 +49,9 @@
 //                                           resume not re-init: STRONGER than a byte
 //                                           count, which a re-init would also satisfy).
 //   4/5 (>4 completed / bugfix stages progressed): NOT asserted — those needed
-//       --test-run to RUN the workflow; deep progression is the tui t50 surface.
+//       a full workflow run; deep progression is the tui t50 surface.
 //       The continuity floor (init stages survive into turn 2) IS asserted.
-//   8 (Test Run Mode: true): DROPPED — a --test-run artifact, covered by the
-//       feature/t54 cli twin (see header).
+//   8 (state field): DROPPED, the field is gone from the engine (see header).
 //
 // Known-answer literals (read from the SHIPPED tool, not guessed):
 //   - --init / --scope dispatch:  SKILL.md (init / known-scope routing)
@@ -102,7 +98,7 @@ describe("t55 /aidlc birth (--scope bugfix) then resume continuity (sdk)", () =>
   // Two sequential turns against one fresh project: turn 1 births the workflow
   // from a scope (P4 retired --init — a scope on a clean workspace auto-births),
   // turn 2 a --scope bugfix turn RESUMES from it (init [x] markers persist, audit
-  // grows). NO --test-run; deep progression is the tui t50 journey's surface.
+  // grows). Deep progression is the tui t50 journey's surface.
   // -------------------------------------------------------------------------
   test(
     "birth establishes state; a second scope turn resumes from it (init stages persist, audit grows across sessions)",

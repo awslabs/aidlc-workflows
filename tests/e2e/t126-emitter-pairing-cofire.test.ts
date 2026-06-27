@@ -11,7 +11,7 @@
 // still holds for them, but the coverage CLAIM stays honest to what is proven.
 //
 // t126-emitter-pairing-cofire.test.ts — METAMORPHIC INVARIANT (§5-D, Phase 4):
-// emitter-pairing co-fire. Drive a REAL `/aidlc <scope> --test-run` workflow
+// emitter-pairing co-fire. Drive a REAL `/aidlc <scope>` workflow
 // through the Claude Agent SDK (driveAidlc) and assert, as data over the audit
 // log, that every audit event whose taxonomy declares a co-emission PARTNER has
 // that partner present in the SAME run. {sdk} mechanism (no rendering — the
@@ -29,7 +29,7 @@
 //     handleCompleteWorkflow (aidlc-state.ts)       -> PHASE_COMPLETED + WORKFLOW_COMPLETED
 //     handleInit             (aidlc-utility.ts)      -> WORKFLOW_STARTED + PHASE_STARTED + STAGE_STARTED
 //   (handleReject -> GATE_REJECTED + STAGE_REVISING is exercised by t128, not
-//   here: a --test-run workflow never rejects, per stage-protocol.md:24.)
+//   here: the driver approves every gate, so this golden-path run never rejects.)
 //
 //   We assert the RUNTIME pairing as a metamorphic invariant: for each pair, IF
 //   the lead event fired THEN its partner(s) fired too, in the SAME run. This is
@@ -37,13 +37,12 @@
 //   atomic co-emission the audit trail's integrity depends on actually held over
 //   a live run, not just that the literals coexist in a handler.
 //
-// WHY --test-run HERE (and not in t128): this invariant is about the
-// APPROVE/INIT/COMPLETE pairs, all of which fire on the golden path. --test-run
-// auto-approves every gate (stage-protocol.md:86) so a single drive reaches
-// WORKFLOW_COMPLETED, exercising handleInit + handleApprove (per stage) +
-// handleCompleteWorkflow — all three pair-emitting handlers — deterministically.
-// The Test-Run=true field tagging does NOT change which events fire, only adds a
-// field (audit-format.md:189), so the pairing holds identically.
+// WHY THE GOLDEN PATH HERE (and not in t128): this invariant is about the
+// APPROVE/INIT/COMPLETE pairs, all of which fire on the golden path. The SDK
+// driver answers every approval gate with "Approve" (its default answerScript),
+// so a single drive reaches WORKFLOW_COMPLETED, exercising handleInit +
+// handleApprove (per stage) + handleCompleteWorkflow — all three pair-emitting
+// handlers — deterministically.
 //
 // THE SCOPE: `poc` — a Minimal greenfield scope (scope-mapping.json "poc") whose
 // EXECUTE set is small (init×3 + reverse-engineering[->SKIP on greenfield] +
@@ -70,7 +69,7 @@ import {
 } from "../harness/fixtures.ts";
 import { auditFilePathFor, driveAidlc } from "../harness/sdk-drive.ts";
 
-// Timeout budget. A full `/aidlc poc --test-run` is a multi-turn workflow on
+// Timeout budget. A full `/aidlc poc` is a multi-turn workflow on
 // Opus/Bedrock. Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds). The
 // timer is a WEDGE-BACKSTOP, not a budget — the pass condition is the on-disk
 // WORKFLOW_COMPLETED pair, never the clock. The drive aborts a hair before bun
@@ -86,7 +85,7 @@ function seedPocState(proj: string): void {
   const utility = join(proj, ".claude", "tools", "aidlc-utility.ts");
   const res = spawnSync(
     process.execPath,
-    [utility, "init", "--scope", "poc", "--project-dir", proj, "--test-run"],
+    [utility, "init", "--scope", "poc", "--project-dir", proj],
     { cwd: proj, encoding: "utf8" },
   );
   expect(res.status).toBe(0);
@@ -98,7 +97,7 @@ function seedPocState(proj: string): void {
  * (t48:304-312). Each entry: a `lead` event and the `partners` that the SAME
  * handler emits in the same body — so over a real run, if `lead` is present in
  * audit.md, every `partner` MUST be too. Only the pairs reachable on a
- * --test-run golden path are asserted here (reject/revise -> t128).
+ * golden path are asserted here (reject/revise -> t128).
  */
 const COFIRE_PAIRS: Array<{ lead: string; partners: string[]; handler: string }> = [
   // handleApprove (aidlc-state.ts:675): a gate approval and the stage completion
@@ -149,7 +148,7 @@ describe("t126 emitter-pairing co-fire (metamorphic invariant, sdk)", () => {
       try {
         seedPocState(proj);
 
-        const r = await driveAidlc("/aidlc poc --test-run", {
+        const r = await driveAidlc("/aidlc poc", {
           projectDir: proj,
           timeoutMs: DRIVE_TIMEOUT_MS,
         });
@@ -163,7 +162,7 @@ describe("t126 emitter-pairing co-fire (metamorphic invariant, sdk)", () => {
 
         // VACUOUS-PASS GUARD: every pair LEAD this test claims to exercise MUST
         // have fired, or that pair's co-fire check is a silent no-op (the
-        // empty-antecedent trap). A completed `/aidlc poc --test-run` guarantees
+        // empty-antecedent trap). A completed `/aidlc poc` guarantees
         // all three: init emits WORKFLOW_STARTED; each auto-approved gate emits
         // GATE_APPROVED; and poc spans Ideation→Inception→Construction so the
         // terminal handleCompleteWorkflow emits PHASE_COMPLETED (aidlc-state.ts:580

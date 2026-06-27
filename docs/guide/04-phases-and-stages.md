@@ -310,8 +310,6 @@ Failures always stop Construction, even in autonomous mode. That's the one place
 - If a solo Bolt fails, Construction halts immediately and offers **retry** (re-run just that Bolt), **skip** (mark it `[S]` and continue — dependent Bolts will likely also fail), or **abort** (stop Construction entirely).
 - If one Bolt in a parallel batch fails while others succeed, the conductor waits for the whole batch to finish, preserves the successful Bolts' artifacts on disk, and presents the same retry / skip / abort choice for the failed Bolt only.
 
-Under `--test-run`, a Bolt failure is a test error (no silent auto-retry) so regressions surface loudly in CI.
-
 ### Stage reference
 
 | # | Stage | Lead | Supporting | Key Artifacts | Runs |

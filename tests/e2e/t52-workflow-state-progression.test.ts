@@ -7,9 +7,9 @@
 // fields the init tool wrote, and the framework's counter↔checkbox invariant —
 // NEVER on assistantText.
 //
-// ⛔ NO --test-run (TRAP 2). The .sh drove `/aidlc bugfix --test-run` to
-// COMPLETION and asserted on the FINAL state (checkbox counts, ordering, fields).
-// --test-run is the auto-approve fakery the refactor kills. The .sh's subject is
+// ⛔ TRAP 2 (no headless auto-approve). The .sh drove the whole bugfix workflow to
+// COMPLETION and asserted on the FINAL state (checkbox counts, ordering, fields)
+// under a headless auto-approve mode the refactor kills. The .sh's subject is
 // "state file INTEGRITY: checkbox counts, stage ordering, field updates" — and the
 // state file's STRUCTURE + all its fields are written DETERMINISTICALLY by
 // explicit init (`aidlc-utility.ts init`, the State-Version-7 template,
@@ -19,7 +19,7 @@
 // (the .sh's tests 2-3 "Current Stage advanced past init" / ">4 completed") is an
 // LLM-paced run-to-milestone journey — that surface is owned by the live tui
 // bugfix journey t-tui-t50-bugfix-scope (which drives the gates by keystroke to
-// Completed>=5 with NO --test-run). FINDING surfaced, not weakened: deep
+// Completed>=5). FINDING surfaced, not weakened: deep
 // progression lives in the tui tier; state INTEGRITY at the deterministic init
 // landing lives here.
 //
@@ -45,8 +45,8 @@
 //   8 Last Updated has ISO timestamp -> the Last Updated field matches YYYY-MM-DDThh:mm:ss.
 //   9 Active Agent field present     -> readStateField(state,"Active Agent") defined.
 //   10 State Version is 7            -> readStateField(state,"State Version") === "7".
-//   2/3 (>4 completed / advanced past init): NOT asserted here — those required
-//       --test-run to RUN the workflow; the deep-progression surface is the tui
+//   2/3 (>4 completed / advanced past init): NOT asserted here - those require
+//       running the workflow to completion; the deep-progression surface is the tui
 //       t50 journey. At the deterministic init landing the 3 init stages ARE [x]
 //       (asserted below as the floor the .sh's >4 built on), and Current Stage is
 //       a populated field (asserted via test 3's surface as "present + non-empty").
@@ -91,7 +91,7 @@ describe("t52 /aidlc --init --scope bugfix state-file integrity (sdk)", () => {
   // -------------------------------------------------------------------------
   // Fresh project: the full State-Version-7 file lands at explicit init. Assert its
   // structure (counter↔checkbox invariant, ordering, every field) on the landed
-  // file. NO --test-run; deep progression is the tui t50 journey's surface.
+  // file. Deep progression is the tui t50 journey's surface.
   // -------------------------------------------------------------------------
   test(
     "init writes a structurally sound State-Version-7 file: counter==checkboxes, ordering preserved, all fields present",

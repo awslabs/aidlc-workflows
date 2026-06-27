@@ -544,13 +544,13 @@ function handleCount(args: string[]): void {
 //      Catches the code-generation case where only the two markdown produces[]
 //      docs were written but no actual source code (issue #366 Update 2).
 //
-// Bypass: --test-run (CLI) or AIDLC_SKIP_ARTIFACT_GUARD=1 (env, set by the test
-// runner for synthetic tiers that drive transitions against bare fixtures).
+// Bypass: AIDLC_SKIP_ARTIFACT_GUARD=1 (env, set by the test runner for synthetic
+// tiers that drive transitions against bare fixtures).
 // (KNOWN_CODEKB_STAGES is declared at module top alongside HARNESS_DOC_DIRS to
 // dodge the TDZ - the dispatch that calls this guard runs at module load.)
 
-function artifactGuardDisabled(testRun: boolean): boolean {
-  return testRun || process.env.AIDLC_SKIP_ARTIFACT_GUARD === "1";
+function artifactGuardDisabled(): boolean {
+  return process.env.AIDLC_SKIP_ARTIFACT_GUARD === "1";
 }
 
 // Resolve the directories a stage's produces[] artifacts would live under,
@@ -761,17 +761,16 @@ function workspaceHasWork(pd: string): boolean {
 // untouched. `stage` is the StageEntry being completed. No-op when bypass active.
 function verifyStageArtifacts(
   pd: string,
-  stage: { slug: string; name: string; phase: string; for_each?: string; produces?: string[]; workspace_requires?: boolean },
-  testRun: boolean
+  stage: { slug: string; name: string; phase: string; for_each?: string; produces?: string[]; workspace_requires?: boolean }
 ): void {
-  if (artifactGuardDisabled(testRun)) return;
+  if (artifactGuardDisabled()) return;
 
   if (!producesArtifactsExist(pd, stage)) {
     error(
       `Refusing to complete "${stage.slug}": none of its declared artifacts exist ` +
         `under the intent's record directory. The stage protocol requires ${stage.name} ` +
-        `to produce output before the gate. Produce the artifacts, or pass --test-run ` +
-        `for CI. (declared: ${(stage.produces ?? []).join(", ") || "none"})`
+        `to produce output before the gate. Produce the artifacts before completing. ` +
+        `(declared: ${(stage.produces ?? []).join(", ") || "none"})`
     );
   }
 
@@ -781,20 +780,17 @@ function verifyStageArtifacts(
         `(workspace_requires) but no source work is evident outside the aidlc/ ` +
         `workspace tree. In a git workspace this means no uncommitted change and no ` +
         `code in the last commit; otherwise no source file exists. Planning docs alone ` +
-        `do not satisfy ${stage.name} - write the code to the workspace, or pass ` +
-        `--test-run for CI.`
+        `do not satisfy ${stage.name} - write the code to the workspace.`
     );
   }
 }
 
 function handleAdvance(args: string[]): void {
-  // Separate the --test-run boolean from the positional <completed-slug>
-  // [<next-slug>] so the flag can appear in any position without being misread
-  // as the next slug.
-  const testRun = args.includes("--test-run");
+  // Keep only the positional <completed-slug> [<next-slug>]; any flags are
+  // filtered out so they are not misread as the next slug.
   const positional = args.filter((a) => !a.startsWith("--"));
   if (positional.length < 1)
-    error("Usage: aidlc-state.ts advance <completed-slug> [<next-slug>] [--test-run]");
+    error("Usage: aidlc-state.ts advance <completed-slug> [<next-slug>]");
   const completedSlug = positional[0];
 
   const pd = resolveProjectDir(projectDir);
@@ -923,7 +919,7 @@ function handleAdvance(args: string[]): void {
   // (the gate-skipping attack path) is NOT alreadyMarkedCompleted, so it is
   // guarded. Runs before any mutation; error() exits leaving state untouched.
   if (!alreadyMarkedCompleted) {
-    verifyStageArtifacts(pd, completedStage, testRun);
+    verifyStageArtifacts(pd, completedStage);
   }
 
   // Detect phase boundary (for PHASE_COMPLETED/VERIFIED/STARTED emissions)
@@ -1004,11 +1000,10 @@ function handleAdvance(args: string[]): void {
 }
 
 function handleFinalize(args: string[]): void {
-  // --test-run can appear in any position; keep <completed-slug> positional.
-  const testRun = args.includes("--test-run");
+  // Keep <completed-slug> positional; any flags are filtered out.
   const positional = args.filter((a) => !a.startsWith("--"));
   if (positional.length < 1)
-    error("Usage: aidlc-state.ts finalize <completed-slug> [--test-run]");
+    error("Usage: aidlc-state.ts finalize <completed-slug>");
   const completedSlug = positional[0];
 
   const pd = resolveProjectDir(projectDir);
@@ -1021,13 +1016,13 @@ function handleFinalize(args: string[]): void {
 
   // Artifact guard (issue #366). finalize also marks a stage [x], so it is a
   // completing transition that must not rubber-stamp. Guard only when the slug
-  // is not already [x] (an idempotent re-finalize already passed the guard or
-  // was test-run), and before any mutation so a refusal leaves state untouched.
+  // is not already [x] (an idempotent re-finalize already passed the guard),
+  // and before any mutation so a refusal leaves state untouched.
   const alreadyMarkedCompleted =
     parseCheckboxes(content).find((c) => c.slug === completedSlug)?.state ===
     "completed";
   if (!alreadyMarkedCompleted) {
-    verifyStageArtifacts(pd, completedStage, testRun);
+    verifyStageArtifacts(pd, completedStage);
   }
 
   // 1. Mark completed
@@ -1085,20 +1080,18 @@ function handleFinalize(args: string[]): void {
 }
 
 function handleCompleteWorkflow(args: string[]): void {
-  // --test-run can appear in any position; keep <completed-slug> positional and
-  // distinct from the --reason value. --reason takes a value, so its argument is
-  // excluded from positionals too.
-  const testRun = args.includes("--test-run");
+  // Keep <completed-slug> positional and distinct from the --reason value.
+  // --reason takes a value, so its argument is excluded from positionals too.
   const reasonIdx = args.indexOf("--reason");
   const reasonValueIdx = reasonIdx !== -1 ? reasonIdx + 1 : -1;
   const positional = args.filter(
     (a, i) => !a.startsWith("--") && i !== reasonValueIdx,
   );
   if (positional.length < 1)
-    error("Usage: aidlc-state.ts complete-workflow <completed-slug> [--reason <text>] [--test-run]");
+    error("Usage: aidlc-state.ts complete-workflow <completed-slug> [--reason <text>]");
   const completedSlug = positional[0];
 
-  // Optional --reason flag for test-run early stops
+  // Optional --reason flag for recording why the workflow completed early
   let reason: string | undefined;
   if (reasonIdx !== -1 && reasonIdx + 1 < args.length) {
     reason = args[reasonIdx + 1];
@@ -1131,7 +1124,7 @@ function handleCompleteWorkflow(args: string[]): void {
   // direct `complete-workflow <active-slug>` that never produced artifacts. Runs
   // before any mutation so a refusal leaves state untouched.
   if (!alreadyMarkedCompleted) {
-    verifyStageArtifacts(pd, completedStage, testRun);
+    verifyStageArtifacts(pd, completedStage);
   }
 
   // 1. Mark completed
@@ -1274,7 +1267,7 @@ function handleGateStart(args: string[]): void {
   });
 }
 
-// approve <slug> [--user-input <text>] [--test-run]
+// approve <slug> [--user-input <text>]
 // Transition: [?] → [x] AND auto-advance to the next in-scope stage (or
 // complete the workflow if this was the final stage). Human judgment ends
 // at the gate response; everything after is deterministic bookkeeping, so
@@ -1283,9 +1276,9 @@ function handleGateStart(args: string[]): void {
 // transitions. Eliminates the t59-class bug where the orchestrator approved
 // but forgot to call advance, leaving Current Stage pointing at a [x] slug.
 function handleApprove(args: string[]): void {
-  if (args.length < 1) error("Usage: aidlc-state.ts approve <slug> [--user-input <text>] [--test-run]");
+  if (args.length < 1) error("Usage: aidlc-state.ts approve <slug> [--user-input <text>]");
   const slug = args[0];
-  const { userInput, testRun } = parseApproveFlags(args.slice(1));
+  const { userInput } = parseApproveFlags(args.slice(1));
 
   const pd = resolveProjectDir(projectDir);
   // C2b lost-update safety: the ENTIRE approve transaction — including the
@@ -1307,11 +1300,10 @@ function handleApprove(args: string[]): void {
   // work on disk. Runs BEFORE any mutation so a refusal (error() -> exit) leaves
   // state untouched. The nested handleAdvance / handleCompleteWorkflow below see
   // the slug as already [x] and skip their own guard, so this is the single
-  // enforcement point on the approve path. Bypass via --test-run /
-  // AIDLC_SKIP_ARTIFACT_GUARD. Covers per-unit Construction stages (globs the
-  // record's construction/<unit>/<slug>/) and code-producing stages
-  // (workspace_requires).
-  verifyStageArtifacts(pd, stage, testRun);
+  // enforcement point on the approve path. Bypass via AIDLC_SKIP_ARTIFACT_GUARD.
+  // Covers per-unit Construction stages (globs the record's
+  // construction/<unit>/<slug>/) and code-producing stages (workspace_requires).
+  verifyStageArtifacts(pd, stage);
 
   const timestamp = isoTimestamp();
 
@@ -1328,7 +1320,6 @@ function handleApprove(args: string[]): void {
   try {
     const gateFields: Record<string, string> = { Stage: slug };
     if (userInput) gateFields["User Input"] = userInput;
-    if (testRun) gateFields["Test-Run"] = "true";
     emitAudit(pd, "GATE_APPROVED", gateFields);
 
     emitAudit(pd, "STAGE_COMPLETED", {
@@ -1372,7 +1363,7 @@ function handleApprove(args: string[]): void {
 
 // Look up a flag's value while guarding against value-starting-with-"--"
 // ambiguity. If the user forgets to provide a value (e.g. `--user-input
-// --test-run`), indexOf+slice would consume the next flag as the value —
+// --reason`), indexOf+slice would consume the next flag as the value —
 // silently wrong. This helper errors cleanly when the value starts with "--".
 // Returns undefined if the flag is absent.
 function getFlagValue(args: string[], flag: string): string | undefined {
@@ -1388,11 +1379,10 @@ function getFlagValue(args: string[], flag: string): string | undefined {
   return val;
 }
 
-// Flag parser for approve — handles --user-input (value) and --test-run (boolean).
-function parseApproveFlags(args: string[]): { userInput?: string; testRun: boolean } {
+// Flag parser for approve — handles --user-input (value).
+function parseApproveFlags(args: string[]): { userInput?: string } {
   return {
     userInput: getFlagValue(args, "--user-input"),
-    testRun: args.includes("--test-run"),
   };
 }
 

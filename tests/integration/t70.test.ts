@@ -1,9 +1,9 @@
 // covers: stage:initialization/workspace-detection, audit:WORKSPACE_SCANNED, subcommand:aidlc-utility:init
 //
 // t70.test.ts — SDK-harness port of tests/integration/t70-stage-workspace-detection-greenfield.sh
-// (plan 8). Drives the real /aidlc --init --force (NO --test-run — TRAP 2; init
-// is a print-and-stop terminal with no gate, SKILL.md:54,138, so the flag was
-// INERT and is dropped) against a project seeded with the greenfield-todo stub
+// (plan 8). Drives the real /aidlc --init --force (TRAP 2; init
+// is a print-and-stop terminal with no gate, SKILL.md:54,138) against a project
+// seeded with the greenfield-todo stub
 // (a bare README.md, no source/manifest/framework config) and a pre-seeded state
 // pinned at workspace-detection. Asserts ONLY on deterministic surfaces —
 // on-disk state fields, audit events, and the init tool's verbatim Bash stdout —
@@ -44,7 +44,7 @@
 //                                            (assertToolResultContains refuses to pass vacuously if Bash never ran).
 //
 // Known-answer literals (read from the SHIPPED handler / fixture, not guessed):
-//   - --init --force --test-run dispatch:  SKILL.md:531 -> `bun .claude/tools/aidlc-utility.ts init` via Bash, stdout verbatim
+//   - --init --force dispatch:  SKILL.md:531 -> `bun .claude/tools/aidlc-utility.ts init` via Bash, stdout verbatim
 //   - --force removes seeded state then re-writes:  handleInit aidlc-utility.ts:1749-1758
 //   - classification "Greenfield":         detectWorkspace :1658-1666 (all brownfield signals false for the stub)
 //   - state Project Type line:             aidlc-utility.ts:2048
@@ -54,7 +54,7 @@
 //   - WORKSPACE_SCANNED audit emit:        :1914 (VALID_EVENT_TYPES member, aidlc-audit.ts:42)
 //   - init stdout "Project type: ...":     :2151
 //   - greenfield-todo stub = bare README:  tests/fixtures/greenfield-todo/README.md (no source/manifest/framework)
-//   - --test-run skips gates (no AskUserQuestion in the init path):  SKILL.md:82,138 (init prints state and STOPs)
+//   - no gate in the init path (no AskUserQuestion):  SKILL.md:82,138 (init prints state and STOPs)
 //
 // It SPENDS TOKENS — each driveAidlc drives the real /aidlc on Opus/Bedrock.
 // Generous per-test timeout so a hung canUseTool fails LOUD via bun:test.
@@ -117,7 +117,7 @@ describe("t70 /aidlc birth on a greenfield stub (sdk)", () => {
       // the default seeded intent record so the engine AUTO-BIRTHS a new intent
       // over the stub and the scan fires (a pre-seeded record would make the
       // engine resolve the existing intent and ask to pick one, skipping the
-      // scan — same fix as t71-brownfield). NO --test-run: the birth path has no
+      // scan — same fix as t71-brownfield). The birth path has no
       // gate (it prints state and STOPs).
       const proj = setupIntegrationProject({
         withGreenfieldStub: true,

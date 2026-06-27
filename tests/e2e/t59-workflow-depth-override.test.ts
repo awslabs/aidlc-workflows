@@ -7,17 +7,17 @@
 // init tool's verbatim stdout, the on-disk state fields, and the parsed audit
 // events — NEVER on assistantText.
 //
-// ⛔ NO --test-run (TRAP 2). The .sh drove `/aidlc bugfix --depth comprehensive
-// --test-run` to completion and asserted on the FINAL state. --test-run is the
-// auto-approve fakery the refactor kills. It is NOT load-bearing for THIS test's
-// subject — the depth override lands at explicit init (the init tool writes
+// ⛔ TRAP 2 (no headless auto-approve). The .sh drove `/aidlc bugfix --depth
+// comprehensive` to completion and asserted on the FINAL state under a headless
+// auto-approve mode the refactor kills. That mode is NOT load-bearing for THIS
+// test's subject - the depth override lands at explicit init (the init tool writes
 // `- **Depth**: <effectiveDepth>` from the --depth flag, utility.ts:1941-1943,
 // :2064, BEFORE any gate). So we drive explicit init with the depth flag, stop the
 // SDK the instant the init stdout lands (the depth is already on disk), and
 // assert the deterministic init emission. We do NOT chase Construction-stage
 // progress (the .sh's tests 4-5 of "init stages completed" / "Construction
-// progressed") — those depend on the LLM running the workflow to completion under
-// --test-run, a moving target; the depth-OVERRIDE invariant this test owns lands
+// progressed") - those depend on the LLM running the workflow to completion,
+// a moving target; the depth-OVERRIDE invariant this test owns lands
 // at init and is fully deterministic there.
 //
 // THIS TEST OWNS THE DEPTH-AT-INIT SURFACE (the t27 gap). The tui t27
@@ -47,8 +47,8 @@
 //   3 bugfix scope recorded
 //       -> readStateField(state,"Scope") === "bugfix" (utility.ts:2049). Exact,
 //          stronger than the .sh's `[Bb]ugfix` regex.
-//   (4-5 init/Construction progress: NOT asserted — those depended on --test-run
-//        running the workflow to completion; the depth-OVERRIDE invariant this
+//   (4-5 init/Construction progress: NOT asserted - those depended on running
+//        the workflow to completion; the depth-OVERRIDE invariant this
 //        test owns is deterministic at init and asserted above. Init COMPLETION
 //        of the 3 init stages IS still asserted via test 1+ the [x] markers below,
 //        the deterministic part.)
@@ -104,7 +104,7 @@ describe("t59 /aidlc --init --scope bugfix --depth comprehensive depth override 
   // Fresh brownfield project: the depth override lands at explicit init. We assert
   // the Depth state field is Comprehensive (overriding bugfix's Minimal default),
   // Scope=bugfix, WORKFLOW_STARTED, and the 3 init stages complete — all
-  // deterministic at init. NO --test-run.
+  // deterministic at init.
   // -------------------------------------------------------------------------
   test(
     "depth comprehensive overrides the bugfix Minimal default at init, records bugfix scope + WORKFLOW_STARTED",

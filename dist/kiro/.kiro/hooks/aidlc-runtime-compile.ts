@@ -113,21 +113,12 @@ const transitionRegex = /^\*\*Event\*\*:\s*(GATE_APPROVED|STAGE_STARTED|STAGE_AW
 const hasTransition = last3.some((b) => transitionRegex.test(b));
 if (!hasTransition) process.exit(0);
 
-// 8. Test-Run extraction — propagate to compile so emitted MEMORY_EMPTY
-//    rows carry Test-Run: true (per audit-format.md:71-74 convention).
-//    Per the propagation pattern, Test-Run flows through every interaction
-//    row in a test-run session; if ANY of the last 3 blocks carries it,
-//    the same Bash call's emits all came from a test-run.
-const testRunRegex = /^\*\*Test-Run\*\*:\s*true\s*$/m;
-const testRun = last3.some((b) => testRunRegex.test(b));
-
-// 9. Dispatch — sync subprocess. Hook waits for completion. On non-zero
+// 8. Dispatch — sync subprocess. Hook waits for completion. On non-zero
 //    exit, record the drop for `--doctor` to surface; never block the
 //    parent Bash call (mirrors aidlc-audit-logger.ts:95-101).
 const runtimeTs = join(projectDir, harnessDir(), "tools", "aidlc-runtime.ts");
 try {
   const args = ["run", runtimeTs, "compile"];
-  if (testRun) args.push("--test-run");
   const result = spawnSync("bun", args, {
     cwd: projectDir,
     timeout: 30_000,

@@ -16,13 +16,13 @@
 // approve in one continuous query: there is no approval AUQ for canUseTool to
 // answer. This is exactly what the DRIVER-SPLIT INVARIANT predicts (memory
 // project_v0harness_driver_split_invariant, user-locked): a journey that must
-// CONTINUE PAST a user-stop (answer a gate, then keep going) is TUI, not sdk —
-// using sdk multi-turn to fake it "rebuilds the --test-run auto-approve fake the
-// mission kills." The revision loop is the canonical continue-past-a-stop journey,
+// CONTINUE PAST a user-stop (answer a gate, then keep going) is TUI, not sdk -
+// using sdk multi-turn to fake it rebuilds the auto-approve fake the mission
+// kills. The revision loop is the canonical continue-past-a-stop journey,
 // so it is driven through the real TUI like a human: the gate PAINTS, a keystroke
 // answers it (Enter = Approve, or Down+Enter = Request changes), and the workflow
-// continues. NO --test-run — that flag "skips the revision loop entirely, no
-// Request changes path" (stage-protocol.md:24), so it could never exercise this.
+// continues. Auto-approving every gate skips the revision loop entirely (no
+// Request changes path, stage-protocol.md:24), so it could never exercise this.
 //
 // THE METAMORPHIC RELATION (asserted as on-disk DATA, never on prose):
 //   CLEAN   = terminal aidlc-state.md after a run that APPROVES every gate.

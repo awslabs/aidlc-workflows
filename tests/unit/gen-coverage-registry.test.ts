@@ -772,7 +772,6 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t49.test.ts",
     "integration/t51.test.ts",
     "integration/t52-drift-meta-validation.test.ts",
-    "integration/t54-compaction-and-test-run.test.ts",
     "integration/t66.test.ts",
     "integration/t75.test.ts",
     "integration/t78-bolt-worktree-lifecycle.test.ts",

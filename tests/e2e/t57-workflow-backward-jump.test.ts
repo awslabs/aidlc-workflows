@@ -2,13 +2,12 @@
 //
 // t57-workflow-backward-jump.test.ts — SDK-harness port of
 // tests/e2e/t57-workflow-backward-jump.sh (plan 5). Drives the real
-// `/aidlc --stage reverse-engineering` (NO --test-run) through the Claude Agent
+// `/aidlc --stage reverse-engineering` through the Claude Agent
 // SDK and asserts ONLY on deterministic surfaces — never on assistantText.
 //
-// ⛔ NO --test-run (TRAP 2 — the t26 pattern). The .sh drove `--stage
-// reverse-engineering --test-run`. Its sibling t26 documents dropping --test-run
-// as the ROOT FIX for the historic backward-jump flake: under --test-run the
-// orchestrator auto-advanced past the jump target, so final-state reads raced.
+// ⛔ TRAP 2 (the t26 pattern). The historic backward-jump flake came from
+// asserting the FINAL on-disk state: after the jump the orchestrator continues
+// past the jump target, so final-state reads raced.
 // This port asserts the deterministic jump EMISSION — the tool's own stdout JSON
 // (immune to whatever the orchestrator does next) plus the immutable audit
 // bytes — and stops the SDK the instant the jump JSON lands.
@@ -43,8 +42,8 @@
 // (aidlc-jump.ts:268-285), pivots Current Stage to the target
 // (aidlc-jump.ts:313), and rewrites Lifecycle Phase to the target's phase
 // uppercased (aidlc-jump.ts:312 — reverse-engineering is an INCEPTION stage).
-// A BACKWARD jump never terminates (willTerminate = testRunMode && direction
-// === "forward", aidlc-jump.ts:310 → false), so Status stays "Running" and the
+// A jump always lands Status="Running" (aidlc-jump.ts:309 → never terminates),
+// so the
 // orchestrator CONTINUES after the jump — which is exactly why this port
 // asserts the jump tool's OWN stdout emission (stopAfterToolResult the instant
 // it lands) rather than the final on-disk state the .sh raced against. The
@@ -174,7 +173,7 @@ describe("t57 workflow backward jump (sdk)", () => {
         // on a high pre-jump count (the .sh comment said 19; disk says 20).
         expect(completedBefore).toBeGreaterThanOrEqual(COMPLETED_CEILING);
 
-        // NO --test-run (the t26 root fix — see header). Stop the SDK the
+        // Stop the SDK the
         // instant the jump tool's stdout JSON lands so the LLM-paced
         // continuation never moves the surfaces under assertion.
         const r = await driveAidlc(`/aidlc --stage ${TARGET_SLUG}`, {

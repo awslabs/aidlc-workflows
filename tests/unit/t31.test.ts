@@ -31,8 +31,8 @@
 //       auditField "Options" === "React,Vue,Svelte" (STRONGER, exact).
 //   - .sh Test 5  **Rationale**: Align with team skillset      -> Test 5:
 //       auditField "Rationale" === "Align with team skillset" (STRONGER).
-//   - .sh Test 6  decision --test-run **Test-Run**: true       -> Test 6:
-//       auditField "Test-Run" === "true" (STRONGER, exact).
+//   - .sh Test 6  (decision --test-run **Test-Run**: true) was DROPPED per #369
+//       when the test-run mechanism was removed.
 //   - .sh Test 7  decision missing --stage   $? == 1           -> Test 7:
 //       res.status === 1 (same observable) + error message asserted.
 //   - .sh Test 8  decision missing --decision $? == 1          -> Test 8.
@@ -42,16 +42,15 @@
 //       auditField "Details" exact (STRONGER) + Stage exact (the .sh msg
 //       says "records Stage and Details"; the .sh only grepped Details, so
 //       the Stage assert here is a STRONGER addition matching the comment).
-//   - .sh Test 11 answer --test-run **Test-Run**: true         -> Test 11:
-//       auditField "Test-Run" === "true" (STRONGER, exact).
+//   - .sh Test 11 (answer --test-run **Test-Run**: true) was DROPPED per #369
+//       when the test-run mechanism was removed.
 //   - .sh Test 12 answer missing --stage   $? == 1             -> Test 12.
 //   - .sh Test 13 answer missing --details $? == 1             -> Test 13.
 //   - .sh Test 14 unknown subcommand       $? == 1             -> Test 14:
 //       res.status === 1 + "Unknown subcommand" error asserted (STRONGER).
-//   - .sh Test 15 answer --test-run: canonical QUESTION_ANSWERED present
-//       AND deleted QUESTION_AUTO_ANSWERED absent (2 asserts)  -> Test 15:
-//       both preserved (event count===1 STRONGER for canonical; whole-file
-//       absence for the deleted auto-event).
+//   - .sh Test 15 (answer --test-run: canonical QUESTION_ANSWERED present AND
+//       deleted QUESTION_AUTO_ANSWERED absent) was DROPPED per #369 when the
+//       test-run mechanism was removed.
 //   - .sh Test 16 decision sans --options: no **Options**: row -> Test 16:
 //       auditField "Options" === "" (block-scoped absence) (STRONGER).
 //   - .sh Test 17 --stage <no value, next tok --decision> $?==1 -> Test 17:
@@ -63,9 +62,9 @@
 //   - .sh Test 20 answer JSON ack contains `"emitted":"QUESTION_ANSWERED"`
 //       -> Test 20: stdout contains it (same observable).
 //
-// 21 .sh asserts -> 21 expect()-bearing test() cases here (Test 15 split
-// into two test() cases to keep one observable per case, matching the .sh's
-// two `ok` lines).
+// Each .sh `ok` line maps to one expect()-bearing test() here, one observable
+// per case. (The .sh's test-run cases 6, 11, and the two-assert 15 were dropped
+// per #369 when the test-run mechanism was removed.)
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's create_test_project + seed_audit_file
 // + cleanup_test_project per case): each case uses a FRESH temp project dir
@@ -225,12 +224,6 @@ describe("t31 aidlc-log decision (migrated from t31-tool-log.sh, plan 21)", () =
     expect(auditField(readAllAuditShards(p), "DECISION_RECORDED", "Rationale")).toBe("Align with team skillset");
   });
 
-  test("6: decision --test-run emits Test-Run=true", () => {
-    const p = proj();
-    log(["decision", "--stage", "feasibility", "--decision", "Pick a framework", "--test-run"], p);
-    expect(auditField(readAllAuditShards(p), "DECISION_RECORDED", "Test-Run")).toBe("true");
-  });
-
   test("7: decision missing --stage exits 1", () => {
     const p = proj();
     const r = log(["decision", "--decision", "x"], p);
@@ -306,12 +299,6 @@ describe("t31 aidlc-log answer (migrated from t31-tool-log.sh, plan 21)", () => 
     expect(auditField(f, "QUESTION_ANSWERED", "Stage")).toBe("feasibility");
   });
 
-  test("11: answer --test-run emits Test-Run=true", () => {
-    const p = proj();
-    log(["answer", "--stage", "feasibility", "--details", "auto-selected", "--test-run"], p);
-    expect(auditField(readAllAuditShards(p), "QUESTION_ANSWERED", "Test-Run")).toBe("true");
-  });
-
   test("12: answer missing --stage exits 1", () => {
     const p = proj();
     const r = log(["answer", "--details", "x"], p);
@@ -324,21 +311,6 @@ describe("t31 aidlc-log answer (migrated from t31-tool-log.sh, plan 21)", () => 
     const r = log(["answer", "--stage", "feasibility"], p);
     expect(r.status).toBe(1);
     expect(r.out).toContain("Missing --details");
-  });
-
-  test("15a: answer --test-run emits canonical QUESTION_ANSWERED", () => {
-    const p = proj();
-    log(["answer", "--stage", "feasibility", "--details", "auto", "--test-run"], p);
-    expect(auditEventCount(readAllAuditShards(p), "QUESTION_ANSWERED")).toBe(1);
-  });
-
-  test("15b: answer --test-run does NOT emit deleted QUESTION_AUTO_ANSWERED", () => {
-    // Regression guard (Phase 1 taxonomy deletion): --test-run must tag the
-    // canonical event, never reintroduce QUESTION_AUTO_ANSWERED. Whole-file
-    // absence, mirroring the .sh's unanchored assert_not_grep.
-    const p = proj();
-    log(["answer", "--stage", "feasibility", "--details", "auto", "--test-run"], p);
-    expect(fileContains(readAllAuditShards(p), "QUESTION_AUTO_ANSWERED")).toBe(false);
   });
 
   test("20: answer prints JSON ack with emitted field on stdout", () => {
@@ -374,7 +346,7 @@ describe("t31 aidlc-log dispatch", () => {
 // no aidlc-state.md / audit/ ever lives in the bare intents root (aidlc-lib.ts).
 // aidlc-log was the lone emitter missing the "no active workflow → clean error"
 // guard every other emitter has (the hooks no-op via existsSync(stateFilePath);
-// handleEnableTestRun dies; emitError gates on the same check). Mirrors that.
+// emitError gates on the same check). Mirrors that.
 //
 // These cases REMOVE the seeded record (removeWorkspaceRecord, the no-layout
 // option) so no intent resolves at all — the strongest form of the at-risk

@@ -225,9 +225,6 @@ function handleExecute(args: string[]): void {
   const stagesSkipped: string[] = [];
   const stagesReset: string[] = [];
 
-  // Detect test-run mode (persisted in state file by aidlc-utility enable-test-run)
-  const testRunMode = (getField(content, "Test Run Mode") || "").toLowerCase() === "true";
-
   // Get current stage for audit
   const currentSlug = getField(content, "Current Stage") || "state-init";
 
@@ -305,26 +302,14 @@ function handleExecute(args: string[]): void {
   const nextAfterTarget = nextInScopeStage(targetSlug, scope);
   const timestamp = isoTimestamp();
 
-  // Determine terminal Status — test-run forward jumps to a named target end
-  // the workflow; all other jumps leave it Running.
-  const willTerminate = testRunMode && direction === "forward";
-
   content = setField(content, "Lifecycle Phase", targetStage.phase.toUpperCase());
   content = setField(content, "Current Stage", targetSlug);
   content = setField(content, "Next Stage", nextAfterTarget ? nextAfterTarget.slug : "none");
   content = setField(content, "Active Agent", targetStage.lead_agent);
-  content = setField(content, "Status", willTerminate ? "Completed" : "Running");
+  content = setField(content, "Status", "Running");
   content = setField(content, "Last Updated", timestamp);
-  content = setField(
-    content,
-    "In Progress",
-    willTerminate ? "none" : targetSlug
-  );
-  content = setField(
-    content,
-    "Next Action",
-    willTerminate ? `Test-run stopped at ${targetSlug}` : `Execute ${targetStage.name}`
-  );
+  content = setField(content, "In Progress", targetSlug);
+  content = setField(content, "Next Action", `Execute ${targetStage.name}`);
 
   // Count [x] checkboxes for Completed field
   const completedCount = countCheckboxes(content, "completed");
@@ -381,27 +366,15 @@ function handleExecute(args: string[]): void {
 
     // Target enters Active state — emit STAGE_STARTED so audit reflects the
     // stage transition symmetric with advance's STAGE_STARTED emission.
-    // Exception: test-run terminal case, where the workflow ends instead of
-    // continuing into the target stage.
-    if (!willTerminate) {
-      emitAudit(pd, "STAGE_STARTED", {
-        Stage: targetSlug,
-        Agent: targetStage.lead_agent,
-      });
-    } else {
-      // Test-run terminal — emit WORKFLOW_COMPLETED with reason instead
-      emitAudit(pd, "WORKFLOW_COMPLETED", {
-        Scope: scope,
-        Details: `Test-run jump terminated at ${targetSlug}`,
-        Reason: `test-run-stopped-at-${targetSlug}`,
-      });
-    }
+    emitAudit(pd, "STAGE_STARTED", {
+      Stage: targetSlug,
+      Agent: targetStage.lead_agent,
+    });
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
 
   writeStateFile(pd, content);
-  const workflowStopped = willTerminate;
 
   console.log(
     JSON.stringify({
@@ -413,8 +386,7 @@ function handleExecute(args: string[]): void {
       state_updated: true,
       audit_appended: true,
       completed_count: completedCount,
-      workflow_stopped: workflowStopped,
-      test_run_mode: testRunMode,
+      workflow_stopped: false,
       timestamp,
     })
   );

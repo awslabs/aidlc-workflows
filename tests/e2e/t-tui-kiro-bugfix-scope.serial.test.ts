@@ -7,7 +7,6 @@
 // question-rendering annex), and TERMINATE on the on-disk Completed counter
 // crossing the post-init milestone — the same milestone the Claude twin (and
 // its .sh ancestor) pinned: init=3 + >=2 Inception stages = Completed >= 5.
-// NO --test-run anywhere.
 //
 // The gate loop is the kiro-intent-capture pattern (idle footer → send "1" →
 // re-check disk): disk is the terminator, never the screen (§1.1).
@@ -19,7 +18,7 @@
 //   - state: scope=bugfix, Project Type=Brownfield, Completed >= 5 and ==
 //     the count of [x] lines,
 //   - audit: WORKFLOW_STARTED + >=1 GATE_APPROVED (a human-shaped approval
-//     actually landed, the thing --test-run faked).
+//     actually landed).
 //
 // COST: the long Kiro journey (the Claude twin budgets 2400s). Gated behind
 // AIDLC_KIRO_TUI_LIVE=1 with skip-reasons; tmux-backend only.

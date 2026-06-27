@@ -17,7 +17,7 @@
 // semantics defer to the future ralph driver.
 
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type GraphStage, loadGraph } from "../tools/aidlc-graph.ts";
 import {
@@ -46,8 +46,8 @@ const projectDir = resolveProjectDirFromHook(import.meta.url);
 const SUBPROCESS_TIMEOUT_MS =
   Number(process.env.AIDLC_SENSOR_TIMEOUT_MS) || 90_000;
 
-// Health-dir for the heartbeat (sensor-fire.last) + skipped-file
-// (sensor-fire.skipped). Read by the future hook-health doctor.
+// Health-dir for the heartbeat (sensor-fire.last). Read by the future
+// hook-health doctor.
 const healthDir = hooksHealthDir(projectDir);
 
 // Step 2 — TTY guard. Hook invoked outside a piped-stdin context (e.g.
@@ -99,7 +99,7 @@ if (
 // Mirrors aidlc-audit-logger.ts:48-50 + aidlc-runtime-compile.ts:62-64.
 if (!existsSync(auditFilePath(projectDir))) process.exit(0);
 
-// Step 7 — State-file guard + Test Run Mode skip (G2).
+// Step 7 — State-file guard.
 //
 // readStateFile throws on missing aidlc-state.md (lib.ts:169-175).
 // Pre-init or partially-deleted workspaces could have audit.md without
@@ -114,28 +114,9 @@ try {
   process.exit(0);
 }
 
-// G2 — Test Run Mode skip. CI runs would balloon audit.md and pay
-// per-write subprocess cost. Touch sensor-fire.skipped (timestamped
-// append) so the doctor can surface skip frequency.
-const testRunMode =
-  (getField(stateContent, "Test Run Mode") ?? "").toLowerCase() === "true";
-if (testRunMode) {
-  try {
-    mkdirSync(healthDir, { recursive: true });
-    appendFileSync(
-      join(healthDir, "sensor-fire.skipped"),
-      `${isoTimestamp()}\n`,
-      "utf-8"
-    );
-  } catch {
-    // Skipped-file write failure is non-fatal — already in a no-op path.
-  }
-  process.exit(0);
-}
-
 // Step 8 — Heartbeat (G3). The future hook-health doctor reads this
 // file's mtime to detect silent-hook failure. Placement: AFTER
-// input/recursion/audit/state/test-run guards but BEFORE the
+// input/recursion/audit/state guards but BEFORE the
 // active-stage and graph-read guards. Doctor must distinguish two
 // valid no-SENSOR_FIRED states: (a) healthy hook firing on a stage
 // with empty sensors_applicable like workspace-scaffold, (b) no
@@ -212,7 +193,7 @@ for (const entry of applicableSensors) {
   // Spawn dispatcher (C1). Bare-script form (`bun <script> ...`)
   // matches the upstream dispatcher manifest's `command:` convention.
   // Sync subprocess; user pays wall-clock per Write inside an active
-  // stage with applicable sensors. Use --test-run to skip per G2.
+  // stage with applicable sensors.
   //
   // TPL note: this hook invokes the DISPATCHER (aidlc-sensor.ts fire), not the
   // per-sensor script directly. The dispatcher re-resolves the stageNode by

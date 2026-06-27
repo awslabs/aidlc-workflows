@@ -4,16 +4,16 @@
 // REAL claude TUI and prove that answering its rendered AskUserQuestion gates by
 // keystroke advances POC's Ideation phase to a real on-disk artifact (§5.1). A
 // REWRITE (not a port) of tests/e2e/t51-workflow-poc-scope.sh, which ran the
-// whole journey under `--test-run` so every gate AUTO-APPROVED — the interactive
+// whole journey headlessly so every gate AUTO-APPROVED, so the interactive
 // poc journey a user actually lives was never tested. This drives the painted TUI
 // like a human, answers each gate by Enter (the Recommended default), and
-// TERMINATES on the on-disk `Completed>=7` milestone. NO --test-run anywhere.
+// TERMINATES on the on-disk `Completed>=7` milestone.
 //
 // What it proves (PATTERN B — multi-gate journey, answer-gate --until-state-field):
 //   - a POC workflow starts from `/aidlc poc` on a fresh greenfield workspace
 //     (statusline leaves `ready` for a live phase),
 //   - the answer-gate clears the Initialization + early-Ideation gates by taking
-//     the Recommended default per menu, with NO --test-run auto-approve,
+//     the Recommended default per menu, with NO auto-approve,
 //   - answering advances REAL state on disk — the milestone the .sh asserted
 //     (POC, unlike bugfix, includes Ideation, so intent-capture runs):
 //       * the intent-capture intent-statement artifact exists & is non-empty,
@@ -31,7 +31,7 @@
 // WHY PATTERN B (not A): poc is a MULTI-STEP journey (full Ideation run-through
 // gate-by-gate), not a single landed jump. Per the driver-split invariant, every
 // multi-step journey is TUI-driven; a one-shot SDK check would have to rebuild the
-// --test-run auto-approve fake the mission kills.
+// headless auto-approve fake the mission kills.
 //
 // WHY a MILESTONE terminator (not full poc completion): the .sh itself never
 // asserted full poc completion — its strongest stage assertion was "> 6 completed"
@@ -42,9 +42,9 @@
 // proven, that is a SEPARATE, longer journey and the unreachable-in-budget gap is a
 // FINDING, not a thing to weaken to.
 //
-// REMOVED vs the .sh (faithfully, because --test-run is gone): the .sh's test 12
-// asserted `Test Run Mode: true` in state — that field is a --test-run artifact and
-// has no place in a real interactive journey, so it is dropped (not weakened). The
+// REMOVED vs the .sh (faithfully): the .sh's test 12 asserted a state field that
+// no longer exists (an artifact of a headless auto-approve mode the engine no
+// longer has), so it is dropped (not weakened). The
 // intent-artifact "mentions Todo/task" check (.sh test 16) was a `skip`-on-miss
 // LLM-output check, so it is NOT hard-asserted here either (LLM output varies); the
 // greenfield-todo stub is a React Todo README, so the domain is present, but the
@@ -189,7 +189,7 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
         // Fresh project (no seeded state) -> the no-workflow "ready" line.
         expect(waitFor(session, "\\[AIDLC\\].*ready", 45000, 800)).toBe(true);
 
-        // --- submit the poc workflow command (NO --test-run) -------------------
+        // --- submit the poc workflow command -----------------------------------
         // `/aidlc poc` is a single token-stream with no embedded spaces beyond the
         // scope word; send literally with no auto-Enter, then Enter as a named key
         // (the template's exact two-step, robust for slash commands).

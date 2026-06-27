@@ -321,9 +321,9 @@ the five against the audit log can detect drift and reconcile.
 ### What this means for the framework
 
 The framework already practises a small version of this: today's
-`aidlc-state.md` carries a `Test Run Mode` field specifically so it
-survives context compaction — `SKILL.md` instructs the orchestrator
-to write it on session-start, read it on session-resume. The
+`aidlc-state.md` carries a `Scope` field that is written at intent
+birth and read on session-resume, so the workflow's scope survives
+context compaction without the orchestrator having to re-derive it. The
 generalisation is that every part of the data plane that records
 something durable becomes part of the recovery surface, not just the
 state file. The deeper principle is that the *data plane is structured

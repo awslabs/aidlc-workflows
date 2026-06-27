@@ -32,7 +32,7 @@
 //
 // WHAT IT PROVES (equal to the Claude twin's disk surface):
 //   - the shipped dist/kiro tree drives a real workflow from a seeded
-//     init-done state through intent-capture WITHOUT --test-run,
+//     init-done state through intent-capture,
 //   - the numbered-prose gate protocol is answerable by keystroke,
 //   - ON DISK: questions file with >=1 [Answer]: line; intent-statement
 //     (>100 bytes, has a heading); stakeholder map; state Completed == [x]

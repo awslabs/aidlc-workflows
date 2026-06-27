@@ -16,11 +16,10 @@ this protocol never name a harness tool.
 Before and during EVERY stage, verify:
 1. [ ] **Use the engine for forward gate transitions** — `aidlc-state.ts gate-start <slug>` may be used before the approval gate (`[-]` → `[?]`) so status shows the held gate, but the approve path is `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<choice>"`. The report command opens a missing gate when needed, emits the correct audit events through the state tool, and advances. Request-changes still uses `aidlc-state.ts reject <slug> --feedback "<text>"`. Do NOT call `aidlc-audit.ts append` separately. (§2)
 2. [ ] **Log questions via `aidlc-log.ts`** — before presenting a structured question: `bun {{HARNESS_DIR}}/tools/aidlc-log.ts decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage <slug> --details "<exact choice>"`. (§3)
-3. [ ] **Never summarize User Input** — use exact option labels. For test-run auto-selections, include `--test-run` on the command so the audit entry carries `Test-Run=true`. (§2, §3)
+3. [ ] **Never summarize User Input** — use exact option labels. (§2, §3)
 4. [ ] **Task transitions + state sync** — Mark previous task `completed`, then `TaskUpdate({ ..., status: "in_progress", activeForm: "Running [Stage] [slug]" })`. The `[slug]` suffix triggers the PostToolUse hook that syncs the state file. `aidlc-orchestrate.ts report --stage <slug> --result approved` auto-advances to the next in-scope stage (or completes the workflow on the final stage) — do NOT call `advance` separately after approval. (§4)
-5. [ ] **Test-run mode check** — if TEST_RUN_MODE, skip structured questions and call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "Approve (test-run)" --test-run`. The `--test-run` flag tags the audit entry so it can be filtered later.
-6. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes.
-7. [ ] **Autonomy is NEVER inferred** — a user saying "go with recommended" or "pick the best answers" for one stage is a ONE-TIME instruction for THAT stage only. It does NOT create a standing rule. The next stage starts fresh with its declared autonomy mode. The ONLY way to get autonomous mode is: (a) the directive explicitly carries `autonomy: autonomous`, OR (b) the human explicitly says "run this autonomous" for the specific stage being proposed. NEVER carry forward an autonomy inference from a previous stage. NEVER self-answer questions without explicit permission for THIS stage.
+5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes.
+6. [ ] **Autonomy is NEVER inferred** — a user saying "go with recommended" or "pick the best answers" for one stage is a ONE-TIME instruction for THAT stage only. It does NOT create a standing rule. The next stage starts fresh with its declared autonomy mode. The ONLY way to get autonomous mode is: (a) the directive explicitly carries `autonomy: autonomous`, OR (b) the human explicitly says "run this autonomous" for the specific stage being proposed. NEVER carry forward an autonomy inference from a previous stage. NEVER self-answer questions without explicit permission for THIS stage.
 
 ---
 
@@ -30,16 +29,7 @@ Every stage (except the 3 stages in the Initialization phase: workspace-scaffold
 
 ### HARD STOP RULE (non-negotiable)
 
-When you present an approval gate question, you MUST end your turn immediately and wait for the user's explicit response. Do NOT call any tool until the user has typed their choice in a new message. An approval gate is a mandatory human checkpoint that cannot be inferred, auto-approved, or skipped unless `--test-run` mode is active.
-
-### Test-Run Mode Override
-
-When TEST_RUN_MODE is active (set by the `--test-run` flag in SKILL.md):
-- Do NOT present structured questions for approval gates
-- Call `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "Approve" --test-run`. The report command opens the gate if it is still `[-]`, tags the emitted `GATE_APPROVED` event with `Test-Run: true`, and auto-advances to the next in-scope stage.
-- Skip the revision loop entirely — no "Request Changes" path
-- Completion messages (Parts 1-2: announcement and summary) are still generated as normal — tests verify these artifacts
-- Part 3 (approval gate) is bypassed; Part 4 (progress update) still displays
+When you present an approval gate question, you MUST end your turn immediately and wait for the user's explicit response. Do NOT call any tool until the user has typed their choice in a new message. An approval gate is a mandatory human checkpoint that cannot be inferred, auto-approved, or skipped.
 
 ### NO EMERGENT BEHAVIOR RULE
 Construction and Operation stages MUST use standardized 2-option completion messages. DO NOT create 3-option menus or other emergent navigation patterns. Only IDEATION and INCEPTION stages may conditionally include a 3rd option (to add a previously skipped stage). Any deviation from these patterns is a protocol violation.
@@ -102,7 +92,7 @@ Construction introduces three gate patterns that differ from the standard per-st
 
 **Walking-skeleton gate (first Bolt, always present)**
 
-The first Bolt in Construction (the walking skeleton) always presents a Bolt-level approval gate regardless of any autonomy-mode setting. The gate covers the Bolt's design artifacts and generated code together. Under `--test-run`, the gate auto-approves per the standard Test-Run Mode Override. Audit: emit `GATE_APPROVED` as usual; the enclosing `BOLT_COMPLETED` ties the gate to the Bolt.
+The first Bolt in Construction (the walking skeleton) always presents a Bolt-level approval gate regardless of any autonomy-mode setting. The gate covers the Bolt's design artifacts and generated code together. Audit: emit `GATE_APPROVED` as usual; the enclosing `BOLT_COMPLETED` ties the gate to the Bolt.
 
 **Ladder prompt (fires once, immediately after walking skeleton gate)**
 
@@ -121,7 +111,6 @@ options:
 
 - Record the answer in `aidlc-state.md` as `Construction Autonomy Mode: autonomous` or `Construction Autonomy Mode: gated`.
 - Emit `AUTONOMY_MODE_SET` audit event with the chosen mode.
-- Under `--test-run`: auto-select "Continue autonomously" — call `bun {{HARNESS_DIR}}/tools/aidlc-bolt.ts set-autonomy --mode autonomous` (the tool emits AUTONOMY_MODE_SET). No separate auto-event.
 - Session resume: if `Construction Autonomy Mode: unset` but the walking skeleton is already `[x]` complete, re-fire the ladder prompt before executing the next Bolt.
 
 **Subsequent Bolt gate (per autonomy mode)**
@@ -153,8 +142,6 @@ options:
     description: Stop Construction; worktree preserved.
 ```
 
-Under `--test-run`: treat failure as an error and abort the test (do not auto-retry or auto-skip — silent failures would mask real regressions).
-
 ---
 
 ## 2. Completion Messages
@@ -169,7 +156,6 @@ Before showing the completion message:
    - **Approve** → `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"`. The engine emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
    - **Request Changes** → `bun {{HARNESS_DIR}}/tools/aidlc-state.ts reject <slug> --feedback "<text>"`. The tool emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, increments Revision Count. If gate-start was skipped (stage still `[-]`), reject backfills the missing `STAGE_AWAITING_APPROVAL` first — mirroring the approve-side backfill. After re-running the stage work, call `bun {{HARNESS_DIR}}/tools/aidlc-state.ts revise <slug>` to re-enter the gate (emits a fresh `STAGE_AWAITING_APPROVAL`, marks `[R]` → `[?]`).
    - **Accept as-is** (after 3 rejection cycles) → same as Approve; include `--user-input "Accept as-is after N cycles"`.
-4. Under `--test-run`: skip the structured question and call `report --stage <slug> --result approved --user-input "Approve (test-run)" --test-run`.
 
 ### Part 1: Announcement (mandatory)
 ```markdown
@@ -230,16 +216,6 @@ Count only stages in the current phase (INITIALIZATION, IDEATION, INCEPTION, CON
 ## 3. Question Format
 
 When a stage needs to ask the user questions:
-
-### Test-Run Mode Override for Questions
-
-When TEST_RUN_MODE is active:
-- **Create questions file as normal** — the file is a test-verifiable artifact
-- **Skip mode selection** — auto-select "Guide me" (do not present the mode-choice question)
-- **Auto-answer all questions** — write `[Answer]: A` for every question in the file
-- **Skip ambiguity detection, contradiction detection, follow-up questions, and consolidated summary confirmation**
-- Record answers via `bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage <slug> --details "[N] questions auto-answered option A" --test-run` (the tool emits QUESTION_ANSWERED with `Test-Run: true`).
-- Proceed directly to artifact generation after writing answers
 
 ### Question flow (all question counts)
 
@@ -433,8 +409,6 @@ At each approval gate — see §2 Part 0 for the full flow. Summary:
 At each question interaction:
 1. BEFORE presenting the question: `bun {{HARNESS_DIR}}/tools/aidlc-log.ts decision --stage <slug> --decision "<summary>" --options "<A,B,C>"` (emits `DECISION_RECORDED`).
 2. AFTER response: `bun {{HARNESS_DIR}}/tools/aidlc-log.ts answer --stage <slug> --details "<summary of answers>"` (emits `QUESTION_ANSWERED`).
-
-Add `--test-run` to any of these commands under TEST_RUN_MODE to tag the audit entry.
 
 ### Stage progress notation
 - `[ ]` — Not started
@@ -908,10 +882,6 @@ If the `run-stage` directive includes a `reviewer` field (non-null), the orchest
 - Does not block the workflow — the human always gets final say at the gate
 - Does not fire for stages without a `reviewer` field in the directive
 
-### Test-Run Mode
-
-Under `--test-run`, the reviewer step is **still executed** (it validates artifact quality even in CI). However, if the verdict is NOT-READY after max iterations, the workflow auto-advances (same as gate auto-approval in test-run mode).
-
 ## 13. Learnings Ritual
 
 MANDATORY: Every stage runs the learnings-capture step **between the completion message (§2) and the approval gate (§1)**. Per Fowler's harness model: "when issues recur, feedforward and feedback controls should be improved." This ritual is the human learning loop — surface what's worth remembering, write it into the harness where the next runner will pick it up automatically.
@@ -931,7 +901,7 @@ Next time the stage runs, the resolved rules and the bound sensor load automatic
 
 ### When to run
 
-Trigger after Step N-1 (completion message rendered) and before Step N (approval gate). If `TEST_RUN_MODE` is active, **skip this ritual entirely** — auto-approval has no human in the loop (the tool also refuses to write under a test-run audit block).
+Trigger after Step N-1 (completion message rendered) and before Step N (approval gate).
 
 ### The ritual
 
@@ -1016,8 +986,6 @@ When a stage detects existing output artifacts in its artifact directory:
    - **Keep** — Accept existing artifacts as-is, skip this stage's generation steps, proceed to approval gate
    - **Modify** — Display existing artifacts as starting context, then walk through the stage's question flow to identify what should change. Update artifacts in-place.
    - **Redo from scratch** — Ignore existing artifacts entirely and execute the stage fresh. Existing files are overwritten.
-
-If TEST_RUN_MODE: auto-select "Redo from scratch" (ensures deterministic test output).
 
 **Audit logging**: After the user's choice, call the state tool (maps the "Redo from scratch" option to `--decision redo`):
 

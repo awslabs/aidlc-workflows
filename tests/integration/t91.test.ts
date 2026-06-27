@@ -24,9 +24,8 @@
 //      `bun run <projectDir>/.claude/tools/aidlc-runtime.ts compile` (which
 //      writes aidlc-docs/runtime-graph.json). MEMORY_EMPTY is deliberately NOT
 //      in the regex (recursion guard at the event level).
-//   6. Test-Run propagation: if any of the last 3 blocks carries
-//      `**Test-Run**: true`, the spawned compile gets --test-run, so the
-//      MEMORY_EMPTY rows it appends carry Test-Run: true.
+//   (The old step 6, test-run propagation to the spawned compile, was removed
+//      per #369 when the test-run mechanism was removed.)
 //
 // FIXTURE DISCIPLINE — replicate the .sh's make_project (t91:36-47) EXACTLY:
 // a fresh temp project under aidlc-docs/ + a self-contained .claude/ skeleton
@@ -59,12 +58,12 @@
 //        still written (T9 — the filter passed, only the event-class failed).
 //   .sh Case 6  empty stdin -> exit 0 (T10) + no graph (T11).
 //   .sh Case 7  malformed JSON stdin -> exit 0 (T12).
-//   .sh Case 8  Test-Run propagation -> the MEMORY_EMPTY block carries
-//        Test-Run: true (T13). STRONGER: block-scoped scan of the
-//        `## Memory Empty` heading (the .sh used awk-range + grep -c).
+//   .sh Case 8  (Test-Run propagation -> the MEMORY_EMPTY block carries
+//        Test-Run: true, T13) was dropped per #369 when the test-run mechanism
+//        was removed.
 //
-// 13 .sh asserts -> 13 expect()-bearing test() cases here, plus the MR9
-// orchestrate-report command-filter regression.
+// Each .sh `ok` / assert_eq maps to one expect()-bearing test() case here, plus
+// the MR9 orchestrate-report command-filter regression.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -79,7 +78,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
   createTestProject,
@@ -329,13 +327,8 @@ const AUDIT_NO_TRANSITION = `## Workflow Start
 ---
 `;
 
-// GATE_APPROVED audit with a `**Test-Run**: true` line spliced into the
-// GATE_APPROVED block (the .sh's sed insert after `**Event**: GATE_APPROVED`,
-// t91:322-323).
-const AUDIT_GATE_APPROVED_TESTRUN = AUDIT_GATE_APPROVED.replace(
-  "**Event**: GATE_APPROVED\n",
-  "**Event**: GATE_APPROVED\n**Test-Run**: true\n",
-);
+// (The AUDIT_GATE_APPROVED_TESTRUN fixture and its Test-Run-propagation case
+// were dropped per #369 when the test-run mechanism was removed.)
 
 describe("t91 aidlc-runtime-compile hook (migrated from t91-runtime-compile-hook.sh, plan 13)", () => {
   // --- Case 1: filter pass — GATE_APPROVED in last 3 -> dispatch -----------
@@ -462,45 +455,6 @@ describe("t91 aidlc-runtime-compile hook (migrated from t91-runtime-compile-hook
     expect(r.status).toBe(0);
   }, 30000);
 
-  // --- Case 8: Test-Run propagation ---------------------------------------
-  test("13: Test-Run in matched block -> MEMORY_EMPTY row carries Test-Run: true", () => {
-    const p = makeProject();
-    // Empty per-stage memory.md so the approved stage compiles to
-    // memory_entries 0 -> a MEMORY_EMPTY row is emitted (intent-capture lives
-    // in the ideation phase per stage-graph.json).
-    // P9: the per-stage memory.md re-roots under the record.
-    mkdirSync(join(seededRecordDir(p), "ideation", "intent-capture"), {
-      recursive: true,
-    });
-    writeFileSync(
-      join(seededRecordDir(p), "ideation", "intent-capture", "memory.md"),
-      "",
-      "utf-8",
-    );
-    writeFileSync(auditPath(p), AUDIT_GATE_APPROVED_TESTRUN, "utf-8");
-    runHook(
-      p,
-      payload(
-        "bun .claude/tools/aidlc-state.ts approve --stage intent-capture --test-run",
-      ),
-    );
-    // Block-scoped scan of the `## Memory Empty` heading, mirroring the .sh's
-    // `awk '/^## Memory Empty$/,/^---$/' | grep -c '^\*\*Test-Run\*\*: true$'`.
-    // The compile appends MEMORY_EMPTY to its OWN per-clone shard, so glob-read.
-    const lines = readAllAuditShards(p).split("\n");
-    let inBlock = false;
-    let trCount = 0;
-    for (const line of lines) {
-      if (line === "## Memory Empty") {
-        inBlock = true;
-        continue;
-      }
-      if (line === "---") {
-        inBlock = false;
-        continue;
-      }
-      if (inBlock && line === "**Test-Run**: true") trCount++;
-    }
-    expect(trCount).toBe(1);
-  }, 30000);
+  // Case 8 / test 13 (Test-Run propagation -> MEMORY_EMPTY row carries
+  // Test-Run: true) was dropped per #369 when the test-run mechanism was removed.
 });

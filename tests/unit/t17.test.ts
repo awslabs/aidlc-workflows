@@ -682,15 +682,6 @@ describe("t17 approve", () => {
     expect(readAudit(proj)).toContain("**User Input**: Looks good, proceed");
   });
 
-  test("46: approve --test-run tags event", () => {
-    proj = createTestProject();
-    seedStateFile(proj, MID_IDEATION);
-    seedAuditFile(proj);
-    runState(proj, ["gate-start", "feasibility"]);
-    runState(proj, ["approve", "feasibility", "--test-run"]);
-    expect(readAudit(proj)).toContain("**Test-Run**: true");
-  });
-
   test("47: approve rejects slug not in [?]", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
@@ -702,9 +693,9 @@ describe("t17 approve", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     runState(proj, ["gate-start", "feasibility"]);
-    // --user-input without a value followed by --test-run — must error, not
-    // silently consume "--test-run" as the input value.
-    expect(runState(proj, ["approve", "feasibility", "--user-input", "--test-run"]).rc).toBe(1);
+    // --user-input without a value followed by another flag token (--reason):
+    // must error, not silently consume the following flag as the input value.
+    expect(runState(proj, ["approve", "feasibility", "--user-input", "--reason"]).rc).toBe(1);
   });
 
   test("65: approve is audit-first (state unchanged when audit write fails)", () => {

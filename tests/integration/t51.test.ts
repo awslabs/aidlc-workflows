@@ -99,9 +99,9 @@ function readAudit(p: string): string {
   return existsSync(flat) ? readFileSync(flat, "utf-8") : "";
 }
 
-/** init --scope bugfix --test-run (mirrors the .sh bootstrap, L78-79). */
+/** init --scope bugfix (mirrors the .sh bootstrap, L78-79). */
 function runInit(proj: string): void {
-  const res = spawnSync(BUN, [UTIL, "init", "--scope", "bugfix", "--project-dir", proj, "--test-run"], {
+  const res = spawnSync(BUN, [UTIL, "init", "--scope", "bugfix", "--project-dir", proj], {
     encoding: "utf-8",
     env: { ...process.env, AIDLC_WORKFLOW_INTENT: "bugfix parity test" },
   });
@@ -146,7 +146,7 @@ let PROJ: string;
 beforeAll(() => {
   PROJ = createTestProject();
   // Bootstrap via init (emits WORKFLOW_STARTED + init phase + 2x PHASE_SKIPPED,
-  // and init --test-run pre-completes the 3 init stages: workspace-scaffold,
+  // and init pre-completes the 3 init stages: workspace-scaffold,
   // workspace-detection, state-init). The first post-init EXECUTE stage for
   // bugfix-on-greenfield is requirements-analysis (reverse-engineering is
   // SKIP-greenfield). Walk the 3 gated EXECUTE stages; approve auto-advances /

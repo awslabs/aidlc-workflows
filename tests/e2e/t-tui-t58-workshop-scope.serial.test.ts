@@ -6,8 +6,8 @@
 // with a Minimal test strategy, and lands < 30 completed stages — ON DISK + as
 // the workshop facilitator SEES it painted. NET-NEW (not a port of an existing
 // .test.ts): a Pattern-B answer-gate journey authored from the original
-// tests/e2e/t58-workflow-workshop-scope.sh (plan 14), with the `--test-run`
-// fake REMOVED and the rendered-screen value-add ADDED.
+// tests/e2e/t58-workflow-workshop-scope.sh (plan 14), with the
+// rendered-screen value-add ADDED.
 //
 // DISTINCT FROM t-tui-workshop.serial.tui.test.ts: that file drives the practices
 // AFFIRMATION gate (multi-tab Submit -> aidlc-team.md `## Way of Working`); THIS
@@ -15,7 +15,7 @@
 // skipped, depth/test-strategy defaults). Different surface, different terminator.
 //
 // WHAT IT PROVES (the .sh's 14 assertions, equal-or-stronger, on the same on-disk
-// surface, MINUS the --test-run fake, PLUS the rendered statusline value-add):
+// surface, PLUS the rendered statusline value-add):
 //   ROUTING IS DATA-DRIVEN (scope-mapping.json `workshop`):
 //     - workshop has depth "Standard", testStrategy "Minimal", and SKIPs every
 //       ideation stage (intent-capture..approval-handoff all SKIP — lines 105 of

@@ -3,10 +3,6 @@
 // Records DECISION_RECORDED (before AskUserQuestion) and QUESTION_ANSWERED
 // (after the user answers). Orchestrator-callable; state tool doesn't own
 // these because they fire per-question, not per state transition.
-//
-// Both commands accept an optional --test-run flag that adds Test-Run=true
-// to the emitted fields. Under test-run, this replaces the old auto-events
-// (QUESTION_AUTO_ANSWERED, OPTION_AUTO_SELECTED, ACTION_AUTO_CONFIRMED).
 
 import { existsSync } from "node:fs";
 import { appendAuditEntry } from "./aidlc-audit.ts";
@@ -28,9 +24,9 @@ import {
 // invariant (aidlc-lib.ts). Existence of the resolved state file is the same
 // "is there an active workflow" signal every other emitter guards on — the
 // hooks via `if (!existsSync(stateFilePath(...)))` no-op, emitError() via the
-// same check, handleEnableTestRun() via a die(). aidlc-log is the lone emitter
-// that was missing it; mirror the clean-error idiom (orchestrator-called → a
-// missing workflow is a misuse, not a routine no-op).
+// same check. aidlc-log is the lone emitter that was missing it; mirror the
+// clean-error idiom (orchestrator-called → a missing workflow is a misuse, not
+// a routine no-op).
 function resolveActiveProjectDir(explicit?: string): string {
   const pd = resolveProjectDir(explicit);
   if (!existsSync(stateFilePath(pd))) {
@@ -53,16 +49,13 @@ function emitAudit(
 
 function parseFlags(
   args: string[]
-): { positional: string[]; flags: Record<string, string>; testRun: boolean } {
+): { positional: string[]; flags: Record<string, string> } {
   const positional: string[] = [];
   const flags: Record<string, string> = {};
-  let testRun = false;
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === "--test-run") {
-      testRun = true;
-    } else if (a.startsWith("--")) {
+    if (a.startsWith("--")) {
       if (i + 1 >= args.length) {
         error(`${a} expects a value, got end of arguments.`);
       }
@@ -76,15 +69,15 @@ function parseFlags(
       positional.push(a);
     }
   }
-  return { positional, flags, testRun };
+  return { positional, flags };
 }
 
 // --- Subcommand: decision ---
-// Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>] [--rationale <text>] [--test-run]
+// Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>] [--rationale <text>]
 //
 // Fires BEFORE AskUserQuestion, recording what options will be shown.
 function handleDecision(args: string[]): void {
-  const { flags, testRun } = parseFlags(args);
+  const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
   if (!flags.decision) error("Missing --decision <text>");
 
@@ -95,7 +88,6 @@ function handleDecision(args: string[]): void {
   };
   if (flags.options) fields.Options = flags.options;
   if (flags.rationale) fields.Rationale = flags.rationale;
-  if (testRun) fields["Test-Run"] = "true";
 
   try {
     emitAudit(pd, "DECISION_RECORDED", fields);
@@ -104,16 +96,16 @@ function handleDecision(args: string[]): void {
   }
 
   console.log(
-    JSON.stringify({ emitted: "DECISION_RECORDED", stage: flags.stage, test_run: testRun })
+    JSON.stringify({ emitted: "DECISION_RECORDED", stage: flags.stage })
   );
 }
 
 // --- Subcommand: answer ---
-// Usage: aidlc-log answer --stage <slug> --details <text> [--test-run]
+// Usage: aidlc-log answer --stage <slug> --details <text>
 //
-// Fires AFTER the user answers a question (or AUTO fires under test-run).
+// Fires AFTER the user answers a question.
 function handleAnswer(args: string[]): void {
-  const { flags, testRun } = parseFlags(args);
+  const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
   if (!flags.details) error("Missing --details <text>");
 
@@ -122,7 +114,6 @@ function handleAnswer(args: string[]): void {
     Stage: flags.stage,
     Details: flags.details,
   };
-  if (testRun) fields["Test-Run"] = "true";
 
   try {
     emitAudit(pd, "QUESTION_ANSWERED", fields);
@@ -131,7 +122,7 @@ function handleAnswer(args: string[]): void {
   }
 
   console.log(
-    JSON.stringify({ emitted: "QUESTION_ANSWERED", stage: flags.stage, test_run: testRun })
+    JSON.stringify({ emitted: "QUESTION_ANSWERED", stage: flags.stage })
   );
 }
 

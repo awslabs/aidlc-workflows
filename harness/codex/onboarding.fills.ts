@@ -23,7 +23,7 @@ byte-identical to every other harness distribution; only the shell differs. Run
 \`$aidlc --status\` for progress, \`$aidlc --help\` for usage, \`$aidlc intent\`
 to list intents, \`$aidlc --doctor\` to validate setup, and
 \`$aidlc --stage <slug>\` / \`--phase <name>\` / \`--depth <level>\` /
-\`--test-strategy <level>\` / \`--test-run\` for the usual overrides.`,
+\`--test-strategy <level>\` for the usual overrides.`,
 
     prereq_bullets: `- **Codex CLI ≥ 0.139.0**: earlier releases do not surface the real agent role in subagent hook payloads and do not resolve hyphenated agent TOMLs. \`$aidlc --doctor\` enforces the pin. Check with \`codex --version\`.
 - **bun**: Required for CLI tools and hook scripts (state management, audit logging, jump orchestration). Install via \`curl -fsSL https://bun.sh/install | bash\`. On Windows: \`npm install -g bun\` or \`powershell -c "irm bun.sh/install.ps1 | iex"\`. \`bun\` must be on your PATH for the non-interactive shells the harness spawns — these source \`~/.zshenv\` (zsh) or \`~/.bashrc\` (bash), NOT \`~/.zshrc\`.
@@ -51,10 +51,7 @@ This is the same AI-DLC core that ships to every harness, rendered onto Codex CL
 - **The AIDLC method** (the layered practice files \`org.md\`, \`team.md\`, \`project.md\`, and the per-phase \`phases/<phase>.md\`) lives once at the workspace root under \`aidlc/spaces/default/memory/\` — the single hand-editable source of truth, identical on every harness, NOT a per-harness copy. Codex auto-merges the root \`AGENTS.md\` and the orchestrator injects an \`@aidlc/spaces/default/memory/…\` prompt mention to pull specific method files into context on demand; AI-DLC's own stage resolver reads the same tree directly (via the \`AIDLC_RULES_DIR\` seam in the shipped \`config.toml\`). Edit the method there, never under \`.codex/\`. (\`.codex/rules/default.rules\` remains Codex's native Starlark permission-rules file — distinct from the AIDLC method, and the two must not collide.)
 `,
 
-    sections_after_resumption: `## Automated Testing
-
-The \`--test-run\` flag (\`$aidlc bugfix --test-run\`) auto-approves all approval gates and question stages for automated testing. It is intended for CI/test environments only — not for interactive use. State tracking, audit logging, and artifact generation all continue normally.
-`,
+    sections_after_resumption: "",
 
     gitignore_extra: "",
   },

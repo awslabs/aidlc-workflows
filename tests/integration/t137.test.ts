@@ -197,12 +197,12 @@ interface CliResult {
 
 /**
  * `AIDLC_WORKFLOW_INTENT=chaos bun aidlc-utility.ts init --scope bugfix
- * --project-dir <p> --test-run` (t123:43-44). Mirrors the .sh's init.
+ * --project-dir <p>` (t123:43-44). Mirrors the .sh's init.
  */
 function init(p: string): CliResult {
   const res = spawnSync(
     BUN,
-    [UTIL, "init", "--scope", "bugfix", "--project-dir", p, "--test-run"],
+    [UTIL, "init", "--scope", "bugfix", "--project-dir", p],
     { encoding: "utf-8", env: { ...process.env, AIDLC_WORKFLOW_INTENT: "chaos" } },
   );
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };

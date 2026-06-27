@@ -28,7 +28,7 @@
 //          approve emits GATE_APPROVED exactly once and lands [x].
 //
 // State + audit contract (verified against a live cycle on bugfix scope):
-//   - bugfix `init --test-run` leaves requirements-analysis at `[-] ... — EXECUTE`.
+//   - bugfix `init` leaves requirements-analysis at `[-] ... — EXECUTE`.
 //     The checkbox line carries the trailing ` — EXECUTE` suffix, so checkbox
 //     assertions match the `- [X] requirements-analysis` PREFIX (the .sh used
 //     anchored regex `^- \[X\] requirements-analysis`, prefix-equivalent).
@@ -167,7 +167,7 @@ beforeAll(() => {
   // Init bugfix scope — leaves requirements-analysis in [-] ready to gate.
   const init = spawnSync(
     BUN,
-    [UTIL, "init", "--scope", "bugfix", "--project-dir", proj, "--test-run"],
+    [UTIL, "init", "--scope", "bugfix", "--project-dir", proj],
     { encoding: "utf-8", env: { ...process.env, AIDLC_WORKFLOW_INTENT: "revision loop test" } },
   );
   expect(init.status, `init stderr=${init.stderr ?? ""}`).toBe(0);

@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:init, subcommand:aidlc-utility:status, subcommand:aidlc-utility:scope-change, subcommand:aidlc-utility:set-status, subcommand:aidlc-utility:enable-test-run, subcommand:aidlc-utility:config-change, subcommand:aidlc-utility:doctor, subcommand:aidlc-utility:detect-scope, subcommand:aidlc-utility:resolve-env-scope
+// covers: subcommand:aidlc-utility:init, subcommand:aidlc-utility:status, subcommand:aidlc-utility:scope-change, subcommand:aidlc-utility:set-status, subcommand:aidlc-utility:config-change, subcommand:aidlc-utility:doctor, subcommand:aidlc-utility:detect-scope, subcommand:aidlc-utility:resolve-env-scope
 //
 // CLI-contract port of tests/unit/t27-tool-utility.sh (TAP plan 81),
 // mechanism = cli. Equal-or-stronger migration: every .sh assertion that
@@ -14,11 +14,12 @@
 // .sh observes through stdout.
 //
 // SUBCOMMAND UNITS (the covers: header is the COLON form, credited verbatim):
-//   init, status, scope-change, set-status, enable-test-run, config-change,
-//   doctor, detect-scope, resolve-env-scope. All nine are fired here. (help /
-//   version are exercised by the .sh too but t27's covers: line — per the port
-//   spec — credits these nine; help is still asserted below as the .sh did,
-//   so parity is preserved even though help is not a separately-credited unit.)
+//   init, status, scope-change, set-status, config-change, doctor, detect-scope,
+//   resolve-env-scope. All eight are fired here. (enable-test-run was dropped per
+//   #369 when the test-run mechanism was removed. help / version are exercised by
+//   the .sh too but t27's covers: line (per the port spec) credits these eight;
+//   help is still asserted below as the .sh did, so parity is preserved even
+//   though help is not a separately-credited unit.)
 //
 // PARITY NOTES (every .sh `ok` line maps to expect()s below; several STRONGER):
 //   - .sh T1-T4   help contains AI-DLC / --status / enterprise / all 8 scopes
@@ -49,8 +50,8 @@
 //   - .sh T31     set-status cross-phase CONSTRUCTION             -> Test 31.
 //   - .sh T32     set-status --agent override                    -> Test 32.
 //   - .sh T33     init bootstrap workspace-scaffold checkbox      -> Test 33.
-//   - .sh T34-T36 enable-test-run field / idempotent / no state  -> Test 34-36
-//       (STRONGER: TEST_RUN_MODE_ENABLED count===1 in Test 34).
+//   - .sh T34-T36 (enable-test-run field / idempotent / no state) were DROPPED
+//       per #369 when the test-run mechanism was removed.
 //   - .sh T37     help --depth                                    -> Test 37.
 //   - .sh T38-T43 config-change depth: set / no-op / unknown / event / no-state
 //       -> Test 38-43 (STRONGER byte-equality + event-count===1).
@@ -742,34 +743,6 @@ describe("t27 aidlc-utility set-status", () => {
     const p = stateProj();
     util(["set-status", "--stage", "feasibility", "--agent", "custom-agent"], p);
     expect(stateField(p, "Active Agent")).toBe("custom-agent");
-  });
-});
-
-// ============================================================
-// enable-test-run (covers: subcommand:aidlc-utility:enable-test-run)
-// ============================================================
-
-describe("t27 aidlc-utility enable-test-run", () => {
-  test("34: enable-test-run adds Test Run Mode field (one TEST_RUN_MODE_ENABLED)", () => {
-    const p = stateProj();
-    util(["enable-test-run"], p);
-    expect(stateField(p, "Test Run Mode")).toBe("true");
-    // STRONGER: the .sh only grepped the state field; pin the audit event too.
-    expect(auditEventCount(auditPath(p), "TEST_RUN_MODE_ENABLED")).toBe(1);
-  });
-
-  test("35: enable-test-run is idempotent", () => {
-    const p = stateProj();
-    util(["enable-test-run"], p);
-    const r = util(["enable-test-run"], p);
-    expect(r.out).toContain("already set");
-  });
-
-  test("36: enable-test-run errors without state file", () => {
-    const p = bareProj();
-    const r = util(["enable-test-run"], p);
-    expect(r.out).toContain("No state file");
-    expect(r.status).toBe(1); // STRONGER
   });
 });
 

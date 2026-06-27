@@ -20,7 +20,7 @@ const fills: OnboardingFills = {
 
 # Project Name <!-- Replace with your project name -->
 
-This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development. The workspace shell ships in \`.claude/\` (no setup command); the engine auto-births the first intent when you describe what to build. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup. Run \`/aidlc --version\` to print the framework version. Run \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume, or \`/aidlc --test-run\` to auto-approve gates for CI/automated runs.`,
+This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development. The workspace shell ships in \`.claude/\` (no setup command); the engine auto-births the first intent when you describe what to build. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup. Run \`/aidlc --version\` to print the framework version. Run \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume.`,
 
     prereq_bullets: `- **bun**: Required for CLI tools and hook scripts (state management, audit logging, jump orchestration). Install via \`curl -fsSL https://bun.sh/install | bash\`. On Windows: \`npm install -g bun\` or \`powershell -c "irm bun.sh/install.ps1 | iex"\`. Startup is ~20ms. **Important**: \`bun\` must be on your PATH for non-interactive shells. Claude Code runs your shell non-interactively, so it sources \`~/.zshenv\` (zsh) or \`~/.bashrc\` (bash) — NOT \`~/.zshrc\`. On Windows with Git Bash, \`~/.bashrc\` is the correct file. If \`which bun\` fails inside Claude Code, add the bun PATH export to the appropriate file.
 - **AWS Bedrock access**: The shipped \`.claude/settings.json\` defaults the orchestrator to Opus 4.8 with the 1M-context variant via AWS Bedrock (\`global.anthropic.claude-opus-4-8\`), sets \`AWS_REGION\` to \`us-east-1\`, and pins global Bedrock model IDs for Fable, Opus, Sonnet, and Haiku. You need Bedrock model access enabled and AWS credentials on the default SDK credential chain to run the framework as shipped. If your region isn't \`us-east-1\`, override \`AWS_REGION\` in \`.claude/settings.local.json\`. Full setup (model access, IAM, credentials, region) is in \`docs/guide/01-getting-started.md\` § "AWS Bedrock Setup".
@@ -40,10 +40,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 The AI-DLC method — the layered practice files (\`org.md\`, \`team.md\`, \`project.md\`, and the per-phase \`phases/<phase>.md\`) — is authored once at the workspace root under \`aidlc/spaces/default/memory/\` and imported into Claude's ambient context by reference (the \`@{{HARNESS_DIR}}/rules/aidlc.md\` import at the top of this file), never copied. That stub \`@\`-imports each method file from \`aidlc/spaces/default/memory/\`; Claude resolves the nested chain. Edit the method there — it is the single hand-editable source of truth, identical on every harness. (AI-DLC's own stage resolver reads the same tree directly, so each stage is method-correct without this ambient import.)
 `,
 
-    sections_after_resumption: `## Automated Testing
-
-The \`--test-run\` flag (\`/aidlc bugfix --test-run\`) auto-approves all approval gates and question stages for automated testing. It is intended for CI/test environments only — not for interactive use. State tracking, audit logging, and artifact generation all continue normally.
-`,
+    sections_after_resumption: "",
 
     gitignore_extra: `- \`.claude/settings.local.json\``,
   },

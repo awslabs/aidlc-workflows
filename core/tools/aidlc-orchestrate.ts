@@ -248,7 +248,6 @@ interface ParsedFlags {
   testStrategy?: string;
   readOnly?: string; // the matched read-only flag, if any
   resume?: boolean; // --resume: re-enter an existing workflow (resume choice)
-  testRun?: boolean; // --test-run: CI/automation mode (rides through to a jump's execute)
   single?: boolean; // --single: run ONE stage under a synthetic workflow id, never touching the main pointer
   newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME birth directive (with the --label seam) the fresh-start path uses, instead of constructing intent-birth from SKILL.md prose
   intent?: string; // freeform request text (no leading --flag)
@@ -258,7 +257,7 @@ interface ParsedFlags {
 
 // Extract the flags the `next` decision rule consumes. --project-dir is pulled
 // out by the caller before this runs; here we read scope/stage/phase/depth/
-// test-strategy, the boolean mode flags (--resume/--test-run/--single), and detect a
+// test-strategy, the boolean mode flags (--resume/--single), and detect a
 // read-only utility flag. Any leading non-flag token is the freeform intent
 // (mirrors `/aidlc <freeform description>`). Mirrors the prose orchestrator's
 // flag extraction — the value of a valued flag is the following argv token.
@@ -286,8 +285,6 @@ function parseNextFlags(args: string[]): ParsedFlags {
     }
     if (a === "--resume") {
       flags.resume = true;
-    } else if (a === "--test-run") {
-      flags.testRun = true;
     } else if (a === "--single") {
       flags.single = true;
     } else if (a === "--new-intent") {
@@ -328,7 +325,7 @@ function parseNextFlags(args: string[]): ParsedFlags {
 // deterministic tool mutates, the human's "start a new intent?" judgement gated
 // the get-here. Threads the freeform feature description (--arguments) so the
 // born intent's slug + state Project field carry it, plus --depth /
-// --test-strategy / --test-run. Shared by Branch 7b (valid-scope positional) and
+// --test-strategy. Shared by Branch 7b (valid-scope positional) and
 // Branch 9 (explicit --scope flag) so the explicit-naming shapes emit identical
 // directives. The harness dir is resolved through harnessDir() so the directive
 // names the right tree on every harness (.claude/.kiro/.codex).
@@ -348,7 +345,6 @@ function birthPrintDirective(scope: string, flags: ParsedFlags, description?: st
   }
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
-  if (flags.testRun) cmd.push("--test-run");
   return printDirective(
     `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\` to start the workflow, then re-run \`next\` to continue.${labelHint}`,
   );
@@ -978,7 +974,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // open to the normal `next`.
   if (!flags.readOnly && !flags.workspaceVerb && !flags.stage && !flags.phase &&
       !flags.scope && !flags.intent && !flags.resume && !flags.depth && !flags.testStrategy &&
-      !flags.single && !flags.testRun) {
+      !flags.single) {
     try {
       const pdLatch = resolveProjectDir(projectDir);
       const latchPath = join(pdLatch, "aidlc", ".aidlc-readonly-latch");
@@ -1110,10 +1106,10 @@ function handleNext(args: string[], projectDir: string | undefined): void {
 
   // Branch 2.6 - unpark on RESUME (issue #367). A `--resume` over a parked
   // workflow must CLEAR the marker before continuing, else the next plain `next`
-  // would re-park. Clearing is a MUTATION, so - exactly like Branch 5b's
-  // test-run re-stamp - `next` NAMES the move (a run-then-continue print) and the
-  // conductor runs the tool; `next` itself writes nothing. Fires before Branch 6
-  // (the resume-choice ask) so the marker is cleared first.
+  // would re-park. Clearing is a MUTATION, so `next` NAMES the move (a
+  // run-then-continue print) and the conductor runs the tool; `next` itself
+  // writes nothing. Fires before Branch 6 (the resume-choice ask) so the marker
+  // is cleared first.
   if (
     stateContent &&
     flags.resume &&
@@ -1279,46 +1275,6 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-  }
-
-  // Branch 5b — test-run persistence on RESUME. When `--test-run` re-enters an
-  // EXISTING workflow whose state file lacks the `Test Run Mode` field, the
-  // marking must be re-stamped: aidlc-jump.ts:229 reads `getField(content,
-  // "Test Run Mode")` — NOT the CLI flag — for forward-jump termination, so a
-  // resume that carries the flag but not the field silently loses test-run
-  // mode (t56/t57 fail indirectly through it). Birth stamps the field via
-  // `init --test-run` (Branch 3); resume has no init to ride, so the field is
-  // absent until re-stamped. Persisting it is a MUTATION, so — exactly like
-  // scope-change/config-change (Branch 5) and the jump `execute` (Branch 7) —
-  // `next` NAMES the move (a run-then-continue print) and the conductor runs
-  // the tool; `next` stays read-only and writes nothing here. The named tool
-  // (`aidlc-utility.ts enable-test-run`) requires existing state, no-ops when
-  // the field is already present, inserts `- **Test Run Mode**: true` after the
-  // Revision Count line, and emits TEST_RUN_MODE_ENABLED. After the conductor
-  // runs it, the NEXT `next` sees the field present, this branch no-ops, and
-  // the happy path (Branch 10) emits the run-stage — the loop continues.
-  //
-  // Ordering (branch_order_check): this fires AFTER Branch 5, so a
-  // `--scope X --test-run` against a differing scope routes to scope-change
-  // first (the bigger move) and returns — test-run persistence rides the next
-  // loop iteration once the scope-change tool has re-stamped state. It is
-  // gated on `!flags.stage && !flags.phase` so a `--test-run` jump takes the
-  // jump path below (Branch 7), which threads `--test-run` into `execute`
-  // itself. And it fires BEFORE Branch 10, so the plain `next <scope>
-  // --test-run` resume persists the field before any run-stage. Composes
-  // getField — the canonical state-field read — rather than hand-rolling.
-  if (
-    stateContent &&
-    flags.testRun &&
-    !flags.stage &&
-    !flags.phase &&
-    getField(stateContent, "Test Run Mode") === null
-  ) {
-    emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts enable-test-run\` to persist ` +
-        "test-run mode, then re-run `next` to continue.",
-    ));
-    return;
   }
 
   // Branch 6 — resume (SKILL.md:292). When the conductor re-enters an existing
@@ -1936,17 +1892,11 @@ function emitJumpDirective(
     // Committing the jump is a MUTATION — name the move (print) and let the
     // conductor run `execute`, exactly as scope-change/config-change do. The
     // command carries the tool-resolved direction so `execute` skips/resets the
-    // right stages, emits STAGE_JUMPED, and pivots Current Stage. --test-run
-    // rides through: resolve/execute honour it, and `execute --test-run` owns
-    // the terminal stop for a test-run forward jump (SKILL.md origin/main:92).
-    // After the conductor runs it, the NEXT `next` sees the pivoted state and
-    // emits the run-stage for the now-current target.
-    const executeParts = [
-      `execute --target ${targetSlug} --direction ${direction} --scope ${scope}`,
-    ];
-    if (flags.testRun) executeParts.push("--test-run");
+    // right stages, emits STAGE_JUMPED, and pivots Current Stage. After the
+    // conductor runs it, the NEXT `next` sees the pivoted state and emits the
+    // run-stage for the now-current target.
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-jump.ts ${executeParts.join(" ")}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
+      `Run \`bun ${harnessDir()}/tools/aidlc-jump.ts execute --target ${targetSlug} --direction ${direction} --scope ${scope}\` to perform the jump, then re-run \`next\` to continue from the jump target.`,
     ));
     return;
   }
@@ -2112,15 +2062,13 @@ interface ReportFlags {
   result?: string;
   userInput?: string;
   reason?: string;
-  testRun?: boolean;
   skeletonStance?: string; // the classify round-trip's classified stance
   single?: boolean; // --single: commit a synthetic-id STAGE_STARTED/COMPLETED pair, never the main pointer
   stage?: string; // --stage <slug>: the acted stage (required under --single; preferred for main workflow reports)
 }
 
 // Extract report's flags. --result is the verdict; --user-input rides through
-// to approve's GATE_APPROVED row; --reason rides through to complete-workflow;
-// --test-run rides through to approve (it auto-approves and stamps Test-Run).
+// to approve's GATE_APPROVED row; --reason rides through to complete-workflow.
 // --skeleton-stance carries the conductor's classified walking-skeleton stance
 // (the classify round-trip): it does NOT commit a transition — it records the
 // stance so the next `next` resolves the deferred gate.
@@ -2143,8 +2091,6 @@ function parseReportFlags(args: string[]): ReportFlags {
     } else if (a === "--stage" && i + 1 < args.length) {
       flags.stage = args[i + 1];
       i++;
-    } else if (a === "--test-run") {
-      flags.testRun = true;
     } else if (a === "--single") {
       flags.single = true;
     }
@@ -2401,7 +2347,6 @@ function checkboxForSlug(
 function approveArgs(slug: string, flags: ReportFlags): string[] {
   const args = ["approve", slug];
   if (flags.userInput) args.push("--user-input", flags.userInput);
-  if (flags.testRun) args.push("--test-run");
   return args;
 }
 
@@ -2610,7 +2555,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       }
       const completeArgs = ["complete-workflow", slug];
       if (flags.reason) completeArgs.push("--reason", flags.reason);
-      if (flags.testRun) completeArgs.push("--test-run");
       sequence.push(completeArgs);
     } else {
       // Stale re-report guard. If the workflow has already moved on — Current
@@ -2653,7 +2597,6 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   } else if (isFinal) {
     const completeArgs = ["complete-workflow", slug];
     if (flags.reason) completeArgs.push("--reason", flags.reason);
-    if (flags.testRun) completeArgs.push("--test-run");
     sequence.push(completeArgs);
   } else {
     sequence.push(["advance", slug]);

@@ -8,23 +8,17 @@
 // the `---` block separators, ISO timestamps, no duplicate SESSION_STARTED) and
 // the parsed audit events — NEVER on assistantText.
 //
-// ⛔ NO --test-run (TRAP 2). The .sh drove `/aidlc bugfix --test-run` to
-// completion. --test-run is the auto-approve fakery the refactor kills. Its
-// subject is "audit trail COMPLETENESS: structure, timestamps, no duplicates" —
+// ⛔ TRAP 2 (no headless auto-approve). This twin's subject is "audit trail
+// COMPLETENESS: structure, timestamps, no duplicates":
 // the audit.md STRUCTURE is written DETERMINISTICALLY by explicit init + the
 // audit emitter (aidlc-audit.ts block format), BEFORE any gate. So this twin
 // drives the init turn, stops the instant the init stdout lands, and asserts the
 // audit STRUCTURE on the landed file.
 //
 // THE ONE DROPPED .sh ASSERTION (faithfully, not weakened). The .sh's test 4
-// (`**Test-Run**: true` tags canonical events) is a --test-run ARTIFACT — it only
-// exists when auto-approve is on, which this journey no longer uses. That exact
-// surface (the `--test-run` terminal state + the Test-Run/WORKFLOW_COMPLETED
-// tagging on aidlc-jump) is ALREADY covered DETERMINISTICALLY by the cli twin
-// tests/integration/t54-compaction-and-test-run.test.ts (it spawns the real
-// `aidlc-jump execute --test-run` and asserts `**Reason**: test-run-stopped-at-...`
-// + WORKFLOW_COMPLETED). So dropping it here loses NO coverage — it lives in the
-// deterministic feature tier where it belongs, not behind a live auto-approve.
+// tagged canonical events with an extra per-event field that the engine no
+// longer emits, so there is nothing to assert. Dropping it here loses NO real
+// coverage: the field is gone from the engine entirely.
 //
 // THE JOURNEY (verified against the SHIPPED tool). `/aidlc --init --scope
 // bugfix` on a fresh `--no-aidlc-docs` project routes through
@@ -56,8 +50,7 @@
 //   9 horizontal-rule separators   -> raw audit.md contains >= 1 line starting `---`.
 //   10 multiple audit events       -> the parsed auditEvents length > 2 (the .sh's
 //                                     `grep -ciE '**Event**:'` assert_gt 2).
-//   4 (Test-Run: true tag): DROPPED — a --test-run artifact, covered
-//      deterministically by feature/t54-compaction-and-test-run.test.ts (see header).
+//   4 (per-event tag): DROPPED, the field is gone from the engine (see header).
 //   + WORKFLOW_STARTED fired (the birth event, the audit's reason to exist):
 //       -> assertAuditEvent(r,"WORKFLOW_STARTED").
 //
@@ -101,8 +94,7 @@ describe("t54 /aidlc --init --scope bugfix audit completeness (sdk)", () => {
   // -------------------------------------------------------------------------
   // Fresh project: the audit.md structure lands at explicit init. Assert the header,
   // canonical field shapes, separators, ISO timestamps, no duplicate
-  // SESSION_STARTED, and the init-phase event population on the landed file. NO
-  // --test-run; the Test-Run-tag artifact lives in the feature/t54 cli twin.
+  // SESSION_STARTED, and the init-phase event population on the landed file.
   // -------------------------------------------------------------------------
   test(
     "init writes a structurally complete audit log: header, canonical fields, separators, ISO timestamps, no duplicate SESSION_STARTED",

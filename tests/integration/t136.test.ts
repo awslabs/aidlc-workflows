@@ -22,7 +22,7 @@
 // the reject cycle is the sole emitter of in this test.
 //
 // SHARED-PROJECT DISCIPLINE (mirrors the .sh exactly): the .sh runs ONE
-// create_test_project + ONE `init --scope bugfix --test-run`, then mutates
+// create_test_project + ONE `init --scope bugfix`, then mutates
 // that single project through an ordered sequence of state-tool calls. The
 // observables are inherently positional (Revision Count after the 1st/2nd/3rd
 // reject; the checkbox glyph after each transition). So this port also uses a
@@ -225,7 +225,7 @@ function auditBlocks(p: string, ev: string): string[][] {
 let proj: string;
 
 beforeAll(() => {
-  // create_test_project + `init --scope bugfix --test-run` (t122.sh:30-34).
+  // create_test_project + `init --scope bugfix` (t122.sh:30-34).
   proj = createTestProject();
   const init = spawnSync(
     BUN,
@@ -236,7 +236,6 @@ beforeAll(() => {
       "bugfix",
       "--project-dir",
       proj,
-      "--test-run",
     ],
     {
       encoding: "utf-8",

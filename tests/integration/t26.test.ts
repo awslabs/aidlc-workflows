@@ -1,7 +1,7 @@
 // covers: subcommand:aidlc-jump:execute
 //
 // t26.test.ts — SDK-harness port of tests/integration/t26-integration-backward-jump.sh
-// (TAP plan 8). Drives the real `/aidlc --stage intent-capture` (NO --test-run)
+// (TAP plan 8). Drives the real `/aidlc --stage intent-capture`
 // through the Claude Agent SDK from a CONSTRUCTION-phase state and asserts ONLY
 // on deterministic surfaces (the jump tool's verbatim stdout JSON in the Bash
 // tool_result, parsed audit events, raw audit-file bytes, and the NOW-STABLE
@@ -14,11 +14,7 @@
 // directly; --phase routes through firstInScopeStageOfPhase, jump.ts:121-136);
 // the EXECUTE emission and every deterministic surface below are identical.
 //
-// ⛔ GOVERNING DECISION (user 2026-06-05): --test-run is being RETIRED. This test
-// does NOT pass --test-run. That is not a workaround — it is the ROOT FIX for the
-// historic t26 flake. With --test-run the orchestrator auto-ADVANCED past the
-// jump target (intent-capture -> market-research), so the FINAL on-disk Current
-// Stage was racy and the .sh's state read flaked. WITHOUT --test-run the backward
+// ⛔ WHY THE STATE READ IS STABLE. The backward
 // jump LANDS at the target and STOPS: the run terminates cleanly and the post-jump
 // state is STABLE (Current Stage=intent-capture, NOT auto-advanced). So we assert
 // that stable state DIRECTLY — STRONGER than the audit-only fallback an earlier
@@ -37,7 +33,7 @@
 //   - sets target intent-capture -> [-] in-progress (jump.ts:295),
 //   - rewrites Lifecycle Phase=IDEATION, Current Stage=intent-capture,
 //     In Progress=intent-capture, Status=Running, recomputed Completed
-//     (jump.ts:312-331; willTerminate=false for a BACKWARD jump, jump.ts:310, so
+//     (jump.ts:312-331; a jump never terminates, jump.ts:309, so
 //     Status stays Running and the workflow does NOT terminate —
 //     workflow_stopped:false),
 //   - crosses the construction->ideation phase boundary, so emits
@@ -46,13 +42,13 @@
 //     Target=intent-capture / Scope=feature (jump.ts:374-380),
 //   - appends STAGE_STARTED for the target (Stage=intent-capture,
 //     Agent=aidlc-product-agent; jump.ts:386-390).
-// WITHOUT --test-run the run STOPS at the jump target: the live probe observed
+// The run STOPS at the jump target: the live probe observed
 // subtype=success, is_error=false, ~286s, 37 turns, and a STABLE final state
 // (Lifecycle Phase=IDEATION, Current Stage=intent-capture, In Progress=
 // intent-capture, Completed=4, Status=Running, [x] count=4). One AskUserQuestion
 // gate fired on the landing and was answered with the default option-1 policy;
-// the run still stopped stable at intent-capture (no auto-advance). The 4 benign
-// ERROR_LOGGED probes (Test Run Mode / Initial Intent "Field not found") are
+// the run still stopped stable at intent-capture (no auto-advance). Any benign
+// ERROR_LOGGED probes (e.g. Initial Intent "Field not found") are
 // routine optional-field reads — NOT failures; we do NOT assert on them.
 //
 // THE KNOWN-ANSWER COUNT. countCheckboxes("completed") after a backward reset to
@@ -71,16 +67,16 @@
 //       -> Bash tool_result contains `"completed_count":4` (jump.ts:415 stdout
 //          JSON). STRONGER: exact known-answer 4 (satisfies <20). ALSO: the
 //          now-stable on-disk readStateField(state,"Completed") === "4" (the .sh
-//          read this field but only bounded it <20; without --test-run it is
+//          read this field but only bounded it <20; it is
 //          stable so we pin the exact 4 — and still assert <20 to preserve the
 //          .sh's exact surface+bound).
 //   2 assert_grep AUDIT 'intent-capture'
 //       -> raw audit.md bytes contain "**Target**: intent-capture" (jump.ts:377)
 //          AND the now-stable on-disk Current Stage === "intent-capture"
 //          (jump.ts:313). The audit Target line is the immutable origin; the
-//          on-disk Current Stage is STABLE now that --test-run is gone (no
-//          auto-advance) — so we assert BOTH, the stronger surface the retirement
-//          unlocked. (audit-sample.md baseline does NOT contain intent-capture —
+//          on-disk Current Stage is STABLE (no
+//          auto-advance), so we assert BOTH, the stronger surface the stable
+//          landing unlocks. (audit-sample.md baseline does NOT contain intent-capture,
 //          no vacuous pass.)
 //   3 assert_lt X_COUNT 15 (grep -c '^- [x]')
 //       -> count of `- [x]` lines in the post-run state < 15. The jump tool sets
@@ -96,23 +92,13 @@
 //   7 assert_grep AUDIT 'Timestamp'
 //       -> raw audit.md bytes contain "**Timestamp**:" (audit.ts:257, every block).
 //   8 Status=Running AND Current Stage == In Progress (read from FINAL state)
-//       -> NOW DIRECTLY ASSERTABLE. With --test-run RETIRED the backward jump
+//       -> DIRECTLY ASSERTABLE. The backward jump
 //          lands and STOPS, so the post-run state is stable: Status === "Running",
 //          Current Stage === "intent-capture", In Progress === "intent-capture"
 //          (jump.ts:313,316,321) — the EXACT three-way consistency the .sh read.
 //          ALSO the jump-tool stdout `"workflow_stopped":false` (jump.ts:416, the
 //          deterministic origin) AND the STAGE_STARTED audit event for the target.
-//          This is the surface the .sh ALWAYS intended; --test-run's auto-advance
-//          (which moved Current Stage to market-research) was the flake, now removed.
-//
-//       FLAKE ROOT-CAUSE (resolved). The historic t26 flake: under --test-run a
-//          BACKWARD jump left the workflow Running (willTerminate=false), so the
-//          orchestrator immediately ran intent-capture (1.1) and auto-advanced into
-//          market-research (1.2) — the CONDITIONAL next stage. The FINAL on-disk
-//          Current Stage read market-research, not intent-capture, racing the
-//          assertion. Dropping --test-run removes the auto-advance entirely; the
-//          run stops AT the jump target and the state read is deterministic.
-//          Verified by tmp/phase2/probe-t26-stage.ts (2026-06-05).
+//          This is the surface the .sh ALWAYS intended.
 //
 // Known-answer literals are READ from the SHIPPED handlers (cited inline) and
 // CONFIRMED by the live probe (tmp/phase2/probe-t26-stage.ts): completed_count=4,
@@ -139,7 +125,7 @@ import {
 } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget. The .sh set AIDLC_TEST_TIMEOUT=600. WITHOUT --test-run the
+// Timeout budget. The .sh set AIDLC_TEST_TIMEOUT=600. The
 // backward jump lands + STOPS in ~286s (live probe), so 600s is generous. The
 // driver aborts a hair before bun kills the test so a stuck run surfaces a
 // partial DriveResult to diagnose rather than an opaque hang.
@@ -156,7 +142,7 @@ const DRIVE_TIMEOUT_MS = Math.max(120_000, TEST_TIMEOUT_MS - 15_000);
 // moving target (the workflow continues after the jump) and is NOT asserted here.
 const TARGET_STAGE = "intent-capture"; // resolve --stage intent-capture (stage 1.1)
 const JUMP_COMPLETED_COUNT = '"completed_count":4'; // jump.ts:415 stdout JSON
-const JUMP_WORKFLOW_STOPPED = '"workflow_stopped":false'; // jump.ts:416 (BACKWARD never terminates, jump.ts:310)
+const JUMP_WORKFLOW_STOPPED = '"workflow_stopped":false'; // jump.ts:416 (BACKWARD never terminates, jump.ts:309)
 const JUMP_DIRECTION = '"direction":"backward"'; // jump.ts:407 stdout JSON
 const STOP_AFTER_JUMP = { toolName: "Bash", resultIncludes: JUMP_COMPLETED_COUNT } as const;
 const AUDIT_TARGET_LINE = `**Target**: ${TARGET_STAGE}`; // jump.ts:377 Target field, audit.ts:265 **key**:
@@ -193,8 +179,7 @@ describe("t26 /aidlc --stage intent-capture backward jump (sdk)", () => {
           "functional-design",
         );
 
-        // NO --test-run: the backward jump lands at the target and STOPS (the
-        // root fix for the historic flake — see header). answerScript "default"
+        // The backward jump lands at the target and STOPS. answerScript "default"
         // answers the single landing gate with option 1; the run still stops
         // stable at intent-capture (verified by tmp/phase2/probe-t26-stage.ts).
         const r = await driveAidlc("/aidlc --stage intent-capture", {
@@ -214,7 +199,7 @@ describe("t26 /aidlc --stage intent-capture backward jump (sdk)", () => {
         assertToolResultContains(r, "Bash", JUMP_COMPLETED_COUNT);
         // .sh test 8 (Status=Running): the tool's workflow_stopped flag is the
         // deterministic origin of Status=Running — false for a BACKWARD jump
-        // (jump.ts:310). The on-disk Status is also asserted below (now stable).
+        // (jump.ts:309). The on-disk Status is also asserted below (now stable).
         assertToolResultContains(r, "Bash", JUMP_WORKFLOW_STOPPED);
         // The direction the tool resolved is backward (jump.ts:407 stdout).
         assertToolResultContains(r, "Bash", JUMP_DIRECTION);
@@ -231,9 +216,9 @@ describe("t26 /aidlc --stage intent-capture backward jump (sdk)", () => {
 
         // POST-RUN LIVE STATE IS NOT ASSERTED (deliberate). The .sh's test-8 read
         // final-state Current Stage / In Progress / Status / Completed and the
-        // x-checkbox count off the FINAL file. Those are a MOVING TARGET: a BACKWARD
-        // jump leaves Status=Running (aidlc-jump.ts:310 — willTerminate is set only
-        // for test-run FORWARD jumps), and SKILL.md:255 step 13c then has the
+        // x-checkbox count off the FINAL file. Those are a MOVING TARGET: a
+        // jump leaves Status=Running (aidlc-jump.ts:309, a jump never
+        // terminates), and SKILL.md:255 step 13c then has the
         // orchestrator "Enter Stage Advancement. Normal workflow continues." So the
         // LLM keeps running the workflow after the jump and may advance Current
         // Stage off intent-capture (a stability gate caught it reading

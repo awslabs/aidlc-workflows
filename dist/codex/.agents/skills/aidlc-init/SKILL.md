@@ -24,7 +24,7 @@ no standalone meaning.
 
 1. Birth the intent (run the initialization phase). Parse the user's
    `$ARGUMENTS`: forward any recognized flags
-   (`--scope <name>`/`--depth <level>`/`--test-strategy <level>`/`--test-run`)
+   (`--scope <name>`/`--depth <level>`/`--test-strategy <level>`)
    as-is, and pass any freeform description text via `--arguments "<text>"`
    (`intent-birth` reads the description from the `--arguments` flag, NOT a
    positional — forwarding it bare would silently drop it). ALSO derive a short

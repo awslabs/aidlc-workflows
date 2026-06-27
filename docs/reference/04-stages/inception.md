@@ -291,8 +291,6 @@ On affirmation, content is promoted to:
   `## Deployment`, `## Code Style`). The stage reads each section from
   `org.md` via `extractMarkdownSection` with the matching Title Case
   heading and section-replaces the same heading in `team.md`.
-- Test-run mode: skip AskUserQuestion calls; use `org.md` defaults verbatim
-  for greenfield, evidence-only findings for brownfield.
 
 ---
 

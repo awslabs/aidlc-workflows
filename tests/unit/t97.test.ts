@@ -22,13 +22,12 @@
 //             parseMemoryEntries(raw).length === parseMemoryHeadings(raw).total
 //             holds for ANY input — no multi-line merge)
 //   dist/claude/.claude/tools/aidlc-learnings.ts
-//     surface --slug <s> [--project-dir <p>]  -> JSON candidates + parked,
-//             or {candidates:[],parked_open_questions:[],skipped:"test-run-mode"};
+//     surface --slug <s> [--project-dir <p>]  -> JSON candidates + parked;
 //             exit 1 on missing --slug / missing state / slug-not-Active.
 //     persist --slug <s> --selections-json <p> [--project-dir <p>] -> writes
 //             learnings file + RULE_LEARNED audit row (cid-marker idempotency,
 //             team/project scope routing, two-write sensor bind, framework-tier
-//             rejection, decide-inside-lock recovery, test-run skip); exit 1 on
+//             rejection, decide-inside-lock recovery); exit 1 on
 //             missing --selections-json / framework-distribution sensor path.
 //     exit 2 on unknown subcommand / missing subcommand.
 //
@@ -66,9 +65,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
-  auditFilePath,
   parseMemoryEntries,
   parseMemoryHeadings,
   readAllAuditShards,
@@ -440,24 +438,8 @@ describe("t97 surface (cli)", () => {
     expect(`${j.candidates.length}:${j.parked_open_questions.length}`).toBe("2:1");
   });
 
-  // .sh 16 — test-run mode -> {candidates:[], parked_open_questions:[], skipped}
-  test("test-run mode -> skipped, no candidates", () => {
-    const pd = mkproj("p16");
-    // Seed the canonical field name the real writers emit: `Test Run Mode`
-    // (space), matching aidlc-utility init/enable-test-run and the
-    // orchestrate/jump/sensor-fire readers. (This seed previously used the
-    // hyphenated `Test-Run Mode`, which matched a now-fixed reader-side typo in
-    // aidlc-learnings.isTestRunMode — the test encoded the bug, so it passed
-    // while the skip was actually dead. With the reader corrected to the space
-    // spelling, the seed must use it too for the skip to genuinely fire.)
-    writeFileSync(
-      stateFile(pd),
-      "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Test Run Mode**: true\n",
-      "utf-8",
-    );
-    const res = runCli(["surface", "--slug", "user-stories", "--project-dir", pd]);
-    expect(res.out).toContain('"skipped":"test-run-mode"');
-  });
+  // .sh 16 (test-run mode -> surface skipped) was dropped per #369 when the
+  // test-run mechanism was removed; surface now always proceeds.
 
   // .sh 17 — slug-not-Active -> exit 1
   test("slug not Active stage -> exit 1", () => {
@@ -668,38 +650,6 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     expect(lines).toBe(1);
   });
 
-  // .sh 26 — test-run -> exit 0, no writes/emits (most-recent audit block Test-Run: true).
-  test("test-run -> no writes, no emits", () => {
-    const pd = mkproj("p26");
-    // Pre-seed the DETERMINISTIC shard the persist tool resolves (auditFilePath
-    // -> the bare space record root's audit/<host>-<clone>.md) so the tool's
-    // readAllAuditShards() test-run check sees this most-recent Test-Run block.
-    const shard = auditFilePath(pd);
-    mkdirSync(dirname(shard), { recursive: true });
-    writeFileSync(
-      shard,
-      `
-## Stage Start
-**Timestamp**: 2026-05-29T10:00:00Z
-**Event**: STAGE_STARTED
-**Stage**: user-stories
-**Test-Run**: true
-
----
-`,
-      "utf-8",
-    );
-    const sel = writeSel(
-      pd,
-      `{ "stage_slug": "user-stories", "selections": [
-  { "candidate_id": "c1", "type": "learning", "scope": "project", "heading": "Corrections", "text": "should not write", "source": "orchestrator" } ] }
-`,
-    );
-    runCli(["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd]);
-    const rows = grepCountAudit(pd, /Event.*: RULE_LEARNED/);
-    const fileState = existsSync(projectPractices(pd))
-      ? "file"
-      : "none";
-    expect(`${rows}:${fileState}`).toBe("0:none");
-  });
+  // .sh 26 (test-run -> persist writes nothing) was dropped per #369 when the
+  // test-run mechanism was removed; persist now always proceeds.
 });

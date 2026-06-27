@@ -1,10 +1,10 @@
 // covers: audit:STAGE_STARTED, scope:bugfix
 //
 // t53.test.ts — SDK-harness port of tests/e2e/t53-workflow-scope-routing.sh
-// (plan 11). Drives the real `/aidlc bugfix` (NO --test-run — TRAP 2: the run
-// stops at the FIRST orchestrator directive, BEFORE any gate, so auto-approve
-// was never load-bearing; the flag is dropped from both the live prompt and the
-// deterministic seed so test-run mode can't ride the state into the live turn)
+// (plan 11). Drives the real `/aidlc bugfix` (TRAP 2: the run
+// stops at the FIRST orchestrator directive, BEFORE any gate, so headless
+// auto-approve was never load-bearing; both the live prompt and the
+// deterministic seed are plain, human-driven)
 // through the Claude Agent SDK until the deterministic orchestrator directive
 // is observed, then asserts ONLY on deterministic surfaces (tool_result JSON,
 // on-disk state fields, the state file's Scope-Configuration / Stage-Progress
@@ -137,8 +137,7 @@ const INIT_STAGES = ["workspace-scaffold", "workspace-detection", "state-init"];
  * elsewhere and can otherwise pollute audit.md before the bugfix run begins. */
 function seedBugfixState(proj: string): void {
   const utility = join(proj, ".claude", "tools", "aidlc-utility.ts");
-  // NO --test-run on the seed: persisting test-run mode into the state would
-  // ride auto-approve into the live turn below (TRAP 2). The live journey stops
+  // The seed is a plain, deterministic init (TRAP 2). The live journey stops
   // at the first orchestrator directive, before any gate, so it needs no mode.
   const res = spawnSync(
     process.execPath,

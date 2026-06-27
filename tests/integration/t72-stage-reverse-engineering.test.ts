@@ -7,8 +7,9 @@
 // scaffold, the state fields the stage wrote, and the SDK's captured gate — NEVER
 // on assistantText.
 //
-// ⛔ NO --test-run (TRAP 2). The .sh drove `--stage reverse-engineering --test-run`
-// so the approval gate AUTO-APPROVED and the stage auto-advanced — that auto-advance
+// ⛔ TRAP 2 (no headless auto-approve). The .sh drove `--stage reverse-engineering`
+// under a headless auto-approve mode so the approval gate AUTO-APPROVED and the stage
+// auto-advanced - that auto-advance
 // is also why the .sh's "current stage advanced past RE" assertion was racy (a known
 // LLM-tier flake). This port drives the REAL stage and STOPS when its approval gate
 // RENDERS (stopAfterAskUserQuestion), the moment the deterministic artifacts + state
@@ -37,8 +38,8 @@
 //   7 RE artifacts have markdown headings
 //       -> >= 1 artifact matches /^#/m (the .sh's grep -l "^#").
 //   8/9/13 RE completion + advance + completed count
-//       -> NOT asserted post-approval (those depend on the auto-advance --test-run
-//          forced — the racy surface). Instead we assert the DETERMINISTIC landed
+//       -> NOT asserted post-approval (those depend on the auto-advance the .sh's
+//          headless mode forced - the racy surface). Instead we assert the DETERMINISTIC landed
 //          state at the gate: Current Stage === reverse-engineering (the stage is
 //          active, jump/stage set it) — the stable pre-approval truth.
 //   10 RE mentions component/module structure (3, 4, 5, 11 domain-word probes)
@@ -107,8 +108,8 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
   // -------------------------------------------------------------------------
   // Brownfield project seeded at init-done with RE next. Drive the RE stage and
   // STOP when its approval gate renders — the moment the 9 artifacts + the state
-  // update have landed. Assert the deterministic artifact scaffold + state. NO
-  // --test-run, so no auto-advance and no racy post-approval read.
+  // update have landed. Assert the deterministic artifact scaffold + state, with
+  // no auto-advance and no racy post-approval read.
   // -------------------------------------------------------------------------
   test(
     "reverse-engineering produces the artifact scaffold and lands at its approval gate (phase INCEPTION)",
@@ -172,7 +173,7 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
         // .sh tests 8/9 re-expressed as the DETERMINISTIC pre-approval truth: the
         // RE stage is the active Current Stage (set by the stage/jump). We do NOT
         // assert the post-approval [x]/advance — that is the racy auto-advance the
-        // .sh's --test-run forced (the flake root); it is the tui tier's surface.
+        // .sh's headless mode forced (the flake root); it is the tui tier's surface.
         expect(readStateField(state, "Current Stage")).toBe(TARGET_SLUG);
       } finally {
         cleanupTestProject(proj);

@@ -18,7 +18,7 @@
 // invocations are NOT a mock anything — they pipe a real Stop-event payload
 // into the SHIPPED hook, which spawns the SHIPPED engine over a seeded project.
 //
-// NO --test-run anywhere (the .sh had none — a hook contract has no gate).
+// A hook contract has no gate.
 //
 // ASSERTION MAP (.sh test -> surface, equal-or-stronger):
 //   1+2 run-to-done, genuinely e2e

@@ -12,8 +12,8 @@
 // never an in-process call.
 //
 // Why spawn (not in-process): the .sh shells out to FOUR binaries per walk and
-// asserts on (a) the directive JSON each emits on stdout, (b) the Test-Run /
-// STAGE_STARTED rows aidlc-state.ts appends to audit.md through report's
+// asserts on (a) the directive JSON each emits on stdout, (b) the STAGE_STARTED
+// rows aidlc-state.ts appends to audit.md through report's
 // dispatcher, and (c) the no-state-created side effect of --init. The contract is
 // the subprocess boundary plus those side effects; an in-process twin would lose
 // the report-dispatcher → aidlc-state.ts subprocess seam the corpus exists to pin.
@@ -45,13 +45,10 @@
 //     - (b) named scope over existing state -> NOT a birth (no intent-birth
 //       print; the old --force re-init guard is gone).
 //   SP6 scope-change (2): kind==="print" + out contains "scope-change --scope mvp".
-//   SP7 test-run round-trip (4):
-//     - report --result approved --test-run -> kind==="done".
-//     - audit.md carries `**Test-Run**: true` on the GATE_APPROVED row
-//       (STRONGER: block-scoped to the GATE_APPROVED block, not a file-wide grep).
-//     - follow-up next -> stage==="scope-definition" (advanced).
-//     - control WITHOUT --test-run -> NO `**Test-Run**: true` anywhere
-//       (whole-file absence; the path is observable, not a no-op).
+//   SP7 normal gate (1):
+//     - report --result approved --user-input -> kind==="done".
+//       (The --test-run round-trip was dropped per #369; only the normal-gate
+//       control survives.)
 //   WALK A non-gated advance (3): N1 stage==="workspace-detection" gate===false;
 //     report contains "Committed advance for"; N2 stage==="state-init".
 //   WALK B gated approve (3): N1 stage==="feasibility" gate===true; STAGE_STARTED
@@ -70,9 +67,10 @@
 //       stage with the now-DETERMINED gate (boolean true). The next decision rule
 //       read the recorded stance; the round-trip closes deterministically.
 //
-// 27 .sh asserts -> 27 expect()-bearing test() cases (the .sh's two-observable
-// `assert_eq "a|b"` lines are kept as two expect()s inside one test(), matching
-// the single `ok` line the .sh emitted for each).
+// The .sh's two-observable `assert_eq "a|b"` lines are kept as two expect()s
+// inside one test(), matching the single `ok` line the .sh emitted for each.
+// (The original SP7 --test-run round-trip asserts were dropped per #369 when the
+// test-run mechanism was removed; only the normal-gate control survives.)
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's create_test_project + seed_state_file +
 // cleanup_test_project per case): each case uses a FRESH temp project dir
@@ -178,33 +176,6 @@ function eventCount(p: string, ev: string): number {
     .filter((l) => l === `**Event**: ${ev}`).length;
 }
 
-/**
- * Block-scoped presence of `**<key>**: <value>` inside the FIRST audit block
- * whose `**Event**:` matches <ev>. STRONGER than the .sh's file-wide
- * assert_grep '\*\*Test-Run\*\*: true' — it pins the field to the GATE_APPROVED
- * block specifically. Resets at `## ` headings and `---` separators.
- */
-function blockHasField(p: string, ev: string, key: string, value: string): boolean {
-  let matched = false;
-  for (const line of readAudit(p).replace(/\r\n/g, "\n").split("\n")) {
-    if (line.startsWith("## ") || line === "---") {
-      matched = false;
-      continue;
-    }
-    if (line.startsWith("**Event**: ")) {
-      matched = line === `**Event**: ${ev}`;
-      continue;
-    }
-    if (matched && line === `**${key}**: ${value}`) return true;
-  }
-  return false;
-}
-
-/** Whole-trail presence of a literal needle (mirrors a bare unanchored grep). */
-function fileContains(p: string, needle: string): boolean {
-  return readAudit(p).includes(needle);
-}
-
 // ============================================================
 // Special path 1: JUMP FORWARD — engine DELEGATES direction to aidlc-jump.ts
 // resolve; corpus pins engine-vs-tool agreement (covers subcommand:aidlc-jump resolve).
@@ -236,6 +207,41 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     expect(res.status).toBe(0);
     expect(JSON.parse(res.stdout.trim()).direction).toBe("forward");
+  });
+
+  // SP1-exec: a forward `aidlc-jump.ts execute` does NOT auto-terminate the
+  // workflow (issue #369: the test-run forward-jump terminal-stop branch was
+  // removed; a forward jump now ALWAYS lands Running). The deterministic guard
+  // the deleted t54-compaction-and-test-run.test.ts used to carry - its SDK twin
+  // (t56/t26) is claude-gated and skips without the live CLI, so this is the only
+  // non-live test that pins the always-Running invariant. Asserts all three
+  // observables: the tool's stdout JSON workflow_stopped:false, the post-jump
+  // state Status:Running, and the audit STAGE_STARTED-present / WORKFLOW_COMPLETED-
+  // absent pair (a re-introduced terminal branch would flip any one of these).
+  test("SP1-exec: forward execute lands Running (workflow_stopped:false, STAGE_STARTED, no WORKFLOW_COMPLETED)", () => {
+    const p = projWithState("state-mid-ideation.md");
+    const res = run(JUMP, [
+      "execute",
+      "--target",
+      "code-generation",
+      "--direction",
+      "forward",
+      "--scope",
+      "feature",
+      "--project-dir",
+      p,
+    ]);
+    expect(res.status).toBe(0);
+    const jump = JSON.parse(res.stdout.trim());
+    // The jump committed and did NOT stop the workflow.
+    expect(jump.workflow_stopped).toBe(false);
+    // Post-jump state: the target is Active and Running, never Completed.
+    const state = readFileSync(statePath(p), "utf-8");
+    expect(state).toContain("- **Status**: Running");
+    expect(state).toContain("- **Current Stage**: code-generation");
+    // Audit symmetry: the target emitted STAGE_STARTED; no terminal row.
+    expect(eventCount(p, "STAGE_STARTED")).toBeGreaterThanOrEqual(1);
+    expect(eventCount(p, "WORKFLOW_COMPLETED")).toBe(0);
   });
 
   // ============================================================
@@ -333,35 +339,12 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   });
 
   // ============================================================
-  // Special path 7: TEST-RUN round-trip — report rides --test-run through to
-  // aidlc-state.ts approve, stamping Test-Run: true on GATE_APPROVED; next-after
-  // reflects the advance; control without --test-run proves the stamp is absent.
-  // Spawns gate-start + report + next + (control) gate-start + report = 5 procs.
+  // Special path 7: NORMAL GATE - report drives aidlc-state.ts approve through
+  // the report dispatcher; the gate closes (kind==="done"). The --test-run
+  // round-trip that used to sit here was removed with the test-run mechanism
+  // (#369); this control proves the normal gate path is observable, not a no-op.
   // ============================================================
-  test("SP7: report --test-run -> done, Test-Run:true on GATE_APPROVED, next advances", () => {
-    const p = projWithState("state-mid-ideation.md");
-    const gs = run(STATE, ["gate-start", "feasibility", "--project-dir", p]);
-    expect(gs.status).toBe(0);
-    const reportOut = run(ORCHESTRATE, [
-      "report",
-      "--result",
-      "approved",
-      "--test-run",
-      "--user-input",
-      "auto",
-      "--project-dir",
-      p,
-    ]);
-    expect(directive(reportOut).kind).toBe("done");
-    // Block-scoped: Test-Run: true sits on the GATE_APPROVED row.
-    expect(blockHasField(p, "GATE_APPROVED", "Test-Run", "true")).toBe(true);
-    const nextAfter = directive(
-      run(ORCHESTRATE, ["next", "--project-dir", p]),
-    );
-    expect(nextAfter.stage).toBe("scope-definition");
-  }, 30000);
-
-  test("SP7-control: report WITHOUT --test-run leaves no Test-Run stamp", () => {
+  test("SP7-control: report --result approved --user-input -> done", () => {
     const p = projWithState("state-mid-ideation.md");
     run(STATE, ["gate-start", "feasibility", "--project-dir", p]);
     const r = run(ORCHESTRATE, [
@@ -374,8 +357,6 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       p,
     ]);
     expect(directive(r).kind).toBe("done");
-    // Whole-file absence (mirrors the .sh's unanchored assert_not_grep).
-    expect(fileContains(p, "**Test-Run**: true")).toBe(false);
   }, 30000);
 
   // ============================================================

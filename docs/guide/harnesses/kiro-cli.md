@@ -54,7 +54,7 @@ conductor reasons at full depth out of the box. Override it per session with
 
 Identical to the Claude Code harness: `/aidlc <description>` starts a
 workflow, `/aidlc --status` reports position, `--doctor`,
-`--stage`, `--phase`, `--depth`, `--test-strategy`, `--test-run` all work, and
+`--stage`, `--phase`, `--depth`, `--test-strategy` all work, and
 the per-stage (`/aidlc-application-design`) and per-scope (`/aidlc-feature`)
 runner skills are installed.
 

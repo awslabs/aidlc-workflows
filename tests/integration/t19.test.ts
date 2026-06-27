@@ -42,7 +42,7 @@
 //                                  (the .sh's `-n "$CLAUDE_OUTPUT"`). We check the
 //                                  PRESENCE of output, never its CONTENT.
 //
-// NO --test-run (the .sh had none — it is a substrate probe, not a workflow).
+// It is a substrate probe, not a workflow.
 // This is the trust-anchor's sibling: where sdk-drive.calibration proves the
 // driver reports planted truths, t19 proves the LIVE substrate the driver needs
 // is healthy. A red here is a real environment FINDING (claude/creds), never a

@@ -21,7 +21,7 @@
 //
 // WHAT THE .sh PROVED (t130-scope-runners.sh:1-12 prose + the loop at :42-70):
 //   For each first-batch scope the runner's shell makes the SAME first move —
-//   `aidlc-orchestrate.ts next --scope <scope>` over a real `--test-run` init —
+//   `aidlc-orchestrate.ts next --scope <scope>` over a real init,
 //   and the test pins that
 //     (a) the engine resolves a `run-stage` directive,
 //     (b) it lands on that scope's first EXECUTE stage (the brownfield
@@ -35,7 +35,7 @@
 //   the runner's baked-scope FIRST move reaches the engine and carries the persona.
 //
 // WHY SPAWN (mechanism cli, not in-process): the .sh shells out to TWO binaries
-// per case — `aidlc-utility.ts init --scope … --test-run` (a state-writing
+// per case — `aidlc-utility.ts init --scope …` (a state-writing
 // MUTATION) then `aidlc-orchestrate.ts next --scope … ` (the engine's read-only
 // directive emit) — against a temp project holding a FULL copy of the shipped
 // .claude/. Both run FROM THE COPY (`bun <proj>/.claude/tools/…`) so the engine
@@ -64,10 +64,10 @@
 //   .sh "aidlc-<scope>: directive carries the conductor persona"        -> typeof directive.conductor_persona === "string" && length > 0
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's make_project at :32-40 — mktemp -d,
-// cp -r "$SRC" "$proj/.claude", init --scope <s> --test-run, then rm -rf): each
+// cp -r "$SRC" "$proj/.claude", init --scope <s>, then rm -rf): each
 // scope gets a FRESH integration project (setupIntegrationProject copies the
 // shipped dist/claude/.claude into <proj>/.claude exactly as the .sh's cp -r),
-// is initialised --test-run via the COPIED utility tool, then the COPIED engine
+// is initialised via the COPIED utility tool, then the COPIED engine
 // resolves `next --scope <s>`. Nothing is written under tests/fixtures/**; all
 // temp dirs cleaned in afterAll.
 
@@ -87,7 +87,7 @@ const BUN = process.execPath; // the bun running this test
 resetAidlcEnv();
 
 // Per first-batch scope: the first EXECUTE stage the engine resolves on a fresh
-// greenfield --test-run init. Mirrors the .sh's CASES at :26. Measured live
+// greenfield init. Mirrors the .sh's CASES at :26. Measured live
 // against the shipped engine before authoring (see the SOURCE UNDER TEST note).
 const CASES: ReadonlyArray<{ scope: string; wantStage: string }> = [
   { scope: "bugfix", wantStage: "requirements-analysis" },
@@ -98,7 +98,7 @@ const CASES: ReadonlyArray<{ scope: string; wantStage: string }> = [
   // its first EXECUTE stage (scopes/aidlc-infra.md). Measured live.
   { scope: "infra", wantStage: "practices-discovery" },
   // refactor's first EXECUTE is reverse-engineering, but that brownfield
-  // conditional stage greenfield-SKIPs on the empty --test-run workspace (same as
+  // conditional stage greenfield-SKIPs on the empty workspace (same as
   // security-patch's reverse-engineering), so the engine lands on the next
   // EXECUTE: requirements-analysis (scopes/aidlc-refactor.md). Measured live.
   { scope: "refactor", wantStage: "requirements-analysis" },
@@ -120,7 +120,7 @@ type Directive = any;
 /**
  * make_project + first move (t130-scope-runners.sh:32-49): scaffold a full
  * integration project (copy of the shipped .claude/), init --scope <s>
- * --test-run via the COPIED utility tool, then resolve the runner's FIRST move
+ * via the COPIED utility tool, then resolve the runner's FIRST move
  * `aidlc-orchestrate.ts next --scope <s>` via the COPIED engine and parse the
  * single emitted directive JSON off stdout.
  */
@@ -135,7 +135,6 @@ function firstMoveDirective(scope: string): Directive {
       "init",
       "--scope",
       scope,
-      "--test-run",
       "--project-dir",
       proj,
     ],

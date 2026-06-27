@@ -6,7 +6,7 @@ description: >
   `.codex/scopes/`; run
   `bun .codex/tools/aidlc-utility.ts help` for the authoritative list
   and descriptions. Utilities: --status, --doctor, --stage,
-  --phase, --scope, --depth, --test-strategy, --test-run, --version,
+  --phase, --scope, --depth, --test-strategy, --version,
   --help, plus the intent and space verbs.
   Or describe what you want to build and the scope will be auto-detected.
 ---
@@ -69,14 +69,12 @@ The orchestration engine emits seven kinds today: `run-stage`, `invoke-swarm`, `
 - **`gate: false`** — run the stage body and complete it directly. `report --stage "<directive.stage>" --result completed`. No human approval, no learnings ritual (these are the auto-proceeding bootstrap stages).
 - **`gate: true`** — after the stage body produces its artifacts, run the **§13 learnings ritual** then present the **approval gate**:
   1. Run stage-completion verification (artifacts exist, guardrails respected).
-  2. Unless in test-run mode, run the learnings ritual: `bun .codex/tools/aidlc-learnings.ts surface --slug <slug>`, render the structured question + free-text channel (per `question-rendering.md`), run the admission conflict-check against `aidlc/spaces/<space>/memory/org.md`, then `bun .codex/tools/aidlc-learnings.ts persist --slug <slug> --selections-json <path>`. Advisory and additive — it never blocks the gate. See `aidlc-common/protocols/stage-protocol.md` §13.
+  2. Run the learnings ritual: `bun .codex/tools/aidlc-learnings.ts surface --slug <slug>`, render the structured question + free-text channel (per `question-rendering.md`), run the admission conflict-check against `aidlc/spaces/<space>/memory/org.md`, then `bun .codex/tools/aidlc-learnings.ts persist --slug <slug> --selections-json <path>`. Advisory and additive — it never blocks the gate. See `aidlc-common/protocols/stage-protocol.md` §13.
   3. Present the approval gate as a structured question (Approve / Request Changes). On approval, `report --stage "<directive.stage>" --result approved` — the engine's `report` owns the full transition (it dispatches the right `aidlc-state.ts` subcommand and advances; never call those tools yourself, and never re-report the same directive). On a Request-Changes / reject, run the Keep/Modify/Redo loop within this stage (below) and re-present; the reject path stays conductor-side and is not a `report` outcome.
 
 **Per-unit iteration (`directive.unit`).** When `directive.unit` is present, this `run-stage` is ONE iteration of a per-unit Construction stage (`for_each: unit-of-work`, covering the 3.1-3.4 design stages and non-autonomous code-generation). Run the body for THIS unit only, writing its artifacts under `construction/<directive.unit>/<directive.stage>/`. The engine drives the loop: if `directive.gate` is **false** on a per-unit directive, this unit's artifacts are not yet on disk, so complete the body, write the unit's artifacts, then re-run `next` (do NOT report-approve); the engine hands you the next uncovered unit, and once every unit is built it re-emits this stage with `gate: true`. When `directive.gate` is **true** on a per-unit stage, every unit is already built, so run the §13 ritual and present the single approval gate that covers the whole stage (all units). (If `directive.unit` is absent, the stage is not per-unit, or there is no compiled unit list, run it as a single stage exactly as above.)
 
 `directive.mode` tells you HOW to run the body: `inline` (run it in this session, with the lead agent's persona framing loaded from its `.md` file under `.codex/agents/`), or `subagent` (spawn the named agent role — the harness resolves `.codex/agents/aidlc-<role>-agent.toml`, which loads its own persona via `developer_instructions`; do not inject it in the prompt). Today the graph uses `inline` and `subagent`; the named worker stages (reverse-engineering, code-generation) carry `subagent`.
-
-Under **test-run mode** (the engine threads `--test-run` through; `report` rides it to the committing tool), gates auto-approve and the learnings ritual is skipped — there is no human in the loop. Pass `--stage "<directive.stage>" --test-run` through on `report` so the `GATE_APPROVED` row is stamped `Test-Run: true` and the engine commits the stage you actually acted on even if `Current Stage` was recovered meanwhile.
 
 ---
 

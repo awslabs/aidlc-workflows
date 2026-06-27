@@ -14,7 +14,7 @@
 // short-lived processes, so this is deliberately cli (= all spawns).
 //
 // Source under test (dist/claude/.claude/tools/aidlc-runtime.ts):
-//   :314 compile({ testRun, projectDir }) — walks audit.md + per-stage
+//   :314 compile({ projectDir }) walks audit.md + per-stage
 //        memory.md, pairs STAGE_STARTED/STAGE_COMPLETED into one row per slug
 //        (pairStartedCompleted, :171), reads memory.md (readMemory, :269 —
 //        absent file => memory_entries:null, the v0.4.0 backfill rule), and
@@ -173,7 +173,7 @@ beforeAll(() => {
   // Init the bugfix scope — fastest scope, smallest stage list (.sh:40-42).
   const init = run(
     UTIL,
-    ["init", "--scope", "bugfix", "--project-dir", proj, "--test-run"],
+    ["init", "--scope", "bugfix", "--project-dir", proj],
     { AIDLC_WORKFLOW_INTENT: "runtime-graph e2e" },
   );
   initOk = init.status === 0;

@@ -9,8 +9,8 @@
 // Current-Stage==approval-handoff assertion; and the memory.md terminator fires
 // at 0 answers before the gate paints — see the PATTERN A note at the wait
 // below). A faithful rewrite of tests/integration/t101-stage-memory-lifecycle.sh,
-// EQUAL-OR-STRONGER on the same on-disk surface, with the --test-run auto-approve
-// crutch REMOVED and the rendered-gate value-add ADDED.
+// EQUAL-OR-STRONGER on the same on-disk surface, with the rendered-gate value-add
+// ADDED.
 //
 // WHAT IT PROVES (the memory.md lifecycle the SKILL.md ## Routing block drives):
 //   - init-from-template fires at stage START — the orchestrator copies
@@ -30,14 +30,14 @@
 //     bun, never loads node-pty).
 //   - RENDER (the tui-only value-add the SDK path is blind to): the captured grid
 //     showed the AskUserQuestion approval gate at least once during the run — the
-//     `❯` caret + an `Enter to select` / `Submit answers` footer. The .sh, running
-//     under --test-run, NEVER saw a painted gate; the menu was auto-approved
-//     headlessly. This is the journey a real user actually lives.
+//     `❯` caret + an `Enter to select` / `Submit answers` footer. The .sh NEVER saw
+//     a painted gate; the menu was auto-approved headlessly. This is the journey a
+//     real user actually lives.
 //
 // WHY PATTERN A (land + render, not answer-and-advance): approval-handoff is a
 // GATE stage (its stage file: "Approval gate: Approve / Request Changes /
-// Reject"). Without --test-run the orchestrator paints a real AskUserQuestion gate
-// and WAITS for a human keystroke; nothing advances until it is answered. This
+// Reject"). The orchestrator paints a real AskUserQuestion gate and WAITS for a
+// human keystroke; nothing advances until it is answered. This
 // journey's contract is the memory.md LIFECYCLE observed WHILE PAUSED ON that gate
 // — creation at stage start, fidelity, and that the gate RENDERS — plus the jump
 // landing ON approval-handoff (Current Stage == approval-handoff, i.e. NOT
@@ -192,7 +192,7 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         ideationArtifacts: true,
       });
       // The render value-add: tail the grid during the run to prove the approval
-      // gate painted at least once (the SDK / --test-run path can't see it).
+      // gate painted at least once (the SDK path can't see it).
       try {
         // --- launch the claude TUI -------------------------------------------
         expect(
@@ -223,10 +223,10 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         // ([AIDLC] IDEATION), not the no-workflow "ready" line.
         expect(waitFor(session, "\\[AIDLC\\].*IDEATION", 45000, 800)).toBe(true);
 
-        // --- jump to the approval-handoff gate stage (NO --test-run) ----------
+        // --- jump to the approval-handoff gate stage -------------------------
         // Slash command has spaces -> send literally with no auto-Enter, then
-        // Enter as a named key (the template's exact two-step). REMOVING
-        // --test-run is the whole point: the gate paints and waits for a human.
+        // Enter as a named key (the template's exact two-step). The gate paints
+        // and waits for a human.
         drive([
           "send",
           "--session",
@@ -336,8 +336,8 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         expect(stateMd).toMatch(/\*\*Current Stage\*\*:[ \t]*approval-handoff\b/);
 
         // (The render assertion — the AUQ gate footer painted — is proven above by
-        // `gateRendered` from waitFor, the tui-only value-add the SDK / --test-run
-        // path is blind to. No separate poll-timer: waitFor is the robust proof.)
+        // `gateRendered` from waitFor, the tui-only value-add the SDK path is blind
+        // to. No separate poll-timer: waitFor is the robust proof.)
       } finally {
         drive(["kill", "--session", session]);
         cleanupTuiProject(sandbox);

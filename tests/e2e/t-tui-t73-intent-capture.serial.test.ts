@@ -5,13 +5,12 @@
 // on-disk artifacts (§5.1, Phase-3 journey tier). A REWRITE — not a port — of the
 // shipped tests/integration/t73-stage-intent-capture.sh.
 //
-// WHAT THE .sh DID (and why it was a fake journey): it ran
-//   run_claude "$PROJ" "/aidlc --stage intent-capture --test-run"
-// where --test-run AUTO-APPROVED the stage's AskUserQuestion gate. The user never
-// answered the gate the real intent-capture stage raises; the interactive journey
-// a human actually lives was NEVER exercised. This rewrite removes --test-run
-// entirely and drives the painted gate by keystroke via the shared `answer-gate`
-// primitive (tui-drive.ts §3), terminating on the on-disk intent-statement.
+// WHAT THE .sh DID (and why it was a fake journey): it ran the intent-capture
+// stage jump headlessly, AUTO-APPROVING the stage's AskUserQuestion gate. The user
+// never answered the gate the real intent-capture stage raises; the interactive
+// journey a human actually lives was NEVER exercised. This rewrite drives the
+// painted gate by keystroke via the shared `answer-gate` primitive (tui-drive.ts
+// §3), terminating on the on-disk intent-statement.
 //
 // WHY PATTERN B (multi-gate journey, answer-gate --until-file):
 //   intent-capture is a GATED stage — it asks the user questions (a questions file
@@ -32,14 +31,14 @@
 //   asserted exactly this (its tests 9-12). We assert equal-or-stronger.
 //
 // What it proves:
-//   - the intent-capture stage starts from a --stage jump WITHOUT --test-run
+//   - the intent-capture stage starts from a --stage jump
 //     (statusline leaves nothing-to-do and shows a live IDEATION phase),
 //   - the answer-gate clears the stage's rendered AUQ menu(s) by taking the
 //     Recommended default and TERMINATES on the on-disk intent-statement artifact,
 //   - ON DISK (the surface the .sh greps, equal-or-stronger):
 //       * <record>/ideation/intent-capture/ exists,
 //       * a *questions* file exists AND carries >=1 `[Answer]:` line (the gate's
-//         answers were written back — the thing --test-run faked),
+//         answers were written back, the thing the headless auto-approve faked),
 //       * a *intent*statement* artifact exists, is > 100 bytes, and has at least
 //         one markdown heading,
 //       * a *stakeholder* map artifact exists,
@@ -171,7 +170,7 @@ function findArtifact(dir: string, fragments: string[], exclude: string[] = []):
 
 describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts on disk)", () => {
   test.skipIf(SKIP_REASON !== null)(
-    `intent-capture jump (no --test-run) commits intent-statement + answered questions on disk${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
+    `intent-capture jump commits intent-statement + answered questions on disk${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       const session = `aidlc_tui_t73_${process.pid}`;
       // Seed EXACTLY as the .sh: state at init-done (intent-capture next/current),
@@ -214,7 +213,7 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         // (not the no-workflow "ready" line). Wait for it before driving.
         expect(waitFor(session, "\\[AIDLC\\].*IDEATION", 45000, 800)).toBe(true);
 
-        // --- submit the stage-jump WITH a build description (NO --test-run) ----
+        // --- submit the stage-jump WITH a build description -------------------
         // intent-capture.md Step 2 reads the project description from "$ARGUMENTS
         // or audit.md". Jumping with a BARE `/aidlc --stage intent-capture` (no
         // description) makes the stage ask "What would you like to build?" as a
@@ -304,7 +303,8 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
 
         // .sh tests 2+3: a *questions* file exists AND has >=1 [Answer]: line.
         // This is the heart of the rewrite — the answered-questions file is the
-        // artifact --test-run faked. We assert the answers were really written.
+        // artifact the headless auto-approve faked. We assert the answers were
+        // really written.
         const questionsFile = findArtifact(icDir, ["questions"]);
         expect(questionsFile).not.toBeNull();
         const questionsBody = readFileSync(questionsFile as string, "utf8");

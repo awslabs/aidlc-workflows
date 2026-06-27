@@ -8,14 +8,14 @@
 
 All event names follow `SUBJECT_PAST_VERB` — every event answers "what happened?"
 
-## Event Registry (69 events, 18 categories)
+## Event Registry (68 events, 18 categories)
 
 ### Workflow Lifecycle (4 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | ✓ `WORKFLOW_STARTED` | Scope determined, workflow begins | Timestamp, Scope, Request | `tools/aidlc-utility.ts init` |
-| ✓ `WORKFLOW_COMPLETED` | All in-scope stages done, or test-run stop | Timestamp, Scope, Details, optional `Reason=test-run-stopped-at-<target>` | `tools/aidlc-state.ts complete-workflow`, `tools/aidlc-jump.ts execute --test-run` |
+| ✓ `WORKFLOW_COMPLETED` | All in-scope stages done | Timestamp, Scope, Details | `tools/aidlc-state.ts complete-workflow` |
 | ✓ `WORKFLOW_PARKED` | Workflow parked mid-flow for a later session (no stage advanced) | Stage, Timestamp | `tools/aidlc-state.ts park` |
 | ✓ `WORKFLOW_UNPARKED` | Park marker cleared on explicit `--resume` re-entry | Timestamp | `tools/aidlc-state.ts unpark` |
 
@@ -56,24 +56,23 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 | `WORKSPACE_SCANNED` | Workspace detection done | Timestamp, Project type, Details | `tools/aidlc-utility.ts` handleInit |
 | `WORKSPACE_INITIALISED` | State file created | Timestamp, Details | `tools/aidlc-utility.ts` handleInit |
 
-### Navigation Events (5 events)
+### Navigation Events (4 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `SCOPE_CHANGED` | `--scope` changed existing scope | Timestamp, Old scope, New scope | `tools/aidlc-utility.ts` |
 | `DEPTH_CHANGED` | `--depth` changed depth level | Timestamp, Old depth, New depth | `tools/aidlc-utility.ts` |
 | `TEST_STRATEGY_CHANGED` | `--test-strategy` changed test strategy | Timestamp, Old strategy, New strategy | `tools/aidlc-utility.ts` |
-| `TEST_RUN_MODE_ENABLED` | `--test-run` flag set | Timestamp, Details | `tools/aidlc-utility.ts` |
 | `SCOPE_DETECTED` | Auto-detected from freeform text | Timestamp, Detected scope, Input text, Source, Matched keywords (optional; present when `Source=keyword`) | `tools/aidlc-utility.ts detect-scope` |
 
 ### Interaction Events (4 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `DECISION_RECORDED` | Before presenting a structured question, to record the options shown | Timestamp, Stage, Decision, Options, optional `Test-Run=true` | `tools/aidlc-log.ts decision` |
-| `GATE_APPROVED` | Human approved at gate | Timestamp, Stage, User Input, optional `Test-Run=true` | `tools/aidlc-state.ts approve` |
+| `DECISION_RECORDED` | Before presenting a structured question, to record the options shown | Timestamp, Stage, Decision, Options | `tools/aidlc-log.ts decision` |
+| `GATE_APPROVED` | Human approved at gate | Timestamp, Stage, User Input | `tools/aidlc-state.ts approve` |
 | `GATE_REJECTED` | Human requested changes | Timestamp, Stage, Feedback | `tools/aidlc-state.ts reject` |
-| `QUESTION_ANSWERED` | Question answered by user | Timestamp, Stage, Details, optional `Test-Run=true` | `tools/aidlc-log.ts answer` |
+| `QUESTION_ANSWERED` | Question answered by user | Timestamp, Stage, Details | `tools/aidlc-log.ts answer` |
 
 ### Artifact Events (3 events — hook-emitted)
 
@@ -187,12 +186,6 @@ All six swarm events emit from the swarm referee `aidlc-swarm.ts` — the determ
 | `SWARM_BATON_RETURNED` | A swarm Unit returned the baton to the conductor for orchestrator-mediated coordination | Timestamp, Batch number, Unit name, Reason | `tools/aidlc-swarm.ts` |
 | `SWARM_COMPLETED` | All Units in the batch finished (converged or failed); batch closed | Timestamp, Batch number, Converged count, Failed count | `tools/aidlc-swarm.ts` |
 | `SWARM_DEGRADED` | `AIDLC_USE_SWARM=1` was requested but the Workflow tool was unavailable, so the conductor ran the subagent floor (loud-degrade) | Timestamp, Batch number, Requested driver, Fallback driver | `tools/aidlc-swarm.ts` |
-
-## Test-Run Mode
-
-`--test-run` is a CI/test-framework flag. It runs a scope end-to-end without interactive prompts for automated orchestrator testing. Under `--test-run`, interaction events (`GATE_APPROVED`, `QUESTION_ANSWERED`, `DECISION_RECORDED`) fire with an extra `Test-Run=true` field so downstream tooling can filter. No separate auto-variant events exist.
-
-When `--test-run` is combined with `--stage` or `--phase` and the target is reached, the workflow terminates via `WORKFLOW_COMPLETED` with `Reason=test-run-stopped-at-<target>`.
 
 ## Hook-Generated Format
 

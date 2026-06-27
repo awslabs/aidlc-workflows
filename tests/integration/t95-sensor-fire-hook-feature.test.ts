@@ -13,8 +13,9 @@
 // --stage <slug> --output-path <path>` per matching sensor (hook :195-222),
 // records hook-level drops via recordHookDrop to
 // aidlc-docs/.aidlc-hooks-health/sensor-fire.drops (hook :238-257, lib.ts:1554),
-// touches the heartbeat sensor-fire.last (hook :134-139), and appends to
-// sensor-fire.skipped under Test Run Mode (hook :112-124). None of that is
+// and touches the heartbeat sensor-fire.last (hook :134-139). (The
+// sensor-fire.skipped accounting under the old test-run mode was removed per
+// #369.) None of that is
 // observable in-process, so every row SPAWNS the real hook via the bun runtime
 // (spawnSync, input: JSON) and asserts on the bytes / mtimes / exit code the
 // subprocess leaves behind. spawnCount = all.
@@ -22,8 +23,8 @@
 // SOURCE UNDER TEST (dist/claude/.claude/hooks/aidlc-sensor-fire.ts):
 //   :43-44 SUBPROCESS_TIMEOUT_MS = Number(env.AIDLC_SENSOR_TIMEOUT_MS) || 90_000
 //          — the env-var seam the timeout case overrides (no source patch).
-//   :110-124 Test Run Mode skip — appends one isoTimestamp()+"\n" line to
-//          sensor-fire.skipped, then exit 0.
+//   (The old test-run-mode skip that appended to sensor-fire.skipped was removed
+//          per #369.)
 //   :134-139 heartbeat — writes isoTimestamp() to sensor-fire.last every fire.
 //   :184-185 empty sensors_applicable -> exit 0 (no spawn).
 //   :196-222 per-entry dispatch — `if (!entry.matches) continue` then
@@ -61,8 +62,8 @@
 //   C6 t15 (exit 1 -> recordHookDrop "dispatcher exit 1")  -> C6b
 //   C7 t16 (stdout never carries {decision: block})       -> C7
 //   C8 t17 (heartbeat mtime advances on 2nd invocation)    -> C8
-//   C9 t18 (2 Test-Run writes -> skipped has 2 lines)      -> C9a
-//   C9 t19 (every skipped line is an ISO timestamp)        -> C9b
+//   C9 t18/t19 (the Test-Run-mode skip -> sensor-fire.skipped accounting) were
+//      dropped per #369 when the test-run mechanism was removed.
 //
 // Several are STRONGER: argv is parsed from the recorded JSON and asserted as an
 // EXACT ordered slice (not a substring grep), and the spawn count is the parsed
@@ -524,60 +525,6 @@ describe("t95 sensor-fire hook — heartbeat & skipped-file accounting (mechanis
     expect(m2).toBeGreaterThan(m1);
   }, 30000);
 
-  test("C9a: two Test-Run writes -> sensor-fire.skipped has 2 timestamped lines [.sh test 18]", () => {
-    const proj = makeProject();
-    mkdirSync(seededRecordDir(proj), { recursive: true });
-    mkdirSync(seededAuditDir(proj), { recursive: true });
-    writeFileSync(join(seededAuditDir(proj), pinnedShardName()), "audit fixture\n", "utf-8");
-    writeFileSync(
-      seededStateFile(proj),
-      "- **Current Stage**: requirements-analysis\n- **Test Run Mode**: true\n",
-      "utf-8",
-    );
-    const fp = join(proj, "aidlc-docs", "inception", "x.md");
-    runHook(proj, fp);
-    Bun.sleepSync(50);
-    runHook(proj, fp);
-    const skip = join(
-      seededRecordDir(proj),
-      ".aidlc-hooks-health",
-      "sensor-fire.skipped",
-    );
-    expect(existsSync(skip)).toBe(true);
-    const lines = readFileSync(skip, "utf-8")
-      .split("\n")
-      .filter((l) => l.length > 0);
-    expect(lines.length).toBe(2);
-    // STRONGER: Test Run Mode must short-circuit BEFORE the dispatch loop, so
-    // not a single sensor spawned.
-    expect(spawnArgvs(proj).length).toBe(0);
-  }, 30000);
-
-  test("C9b: every line in sensor-fire.skipped is an ISO timestamp [.sh test 19]", () => {
-    const proj = makeProject();
-    mkdirSync(seededRecordDir(proj), { recursive: true });
-    mkdirSync(seededAuditDir(proj), { recursive: true });
-    writeFileSync(join(seededAuditDir(proj), pinnedShardName()), "audit fixture\n", "utf-8");
-    writeFileSync(
-      seededStateFile(proj),
-      "- **Current Stage**: requirements-analysis\n- **Test Run Mode**: true\n",
-      "utf-8",
-    );
-    const fp = join(proj, "aidlc-docs", "inception", "x.md");
-    runHook(proj, fp);
-    Bun.sleepSync(50);
-    runHook(proj, fp);
-    const skip = join(
-      seededRecordDir(proj),
-      ".aidlc-hooks-health",
-      "sensor-fire.skipped",
-    );
-    const lines = readFileSync(skip, "utf-8")
-      .split("\n")
-      .filter((l) => l.length > 0);
-    // isoTimestamp(): YYYY-MM-DDTHH:MM:SSZ (lib.ts:1543-1545).
-    const isoRe = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
-    expect(lines.length).toBeGreaterThan(0);
-    for (const l of lines) expect(isoRe.test(l)).toBe(true);
-  }, 30000);
+  // C9a/C9b (the Test-Run-mode sensor-fire skip -> sensor-fire.skipped
+  // accounting) were dropped per #369 when the test-run mechanism was removed.
 });

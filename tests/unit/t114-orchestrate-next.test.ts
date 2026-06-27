@@ -20,7 +20,7 @@
 // directive lands on stdout through `console.log`; errors land through the
 // composed sibling tools the non-happy-path branches shell out to
 // (aidlc-jump.ts resolve/execute, aidlc-utility.ts resolve-env-scope /
-// enable-test-run / init — none importable, all spawned). An in-process twin
+// init — none importable, all spawned). An in-process twin
 // would forfeit both the stdout-JSON seam AND the real-tool composition the
 // branches depend on. So all `next` invocations stay spawns. Mirrors the .sh's
 // `bun "$TOOL" next ... 2>&1`.
@@ -52,21 +52,18 @@
 //   .sh 12 with-state --phase jump -> execute print (x2)   -> "12: with-state --phase jump -> print naming execute" (kind:print + execute cmd)
 //   .sh 13 ALWAYS-execution gated stage -> gate:true       -> "13: ALWAYS-execution gated stage (intent-capture) -> gate:true"
 //   .sh 14 SKILL.md no --args wrapper + flag reaches parser -> "14a: SKILL.md has no 'next --args' wrapper" + "14b: flag-bearing argv reaches the parser"
-//   .sh 15 --init threads --test-run (x2)                  -> "15a: --init --test-run threads --test-run" + "15b: control without --test-run"
-//   .sh 16 --test-run resume over stamp-less state (x2)    -> "16a: --test-run over stamp-less state -> print" + "16b: print names enable-test-run"
-//   .sh 17 field present -> no re-emit (x2)                -> "17a: field present + --test-run does NOT re-emit" + "17b: -> run-stage"
-//   .sh 18 stamp-less, no --test-run -> run-stage (x2)     -> "18a: no --test-run never emits enable-test-run" + "18b: -> run-stage"
-//   .sh 19 scope-change beats test-run-persist (x2)        -> "19a: differing --scope --test-run routes to scope-change" + "19b: no enable-test-run"
+//
+// (The .sh's tests 15-19 exercised the now-removed --test-run / Test Run Mode
+// mechanism and were dropped with it; issue #369.)
 //
 // Source cites (dist/claude/.claude/tools/aidlc-orchestrate.ts):
 //   :785 handleNext — the read-only branch ladder.
 //   :793 Branch 1  --status/--version -> print.
 //   :804 Branch 2  --stage + --phase -> "Cannot use --stage and --phase together".
-//   :822 Branch 3  --init -> print naming the scaffold cmd; threads --test-run only when present (:838).
+//   :822 Branch 3  --init -> print naming the scaffold cmd.
 //   :858 Branch 3b UNCONDITIONAL invalid --scope -> "Unknown scope ...".
 //   :873 Branch 4  env source -> shells resolve-env-scope -> verbatim "Invalid AWS_AIDLC_DEFAULT_SCOPE ...".
 //   :934 Branch 5  scope-change print ("scope-change --scope <s>").
-//   :994 Branch 5b test-run persistence -> print naming "enable-test-run" only when field absent + no --stage/--phase.
 //  :1034 Branch 7  --stage/--phase jump -> emitJumpDirective; with-state -> print "aidlc-jump.ts execute --target ... --direction ...".
 //  :1116 Branch 10 happy path -> run-stage for the in-flight current stage.
 //   :754 computeGate -> gate:true for every EXECUTE stage except initialization (the gate axis is NOT the execution axis).
@@ -80,14 +77,12 @@ import {
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
-  removeWorkspaceRecord,
   resetAidlcEnv,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
-const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const SKILL_MD = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
 
@@ -120,15 +115,6 @@ function runNext(
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";
   return { rc: res.status ?? -1, out: `${stdout}${stderr}` };
-}
-
-// Stamp `Test Run Mode: true` via the REAL tool (test 17 precondition). This
-// also proves the engine's resume branch no-ops once the field is present.
-function enableTestRun(proj: string): void {
-  spawnSync(BUN, [UTILITY, "enable-test-run", "--project-dir", proj], {
-    encoding: "utf-8",
-    cwd: proj,
-  });
 }
 
 let proj = "";
@@ -302,113 +288,6 @@ describe("t114 cutover: no --args swallow", () => {
       AWS_AIDLC_DEFAULT_SCOPE: "poc",
     }).out;
     expect(out).toContain("Unknown stage");
-  });
-});
-
-// ===========================================================================
-// --init threads --test-run into the scaffold command (.sh test 15)
-// ===========================================================================
-describe("t114 --init test-run threading", () => {
-  test("15a: --init --test-run threads --test-run into the scaffold command (birth test-run persistence)", () => {
-    proj = createTestProject();
-    // P9: --init births the FIRST intent — drop the seeded record so the
-    // workspace is genuinely empty and the birth/scaffold path fires (a seeded
-    // record makes the engine ask to select an intent instead).
-    removeWorkspaceRecord(proj);
-    expect(
-      runNext(proj, ["--init", "--scope", "bugfix", "--test-run"]).out,
-    ).toContain("--test-run");
-  });
-
-  test("15b: --init without --test-run does NOT thread --test-run (control)", () => {
-    proj = createTestProject();
-    removeWorkspaceRecord(proj);
-    expect(runNext(proj, ["--init", "--scope", "bugfix"]).out).not.toContain(
-      "--test-run",
-    );
-  });
-});
-
-// ===========================================================================
-// --test-run RESUME over a stamp-less workflow -> enable-test-run print
-// (.sh test 16). state-brownfield-init-done is bugfix scope, in-flight
-// reverse-engineering, has a Revision Count line, NO Test Run Mode field —
-// the exact t55 resume shape.
-// ===========================================================================
-describe("t114 test-run resume persistence", () => {
-  test("16a: --test-run over stamp-less state -> print directive (resume test-run persistence)", () => {
-    proj = createTestProject();
-    seedStateFile(proj, BROWNFIELD_INIT_DONE);
-    expect(runNext(proj, ["bugfix", "--test-run"]).out).toContain('"kind":"print"');
-  });
-
-  test("16b: the print names aidlc-utility.ts enable-test-run for the conductor to run", () => {
-    proj = createTestProject();
-    seedStateFile(proj, BROWNFIELD_INIT_DONE);
-    expect(runNext(proj, ["bugfix", "--test-run"]).out).toContain("enable-test-run");
-  });
-});
-
-// ===========================================================================
-// Control — field ALREADY present -> does NOT re-emit enable-test-run
-// (.sh test 17). Stamp via the real tool, then re-run next.
-// ===========================================================================
-describe("t114 test-run resume — field present no-op", () => {
-  test("17a: --test-run with the field already present does NOT re-emit enable-test-run (loop advances)", () => {
-    proj = createTestProject();
-    seedStateFile(proj, BROWNFIELD_INIT_DONE);
-    enableTestRun(proj);
-    expect(runNext(proj, ["bugfix", "--test-run"]).out).not.toContain(
-      "enable-test-run",
-    );
-  });
-
-  test("17b: field present + --test-run -> run-stage (the resume persist branch no-ops)", () => {
-    proj = createTestProject();
-    seedStateFile(proj, BROWNFIELD_INIT_DONE);
-    enableTestRun(proj);
-    expect(runNext(proj, ["bugfix", "--test-run"]).out).toContain('"kind":"run-stage"');
-  });
-});
-
-// ===========================================================================
-// Control — stamp-less state, NO --test-run -> never emits enable-test-run
-// (.sh test 18)
-// ===========================================================================
-describe("t114 test-run resume — gated on flag", () => {
-  test("18a: no --test-run -> never emits enable-test-run (normal run-stage)", () => {
-    proj = createTestProject();
-    seedStateFile(proj, BROWNFIELD_INIT_DONE);
-    expect(runNext(proj, ["bugfix"]).out).not.toContain("enable-test-run");
-  });
-
-  test("18b: stamp-less state without --test-run -> run-stage", () => {
-    proj = createTestProject();
-    seedStateFile(proj, BROWNFIELD_INIT_DONE);
-    expect(runNext(proj, ["bugfix"]).out).toContain('"kind":"run-stage"');
-  });
-});
-
-// ===========================================================================
-// Branch order — --scope X --test-run over a DIFFERING scope routes to
-// scope-change FIRST, not test-run-persist (.sh test 19). Pins the
-// branch_order_check guarantee.
-// ===========================================================================
-describe("t114 branch order: scope-change beats test-run-persist", () => {
-  test("19a: differing --scope --test-run routes to scope-change first (test-run persist does not shadow it)", () => {
-    proj = createTestProject();
-    seedStateFile(proj, BROWNFIELD_INIT_DONE);
-    expect(runNext(proj, ["--scope", "feature", "--test-run"]).out).toContain(
-      "scope-change --scope feature",
-    );
-  });
-
-  test("19b: the scope-change combo does NOT emit enable-test-run (test-run persist rides the next loop iteration)", () => {
-    proj = createTestProject();
-    seedStateFile(proj, BROWNFIELD_INIT_DONE);
-    expect(runNext(proj, ["--scope", "feature", "--test-run"]).out).not.toContain(
-      "enable-test-run",
-    );
   });
 });
 

@@ -4,12 +4,11 @@
 // requirements-analysis Inception stage through a REAL claude TUI and prove the
 // stage commits its artefacts + advances workflow state ON DISK, answering every
 // rendered AskUserQuestion gate by keystroke. A faithful PATTERN-B port of the
-// bash journey tests/integration/t74-stage-requirements-analysis.sh, which used
-// `--test-run` to AUTO-APPROVE the requirements gate — so the interactive review
+// bash journey tests/integration/t74-stage-requirements-analysis.sh, which
+// AUTO-APPROVED the requirements gate headlessly, so the interactive review
 // a real user lives (answering the questions menu, then the approval gate) was
-// NEVER exercised. This rewrite removes --test-run entirely and answers the
-// painted gates with the shared `answer-gate` primitive, terminating on the
-// on-disk requirements artefact.
+// NEVER exercised. This rewrite answers the painted gates with the shared
+// `answer-gate` primitive, terminating on the on-disk requirements artefact.
 //
 // WHAT IT PROVES (equal-or-stronger than the .sh on the same on-disk surface):
 //   The .sh seeds a brownfield Todo app, mid-inception state (Current Stage ==
@@ -37,8 +36,8 @@
 //   `Enter to select` / `Submit answers` footer) at least once during the run.
 //
 // WHY PATTERN B (multi-gate journey, not landed+rendered): requirements-analysis
-// is a full gated stage — it authors a questions file, then (in the interactive,
-// no-`--test-run` path) presents an answer menu and an approval gate before
+// is a full gated stage (it authors a questions file, then in the interactive
+// path presents an answer menu and an approval gate) before
 // writing requirements.md. There is no single deterministic "landed" statusline
 // to await; the journey only completes when the artefact lands after the gates
 // clear. So we drive the gates with `answer-gate` and terminate on the artefact
@@ -74,7 +73,6 @@
 // COST: spends real Bedrock tokens (minutes-long LLM turns). Gated behind
 // AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs it; tmux/claude/
 // distributable absence also SKIPs with a reason — never a hollow pass.
-// NO --test-run anywhere.
 //
 // SPAWN, not import (D-TUI-7): runs under bun, spawns tui-drive.ts (node on
 // Windows so node-pty never loads under bun, #748; bun elsewhere). The
@@ -214,7 +212,7 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         // resting state, but the seeded fixture is INCEPTION.
         expect(waitFor(session, "\\[AIDLC\\].*(INCEPTION|ready)", 45000, 800)).toBe(true);
 
-        // --- submit the stage jump (NO --test-run) ----------------------------
+        // --- submit the stage jump --------------------------------------------
         // The slash command has spaces -> send literally with no auto-Enter, then
         // Enter as a named key (the template's exact two-step). The fixture's
         // Current Stage already equals the target, so aidlc-jump treats this as a
@@ -334,7 +332,7 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
 
         // .sh test 8: the questions file has >0 [Answer]: tags filled — the proof
         // the interactive gate answers actually landed on disk (the whole point of
-        // dropping --test-run: a REAL keystroke-answered gate, not an auto-approve).
+        // this rewrite: a REAL keystroke-answered gate, not an auto-approve).
         const answerCount = (questionsBody.match(/\[Answer\]:/g) ?? []).length;
         expect(answerCount).toBeGreaterThan(0);
 
@@ -367,7 +365,7 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         // --- ADDED on-disk strengthening (audit emission the .sh did not check) -
         // The interactive stage commit emits STAGE_COMPLETED (and the gate emits
         // GATE_APPROVED). The .sh asserted only state lines; this also pins the
-        // audit emission the no-`--test-run` path produces, on the same surface
+        // audit emission the interactive path produces, on the same surface
         // the workshop port asserts (`**Event**: <type>` line, aidlc-audit.ts:258).
         const auditMd = readAllAuditShards(sandbox);
         const auditLines = auditMd.split("\n");

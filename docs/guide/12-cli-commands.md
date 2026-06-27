@@ -24,7 +24,6 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc --scope <name>` | Change the active scope |
 | `/aidlc --depth <level>` | Override depth level (minimal, standard, comprehensive) |
 | `/aidlc --test-strategy <level>` | Override test strategy (minimal, standard, comprehensive) |
-| `/aidlc --test-run` | Enable automated mode (auto-approve all gates) |
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
 
@@ -382,20 +381,6 @@ See [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md#the-3-test-strateg
 
 ---
 
-### `/aidlc --test-run` — Automated mode
-
-Enable automated mode for CI and testing environments.
-
-**Syntax:**
-
-```
-/aidlc bugfix --test-run
-```
-
-**Behavior:** Auto-approves all approval gates, auto-answers all questions, and auto-selects options without user interaction. State tracking, audit logging, and artifact generation all continue normally. Intended for automated testing only, not interactive use.
-
----
-
 ### `/aidlc --version` — Framework version
 
 Print the framework version (`aidlc <X.Y.Z>`) and exit. Read-only — works without a workflow and never prompts to resume one.
@@ -455,7 +440,7 @@ This is the deterministic half of the §13 learning gate. After a stage is appro
 | `surface --slug <stage-slug>` | Read the just-approved stage's `memory.md` and print structured candidates (Interpretations, Deviations, Tradeoffs) plus any parked open questions. Read-only |
 | `persist --slug <stage-slug> --selections-json <path>` | Write the confirmed learnings (a confirmed learning is a practice) to the space memory layer — `aidlc/spaces/<space>/memory/project.md` / `memory/team.md` (and, for a Sensor-binding learning, scaffold and bind a project-tier Sensor), emitting `RULE_LEARNED` / `SENSOR_PROPOSED` |
 
-Both steps are skipped under `--test-run`. Confirmed learnings apply on the next workflow, not the current one.
+Confirmed learnings apply on the next workflow, not the current one.
 
 ### `aidlc-runtime` — read the runtime graph
 

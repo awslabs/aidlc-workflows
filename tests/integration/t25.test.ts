@@ -16,24 +16,14 @@
 // structured reads (readStateField / auditEvents) instead of greps over a shell
 // capture. Equal-or-stronger on every line.
 //
-// GOVERNING DECISION (user, 2026-06-05): --test-run is being RETIRED. This test
-// MUST NOT pass --test-run. That is not a cosmetic change — it is the ROOT FIX
-// for this test's long-standing flake. See the next paragraph.
-//
-// WHY DROPPING --test-run STRENGTHENS THIS TEST (not a workaround). The EARLIER
-// port drove `--phase ideation --test-run`. Under --test-run the orchestrator
-// enters Stage Advancement IMMEDIATELY after the jump (SKILL.md step 13b) and
-// auto-advances PAST the jump target intent-capture — so the live post-run
-// Current Stage was racy, and the port could only assert the loose `Completed
-// < 20` reduction on the state and pin the exact destination on the audit
-// **Target** byte. The auto-advance WAS the flake. Without --test-run a
-// backward/phase jump TERMINATES CLEANLY at the jump target and leaves STABLE
-// post-jump state: VERIFIED via a live probe (tmp/phase2/probe2.ts, 2026-06-05)
+// WHY THIS TEST IS STABLE. A backward/phase jump TERMINATES CLEANLY at the jump
+// target and leaves STABLE post-jump state: VERIFIED via a live probe
+// (tmp/phase2/probe2.ts, 2026-06-05)
 // — resultEvent subtype=success, is_error=false, ~184s, 27 turns, askedQuestions=0
 // (backward jump lands + stops; no gate on this path), and the on-disk state at
 // rest reads Lifecycle Phase=IDEATION, Current Stage=intent-capture (NOT
 // auto-advanced), Completed=4, Status=Running. So this port asserts the
-// now-stable Current Stage === intent-capture and Lifecycle Phase === IDEATION
+// stable Current Stage === intent-capture and Lifecycle Phase === IDEATION
 // DIRECTLY off the state file — STRICTLY STRONGER than the old audit-only
 // destination pin — plus the audit STAGE_JUMPED / **Target** / **Direction**
 // bytes and the .sh's own `Completed < 20` reduction bound.
@@ -50,8 +40,8 @@
 // target [-] (jump.ts:295), rewrites Lifecycle Phase=IDEATION + Current
 // Stage=intent-capture + recomputed Completed (jump.ts:312,313,330-331), and
 // appends a STAGE_JUMPED audit event with Direction=BACKWARD / Target=intent-
-// capture (jump.ts:374-380). For a BACKWARD jump willTerminate is false
-// (jump.ts:310 — only test-run FORWARD jumps terminate), so Status stays Running.
+// capture (jump.ts:374-380). A jump never terminates
+// (jump.ts:309), so Status stays Running.
 //
 // ASSERTION MAP (.sh test -> deterministic SDK surface, equal-or-stronger):
 //   1 grep STATE 'IDEATION'            -> the jump tool's OWN stdout JSON carries
@@ -85,8 +75,8 @@
 // askedQuestions=0 — so this is a §5-A2 LOGIC journey (an sdk port), NOT a
 // rendered-gate journey: answerScript stays "default" (no gate fires).
 //
-// The 2 BENIGN ERROR_LOGGED probes the run emits (aidlc-state get "Test Run
-// Mode" / "Initial Intent" -> Field not found) are routine optional-field reads;
+// Any BENIGN ERROR_LOGGED probes the run emits (e.g. aidlc-state get
+// "Initial Intent" -> Field not found) are routine optional-field reads;
 // the run still succeeds. This test does NOT assert against ERROR_LOGGED
 // presence/absence — it is noise, not a failure.
 //
@@ -107,7 +97,7 @@ import {
 } from "../harness/sdk-drive.ts";
 
 // ---------------------------------------------------------------------------
-// Timeout budget. The .sh set AIDLC_TEST_TIMEOUT=300. Without --test-run the
+// Timeout budget. The .sh set AIDLC_TEST_TIMEOUT=300. The
 // backward jump terminates cleanly at the target — the live probe measured
 // ~184s / 27 turns — so the 300s ceiling is comfortable. The driver aborts a
 // hair before bun kills the test so a stuck run surfaces a partial DriveResult.
@@ -134,8 +124,8 @@ const AUDIT_TIMESTAMP_PREFIX = "**Timestamp**:"; // audit.ts:257, on every block
 describe("t25 /aidlc --phase ideation backward jump (sdk)", () => {
   // -------------------------------------------------------------------------
   // From CONSTRUCTION, `--phase ideation` is a backward jump that resolves to
-  // intent-capture (first in-scope ideation stage for scope=feature). Without
-  // --test-run the run stops AT the target, so we assert the now-stable state +
+  // intent-capture (first in-scope ideation stage for scope=feature). The run
+  // stops AT the target, so we assert the now-stable state +
   // audit surfaces the jump tool wrote, re-expressing each .sh grep on a
   // structured read (and the destination pin is the LIVE Current Stage field,
   // strictly stronger than the old audit-only pin).
@@ -161,8 +151,8 @@ describe("t25 /aidlc --phase ideation backward jump (sdk)", () => {
           "functional-design",
         );
 
-        // Drop --test-run (governing decision 2026-06-05): the backward jump
-        // terminates cleanly at the target and leaves stable state to assert.
+        // The backward jump terminates cleanly at the target and leaves stable
+        // state to assert.
         const r = await driveAidlc("/aidlc --phase ideation", {
           projectDir: proj,
           timeoutMs: DRIVE_TIMEOUT_MS,
@@ -189,8 +179,8 @@ describe("t25 /aidlc --phase ideation backward jump (sdk)", () => {
         expect(jumpCall?.resultText).toContain(JUMP_COMPLETED_JSON);
 
         // POST-RUN LIVE STATE IS NOT ASSERTED HERE (deliberate — see below).
-        // A BACKWARD jump leaves Status=Running (aidlc-jump.ts:310 sets
-        // willTerminate only for test-run FORWARD jumps), and SKILL.md:255 step
+        // A jump leaves Status=Running (aidlc-jump.ts:309 never terminates),
+        // and SKILL.md:255 step
         // 13c then has the orchestrator "Enter Stage Advancement. Normal workflow
         // continues." So after the jump the LLM keeps running the workflow and the
         // post-run Current Stage / Completed / Lifecycle Phase are a MOVING TARGET

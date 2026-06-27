@@ -198,7 +198,7 @@ no standalone meaning.
 
 1. Birth the intent (run the initialization phase). Parse the user's
    \`$ARGUMENTS\`: forward any recognized flags
-   (\`--scope <name>\`/\`--depth <level>\`/\`--test-strategy <level>\`/\`--test-run\`)
+   (\`--scope <name>\`/\`--depth <level>\`/\`--test-strategy <level>\`)
    as-is, and pass any freeform description text via \`--arguments "<text>"\`
    (\`intent-birth\` reads the description from the \`--arguments\` flag, NOT a
    positional — forwarding it bare would silently drop it). ALSO derive a short
@@ -427,7 +427,7 @@ engine owns all routing; the conductor persona arrives on the first directive's
 4. Repeat from step 1 until \`directive.kind == done\`.
 
 Pass \`$ARGUMENTS\` through verbatim after \`--scope ${scope}\`; the engine parses
-any flags (\`--status\`, \`--stage\`, \`--test-run\`, …) and the \`--scope\` from the
+any flags (\`--status\`, \`--stage\`, …) and the \`--scope\` from the
 state file always wins on an existing workflow, so re-running a started workflow
 resumes it. To run a different scope, use \`/aidlc --scope <other>\` instead.
 `;
