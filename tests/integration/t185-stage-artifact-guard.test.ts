@@ -325,5 +325,24 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       const r = approveCodeGen();
       expect(r.rc).toBe(0);
     }, 30000);
+
+    // SINGLE-commit clean tree, the source IS in the sole commit -> PASS. The
+    // greenfield "git init, generate, commit, approve" path: there is no parent,
+    // so `git diff HEAD~1 HEAD` errors and gitHasSourceWork cannot inspect the
+    // last commit. It must return null (NOT false) so workspaceHasWork falls back
+    // to the filesystem probe, which sees the committed src/ - otherwise the
+    // code-generation approve is false-refused (gitHasSourceWork header contract;
+    // @leandrodamascena's PR #443 review). Distinct from the case above: that one
+    // makes a separate `--allow-empty init` commit first (HEAD~1 resolves); this
+    // one has exactly ONE commit (HEAD~1 misses).
+    test("PASSES on a single-commit clean tree whose only commit contains the source", () => {
+      initGitRepo();
+      stageCodeGenDocsOnly();
+      writeWorkspaceFile(proj, "src/auth/login.ts");
+      git(["add", "-A"]); // stage docs + the new code into the FIRST and ONLY commit
+      git(["commit", "-q", "-m", "first commit: code-generation output"]);
+      const r = approveCodeGen();
+      expect(r.rc).toBe(0);
+    }, 30000);
   });
 });

@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.1.2] - 2026-06-26
+## [2.1.3] - 2026-06-28
 
 Closes the rubber-stamp trap that let an agent on a long (enterprise-scope) workflow mark every remaining stage complete with no real output, and stops the Stop hook from nagging a human who just wants to chat mid-workflow. Four interlocking fixes land together (they all touch `aidlc-state.ts` / the Stop hook, so shipping separately would force hard conflicts): a first-class **park** command gives the conductor a clean multi-session exit, a deterministic **artifact guard** refuses to complete a stage with no evidence of work on disk, an **autonomy guard** keeps an unattended swarm/Bolt run from self-parking, and a **conversational carve-out** lets a chat turn end without being nudged back into the loop. **Upgrade:** re-copy your `dist/<harness>/` shell into the project. CI/scripts breaking change: every `aidlc-state.ts` subcommand that completes a stage (`approve`, `advance`, `finalize`, `complete-workflow`) now refuses to mark it `[x]` when the stage's declared `produces[]` artifacts are absent; pass `--test-run` or set `AIDLC_SKIP_ARTIFACT_GUARD=1` for automated dry runs.
 

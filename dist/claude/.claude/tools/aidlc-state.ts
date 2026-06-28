@@ -705,8 +705,11 @@ function isGitRepo(pd: string): boolean {
 //   2. the last commit touched a non-doc path (`git diff --name-only HEAD~1 HEAD`)
 //      - so commit-then-approve (clean tree) still passes, closing Update 3's
 //      clean-working-tree false-block.
-// Returns null (NOT false) on any git error or a 0-commit repo's HEAD~1 miss, so
-// the caller falls back to the filesystem check rather than wrongly refusing.
+// Returns null (NOT false) on any git error or a HEAD~1 miss (a single-commit or
+// 0-commit repo has no parent to diff), so the caller falls back to the
+// filesystem check rather than wrongly refusing a greenfield first commit. A
+// resolved HEAD~1 whose last commit is doc-only returns false (a real
+// "no recent code", e.g. a brownfield clean tree), so the guard still refuses.
 function gitHasSourceWork(pd: string): boolean | null {
   const porcelain = git(pd, ["status", "--porcelain"]);
   if (porcelain === null) return null;
@@ -721,14 +724,24 @@ function gitHasSourceWork(pd: string): boolean | null {
   }
   // Clean (or doc-only) working tree - check whether the LAST commit added code,
   // covering the commit-then-approve pattern. HEAD~1 is absent on the very first
-  // commit; that diff errors -> git() null -> we treat it as "no recent code".
+  // commit; that diff errors -> git() returns null.
   const lastCommit = git(pd, ["diff", "--name-only", "HEAD~1", "HEAD"]);
   if (lastCommit !== null) {
     for (const line of lastCommit.split("\n")) {
       if (isNonDocPath(line)) return true;
     }
+    // HEAD~1 resolved and the last commit was doc-only: a definitive "no recent
+    // code" (e.g. a brownfield repo whose src/ predates this session), so return
+    // false to refuse - the FS fallback would wrongly pass on the pre-existing
+    // src/.
+    return false;
   }
-  return false;
+  // HEAD~1 did NOT resolve (a single-commit repo has no parent): we could not
+  // inspect the last commit at all, so this is the documented "0-commit / HEAD~1
+  // miss" case - return null (NOT false) so the caller falls back to the
+  // filesystem probe rather than false-refusing a greenfield first-commit whose
+  // sole commit holds the source.
+  return null;
 }
 
 // The workspace_requires signal: git-aware when the workspace is a git repo

@@ -512,6 +512,14 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     setAutonomous(proj);
     // First batch (alpha) merged its artifacts; beta (batch 2) not yet.
     coverUnit(proj, "alpha", "code-generation", CG_PRODUCES);
+    // The swarm wrote real source for batch 1 outside the aidlc/ tree, so the
+    // #366 workspace_requires guard (code-generation is a code-producing stage)
+    // sees source work and lets the approve through. Orthogonal to the per-unit
+    // coverage guard under test; without it the approve is refused for "no source
+    // work" before reaching the coverage-guard path. (The suite harness also sets
+    // AIDLC_SKIP_ARTIFACT_GUARD, so this only matters when the file runs bare.)
+    mkdirSync(join(proj, "src", "alpha"), { recursive: true });
+    writeFileSync(join(proj, "src", "alpha", "index.ts"), "export const x = 1;\n");
     // next emits the swarm directive for the first batch (proves the swarm path).
     const nd = runNext(proj);
     expect(nd.kind).toBe("invoke-swarm");

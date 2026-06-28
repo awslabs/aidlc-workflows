@@ -2764,7 +2764,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/integration/t186-park-conversational.sdk.test.ts",
+          "file": "tests/integration/t187-park-conversational.sdk.test.ts",
           "mechanism": "sdk"
         }
       ],

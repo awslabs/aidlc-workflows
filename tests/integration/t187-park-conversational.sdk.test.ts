@@ -1,6 +1,6 @@
 // covers: hook:aidlc-stop
 //
-// t186 - park + conversational carve-out (live SDK). The shipped end-to-end
+// t187 - park + conversational carve-out (live SDK). The shipped end-to-end
 // proof of the #365 / #366 / #367 park umbrella: drive a REAL agent through the
 // Claude Agent SDK against the shipped dist and confirm a conductor that is
 // asked to PAUSE the workflow for later parks it cleanly and ends its turn,
@@ -67,7 +67,7 @@ const PENDING_STAGE = "feedback-optimization";
 const PENDING_ROW = `- [-] ${PENDING_STAGE} — EXECUTE`;
 const COMPLETED_ROW = `- [x] ${PENDING_STAGE} — EXECUTE`;
 
-describe("t186 park + conversational carve-out (sdk): a conductor asked to pause parks cleanly and the turn ends", () => {
+describe("t187 park + conversational carve-out (sdk): a conductor asked to pause parks cleanly and the turn ends", () => {
   test(
     "asked to pause for later, the conductor parks (Parked markers written, feedback-optimization still [-]) and the run ends cleanly",
     async () => {
