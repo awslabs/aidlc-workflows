@@ -49,6 +49,7 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 - [Cline](#cline)
 - [Claude Code](#claude-code)
 - [GitHub Copilot](#github-copilot)
+- [OpenAI Codex](#openai-codex)
 
 ---
 
