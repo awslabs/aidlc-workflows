@@ -1,6 +1,6 @@
 # AI-DLC (AI-Driven Development Life Cycle)
 
-## 🚀 **Announcing 2.0 (Preview)**
+## **Announcing 2.0 (Preview)**
 
 We're excited to announce the Preview release of AI-DLC Workflows 2.0. The new version makes autonomous software development practical by turning AI agents into verifiable, self-correcting engineering workflows. You can read the [full specification here](https://github.com/awslabs/aidlc-workflows/blob/v2/assets/AI-DLC-Workflows-2.0-Specification.pdf) and check the [v2 branch](https://github.com/awslabs/aidlc-workflows/tree/v2). We would love to hear from you, and your feedback will directly shape the path to GA. If you have suggestions, please reach out or interact with us on the repository.
 
@@ -12,7 +12,7 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 
 ## Table of Contents
 
-- [Common](#common)
+- [Common Setup](#common-setup)
 - [Platform-Specific Setup](#platform-specific-setup)
 - [Usage](#usage)
 - [Three-Phase Adaptive Workflow](#three-phase-adaptive-workflow)
@@ -31,13 +31,21 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 
 ---
 
-## Common
+## Common Setup
 
-1. Download the latest release zip file named `ai-dlc-rules-v<release-number>.zip` from the [Releases page](https://github.com/awslabs/aidlc-workflows/releases/latest) to a folder **outside** your project directory (e.g., `~/Downloads`).
-2. Extract the zip. It contains an `aidlc-rules/` folder with two subdirectories:
-   - `aws-aidlc-rules/` — the core AI-DLC workflow rules
-   - `aws-aidlc-rule-details/` — detailed rules conditionally referenced by the core rules
-3. Follow the setup instructions for your coding agent and platform below.
+Choose one of the following methods to initialize AI-DLC rules in your project workspace:
+
+### Method 1: Git-Based Automated Setup (Recommended)
+
+No manual browser downloads are required. The platform-specific commands below automatically clone the rules repository to a temporary folder, copy the correct folders to your workspace, and clean up the temporary files.
+
+### Method 2: Manual Fallback Setup
+
+If Git is not installed on your system, you can set up manually:
+
+1. Download the latest release zip file named `ai-dlc-rules-v<release-number>.zip` from the [Releases page](https://github.com/awslabs/aidlc-workflows/releases/latest) to your computer.
+2. Extract the zip file.
+3. Manually create the required directories listed under your platform below (e.g., `.kiro/steering/`) and copy the extracted contents (`aws-aidlc-rules/` and `aws-aidlc-rule-details/`) to those directories.
 
 ---
 
@@ -56,33 +64,36 @@ AI-DLC is an intelligent software development workflow that adapts to your needs
 
 AI-DLC uses [Kiro Steering Files](https://kiro.dev/docs/cli/steering/) within your project workspace.  
 
-The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
-
-> [!NOTE]
-> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
+To set up the steering rules in your project workspace:
 
 On macOS/Linux:
 
 ```bash
-mkdir -p .kiro/steering
-cp -R ~/Downloads/aidlc-rules/aws-aidlc-rules .kiro/steering/
-cp -R ~/Downloads/aidlc-rules/aws-aidlc-rule-details .kiro/
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git /tmp/aidlc-workflows && \
+mkdir -p .kiro/steering && \
+cp -r /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rules .kiro/steering/ && \
+cp -r /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rule-details .kiro/ && \
+rm -rf /tmp/aidlc-workflows
 ```
 
 On Windows (PowerShell):
 
 ```powershell
-New-Item -ItemType Directory -Force -Path ".kiro\steering"
-Copy-Item -Recurse "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rules" ".kiro\steering\"
-Copy-Item -Recurse "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rule-details" ".kiro\"
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git "$env:TEMP\aidlc-workflows";
+New-Item -ItemType Directory -Force -Path ".kiro\steering";
+Copy-Item -Recurse "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rules" ".kiro\steering\";
+Copy-Item -Recurse "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details" ".kiro\";
+Remove-Item -Recurse -Force "$env:TEMP\aidlc-workflows"
 ```
 
 On Windows (CMD):
 
 ```cmd
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git %TEMP%\aidlc-workflows
 mkdir .kiro\steering
-xcopy %USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rules .kiro\steering\aws-aidlc-rules\ /E /I
-xcopy %USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details .kiro\aws-aidlc-rule-details\ /E /I
+xcopy %TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rules .kiro\steering\aws-aidlc-rules\ /E /I
+xcopy %TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details .kiro\aws-aidlc-rule-details\ /E /I
+rd /s /q %TEMP%\aidlc-workflows
 ```
 
 Your project should look like:
@@ -119,33 +130,36 @@ Run `kiro-cli`, then `/context show`, and confirm entries for `.kiro/steering/aw
 
 AI-DLC uses [Amazon Q Rules](https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/context-project-rules.html) within your project workspace.
 
-The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
-
-> [!NOTE]
-> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
+To set up the rules in your project workspace:
 
 On macOS/Linux:
 
 ```bash
-mkdir -p .amazonq/rules
-cp -R ~/Downloads/aidlc-rules/aws-aidlc-rules .amazonq/rules/
-cp -R ~/Downloads/aidlc-rules/aws-aidlc-rule-details .amazonq/
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git /tmp/aidlc-workflows && \
+mkdir -p .amazonq/rules && \
+cp -r /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rules .amazonq/rules/ && \
+cp -r /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rule-details .amazonq/ && \
+rm -rf /tmp/aidlc-workflows
 ```
 
 On Windows (PowerShell):
 
 ```powershell
-New-Item -ItemType Directory -Force -Path ".amazonq\rules"
-Copy-Item -Recurse "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rules" ".amazonq\rules\"
-Copy-Item -Recurse "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rule-details" ".amazonq\"
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git "$env:TEMP\aidlc-workflows";
+New-Item -ItemType Directory -Force -Path ".amazonq\rules";
+Copy-Item -Recurse "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rules" ".amazonq\rules\";
+Copy-Item -Recurse "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details" ".amazonq\";
+Remove-Item -Recurse -Force "$env:TEMP\aidlc-workflows"
 ```
 
 On Windows (CMD):
 
 ```cmd
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git %TEMP%\aidlc-workflows
 mkdir .amazonq\rules
-xcopy %USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rules .amazonq\rules\aws-aidlc-rules\ /E /I
-xcopy %USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details .amazonq\aws-aidlc-rule-details\ /E /I
+xcopy %TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rules .amazonq\rules\aws-aidlc-rules\ /E /I
+xcopy %TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details .amazonq\aws-aidlc-rule-details\ /E /I
+rd /s /q %TEMP%\aidlc-workflows
 ```
 
 Your project should look like:
@@ -171,18 +185,15 @@ To verify the rules are loaded:
 
 AI-DLC uses [Cursor Rules](https://cursor.com/docs/context/rules) to implement its intelligent workflow.
 
-The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
-
-> [!NOTE]
-> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
+To set up the rules in your project workspace:
 
 #### Option 1: Project Rules (Recommended)
 
-**Unix/Linux/macOS:**
+**macOS/Linux:**
 
 ```bash
-mkdir -p .cursor/rules
-
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git /tmp/aidlc-workflows && \
+mkdir -p .cursor/rules && \
 cat > .cursor/rules/ai-dlc-workflow.mdc << 'EOF'
 ---
 description: "AI-DLC (AI-Driven Development Life Cycle) adaptive workflow for software development"
@@ -190,37 +201,36 @@ alwaysApply: true
 ---
 
 EOF
-cat ~/Downloads/aidlc-rules/aws-aidlc-rules/core-workflow.md >> .cursor/rules/ai-dlc-workflow.mdc
-
-mkdir -p .aidlc-rule-details
-cp -R ~/Downloads/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/
+cat /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rules/core-workflow.md >> .cursor/rules/ai-dlc-workflow.mdc && \
+mkdir -p .aidlc-rule-details && \
+cp -r /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/ && \
+rm -rf /tmp/aidlc-workflows
 ```
 
-**Windows PowerShell:**
+**Windows (PowerShell):**
 
 ```powershell
-New-Item -ItemType Directory -Force -Path ".cursor\rules"
-
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git "$env:TEMP\aidlc-workflows";
+New-Item -ItemType Directory -Force -Path ".cursor\rules";
 $frontmatter = @"
 ---
 description: "AI-DLC (AI-Driven Development Life Cycle) adaptive workflow for software development"
 alwaysApply: true
 ---
 
-"@
-$frontmatter | Out-File -FilePath ".cursor\rules\ai-dlc-workflow.mdc" -Encoding utf8
-
-Get-Content "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" | Add-Content ".cursor\rules\ai-dlc-workflow.mdc"
-
-New-Item -ItemType Directory -Force -Path ".aidlc-rule-details"
-Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse
+"@;
+$frontmatter | Out-File -FilePath ".cursor\rules\ai-dlc-workflow.mdc" -Encoding utf8;
+Get-Content "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" | Add-Content ".cursor\rules\ai-dlc-workflow.mdc";
+New-Item -ItemType Directory -Force -Path ".aidlc-rule-details";
+Copy-Item "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse;
+Remove-Item -Recurse -Force "$env:TEMP\aidlc-workflows"
 ```
 
-**Windows CMD:**
+**Windows (CMD):**
 
 ```cmd
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git %TEMP%\aidlc-workflows
 mkdir .cursor\rules
-
 (
 echo ---
 echo description: "AI-DLC (AI-Driven Development Life Cycle) adaptive workflow for software development"
@@ -228,37 +238,42 @@ echo alwaysApply: true
 echo ---
 echo.
 ) > .cursor\rules\ai-dlc-workflow.mdc
-
-type "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" >> .cursor\rules\ai-dlc-workflow.mdc
-
+type "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" >> .cursor\rules\ai-dlc-workflow.mdc
 mkdir .aidlc-rule-details
-xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+xcopy "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+rd /s /q %TEMP%\aidlc-workflows
 ```
 
 #### Option 2: AGENTS.md (Simple Alternative)
 
-**Unix/Linux/macOS:**
+**macOS/Linux:**
 
 ```bash
-cp ~/Downloads/aidlc-rules/aws-aidlc-rules/core-workflow.md ./AGENTS.md
-mkdir -p .aidlc-rule-details
-cp -R ~/Downloads/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git /tmp/aidlc-workflows && \
+cp /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rules/core-workflow.md ./AGENTS.md && \
+mkdir -p .aidlc-rule-details && \
+cp -r /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/ && \
+rm -rf /tmp/aidlc-workflows
 ```
 
-**Windows PowerShell:**
+**Windows (PowerShell):**
 
 ```powershell
-Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\AGENTS.md"
-New-Item -ItemType Directory -Force -Path ".aidlc-rule-details"
-Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git "$env:TEMP\aidlc-workflows";
+Copy-Item "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\AGENTS.md";
+New-Item -ItemType Directory -Force -Path ".aidlc-rule-details";
+Copy-Item "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse;
+Remove-Item -Recurse -Force "$env:TEMP\aidlc-workflows"
 ```
 
-**Windows CMD:**
+**Windows (CMD):**
 
 ```cmd
-copy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\AGENTS.md"
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git %TEMP%\aidlc-workflows
+copy "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\AGENTS.md"
 mkdir .aidlc-rule-details
-xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+xcopy "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+rd /s /q %TEMP%\aidlc-workflows
 ```
 
 **Verify Setup:**
@@ -290,64 +305,73 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
 
 AI-DLC uses Cline Rules to implement its intelligent workflow.
 
-The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
-
-> [!NOTE]
-> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
+To set up the rules in your project workspace:
 
 #### Option 1: .clinerules Directory (Recommended)
 
-**Unix/Linux/macOS:**
+**macOS/Linux:**
 
 ```bash
-mkdir -p .clinerules
-cp ~/Downloads/aidlc-rules/aws-aidlc-rules/core-workflow.md .clinerules/
-mkdir -p .aidlc-rule-details
-cp -R ~/Downloads/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git /tmp/aidlc-workflows && \
+mkdir -p .clinerules && \
+cp /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rules/core-workflow.md .clinerules/ && \
+mkdir -p .aidlc-rule-details && \
+cp -r /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/ && \
+rm -rf /tmp/aidlc-workflows
 ```
 
-**Windows PowerShell:**
+**Windows (PowerShell):**
 
 ```powershell
-New-Item -ItemType Directory -Force -Path ".clinerules"
-Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".clinerules\"
-New-Item -ItemType Directory -Force -Path ".aidlc-rule-details"
-Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git "$env:TEMP\aidlc-workflows";
+New-Item -ItemType Directory -Force -Path ".clinerules";
+Copy-Item "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".clinerules\";
+New-Item -ItemType Directory -Force -Path ".aidlc-rule-details";
+Copy-Item "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse;
+Remove-Item -Recurse -Force "$env:TEMP\aidlc-workflows"
 ```
 
-**Windows CMD:**
+**Windows (CMD):**
 
 ```cmd
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git %TEMP%\aidlc-workflows
 mkdir .clinerules
-copy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".clinerules\"
+copy "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".clinerules\"
 mkdir .aidlc-rule-details
-xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+xcopy "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+rd /s /q %TEMP%\aidlc-workflows
 ```
 
 #### Option 2: AGENTS.md (Alternative)
 
-**Unix/Linux/macOS:**
+**macOS/Linux:**
 
 ```bash
-cp ~/Downloads/aidlc-rules/aws-aidlc-rules/core-workflow.md ./AGENTS.md
-mkdir -p .aidlc-rule-details
-cp -R ~/Downloads/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git /tmp/aidlc-workflows && \
+cp /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rules/core-workflow.md ./AGENTS.md && \
+mkdir -p .aidlc-rule-details && \
+cp -r /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/ && \
+rm -rf /tmp/aidlc-workflows
 ```
 
-**Windows PowerShell:**
+**Windows (PowerShell):**
 
 ```powershell
-Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\AGENTS.md"
-New-Item -ItemType Directory -Force -Path ".aidlc-rule-details"
-Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git "$env:TEMP\aidlc-workflows";
+Copy-Item "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\AGENTS.md";
+New-Item -ItemType Directory -Force -Path ".aidlc-rule-details";
+Copy-Item "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse;
+Remove-Item -Recurse -Force "$env:TEMP\aidlc-workflows"
 ```
 
-**Windows CMD:**
+**Windows (CMD):**
 
 ```cmd
-copy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\AGENTS.md"
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git %TEMP%\aidlc-workflows
+copy "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\AGENTS.md"
 mkdir .aidlc-rule-details
-xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+xcopy "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+rd /s /q %TEMP%\aidlc-workflows
 ```
 
 **Verify Setup:**
@@ -378,64 +402,73 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
 
 AI-DLC uses Claude Code's project memory file (`CLAUDE.md`) to implement its intelligent workflow.
 
-The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
-
-> [!NOTE]
-> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
+To set up the rules in your project workspace:
 
 #### Option 1: Project Root (Recommended)
 
-**Unix/Linux/macOS:**
+**macOS/Linux:**
 
 ```bash
-cp ~/Downloads/aidlc-rules/aws-aidlc-rules/core-workflow.md ./CLAUDE.md
-mkdir -p .aidlc-rule-details
-cp -R ~/Downloads/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git /tmp/aidlc-workflows && \
+cp /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rules/core-workflow.md ./CLAUDE.md && \
+mkdir -p .aidlc-rule-details && \
+cp -r /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/ && \
+rm -rf /tmp/aidlc-workflows
 ```
 
-**Windows PowerShell:**
+**Windows (PowerShell):**
 
 ```powershell
-Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\CLAUDE.md"
-New-Item -ItemType Directory -Force -Path ".aidlc-rule-details"
-Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git "$env:TEMP\aidlc-workflows";
+Copy-Item "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\CLAUDE.md";
+New-Item -ItemType Directory -Force -Path ".aidlc-rule-details";
+Copy-Item "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse;
+Remove-Item -Recurse -Force "$env:TEMP\aidlc-workflows"
 ```
 
-**Windows CMD:**
+**Windows (CMD):**
 
 ```cmd
-copy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\CLAUDE.md"
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git %TEMP%\aidlc-workflows
+copy "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\CLAUDE.md"
 mkdir .aidlc-rule-details
-xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+xcopy "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+rd /s /q %TEMP%\aidlc-workflows
 ```
 
 #### Option 2: .claude Directory
 
-**Unix/Linux/macOS:**
+**macOS/Linux:**
 
 ```bash
-mkdir -p .claude
-cp ~/Downloads/aidlc-rules/aws-aidlc-rules/core-workflow.md .claude/CLAUDE.md
-mkdir -p .aidlc-rule-details
-cp -R ~/Downloads/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git /tmp/aidlc-workflows && \
+mkdir -p .claude && \
+cp /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rules/core-workflow.md .claude/CLAUDE.md && \
+mkdir -p .aidlc-rule-details && \
+cp -r /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/ && \
+rm -rf /tmp/aidlc-workflows
 ```
 
-**Windows PowerShell:**
+**Windows (PowerShell):**
 
 ```powershell
-New-Item -ItemType Directory -Force -Path ".claude"
-Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".claude\CLAUDE.md"
-New-Item -ItemType Directory -Force -Path ".aidlc-rule-details"
-Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git "$env:TEMP\aidlc-workflows";
+New-Item -ItemType Directory -Force -Path ".claude";
+Copy-Item "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".claude\CLAUDE.md";
+New-Item -ItemType Directory -Force -Path ".aidlc-rule-details";
+Copy-Item "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse;
+Remove-Item -Recurse -Force "$env:TEMP\aidlc-workflows"
 ```
 
-**Windows CMD:**
+**Windows (CMD):**
 
 ```cmd
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git %TEMP%\aidlc-workflows
 mkdir .claude
-copy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".claude\CLAUDE.md"
+copy "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".claude\CLAUDE.md"
 mkdir .aidlc-rule-details
-xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+xcopy "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+rd /s /q %TEMP%\aidlc-workflows
 ```
 
 **Verify Setup:**
@@ -463,36 +496,39 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
 
 AI-DLC uses [GitHub Copilot custom instructions](https://code.visualstudio.com/docs/copilot/customization/custom-instructions) to implement its intelligent workflow. The `.github/copilot-instructions.md` file is automatically detected and applied to all chat requests in the workspace.
 
-The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+To set up the rules in your project workspace:
 
-> [!NOTE]
-> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
-
-**Unix/Linux/macOS:**
+**macOS/Linux:**
 
 ```bash
-mkdir -p .github
-cp ~/Downloads/aidlc-rules/aws-aidlc-rules/core-workflow.md .github/copilot-instructions.md
-mkdir -p .aidlc-rule-details
-cp -R ~/Downloads/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git /tmp/aidlc-workflows && \
+mkdir -p .github && \
+cp /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rules/core-workflow.md .github/copilot-instructions.md && \
+mkdir -p .aidlc-rule-details && \
+cp -r /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/ && \
+rm -rf /tmp/aidlc-workflows
 ```
 
-**Windows PowerShell:**
+**Windows (PowerShell):**
 
 ```powershell
-New-Item -ItemType Directory -Force -Path ".github"
-Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".github\copilot-instructions.md"
-New-Item -ItemType Directory -Force -Path ".aidlc-rule-details"
-Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git "$env:TEMP\aidlc-workflows";
+New-Item -ItemType Directory -Force -Path ".github";
+Copy-Item "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".github\copilot-instructions.md";
+New-Item -ItemType Directory -Force -Path ".aidlc-rule-details";
+Copy-Item "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse;
+Remove-Item -Recurse -Force "$env:TEMP\aidlc-workflows"
 ```
 
-**Windows CMD:**
+**Windows (CMD):**
 
 ```cmd
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git %TEMP%\aidlc-workflows
 mkdir .github
-copy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".github\copilot-instructions.md"
+copy "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".github\copilot-instructions.md"
 mkdir .aidlc-rule-details
-xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+xcopy "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+rd /s /q %TEMP%\aidlc-workflows
 ```
 
 **Verify Setup:**
@@ -522,33 +558,36 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
 
 AI-DLC supports OpenAI Codex as a supported coding agent, using the [Codex AGENTS.md](https://developers.openai.com/codex/guides/agents-md) convention to deliver its intelligent workflow. Codex automatically discovers and loads `AGENTS.md` from your project root when you start a session.
 
-The commands below assume you extracted the zip to your `Downloads` folder so that the resulting path is `Downloads/aidlc-rules/`. If you used a different location, replace `Downloads` with your actual folder path.
+To set up the rules in your project workspace:
 
-> [!NOTE]
-> **Windows users:** if you used File Explorer's **Extract All...** dialog, it defaults to creating a wrapper folder named after the zip (e.g., `ai-dlc-rules-v0.1.8\aidlc-rules\...`). Either uncheck/edit that destination so the contents land directly in `Downloads\aidlc-rules\` (matching the commands below), or prepend `ai-dlc-rules-v<version>\` to each `Downloads\` path in the commands — substituting `<version>` with the release you downloaded.
-
-**Unix/Linux/macOS:**
+**macOS/Linux:**
 
 ```bash
-cp ~/Downloads/aidlc-rules/aws-aidlc-rules/core-workflow.md ./AGENTS.md
-mkdir -p .aidlc-rule-details
-cp -R ~/Downloads/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git /tmp/aidlc-workflows && \
+cp /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rules/core-workflow.md ./AGENTS.md && \
+mkdir -p .aidlc-rule-details && \
+cp -r /tmp/aidlc-workflows/aidlc-rules/aws-aidlc-rule-details/* .aidlc-rule-details/ && \
+rm -rf /tmp/aidlc-workflows
 ```
 
-**Windows PowerShell:**
+**Windows (PowerShell):**
 
 ```powershell
-Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\AGENTS.md"
-New-Item -ItemType Directory -Force -Path ".aidlc-rule-details"
-Copy-Item "$env:USERPROFILE\Downloads\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git "$env:TEMP\aidlc-workflows";
+Copy-Item "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\AGENTS.md";
+New-Item -ItemType Directory -Force -Path ".aidlc-rule-details";
+Copy-Item "$env:TEMP\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details\*" ".aidlc-rule-details\" -Recurse;
+Remove-Item -Recurse -Force "$env:TEMP\aidlc-workflows"
 ```
 
-**Windows CMD:**
+**Windows (CMD):**
 
 ```cmd
-copy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\AGENTS.md"
+git clone --depth 1 https://github.com/awslabs/aidlc-workflows.git %TEMP%\aidlc-workflows
+copy "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rules\core-workflow.md" ".\AGENTS.md"
 mkdir .aidlc-rule-details
-xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+xcopy "%TEMP%\aidlc-workflows\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-details\" /E /I
+rd /s /q %TEMP%\aidlc-workflows
 ```
 
 **Verify Setup:**
@@ -888,7 +927,7 @@ For the complete reference of all documentation artifacts generated by the AI-DL
 
 > Instead of manually copying files, let your AI agent handle the setup. This is an experimental workflow — currently validated with Kiro, Claude code, Cursor, Antigravity.
 >
-> **Note:** This approach requires your agent to have shell access (e.g., Kiro, Claude Code, Cline). For agents without shell access, follow the [Common](#common) setup above.
+> **Note:** This approach requires your agent to have shell access (e.g., Kiro, Claude Code, Cline). For agents without shell access, follow the [Common Setup](#common-setup) setup above.
 
 Paste this prompt into your AI agent:
 
