@@ -1,8 +1,5 @@
 ---
 slug: test-pro-full-suite
-number: 4.45
-name: Full Test Suite Execution
-bundle: test-pro
 phase: operation
 execution: CONDITIONAL
 condition: Execute under the enterprise scope when the regression suite is on this scope's resolved plan, after deployment.
@@ -24,8 +21,6 @@ requires_stage:
   - test-pro-integration
 scopes:
   - enterprise
-when:
-  producer-in-plan: test-pro-regression-suite
 inputs: Deployed environment coordinates, the construction regression suite, and integration results
 outputs: aidlc-docs/operation/test-pro-full-suite/test-pro-full-suite-results.md, aidlc-docs/operation/test-pro-full-suite/test-pro-edge-api-report.md
 ---

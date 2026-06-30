@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/compose.sh\"",
+            "statusMessage": "AIDLC test-pro: composing plugin into project"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,4 +1,4 @@
-// aidlc-sensor-coverage-threshold.ts — ADVISORY coverage gate (test-pro bundle).
+// aidlc-sensor-coverage-threshold.ts — ADVISORY coverage gate (test-pro plugin).
 //
 // Reads the machine-readable coverage summary the build-and-test contribution
 // emits (test-pro-coverage-summary.json) and reports whether branch+line
@@ -9,7 +9,7 @@
 // passes. Shipped to .claude/tools/ via the bundle's contributes.tools.
 import { existsSync, readFileSync } from "node:fs";
 
-// Self-contained — no import of the framework's aidlc-lib (a bundle tool ships
+// Self-contained — no import of the framework's aidlc-lib (a plugin tool ships
 // in its own delta and must not depend on a sibling core tool being present).
 const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 

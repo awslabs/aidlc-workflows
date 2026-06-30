@@ -1,0 +1,6 @@
+{
+  "name": "aidlc-test-pro",
+  "version": "0.1.0",
+  "description": "AIDLC test-pro plugin — comprehensive testing: unit/branch coverage, functional, integration, regression, edge, and API positive+negative. Composes into the AIDLC workflow on SessionStart.",
+  "author": { "name": "AWS AIDLC" }
+}

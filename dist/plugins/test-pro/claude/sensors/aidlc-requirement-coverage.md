@@ -3,7 +3,7 @@ id: requirement-coverage
 kind: deterministic
 command: bun {{HARNESS_DIR}}/tools/aidlc-sensor-requirement-coverage.ts
 default_severity: advisory
-description: Reports any functional requirement in test-pro-test-results.json with no covering test (test-pro bundle, advisory)
+description: Reports any functional requirement in test-pro-test-results.json with no covering test (test-pro plugin, advisory)
 category: document-shape
 matches: "**/aidlc-docs/**"
 input_schema:

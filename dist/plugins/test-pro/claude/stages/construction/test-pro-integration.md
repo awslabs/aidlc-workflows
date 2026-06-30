@@ -1,11 +1,8 @@
 ---
 slug: test-pro-integration
-number: 3.85
-name: Cross-Unit Integration Testing
-bundle: test-pro
 phase: construction
 execution: CONDITIONAL
-condition: Execute once after build-and-test when the test-pro bundle is active and the build spans more than one unit of work.
+condition: Execute once after build-and-test when the test-pro plugin is active and the build spans more than one unit of work.
 lead_agent: aidlc-quality-agent
 support_agents: []
 mode: inline
