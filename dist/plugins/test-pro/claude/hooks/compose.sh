@@ -50,7 +50,14 @@ if [ -d "$TOOLS_SRC" ]; then
   cp -rn "$TOOLS_SRC"/* "$TOOLS_DST/" 2>/dev/null || cp -r "$TOOLS_SRC"/* "$TOOLS_DST/"
 fi
 
-# --- 4. Recompile the stage graph (so the orchestrator picks up new stages) ---
+# --- 4. Recompile the stage graph (picks up new stages) ---
 "$BUN" "$HARNESS_DIR/tools/aidlc-graph.ts" compile 2>/dev/null || true
+
+# --- 5. Merge contributions into the COMPILED graph (structural surfaces) ---
+# Post-processes stage-graph.json to set-union each contribution's
+# adds.produces/consumes/sensors into the target stage's compiled node.
+# Runs AFTER compile so we modify the output, not the fragile stage YAML.
+# Fragments (prose splicing) are future work.
+"$BUN" "$PLUGIN_ROOT/hooks/compose-contributions.ts" 2>/dev/null || true
 
 exit 0
