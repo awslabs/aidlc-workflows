@@ -2,20 +2,20 @@
 // IDE (the Electron desktop app). The harness twin of tui-drive.ts (Kiro CLI over
 // tmux) and kiro-acp-drive.ts (Kiro CLI over ACP) - this one drives the GUI app.
 //
-// WHY raw CDP and NOT Playwright (proven in the issue #451 spike):
+// WHY raw CDP and NOT Playwright (proven in the human-presence CDP spike):
 //   - electron.launch() TIMES OUT on Kiro's VS-Code-fork firstWindow handshake.
 //   - connectOverCDP HANGS under bun on Electron's BROWSER-level endpoint (it only
 //     worked under node), and even once connected it did NOT expose the nested
 //     chat webview.
 //   So we speak CDP JSON-RPC directly over a Bun-native WebSocket: each page/iframe
 //   target in /json/list carries its own webSocketDebuggerUrl we can drive with
-//   Runtime.evaluate / Input.* . (spike note: tmp/issue-451/spike/driver/cdp.mjs:1-6.)
+//   Runtime.evaluate / Input.* .
 //
 // Import-safe: NO top-level side effects (mirrors tui-fixtures.ts:9-10) so importing
 // this module never launches Electron. Driving happens only when you call launchKiroIde().
 //
-// Distilled from the spike primitives (tmp/issue-451/spike/driver/{cdp,ctx-click,
-// ctx-scan,drive-unblocked}.mjs + tmp/issue-451/fix-spike/driver/live-fix-drive.mjs).
+// Distilled from the CDP spike primitives (the raw cdp / ctx-click / ctx-scan /
+// drive-unblocked / live-fix-drive probes kept under the private tmp working area).
 // Test-grade choices that REPLACE spike shortcuts are marked TEST-GRADE below:
 //   - port comes from the caller (ephemeral / pid-derived), never the hardcoded
 //     9337/9340/9341 the spike used (those collide under -P 8). (spike gotcha)
@@ -181,7 +181,7 @@ export class CdpTarget {
 // Seed generation (skip onboarding with NO committed profile, NO credentials).
 // ---------------------------------------------------------------------------
 
-// Spike-proven (tmp/issue-451-impl/SEED-SPIKE-RESULTS.md, 2026-06-30): a fresh
+// Spike-proven (the seed spike under the private tmp working area): a fresh
 // Kiro user-data-dir hits the "Import configuration" onboarding wall and never
 // reaches chat. The ONLY load-bearing flag that skips it is the global-state row
 // `kiroAgent.onboarding.onboardingCompleted = "true"` in
@@ -204,6 +204,24 @@ const SEED_SETTINGS = {
   "telemetry.telemetryLevel": "off",
   "security.workspace.trust.enabled": false,
   "update.showReleaseNotes": false,
+  // LOAD-BEARING for the human-presence test: a `.kiro.hook` whose action is
+  // runCommand does NOT auto-execute in the IDE - Kiro renders a manual "Hook
+  // Command" approval card (Run / Reject) and the command only fires once the Run
+  // control is clicked. The MINT hook (promptSubmit) and the BLOCK hook (preToolUse)
+  // are both runCommand hooks. Without this setting the mint command sits behind that
+  // card: the test's autoApprove() loop CAN click it through (its label list includes
+  // "run command"), but only on its next ~1.5s tick and only if it wins focus, so the
+  // mint firing becomes a RACE - under load the click can lag the watch budget and the
+  // HUMAN_TURN never lands, which is the intermittent reap this driver kept hitting.
+  // `trustedCommands: ["*"]` auto-trusts every hook/agent command (the IDE's
+  // getTrustedCommands() short-circuits the approval card on a "*" match), so both
+  // hooks run on submit with NO card and NO click - deterministic instead of racy.
+  // This trusts COMMANDS for the ephemeral generated test seed only; it makes the
+  // hooks RUN, it does not make the gate PASS. Enforcement is unchanged: the preToolUse
+  // block hook still refuses a fabricated approval via exit 2 (it reads the ledger
+  // directly), and the core handleApprove ledger check is covered deterministically by
+  // the t188 unit test. Trusting the command is what lets the block hook RUN at all.
+  "kiroAgent.trustedCommands": ["*"],
 } as const;
 
 /** Build a minimal Kiro IDE user-data-dir under `dir` that skips first-run onboarding,
@@ -318,15 +336,15 @@ const SHIFT = 8;
 
 /** The prompt the Kiro chat input renders - the SAME signal the Kiro TUI test waits
  *  on (t-tui-kiro-status.serial.test.ts:95). Lowercased for a tolerant match. Kept as
- *  a SECONDARY signal only: live (issue #451 probe, 2026-06-30) the desktop app does
- *  NOT expose it as an attribute or in body.innerText (see FIND_CHAT_INPUT_EXPR). */
+ *  a SECONDARY signal only: a live probe found the desktop app does NOT expose it as
+ *  an attribute or in body.innerText (see FIND_CHAT_INPUT_EXPR). */
 const CHAT_PLACEHOLDER = "ask a question or describe a task";
 
 /** Detect that the Kiro chat input is present and laid out, in whatever execution
  *  context owns it. TEST-GRADE replacement for the spike's fixed 11_000ms settle sleep:
  *  the workbench is "ready" once the chat editor exists.
  *
- *  Live probe (issue #451, 2026-06-30, generated onboarding-skip seed): the input is a
+ *  Live probe (generated onboarding-skip seed): the input is a
  *  tiptap/ProseMirror `contenteditable` DIV inside the doubly-nested vscode-webview
  *  iframe, and its "ask a question..." prompt is a CSS ::before - NOT a
  *  placeholder/aria/data-placeholder attribute and NOT present in document.body.innerText
@@ -369,7 +387,7 @@ export async function waitForChatInput(port: number, timeoutMs = 60_000): Promis
         await t.connect();
         // 1500ms (not the spike's 500ms): the deeply-nested OOPIF chat webview's
         // executionContextCreated arrives late on a loaded box - a 500ms budget raced
-        // past it and missed the input on a first pass (issue #451 probe, 2026-06-30).
+        // past it and missed the input on a first pass (live probe finding).
         const contexts = await t.enableContexts(1500);
         for (const c of contexts) {
           try {
@@ -489,18 +507,25 @@ async function selectAllAndDelete(t: CdpTarget): Promise<void> {
   });
 }
 
-/** Focus the chat input, type `text`, VERIFY it landed in the editor, then submit
- *  with a TEXT-BEARING Enter keyDown (the `text:"\r"` is load-bearing - that is what
- *  submits, drive-unblocked.mjs:123-128).
+/** Focus the chat input, type `text`, VERIFY it landed in the editor, submit with a
+ *  TEXT-BEARING Enter keyDown (the `text:"\r"` is load-bearing - that is what submits
+ *  in the tiptap editor, drive-unblocked.mjs:123-128), then VERIFY the submit landed
+ *  by confirming the editor cleared (a submitted prompt empties the input).
  *
- *  Why focus + settle + read-back + retry (issue #451, 2026-06-30): the chat editor
- *  element EXISTS (waitForChatInput returns true) several seconds before it accepts
- *  Input.insertText. A blind insert the instant after detection is silently dropped -
- *  the chat stayed EMPTY for the whole turn and no marker was ever minted (the test
- *  then burned its full budget watching for a marker that could not appear). A timing
- *  probe showed a single focus -> 700ms settle -> insert lands once the workbench is
- *  ready; so we focus, settle, insert, read the editor BACK, and retry (clearing any
- *  partial) until the text is present before pressing Enter. */
+ *  Why focus + settle + read-back + retry: the chat editor element EXISTS
+ *  (waitForChatInput returns true) a beat before it reliably accepts Input.insertText.
+ *  A blind insert the instant after detection can be dropped, leaving the chat EMPTY;
+ *  so we focus, settle, insert, read the editor BACK, and retry (clearing any partial)
+ *  until the text is present before pressing Enter.
+ *
+ *  Why FAIL FAST AND LOUD: if the text never lands, or Enter never clears the editor,
+ *  the older driver pressed Enter on an empty editor and returned silently - the
+ *  caller's watch loop then polled for a disk event that could never appear until it
+ *  exhausted a multi-minute budget and the harness reaped the slice (a reap reads as
+ *  an ambiguous hang). Throwing here turns that into a fast, debuggable failure with
+ *  the editor's actual contents in the message. (The separate human-presence MINT
+ *  hook firing on submit is handled by the seed trusting hook commands - see
+ *  SEED_SETTINGS; this function only guarantees the prompt itself was typed + sent.) */
 export async function typeAndSubmit(t: CdpTarget, text: string, port: number): Promise<void> {
   const want = text.replace(/\s+/g, " ").trim().toLowerCase().slice(0, 40);
   let landed = false;
@@ -515,6 +540,14 @@ export async function typeAndSubmit(t: CdpTarget, text: string, port: number): P
       await selectAllAndDelete(t);
       await sleep(1500);
     }
+  }
+  if (!landed) {
+    const seen = (await readChatText(port)).slice(0, 60);
+    throw new Error(
+      `kiro-ide-driver: prompt never landed in the chat editor after 12 attempts ` +
+        `(editor shows ${JSON.stringify(seen)}). Failing fast instead of submitting an ` +
+        `empty editor and waiting out the watch budget.`,
+    );
   }
   // Submit. text:"\r" on the keyDown is what actually submits in the tiptap editor.
   await t.send("Input.dispatchKeyEvent", {
@@ -532,6 +565,35 @@ export async function typeAndSubmit(t: CdpTarget, text: string, port: number): P
     code: "Enter",
     windowsVirtualKeyCode: 13,
   });
+  // VERIFY the submit landed: a sent prompt clears the editor. Retry Enter a few
+  // times before giving up - a single Enter is occasionally swallowed while the
+  // editor settles. If it never clears, the prompt is stuck in the input; throw so
+  // the caller fails fast rather than waiting out a watch budget on an unsent turn.
+  for (let attempt = 0; attempt < 6; attempt++) {
+    await sleep(700);
+    const cur = (await readChatText(port)).toLowerCase();
+    if (!cur.includes(want)) return; // editor cleared => submitted
+    await t.send("Input.dispatchKeyEvent", {
+      type: "keyDown",
+      modifiers: 0,
+      key: "Enter",
+      code: "Enter",
+      windowsVirtualKeyCode: 13,
+      text: "\r",
+    });
+    await t.send("Input.dispatchKeyEvent", {
+      type: "keyUp",
+      modifiers: 0,
+      key: "Enter",
+      code: "Enter",
+      windowsVirtualKeyCode: 13,
+    });
+  }
+  const seen = (await readChatText(port)).slice(0, 60);
+  throw new Error(
+    `kiro-ide-driver: prompt landed but Enter never submitted it (editor still shows ` +
+      `${JSON.stringify(seen)} after 6 Enter attempts). Failing fast.`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -584,9 +646,12 @@ export async function clickByText(port: number, texts: string[]): Promise<string
   return null;
 }
 
-/** Auto-approve Kiro's OWN Run/Allow tool-permission prompts (SEPARATE from the #451
- *  hooks). Without this the agent turn stalls waiting for a human to click Run
- *  (drive-unblocked.mjs:82-112). The watch loop calls this every iteration. */
+/** Auto-approve Kiro's OWN Run/Allow tool-permission prompts (SEPARATE from the
+ *  human-presence hooks). Without this the agent turn stalls waiting for a human to
+ *  click Run (drive-unblocked.mjs:82-112). The watch loop calls this every iteration.
+ *  Note: the seed trusts hook/shell COMMANDS (SEED_SETTINGS) so the mint/block hooks
+ *  run without a card, but the agent's per-tool permission cards are a separate gate -
+ *  this still clicks those through so the turn proceeds. */
 export function autoApprove(port: number): Promise<string | null> {
   return clickByText(port, ["run", "allow", "approve", "run command", "accept", "yes"]);
 }

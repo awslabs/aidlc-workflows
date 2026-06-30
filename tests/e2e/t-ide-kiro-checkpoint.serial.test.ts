@@ -28,7 +28,7 @@
 // gate var; per CLAUDE.local.md it must be set EXPLICITLY in any slice command or
 // the test skips green (a false green - it exercises nothing).
 //
-// SEED-PROFILE (RESOLVED, spike tmp/issue-451-impl/SEED-SPIKE-RESULTS.md): a fresh
+// SEED-PROFILE (RESOLVED, the seed spike under the private tmp working area): a fresh
 // Kiro user-data-dir hits the "Import configuration" onboarding wall and never reaches
 // chat. The skip is ONE global-state flag (kiroAgent.onboarding.onboardingCompleted);
 // auth is machine-level (NOT in the profile), so a usable seed needs ZERO credentials.
@@ -251,7 +251,19 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
   test.skipIf(SKIP_REASON !== null)(
     `one human turn records exactly one HUMAN_TURN across N model continuations${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
-      const sandbox = setupTuiProject({ harness: "kiro-ide" });
+      // withState is LOAD-BEARING (not just flavor): the mint hook resolves the
+      // active intent from the on-disk cursor, and activeIntent() only honors a
+      // record dir that contains aidlc-state.md (listIntentDirs filters on it). With
+      // no seeded state the record never resolves, so the mint falls back to the bare
+      // space-root audit shard while humanTurnCount() (seededAuditShard) reads the
+      // per-intent record shard - the event lands in a file the assertion never reads,
+      // and the watch loop times out at humanTurnCount==0. Seeding any valid state
+      // file makes the record resolve so the mint and the reader agree on one shard.
+      const sandbox = setupTuiProject({
+        harness: "kiro-ide",
+        withState: "state-mid-inception.md",
+        withAudit: true,
+      });
 
       const seedDir = makeSeedDir();
       const handle = launchKiroIde({
