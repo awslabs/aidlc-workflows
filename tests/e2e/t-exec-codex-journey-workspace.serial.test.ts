@@ -165,12 +165,27 @@ function execCodex(
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
 }
 
+// The engine resolves the per-repo codekb store to the SPACE-LEVEL sibling of
+// intents (aidlc/spaces/<space>/codekb/<repo>/ - the dir codekb-path prints, the
+// codekb-determinism placement fix), but the live RE subagent occasionally still
+// writes the bare workspace-root form aidlc/codekb/<repo>/. Either is a valid
+// per-repo store for this beat's promise; accept BOTH, only absence is a fail
+// (matching the SDK t-journey-workspace.sdk sibling helper verbatim, and the ACP
+// t-acp-kiro-journey-workspace sibling modulo candidate order).
 function codekbFiles(root: string, repo: string): string[] {
-  try {
-    return readdirSync(join(root, "aidlc", "codekb", repo)).filter((f) => f.endsWith(".md"));
-  } catch {
-    return [];
+  const candidates = [
+    join(root, "aidlc", "spaces", activeSpace(root), "codekb", repo),
+    join(root, "aidlc", "codekb", repo),
+  ];
+  for (const dir of candidates) {
+    try {
+      const md = readdirSync(dir).filter((f) => f.endsWith(".md"));
+      if (md.length > 0) return md;
+    } catch {
+      /* try the next candidate */
+    }
   }
+  return [];
 }
 
 function activeRecordDir(root: string): string | undefined {

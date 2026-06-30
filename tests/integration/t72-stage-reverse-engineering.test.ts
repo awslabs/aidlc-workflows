@@ -92,6 +92,26 @@ function codekbReDir(proj: string): string {
   return existsSync(spaceScoped) ? spaceScoped : bare;
 }
 
+// The 9 RE artifact stems the architect synthesises (reverse-engineering.md
+// produces:). The anti-scatter check below tests for THESE in the old per-intent
+// record location - NOT the directory's mere existence, because the RE stage's
+// own "Learn" ritual legitimately writes its stage diary memory.md into
+// <record>/<phase>/<stage>/ (reverse-engineering.md "the memory.md file stays in
+// the artefact directory as part of the stage's permanent record"). That diary
+// materializes the reverse-engineering/ directory by design; only a scattered RE
+// ARTIFACT there is a placement regression. Mirrors t183's stem-filtered check.
+const RE_STEMS = [
+  "business-overview",
+  "architecture",
+  "code-structure",
+  "api-documentation",
+  "component-inventory",
+  "technology-stack",
+  "dependencies",
+  "code-quality-assessment",
+  "reverse-engineering-timestamp",
+];
+
 // ---------------------------------------------------------------------------
 // Timeout budget — the .sh set AIDLC_TEST_TIMEOUT=900 (RE is a HEAVY multi-agent
 // stage). Honour it. The driver aborts ~15s before bun's per-test cap so a stuck
@@ -144,11 +164,20 @@ describe("t72 /aidlc reverse-engineering brownfield (sdk)", () => {
         // .sh test 1: the RE artifact directory was created. RE now writes to the
         // SPACE-LEVEL per-repo codekb store, NOT the per-intent record dir (the
         // codekb-determinism placement fix). Enumerate that dir; also assert RE
-        // did NOT scatter artifacts into the old record-dir location.
+        // did NOT scatter ARTIFACTS into the old record-dir location.
         const reDir = codekbReDir(proj);
         expect(existsSync(reDir) && statSync(reDir).isDirectory()).toBe(true);
+        // Anti-scatter: no RE artifact (by stem) landed in the per-intent record
+        // dir. We do NOT assert the dir is absent - the stage's by-design diary
+        // memory.md lives there (see RE_STEMS comment); only a scattered ARTIFACT
+        // is a regression. (Mirrors t183's stem-filtered placement check.)
         const oldRecordReDir = join(seededRecordDir(proj), "inception", "reverse-engineering");
-        expect(existsSync(oldRecordReDir)).toBe(false);
+        const scatteredArtifacts = existsSync(oldRecordReDir)
+          ? readdirSync(oldRecordReDir).filter((f) =>
+              RE_STEMS.includes(f.replace(/\.md$/, "")),
+            )
+          : [];
+        expect(scatteredArtifacts).toEqual([]);
 
         // .sh test 2: >= 4 .md artifacts (the .sh's assert_gt 3).
         const reFiles = readdirSync(reDir).filter((f) => f.endsWith(".md"));
