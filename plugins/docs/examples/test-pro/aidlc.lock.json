@@ -1,0 +1,29 @@
+{
+  "$comment": "EXAMPLE aidlc.lock for an install that chose the test-pro plugin. Written by `aidlc plugin add test-pro` (the installer is future work — doc 21 §B.6). Pins everything that determines the composed result, so `aidlc plugin sync` reproduces a byte-identical install on another machine. The sha256 values below are ILLUSTRATIVE placeholders.",
+  "lockfileVersion": 1,
+  "harness": "claude",
+  "composer": {
+    "version": "2.1.0",
+    "$comment": "the AIDLC composer that produced this install (doc 21 §B.7)"
+  },
+  "core": {
+    "version": "2.0.8",
+    "integrity": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "$comment": "bare-core version + content hash — the base every install starts from"
+  },
+  "plugins": {
+    "test-pro": {
+      "version": "0.1.0",
+      "source": "github:awslabs/aidlc-plugin-test-pro",
+      "resolved": "https://github.com/awslabs/aidlc-plugin-test-pro.git",
+      "commit": "1111111111111111111111111111111111111111",
+      "integrity": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "dependencies": ["core"],
+      "$comment": "source git SHA + content hash of the fetched plugin tree"
+    }
+  },
+  "result": {
+    "integrity": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "$comment": "content hash of the composed effective install (core + test-pro). sync asserts the recomposed tree matches this."
+  }
+}

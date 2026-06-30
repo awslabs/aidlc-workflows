@@ -1,0 +1,24 @@
+{
+  "$comment": "EXAMPLE org trust policy (managed scope). Mirrors Claude Code's strictKnownMarketplaces mechanism (doc 21 §B.4): managed-only, highest precedence, no cross-scope merge — a developer's user/project settings cannot override or add to it. Lives at the machine's managed-settings path (Linux /etc/claude-code/, macOS /Library/Application Support/ClaudeCode/, Windows Program Files\\ClaudeCode\\, or MDM/registry/server-managed).",
+  "aidlc": {
+    "strictKnownPluginSources": [
+      {
+        "source": "github",
+        "repoPattern": "^acme-corp/",
+        "$comment": "allow any plugin from the org's own GitHub org"
+      },
+      {
+        "source": "github",
+        "repo": "awslabs/aidlc-plugin-test-pro",
+        "$comment": "plus this one specific first-party plugin"
+      }
+    ],
+    "blockedPluginSources": [
+      {
+        "source": "github",
+        "repo": "untrusted/aidlc-plugins",
+        "$comment": "explicit denylist entry — blocks this source even if an allowlist rule would otherwise admit it"
+      }
+    ]
+  }
+}

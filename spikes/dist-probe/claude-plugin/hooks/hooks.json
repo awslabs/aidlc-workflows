@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/probe.sh\"",
+            "statusMessage": "AIDLC dist-probe: testing SessionStart compose"
+          }
+        ]
+      }
+    ]
+  }
+}

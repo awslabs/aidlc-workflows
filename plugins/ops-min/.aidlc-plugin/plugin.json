@@ -1,0 +1,13 @@
+{
+  "name": "ops-min",
+  "version": "0.1.0",
+  "description": "Minimal operation-phase plugin — two scope-gated operation stages + a contribution to nfr-requirements.",
+  "author": { "name": "AWS AIDLC" },
+  "dependencies": ["core"],
+  "aidlc": {
+    "contributes": {
+      "stages": "stages/",
+      "overlays": "contributions/"
+    }
+  }
+}
