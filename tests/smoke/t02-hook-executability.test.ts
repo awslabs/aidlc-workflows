@@ -43,7 +43,7 @@ import { AIDLC_SRC } from "../harness/fixtures.ts";
 
 const HOOKS_DIR = join(AIDLC_SRC, "hooks");
 
-// The framework hooks, in the .sh's row order (t02:11-20) plus the issue #451
+// The framework hooks, in the .sh's row order (t02:11-20) plus the
 // mint-presence hook added after the migration. All .ts, run via bun — the .sh
 // title notes no executable bit is needed.
 const HOOKS = [
@@ -57,7 +57,7 @@ const HOOKS = [
   "aidlc-session-end.ts",
   "aidlc-statusline.ts",
   "aidlc-stop.ts",
-  // Added for issue #451: stamps the human-presence marker on UserPromptSubmit.
+  // Records a HUMAN_TURN on UserPromptSubmit.
   "aidlc-mint-presence.ts",
 ] as const;
 

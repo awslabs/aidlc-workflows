@@ -31,7 +31,7 @@ Ten of the eleven are **non-blocking** — they observe and exit 0, never alteri
 
 | Hook | Event | Scoping | Matcher | Purpose |
 |------|-------|---------|---------|---------|
-| `mint-presence.ts` | UserPromptSubmit | Project-wide (settings.json) | (empty) | Mint a human-presence marker on every real human prompt; the approval/interview gate consumes it so a model under autopilot cannot fabricate an approval with no human having acted |
+| `mint-presence.ts` | UserPromptSubmit | Project-wide (settings.json) | (empty) | Record a `HUMAN_TURN` event on every real human prompt; the approval/interview gate checks the ledger and requires one since the last gate resolution so a model under autopilot cannot fabricate an approval with no human having acted |
 | `audit-logger.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Auto-log artifact writes to the `audit/` shards |
 | `sensor-fire.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Fire the active stage's resolved Sensors on matching writes (advisory; never blocks) |
 | `sync-statusline.ts` | PostToolUse | Project-wide (settings.json) | `TaskUpdate` | Auto-sync state file on stage task activation |

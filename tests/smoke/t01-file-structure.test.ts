@@ -20,7 +20,7 @@
 // STRONGER than the .sh, which only existence-checked each path individually):
 //   .sh L12  SKILL.md exists                          -> "ships skills/aidlc/SKILL.md"
 //   .sh L15-17  3 stage-protocol files                -> "ships the 3 stage-protocol spine files" (each asserted)
-//   .sh L20-29  11 hooks (each)                        -> "ships each of the 11 framework hooks" + "ships EXACTLY the 11 expected aidlc-*.ts hooks" (count strengthening; grew to 11 with the issue #451 human-presence mint hook)
+//   .sh L20-29  11 hooks (each)                        -> "ships each of the 11 framework hooks" + "ships EXACTLY the 11 expected aidlc-*.ts hooks" (count strengthening; grew to 11 with the human-turn mint hook)
 //   .sh L32-34  11 agents (loop)                       -> "ships each of the 13 domain-expert agent personas" + "ships EXACTLY 13 aidlc-*-agent.md files" (count strengthening; roster grew to 13 with the two reviewer personas)
 //   .sh L38-40  3 initialization stages (loop)         -> "ships the 3 initialization stages"
 //   .sh L43-45  7 ideation stages (loop)               -> "ships the 7 ideation stages"
@@ -250,8 +250,8 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
 
   // TAP-plan parity guard: the .sh declared `plan 63` and made 63
   // assert_file_exists calls. The roster later grew by two reviewer agent
-  // personas (product-lead, architecture-reviewer) to 65, then by the issue #451
-  // human-presence mint hook to 66. Re-derive the full path list from the same
+  // personas (product-lead, architecture-reviewer) to 65, then by the
+  // human-turn mint hook to 66. Re-derive the full path list from the same
   // data the loops drove and pin its length, so the migrated suite cannot
   // silently shrink the structural surface the .sh enforced.
   test("asserts EXACTLY 66 shipped paths (TAP plan 63 + 2 reviewer agents + 1 presence hook) [.sh L9]", () => {

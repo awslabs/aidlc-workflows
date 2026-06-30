@@ -71,10 +71,10 @@ shape the byte-shared core hooks expect.
 | Hook | IDE event | Purpose |
 |------|-----------|---------|
 | `aidlc-session-start` | `promptSubmit` | Injects workflow resume context |
-| `aidlc-mint` | `promptSubmit` | Stamps a human-presence marker on every prompt (issue #451 gate) |
+| `aidlc-mint` | `promptSubmit` | Records a human-turn event on every prompt (human-presence gate) |
 | `aidlc-session-end` | `agentStop` | Emits `SESSION_ENDED` (observability) |
 | `aidlc-stop` | `agentStop` | Forwarding-loop continuation |
-| `aidlc-block` | `preToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (issue #451 floor) |
+| `aidlc-block` | `preToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (human-presence floor) |
 | `aidlc-audit-logger` | `postToolUse` (write) | Logs artifact create/update |
 | `aidlc-sensor-fire` | `postToolUse` (write) | Fires applicable sensors |
 | `aidlc-runtime-compile` | `postToolUse` (shell) | Recompiles the runtime graph |

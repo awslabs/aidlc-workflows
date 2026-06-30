@@ -55,7 +55,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { mintHumanMarker } from "../tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const target = process.argv[2] ?? "";
@@ -344,13 +344,13 @@ switch (target) {
   }
 
   case "mint": {
-    // UserPromptSubmit: a real human acted this turn — stamp the
-    // human-presence marker (issue #451 gate). Fail-open: a mint failure must
-    // never block the turn. Advisory, no stdout.
+    // UserPromptSubmit: a real human acted this turn — record a HUMAN_TURN event
+    // in the active intent's audit shard (human-presence gate). Fail-open: a mint
+    // failure must never block the turn. Advisory, no stdout.
     try {
-      mintHumanMarker(projectDir);
+      appendAuditEntry("HUMAN_TURN", {}, projectDir);
     } catch {
-      // best-effort presence stamp — advisory
+      // best-effort presence record — advisory
     }
     persistResponse("", 0);
     process.exit(0);

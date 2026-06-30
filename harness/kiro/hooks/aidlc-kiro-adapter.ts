@@ -33,13 +33,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   classifyTerminalCommand,
-  findAllEvents,
-  humanPresent,
+  humanActedSinceGate,
   isAutonomousMode,
-  readAllAuditShards,
   stateFilePath,
-  writeHumanMarker,
 } from "../tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const target = process.argv[2] ?? "";
@@ -117,14 +115,13 @@ if (target === "verb-intercept") {
       ? (Number.parseInt(readFileSync(cp, "utf-8").trim(), 10) || 0) + 1
       : 1;
     writeFileSync(cp, String(turn) + "\n", "utf-8");
-    // Human-presence marker (issue #451): this seam fires on a real human turn,
-    // so stamp a fresh unconsumed marker at the just-bumped turn. Marker-only:
-    // the counter is already incremented above, so do NOT call mintHumanMarker
-    // (which would double-bump). The gate (handleApprove/handleAnswer) requires +
-    // consumes this; the preToolUse block below refuses while a gate is open and
-    // no fresh marker exists.
-    writeHumanMarker(cwd, turn);
-  } catch { /* turn-clock + marker best-effort */ }
+    // Human presence: this seam fires on a real human turn, so record a HUMAN_TURN
+    // event in the active intent's audit shard. The gate (handleApprove/handleAnswer)
+    // refuses unless a HUMAN_TURN was recorded since the last gate resolution; the
+    // preToolUse block below is the exit-2 floor. SEPARATE from the turn-counter bump
+    // above (that is the roll-forward latch clock — kept intact).
+    appendAuditEntry("HUMAN_TURN", {}, cwd);
+  } catch { /* turn-clock + presence best-effort */ }
   if (cmd === null) process.exit(0); // not a terminal command — conductor handles it
 
   const cwd = kiro.cwd ?? process.cwd();
@@ -220,13 +217,13 @@ if (target === "pretool-block") {
     process.exit(2); // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   }
 
-  // --- #451 human-presence floor (second exit-2 branch) ---
+  // --- human-presence floor (second exit-2 branch) ---
   //
-  // Refuse ANY tool call while an approval gate is open and no fresh, unconsumed
-  // human marker exists: the hard floor that stops a model under autopilot from
-  // fabricating an approval (the verb-intercept seam above mints the marker on a
-  // real human turn; handleApprove/handleAnswer consume it). Distinct from the
-  // roll-forward latch above. Autonomy carve-out is checked FIRST so autonomous
+  // Refuse ANY tool call while an approval gate is open and no HUMAN_TURN has been
+  // recorded since the last gate resolution: the hard floor that stops a model under
+  // autopilot from fabricating an approval (the verb-intercept seam above records a
+  // HUMAN_TURN on a real human turn). Distinct from the roll-forward latch above.
+  // Autonomy carve-out is checked FIRST so autonomous
   // Construction (swarm/Bolt) is never blocked. Fail-open on any read/parse
   // error: advisory, must never wedge a legitimate turn.
   try {
@@ -235,43 +232,19 @@ if (target === "pretool-block") {
       : null;
     if (isAutonomousMode(content)) process.exit(0); // autonomous: never block
 
-    // Gate-open turn: the latest STAGE_AWAITING_APPROVAL for the active slug. Do
-    // NOT pass slug to findAllEvents: its third arg filters the `**Bolt slug**`
-    // field, but these events carry a `**Stage**` field. Filter on `**Stage**`
-    // manually, take the latest, parse its `**Open Turn**` field (0 if absent:
-    // a missing/backfilled gate-open must never false-block).
+    // The active slug is the state file's "Current Stage" field.
+    // humanActedSinceGate refuses iff a gate is open with no HUMAN_TURN recorded
+    // since the last gate resolution (ledger order); it fails open when no ledger
+    // / no gate exists, so a missing/backfilled gate never false-blocks.
     const slug = (() => {
       const m = content?.match(/^- \*\*Current Stage\*\*:[ \t]*(.*)$/m);
       return m ? m[1].trim() : "";
     })();
-    if (slug) {
-      const audit = readAllAuditShards(cwd);
-      const gateBlock = findAllEvents(audit, "STAGE_AWAITING_APPROVAL")
-        .filter((ev) => {
-          for (const line of ev.block.split("\n")) {
-            if (line.startsWith("**Stage**:")) {
-              return line.slice("**Stage**:".length).trim() === slug;
-            }
-          }
-          return false;
-        })
-        .at(-1);
-      if (gateBlock) {
-        let openTurn = 0;
-        for (const line of gateBlock.block.split("\n")) {
-          if (line.startsWith("**Open Turn**:")) {
-            const n = Number.parseInt(line.slice("**Open Turn**:".length).trim(), 10);
-            if (Number.isFinite(n)) openTurn = n;
-            break;
-          }
-        }
-        if (!humanPresent(cwd, openTurn)) {
-          process.stderr.write(
-            "an approval gate is open and no human has acted since it opened: refusing the tool call. A real human must respond at the gate (issue #451). End the turn.\n",
-          );
-          process.exit(2); // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
-        }
-      }
+    if (!humanActedSinceGate(cwd, slug || null)) {
+      process.stderr.write(
+        "an approval gate is open and no human has acted since it opened: refusing the tool call. A real human must respond at the gate. End the turn.\n",
+      );
+      process.exit(2); // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
     }
   } catch { /* fail open: advisory presence floor */ }
 

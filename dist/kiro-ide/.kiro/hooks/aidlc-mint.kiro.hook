@@ -1,1 +1,1 @@
-{"version":"1.0.0","enabled":true,"name":"aidlc-mint","description":"Stamps a human-presence marker on prompt submit (issue #451 gate).","when":{"type":"promptSubmit"},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-kiro-adapter.ts mint"}}
+{"version":"1.0.0","enabled":true,"name":"aidlc-mint","description":"Records a human-turn event on prompt submit (human-presence gate).","when":{"type":"promptSubmit"},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-kiro-adapter.ts mint"}}

@@ -7,11 +7,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
-  consumeHumanMarker,
   emitError,
   errorMessage,
+  humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
-  humanPresent,
   isAutonomousMode,
   resolveProjectDir,
   stateFilePath,
@@ -119,12 +118,13 @@ function handleAnswer(args: string[]): void {
     Details: flags.details,
   };
 
-  // Human-presence gate (issue #451): the interview answer is a human-judgement
-  // event, so require proof a real human acted this turn before recording it.
-  // Autonomy carve-out FIRST (Construction swarm/Bolt answers are not human),
-  // then the scoped test off-switch, then the consume-once marker check. openTurn
-  // is pinned to 0 here: any unconsumed human marker proves a human acted this
-  // turn, and consume-once stops re-use. consumeHumanMarker is atomic (no lock).
+  // Human-presence gate (ledger-event design): the interview answer is
+  // a human-judgement event, so require a HUMAN_TURN appended AFTER the last
+  // QUESTION_ANSWERED (ledger order) before recording another. The prior
+  // QUESTION_ANSWERED is the "since" boundary (its own consume-once: one human turn
+  // logs one answer), so no separate marker/consume step is needed. Autonomy
+  // carve-out FIRST (Construction swarm/Bolt answers are not human), then the scoped
+  // test off-switch. Fail-open when no ledger exists (presence not tracked yet).
   const content = existsSync(stateFilePath(pd))
     ? readFileSync(stateFilePath(pd), "utf-8")
     : null;
@@ -132,13 +132,10 @@ function handleAnswer(args: string[]): void {
     // autonomous Construction: no human presence required
   } else if (humanPresenceGuardDisabled()) {
     // scoped test off-switch
-  } else {
-    if (!humanPresent(pd, 0)) {
-      error(
-        "Refusing to record this answer: a real human has not acted at this checkpoint this turn. Type your answer in the session (which mints a human-presence marker) before logging it."
-      );
-    }
-    consumeHumanMarker(pd);
+  } else if (!humanActedSinceLastAnswer(pd)) {
+    error(
+      "Refusing to record this answer: a real human has not acted at this checkpoint this turn. Type your answer in the session (which records a human turn) before logging it."
+    );
   }
 
   try {

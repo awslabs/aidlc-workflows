@@ -1,19 +1,22 @@
-// UserPromptSubmit hook: mint a human-presence marker (issue #451 gate).
+// UserPromptSubmit hook: record a HUMAN_TURN event (human-presence gate).
 //
-// On every real human prompt, bump the per-turn clock (aidlc/.aidlc-turn-counter)
-// and write aidlc/.aidlc-human-marker {turn, ts, consumed:false} at the workspace
-// root. The approval/interview gate (handleApprove / handleAnswer) requires and
-// consumes this marker so a model under autopilot cannot fabricate an approval
-// with no human having acted at the gate since it opened.
+// On every real human prompt, append a HUMAN_TURN event to the active intent's
+// audit shard (the state machine's own append-only ledger). The approval /
+// interview gate (handleApprove / handleAnswer) refuses unless a HUMAN_TURN was
+// recorded since the last gate resolution, so a model under autopilot cannot
+// fabricate an approval with no human having acted this turn.
 //
-// Presence-only: the prompt text is irrelevant, so stdin is not read. The mint
-// is fail-open (try/catch, exit 0): a mint failure must never block the human's
-// turn, and the gate fails open on a harness whose turn counter was never written.
-import { mintHumanMarker, resolveProjectDirFromHook } from "../tools/aidlc-lib.ts";
+// Presence-only: the prompt text is irrelevant, so stdin is not read.
+// appendAuditEntry resolves the active intent from the on-disk cursor using only
+// the project dir (no payload needed). The mint is fail-open (try/catch, exit 0):
+// a mint failure must never block the human's turn, and the gate fails open on a
+// harness whose ledger has no HUMAN_TURN yet.
+import { resolveProjectDirFromHook } from "../tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
-  mintHumanMarker(projectDir);
+  appendAuditEntry("HUMAN_TURN", {}, projectDir);
 } catch {
   // Non-fatal — a mint failure must never block the human's turn.
 }

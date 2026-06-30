@@ -30,13 +30,11 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  findAllEvents,
-  humanPresent,
+  humanActedSinceGate,
   isAutonomousMode,
-  mintHumanMarker,
-  readAllAuditShards,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { existsSync, readFileSync } from "node:fs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -69,27 +67,28 @@ if (!process.stdin.isTTY) {
   }
 }
 
-// --- mint: stamp a human-presence marker on prompt submit (issue #451) ---
+// --- mint: record a HUMAN_TURN event on prompt submit ---
 //
-// Wired by aidlc-mint.kiro.hook (promptSubmit). stdin is empty on Kiro IDE
-// (the race-to-2s above), so this carries NO intent context - mintHumanMarker
-// writes to the WORKSPACE-ROOT marker (aidlc/.aidlc-human-marker) + turn
-// counter, reachable from cwd with no active-intent resolution. Presence only;
-// reads nothing from stdin. Fail-open (try/catch, exit 0) so a mint failure
-// never blocks the human's turn.
+// Wired by aidlc-mint.kiro.hook (promptSubmit). stdin is empty on Kiro IDE (the
+// race-to-2s above), so this carries NO intent context - but appendAuditEntry
+// resolves the active intent from the on-disk cursor
+// (aidlc/spaces/<space>/intents/active-intent) using only cwd, so the event lands
+// in the correct per-intent shard with no payload. One ledger event per human
+// turn; no marker file, no turn counter. Fail-open (try/catch, exit 0) so a mint
+// failure never blocks the human's turn.
 if (target === "mint") {
   try {
-    mintHumanMarker(kiro.cwd ?? process.cwd());
+    appendAuditEntry("HUMAN_TURN", {}, kiro.cwd ?? process.cwd());
   } catch {
     /* advisory - mint never blocks the turn */
   }
   process.exit(0);
 }
 
-// --- block: the preToolUse human-presence floor (issue #451) ---
+// --- block: the preToolUse human-presence floor ---
 //
 // Wired by aidlc-block.kiro.hook (preToolUse). Hard-blocks tool calls while an
-// approval gate is open and no fresh, unconsumed human marker exists - the
+// approval gate is open and no HUMAN_TURN has been recorded since it opened - the
 // exit-2 floor behind the core handleApprove CHECK. Autonomous Construction is
 // carved out (swarm/Bolt has no human at the gate). All read from disk (empty
 // stdin is fine). Fail-open on any read/parse error (advisory).
@@ -100,27 +99,15 @@ if (target === "block") {
     const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
     // Autonomy carve-out first: autonomous Construction has no human at the gate.
     if (isAutonomousMode(content)) process.exit(0);
-    // Derive the gate-open turn from the latest STAGE_AWAITING_APPROVAL event for
-    // the active slug. The active slug is the state file's "Current Stage" field
-    // (getField wants `- **`, audit/state writers use `**Field**:`, so use the
-    // local auditField reader for both). CRITICAL: do NOT pass slug as
-    // findAllEvents' 3rd arg - that filters the **Bolt slug** field these events
-    // never carry; they carry a Stage field. Instead filter the returned blocks
-    // on the Stage field == slug and take the latest, then parse its "Open Turn".
-    // No matching open gate -> allow (exit 0).
+    // The active slug is the state file's "Current Stage" field. humanActedSinceGate
+    // refuses iff a gate is open for that slug with no HUMAN_TURN appended after it
+    // (ledger order); it fails open when no gate is recorded.
     const slug = content ? auditField(content, "Current Stage") : null;
-    const audit = readAllAuditShards(pd);
-    const openEvents = findAllEvents(audit, "STAGE_AWAITING_APPROVAL").filter(
-      (ev) => (slug ? auditField(ev.block, "Stage") === slug : auditField(ev.block, "Stage") !== null),
-    );
-    const latestOpen = openEvents.at(-1);
-    if (!latestOpen) process.exit(0); // no gate open this workflow → allow
-    const openTurn = parseInt(auditField(latestOpen.block, "Open Turn") ?? "0", 10) || 0;
-    if (humanPresent(pd, openTurn)) process.exit(0); // a human acted since the gate opened
+    if (humanActedSinceGate(pd, slug)) process.exit(0); // a human acted since the gate opened
     process.stderr.write(
       "An approval gate is open and no human has acted since it opened. The gate " +
-        "requires a typed human turn (which mints a presence marker) before any tool " +
-        "call proceeds. Acknowledge the gate as a human, then continue.\n",
+        "requires a typed human turn before any tool call proceeds. Acknowledge the " +
+        "gate as a human, then continue.\n",
     );
     process.exit(2); // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   } catch {

@@ -250,6 +250,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `SESSION_RESUMED` | `hooks/aidlc-session-start.ts` | `source=resume` |
 | `SESSION_COMPACTED` | `hooks/aidlc-validate-state.ts` | Emitted at PreCompact (not at next SessionStart) to avoid duplication |
 | `SESSION_ENDED` | `hooks/aidlc-session-end.ts` | Includes `Reason` field from Claude Code |
+| `HUMAN_TURN` | `hooks/aidlc-mint-presence.ts` (+ per-harness prompt-submit adapters) | One per real human prompt; the approval/interview gate requires one since the last gate resolution |
 | `SUBAGENT_COMPLETED` | `hooks/aidlc-log-subagent.ts` | Records subagent completion via SubagentStop hook |
 
 ### Diagnostics and workspace

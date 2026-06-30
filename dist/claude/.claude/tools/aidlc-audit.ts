@@ -15,7 +15,7 @@ import {
   worktreePath,
 } from "./aidlc-lib.ts";
 
-// --- Canonical event types (68) ---
+// --- Canonical event types (69) ---
 // See docs/reference/12-state-machine.md for the state transitions that emit each event.
 
 const VALID_EVENT_TYPES = new Set([
@@ -41,6 +41,10 @@ const VALID_EVENT_TYPES = new Set([
   "SESSION_RESUMED",
   "SESSION_COMPACTED",
   "SESSION_ENDED",
+  // Human presence (hook-owned): one event per real human prompt turn. The
+  // approval/interview gate requires a HUMAN_TURN appended AFTER the gate-open
+  // event (in ledger order) before it commits.
+  "HUMAN_TURN",
   // Initialization events (fire IN ADDITION TO STAGE_COMPLETED)
   "WORKSPACE_SCAFFOLDED",
   "WORKSPACE_SCANNED",
@@ -136,6 +140,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   SESSION_RESUMED: "Session Resume",
   SESSION_COMPACTED: "Session Compacted",
   SESSION_ENDED: "Session End",
+  HUMAN_TURN: "Human Turn",
   WORKSPACE_SCAFFOLDED: "Workspace Scaffolded",
   WORKSPACE_SCANNED: "Workspace Scanned",
   WORKSPACE_INITIALISED: "Workspace Initialised",

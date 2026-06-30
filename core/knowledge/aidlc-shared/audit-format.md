@@ -8,7 +8,7 @@
 
 All event names follow `SUBJECT_PAST_VERB` — every event answers "what happened?"
 
-## Event Registry (68 events, 18 categories)
+## Event Registry (69 events, 18 categories)
 
 ### Workflow Lifecycle (4 events)
 
@@ -39,7 +39,7 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 | `STAGE_JUMPED` | Forward/backward/redo jump target reached | Timestamp, Direction, Source, Target, Scope | `tools/aidlc-jump.ts execute` |
 | `STAGE_SKIPPED` | Stage skipped during jump (`[S]`) | Timestamp, Stage, Reason | `tools/aidlc-jump.ts execute`, `tools/aidlc-state.ts skip` |
 
-### Session Events (4 events — hook-owned, independent of workflow lifecycle)
+### Session Events (5 events — hook-owned, independent of workflow lifecycle)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
@@ -47,6 +47,7 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 | `SESSION_RESUMED` | Existing Claude Code session resumed (source=resume) | Timestamp, Source | `hooks/aidlc-session-start.ts` |
 | `SESSION_COMPACTED` | Context compaction occurred | Timestamp, Current Stage, State Validity | `hooks/aidlc-validate-state.ts` (PreCompact) |
 | `SESSION_ENDED` | Claude Code session terminates | Timestamp, Reason | `hooks/aidlc-session-end.ts` |
+| `HUMAN_TURN` | A real human submitted a prompt this turn (the approval/interview gate requires one since the last gate resolution) | Timestamp | `hooks/aidlc-mint-presence.ts` (UserPromptSubmit) + the per-harness prompt-submit adapters |
 
 ### Initialization Events (3 events — fire IN ADDITION TO `STAGE_COMPLETED`)
 

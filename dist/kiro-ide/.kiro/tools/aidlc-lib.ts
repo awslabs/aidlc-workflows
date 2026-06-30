@@ -1322,98 +1322,71 @@ function cloneId(projectDir: string): string {
   return _cloneId;
 }
 
-// --- Human-presence marker (issue #451) ---
+// --- Human presence at an approval/interview gate ---
 //
-// Per-USER, machine-local runtime proof that a real human took a turn since an
-// approval gate opened (NOT shared truth) — gitignored, alongside the clone-id
-// token at WORKSPACE ROOT, addressable from a hook with no intent context (the
-// mint hook fires with empty stdin and carries no active-intent cursor). The
-// turn counter is the per-turn clock the Kiro CLI adapter already writes; the
-// marker stamps the counter value + whether it has been consumed at a gate.
-export const HUMAN_MARKER_FILE = ".aidlc-human-marker";
-export const TURN_COUNTER_FILE = ".aidlc-turn-counter";
-
-function humanMarkerPath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), HUMAN_MARKER_FILE);
-}
-
-function turnCounterPath(projectDir: string): string {
-  return join(workspaceRoot(projectDir), TURN_COUNTER_FILE);
-}
-
-// The per-turn clock: the int in `aidlc/.aidlc-turn-counter`, or 0 when the file
-// has never been written (no mint seam has run on this harness yet).
-export function readTurnCounter(projectDir: string): number {
-  try {
-    const raw = readFileSync(turnCounterPath(projectDir), "utf-8").trim();
-    const n = parseInt(raw, 10);
-    return Number.isFinite(n) ? n : 0;
-  } catch {
-    return 0;
+// Ledger-event presence check (the marker-free design). A real human
+// is present for THIS gate-commit iff a HUMAN_TURN event appears AFTER the LAST
+// GATE RESOLUTION (GATE_APPROVED / GATE_REJECTED / QUESTION_ANSWERED) in ledger
+// append order. The prior resolution is the freshness boundary - this is the
+// consume-once semantics expressed as event order instead of a flag.
+//
+// Why the boundary is the prior RESOLUTION, not this gate's STAGE_AWAITING_APPROVAL
+// (the live Kiro IDE spike, 2026-06-30, caught this): in the real flow ONE human
+// prompt drives the agent to BOTH open the gate AND approve it, so the human turn
+// PRECEDES this gate-open. A "human turn after gate-open" rule false-refuses every
+// legitimate approval. But a human turn after the prior gate's resolution still
+// proves a fresh human acted this turn, while a fabricated cascade (gate2 approved
+// right after gate1 committed, no new human turn) has its only human turn BEFORE
+// the gate1 GATE_APPROVED -> refused. Stale (human turn long ago, then a fabricated
+// approve) likewise has the last resolution after the human turn -> refused.
+//
+// Ordering is by APPEND POSITION, not timestamp: isoTimestamp is second-granularity
+// so same-second events tie; both the hook (HUMAN_TURN) and the engine (resolutions)
+// append to the same shard via appendAuditEntry, so buffer position == execution
+// order. Fail-open when no ledger exists (no presence tracking yet on this harness).
+//
+// Single-clone contract: the approve/answer gate is always the human's own clone;
+// autonomous swarm (the only multi-clone case) is carved out by the caller BEFORE
+// this check, so cross-shard merge order never reaches the comparison.
+//
+// `slug` is accepted for symmetry / future per-slug scoping but the resolution
+// boundary is workflow-global (the most recent commit of ANY gate), which is what
+// makes a same-turn cascade across DIFFERENT slugs refuse correctly.
+const GATE_RESOLUTION_EVENTS = new Set(["GATE_APPROVED", "GATE_REJECTED", "QUESTION_ANSWERED"]);
+export function humanActedSinceGate(projectDir: string, _slug: string | null): boolean {
+  const audit = readAllAuditShards(projectDir);
+  if (audit.length === 0) return true; // no ledger → no presence tracking → fail open
+  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
+  let lastResolutionPos = -1;
+  let lastHumanPos = -1;
+  for (let i = 0; i < blocks.length; i++) {
+    const ev = auditBlockField(blocks[i], "Event");
+    if (ev && GATE_RESOLUTION_EVENTS.has(ev)) lastResolutionPos = i;
+    else if (ev === "HUMAN_TURN") lastHumanPos = i;
   }
+  // A human turn appears after the last gate resolution (or there is a human turn
+  // and no resolution yet) => a fresh human acted this turn => allow.
+  return lastHumanPos > lastResolutionPos && lastHumanPos !== -1;
 }
 
-// Read the human-presence marker, or null when absent/unparseable.
-export function readHumanMarker(
-  projectDir: string,
-): { turn: number; ts: string; consumed: boolean } | null {
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(humanMarkerPath(projectDir), "utf-8"));
-    if (parsed && typeof parsed === "object") {
-      const obj = parsed as Record<string, unknown>;
-      const turn = typeof obj.turn === "number" ? obj.turn : 0;
-      const ts = typeof obj.ts === "string" ? obj.ts : "";
-      const consumed = obj.consumed === true;
-      return { turn, ts, consumed };
-    }
-  } catch {
-    // no marker / torn write → null
+// The interview path (handleAnswer) uses the SAME resolution-boundary check: a
+// QUESTION_ANSWERED is itself a gate resolution, so "a human turn since the last
+// resolution" gives one-answer-per-human-turn for free. Thin alias for call-site
+// readability; both paths share one definition so the predicate cannot drift.
+export function humanActedSinceLastAnswer(projectDir: string): boolean {
+  return humanActedSinceGate(projectDir, null);
+}
+
+// Read a `**Field**: value` line from one audit block (tolerates an optional
+// leading `- ` so it serves both audit blocks and the state file). Mirrors the
+// per-tool private auditField readers; shared here for humanActedSinceGate.
+export function auditBlockField(block: string, fieldName: string): string | null {
+  const prefix = `**${fieldName}**:`;
+  for (const raw of block.split("\n")) {
+    const line = raw.startsWith("- ") ? raw.slice(2) : raw;
+    if (line.startsWith(prefix)) return line.slice(prefix.length).trim();
   }
   return null;
-}
-
-// MINT (green-field harnesses): bump the turn counter, then stamp a fresh
-// unconsumed marker at the new turn. Atomic writes so the lock-free mint hook
-// and a locked consumer never tear each other's writes.
-export function mintHumanMarker(projectDir: string): void {
-  const turn = readTurnCounter(projectDir) + 1;
-  mkdirSync(workspaceRoot(projectDir), { recursive: true });
-  writeFileAtomic(turnCounterPath(projectDir), `${turn}\n`);
-  writeHumanMarker(projectDir, turn);
-}
-
-// Marker-only write (does NOT bump the counter) — for the Kiro CLI adapter,
-// which already bumps the shared turn counter inline, so the counter must move
-// exactly once per turn.
-export function writeHumanMarker(projectDir: string, turn: number): void {
-  mkdirSync(workspaceRoot(projectDir), { recursive: true });
-  const marker = { turn, ts: isoTimestamp(), consumed: false };
-  writeFileAtomic(humanMarkerPath(projectDir), `${JSON.stringify(marker)}\n`);
-}
-
-// CONSUME (on a passing approve/answer): re-read and flip consumed:true so a
-// second gate auto-advanced in the same turn refuses. Idempotent — a no-op when
-// the marker is absent. Atomic, touches only the marker file (no audit lock).
-export function consumeHumanMarker(projectDir: string): void {
-  const marker = readHumanMarker(projectDir);
-  if (marker === null) return;
-  const next = { ...marker, consumed: true };
-  writeFileAtomic(humanMarkerPath(projectDir), `${JSON.stringify(next)}\n`);
-}
-
-// CHECK: a real human acted at THIS gate since it opened. True iff there is an
-// unconsumed marker whose turn is at/after the gate-open turn. Fail-open when no
-// turn-counter file has ever existed (presence tracking is not active on this
-// harness — e.g. Claude/Codex before their mint seam is wired), so the gate
-// never bricks a harness with no mint.
-export function humanPresent(projectDir: string, openTurn: number): boolean {
-  try {
-    accessSync(turnCounterPath(projectDir), fsConstants.F_OK);
-  } catch {
-    return true; // no presence tracking on this harness → fail open
-  }
-  const marker = readHumanMarker(projectDir);
-  return !!marker && !marker.consumed && marker.turn >= openTurn;
 }
 
 // This clone's audit shard filename: `<host>-<clone-id>.md`. The clone-id token
@@ -2017,7 +1990,7 @@ export function getField(content: string, field: string): string | null {
   return match ? match[1].trim() : null;
 }
 
-// --- Autonomy mode (issue #451) ---
+// --- Autonomy mode ---
 //
 // The state-file field that distinguishes autonomous Construction (swarm/Bolt)
 // from interactive flow. Promoted to ONE exported predicate so the human-

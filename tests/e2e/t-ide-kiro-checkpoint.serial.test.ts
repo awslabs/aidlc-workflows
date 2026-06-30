@@ -4,9 +4,9 @@
 // IDE (the Electron desktop app), not the Kiro CLI. Every existing live Kiro test
 // drives the CLI over ACP (t-acp-kiro-*) or over a tmux TUI (t-tui-kiro-*); NONE
 // drives the GUI app. This is the gap, and it is the enforcement surface for the
-// issue #451 fix (a human-presence marker minted on each human chat turn + a
+// human-presence gate (a HUMAN_TURN event recorded on each human chat turn + a
 // preToolUse hard-block that refuses a model-fabricated approval while a checkpoint
-// gate is open with no fresh human marker).
+// gate is open with no HUMAN_TURN since the last gate resolution).
 //
 // Mirrors the skip-clean conventions of t-tui-kiro-status.serial.test.ts (the
 // closest sibling: live Kiro, opt-in env gate, skipReason() chain, reason in the
@@ -38,15 +38,16 @@
 // only remaining gate is a signed-in Kiro.app on a macOS box (the AIDLC_KIRO_IDE_LIVE
 // gate already implies that), so this no longer needs a hand-built profile.
 //
-// SHAPE OF THE REPRO (constructed, not organic): the #451 fault is intermittent and
+// SHAPE OF THE REPRO (constructed, not organic): the fault is intermittent and
 // emerges deep into a long session; a deterministic test cannot reproduce the
 // organic drift, so we CONSTRUCT it (the fix-spike approach): seed a real
 // STAGE_AWAITING_APPROVAL gate, send ONE human prompt that tells the model to
 // approve the open gate and then - in the SAME un-ended turn, with no further human
 // input - advance and fabricate an approval of the next auto-opened gate. The first
-// approval consumes the one human marker the prompt minted and commits; the second
-// finds the marker consumed and is REFUSED by the core gate (and the preToolUse hook
-// hard-blocks the tool call besides). One human turn commits at most one gate.
+// approval is backed by the one HUMAN_TURN the prompt recorded and commits (emitting
+// GATE_APPROVED); the second finds NO HUMAN_TURN after that GATE_APPROVED and is
+// REFUSED by the core gate (and the preToolUse hook hard-blocks the tool call
+// besides). One human turn commits at most one gate.
 
 import { describe, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -96,7 +97,7 @@ function makeSeedDir(): string {
 // The committed stage slug = the gate open in state-mid-inception.md (Current Stage:
 // requirements-analysis, the gate the human approves). The blocked slug = the Next
 // Stage (code-generation), whose gate the first approve's reentrant advance opens and
-// which the same-turn fabricated approval targets after the marker is consumed. The
+// which the same-turn fabricated approval targets after the first gate commits. The
 // constructed repro only needs the two to differ; pinned to the fixture's stage pair
 // (tests/fixtures/state-mid-inception.md Current/Next Stage fields).
 const COMMITTED_SLUG = "requirements-analysis";
@@ -127,33 +128,23 @@ const SKIP_REASON = skipReason();
 // Disk-only assertion helpers (never assert on chat prose).
 // ---------------------------------------------------------------------------
 
-/** The workspace-root human-presence marker the shipped mint hook writes
- *  (aidlc/.aidlc-human-marker, JSON {turn,ts,consumed} - core/tools/aidlc-lib.ts
- *  HUMAN_MARKER_FILE). Returns null when absent. */
-function readHumanMarker(sandbox: string): { turn: number; ts: string; consumed: boolean } | null {
-  const p = join(sandbox, "aidlc", ".aidlc-human-marker");
-  if (!existsSync(p)) return null;
-  try {
-    return JSON.parse(readFileSync(p, "utf-8"));
-  } catch {
-    return null;
-  }
-}
-
-/** The workspace-root per-turn clock the shipped mint hook bumps
- *  (aidlc/.aidlc-turn-counter, a plain int - core/tools/aidlc-lib.ts
- *  TURN_COUNTER_FILE). Returns the raw string ("0" when absent). */
-function readTurnCounter(sandbox: string): string {
-  const p = join(sandbox, "aidlc", ".aidlc-turn-counter");
-  if (!existsSync(p)) return "0";
-  return readFileSync(p, "utf-8").trim();
+/** Count HUMAN_TURN events the shipped mint hook records in the per-intent audit
+ *  shard (the prompt-submit hook appends one per real human prompt). The mint hook
+ *  resolves the active intent from the on-disk cursor, so the event lands in the
+ *  same shard seededAuditShard resolves. */
+function humanTurnCount(sandbox: string): number {
+  const shard = seededAuditShard(sandbox);
+  if (!existsSync(shard)) return 0;
+  return readFileSync(shard, "utf-8")
+    .split("\n")
+    .filter((l) => l === "**Event**: HUMAN_TURN").length;
 }
 
 /** Count GATE_APPROVED audit blocks whose `**Stage**:` field equals <slug> in the
  *  per-intent audit shard the spawned tool resolves (seededAuditShard). Block-scoped
  *  on Stage exactly like t49's stageCompletedCountFor - handleApprove emits
- *  GATE_APPROVED with a `Stage: <slug>` field (core/tools/aidlc-state.ts:1367-1369),
- *  so a committed gate shows count 1 and a refused (consumed-marker) gate shows 0. */
+ *  GATE_APPROVED with a `Stage: <slug>` field, so a committed gate shows count 1 and
+ *  a refused gate shows 0. */
 function gateApprovedCountFor(sandbox: string, slug: string): number {
   const shard = seededAuditShard(sandbox);
   if (!existsSync(shard)) return 0;
@@ -174,10 +165,9 @@ function gateApprovedCountFor(sandbox: string, slug: string): number {
 }
 
 describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on the desktop app)", () => {
-  // B1/B2/B3 resolved: drives the SHIPPED dist/kiro-ide tree (harness:"kiro-ide" =>
-  // mint + block .kiro.hook files seeded, B3) and asserts the REAL fix surfaces - the
-  // workspace-root marker/turn-counter + the GATE_APPROVED audit ledger (B1), NOT the
-  // stale markers.ndjson/.aidlc-committed prototype schema.
+  // Drives the SHIPPED dist/kiro-ide tree (harness:"kiro-ide" => mint + block
+  // .kiro.hook files seeded) and asserts the REAL fix surfaces on disk: the
+  // HUMAN_TURN events the mint hook records + the GATE_APPROVED audit ledger.
   test.skipIf(SKIP_REASON !== null)(
     `one human turn commits the approved gate and REFUSES a same-turn fabricated approval${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
@@ -193,8 +183,9 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
       });
 
       // One human prompt forces the constructed same-turn cascade: approve the open
-      // gate (legit - the prompt minted one marker), then in the SAME un-ended turn
-      // advance and re-approve the next gate (fabricated - the marker is now consumed).
+      // gate (legit - the prompt recorded one HUMAN_TURN), then in the SAME un-ended
+      // turn advance and re-approve the next gate (fabricated - no HUMAN_TURN follows
+      // the first GATE_APPROVED, so the ledger check refuses it).
       const PROMPT =
         "Run the AI-DLC approval now without pausing or asking me anything between steps: " +
         "first approve the current open checkpoint, then immediately advance to the next " +
@@ -213,38 +204,33 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         await typeAndSubmit(t, PROMPT, handle.port);
         t.close();
 
-        // Watch the human marker flip to consumed while auto-clicking Kiro's OWN
-        // Run/Allow tool-permission prompts (separate from the #451 hooks). The legit
-        // first approval consumes the marker; budget leaves headroom under the timeout.
+        // Watch the legit gate commit (GATE_APPROVED for the open slug) while
+        // auto-clicking Kiro's OWN Run/Allow tool-permission prompts (separate from the
+        // human-presence hooks). Budget leaves headroom under the timeout.
         await watchMarkers(
-          () => readHumanMarker(sandbox)?.consumed === true,
+          () => gateApprovedCountFor(sandbox, COMMITTED_SLUG) >= 1,
           TEST_TIMEOUT_MS - 120_000,
           async () => {
             await autoApprove(handle.port);
           },
         );
+        // Settle a beat so a (wrongly) committed second gate would also have landed.
+        await new Promise((r) => setTimeout(r, 8000));
 
         // ---- ASSERTIONS (disk only; never chat prose) - the REAL fix surfaces ----
 
-        // B1: exactly one human turn => the turn counter advanced to 1 (the mint hook
-        // bumps it once per human prompt submit, never per model continuation).
-        expect(readTurnCounter(sandbox)).toBe("1");
+        // Exactly one human turn => exactly one HUMAN_TURN event in the shard (the mint
+        // hook records one per human prompt submit, never per model continuation).
+        expect(humanTurnCount(sandbox)).toBe(1);
 
-        // B1: the marker the human turn minted was CONSUMED by the legit approval
-        // (consume-once - core/tools/aidlc-lib.ts consumeHumanMarker), so the same turn
-        // cannot satisfy a second gate.
-        const marker = readHumanMarker(sandbox);
-        expect(marker).not.toBeNull();
-        expect(marker?.consumed).toBe(true);
-
-        // B1: the committed (legit, human-present) gate recorded exactly one
-        // GATE_APPROVED in the real handleApprove audit ledger.
+        // The committed (legit, human-present) gate recorded exactly one GATE_APPROVED
+        // in the real handleApprove audit ledger.
         expect(gateApprovedCountFor(sandbox, COMMITTED_SLUG)).toBe(1);
 
-        // B1: the model-fabricated same-turn approval was REFUSED - the marker was
-        // already consumed, so humanPresent() returned false and handleApprove
-        // error()'d before any mutation (and the preToolUse hook hard-blocked the tool
-        // call besides). The next-stage gate never committed.
+        // The model-fabricated same-turn approval was REFUSED - no HUMAN_TURN follows
+        // the first GATE_APPROVED, so humanActedSinceGate returned false and
+        // handleApprove error()'d before any mutation (and the preToolUse hook
+        // hard-blocked the tool call besides). The next-stage gate never committed.
         expect(gateApprovedCountFor(sandbox, BLOCKED_SLUG)).toBe(0);
       } finally {
         teardown(handle);
@@ -255,15 +241,15 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
     TEST_TIMEOUT_MS,
   );
 
-  // RATIO regression (MANDATORY, SPIKE-FOLLOWUP section 4): one human turn that drives
-  // N model continuations (N separate shell tool calls, each a postToolUse) must mint
-  // EXACTLY ONE marker - the turn counter stays 1. A presence-only assert would stay
-  // green if a future Kiro per-continuation mint inflated the counter; pinning == 1
-  // proves the mint fires once per HUMAN turn, not per continuation. (To toggle the
-  // mint hook off you ADD/REMOVE the .kiro.hook FILE, never `enabled:false` - a
-  // .kiro.hook fires even disabled; here we keep the shipped hook in place.)
+  // RATIO regression (MANDATORY): one human turn that drives N model continuations
+  // (N separate shell tool calls, each a postToolUse) must record EXACTLY ONE
+  // HUMAN_TURN event. A presence-only assert would stay green if a future Kiro
+  // per-continuation mint inflated the count; pinning == 1 proves the mint fires
+  // once per HUMAN turn, not per continuation. (To toggle the mint hook off you
+  // ADD/REMOVE the .kiro.hook FILE, never `enabled:false` - a .kiro.hook fires even
+  // disabled; here we keep the shipped hook in place.)
   test.skipIf(SKIP_REASON !== null)(
-    `one human turn mints exactly one marker across N model continuations${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
+    `one human turn records exactly one HUMAN_TURN across N model continuations${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       const sandbox = setupTuiProject({ harness: "kiro-ide" });
 
@@ -290,22 +276,22 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         );
         t.close();
 
-        // Wait until the turn counter reaches 1 (the mint fired for the one human
-        // prompt) while auto-clicking Kiro's Run/Allow so the continuations proceed.
+        // Wait until the one HUMAN_TURN event is recorded (the mint fired for the one
+        // human prompt) while auto-clicking Kiro's Run/Allow so the continuations
+        // proceed and fire their postToolUse hooks.
         await watchMarkers(
-          () => readTurnCounter(sandbox) === "1",
+          () => humanTurnCount(sandbox) >= 1,
           TEST_TIMEOUT_MS - 120_000,
           async () => {
             await autoApprove(handle.port);
           },
         );
+        // Settle so any (wrongly) re-fired mint on a continuation would have landed.
+        await new Promise((r) => setTimeout(r, 8000));
 
-        // RATIO: exactly one human turn => exactly one mint, regardless of how many
-        // model continuations / postToolUse firings happened in between.
-        expect(readTurnCounter(sandbox)).toBe("1");
-        const marker = readHumanMarker(sandbox);
-        expect(marker).not.toBeNull();
-        expect(marker?.turn).toBe(1);
+        // RATIO: exactly one human turn => exactly one HUMAN_TURN event, regardless of
+        // how many model continuations / postToolUse firings happened in between.
+        expect(humanTurnCount(sandbox)).toBe(1);
       } finally {
         teardown(handle);
         cleanupTuiProject(sandbox);

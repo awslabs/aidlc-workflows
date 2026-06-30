@@ -476,11 +476,12 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
   // re-enables the guard by clearing this var in its own tool spawns, so
   // enforcement is still covered.
   //
-  // Disable the human-presence gate (issue #451) for the suite by default for
-  // the same reason: most approve/advance tests drive the gate without a minted
-  // human-presence marker, so the suite sets the bypass globally. The dedicated
-  // guard test (t188-human-presence-gate) clears this var in its own tool
-  // spawns to exercise real enforcement.
+  // Disable the human-presence gate for the suite by default for the same
+  // reason: most approve/advance tests drive the gate without recording a
+  // HUMAN_TURN event (the gate requires one since the last gate resolution),
+  // so the suite sets the bypass globally. The dedicated guard test
+  // (t188-human-presence-gate) clears this var in its own tool spawns to
+  // exercise real enforcement.
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AIDLC_TEST_NAME: base,

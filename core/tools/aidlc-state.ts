@@ -9,7 +9,6 @@ import {
   appendUnderHeading,
   type CheckboxState,
   codekbDir,
-  consumeHumanMarker,
   countCheckboxes,
   emitError,
   errorMessage,
@@ -19,7 +18,7 @@ import {
   firstInScopeStageOfPhase,
   getField,
   holdsAuditLock,
-  humanPresent,
+  humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
   isoTimestamp,
@@ -32,7 +31,6 @@ import {
   parseStateStageSuffixes,
   readAllAuditShards,
   readStateFile,
-  readTurnCounter,
   recordDir,
   relativeMemoryPath,
   relativeRecordDir,
@@ -1260,10 +1258,6 @@ function handleGateStart(args: string[]): void {
 
   try {
     const fields: Record<string, string> = { Stage: slug };
-    // Stamp the turn at gate-open so the approve-path presence CHECK can compare
-    // turns (not second-granularity ts). 0 when no mint seam has run on this
-    // harness yet (fail-open path in humanPresent). Issue #451.
-    fields["Open Turn"] = String(readTurnCounter(pd));
     if (artifacts) fields.Artifacts = artifacts;
     if (recovered) fields.Recovered = "true";
     emitAudit(pd, "STAGE_AWAITING_APPROVAL", fields);
@@ -1314,7 +1308,7 @@ function handleApprove(args: string[]): void {
   // construction/<unit>/<slug>/) and code-producing stages (workspace_requires).
   verifyStageArtifacts(pd, stage);
 
-  // Human-presence guard (issue #451): a gate cannot be approved unless a real
+  // Human-presence guard: a gate cannot be approved unless a real
   // human acted at THIS gate since it opened. Runs BEFORE any mutation so a
   // refusal (error() -> exit) leaves state untouched (same slot as the #366
   // artifact guard above). Carve-outs FIRST: autonomous Construction (swarm /
@@ -1323,32 +1317,16 @@ function handleApprove(args: string[]): void {
     // skip the presence check — autonomous Construction has no human at the gate
   } else if (humanPresenceGuardDisabled()) {
     // skip — suite-wide deterministic off-switch (AIDLC_SKIP_HUMAN_PRESENCE_GUARD)
-  } else {
-    // Derive the gate-open turn from the latest STAGE_AWAITING_APPROVAL event for
-    // this slug. CRITICAL: do NOT pass `slug` as findAllEvents' 3rd arg — that
-    // filters the **Bolt slug** field (aidlc-lib.ts:2740-2742), which these
-    // events never carry; they carry a Stage field (handleGateStart at :1257).
-    // Passing slug returns zero matches and silently defeats the freshness check.
-    // Instead filter the returned blocks on the Stage field == slug (mirrors the
-    // auditField(ev.block, "Stage") idiom at :153), take the latest, and parse
-    // its "Open Turn" field (stamped by handleGateStart). Missing event/field ->
-    // openTurn 0 (recovered/backfilled gate; never false-refuse a legit recovery).
-    const audit = readAllAuditShards(pd);
-    const openEvents = findAllEvents(audit, "STAGE_AWAITING_APPROVAL").filter(
-      (ev) => auditField(ev.block, "Stage") === slug
+  } else if (!humanActedSinceGate(pd, slug)) {
+    // Ledger-event presence check: refuse unless a HUMAN_TURN event
+    // was appended AFTER this slug's latest STAGE_AWAITING_APPROVAL (ledger order).
+    // Cascade-safety + freshness fall out of order; no marker file / turn counter.
+    error(
+      `Refusing to approve "${slug}": a real human has not acted at this gate ` +
+        `since it opened. The approval gate requires a typed human turn before it ` +
+        `can commit. Acknowledge the gate as a human, then approve. (autonomous ` +
+        `Construction is exempt)`
     );
-    const latestOpen = openEvents.at(-1);
-    const openTurn = latestOpen
-      ? parseInt(auditField(latestOpen.block, "Open Turn") ?? "0", 10) || 0
-      : 0;
-    if (!humanPresent(pd, openTurn)) {
-      error(
-        `Refusing to approve "${slug}": a real human has not acted at this gate ` +
-          `since it opened. The approval gate requires a typed human turn (which ` +
-          `mints a presence marker) before it can commit. Acknowledge the gate as ` +
-          `a human, then approve. (autonomous Construction is exempt)`
-      );
-    }
   }
 
   const timestamp = isoTimestamp();
@@ -1392,16 +1370,11 @@ function handleApprove(args: string[]): void {
     );
   }
 
-  // Consume the human-presence marker (issue #451) BEFORE the reentrant advance
-  // opens the next gate. ORDERING IS LOAD-BEARING: if a single human turn
-  // auto-cascades multiple gates, the marker must be flipped consumed:true here
-  // so the next auto-opened gate sees consumed and refuses (one commit per human
-  // turn). consumeHumanMarker is atomic (writeFileAtomic), touches only the
-  // marker file (no audit lock), and is idempotent / a no-op when absent — so it
-  // is safe under the carve-outs and cannot self-deadlock the held lock. The
-  // marker flip is the record; no extra audit row.
-  consumeHumanMarker(pd);
-
+  // No explicit consume step (ledger-event design): the GATE_APPROVED
+  // emitted by this commit IS the freshness boundary for the next gate. A second
+  // gate auto-cascaded in the same human turn finds the last gate resolution
+  // (this GATE_APPROVED) AFTER the only HUMAN_TURN, so humanActedSinceGate refuses
+  // it — one commit per human turn, from ledger order, with no marker to flip.
   const next = nextInScopeStage(slug, scope, content);
   if (next) {
     // Delegate to handleAdvance. The slug is now [x], so handleAdvance takes
