@@ -622,6 +622,120 @@ if (argv[0] === "codex" && argv[1] === "trust") {
   process.exit(0);
 }
 
+// ---------------------------------------------------------------------------
+// PLUGIN EMISSION — the hybrid's "one more projection target" per harness.
+// Discovers plugins/<name>/ (those with .aidlc-plugin/plugin.json), then emits
+// a per-harness host-native plugin at dist/plugins/<name>/<harness>/.
+// ---------------------------------------------------------------------------
+const PLUGINS_ROOT = join(REPO_ROOT, "plugins");
+
+function discoverPluginNames(): string[] {
+  if (!existsSync(PLUGINS_ROOT)) return [];
+  return readdirSync(PLUGINS_ROOT)
+    .filter((n) => existsSync(join(PLUGINS_ROOT, n, ".aidlc-plugin", "plugin.json")))
+    .sort();
+}
+
+/** Fields the v2 graph compiler doesn't know yet — stripped from emitted stages. */
+const STRIP_FIELDS = ["number", "name", "bundle", "when"];
+
+function stripUnknownFrontmatter(content: string): string {
+  return content.replace(/^---\n([\s\S]*?)\n---/, (match, fm: string) => {
+    const lines = fm.split("\n").filter((line: string) => {
+      const key = line.match(/^(\w+):/)?.[1];
+      return !key || !STRIP_FIELDS.includes(key);
+    });
+    return `---\n${lines.join("\n")}\n---`;
+  });
+}
+
+function emitPlugins(harnesses: string[]): void {
+  const plugins = discoverPluginNames();
+  if (plugins.length === 0) return;
+
+  for (const pluginName of plugins) {
+    const pluginSrc = join(PLUGINS_ROOT, pluginName);
+    const manifest = JSON.parse(
+      readFileSync(join(pluginSrc, ".aidlc-plugin", "plugin.json"), "utf-8")
+    );
+
+    // For now, emit only a Claude projection (Codex + Kiro are future)
+    const harnessName = "claude";
+    if (!harnesses.includes(harnessName)) continue;
+
+    const outDir = join(REPO_ROOT, "dist", "plugins", pluginName, harnessName);
+    if (existsSync(outDir)) rmSync(outDir, { recursive: true, force: true });
+    mkdirSync(outDir, { recursive: true });
+
+    // 1. Emit .claude-plugin/plugin.json (host-native manifest)
+    const hostManifest = {
+      name: `aidlc-${pluginName}`,
+      version: manifest.version || "0.0.1",
+      description: manifest.description || "",
+      author: manifest.author || { name: "AIDLC" },
+    };
+    const hostManifestDir = join(outDir, ".claude-plugin");
+    mkdirSync(hostManifestDir, { recursive: true });
+    writeFileSync(join(hostManifestDir, "plugin.json"), JSON.stringify(hostManifest, null, 2) + "\n");
+
+    // 2. Emit marketplace.json
+    const marketplace = {
+      name: "aidlc-plugins",
+      owner: manifest.author || { name: "AIDLC" },
+      description: "AIDLC plugin catalogue.",
+      plugins: [{
+        name: `aidlc-${pluginName}`,
+        source: ".",
+        version: manifest.version || "0.0.1",
+        description: manifest.description || "",
+      }],
+    };
+    writeFileSync(join(hostManifestDir, "marketplace.json"), JSON.stringify(marketplace, null, 2) + "\n");
+
+    // 3. Emit hooks (compose.sh + compose-contributions.ts + hooks.json)
+    const hooksDir = join(outDir, "hooks");
+    mkdirSync(hooksDir, { recursive: true });
+    // Copy the generic compose hooks from the template
+    const templateHooks = join(REPO_ROOT, "scripts", "plugin-hooks-template");
+    for (const f of readdirSync(templateHooks)) {
+      cpSync(join(templateHooks, f), join(hooksDir, f));
+    }
+    // Generate hooks.json wiring the SessionStart → compose.sh
+    const hooksJson = {
+      hooks: {
+        SessionStart: [{
+          hooks: [{
+            type: "command",
+            command: `bash "\${CLAUDE_PLUGIN_ROOT}/hooks/compose.sh"`,
+            statusMessage: `AIDLC ${pluginName}: composing plugin into project`,
+          }],
+        }],
+      },
+    };
+    writeFileSync(join(hooksDir, "hooks.json"), JSON.stringify(hooksJson, null, 2) + "\n");
+
+    // 4. Copy plugin content (stages, sensors, tools, contributions)
+    const contentDirs = ["stages", "sensors", "tools", "contributions"];
+    for (const dir of contentDirs) {
+      const srcDir = join(pluginSrc, dir);
+      if (!existsSync(srcDir)) continue;
+      for (const file of walk(srcDir)) {
+        const rel = relative(srcDir, file);
+        const outPath = join(outDir, dir, rel);
+        mkdirSync(dirname(outPath), { recursive: true });
+        let content = readFileSync(file);
+        // Strip unknown frontmatter fields from stage .md files
+        if (dir === "stages" && file.endsWith(".md")) {
+          content = Buffer.from(stripUnknownFrontmatter(content.toString("utf-8")));
+        }
+        writeFileSync(outPath, content);
+      }
+    }
+
+    console.log(`[plugin:${pluginName}] emitted dist/plugins/${pluginName}/${harnessName}/`);
+  }
+}
+
 const check = argv.includes("--check");
 const named = argv.find((a) => !a.startsWith("--"));
 // Default targets are DISCOVERED from harness/ (one manifest = one harness); a
@@ -646,4 +760,6 @@ if (check) {
   console.log("package --check: all harness trees in sync with core/ + harness/.");
 } else {
   for (const n of present) writeHarness(n);
+  // Emit plugin projections (the hybrid: per-harness host plugins from plugins/<name>/)
+  emitPlugins(present);
 }
