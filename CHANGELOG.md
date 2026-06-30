@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.1] - 2026-06-30
+
+### Documentation
+
+- add OpenAI Codex to Platform-Specific Setup index (#453)
+
+### Features
+
+- add AIDLC Code Reviewer tool (#282)
+
 ## [1.0.0] - 2026-06-17
 
 ### Bug Fixes
