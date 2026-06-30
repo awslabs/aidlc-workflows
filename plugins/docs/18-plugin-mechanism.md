@@ -4,8 +4,8 @@
 > is, how plugins compose, the seams a plugin may use, and the invariants the
 > system guarantees. This is the authoritative "what it is."
 >
-> Companions: [19 — Composition: Build-Time vs Install-Time](19-plugin-composition-timing.md)
-> (why the model is install-time, with evidence), [20 — Extension System
+> Companions: [19 — Plugin Composition Timing](19-plugin-composition-timing.md)
+> (why install-time, with evidence), [20 — Plugin System
 > Vision](20-plugin-system-vision.md) (narrative target state + worked
 > example), [21 — Implementation Plan](21-plugin-implementation-plan.md)
 > (sequenced, file/seam-level work), and the author guide
@@ -33,10 +33,12 @@ the plugin lives in and who reviewed it.
 
 ## 2. Design principles
 
-- **One composition model.** A single composer merges `bare core + {chosen
-  plugins}` into the effective install. There is no separate first-party
-  pipeline; build-time is merely that composer memoized for the empty set (bare
-  core). See [doc 19](19-plugin-composition-timing.md).
+- **One composer, multiple invocation sites.** A single composer merges
+  `bare core + {chosen plugins}` into the effective install. Where stores exist
+  (Claude, Codex) the host's **SessionStart hook** invokes it automatically on
+  install; where no store exists (Kiro) a thin **`aidlc plugin compose`** command
+  does the same. The composer itself is identical in both paths — the host just
+  decides *when* it runs. See [doc 19](19-plugin-composition-timing.md).
 - **Strict-additive, never override.** Contributions only *add*. Conflicts are
   rejected at compose time with plugin attribution, never silently resolved by
   order. Additive set-union over structural surfaces is commutative — which is
@@ -51,7 +53,7 @@ the plugin lives in and who reviewed it.
   (edges, jumps, resolution). Stage numbers are display/ordering only, so an
   inserted plugin stage never renumbers or destabilizes core.
 
-## 3. Bundle structure
+## 3. Plugin structure
 
 A plugin is a directory (and a git repository) with a declarative manifest and a
 set of core-shaped subtrees:
@@ -159,8 +161,16 @@ typo-safety:
 
 ## 5. Composition model
 
-When a user composes their chosen set, the composer runs once over `bare core +
-{all chosen plugins}` and writes the effective install:
+The composer runs once over `bare core + {all chosen plugins}` and writes the
+effective install. The **same composer** runs regardless of how it's triggered:
+
+| Host | Trigger | Trust |
+|---|---|---|
+| **Claude** | SessionStart hook (fires eagerly on session spawn) | host managed allowlist (`strictKnownMarketplaces`) |
+| **Codex** | SessionStart hook (fires lazily on first interaction) | one-time trust prompt, content-hash-pinned |
+| **Kiro** (CLI/IDE) | `aidlc plugin compose` (thin wrapper) | n/a — folder-drop distribution |
+
+Steps (identical regardless of trigger):
 
 1. **Resolve** the chosen plugins plus their transitive `dependencies` closure
    against published versions.
@@ -173,9 +183,7 @@ When a user composes their chosen set, the composer runs once over `bare core +
 4. **Validate the merged graph** — once, over the whole set (§7).
 5. **Compile** — produce the stage graph and scope grid, resolving activation
    predicates over the merged graph.
-6. **Project + pin** — write the effective install for the target harness and
-   record a lockfile (plugin source SHAs + versions, bare-core version, composer
-   version, result hash) for byte-reproducible re-composition.
+6. **Project** — write the effective install for the target harness.
 
 Because composition is one N-way merge (not a sequence of independent overlays),
 **two plugins that both contribute to the same stage are genuinely merged** —
@@ -184,6 +192,21 @@ deterministically — rather than one silently overwriting the other.
 
 The runtime is **read-only** with respect to composition: all merging happens at
 compose time, never per session.
+
+### Distribution: the hybrid model
+
+An AIDLC plugin is **emitted as a real host plugin** by the packager (one
+projection target per harness: `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`).
+The plugin IS a host plugin — it installs through the host's native commands,
+and its SessionStart hook runs the composer. Where no host store exists (Kiro),
+the same plugin is distributed as a git repo and composed via the thin `aidlc
+plugin compose` command. Same plugin, same composer — two delivery paths.
+
+- **Versioning** = semver tags on the plugin's git repo.
+- **Trust** = the host's own managed mechanism (Claude: `strictKnownMarketplaces`;
+  Codex: `trust_level` + hook content-hash). We run no distribution infra.
+- **Marketplace** = a `marketplace.json` in the plugin repo — one entry works
+  across hosts. See [doc 20](20-plugin-system-vision.md) for the worked example.
 
 ## 6. The contribution seam (modifying an existing core stage)
 
@@ -334,17 +357,23 @@ this plugin active" is a compose-time fact, not a runtime signal.
   need to *change* upstream behavior is a framework-level design decision — a
   separate, auditable mechanism — never a quiet patch inside a plugin.
 - **Inert when off.** Disabling every plugin yields bare core, byte-identical.
-- **One composer.** The same code composes wherever it runs; the only centrally
-  pre-built artifact is bare core.
-- **Deterministic & reproducible.** Pinned by a lockfile; no plugin combination
-  is pre-built or shipped as a canonical artifact.
+- **One composer, host-triggered.** The same code composes wherever it runs —
+  triggered by the host's SessionStart hook (Claude/Codex) or by `aidlc plugin
+  compose` (Kiro). The only centrally pre-built artifact is bare core.
+- **A plugin IS a host plugin.** The packager emits real `.claude-plugin/` and
+  `.codex-plugin/` manifests; they install through the host's native commands. We
+  run no distribution infrastructure.
+- **Deterministic & reproducible.** Same inputs → same composed output.
 - **Slug identity, display-only numbers.** Inserting a plugin stage never
   renumbers core.
 - **No gatekeeping.** First- and third-party plugins are mechanically equal.
+- **Trust is host-native.** Org restrictions use the host's managed allowlist
+  (Claude: `strictKnownMarketplaces`; Codex: policy controls + hash-pinned trust).
+  We build no trust layer.
 
 ## See also
 
-- [19 — Composition: Build-Time vs Install-Time](19-plugin-composition-timing.md)
-- [20 — Extension System Vision](20-plugin-system-vision.md)
-- [21 — Implementation Plan](21-plugin-implementation-plan.md)
+- [19 — Plugin Composition Timing](19-plugin-composition-timing.md)
+- [20 — Plugin System Vision](20-plugin-system-vision.md)
+- [21 — Plugin Implementation Plan](21-plugin-implementation-plan.md)
 - [10 — Authoring a Plugin](10-authoring-a-plugin.md)

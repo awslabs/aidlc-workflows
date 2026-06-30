@@ -1,53 +1,57 @@
-# AIDLC Extension System — Vision
+# AIDLC Plugin System — Vision
 
-> **Status:** Vision / target-state. Describes the completed plugin system as
-> decided in [19-plugin-composition-timing.md](19-plugin-composition-timing.md),
-> building on the as-built mechanism in
-> [18-plugin-mechanism.md](18-plugin-mechanism.md) and the author guide
-> [10-authoring-a-plugin.md](10-authoring-a-plugin.md).
-> This document is written in the present tense as if the system is finished; it
-> is the destination, not a record of what ships today. Where it departs from
-> current behavior, that gap is the implementation work (doc 19 §7).
+> **Status:** Vision / target-state. Describes the completed plugin system.
+> Written in the present tense as if finished — it is the destination, not a
+> record of what ships today. Where it departs from current behavior, that gap is
+> the implementation work ([doc 21](21-plugin-implementation-plan.md)).
+>
+> Companions: [18 — Plugin Mechanism](18-plugin-mechanism.md) (normative spec),
+> [19 — Composition Timing](19-plugin-composition-timing.md) (why install-time),
+> [21 — Implementation Plan](21-plugin-implementation-plan.md), and the author
+> guide [10 — Authoring a Plugin](10-authoring-a-plugin.md).
 
 ## 1. One sentence
 
-AIDLC is a small immutable **core** plus an open ecosystem of **plugins** —
-optional, owned, versioned sets of stages, agents, scopes, method/rules (the
-memory layer), sensors, and *additive contributions to existing core stages* —
-composed by a **single composer** that runs over each install's *chosen* set of
-plugins,
-deterministically and reproducibly. The only pre-built artifact is **bare core**
-(zero plugins); every plugin, first- or third-party, is composed at install.
+AIDLC is a small immutable **core** plus an open ecosystem of **AIDLC plugins**
+— optional, owned, versioned sets of stages, agents, scopes, method/rules,
+sensors, and additive contributions to existing core stages — **emitted as real
+host plugins** by the packager and installed through each host's native commands.
+A SessionStart hook composes on install (Claude/Codex); a thin `aidlc plugin
+compose` does the same for Kiro. We run no distribution infrastructure.
 
 ## 2. The model in one picture
 
 ```
               author once (harness-neutral)
 <plugin>/  ───────────────────────────────────────┐
-  .aidlc-plugin/plugin.json (manifest: ver, deps) │
+  .aidlc-plugin/plugin.json (source manifest)     │
   stages/ agents/ scopes/ memory/ sensors/        │
   contributions/<phase>/<slug>.md  (the seam)     │
-                                                 │
-   plugins published as git repos/tags ──────────┤
-   (first- AND third-party, identical)           │
-                                                 ▼
-                                          ┌───────────────┐
-   bare core (committed) ────────────────▶│ THE COMPOSER  │  one implementation,
-                                          │  over the     │  run wherever you
-   chosen plugin set ─────────────────────▶│  chosen set  │  choose (see below)
-                                          └──────┬────────┘
-                                                 ▼
-                effective install: core + chosen plugins  +  aidlc.lock
-        (stages set-unioned, prose fragments ordered, predicates resolved)
+                                                  ▼
+                                    ┌──────────────────────┐
+                                    │    THE PACKAGER       │
+                                    │  (one more projection │
+                                    │   target per harness) │
+                                    └──────┬───────────────┘
+           ┌───────────────────────────────┼────────────────────────────┐
+           ▼                               ▼                            ▼
+  .claude-plugin/plugin.json    .codex-plugin/plugin.json      .kiro/ tree
+  + SessionStart compose hook   + SessionStart compose hook    (folder-drop)
+           │                               │                            │
+           ▼                               ▼                            ▼
+  /plugin install ──────────▶   codex plugin add ──────────▶  aidlc plugin compose
+  (host store, auto-compose)    (host store, auto-compose)    (thin CLI, manual)
+           │                               │                            │
+           └───────────────────────────────┼────────────────────────────┘
+                                           ▼
+                      effective install: core + chosen plugins
+             (stages set-unioned, prose fragments ordered, predicates resolved)
 ```
 
-There are no two pipelines. There is **one composer**, run over whatever plugins
-an install actually chose. "Build-time vs install-time" was never the real axis:
-the composer always runs and its output is always pinned (a committed tree *or* a
-lockfile) — the only question is **where** it runs (the user's machine, the
-team's CI, or a hosted service). The single thing worth pre-building and
-committing is **bare core**, because it is the one input with no plugins to
-resolve and is therefore identical for everyone.
+The plugin **IS** a host plugin. The packager already cross-compiles per harness;
+emitting a real `.claude-plugin/` or `.codex-plugin/` is one more projection
+target. Customers host their own plugins (git repo + semver tags +
+`marketplace.json`); we run nothing.
 
 ## 3. What a plugin is (unchanged from doc 18)
 
@@ -67,201 +71,132 @@ Code `contributes` + Cargo feature-union — the best-composing model in the fie
 (doc 19 §6.3) — and it is available to **every** plugin, first- and third-party
 alike. No gatekeeping.
 
-## 4. Why bare core is the only build-time artifact
+## 4. Distribution: the hybrid
 
-The core team ships *many* plugins; a given install enables *a few*. That single
-fact dictates the pipeline:
+An AIDLC plugin is distributed differently depending on the host — because the
+hosts are genuinely different shapes (confirmed by real probes,
+`spikes/dist-probe/RESULTS.md`):
 
-- Pre-composing "core + all first-party plugins" yields a tree **nobody
-  installs** — it carries stages the customer never enabled.
-- Pre-composing every subset a customer might pick is the **`2^N` trap** we
-  already rejected for third-party plugins (doc 19 §6.3).
-- So a customer with a chosen subset **runs the composer regardless.** Pre-built
-  first-party deltas would just sit unused beside the set they actually want.
+| Host | Distribution | Compose trigger | Agents | Trust |
+|---|---|---|---|---|
+| **Claude** | real plugin, host store | SessionStart hook (eager) | ✅ | managed allowlist |
+| **Codex** | real plugin, host store | SessionStart hook (lazy, first turn) | ❌ no agent surface | one-time trust, hash-pinned |
+| **Kiro** (CLI/IDE) | folder-drop (no store) | `aidlc plugin compose` / `.kiro.hook` (lazy, promptSubmit) | ✅ full | n/a |
 
-Therefore the only artifact worth pre-building and committing is **bare core**
-(zero plugins): it has no plugin inputs to resolve, it is byte-identical for
-every install, and copying it is genuinely toolchain-free. Everything beyond bare
-core — *any* plugin — is composed from its chosen set. First-party and
-third-party are no longer two pipelines; the distinction is purely **provenance
-and trust** (whose repo, who reviewed it), not how the artifact is produced.
+**The user story (platform team):** You're shipping AIDLC plugins to product
+teams, some on Claude, some on Codex, some on Kiro. You publish once:
 
-> CI still composes-and-diffs first-party plugins — but as a **review and test
-> aid** (a reviewer sees exactly what a plugin does to core, and the drift guard
-> proves the composer is deterministic), **not** as the artifact customers
-> install. We pin bare core; we test plugins.
+1. Author against `core/`, run the packager — it spits out per-harness plugins.
+2. Push them to a git repo you own with semver tags.
+3. Drop a `marketplace.json` in (one repo can list everything — one entry works
+   on any harness).
 
-## 5. Packages, end to end (first- and third-party, one path)
+Then teams **install themselves:**
+- **Claude:** `/plugin marketplace add` on your repo + `/plugin install` — a
+  SessionStart hook composes, done.
+- **Codex:** same two commands; approve the hook trust prompt once (it's
+  content-hash-pinned, won't re-prompt until the hook changes); compose fires on
+  first interaction.
+- **Kiro:** no store — `git pull` your repo + `aidlc plugin compose` (or the IDE
+  discovers the `.kiro/` tree from the folder-drop and the `.kiro.hook` composes
+  on first prompt).
 
-Bundles are published the same way regardless of provenance — first-party
-plugins live in this repo's `plugins/`; third-party plugins live in their own
-repos with identical internal structure. Both flow through one install path.
+Rolling out a new version = bump a tag. Trust controls are the host's own
+managed mechanism (Claude: `strictKnownMarketplaces`, unoverridable; Codex:
+policy controls + hash-pinned trust). For teams not on a host store at all, you
+keep a plain git repo and point them at it — same shape as the marketplace.
 
-- **Distribution.** A plugin is a git repository (or published archive) with a
-  `.aidlc-plugin/plugin.json` manifest at its root. No central gatekeeper; a
-  registry may *index* plugins for discovery but is not in the trust path.
-  (Mirrors Claude Code's git-backed plugin model — doc 19 §6.2 — minus the
-  marketplace requirement. First-party plugins are simply the ones this repo
-  publishes.)
-- **Versioning.** Semver in `plugin.json`; dependencies declared as
-  `dependencies: ["compliance@^1.2.0"]`, resolved against the dependency's git
-  tags (`<plugin>--v<version>` convention). Constraints from multiple dependents
-  are intersected to the highest satisfying version.
-- **Install.** `aidlc plugin add <git-url-or-name>`:
-  1. **resolve** the version set (the requested plugin + its transitive
-     `dependencies` closure) against tags;
-  2. **fetch** each source at its resolved SHA and **verify** a content hash;
-  3. **compose** over the chosen set — the one composer, run over
-     `bare core + {every enabled plugin}`: one set-union merge of all active
-     contributions per stage, one cross-plugin validation pass, one predicate
-     fixpoint, one compile;
-  4. **project + write** the effective install and record an `aidlc.lock`.
-- **Enable / disable.** Enablement is recorded per scope (project / user), like
-  Claude Code's `enabledPlugins`. Disabling a plugin re-composes without it;
-  disabling a plugin another enabled plugin depends on is blocked with a clear
-  message.
-- **Removal.** `aidlc plugin remove <name>` drops it from the chosen set and
-  re-composes. Because composition is additive and bare core is never mutated,
-  removal is exact — no residue.
+> **Codex caveat:** no agent surface (confirmed gap). Plugins run on Codex but
+> without persona-specialized agents — accepted tradeoff (doc 19 probes).
 
-### 5.1 Where the composer runs (it always runs; only the site varies)
+## 5. The install path, end to end
 
-The chosen-set compose is one operation that can run at three sites, same code,
-same output, pinned by the same lockfile:
-
-- **User's machine** — the default; `aidlc plugin add` composes locally.
-- **A team's CI** — for locked-down environments: compose the team's declared set
-  once, commit the resulting tree + `aidlc.lock`, and have developers copy it
-  (recovering a toolchain-free path for *that team's specific set*, not a
-  canonical one).
-- **A hosted "compose my set" service** — emits the same pinned tree + lockfile.
-
-This is the residue of the old build-vs-install debate: the question was never
-*whether* to pre-build, only *where the one composer runs* for a given chosen
-set. Bare core is the lone set (the empty one) worth committing centrally.
-
-### 5.2 The lockfile (`aidlc.lock`)
-
-Reproducibility without pre-building the `2^N` cross-product, the universal
-answer of every scaled ecosystem (doc 19 §6.3). The lockfile pins, per plugin:
-
-- **source** — git URL + exact commit SHA;
-- **version** — the resolved semver;
-- **integrity** — a content hash of the fetched source;
-- **result hash** — a content hash of the composed output for the locked set;
-- **composer version** — the AIDLC composer that produced it.
-
-A second machine running `aidlc plugin sync` against the same `aidlc.lock`
-produces a byte-identical effective install. This is build-time-grade determinism
-delivered at install time.
-
-### 5.3 Worked example — picking a 1st- and a 3rd-party plugin, then starting AIDLC
-
-Meet a team building an internal service. They want the standard core, the
-first-party **`ops-pro`** operation phase (shipped by the AIDLC team), and a
-third-party **`acme-compliance`** plugin from their own platform org's git repo.
-The whole flow is the same three moves regardless of harness: **choose a
-harness, compose the chosen set, start.** Only the last "start" step differs
-between Claude and Kiro.
-
-#### Step 1 — choose plugins and compose (harness-agnostic)
-
-The user names a harness and the plugins they want. The composer resolves the
-set (including `acme-compliance`'s declared `dependencies`), fetches and
-verifies sources, composes `bare core + {ops-pro, acme-compliance}`, projects it
-for the chosen harness, and writes `aidlc.lock`:
+### 5.1 Claude (zero-touch install)
 
 ```bash
-# from anywhere; --harness picks the projection target
-aidlc plugin add ops-pro \
-                 github:acme-corp/aidlc-acme-compliance@^2 \
-  --harness claude \
-  --into ./my-service
+# in a Claude Code session:
+/plugin marketplace add <your-org>/<your-plugin-repo>
+/plugin install <plugin-name>@<marketplace>
+# done — SessionStart hook composes on next session
 ```
 
-What the composer prints:
+The hook fires **eagerly** (on session spawn), writes the composed tree into the
+project, and the workflow runs against it immediately. `CLAUDE_PROJECT_DIR`,
+`CLAUDE_PLUGIN_ROOT`, and `CLAUDE_PLUGIN_DATA` are all available to the hook.
 
-```text
-resolving …
-  core                 (bare core, pinned)
-  ops-pro      1.4.0   first-party        github.com/awslabs/aidlc-workflows
-  acme-compliance 2.3.1 third-party       github.com/acme-corp/aidlc-acme-compliance
-  └─ requires core@^2, ops-pro@^1   ✓ satisfied
-composing chosen set (3) → claude …
-  set-union: 2 contributions → construction/nfr-requirements   ✓ merged
-  fragments ordered by (order, plugin, anchor)                 ✓
-  cross-plugin validation (ranges, artifacts, same-target)     ✓ no conflicts
-  predicate fixpoint (when:) baked into scope-grid.json        ✓
-projected → ./my-service/.claude/   (+ plugins/ops-pro, plugins/acme-compliance)
-wrote ./my-service/aidlc.lock   (composer 2.1.0)
-```
-
-Note the payoff of the single-composer model: the two plugins **both**
-contribute to `construction/nfr-requirements`, and because this is one N-way
-compose (not two `base+1` deltas), their additions are genuinely **set-unioned**
-into one stage — not last-writer-wins. A teammate later runs `aidlc plugin sync`
-against the committed `aidlc.lock` and gets a byte-identical tree.
-
-> **Locked-down team variant:** the platform org runs the exact command above in
-> *their* CI, commits the resulting `./my-service/.claude/` + `aidlc.lock`, and
-> developers just `git pull`. Same composer, same output — only the *site* moved
-> (doc 19 §7, decision #1). Developers need no toolchain.
-
-#### Step 2 — start in **Claude Code**
-
-The compose in Step 1 produced a `.claude/` tree exactly like today's
-`dist/claude/.claude/`, plus the two plugin dirs under `plugins/`. From here
-it is the unchanged getting-started flow ([guide 01](../../docs/guide/01-getting-started.md)):
+### 5.2 Codex (one-time trust, then zero-touch)
 
 ```bash
-cd my-service
-claude                 # launch Claude Code in the project
+# in Codex CLI:
+codex plugin marketplace add <your-org>/<your-plugin-repo>
+codex plugin add <plugin-name>@<marketplace>
+# approve the trust prompt (one-time, content-hash-pinned)
+# compose fires lazily on first interaction
 ```
 
-Inside the session:
+`PLUGIN_ROOT` / `PLUGIN_DATA` available; `CLAUDE_PROJECT_DIR` is unset on Codex
+(the hook uses `$PWD` as the project root).
 
-```text
-/aidlc --init          # scaffold aidlc-docs/
-/aidlc --doctor        # health check — now reports core + 2 plugins
-/aidlc Build the inventory service with an operational runbook
-```
+### 5.3 Kiro (folder-drop + compose)
 
-`--doctor` reflects the chosen set rather than a fixed roster — e.g.
-`✓ Schema validation: 32 core + 6 plugin stages valid`,
-`✓ Scope validation: enterprise scope includes ops-pro operation stages`. The
-operation-phase stages from `ops-pro` and the compliance gates from
-`acme-compliance` are now part of the resolved plan wherever their scopes and
-`when:` predicates put them on-path.
-
-#### Step 2′ — start in **Kiro**
-
-Identical first two moves; only the harness flag and launch differ. Either
-recompose for Kiro, or (more often) the same `aidlc.lock` projected to a Kiro
-tree:
+No plugin store exists on Kiro. The distribution path is:
 
 ```bash
-aidlc plugin add ops-pro \
-                 github:acme-corp/aidlc-acme-compliance@^2 \
-  --harness kiro \
-  --into ./my-service
+# git pull the plugin repo (or copy the packager's kiro projection)
+cp -r <plugin-repo>/.kiro/ <project>/.kiro/
+# compose
+aidlc plugin compose --project <project>
 ```
 
-This writes a `.kiro/` tree (steering, agents, skills, tools — like
-`dist/kiro/.kiro/`) plus `plugins/`. Then start AIDLC the Kiro way (see
-[Running on Kiro IDE](../../docs/guide/harnesses/kiro-ide.md)): open the project in Kiro
-(or Kiro CLI), and the AI-DLC steering files drive the same `/aidlc` workflow
-over the same composed stage graph. The plugins' stages, agents, and
-contributions are identical — *authored once, harness-neutral, projected to
-both* (doc 18 §2). The only thing that changed between Claude and Kiro is the
-projection target; the chosen plugin set, the merged graph, and `aidlc.lock` are
-the same.
+On **Kiro IDE**, the shipped `.kiro.hook` files (trigger: `promptSubmit`) run the
+composer automatically on first interaction — so the manual `compose` command is
+needed only for Kiro CLI or pre-caching.
 
-> **Why the example matters:** the user never thinks in "build-time vs
-> install-time." They pick a harness, pick plugins, and start. First-party
-> (`ops-pro`) and third-party (`acme-compliance`) are selected the *same way* on
-> the same command line — the only visible difference is the source (a plugin
-> name AIDLC publishes vs. a git URL), which is exactly the provenance/trust
-> distinction and nothing more.
+Agents are auto-discovered from `<project>/.kiro/agents/` (confirmed: `kiro-cli
+agent list` shows workspace agents with no registration).
+
+### 5.4 Worked example — platform team rolling out `test-pro` + `acme-compliance`
+
+Meet a platform team shipping AIDLC plugins to product teams on Claude, Codex,
+and Kiro. They want `test-pro` (first-party, testing) and `acme-compliance`
+(third-party, their org's compliance gates).
+
+**Author + publish (once):**
+```bash
+bun scripts/package.ts                   # emits per-harness plugin projections
+cd <plugin-repo> && git tag test-pro--v0.1.0 && git push --tags
+# marketplace.json already in the repo, listing both plugins
+```
+
+**Claude team installs:**
+```bash
+/plugin marketplace add acme-corp/aidlc-plugins
+/plugin install test-pro@acme-corp-aidlc-plugins
+/plugin install acme-compliance@acme-corp-aidlc-plugins
+# next session: hook composes both → 32 core + 6 plugin stages
+```
+
+**Codex team installs:**
+```bash
+codex plugin marketplace add acme-corp/aidlc-plugins
+codex plugin add test-pro@acme-corp-aidlc-plugins
+codex plugin add acme-compliance@acme-corp-aidlc-plugins
+# approve hook trust once per plugin; compose fires on first turn
+```
+
+**Kiro team installs:**
+```bash
+git clone acme-corp/aidlc-plugins && cd aidlc-plugins
+cp -r kiro-projection/.kiro/ /path/to/project/.kiro/
+aidlc plugin compose --project /path/to/project
+# open project in Kiro IDE → /aidlc
+```
+
+In all three cases, the operation-phase stages from `test-pro` and the
+compliance gates from `acme-compliance` are now part of the resolved plan
+wherever their scopes and `when:` predicates put them on-path. The composer
+genuinely merges both plugins' contributions to shared stages (set-union, not
+last-writer-wins).
 
 ## 6. How plugins compose (the rules of the road)
 
@@ -276,38 +211,36 @@ best-composing quadrant (doc 19 §6.3). Concretely:
   is reserved; cross-plugin collisions (artifacts and scope/agent/sensor slugs)
   are rejected. Stage numbers are display-only, so there is no range to claim or
   collide on — a stage's place comes from its slug-based edges.
-- **Activation** — a plugin's stages exist only when it is in the active set;
-  `when:` predicates (e.g. `producer-in-plan`) resolve over the **merged** graph
-  at compose time and bake into `scope-grid.json`. The runtime stays read-only.
+- **Activation** — a plugin's stages exist only when the plugin is in the active
+  set; `when:` predicates (e.g. `producer-in-plan`) resolve over the **merged**
+  graph at compose time and bake into `scope-grid.json`. The runtime stays
+  read-only.
 
 ### 6.1 Conflicts fail loud, never silent
 
-The single behavior change from today's `base + 1` packaging: when two plugins
-genuinely collide on a non-commutative surface — the same stage's same fragment
-anchor at the same order, an unsatisfiable cross-plugin edge, a duplicate
-artifact name — the composer **errors with plugin attribution** rather than
-resolving by overlay order. AIDLC never enters the "patch-ordering hell" of
-silent ordered last-wins (doc 19 §6.3). Set-union surfaces simply merge;
-sequential surfaces order deterministically; true conflicts stop the build.
+When two plugins genuinely collide on a non-commutative surface — the same
+stage's same fragment anchor at the same order, an unsatisfiable cross-plugin
+edge, a duplicate artifact name — the composer **errors with plugin attribution**
+rather than resolving by overlay order. AIDLC never enters the "patch-ordering
+hell" of silent ordered last-wins (doc 19 §6.3). Set-union surfaces simply merge;
+sequential surfaces order deterministically; true conflicts stop the compose.
 
 ## 7. Authoring is identical for everyone
 
-There is one authoring workflow regardless of where the plugin will live
+There is one authoring workflow regardless of where the plugin will be consumed
 (doc 10):
 
 ```bash
-bun scripts/package.ts --validate-ext <plugin>   # fast loop: manifest, ranges,
-                                                  # deps, artifact namespacing,
-                                                  # contribution targets/anchors
-bun scripts/package.ts                            # compose + project a chosen set
-bun scripts/package.ts --check                    # drift guard (bare core + CI test composes)
+bun scripts/package.ts --validate-plugin <plugin>  # fast loop: manifest, deps,
+                                                    # artifact namespacing,
+                                                    # contribution targets/anchors
+bun scripts/package.ts                              # emit per-harness plugins
 ```
 
-A third-party author runs the same validator against their own tree, then
-publishes a git tag. A first-party author additionally lands in `plugins/`
-and lets CI compose-and-test the plugin (and pin bare core). Same seam, same
-tools, same guarantees — the only difference is *whose repo the plugin lives in*
-(doc 18 §2, "First-party vs third-party — same structure, different repo").
+A third-party author runs the same validator against their own tree, then pushes
+a git tag. A first-party author additionally lands in `plugins/` and lets CI
+emit and test. Same seam, same tools, same guarantees — the only difference is
+*whose repo the plugin lives in* (doc 18 §3).
 
 ## 8. Invariants the finished system holds
 
@@ -315,38 +248,40 @@ tools, same guarantees — the only difference is *whose repo the plugin lives i
 - **Additive-only.** Contributions add; they never override or remove. A genuine
   need to *change* upstream behavior is a framework-level design decision, not a
   plugin concern (doc 18 §6).
-- **Inert when off.** Disabling every plugin yields bare core, byte-identical to
-  the committed artifact.
-- **One composer, one artifact.** The same code composes wherever it runs (user
-  machine, team CI, hosted service). The only thing pre-built and committed is
-  **bare core** — there is no separate build-time pipeline for plugins.
-- **Deterministic & reproducible.** Bare core via byte-pinned drift guard; every
-  composed set via lockfile + content hash. No plugin combination is ever
-  pre-built or shipped as a canonical artifact.
-- **No gatekeeping.** First- and third-party plugins are mechanically equal;
-  provenance is the only difference.
+- **Inert when off.** Disabling every plugin yields bare core, byte-identical.
+- **A plugin IS a host plugin.** The packager emits real `.claude-plugin/` and
+  `.codex-plugin/` manifests. They install through the host's native commands. We
+  run no distribution infrastructure.
+- **One composer, host-triggered.** The same composer code runs wherever it's
+  invoked — by the host's SessionStart hook (Claude/Codex) or by `aidlc plugin
+  compose` (Kiro).
+- **Deterministic & reproducible.** Same inputs → same composed output.
+- **Slug identity, display-only numbers.** Inserting a plugin stage never
+  renumbers core.
+- **No gatekeeping.** First- and third-party plugins are mechanically equal.
+- **Trust is host-native.** Org restrictions use the host's managed allowlist;
+  we build no trust layer.
 
 ## 9. What this is not
 
-- **Not a monkeypatch layer.** Bundles cannot rewrite arbitrary core behavior;
-  the additive boundary is the point (doc 19 §6.3 names runtime monkeypatching
-  the anti-pattern).
+- **Not a monkeypatch layer.** Plugins cannot rewrite arbitrary core behavior;
+  the additive boundary is the point (doc 19 §6.3).
 - **Not a per-harness fork.** A plugin is authored harness-neutral and projected
-  into every harness; authoring per-harness is forbidden (doc 18 §2).
-- **Not centrally pre-built for anyone past bare core.** First-party plugins are
-  *not* shipped pre-composed — the core team ships many plugins and each install
-  picks a few, so the only universal artifact is bare core. The `2^N`
-  combinatorial trap is avoided by composing the actual chosen set, not
-  enumerating subsets.
+  into every harness; authoring per-harness is forbidden (doc 18 §3).
+- **Not centrally pre-built for anyone past bare core.** The `2^N` combinatorial
+  trap is avoided by composing the actual chosen set at install, not enumerating
+  subsets.
 - **Not a heavyweight runtime.** The AIDLC runtime stays read-only; all
-  composition happens at compose time (CI or `aidlc plugin` invocation), never
-  per-session.
+  composition happens at compose time (hook or CLI invocation), never per-session.
+- **Not our own distribution service.** Customers host their own plugin repos;
+  we ship only the packager that emits host-native plugins and the composer that
+  merges them.
 
 ## See also
 
-- [19 — Extension Composition: Build-Time vs. Install-Time](19-plugin-composition-timing.md)
-  — the decision and the evidence behind it.
-- [18 — Plugin Mechanism](18-plugin-mechanism.md) — the as-built mechanism
-  (layers, delta model, `when:` predicate, §4 merge, §5 guards).
-- [10 — Authoring a Plugin](10-authoring-a-plugin.md)
-  — the author-facing walkthrough.
+- [18 — Plugin Mechanism](18-plugin-mechanism.md) — normative design spec.
+- [19 — Plugin Composition Timing](19-plugin-composition-timing.md) — why
+  install-time, with evidence.
+- [21 — Plugin Implementation Plan](21-plugin-implementation-plan.md) — the work.
+- [10 — Authoring a Plugin](10-authoring-a-plugin.md) — the author-facing guide.
+- `spikes/dist-probe/RESULTS.md` — the real-host probe evidence backing §4.

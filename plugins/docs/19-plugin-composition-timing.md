@@ -1,4 +1,4 @@
-# Extension Composition: Build-Time vs. Install-Time
+# Plugin Composition: Build-Time vs. Install-Time
 
 > **Status:** Decision note, evidence-backed. Companion to
 > [18-plugin-mechanism.md](18-plugin-mechanism.md). Resolves a recurring
@@ -6,18 +6,13 @@
 > §§1–4 make the two models precise and isolate the part of the criticism that
 > bites; §5 states the direction; §6 records the investigation that backs it
 > (our composer traced in code, Claude Code's plugin model, and a landscape
-> survey); §7 is the decision + next steps.
+> survey); §7 is the decision.
 >
-> **Decision:** one mechanism, no gatekeeping. A *single composer* runs over each
-> install's chosen plugin set, wherever convenient (user machine / team CI /
-> hosted service), pinned by a lockfile. The only centrally pre-built artifact is
-> **bare core** — the core team ships many plugins and each install enables a
-> few, so no "all first-party" tree is canonical and pre-building subsets is the
-> `2^N` trap. First-party vs third-party is provenance/trust only, not a pipeline
-> difference. Both get the full contribution seam (the best-composing model in
-> the field). Reproducibility via lockfile + content hash, not pre-built
-> combinations. See §7 for the full decision and the target-state vision in
-> [20-plugin-system-vision.md](20-plugin-system-vision.md).
+> **Decision: the hybrid.** Emit real host plugins for Claude/Codex (SessionStart
+> hook composes); thin `aidlc plugin compose` for Kiro (no store). One composer,
+> host-triggered. Trust = host-native (managed allowlist / hash-pinned). We run
+> no distribution infra. See §7 for full detail and
+> [20-plugin-system-vision.md](20-plugin-system-vision.md) for the target state.
 
 ## 1. What "build-time" means in the current design
 
@@ -214,47 +209,52 @@ v1 over-unified `std` into `no_std` builds → resolver v2) is the one guardrail
 respect: union/additive composition is only safe while contributions **never
 subtract** — which §6's hard additive-only boundary already enforces.
 
-## 7. Decision
+## 7. Decision — the hybrid
 
-1. **One composer over each install's chosen plugin set; pre-build only bare
-   core.** There is a single composer, not a build-time and an install-time
-   variant. It runs over `bare core + {chosen plugins}` wherever convenient — the
-   user's machine, a team's CI, or a hosted service — and its output is pinned by
-   a lockfile. The *only* artifact committed centrally is **bare core** (zero
-   plugins), because the core team ships many plugins and each install enables a
-   few: there is no canonical "all first-party" tree anyone installs, and
-   pre-building every subset is the `2^N` trap. First-party vs third-party is
-   therefore **provenance/trust only**, not a pipeline difference. (This refines
-   the §5 "two invocation sites" framing: same conclusion — one composer — but
-   build-time is *not* retained as a first-party distribution cache, only as a CI
-   review/test aid plus the bare-core pin.)
-2. **Keep the additive-only contribution seam.** It is the right conflict model
-   per §6.3 — do not add override/removal/monkeypatch semantics.
-3. **Lockfile for reproducibility** — pin each plugin's source git SHA, version,
-   composer version, and a content hash of the composed result. This gives
-   build-time-grade determinism for *any* chosen set without pre-building the
-   `2^N` cross-product. Bare core keeps its byte-pinned drift guard.
-4. **Turn the one silent gap into a detected one.** Two plugins → same stage is
-   currently silent last-wins (§6.1). N-way merge makes it a clean set-union;
-   prose fragments already order deterministically by `(order, plugin, anchor)`
-   (doc 18 §5.2). Add explicit cross-plugin same-target validation
-   (OPA-roots / npm-strict-peer style) so any genuinely non-commutative case
-   errors loudly rather than resolving by overlay order.
+The evidence in §6 resolved the gating unknown (hooks genuinely compose) and
+confirmed the per-host asymmetry. The decision, validated by real probes
+(`spikes/dist-probe/RESULTS.md`) and approved by the team (2026-06-30):
 
-### Next: design the implementation (plan step 4)
+**Emit real host plugins for Claude and Codex; ship a thin `aidlc plugin compose`
+path for Kiro.** Not pure A, not pure B — because the hosts are genuinely
+different shapes and one mechanism can't fit all three well.
 
-The build-vs-install and vision questions (plan steps 1–2) are settled above.
-Implementation design follows from it, in rough dependency order:
+1. **The packager emits real host plugins** (`.claude-plugin/plugin.json`,
+   `.codex-plugin/plugin.json`) — one more projection target alongside the
+   existing harness projections. An AIDLC plugin IS a host plugin.
+2. **A SessionStart hook composes** on Claude (eager) and Codex (lazy, first
+   turn). The composer is the same; the host decides when it runs.
+3. **Kiro has no store** — the plugin is distributed as a git repo/folder-drop
+   and composed via `aidlc plugin compose` (thin CLI) or the IDE's `.kiro.hook`
+   (lazy, `promptSubmit` trigger).
+4. **Trust is host-native** — Claude's `strictKnownMarketplaces` (managed,
+   unoverridable), Codex's one-time hash-pinned trust. We build no trust layer.
+5. **Keep the additive-only contribution seam** — it is the right conflict model
+   per §6.3. Do not add override/removal/monkeypatch semantics.
+6. **Conflicts fail loud** — two plugins → same stage is a clean set-union;
+   non-commutative collisions error with plugin attribution.
+7. **Codex loses agents** (confirmed gap, accepted) — runs degraded.
+8. **We run no distribution infrastructure** — customers host their own plugin
+   repos (git + semver tags + `marketplace.json`). One entry works across hosts.
 
-- **N-way composer** — generalize the `base + 1` orchestration: one composed
-  tree over the active set (`buildTree(m, tmp, ⋃ pluginDirs, [A,B,…])`),
-  `buildBundleDelta`/`validateBundleGraph` to take a set, per-`plugin`
-  validation against each manifest.
-- **Distribution + installer** — how a plugin is published (git repo, manifest),
-  resolved (semver against tags, à la Claude Code), fetched, and projected +
-  recompiled locally; enable/disable/remove.
-- **Lockfile format** — source SHA + version + composer version + result hash.
-- **Cross-plugin same-target validation** — promote the silent case to an error.
-- **Bare-core pin + CI test composes** — commit only bare core under the drift
-  guard; CI compose-and-diffs first-party plugins as a review/test aid, not a
-  shipped artifact.
+### Why the hybrid dominates
+
+- Pure A (our own CLI + trust + marketplace) pays to rebuild what Claude/Codex
+  already ship for free, and would *still* need the folder-drop path for Kiro.
+- Pure B (host plugin everywhere) can't apply to Kiro (no store to emit into)
+  and half-fails Codex (no agents).
+- The hybrid takes each host's native strength: real plugins where stores exist
+  (cheapest, native UX), thin CLI where they don't (Kiro — which we must build
+  anyway).
+
+### Next: implementation
+
+See [doc 21](21-plugin-implementation-plan.md) for the sequenced work. The key
+items that changed from the original plan:
+- **B.4 (trust) is deleted** — host-native trust replaces our own layer.
+- **B.6 (distribution + installer) shrinks** — becomes "emit the host plugin
+  projection target + write the SessionStart compose hook" for store hosts, and
+  the thin `aidlc plugin compose` for Kiro. No `aidlc plugin add` CLI for
+  Claude/Codex.
+- **A new item: packager projection target** — emitting `.claude-plugin/` and
+  `.codex-plugin/` from the authored plugin tree.

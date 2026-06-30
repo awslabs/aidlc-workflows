@@ -5,7 +5,7 @@
 > [Plugin Mechanism](18-plugin-mechanism.md). For *why* the
 > system composes the way it does, see
 > [Composition: Build-Time vs Install-Time](19-plugin-composition-timing.md);
-> for the end-to-end picture, [Extension System Vision](20-plugin-system-vision.md).
+> for the end-to-end picture, [Plugin System Vision](20-plugin-system-vision.md).
 
 An **AIDLC plugin** (a **plugin**) is a reusable, optional set of AIDLC
 contributions — new stages, agents, scopes, method/rules (the memory layer),
@@ -212,32 +212,54 @@ scopes, method/rules, or knowledge — one rule each:
   Membership is additive-only — a stage can gain a scope from a plugin but never
   lose one. See [Scopes](../../docs/harness-engineering/04-scopes.md).
 
-## 5. Compose + install
+## 5. Distribution + install
 
-A plugin is composed into an install over the user's *chosen set* — `bare core +
-{the plugins they enabled}` — by one composer. Composition merges all chosen
-plugins' subtrees and contributions, validates the merged set, compiles the
-stage graph + scope grid, and projects the result for the target harness. The
-orchestrator routes entirely off that compiled graph, so a plugin stage runs the
-moment it is composed in — no prose or skill file to edit.
+The packager emits your plugin as **a real host plugin** (one projection target
+per harness: `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, plus a
+Kiro folder projection). You publish the output to a git repo with semver tags
+and a `marketplace.json`, and teams install through the host's native commands.
 
-The consumer side (from [the vision](20-plugin-system-vision.md)
-§5):
+### Claude / Codex (host store)
 
 ```bash
-aidlc plugin add test-pro --harness claude --into ./my-service   # resolve, fetch, compose, lock
-cd my-service && claude                                          # then the normal /aidlc flow
+# teams run these in their host CLI:
+/plugin marketplace add <your-org>/<your-plugin-repo>    # Claude
+/plugin install test-pro@<marketplace>                   # Claude
+
+codex plugin marketplace add <your-org>/<your-plugin-repo>   # Codex
+codex plugin add test-pro@<marketplace>                      # Codex
 ```
 
-Composition records an `aidlc.lock` pinning each plugin's source + version, the
-bare-core version, the composer version, and a result hash — so
-`aidlc plugin sync` reproduces a byte-identical install on another machine.
+A **SessionStart hook** (bundled in the emitted plugin) composes automatically —
+merges all chosen plugins' subtrees and contributions, validates the merged set,
+compiles the stage graph + scope grid, and projects the result. The orchestrator
+routes entirely off that compiled graph, so a plugin stage runs the moment it is
+composed in — no prose or skill file to edit.
 
-> **Status.** The `aidlc plugin` installer, marketplace resolution, and lockfile
-> are the install-time work in [doc 21](21-plugin-implementation-plan.md)
-> (§B.6/B.7). Concrete example config files — `plugin.json`, `marketplace.json`,
-> `managed-settings.json` (the org trust allowlist), `aidlc.lock.json` — are in
-> [`reference/examples/test-pro/`](examples/test-pro/).
+### Kiro (no store — folder-drop + compose)
+
+```bash
+# git pull your plugin repo, copy the Kiro projection into the project:
+cp -r <plugin-repo>/kiro-projection/.kiro/ <project>/.kiro/
+# run the composer:
+aidlc plugin compose --project <project>
+# open in Kiro IDE or kiro-cli chat → /aidlc
+```
+
+On Kiro IDE the shipped `.kiro.hook` fires the composer on first prompt, so
+`aidlc plugin compose` is needed only for CLI or pre-caching.
+
+### Trust
+
+Trust is **host-native** — you don't build anything:
+- Claude: org admin sets `strictKnownMarketplaces` (managed, unoverridable).
+- Codex: one-time trust prompt per plugin, content-hash-pinned.
+- Kiro: n/a (folder-drop, no host gate).
+
+> **Concrete examples** — `plugin.json`, `marketplace.json`,
+> `managed-settings.json` (the org trust config), `aidlc.lock.json` — are in
+> [`examples/test-pro/`](examples/test-pro/). See also the
+> [vision doc §5](20-plugin-system-vision.md) for the full platform-team story.
 
 ## Rules of the road
 
@@ -258,10 +280,10 @@ bare-core version, the composer version, and a result hash — so
 
 - [Plugin Mechanism](18-plugin-mechanism.md) — the normative
   design (the manifest, composition model, the contribution seam, invariants).
-- [Composition: Build-Time vs Install-Time](19-plugin-composition-timing.md)
-  — why composition is install-time.
-- [Extension System Vision](20-plugin-system-vision.md) — the
-  end-to-end picture + worked Claude/Kiro example.
+- [Plugin Composition Timing](19-plugin-composition-timing.md)
+  — why install-time, with evidence.
+- [Plugin System Vision](20-plugin-system-vision.md) — the
+  end-to-end picture + worked per-host example.
 - [Implementation Plan](21-plugin-implementation-plan.md) — the
   sequenced work to build it.
 - [Anatomy of a Stage](../../docs/harness-engineering/01-anatomy-of-a-stage.md), [Scopes](../../docs/harness-engineering/04-scopes.md),

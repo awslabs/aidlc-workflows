@@ -1,4 +1,4 @@
-# AIDLC Extension System — Implementation Plan
+# AIDLC Plugin System — Implementation Plan
 
 > **Status:** Plan / proposal. Turns the vision in
 > [20-plugin-system-vision.md](20-plugin-system-vision.md) and the decision
@@ -449,47 +449,24 @@ same-`target`-stage advisory so two plugins enriching one stage is visible (it's
 
 **Size:** S. One validation pass, reuses existing plumbing.
 
-### B.4 Trust mechanism (the dropped marketplace)
+### B.4 Trust — host-native (NO AIDLC-BUILT TRUST LAYER)
 
-**Decision.** The vision put the registry "out of the trust path" and dropped the
-marketplace — but that's where org-level "only install from our GitHub org" lived
-(Claude Code: managed allowlist admins control, devs can't override). It has to
-go *somewhere*.
+**Decision.** Under the hybrid, trust is **delegated to the host**. We build
+nothing.
 
-**Call.** Re-introduce trust as **managed settings**, modeled directly on Claude
-Code's mechanism (a curated source allowlist enforced by settings precedence),
-*without* mandating a marketplace for discovery. Concretely: an
-`aidlc plugin add <git-url>` is gated by an allowlist of permitted sources that
-an admin sets in managed/system settings, which user/project settings **cannot**
-override. Discovery (a catalogue) stays optional and out of the trust path;
-*authorization to install* is the managed control.
+**Confirmed by probes** (`spikes/dist-probe/RESULTS.md`):
+- **Claude:** `strictKnownMarketplaces` in managed-settings — enforced pre-fetch,
+  unoverridable by user scope, true allowlist. Blocks non-listed sources outright.
+- **Codex:** one-time `trust_level: "trusted"` + hook content-hash in
+  `config.toml`. Re-prompts only when a hook file changes (security feature).
+- **Kiro:** n/a — folder-drop distribution, no host gate.
 
-**The Claude Code mechanism to mirror (confirmed).** Two managed-only keys, in
-`managed-settings.json` (Linux `/etc/claude-code/`, macOS
-`/Library/Application Support/ClaudeCode/`, Windows `Program Files\ClaudeCode\`,
-or MDM/registry/server-managed):
-- **`strictKnownMarketplaces`** — an *allowlist* of permitted sources; matches by
-  exact `github` `owner/repo`, exact `url`, or regex `hostPattern`/`pathPattern`
-  (e.g. a `github` `repoPattern` of `^acme-corp/`). Gates *add* and
-  *install/update/refresh/auto-update*, checked **before** any fetch.
-- **`blockedMarketplaces`** — a denylist, same enforcement points.
+**Changes: NONE.** This item is deleted from the build. Documentation
+(how an org admin configures the host allowlist for AIDLC plugins) is all that's
+needed — no code.
 
-Both live **only** in managed scope and have **no cross-scope merge**, so
-user/project/local settings cannot add to or override them. Managed-settings
-precedence is highest (Managed > CLI > Local > Project > User). That is exactly
-"org says only our GitHub org, devs can't change it." (Source:
-`code.claude.com/docs/en/plugin-marketplaces.md#managed-marketplace-restrictions`,
-`admin-setup.md`.)
-
-**Changes (net-new).** Mirror this for AIDLC: a managed-only
-`aidlc.strictKnownBundleSources` (+ optional `blockedBundleSources`) read with
-the same highest-precedence-no-merge semantics, and a source-allowlist check in
-the `aidlc plugin` installer (doesn't exist yet — B.6), enforced *before* fetch;
-a trust prompt on first install of a permitted-but-new source. Reusing the key
-*shape* (github/url/hostPattern entries) keeps it familiar to admins who already
-manage Claude Code.
-
-**Size:** M, but **gated on the installer existing** (B.6).
+**Size:** ~~M~~ → **0** (documentation only; `examples/test-pro/managed-settings.json`
+already shows the shape).
 
 ### B.5 A second axis over scope (plugin sub-features)
 
@@ -512,22 +489,31 @@ work today.
 
 **Size:** L (deferred).
 
-### B.6 Distribution + installer (`aidlc plugin …`)
+### B.6 Distribution — packager projection + compose hook (hybrid)
 
-**Decision.** None of the install-time flow exists yet — there is no CLI that
-resolves, fetches, composes locally, and writes a lockfile. Build it, or reuse a
-host's plugin manager?
+**Decision.** Under the hybrid, distribution splits by host capability:
+- **Claude/Codex:** the packager emits a real host plugin (a new projection
+  target: `.claude-plugin/` / `.codex-plugin/` with `plugin.json` + a
+  `hooks/hooks.json` wiring the SessionStart compose hook). Teams install via the
+  host's own `/plugin install` / `codex plugin add`. No AIDLC CLI needed.
+- **Kiro:** no store — the thin `aidlc plugin compose` CLI does
+  resolve + fetch + compose + project for Kiro. Only this path needs our CLI.
 
-**Call.** Build a thin `aidlc plugin` CLI (`add`/`remove`/`sync`/`list`), reusing
-Claude Code's git-tag semver resolution conventions (`<plugin>--v<version>` tags)
-so a plugin repo is also a well-formed plugin source. Resolution → fetch+verify
-→ N-way compose (B.1) → project for `--harness` → write `aidlc.lock`.
+**Changes (net-new).**
+- *Packager projection targets:* emit `.claude-plugin/plugin.json`,
+  `.codex-plugin/plugin.json`, and the SessionStart hooks.json that invokes the
+  composer — one new emitter per host, mirroring how `harness/claude/manifest.ts`
+  etc. already drive per-harness emission.
+- *Kiro thin CLI:* `aidlc plugin compose` (resolve deps from git tags, fetch,
+  N-way compose, project the `.kiro/` tree). The resolver + fetch are shared with
+  the compose hook (same code, different invocation).
+- *marketplace.json template:* emitted alongside the plugin projections so the
+  publisher drops it in and tags.
 
-**Changes (net-new).** The CLI; a resolver (semver vs git tags); fetch + content
-hashing; the lockfile writer/reader; enable/disable state per scope. Composes on
-top of the N-way composer (B.1) and the manifest (A.1).
-
-**Size:** L.
+**Size:** M (down from L — the full install CLI, trust layer, and lockfile
+reader/writer from the old B.6 are gone; only the projection target + Kiro
+thin-CLI remain). Composes on top of the N-way composer (B.1) and the manifest
+(A.1).
 
 ### B.7 Lockfile + version stamps (pin bare core and composer)
 
@@ -688,10 +674,9 @@ B.3 collision detection ─────── needs the plugin set (have it); ch
 B.1 N-way composer  ─────────── the engine; everything install-time depends on it
         ├─ B.8 stage-table generator ── part of compose; independent, can land any time
         │
-B.6 installer + lockfile  ───── needs B.1 + A.1 + B.7
+B.6 packager projection + Kiro CLI ── needs B.1 + A.1 (emits host plugins + compose hook)
         │
-B.4 trust (managed allowlist)── needs B.6
-        │
+B.4 trust ── DELETED (host-native; documentation only)
 B.5 feature axis  ───────────── deferred; separate-plugins covers it until then
 B.9 plugind MCP servers  ────── deferred; project-root MCP covers it until a plugin needs its own
 ```
@@ -721,10 +706,12 @@ hardens what exists and makes first-party multi-plugin real, which is the
 forcing function (issue #430) anyway. It also keeps today's build-time delivery,
 so nothing about the user's install flow changes yet.
 
-**v2 (the install-time leap):** B.1 N-way composer → B.7 stamps → B.6 installer +
-lockfile → B.4 trust, with B.8 stage-table generator folded into compose (it can
-also land in v1 — it's independent and cheap). This is the larger, riskier block;
-doing v1 first lets us validate the contribution/scope/collision model with real
+**v2 (the hybrid delivery):** B.1 N-way composer → B.7 stamps → B.6 packager
+projection targets + Kiro thin-CLI + SessionStart compose hooks, with B.8
+stage-table generator folded into compose (it can also land in v1). B.4 (trust) is
+deleted — host-native, documentation only. This is a moderate block (not L — the
+full CLI/trust/lockfile layer is gone); doing v1 first lets us validate the
+contribution/scope/collision model with real
 plugins before we move the composer onto users' machines.
 
 **v3+ (deferred features, build when a plugin needs them):** B.5 feature axis
@@ -744,8 +731,8 @@ plugins before we move the composer onto users' machines.
 | B.7 version stamps | S | net-new | v1/v2 boundary |
 | B.1 N-way composer | L | branch (loop, packaging model) | v2 |
 | B.8 stage-table generator | S | net-new (+ marker edit) | v1 or v2 (independent) |
-| B.6 installer + lockfile | L | net-new | v2 |
-| B.4 trust | M | net-new (gated on B.6) | v2 |
+| B.6 packager projection + Kiro CLI | M | net-new (emitters + thin compose CLI) | v2 |
+| B.4 trust | **0** | DELETED — host-native; docs only | — |
 | B.5 feature axis | L | net-new | v3 (deferred) |
 | B.9 plugind MCP servers | M | net-new (`contributes.mcp` + merge) | v3 (deferred) |
 
@@ -780,7 +767,7 @@ plugins before we move the composer onto users' machines.
 
 ## See also
 
-- [20 — Extension System Vision](20-plugin-system-vision.md) — target state.
+- [20 — Plugin System Vision](20-plugin-system-vision.md) — target state.
 - [19 — Composition: Build-Time vs Install-Time](19-plugin-composition-timing.md)
   — the decision + evidence.
 - [18 — Plugin Mechanism](18-plugin-mechanism.md) — as-built.
