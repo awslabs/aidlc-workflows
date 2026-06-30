@@ -28,8 +28,10 @@
 //     state, must never ship in a public repo).
 
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { platform } from "node:os";
+import { join } from "node:path";
 
 /** Default launch binary; override via AIDLC_KIRO_IDE_BIN (mirrors AIDLC_CODEX_BIN).
  *  macOS-only as written - Kiro.app is a .app bundle, not a PATH command. */
@@ -176,6 +178,56 @@ export class CdpTarget {
 }
 
 // ---------------------------------------------------------------------------
+// Seed generation (skip onboarding with NO committed profile, NO credentials).
+// ---------------------------------------------------------------------------
+
+// Spike-proven (tmp/issue-451-impl/SEED-SPIKE-RESULTS.md, 2026-06-30): a fresh
+// Kiro user-data-dir hits the "Import configuration" onboarding wall and never
+// reaches chat. The ONLY load-bearing flag that skips it is the global-state row
+// `kiroAgent.onboarding.onboardingCompleted = "true"` in
+// User/globalStorage/state.vscdb (an empty fresh DB seeded with just that row was
+// verified to land directly on the workbench). Kiro AUTH is machine-level (Keychain
+// / IdC, NOT in the profile - grepping the real DB's 80 keys for
+// auth/token/credential/cookie/sso/secret returned nothing), so the seed needs ZERO
+// credentials. We therefore GENERATE the seed from constants at setup time rather
+// than committing or copying any real profile - nothing sensitive ever touches the
+// repo. The two extra rows + settings only mute cosmetic notification toasts (MCP
+// tools, Builder steering, git-repo prompt); the onboarding row is what unblocks chat.
+const SEED_STATE_ROWS: ReadonlyArray<readonly [string, string]> = [
+  ["kiroAgent.onboarding.onboardingCompleted", "true"], // load-bearing: skips the import wall
+  ["releaseNotes/lastVersion", "0.0.0"], // mute the release-notes popup (version-agnostic stub)
+  ["trusted-publishers-init-migration", "true"], // mute the trusted-publishers migration toast
+];
+const SEED_SETTINGS = {
+  "workbench.startupEditor": "none",
+  "workbench.welcomePage.walkthroughs.openOnInstall": false,
+  "telemetry.telemetryLevel": "off",
+  "security.workspace.trust.enabled": false,
+  "update.showReleaseNotes": false,
+} as const;
+
+/** Build a minimal Kiro IDE user-data-dir under `dir` that skips first-run onboarding,
+ *  from CONSTANTS only - no real profile is copied and no credentials are written (auth
+ *  is machine-level). Returns `dir`. The caller owns `dir` (use a temp dir; Kiro mutates
+ *  the profile in place). Safe to ship: the generated state.vscdb holds exactly the rows
+ *  in SEED_STATE_ROWS and nothing else. */
+export function generateKiroIdeSeed(dir: string): string {
+  const userDir = join(dir, "User");
+  const globalStorage = join(userDir, "globalStorage");
+  mkdirSync(globalStorage, { recursive: true });
+  writeFileSync(join(userDir, "settings.json"), `${JSON.stringify(SEED_SETTINGS, null, 2)}\n`, "utf-8");
+  const db = new Database(join(globalStorage, "state.vscdb"));
+  try {
+    db.run("CREATE TABLE IF NOT EXISTS ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)");
+    const insert = db.prepare("INSERT INTO ItemTable (key, value) VALUES (?, ?)");
+    for (const [k, v] of SEED_STATE_ROWS) insert.run(k, v);
+  } finally {
+    db.close();
+  }
+  return dir;
+}
+
+// ---------------------------------------------------------------------------
 // Launch + attach.
 // ---------------------------------------------------------------------------
 
@@ -264,20 +316,42 @@ export async function pageTarget(port: number): Promise<CdpTarget> {
 const META = 4;
 const SHIFT = 8;
 
-/** The placeholder the Kiro chat input renders - the SAME signal the Kiro TUI test
- *  waits on (t-tui-kiro-status.serial.test.ts:95). Lowercased for a tolerant match. */
+/** The prompt the Kiro chat input renders - the SAME signal the Kiro TUI test waits
+ *  on (t-tui-kiro-status.serial.test.ts:95). Lowercased for a tolerant match. Kept as
+ *  a SECONDARY signal only: live (issue #451 probe, 2026-06-30) the desktop app does
+ *  NOT expose it as an attribute or in body.innerText (see FIND_CHAT_INPUT_EXPR). */
 const CHAT_PLACEHOLDER = "ask a question or describe a task";
 
-/** Scan every execution context for the chat-input placeholder. Returns true once
- *  the input is present (TEST-GRADE replacement for the spike's fixed 11_000ms
- *  settle sleep - the workbench is "ready" when the chat input exists). */
+/** Detect that the Kiro chat input is present and laid out, in whatever execution
+ *  context owns it. TEST-GRADE replacement for the spike's fixed 11_000ms settle sleep:
+ *  the workbench is "ready" once the chat editor exists.
+ *
+ *  Live probe (issue #451, 2026-06-30, generated onboarding-skip seed): the input is a
+ *  tiptap/ProseMirror `contenteditable` DIV inside the doubly-nested vscode-webview
+ *  iframe, and its "ask a question..." prompt is a CSS ::before - NOT a
+ *  placeholder/aria/data-placeholder attribute and NOT present in document.body.innerText
+ *  ({tag:"DIV",ce:"true",ph:null,cls:"tiptap ProseMirror ..."} with
+ *  bodyHasPlaceholder=false). So the old attribute-only match never fired. We now anchor
+ *  on the EDITOR element: a visible contenteditable/textbox whose class is the ProseMirror
+ *  chat editor, or (fallback) any visible editable in the chat webview origin. The prompt
+ *  text is still checked first in case a future Kiro exposes it as an attribute or text. */
 const FIND_CHAT_INPUT_EXPR = `(() => {
   const norm = (s) => (s||"").replace(/\\s+/g," ").trim().toLowerCase();
   const want = ${JSON.stringify(CHAT_PLACEHOLDER)};
-  const els = [...document.querySelectorAll("textarea,[contenteditable='true'],[role='textbox']")];
-  for (const e of els) {
-    const ph = norm(e.getAttribute("placeholder")||e.getAttribute("aria-label")||e.getAttribute("data-placeholder"));
-    if (ph.includes(want)) return true;
+  // (a) prompt text wherever a future Kiro version might expose it (attribute or text).
+  if (norm(document.body && document.body.innerText).includes(want)) return true;
+  for (const e of document.querySelectorAll("[placeholder],[aria-label],[data-placeholder]")) {
+    const v = norm(e.getAttribute("placeholder")||e.getAttribute("aria-label")||e.getAttribute("data-placeholder"));
+    if (v.includes(want)) return true;
+  }
+  // (b) the chat editor element itself: a VISIBLE contenteditable/textbox/textarea.
+  const inWebview = String(location.href).startsWith("vscode-webview://");
+  for (const e of document.querySelectorAll("textarea,[contenteditable='true'],[role='textbox']")) {
+    const r = e.getBoundingClientRect && e.getBoundingClientRect();
+    if (r && !(r.width>0 && r.height>0)) continue;
+    const cls = (e.className||"").toString().toLowerCase();
+    if (/prosemirror|tiptap/.test(cls)) return true;
+    if (inWebview) return true;
   }
   return false;
 })()`;
@@ -293,7 +367,10 @@ export async function waitForChatInput(port: number, timeoutMs = 60_000): Promis
       const t = new CdpTarget(tgt.webSocketDebuggerUrl);
       try {
         await t.connect();
-        const contexts = await t.enableContexts(500);
+        // 1500ms (not the spike's 500ms): the deeply-nested OOPIF chat webview's
+        // executionContextCreated arrives late on a loaded box - a 500ms budget raced
+        // past it and missed the input on a first pass (issue #451 probe, 2026-06-30).
+        const contexts = await t.enableContexts(1500);
         for (const c of contexts) {
           try {
             if (await t.evaluateInContext<boolean>(c.id, FIND_CHAT_INPUT_EXPR)) {
@@ -334,12 +411,112 @@ export async function focusChat(t: CdpTarget): Promise<void> {
   });
 }
 
-/** Type via Input.insertText, then submit with a TEXT-BEARING Enter keyDown
- *  (drive-unblocked.mjs:123-128). The `text:"\r"` on the keyDown is load-bearing -
- *  that is what submits. */
-export async function typeAndSubmit(t: CdpTarget, text: string): Promise<void> {
-  await t.send("Input.insertText", { text });
-  await sleep(500);
+/** Read the chat editor's current text from whatever webview context owns the
+ *  tiptap/ProseMirror contenteditable (the SAME element FIND_CHAT_INPUT_EXPR anchors
+ *  on). Returns null from a context with no chat editor, the (possibly empty) text
+ *  from the one that has it. */
+const READ_CHAT_TEXT_EXPR = `(() => {
+  const norm = (s) => (s||"").replace(/\\s+/g," ").trim();
+  const inWebview = String(location.href).startsWith("vscode-webview://");
+  for (const e of document.querySelectorAll("textarea,[contenteditable='true'],[role='textbox']")) {
+    const cls = (e.className||"").toString().toLowerCase();
+    if (/prosemirror|tiptap/.test(cls) || inWebview) {
+      return norm(e.tagName === "TEXTAREA" ? (e.value||"") : (e.innerText||e.textContent||""));
+    }
+  }
+  return null;
+})()`;
+
+/** The chat editor's current text, scanning every page/iframe context for the one
+ *  that owns it (the input lives in the doubly-nested vscode-webview). "" if absent. */
+export async function readChatText(port: number): Promise<string> {
+  const targets = await listTargets(port);
+  for (const tgt of targets) {
+    if (!tgt.webSocketDebuggerUrl || (tgt.type !== "page" && tgt.type !== "iframe")) continue;
+    const t = new CdpTarget(tgt.webSocketDebuggerUrl);
+    try {
+      await t.connect();
+      const contexts = await t.enableContexts(1200);
+      for (const c of contexts) {
+        try {
+          const r = await t.evaluateInContext<string | null>(c.id, READ_CHAT_TEXT_EXPR);
+          if (r !== null && r !== undefined) {
+            t.close();
+            return r;
+          }
+        } catch {
+          /* context gone */
+        }
+      }
+    } catch {
+      /* target gone */
+    } finally {
+      t.close();
+    }
+  }
+  return "";
+}
+
+/** Cmd+A then Delete to clear the focused chat editor (between retries). */
+async function selectAllAndDelete(t: CdpTarget): Promise<void> {
+  await t.send("Input.dispatchKeyEvent", {
+    type: "rawKeyDown",
+    modifiers: META,
+    key: "a",
+    code: "KeyA",
+    windowsVirtualKeyCode: 65,
+  });
+  await t.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    modifiers: META,
+    key: "a",
+    code: "KeyA",
+    windowsVirtualKeyCode: 65,
+  });
+  await t.send("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    modifiers: 0,
+    key: "Delete",
+    code: "Delete",
+    windowsVirtualKeyCode: 46,
+  });
+  await t.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    modifiers: 0,
+    key: "Delete",
+    code: "Delete",
+    windowsVirtualKeyCode: 46,
+  });
+}
+
+/** Focus the chat input, type `text`, VERIFY it landed in the editor, then submit
+ *  with a TEXT-BEARING Enter keyDown (the `text:"\r"` is load-bearing - that is what
+ *  submits, drive-unblocked.mjs:123-128).
+ *
+ *  Why focus + settle + read-back + retry (issue #451, 2026-06-30): the chat editor
+ *  element EXISTS (waitForChatInput returns true) several seconds before it accepts
+ *  Input.insertText. A blind insert the instant after detection is silently dropped -
+ *  the chat stayed EMPTY for the whole turn and no marker was ever minted (the test
+ *  then burned its full budget watching for a marker that could not appear). A timing
+ *  probe showed a single focus -> 700ms settle -> insert lands once the workbench is
+ *  ready; so we focus, settle, insert, read the editor BACK, and retry (clearing any
+ *  partial) until the text is present before pressing Enter. */
+export async function typeAndSubmit(t: CdpTarget, text: string, port: number): Promise<void> {
+  const want = text.replace(/\s+/g, " ").trim().toLowerCase().slice(0, 40);
+  let landed = false;
+  for (let attempt = 0; attempt < 12 && !landed; attempt++) {
+    await focusChat(t);
+    await sleep(700);
+    await t.send("Input.insertText", { text });
+    await sleep(600);
+    const cur = (await readChatText(port)).toLowerCase();
+    landed = want.length > 0 && cur.includes(want);
+    if (!landed) {
+      await selectAllAndDelete(t);
+      await sleep(1500);
+    }
+  }
+  // Submit. text:"\r" on the keyDown is what actually submits in the tiptap editor.
   await t.send("Input.dispatchKeyEvent", {
     type: "keyDown",
     modifiers: 0,

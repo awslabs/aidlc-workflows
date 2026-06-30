@@ -28,12 +28,15 @@
 // gate var; per CLAUDE.local.md it must be set EXPLICITLY in any slice command or
 // the test skips green (a false green - it exercises nothing).
 //
-// SEED-PROFILE (UNRESOLVED HUMAN DECISION, opt-in only): a fresh Kiro user-data-dir
-// hits the onboarding/sign-in wall and never reaches chat. The spike copied a 44MB
-// real profile (cookies, machine-auth, internal ids) - that MUST NOT ship to this
-// PUBLIC repo. So this test stays opt-in/skip-clean: it requires AIDLC_KIRO_IDE_SEED
-// to point at a developer-built DISTILLED seed; absent => clean SKIP. No profile is
-// committed. (Read harness/kiro-ide/onboarding.fills.ts before hand-distilling one.)
+// SEED-PROFILE (RESOLVED, spike tmp/issue-451-impl/SEED-SPIKE-RESULTS.md): a fresh
+// Kiro user-data-dir hits the "Import configuration" onboarding wall and never reaches
+// chat. The skip is ONE global-state flag (kiroAgent.onboarding.onboardingCompleted);
+// auth is machine-level (NOT in the profile), so a usable seed needs ZERO credentials.
+// We therefore GENERATE a minimal seed from constants at setup (generateKiroIdeSeed) -
+// nothing sensitive is copied or committed. AIDLC_KIRO_IDE_SEED may still point at a
+// developer-supplied user-data-dir to override; absent, the generated seed is used. The
+// only remaining gate is a signed-in Kiro.app on a macOS box (the AIDLC_KIRO_IDE_LIVE
+// gate already implies that), so this no longer needs a hand-built profile.
 //
 // SHAPE OF THE REPRO (constructed, not organic): the #451 fault is intermittent and
 // emerges deep into a long session; a deterministic test cannot reproduce the
@@ -46,14 +49,14 @@
 // hard-blocks the tool call besides). One human turn commits at most one gate.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
-import { platform } from "node:os";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { seededAuditShard } from "../harness/fixtures.ts";
 import { cleanupTuiProject, KIRO_IDE_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
 import {
   autoApprove,
-  focusChat,
+  generateKiroIdeSeed,
   KIRO_IDE_BIN,
   launchKiroIde,
   pageTarget,
@@ -72,12 +75,23 @@ const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
 // via the `.serial.` token, so one process => one port band is enough.
 const PORT = 9400 + (process.pid % 500);
 
-// A DISTILLED seed user-data-dir: only the global-state keys that mark
-// onboarding-complete + machine auth, with NO internal/personal identifiers (this
-// is a PUBLIC repo). Its location is an UNRESOLVED HUMAN DECISION (see header) - the
-// test takes the developer-built shape: AIDLC_KIRO_IDE_SEED points at a seed; an
-// absent seed is a clean SKIP, not a fail. No profile is committed to this repo.
-const SEED_PROFILE = process.env.AIDLC_KIRO_IDE_SEED ?? "";
+// Optional override: point AIDLC_KIRO_IDE_SEED at a developer-supplied user-data-dir.
+// Absent (the normal case), the test GENERATES a minimal onboarding-skip seed from
+// constants (no credentials, nothing committed - see header + generateKiroIdeSeed).
+const SEED_OVERRIDE = process.env.AIDLC_KIRO_IDE_SEED ?? "";
+
+// Build a fresh per-test seed user-data-dir in a temp dir. Kiro mutates the profile
+// in place, so each launch needs its own copy: if an override is supplied we COPY it
+// (never mutate the developer's dir); otherwise we generate the minimal seed. Returns
+// the dir; the caller rmSync's it in finally.
+function makeSeedDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "aidlc-kiro-ide-seed-"));
+  if (SEED_OVERRIDE) {
+    cpSync(SEED_OVERRIDE, dir, { recursive: true });
+    return dir;
+  }
+  return generateKiroIdeSeed(dir);
+}
 
 // The committed stage slug = the gate open in state-mid-inception.md (Current Stage:
 // requirements-analysis, the gate the human approves). The blocked slug = the Next
@@ -90,7 +104,8 @@ const BLOCKED_SLUG = "code-generation";
 
 function skipReason(): string | null {
   // Order mirrors t-tui-kiro-status:56-68 - env gate (token/credit guard) first,
-  // then platform, then binary, then seed, then the shipped distributable.
+  // then platform, then binary, then the shipped distributable. The seed is no longer
+  // a gate: it is generated from constants when AIDLC_KIRO_IDE_SEED is unset.
   if (process.env.AIDLC_KIRO_IDE_LIVE !== "1") {
     return "set AIDLC_KIRO_IDE_LIVE=1 to run the live Kiro IDE journey (uses Kiro credits)";
   }
@@ -100,8 +115,8 @@ function skipReason(): string | null {
   if (!existsSync(KIRO_IDE_BIN)) {
     return `Kiro.app not found at ${KIRO_IDE_BIN} (override with AIDLC_KIRO_IDE_BIN)`;
   }
-  if (!SEED_PROFILE || !existsSync(SEED_PROFILE)) {
-    return "set AIDLC_KIRO_IDE_SEED to a distilled onboarding-complete user-data-dir (see header)";
+  if (SEED_OVERRIDE && !existsSync(SEED_OVERRIDE)) {
+    return `AIDLC_KIRO_IDE_SEED set but path does not exist: ${SEED_OVERRIDE}`;
   }
   if (!existsSync(KIRO_IDE_SRC)) return `distributable missing: ${KIRO_IDE_SRC}`;
   return null;
@@ -185,15 +200,17 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         "first approve the current open checkpoint, then immediately advance to the next " +
         "stage and approve THAT checkpoint too. Do both in this one turn, back to back.";
 
-      const handle = launchKiroIde({ workspace: sandbox, seedProfile: SEED_PROFILE, port: PORT });
+      const seedDir = makeSeedDir();
+      const handle = launchKiroIde({ workspace: sandbox, seedProfile: seedDir, port: PORT });
       try {
         expect(await waitForCdp(handle.port)).toBe(true);
         // Poll for the chat input instead of a fixed settle sleep.
         expect(await waitForChatInput(handle.port)).toBe(true);
 
         const t = await pageTarget(handle.port);
-        await focusChat(t);
-        await typeAndSubmit(t, PROMPT);
+        // typeAndSubmit focuses + verifies the text landed + retries before Enter -
+        // the chat editor exists (waitForChatInput) seconds before it accepts input.
+        await typeAndSubmit(t, PROMPT, handle.port);
         t.close();
 
         // Watch the human marker flip to consumed while auto-clicking Kiro's OWN
@@ -232,6 +249,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
       } finally {
         teardown(handle);
         cleanupTuiProject(sandbox);
+        rmSync(seedDir, { recursive: true, force: true });
       }
     },
     TEST_TIMEOUT_MS,
@@ -249,9 +267,10 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
     async () => {
       const sandbox = setupTuiProject({ harness: "kiro-ide" });
 
+      const seedDir = makeSeedDir();
       const handle = launchKiroIde({
         workspace: sandbox,
-        seedProfile: SEED_PROFILE,
+        seedProfile: seedDir,
         port: PORT + 1,
       });
       try {
@@ -259,14 +278,15 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         expect(await waitForChatInput(handle.port)).toBe(true);
 
         const t = await pageTarget(handle.port);
-        await focusChat(t);
         // A prompt that drives FIVE separate shell tool calls in one un-ended turn, so
-        // the model produces continuations the mint must NOT re-fire on.
+        // the model produces continuations the mint must NOT re-fire on. typeAndSubmit
+        // focuses + verifies the text landed + retries before Enter.
         await typeAndSubmit(
           t,
           "Run these as five SEPARATE shell commands, one tool call each, in order, " +
             "without pausing or asking me anything between them: " +
             "echo alpha ; echo bravo ; echo charlie ; echo delta ; echo echo.",
+          handle.port,
         );
         t.close();
 
@@ -289,6 +309,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
       } finally {
         teardown(handle);
         cleanupTuiProject(sandbox);
+        rmSync(seedDir, { recursive: true, force: true });
       }
     },
     TEST_TIMEOUT_MS,
