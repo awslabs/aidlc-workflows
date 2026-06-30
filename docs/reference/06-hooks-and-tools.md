@@ -1,6 +1,6 @@
 # Hooks and Tools
 
-This chapter documents the hook system architecture, all ten hook scripts, the audit event taxonomy, CLI tool configuration, and the deterministic utility tool.
+This chapter documents the hook system architecture, all eleven hook scripts, the audit event taxonomy, CLI tool configuration, and the deterministic utility tool.
 
 > **Path convention.** State, audit, and artifacts live under the active intent's **record dir** — `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`, written `<record>/` below (a compact UTC date prefix plus a short kebab-case label so record dirs sort chronologically; the canonical id is the UUIDv7 in the `intents.json` registry row). The audit trail is a directory of per-clone shards under `<record>/audit/`, not a single file.
 
@@ -8,12 +8,13 @@ This chapter documents the hook system architecture, all ten hook scripts, the a
 
 ## Hook System Architecture
 
-This implementation uses ten hook scripts in `.claude/hooks/`. All ten are TypeScript (run via `bun`). All ten are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other nine via the `hooks` block), they fire regardless of which skill is active. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block. This is safe because every hook **self-gates**: it early-exits when there is no active workflow (`aidlc-state.md` / the active intent's `audit/` shard absent), so always-on is a no-op outside AI-DLC.
+This implementation uses eleven hook scripts in `.claude/hooks/`. All eleven are TypeScript (run via `bun`). All eleven are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other ten via the `hooks` block), they fire regardless of which skill is active. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block. This is safe because every hook **self-gates**: it early-exits when there is no active workflow (`aidlc-state.md` / the active intent's `audit/` shard absent), so always-on is a no-op outside AI-DLC.
 
-Nine of the ten are **non-blocking** — they observe and exit 0, never altering control flow. One, the `Stop` hook (`aidlc-stop.ts`), is **flow-altering**: it may return `{"decision":"block"}` to keep the interactive forwarding loop running. That is a sanctioned, deliberate contract for loop enforcement and is distinct from the advisory `never-block` contract every other hook honours (see "The flow-altering `Stop` hook" below).
+Ten of the eleven are **non-blocking** — they observe and exit 0, never altering control flow. One, the `Stop` hook (`aidlc-stop.ts`), is **flow-altering**: it may return `{"decision":"block"}` to keep the interactive forwarding loop running. That is a sanctioned, deliberate contract for loop enforcement and is distinct from the advisory `never-block` contract every other hook honours (see "The flow-altering `Stop` hook" below).
 
 ```
 .claude/hooks/
++-- mint-presence.ts     # UserPromptSubmit (project-wide, settings.json, TypeScript)
 +-- audit-logger.ts      # PostToolUse Write|Edit (project-wide, settings.json, TypeScript)
 +-- sensor-fire.ts       # PostToolUse Write|Edit (project-wide, settings.json, TypeScript)
 +-- sync-statusline.ts   # PostToolUse TaskUpdate (project-wide, settings.json, TypeScript)
@@ -30,6 +31,7 @@ Nine of the ten are **non-blocking** — they observe and exit 0, never altering
 
 | Hook | Event | Scoping | Matcher | Purpose |
 |------|-------|---------|---------|---------|
+| `mint-presence.ts` | UserPromptSubmit | Project-wide (settings.json) | (empty) | Mint a human-presence marker on every real human prompt; the approval/interview gate consumes it so a model under autopilot cannot fabricate an approval with no human having acted |
 | `audit-logger.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Auto-log artifact writes to the `audit/` shards |
 | `sensor-fire.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Fire the active stage's resolved Sensors on matching writes (advisory; never blocks) |
 | `sync-statusline.ts` | PostToolUse | Project-wide (settings.json) | `TaskUpdate` | Auto-sync state file on stage task activation |
@@ -43,7 +45,7 @@ Nine of the ten are **non-blocking** — they observe and exit 0, never altering
 
 ### Shared Characteristics
 
-All ten TypeScript hooks:
+All eleven TypeScript hooks:
 
 - Written in TypeScript, run via `bun`
 - Do not need executable permissions — work identically on macOS, Linux, and native Windows PowerShell
@@ -479,7 +481,7 @@ Re-running `compile` against the same audit produces a byte-equivalent graph. It
 
 ## Prerequisites
 
-1. **bun** -- Required for all 10 hooks and every CLI tool (`aidlc-utility.ts`, `aidlc-state.ts`, `aidlc-jump.ts`, `aidlc-orchestrate.ts`, `aidlc-audit.ts`, `aidlc-validate.ts`, `aidlc-graph.ts`, `aidlc-sensor.ts`, `aidlc-learnings.ts`, `aidlc-runtime.ts`). Install via `curl -fsSL https://bun.sh/install | bash`. On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 | iex"`. Must be on PATH for non-interactive shells.
+1. **bun** -- Required for all 11 hooks and every CLI tool (`aidlc-utility.ts`, `aidlc-state.ts`, `aidlc-jump.ts`, `aidlc-orchestrate.ts`, `aidlc-audit.ts`, `aidlc-validate.ts`, `aidlc-graph.ts`, `aidlc-sensor.ts`, `aidlc-learnings.ts`, `aidlc-runtime.ts`). Install via `curl -fsSL https://bun.sh/install | bash`. On Windows: `npm install -g bun` or `powershell -c "irm bun.sh/install.ps1 | iex"`. Must be on PATH for non-interactive shells.
 2. **$CLAUDE_PROJECT_DIR** -- Set by Claude Code to the project root. All hooks use it to locate the `aidlc/` workspace (and the active intent's record dir within it).
 
 No other prerequisites: every hook and tool is TypeScript run via bun, so no `jq`, `sed`, `awk`, Git Bash, or WSL is required on any platform.

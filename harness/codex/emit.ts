@@ -28,6 +28,7 @@ import onboardingFills from "./onboarding.fills.ts";
 // ---------------------------------------------------------------------------
 const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = [
   { event: "SessionStart", target: "session-start" },
+  { event: "UserPromptSubmit", target: "mint" },
   { event: "PostToolUse", matcher: "apply_patch", target: "audit-and-sensors" },
   { event: "PostToolUse", matcher: "update_plan", target: "state-sync" },
   { event: "PostToolUse", matcher: "Bash", target: "runtime-compile" },

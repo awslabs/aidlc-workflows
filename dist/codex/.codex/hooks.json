@@ -10,6 +10,16 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .codex/hooks/aidlc-codex-adapter.ts mint"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "hooks": [

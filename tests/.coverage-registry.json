@@ -20,18 +20,18 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 396,
+    "total": 408,
     "enumeratedByClass": {
-      "function": 187,
+      "function": 198,
       "audit": 68,
       "scope": 9,
       "stage": 32,
-      "hook": 10,
+      "hook": 11,
       "subcommand": 83,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 80,
+      "function": 86,
       "audit": 29,
       "scope": 9,
       "stage": 8,
@@ -927,6 +927,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:AUTONOMY_MODE_FIELD",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:birthIntent",
       "minMechanism": "none",
       "coveredBy": [
@@ -1058,6 +1065,18 @@
         },
         {
           "file": "tests/unit/t124-scope-transpose.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:consumeHumanMarker",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1365,6 +1384,37 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:HUMAN_MARKER_FILE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:humanPresenceGuardDisabled",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:humanPresent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:idSuffix",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1402,6 +1452,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isAutonomousMode",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -1670,6 +1732,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:mintHumanMarker",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:mustGet",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1904,6 +1973,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readHumanMarker",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readIntentRegistry",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1927,6 +2008,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readTurnCounter",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2395,6 +2488,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:TURN_COUNTER_FILE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:unitDependencyPath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2554,6 +2654,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeHumanMarker",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeSessionIntentUuid",
       "minMechanism": "none",
       "coveredBy": [
@@ -2618,6 +2725,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-mint-presence",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "hook",

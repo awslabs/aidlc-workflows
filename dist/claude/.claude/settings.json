@@ -31,6 +31,17 @@
   "model": "opus[1m]",
   "effortLevel": "xhigh",
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-mint-presence.ts"
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "",

@@ -47,12 +47,17 @@ const HARNESS_DIR = import.meta.dir;
 const REPO_ROOT = join(HARNESS_DIR, "..", "..");
 export const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 export const KIRO_SRC = join(REPO_ROOT, "dist", "kiro", ".kiro");
+// The Kiro IDE distributable ships the .kiro.hook files the IDE actually reads
+// (mint + block for issue #451); dist/kiro/.kiro/hooks has none. Seed this tree
+// for IDE-shaped tests.
+export const KIRO_IDE_SRC = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
 const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures");
 // The per-harness memory shell (aidlc/spaces/default/memory) ships beside the
 // engine tree; copy it so the resolver finds the rule layers, mirroring
 // setupIntegrationProject's AIDLC_MEMORY_SRC copy.
 const CLAUDE_MEMORY_SRC = join(REPO_ROOT, "dist", "claude", "aidlc");
 const KIRO_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro", "aidlc");
+const KIRO_IDE_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro-ide", "aidlc");
 
 /** Seed the per-intent workspace shell into a TUI fixture project: the default
  *  intent record + cursors + registry + pinned clone-id (mirrors fixtures.ts
@@ -78,9 +83,12 @@ export interface TuiProjectOptions {
   /** Which harness distributable to seed. "claude" (default) copies
    *  dist/claude/.claude → <proj>/.claude; "kiro" copies dist/kiro/.kiro →
    *  <proj>/.kiro plus dist/kiro/AGENTS.md → <proj>/AGENTS.md (the shipped
-   *  Kiro install shape — workspace default agent + steering ride along).
+   *  Kiro install shape — workspace default agent + steering ride along);
+   *  "kiro-ide" copies dist/kiro-ide/.kiro → <proj>/.kiro plus
+   *  dist/kiro-ide/AGENTS.md → <proj>/AGENTS.md (the IDE install shape, which
+   *  carries the .kiro.hook files the IDE reads — mint + block for issue #451).
    *  Everything else (state, audit, stubs) is harness-neutral. */
-  harness?: "claude" | "kiro";
+  harness?: "claude" | "kiro" | "kiro-ide";
   /** Seed aidlc-docs/aidlc-state.md from tests/fixtures/<withState> (a filename like
    *  "state-mid-ideation.md"). Omit for a fresh project. */
   withState?: string;
@@ -161,6 +169,13 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
     cpSync(KIRO_SRC, join(proj, ".kiro"), { recursive: true });
     cpSync(join(KIRO_SRC, "..", "AGENTS.md"), join(proj, "AGENTS.md"));
     if (existsSync(KIRO_MEMORY_SRC)) cpSync(KIRO_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
+  } else if (opts.harness === "kiro-ide") {
+    // The Kiro IDE install shape — same .kiro + AGENTS.md + aidlc/ as Kiro CLI,
+    // but from dist/kiro-ide/ so the .kiro.hook files the IDE reads (mint + block)
+    // ride along (dist/kiro/.kiro/hooks ships none).
+    cpSync(KIRO_IDE_SRC, join(proj, ".kiro"), { recursive: true });
+    cpSync(join(KIRO_IDE_SRC, "..", "AGENTS.md"), join(proj, "AGENTS.md"));
+    if (existsSync(KIRO_IDE_MEMORY_SRC)) cpSync(KIRO_IDE_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
   } else {
     cpSync(AIDLC_SRC, join(proj, ".claude"), { recursive: true });
     if (existsSync(CLAUDE_MEMORY_SRC)) cpSync(CLAUDE_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });

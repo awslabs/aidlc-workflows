@@ -55,6 +55,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { mintHumanMarker } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const target = process.argv[2] ?? "";
@@ -340,6 +341,19 @@ switch (target) {
     persistResponse(r.stdout, r.code);
     if (r.stdout) process.stdout.write(r.stdout);
     process.exit(r.code);
+  }
+
+  case "mint": {
+    // UserPromptSubmit: a real human acted this turn — stamp the
+    // human-presence marker (issue #451 gate). Fail-open: a mint failure must
+    // never block the turn. Advisory, no stdout.
+    try {
+      mintHumanMarker(projectDir);
+    } catch {
+      // best-effort presence stamp — advisory
+    }
+    persistResponse("", 0);
+    process.exit(0);
   }
 
   default:

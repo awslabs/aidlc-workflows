@@ -48,7 +48,7 @@ Verifies the orchestrator's structural correctness without invoking the LLM. If 
 
 **What it tests:**
 - File existence, permissions, naming conventions (smoke)
-- Hook scripts (10 TypeScript via bun), stage frontmatter, knowledge inventory (unit)
+- Hook scripts (11 TypeScript via bun), stage frontmatter, knowledge inventory (unit)
 - Scope-stage mapping, graph consistency, stage I/O contract chains, protocol compliance (integration)
 - Stage output-to-step validation: all declared outputs referenced in instruction steps (integration, deterministic via the `aidlc-validate.ts` CLI tool)
 

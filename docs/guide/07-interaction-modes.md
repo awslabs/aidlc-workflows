@@ -68,6 +68,8 @@ The default approval gate presents two options:
 - **Approve** marks the stage as completed, updates `aidlc-state.md`, shows a progress line, and advances to the next stage
 - **Request Changes** lets you provide specific feedback; the agent revises its work and re-presents the approval gate
 
+The gate requires a real human acknowledgement: typing a prompt mints a one-shot human-presence marker that the approve (and any clarifying-question answer) consumes, so a model running on autopilot cannot fabricate an approval with no human having acted since the gate opened. If you only click **Approve** in a widget without typing anything since the gate opened, type a short message once (for example "approve") so the marker is present. (On harnesses where presence tracking is not wired, the gate fails open and does not require this.)
+
 ### Approval Gate Flow
 
 ```mermaid

@@ -31,7 +31,15 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { classifyTerminalCommand } from "../tools/aidlc-lib.ts";
+import {
+  classifyTerminalCommand,
+  findAllEvents,
+  humanPresent,
+  isAutonomousMode,
+  readAllAuditShards,
+  stateFilePath,
+  writeHumanMarker,
+} from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const target = process.argv[2] ?? "";
@@ -109,7 +117,14 @@ if (target === "verb-intercept") {
       ? (Number.parseInt(readFileSync(cp, "utf-8").trim(), 10) || 0) + 1
       : 1;
     writeFileSync(cp, String(turn) + "\n", "utf-8");
-  } catch { /* turn-clock best-effort */ }
+    // Human-presence marker (issue #451): this seam fires on a real human turn,
+    // so stamp a fresh unconsumed marker at the just-bumped turn. Marker-only:
+    // the counter is already incremented above, so do NOT call mintHumanMarker
+    // (which would double-bump). The gate (handleApprove/handleAnswer) requires +
+    // consumes this; the preToolUse block below refuses while a gate is open and
+    // no fresh marker exists.
+    writeHumanMarker(cwd, turn);
+  } catch { /* turn-clock + marker best-effort */ }
   if (cmd === null) process.exit(0); // not a terminal command — conductor handles it
 
   const cwd = kiro.cwd ?? process.cwd();
@@ -204,6 +219,62 @@ if (target === "pretool-block") {
     );
     process.exit(2); // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   }
+
+  // --- #451 human-presence floor (second exit-2 branch) ---
+  //
+  // Refuse ANY tool call while an approval gate is open and no fresh, unconsumed
+  // human marker exists: the hard floor that stops a model under autopilot from
+  // fabricating an approval (the verb-intercept seam above mints the marker on a
+  // real human turn; handleApprove/handleAnswer consume it). Distinct from the
+  // roll-forward latch above. Autonomy carve-out is checked FIRST so autonomous
+  // Construction (swarm/Bolt) is never blocked. Fail-open on any read/parse
+  // error: advisory, must never wedge a legitimate turn.
+  try {
+    const content = existsSync(stateFilePath(cwd))
+      ? readFileSync(stateFilePath(cwd), "utf-8")
+      : null;
+    if (isAutonomousMode(content)) process.exit(0); // autonomous: never block
+
+    // Gate-open turn: the latest STAGE_AWAITING_APPROVAL for the active slug. Do
+    // NOT pass slug to findAllEvents: its third arg filters the `**Bolt slug**`
+    // field, but these events carry a `**Stage**` field. Filter on `**Stage**`
+    // manually, take the latest, parse its `**Open Turn**` field (0 if absent:
+    // a missing/backfilled gate-open must never false-block).
+    const slug = (() => {
+      const m = content?.match(/^- \*\*Current Stage\*\*:[ \t]*(.*)$/m);
+      return m ? m[1].trim() : "";
+    })();
+    if (slug) {
+      const audit = readAllAuditShards(cwd);
+      const gateBlock = findAllEvents(audit, "STAGE_AWAITING_APPROVAL")
+        .filter((ev) => {
+          for (const line of ev.block.split("\n")) {
+            if (line.startsWith("**Stage**:")) {
+              return line.slice("**Stage**:".length).trim() === slug;
+            }
+          }
+          return false;
+        })
+        .at(-1);
+      if (gateBlock) {
+        let openTurn = 0;
+        for (const line of gateBlock.block.split("\n")) {
+          if (line.startsWith("**Open Turn**:")) {
+            const n = Number.parseInt(line.slice("**Open Turn**:".length).trim(), 10);
+            if (Number.isFinite(n)) openTurn = n;
+            break;
+          }
+        }
+        if (!humanPresent(cwd, openTurn)) {
+          process.stderr.write(
+            "an approval gate is open and no human has acted since it opened: refusing the tool call. A real human must respond at the gate (issue #451). End the turn.\n",
+          );
+          process.exit(2); // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+        }
+      }
+    }
+  } catch { /* fail open: advisory presence floor */ }
+
   process.exit(0);
 }
 

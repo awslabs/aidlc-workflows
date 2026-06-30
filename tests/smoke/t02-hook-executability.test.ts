@@ -43,8 +43,9 @@ import { AIDLC_SRC } from "../harness/fixtures.ts";
 
 const HOOKS_DIR = join(AIDLC_SRC, "hooks");
 
-// The 10 framework hooks, in the .sh's row order (t02:11-20). All .ts, run via
-// bun — the .sh title notes no executable bit is needed.
+// The framework hooks, in the .sh's row order (t02:11-20) plus the issue #451
+// mint-presence hook added after the migration. All .ts, run via bun — the .sh
+// title notes no executable bit is needed.
 const HOOKS = [
   "aidlc-audit-logger.ts",
   "aidlc-sensor-fire.ts",
@@ -56,6 +57,8 @@ const HOOKS = [
   "aidlc-session-end.ts",
   "aidlc-statusline.ts",
   "aidlc-stop.ts",
+  // Added for issue #451: stamps the human-presence marker on UserPromptSubmit.
+  "aidlc-mint-presence.ts",
 ] as const;
 
 describe("t02 hook presence — shipped dist/claude/.claude/hooks (migrated from t02-hook-executability.sh, plan 10)", () => {

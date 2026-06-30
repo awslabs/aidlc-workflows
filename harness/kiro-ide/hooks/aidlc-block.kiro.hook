@@ -1,0 +1,1 @@
+{"version":"1.0.0","enabled":true,"name":"aidlc-block","description":"Hard-blocks tool calls while an approval gate is open and no human acted since (issue #451 floor).","when":{"type":"preToolUse"},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-kiro-adapter.ts block"}}

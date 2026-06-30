@@ -28,7 +28,7 @@ trees. The core uses the same building blocks in every harness:
 - **Sensors** (`sensors/`) — Deterministic verification manifests (advisory): `aidlc-required-sections.md`, `aidlc-upstream-coverage.md`, `aidlc-linter.md`, `aidlc-type-check.md`
 - **Knowledge** (`knowledge/`) — Methodology reference. Per-agent under `aidlc-<agent>-agent/`; cross-agent material in `aidlc-shared/`
 - **Tools** (`tools/`) — TypeScript CLI tools, all prefixed `aidlc-*.ts` and run via bun
-- **Hooks** (`hooks/`) — 10 framework hooks, all prefixed `aidlc-*.ts`, covering audit emission, sensor dispatch, runtime-graph compile, session lifecycle, state validation, subagent tracking, statusline rendering, and forwarding-loop enforcement (the `Stop` hook — the first flow-altering hook)
+- **Hooks** (`hooks/`) — 11 framework hooks, all prefixed `aidlc-*.ts`, covering audit emission, sensor dispatch, runtime-graph compile, session lifecycle, state validation, subagent tracking, statusline rendering, human-presence mint on prompt submit, and forwarding-loop enforcement (the `Stop` hook — the first flow-altering hook)
 
 ## Working on This Project
 

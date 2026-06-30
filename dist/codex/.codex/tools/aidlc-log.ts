@@ -4,11 +4,15 @@
 // (after the user answers). Orchestrator-callable; state tool doesn't own
 // these because they fire per-question, not per state transition.
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
+  consumeHumanMarker,
   emitError,
   errorMessage,
+  humanPresenceGuardDisabled,
+  humanPresent,
+  isAutonomousMode,
   resolveProjectDir,
   stateFilePath,
 } from "./aidlc-lib.js";
@@ -114,6 +118,28 @@ function handleAnswer(args: string[]): void {
     Stage: flags.stage,
     Details: flags.details,
   };
+
+  // Human-presence gate (issue #451): the interview answer is a human-judgement
+  // event, so require proof a real human acted this turn before recording it.
+  // Autonomy carve-out FIRST (Construction swarm/Bolt answers are not human),
+  // then the scoped test off-switch, then the consume-once marker check. openTurn
+  // is pinned to 0 here: any unconsumed human marker proves a human acted this
+  // turn, and consume-once stops re-use. consumeHumanMarker is atomic (no lock).
+  const content = existsSync(stateFilePath(pd))
+    ? readFileSync(stateFilePath(pd), "utf-8")
+    : null;
+  if (isAutonomousMode(content)) {
+    // autonomous Construction: no human presence required
+  } else if (humanPresenceGuardDisabled()) {
+    // scoped test off-switch
+  } else {
+    if (!humanPresent(pd, 0)) {
+      error(
+        "Refusing to record this answer: a real human has not acted at this checkpoint this turn. Type your answer in the session (which mints a human-presence marker) before logging it."
+      );
+    }
+    consumeHumanMarker(pd);
+  }
 
   try {
     emitAudit(pd, "QUESTION_ANSWERED", fields);

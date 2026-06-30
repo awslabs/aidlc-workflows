@@ -41,6 +41,8 @@ const manifest: HarnessManifest = {
     { src: "agents/aidlc-architecture-reviewer-agent.json", dst: "agents/aidlc-architecture-reviewer-agent.json" },
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
     { src: "hooks/aidlc-audit-logger.kiro.hook", dst: "hooks/aidlc-audit-logger.kiro.hook" },
+    { src: "hooks/aidlc-mint.kiro.hook", dst: "hooks/aidlc-mint.kiro.hook" },
+    { src: "hooks/aidlc-block.kiro.hook", dst: "hooks/aidlc-block.kiro.hook" },
     { src: "hooks/aidlc-log-subagent.kiro.hook", dst: "hooks/aidlc-log-subagent.kiro.hook" },
     { src: "hooks/aidlc-runtime-compile.kiro.hook", dst: "hooks/aidlc-runtime-compile.kiro.hook" },
     { src: "hooks/aidlc-session-end.kiro.hook", dst: "hooks/aidlc-session-end.kiro.hook" },
@@ -53,8 +55,10 @@ const manifest: HarnessManifest = {
     // runtime ignored, the shared work (memory/codekb/registry/state/audit shards/
     // artifacts) committed. Authored as dot-gitignore so it does not act as a live
     // ignore inside harness/kiro-ide/; projectRoot routes it to dist/kiro-ide/.gitignore
-    // + the --check drift guard. (The roll-forward latch lines are inert on Kiro IDE,
-    // which has no userPromptSubmit/preToolUse seam, but are kept for parity.)
+    // + the --check drift guard. (Kiro IDE DOES support a promptSubmit seam (the
+    // issue-#451 mint hook) and a preToolUse seam (the exit-2 human-presence hard
+    // block) - both spike-proven on the IDE; the latch lines describe what is wired,
+    // not a platform limit.)
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 

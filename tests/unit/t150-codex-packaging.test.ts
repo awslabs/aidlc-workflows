@@ -111,7 +111,7 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
       hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
     };
     expect(Object.keys(wiring.hooks).sort()).toEqual(
-      ["PostCompact", "PostToolUse", "PreCompact", "SessionStart", "Stop", "SubagentStop"].sort(),
+      ["PostCompact", "PostToolUse", "PreCompact", "SessionStart", "Stop", "SubagentStop", "UserPromptSubmit"].sort(),
     );
     // Matchers per the verified tool-name map.
     const postMatchers = wiring.hooks.PostToolUse.map((g) => g.matcher).sort();
@@ -194,7 +194,7 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     });
     expect(r.status).toBe(0);
     const entries = r.stdout.match(/\[hooks\.state\."[^"]+"\]/g) ?? [];
-    // One entry per registered hook group (7 wirings + the 1 PostCompact = 8).
+    // One entry per registered hook group (8 wirings + the 1 PostCompact = 9).
     const wiring = JSON.parse(readFileSync(join(CODEX_DST, "hooks.json"), "utf-8")) as {
       hooks: Record<string, Array<unknown>>;
     };
