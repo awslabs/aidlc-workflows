@@ -98,216 +98,55 @@ If you want the evaluator to deploy the generated application, the profile needs
 
 ## Setting Up Your Test Environment
 
-The `aidlc-ops-bundle` branch is the pinned release containing the full rule set, evaluator code, and test scenarios. You must create your own test branch from it — do not run directly from the bundle.
+Follow the setup instructions in `scripts/aidlc-evaluator/README.md` — clone the repo, install dependencies (`uv sync`), build the Docker sandbox, and verify Bedrock access.
 
-### 1. Clone the repo
+The Operations phase adds one additional prerequisite for deployment testing:
 
-```bash
-git clone <repo-url> ~/repos/ai-dlc-ops
-cd ~/repos/ai-dlc-ops
-```
+### AWS permissions for deployment (optional)
 
-Replace `<repo-url>` with the AI-DLC Ops repository URL for your organisation.
-
-### 2. Create your test branch
-
-```bash
-git checkout aidlc-ops-bundle
-git checkout -b test/<your-name>-<what-youre-testing>
-```
-
-This pins you to a known-good state and keeps your work isolated from other testers.
-
-### 3. Merge your rule changes on top (if testing a feature)
-
-If you're validating changes from a feature branch:
-
-```bash
-git merge feature/my-rule-change
-```
-
-If you're just running the evaluator against the existing rules, skip this step.
-
-### 4. Add your scenario (or use the built-in ones)
-
-The bundle includes two scenarios (`minimal` and `advanced`). If these test what you need, skip to step 5.
-
-To create your own:
-
-```bash
-mkdir -p test-scenarios/my-scenario/evaluator
-```
-
-A scenario needs these files:
-
-| File | Purpose |
-|------|---------|
-| `vision.md` | What to build — business context, features, data model, NFRs |
-| `tech-env.md` | How to build it — platform, languages, extension preferences, recovery objectives |
-| `scenario.yaml` | Metadata (name, description, file references) |
-| `openapi.yaml` | (Optional) API spec for contract-testing the generated code |
-
-Example `scenario.yaml`:
-
-```yaml
-name: my-scenario
-description: "Brief description"
-status: draft
-vision: vision.md
-tech_env: tech-env.md
-openapi: openapi.yaml
-golden_baseline: golden.yaml
-golden_aidlc_docs: golden-aidlc-docs/
-tags: [aws, operations]
-```
-
-Commit:
-
-```bash
-git add test-scenarios/my-scenario/
-git commit -m "Add scenario for testing X"
-```
-
-### 5. Verify your setup
-
-Before committing to a multi-hour run, check everything is wired up:
-
-```bash
-cd ~/repos/ai-dlc-ops
-docker info > /dev/null 2>&1 && echo "✓ Docker running" || echo "✗ Start Docker Desktop"
-python3 -c "import sys; assert sys.version_info >= (3,13)" && echo "✓ Python ≥ 3.13"
-uv --version > /dev/null 2>&1 && echo "✓ uv installed"
-aws sts get-caller-identity --profile <your-profile> > /dev/null 2>&1 && echo "✓ AWS credentials valid"
-```
-
-The Docker sandbox image and Python dependencies are installed automatically on first run.
-
-### Cleaning up
-
-Delete your test branch when you're done. If the scenario proves generally useful, propose moving it to the shared `test-cases` branch.
+If you want the evaluator to deploy the generated application (not just validate rules), the AWS profile needs permissions for the services the generated IaC uses — typically CloudFormation, S3, Lambda, DynamoDB, IAM, CloudWatch, and CDK bootstrap. An admin-level role in a test account is simplest.
 
 ---
 
 ## Running
 
-### Without deployment (rules validation only)
+The evaluator is run the same way as upstream — see `scripts/aidlc-evaluator/README.md` for the full command reference.
+
+### Enabling deployment in the sandbox
+
+By default, the executor cannot deploy to AWS because the Docker sandbox has no credentials. To enable Deployment and Post-Deployment Testing stages, set `INJECT_AWS_CREDENTIALS=true` before starting the run:
 
 ```bash
-cd ~/repos/ai-dlc-ops
-AWS_PROFILE=<your-profile> ./scripts/run-evaluator.sh advanced
+INJECT_AWS_CREDENTIALS=true AWS_PROFILE=<your-profile> uv run python run.py full \
+    --vision <test-case>/vision.md \
+    --tech-env <test-case>/tech-env.md
 ```
 
-This runs the full workflow through Rules Validation. Deployment and Post-Deployment Testing will be skipped (no credentials injected into the sandbox).
+When this variable is set, `run_command.py` resolves credentials from your environment and propagates them into the sandbox as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, and `AWS_DEFAULT_REGION`.
 
-### What you'll see
+Without it, the workflow completes after Rules Validation — Deployment and Post-Deployment Testing are skipped.
 
-The evaluator streams progress to the terminal — you'll see which agent is active, tool calls being made, and handoff events. Output is also written to `eval-runs/.evaluator-output.log`. The run is unattended — once started, it runs to completion or failure without needing input.
-
-### With deployment to AWS
-
-```bash
-cd ~/repos/ai-dlc-ops
-INJECT_AWS_CREDENTIALS=true AIDLC_AWS_PROFILE=<your-profile> AWS_PROFILE=<your-profile> ./scripts/run-evaluator.sh advanced
-```
-
-This injects your AWS credentials into the sandbox so the executor can run `cdk deploy`, `aws` CLI commands, etc.
-
-### Choosing a scenario
-
-```bash
-./scripts/run-evaluator.sh minimal    # simpler scenario, faster runs (~1h)
-./scripts/run-evaluator.sh advanced   # multi-region, all operational domains (~3h)
-./scripts/run-evaluator.sh my-scenario  # your own custom scenario
-```
-
-**minimal** — Single-region electricity account management. Good for testing rule changes quickly.
-
-**advanced** — Multi-region resilient system (Spark Grid). Tests all 4 operational domains, rework loops, deployment, and post-deployment testing.
+**Important**: Ensure your credentials won't expire mid-run (runs take 2–5 hours). If you use SSO or temporary credentials, refresh them before starting.
 
 ### Keeping the machine awake
 
 Runs take hours. Prevent macOS sleep:
 
 ```bash
-caffeinate -ims ./scripts/run-evaluator.sh advanced
+caffeinate -ims uv run python run.py full ...
 ```
 
-### How can I keep making changes while a run is in progress?
+### Parallel runs with worktrees
 
-Use a git worktree — a second checkout of the same repo in a separate directory:
+Use a git worktree to run the evaluator while continuing to edit:
 
 ```bash
-git worktree add ~/repos/ai-dlc-ops-my-test test/<your-name>-<what-youre-testing>
-cd ~/repos/ai-dlc-ops-my-test
-AWS_PROFILE=<profile> ./scripts/run-evaluator.sh my-scenario
+git worktree add ~/repos/aidlc-evaluator test/<your-branch>
+cd ~/repos/aidlc-evaluator/scripts/aidlc-evaluator
+AWS_PROFILE=<profile> uv run python run.py full ...
 ```
 
-Now the evaluator runs from `~/repos/ai-dlc-ops-my-test` while you continue editing in `~/repos/ai-dlc-ops` on your feature branch. Remove the worktree when done:
-
-```bash
-git worktree remove ~/repos/ai-dlc-ops-my-test
-```
-
----
-
-## Command-Line Parameters
-
-The `run-evaluator.sh` script passes any extra arguments through to the underlying runner. You can override models, disable features, and control where output goes.
-
-```bash
-./scripts/run-evaluator.sh <scenario> [options...]
-```
-
-### Model selection
-
-| Parameter | Purpose | Example |
-|-----------|---------|---------|
-| `--executor-model <id>` | Change the model that drives the workflow | `--executor-model us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
-| `--simulator-model <id>` | Change the model that plays the human | `--simulator-model us.anthropic.claude-sonnet-4-6` |
-
-Model IDs use Bedrock format. The `global.` prefix enables cross-region inference (routes to whichever region has capacity). Region-prefixed IDs (e.g. `us.`) pin to a specific region.
-
-### Execution control
-
-| Parameter | Purpose | When to use |
-|-----------|---------|-------------|
-| `--no-exec` | Disables the `run_command` tool | When you only want to test rule compliance without running builds or deploys |
-| `--no-post-tests` | Skips the post-run test evaluation | When you don't care about test pass rates, just artifact quality |
-
-### AWS overrides
-
-| Parameter | Purpose | Example |
-|-----------|---------|---------|
-| `--aws-profile <name>` | Override the AWS profile for Bedrock calls | `--aws-profile my-test-profile` |
-| `--aws-region <region>` | Override the AWS region for Bedrock calls | `--aws-region us-west-2` |
-
-### Rules source
-
-| Parameter | Purpose | Example |
-|-----------|---------|---------|
-| `--rules-path <path>` | Use rules from a local directory instead of the bundled copy | `--rules-path /tmp/my-experimental-rules` |
-| `--rules-ref <ref>` | Git ref when cloning rules from a repo | `--rules-ref feature/my-branch` |
-
-### Output
-
-| Parameter | Purpose | Example |
-|-----------|---------|---------|
-| `--output-dir <path>` | Override where run folders are created | `--output-dir /tmp/eval-output` |
-
-### Examples
-
-```bash
-# Run with a cheaper/faster executor model
-./scripts/run-evaluator.sh advanced --executor-model us.anthropic.claude-sonnet-4-5-20250929-v1:0
-
-# Run without command execution or post-run tests (fastest — just tests rule artifacts)
-./scripts/run-evaluator.sh advanced --no-exec --no-post-tests
-
-# Run with both agents using the same model (cost comparison)
-./scripts/run-evaluator.sh minimal \
-  --executor-model global.anthropic.claude-sonnet-4-6 \
-  --simulator-model global.anthropic.claude-sonnet-4-6
-```
+Remove when done: `git worktree remove ~/repos/aidlc-evaluator`
 
 ---
 
@@ -316,7 +155,7 @@ Model IDs use Bedrock format. The `global.` prefix enables cross-region inferenc
 Each run produces a timestamped folder in `eval-runs/runs/`:
 
 ```
-eval-runs/runs/20260603T162246-local_ai-dlc-ops-evaluator/
+eval-runs/runs/20260603T162246/
 ├── vision.md                    # Copy of the input vision
 ├── tech-env.md                  # Copy of the input tech-env
 ├── aidlc-rules/                 # Snapshot of rules used
