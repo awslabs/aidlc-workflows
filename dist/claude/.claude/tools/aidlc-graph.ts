@@ -951,10 +951,73 @@ export function validateScope(
   scope: string,
   opts?: { projectType?: "brownfield" | "greenfield" }
 ): ScopeValidation {
-  const subgraph = subgraphForScope(scope);
-  const onPath = new Set(subgraph.map((s) => s.slug));
+  // Delegate to the arbitrary-grid core over the named scope's EXECUTE set.
+  // Default (lenient) mode preserves this function's historical behavior
+  // byte-for-byte: off-path producers advise, only a TRUE orphan errors.
+  const subgraph = subgraphForScope(scope); // throws on unknown scope (unchanged)
+  const grid: Record<string, "EXECUTE" | "SKIP"> = {};
+  for (const s of loadGraph()) grid[s.slug] = "SKIP";
+  for (const s of subgraph) grid[s.slug] = "EXECUTE";
+  return validateGrid(grid, { ...opts, label: scope });
+}
+
+/** Validate an ARBITRARY {slug -> EXECUTE|SKIP} grid - the composer's
+ *  proposal shape, not yet a named scope. Same dependency walk as
+ *  validateScope (which now delegates here), with one addition:
+ *
+ *    opts.strict - RECOMPOSE MODE. Promotes the off-path-producer advisory
+ *    to a hard ERROR: a required consume whose producer exists in the graph
+ *    but is not on the proposed EXECUTE set REJECTS the grid instead of
+ *    advising. Plain (lenient) validation returns valid:true for that case
+ *    because a pre-composed scope's author owns the upstream work; an
+ *    IN-FLIGHT re-shape has no such author guarantee - an ADD whose producer
+ *    was SKIPped would run starved, so it must be refused, not advised.
+ *
+ *  The TRUE-orphan hard error (no producer anywhere in the graph) applies in
+ *  BOTH modes. Unknown slugs in the grid error in both modes too - a typo'd
+ *  stage name must never pass as an implicit SKIP.
+ *
+ *  opts.projectType filters conditional_on consumes exactly as
+ *  validateScope does. opts.label names the grid in messages (defaults to
+ *  "proposed grid"). */
+export function validateGrid(
+  grid: Record<string, string>,
+  opts?: {
+    projectType?: "brownfield" | "greenfield";
+    strict?: boolean;
+    label?: string;
+  }
+): ScopeValidation {
+  const label = opts?.label ?? "proposed grid";
+  const graph = loadGraph();
+  const knownSlugs = new Set(graph.map((s) => s.slug));
   const errors: string[] = [];
   const advisories: string[] = [];
+
+  // Reject unknown slugs up front (a typo silently treated as SKIP would
+  // validate a different plan than the one proposed).
+  for (const slug of Object.keys(grid)) {
+    if (!knownSlugs.has(slug)) {
+      errors.push(
+        `Grid names unknown stage "${slug}" - not in the compiled stage graph.`
+      );
+    }
+    const action = grid[slug];
+    if (action !== "EXECUTE" && action !== "SKIP") {
+      errors.push(
+        `Grid entry "${slug}" has invalid action "${action}" (expected EXECUTE or SKIP).`
+      );
+    }
+  }
+
+  const onPath = new Set(
+    Object.entries(grid)
+      .filter(([slug, action]) => action === "EXECUTE" && knownSlugs.has(slug))
+      .map(([slug]) => slug)
+  );
+  const subgraph = graph
+    .filter((s) => onPath.has(s.slug))
+    .sort((a, b) => numericStageOrder(a.number, b.number));
 
   for (const stage of subgraph) {
     for (const consume of stage.consumes ?? []) {
@@ -978,11 +1041,17 @@ export function validateScope(
       }
       const onPathProducers = producers.filter((p) => onPath.has(p.slug));
       if (onPathProducers.length === 0) {
-        advisories.push(
+        const message =
           `Stage "${stage.slug}" requires artifact "${consume.artifact}" ` +
-            `whose producer(s) [${producers.map((p) => p.slug).join(", ")}] ` +
-            `are not on the "${scope}" path. Ensure existing artifact is current.`
-        );
+          `whose producer(s) [${producers.map((p) => p.slug).join(", ")}] ` +
+          `are not on the "${label}" path.`;
+        if (opts?.strict) {
+          errors.push(
+            `${message} Strict (recompose) mode rejects a starved required input.`
+          );
+        } else {
+          advisories.push(`${message} Ensure existing artifact is current.`);
+        }
       }
     }
   }
@@ -1495,6 +1564,16 @@ function requireArg(args: string[], label: string): string {
   return args[0];
 }
 
+// A required VALUED flag (--flag <value>). Throws when the flag is absent or
+// its value slot is missing/another flag.
+function requireFlag(args: string[], flag: string): string {
+  const idx = args.indexOf(flag);
+  if (idx === -1 || idx + 1 >= args.length || args[idx + 1].startsWith("--")) {
+    throw new Error(`Missing required flag: ${flag} <value>`);
+  }
+  return args[idx + 1];
+}
+
 function printSlugs(stages: GraphStage[]): void {
   for (const s of stages) console.log(s.slug);
 }
@@ -1536,6 +1615,56 @@ const COMMANDS: Record<string, Handler> = {
       for (const e of r.errors) console.error(`[error] ${e}`);
       process.exit(1);
     }
+  },
+  // validate-grid --proposal <path> [--strict] [--project-type <bg>] -
+  // validate an ARBITRARY {slug: EXECUTE|SKIP} grid (the composer's proposal
+  // JSON; also accepts a { stages: {...} } wrapper matching a scope-grid
+  // entry). Lenient mode mirrors validate-scope (off-path producer of a
+  // required consume = advisory); --strict is the recompose mode that
+  // REJECTS a starved required input. Prints a JSON ScopeValidation on
+  // stdout; exit 1 iff invalid - callers branch on the exit code and read
+  // the reasons off stdout.
+  "validate-grid": (args) => {
+    const proposalPath = requireFlag(args, "--proposal");
+    const strict = args.includes("--strict");
+    const ptIdx = args.indexOf("--project-type");
+    const ptRaw = ptIdx >= 0 ? args[ptIdx + 1] : undefined;
+    let projectType: "brownfield" | "greenfield" | undefined;
+    if (ptRaw !== undefined) {
+      const lowered = ptRaw.toLowerCase();
+      if (lowered !== "brownfield" && lowered !== "greenfield") {
+        console.error(
+          `validate-grid: --project-type must be brownfield or greenfield (got "${ptRaw}").`
+        );
+        process.exit(1);
+      }
+      projectType = lowered;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(proposalPath, "utf-8"));
+    } catch (err) {
+      console.error(`validate-grid: cannot read ${proposalPath}: ${errorMessage(err)}`);
+      process.exit(1);
+    }
+    // Accept either the bare {slug: action} map or a {stages: {...}} wrapper
+    // (the shape of a scope-grid.json entry / the composer's proposal.grid).
+    const obj = parsed as Record<string, unknown>;
+    const gridRaw =
+      obj !== null && typeof obj === "object" && typeof obj.stages === "object" && obj.stages !== null
+        ? (obj.stages as Record<string, unknown>)
+        : obj;
+    if (gridRaw === null || typeof gridRaw !== "object" || Array.isArray(gridRaw)) {
+      console.error(
+        "validate-grid: proposal must be a JSON object of {\"<stage-slug>\": \"EXECUTE\"|\"SKIP\"} (or {stages: {...}})."
+      );
+      process.exit(1);
+    }
+    const grid: Record<string, string> = {};
+    for (const [slug, action] of Object.entries(gridRaw)) grid[slug] = String(action);
+    const r = validateGrid(grid, { strict, projectType });
+    process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
+    if (!r.valid) process.exit(1);
   },
   compile: (args) => {
     if (args.includes("--check")) return runCompileCheck();
@@ -1636,6 +1765,9 @@ Common forms:
   aidlc-graph cycles --scope <name>    Cycle check on scope sub-DAG
   aidlc-graph scope <name>             Stages on a scope's path
   aidlc-graph validate-scope <name>    Validate scope dependencies
+  aidlc-graph validate-grid --proposal <path> [--strict] [--project-type <t>]
+                                       Validate an arbitrary EXECUTE/SKIP grid
+                                       (--strict rejects a starved required input)
   aidlc-graph compile                  Regenerate stage-graph.json + scope-grid.json from YAML
   aidlc-graph compile --check          CI drift guard (exit 1 on mismatch)
   aidlc-graph resolve <name>           Emit .aidlc-plan.json for a scope (AIDLC_GRAPH_RESOLVE=1)

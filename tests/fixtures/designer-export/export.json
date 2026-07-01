@@ -3255,6 +3255,11 @@
       ]
     },
     {
+      "slug": "aidlc-composer-agent",
+      "display_name": "Composer Agent",
+      "examples": []
+    },
+    {
       "slug": "aidlc-delivery-agent",
       "display_name": "Delivery Agent",
       "examples": [

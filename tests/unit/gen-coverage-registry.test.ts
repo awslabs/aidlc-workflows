@@ -831,6 +831,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t184-stage-graph-drift.test.ts",
     "unit/t186-foreach-per-unit-iteration.test.ts",
     "unit/t188-human-presence-gate.test.ts",
+    "unit/t190-validate-grid.test.ts",
     "unit/t198-compose-surfaces.test.ts",
     "unit/t17.test.ts",
     "unit/t18.test.ts",
