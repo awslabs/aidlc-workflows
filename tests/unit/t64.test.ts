@@ -805,12 +805,9 @@ describe("shape regressions via parse -> validate chain", () => {
 // Reserved-key passthrough (.sh assertions 38-42)
 // ============================================================
 describe("reserved-key passthrough (parser keeps key, validator rejects)", () => {
-  test("when", () => {
-    // .sh: "reserved: when"
-    expect(reservedPassthrough("when")).toContain(
-      "when is reserved (fitness compiler); not active yet"
-    );
-  });
+  // `when` is NO LONGER reserved — it became an active structured activation
+  // predicate (plugin mechanism, Layer 4). Its shape validation lives in t62;
+  // it is deliberately absent from the reserved-passthrough set here.
 
   test("on_failure", () => {
     // .sh: "reserved: on_failure"

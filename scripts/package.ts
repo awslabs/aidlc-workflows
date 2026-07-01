@@ -636,19 +636,6 @@ function discoverPluginNames(): string[] {
     .sort();
 }
 
-/** Fields the v2 graph compiler doesn't know yet — stripped from emitted stages. */
-const STRIP_FIELDS = ["number", "name", "bundle", "when"];
-
-function stripUnknownFrontmatter(content: string): string {
-  return content.replace(/^---\n([\s\S]*?)\n---/, (match, fm: string) => {
-    const lines = fm.split("\n").filter((line: string) => {
-      const key = line.match(/^(\w+):/)?.[1];
-      return !key || !STRIP_FIELDS.includes(key);
-    });
-    return `---\n${lines.join("\n")}\n---`;
-  });
-}
-
 function emitPlugins(harnesses: string[]): void {
   const plugins = discoverPluginNames();
   if (plugins.length === 0) return;
@@ -723,12 +710,9 @@ function emitPlugins(harnesses: string[]): void {
         const rel = relative(srcDir, file);
         const outPath = join(outDir, dir, rel);
         mkdirSync(dirname(outPath), { recursive: true });
-        let content = readFileSync(file);
-        // Strip unknown frontmatter fields from stage .md files
-        if (dir === "stages" && file.endsWith(".md")) {
-          content = Buffer.from(stripUnknownFrontmatter(content.toString("utf-8")));
-        }
-        writeFileSync(outPath, content);
+        // Copy verbatim — plugin stages keep number/name/bundle/when (the schema
+        // now accepts them; no strip-hack needed).
+        writeFileSync(outPath, readFileSync(file));
       }
     }
 

@@ -12,6 +12,18 @@ import { isPlainObject } from "./aidlc-lib.ts";
 
 export interface StageFrontmatter {
   slug: string;
+  // number — authored display order, `<phase-prefix>.<index>` (e.g. "2.7", "4.50").
+  // Optional at the schema layer (shape-checked when present). Display/ordering
+  // only; slug is identity. A plugin authors its own numbers without renumbering
+  // core (plugin mechanism — see plugins/docs/18-plugin-mechanism.md §2).
+  number?: string;
+  // name — authored human-readable display name. Optional; shape-checked (string)
+  // when present.
+  name?: string;
+  // bundle — ownership identity (plugin mechanism, Layer 1). Optional; absent
+  // means the item belongs to core. An open set (plugin names), so string-only —
+  // no enum. Stored only when authored, so core stages stay byte-identical.
+  bundle?: string;
   phase: "initialization" | "ideation" | "inception" | "construction" | "operation";
   execution: "ALWAYS" | "CONDITIONAL";
   condition: string;
@@ -51,6 +63,13 @@ export interface StageFrontmatter {
   // reviewer_max_iterations — review-cycle cap before escalating to the human.
   // Defaults to 2 when reviewer is present.
   reviewer_max_iterations?: number;
+  // when — structured activation predicate (plugin mechanism, Layer 4). A
+  // single-key map; the one predicate is `producer-in-plan: <artifact-slug>`.
+  // Accepted for shape here; the compile-time grid evaluation is separate.
+  when?: { "producer-in-plan"?: string };
+  // required_sections — named `## ` H2 sections a stage's output must contain
+  // (plugin contribution mechanism §6). Optional list of non-empty names.
+  required_sections?: string[];
   inputs: string;
   outputs: string;
 }
@@ -96,12 +115,17 @@ export const RESERVED_AGENT_SLUG = "orchestrator";
 // error message. Each reserved key has a brief reason — the reason
 // describes the intended subsystem, not a target release.
 export const RESERVED_KEYS: Readonly<Record<string, string>> = {
-  when: "fitness compiler",
   on_failure: "loop driver",
   blocks_on: "construction worktrees",
   timeout: "sensor binding",
   retry: "loop driver",
 };
+
+// Allowed predicate keys for the stage `when:` map (plugin mechanism, Layer 4).
+// Today only `producer-in-plan`. `when` is no longer reserved — it is an active
+// (shape-validated) structured predicate; compile-time grid evaluation is a
+// separate pass. Adding a predicate is one entry here + one grid-pass case.
+export const WHEN_PREDICATE_KEYS = ["producer-in-plan"] as const;
 
 const REQUIRED_FIELDS = [
   "slug",
@@ -118,7 +142,7 @@ const REQUIRED_FIELDS = [
   "outputs",
 ] as const;
 
-const OPTIONAL_FIELDS = ["for_each", "workspace_requires", "optional_produces", "sensors", "scopes", "reviewer", "reviewer_max_iterations"] as const;
+const OPTIONAL_FIELDS = ["number", "name", "bundle", "for_each", "workspace_requires", "optional_produces", "sensors", "scopes", "reviewer", "reviewer_max_iterations", "when", "required_sections"] as const;
 
 const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 
@@ -127,6 +151,11 @@ const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 // Filename-stem check is the parser's responsibility (where the filename
 // is known); here we only validate the shape.
 const SLUG_RE = /^[a-z][a-z0-9-]*$/;
+
+// Stage display number: `<int>.<int>` (e.g. "0.1", "2.7", "4.50"). Shape only —
+// numericStageOrder (aidlc-graph.ts) parses it; a plugin authors numbers in its
+// own range. Phase-prefix/phase agreement is a separate compile cross-check.
+const NUMBER_RE = /^\d+\.\d+$/;
 
 // Lowercase-kebab artifact names — see docs/reference/16-artifact-vocabulary.md
 // for the naming rules and aidlc-graph.ts for the derived registry.
@@ -177,6 +206,14 @@ export function validateStageFrontmatter(
   // Rule 5-7: per-field type, enum, regex checks.
   checkString(o, "slug", errors);
   checkSlugPattern(o, "slug", SLUG_RE, "kebab-case", errors);
+
+  // number / name / bundle — optional plugin-mechanism display + ownership
+  // metadata. Absent is valid (core stages omit them); shape-checked when
+  // present. number must be `<int>.<int>`; name + bundle any non-empty string.
+  checkString(o, "number", errors);
+  checkSlugPattern(o, "number", NUMBER_RE, "<phase-prefix>.<index>", errors);
+  checkString(o, "name", errors);
+  checkString(o, "bundle", errors);
 
   checkString(o, "phase", errors);
   checkEnum(o, "phase", VALID_PHASES, errors);
@@ -240,6 +277,44 @@ export function validateStageFrontmatter(
     !("reviewer" in o && o.reviewer !== undefined)
   ) {
     errors.push("reviewer_max_iterations requires a reviewer");
+  }
+
+  // required_sections — optional list of non-empty section names (plugin
+  // contribution §6). Shape only; the required-sections sensor enforces content.
+  if ("required_sections" in o && o.required_sections !== undefined) {
+    checkStringArray(o, "required_sections", errors);
+    const rsVal: unknown = o.required_sections;
+    if (Array.isArray(rsVal)) {
+      rsVal.forEach((s, i) => {
+        if (typeof s === "string" && s.trim() === "") {
+          errors.push(`required_sections[${i}] must be non-empty`);
+        }
+      });
+    }
+  }
+
+  // when — optional structured activation predicate (Layer 4). When present: a
+  // plain object with exactly one key from WHEN_PREDICATE_KEYS whose value is a
+  // non-empty artifact-slug string. Grid evaluation is a separate compile pass.
+  if ("when" in o && o.when !== undefined) {
+    const w = o.when;
+    if (!isPlainObject(w)) {
+      errors.push(`when must be object, got ${describe(w)}`);
+    } else {
+      const keys = Object.keys(w);
+      if (keys.length !== 1) {
+        errors.push(`when must have exactly one predicate key, got ${keys.length}`);
+      }
+      for (const k of keys) {
+        if (!(WHEN_PREDICATE_KEYS as readonly string[]).includes(k)) {
+          errors.push(
+            `when has unknown predicate "${k}"; allowed: ${WHEN_PREDICATE_KEYS.join(" | ")}`
+          );
+        } else if (typeof w[k] !== "string" || (w[k] as string).trim() === "") {
+          errors.push(`when.${k} must be a non-empty artifact slug`);
+        }
+      }
+    }
   }
 
   checkStringArray(o, "produces", errors);

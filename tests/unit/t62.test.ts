@@ -247,9 +247,34 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
   // Exact strings pin RESERVED_KEYS map (aidlc-stage-schema.ts:67-73).
   // ============================================================
 
-  test("reserved: when", () => {
-    expect(errs({ ...fixture(), when: "x" })).toContain(
-      "when is reserved (fitness compiler); not active yet",
+  // `when` is an ACTIVE structured activation predicate (plugin mechanism,
+  // Layer 4) — no longer reserved. A valid single-key producer-in-plan map
+  // passes; a wrong-shape or unknown-predicate value is rejected.
+  test("when: valid producer-in-plan predicate passes", () => {
+    const r = validateStageFrontmatter({ ...fixture(), when: { "producer-in-plan": "some-artifact" } });
+    expect(r.valid).toBe(true);
+  });
+
+  test("when: string value rejected (must be object)", () => {
+    expect(errs({ ...fixture(), when: "x" })).toContain("when must be object, got string");
+  });
+
+  test("when: unknown predicate rejected", () => {
+    expect(errs({ ...fixture(), when: { "bogus-predicate": "x" } })).toContain(
+      'when has unknown predicate "bogus-predicate"; allowed: producer-in-plan',
+    );
+  });
+
+  // number / name / bundle — optional plugin-mechanism metadata, accepted when
+  // shape-valid (previously rejected as unknown keys).
+  test("number/name/bundle: valid values pass", () => {
+    const r = validateStageFrontmatter({ ...fixture(), number: "4.50", name: "My Stage", bundle: "test-pro" });
+    expect(r.valid).toBe(true);
+  });
+
+  test("number: wrong shape rejected", () => {
+    expect(errs({ ...fixture(), number: "4-50" })).toContain(
+      "number must be <phase-prefix>.<index>",
     );
   });
 

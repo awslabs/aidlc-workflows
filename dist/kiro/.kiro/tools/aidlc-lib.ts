@@ -3212,8 +3212,14 @@ export function parseStageFrontmatter(
   ]);
   const CONSUMES_KEY = "consumes";
 
+  // `when` is a nested single-key map (when:\n  producer-in-plan: <slug>), not a
+  // scalar — parse it separately below. Skip it in the scalar loop so it isn't
+  // captured as an empty string.
+  const WHEN_KEY = "when";
+
   for (const key of topLevelKeys) {
     if (key === CONSUMES_KEY) continue;
+    if (key === WHEN_KEY) continue;
     if (ARRAY_KEYS.has(key)) continue;
     // optional_produces is a presence-gated array field parsed below; skip it
     // here so the scalar loop does not stamp it with an empty-string value.
@@ -3271,6 +3277,23 @@ export function parseStageFrontmatter(
     const raw = obj.workspace_requires;
     if (raw === "true" || raw === "false") {
       obj.workspace_requires = raw === "true";
+    }
+  }
+
+  // `when` — nested single-key predicate map. Present only on plugin stages
+  // (plugin mechanism, Layer 4). Parse the one indented `<predicate>: <value>`
+  // line into an object so the schema validator sees the map it expects; absent
+  // means the key never appears. Only assigned when the key was discovered.
+  if (topLevelKeys.has(WHEN_KEY)) {
+    // Match the `when:` line and the immediately-following indented child line.
+    const whenMatch = fm.match(/^when:\s*\n\s+([a-z][a-z0-9-]*)\s*:\s*(.+?)\s*$/m);
+    if (whenMatch) {
+      obj.when = { [whenMatch[1]]: whenMatch[2] };
+    } else {
+      // inline form `when: {producer-in-plan: X}` or malformed — capture the raw
+      // scalar so the validator can reject a non-map shape loudly.
+      const inline = fm.match(/^when:\s*\{\s*([a-z][a-z0-9-]*)\s*:\s*([^}]+?)\s*\}\s*$/m);
+      obj.when = inline ? { [inline[1]]: inline[2].trim() } : scalarField(fm, WHEN_KEY);
     }
   }
 
