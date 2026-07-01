@@ -1,0 +1,52 @@
+{
+  "tool": "sonar-style-scan",
+  "generatedAt": "2026-06-30T12:00:00Z",
+  "project": "todo-app",
+  "issues": [
+    {
+      "key": "TODO-101",
+      "severity": "CRITICAL",
+      "type": "BUG",
+      "rule": "typescript:S2259",
+      "component": "src/hooks/useTodos.ts",
+      "line": 42,
+      "message": "TypeError: possible null dereference of 'todos' after failed fetch - guard the response before mapping."
+    },
+    {
+      "key": "TODO-102",
+      "severity": "MAJOR",
+      "type": "BUG",
+      "rule": "typescript:S3516",
+      "component": "src/components/TodoList.tsx",
+      "line": 88,
+      "message": "Checkbox state handler always returns the same value - completed toggles are lost on re-render."
+    },
+    {
+      "key": "TODO-103",
+      "severity": "MAJOR",
+      "type": "CODE_SMELL",
+      "rule": "typescript:S1854",
+      "component": "src/state/persistence.ts",
+      "line": 17,
+      "message": "Dead store to 'serialized' - localStorage write path never persists the updated list."
+    },
+    {
+      "key": "TODO-104",
+      "severity": "MINOR",
+      "type": "CODE_SMELL",
+      "rule": "typescript:S125",
+      "component": "src/App.tsx",
+      "line": 5,
+      "message": "Remove commented-out code."
+    },
+    {
+      "key": "TODO-105",
+      "severity": "INFO",
+      "type": "SECURITY_HOTSPOT",
+      "rule": "typescript:S5852",
+      "component": "src/utils/search.ts",
+      "line": 30,
+      "message": "Review this regex for potential catastrophic backtracking on user input."
+    }
+  ]
+}
