@@ -115,6 +115,12 @@ The engine can name a COMPOSER DISPATCH instead of a scope confirm: on `/aidlc c
 
 Render that proposal per `question-rendering.md` and present an approve/edit/reject gate (Approve / Edit the grid / Reject). This gate is a hard turn-stop, like a stage gate: never treat silence as approval, and never write scope data or birth a workflow before an explicit approve. On edit, fold the human's changes into the grid and re-present. On reject, stop; the human can name a scope directly instead. On this harness the approved scope write runs INSIDE the dispatched composer (its agent config grants the scope-registry paths); your own sandbox does not write `.kiro/scopes/` or `.kiro/tools/data/`.
 
+**On approve (front/report), the write and the birth run in the SAME turn - no second `/aidlc` invocation:**
+
+1. If the proposal MATCHED a stock scope, skip the write entirely.
+2. For a CUSTOM grid, re-dispatch the composer (via the `subagent` tool - its config grants the write paths) to author the two files at the paths its `detect --json` printed: `.kiro/scopes/aidlc-<name>.md` (frontmatter `name`, `depth`, and `keywords: []` - composed scopes are NOT inferable unless the human explicitly granted keywords at the gate) plus the `"<name>": { "stages": {...} }` entry in `scope-grid.json`. BOTH files are required - a `.md` without a grid entry resolves as all-SKIP.
+3. Continue into the normal birth: run `bun .kiro/tools/aidlc-orchestrate.ts next --scope <name>` and act on its birth print exactly as "Acting on a directive" describes (the `--label` essence and the duplicate-intent guard ride the same path as any birth).
+
 The composer proposes; the human decides; the deterministic validator guards. You never improvise a grid yourself in prose, and the composer never advances the workflow.
 
 ---

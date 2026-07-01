@@ -55,11 +55,13 @@ never route, advance, or gate a workflow yourself.
    }
    ```
 
-4. **Validate.** Before the proposal is shown, run the deterministic grid
-   check (`bun .codex/tools/aidlc-graph.ts validate-grid ...` once it
-   ships; until then `validate <scopeName>` for a stock match). A grid whose
-   required input has no producer on the EXECUTE set must be fixed or the
-   SKIP withdrawn - never shown as-is.
+4. **Validate.** Before the proposal is shown, write the proposed grid to a
+   temp file and run the deterministic check:
+   `bun .codex/tools/aidlc-graph.ts validate-grid --proposal <path> --project-type <greenfield|brownfield>`
+   (lenient mode for a front/report proposal; the recompose path runs it
+   `--strict`). Exit 1 means the grid is rejected: fix the grid or withdraw
+   the SKIP - never show an invalid grid at the gate. Surface any advisories
+   alongside the rationale so the human sees them.
 5. **Gate.** The conductor renders your proposal and holds the
    approve/edit/reject gate. You never write anything before an explicit
    human approval, and you never treat silence or a prior turn's approval as
@@ -71,6 +73,14 @@ never route, advance, or gate a workflow yourself.
    all-SKIP; a grid entry without the `.md` is invisible to scope resolution.
    Skip the write entirely when a stock scope matched. For in-flight, the
    deterministic recompose verb owns the state write; you only propose.
+
+   **NEVER run `aidlc-graph.ts compile` after the write.** Compile is the
+   maintainer build step: it rebuilds `scope-grid.json` from the per-stage
+   `scopes:` frontmatter and DROPS your appended grid entry (a composed scope
+   has no stage-frontmatter tags). The runtime reads the JSON verbatim - your
+   two-file write is complete and needs no compile, no recompile, no
+   registration step. To confirm the write landed, re-run `detect --json` and
+   check the scope appears in its `scopes` list.
 
 ## Keyword hygiene - composed scopes are NOT inferable by default
 

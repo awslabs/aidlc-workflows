@@ -2568,6 +2568,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t191-composed-scope-write.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t60.test.ts",
           "mechanism": "cli"
         }
@@ -4582,6 +4586,10 @@
         {
           "file": "tests/integration/t21b.test.ts",
           "mechanism": "sdk"
+        },
+        {
+          "file": "tests/unit/t191-composed-scope-write.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/aws/amazon-q-developer-cli/refs/heads/main/schemas/agent-v1.json",
   "name": "aidlc-composer-agent",
-  "description": "AI-DLC Composer Agent — delegation target for composing a workflow plan (front, report, or in-flight). Proposes the EXECUTE/SKIP grid; after human approval writes the composed scope data.",
+  "description": "AI-DLC Composer Agent - delegation target for composing a workflow plan (front, report, or in-flight). Proposes the EXECUTE/SKIP grid; after human approval writes the composed scope data.",
   "prompt": "file://aidlc-composer-agent.md",
   "tools": [
     "fs_read",
