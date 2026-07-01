@@ -2,9 +2,9 @@
 # When user requests software development, ALWAYS follow this workflow FIRST
 
 ## Adaptive Workflow Principle
-**The workflow adapts to the work, not the other way around.**
+**Where no active extension mandates stage execution, the workflow adapts to the work, not the other way around.**
 
-The AI model intelligently assesses what stages are needed based on:
+For stages not listed in any extension's Stage Enforcement section, the AI model intelligently assesses what is needed based on:
 1. User's stated intent and clarity
 2. Existing codebase state (if any)
 3. Complexity and scope of change
@@ -21,33 +21,28 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 
 **Common Rules**: ALWAYS load common rules at workflow start:
 - Load `common/process-overview.md` for workflow overview
+- Load `common/step-execution-accountability.md` for step execution tracking and decision logging
 - Load `common/session-continuity.md` for session resumption guidance
 - Load `common/content-validation.md` for content validation requirements
 - Load `common/question-format-guide.md` for question formatting rules
 - Reference these throughout the workflow execution
 
-## MANDATORY: Extensions Loading (Context-Optimized)
-**CRITICAL**: At workflow start, scan the `extensions/` directory recursively but load ONLY lightweight opt-in files — NOT full rule files. Full rule files are loaded on-demand after the user opts in.
+## MANDATORY: Extensions Loading
+**CRITICAL**: At workflow start, scan the `extensions/` directory recursively for all `.md` files. These are extension rule files that apply as cross-cutting constraints across the entire workflow.
 
 **Loading process**:
 1. List all subdirectories under `extensions/` (e.g., `extensions/security/`, `extensions/compliance/`)
-2. In each subdirectory, load ONLY `*.opt-in.md` files — these contain the extension's opt-in prompt. The corresponding rules file is derived by convention: strip the `.opt-in.md` suffix and append `.md` (e.g., `security-baseline.opt-in.md` → `security-baseline.md`)
-3. Do NOT load full rule files (e.g., `security-baseline.md`) at this stage
+2. Load every `.md` file found within those subdirectories
+3. Each extension file defines its own verification criteria and enforcement rules as cross-cutting constraints
 
-**Deferred Rule Loading**:
-- During Requirements Analysis, opt-in prompts from the loaded `*.opt-in.md` files are presented to the user
-- When the user opts IN for an extension, load the corresponding rules file (derived by naming convention) at that point
-- When the user opts OUT, the full rules file is never loaded — saving context
-- Extensions without a matching `*.opt-in.md` file are always enforced — load their rule files immediately at workflow start
-
-**Enforcement** (applies only to loaded/enabled extensions):
+**Enforcement**:
 - Extension rules are hard constraints, not optional guidance
-- At each stage, the model intelligently evaluates which extension rules are applicable based on the stage's purpose, the artifacts being produced, and the context of the work — enforce only those rules that are relevant
-- Rules that are not applicable to the current stage should be marked as N/A in the compliance summary (this is not a blocking finding)
+- Unless an extension defines a Stage Enforcement section, at each stage the model intelligently evaluates which extension rules are applicable based on the stage's purpose, the artifacts being produced, and the context of the work — enforce only those rules that are relevant. Where an extension defines a Stage Enforcement section, the stages listed are mandatory inclusions — the model MUST enforce the rules at those stages and MAY also enforce them at other stages where relevant.
+- If a rule is judged as not applicable after intelligent evaluation, it must be marked N/A with documented rationale in the compliance summary — this is not a blocking finding.
 - Non-compliance with any applicable enabled extension rule is a **blocking finding** — do NOT present stage completion until resolved
 - When presenting stage completion, include a summary of extension rule compliance (compliant/non-compliant/N/A per rule, with brief rationale for N/A determinations)
 
-**Conditional Enforcement**: Extensions may be conditionally enabled/disabled. See `inception/requirements-analysis.md` for the opt-in mechanism. Before enforcing any extension at ANY stage, check its `Enabled` status in `aidlc-docs/aidlc-state.md` under `## Extension Configuration`. Skip disabled extensions and log the skip in audit.md. Default to enforced if no configuration exists. 
+**Conditional Enforcement**: Extensions may be conditionally enabled/disabled. See `inception/requirements-analysis.md` for the collection mechanism. Before enforcing any extension at ANY stage, check its `Enabled` status in `aidlc-docs/aidlc-state.md` under `## Extension Configuration`. Skip disabled extensions and log the skip in audit.md. Default to enforced if no configuration exists. Extensions without an `## Applicability Question` are always enforced.
 
 ## MANDATORY: Content Validation
 **CRITICAL**: Before creating ANY file, you MUST validate content according to `common/content-validation.md` rules:
@@ -86,6 +81,7 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 
 **Stages in INCEPTION PHASE**:
 - Workspace Detection (ALWAYS)
+- Operations Retrofit (CONDITIONAL - existing project with new extensions)
 - Reverse Engineering (CONDITIONAL - Brownfield only)
 - Requirements Analysis (ALWAYS - Adaptive depth)
 - User Stories (CONDITIONAL)
@@ -97,17 +93,62 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 
 ## Workspace Detection (ALWAYS EXECUTE)
 
-1. **MANDATORY**: Log initial user request in audit.md with complete raw input
+1. **MANDATORY**: You MUST log initial user request in audit.md with complete raw input
 2. Load all steps from `inception/workspace-detection.md`
-3. Execute workspace detection:
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. Execute workspace detection:
    - Check for existing aidlc-state.md (resume if found)
    - Scan workspace for existing code
    - Determine if brownfield or greenfield
    - Check for existing reverse engineering artifacts
-4. Determine next phase: Reverse Engineering (if brownfield and no artifacts) OR Requirements Analysis
-5. **MANDATORY**: Log findings in audit.md
-6. Present completion message to user (see workspace-detection.md for message formats)
-7. Automatically proceed to next phase
+5. Determine next phase: Reverse Engineering (if brownfield and no artifacts) OR Requirements Analysis
+6. **MANDATORY**: Check for Operations Retrofit condition (see Operations Retrofit stage below). If detected, next phase is Operations Retrofit.
+7. **MANDATORY**: You MUST log findings in audit.md
+8. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+9. Present completion message to user (see workspace-detection.md for message formats)
+10. Automatically proceed to next phase
+
+## Operations Retrofit (CONDITIONAL - Brownfield Only)
+
+**Execute IF ALL of the following are true**:
+- Workspace is brownfield (existing code detected)
+- `aidlc-docs/aidlc-state.md` exists
+- Stage Progress shows Construction stages COMPLETED
+- Operations stage shows PLACEHOLDER, or no Operations stages are recorded
+
+**Skip IF**:
+- Operations stage does NOT show PLACEHOLDER
+
+**Purpose**: Implement the trust-and-verify approach for Operations on an existing project. Construction ran without operational extensions — this stage collects extension opt-in answers and resets Construction to re-run with them loaded, so Operations can then verify compliance.
+
+**Execution**:
+1. **MANDATORY**: You MUST log start of Operations Retrofit in audit.md
+2. **MANDATORY**: You MUST record all steps in `aidlc-docs/step-decision-log.md` before executing any of them.
+3. You MUST present the following question to the user: "**Operations extensions are available but were not included when this project was built. Would you like to retrofit the Operations phase? (Yes/No)**"
+4. **Wait for Explicit Approval**: DO NOT PROCEED until user confirms
+5. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
+
+**Skip IF** the user says No:
+- You MUST record stage status as SKIPPED in `aidlc-docs/aidlc-state.md`
+- Present: "Operations Retrofit SKIPPED — user declined."
+- You MUST NOT execute any further steps in this stage. Proceed to Reverse Engineering.
+
+**Execute IF** the user says Yes: Proceed to Step 6.
+
+6. You MUST archive current state:
+   - You MUST create `aidlc-docs/operations/retrofit-archive/`
+   - You MUST copy `aidlc-docs/aidlc-state.md` to `aidlc-docs/operations/retrofit-archive/aidlc-state.md`
+   - You MUST copy `aidlc-docs/audit.md` to `aidlc-docs/operations/retrofit-archive/audit.md`
+7. You MUST reset aidlc-state.md:
+   - **SET**: Project Type to `Brownfield (Operations Retrofit)`
+   - **KEEP**: Project Information (except Project Type), Workspace State, Code Location Rules, Architectural Decisions
+   - **CLEAR**: Extension Configuration table. You MUST leave the section header and empty table columns intact.
+   - **CLEAR**: Build and Test Results
+   - **RESET**: Stage Progress. You MUST mark Requirements Analysis and all subsequent stages as NOT COMPLETED (`[ ]`). You MUST keep Workspace Detection and Operations Retrofit as `[x]`.
+   - **SET**: Current Stage to `INCEPTION - Requirements Analysis`
+   - **MANDATORY**: You MUST re-read aidlc-state.md and confirm: (1) Extension Configuration table has the header row but NO data rows, (2) Current Stage is `INCEPTION - Requirements Analysis`, (3) Requirements Analysis and all subsequent stages show `[ ]`, (4) `aidlc-docs/operations/retrofit-archive/aidlc-state.md` exists. You MUST NOT proceed to Step 8 until all 4 checks pass.
+8. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+9. You MUST automatically proceed to Requirements Analysis
 
 ## Reverse Engineering (CONDITIONAL - Brownfield Only)
 
@@ -120,9 +161,10 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - Previous reverse engineering artifacts exist
 
 **Execution**:
-1. **MANDATORY**: Log start of reverse engineering in audit.md
+1. **MANDATORY**: You MUST log start of reverse engineering in audit.md
 2. Load all steps from `inception/reverse-engineering.md`
-3. Execute reverse engineering:
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. Execute reverse engineering:
    - Analyze all packages and components
    - Generate a business overview of the whole system covering the business transactions
    - Generate architecture documentation
@@ -132,9 +174,9 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
    - Generate Interaction Diagrams depicting how business transactions are implemented across components
    - Generate technology stack documentation
    - Generate dependencies documentation
-
-4. **Wait for Explicit Approval**: Present detailed completion message (see reverse-engineering.md for message format) - DO NOT PROCEED until user confirms
-5. **MANDATORY**: Log user's response in audit.md with complete raw input
+5. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+6. **Wait for Explicit Approval**: Present detailed completion message (see reverse-engineering.md for message format) - DO NOT PROCEED until user confirms
+7. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
 
 ## Requirements Analysis (ALWAYS EXECUTE - Adaptive Depth)
 
@@ -144,18 +186,20 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - **Comprehensive**: Complex, high-risk - detailed requirements with traceability
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this phase in audit.md
+1. **MANDATORY**: You MUST log any user input during this phase in audit.md
 2. Load all steps from `inception/requirements-analysis.md`
-3. Execute requirements analysis:
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. Execute requirements analysis:
    - Load reverse engineering artifacts (if brownfield)
    - Analyze user request (intent analysis)
    - Determine requirements depth needed
    - Assess current requirements
    - Ask clarifying questions (if needed)
    - Generate requirements document
-4. Execute at appropriate depth (minimal/standard/comprehensive)
-5. **Wait for Explicit Approval**: Follow approval format from requirements-analysis.md detailed steps - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+5. Execute at appropriate depth (minimal/standard/comprehensive)
+6. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+7. **Wait for Explicit Approval**: Follow approval format from requirements-analysis.md detailed steps - DO NOT PROCEED until user confirms
+8. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
 
 ## User Stories (CONDITIONAL)
 
@@ -215,35 +259,39 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 2. **Part 2 - Generation**: Execute approved plan to generate stories and personas
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this phase in audit.md
+1. **MANDATORY**: You MUST log any user input during this phase in audit.md
 2. Load all steps from `inception/user-stories.md`
-3. **MANDATORY**: Perform intelligent assessment (Step 1 in user-stories.md) to validate user stories are needed
-4. Load reverse engineering artifacts (if brownfield)
-5. If Requirements exist, reference them when creating stories
-6. Execute at appropriate depth (minimal/standard/comprehensive)
-7. **PART 1 - Planning**: Create story plan with questions, wait for user answers, analyze for ambiguities, get approval
-8. **PART 2 - Generation**: Execute approved plan to generate stories and personas
-9. **Wait for Explicit Approval**: Follow approval format from user-stories.md detailed steps - DO NOT PROCEED until user confirms
-10. **MANDATORY**: Log user's response in audit.md with complete raw input
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. **MANDATORY**: Perform intelligent assessment (Step 1 in user-stories.md) to validate user stories are needed
+5. Load reverse engineering artifacts (if brownfield)
+6. If Requirements exist, reference them when creating stories
+7. Execute at appropriate depth (minimal/standard/comprehensive)
+8. **PART 1 - Planning**: Create story plan with questions, wait for user answers, analyze for ambiguities, get approval
+9. **PART 2 - Generation**: Execute approved plan to generate stories and personas
+10. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+11. **Wait for Explicit Approval**: Follow approval format from user-stories.md detailed steps - DO NOT PROCEED until user confirms
+12. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
 
 ## Workflow Planning (ALWAYS EXECUTE)
 
-1. **MANDATORY**: Log any user input during this phase in audit.md
+1. **MANDATORY**: You MUST log any user input during this phase in audit.md
 2. Load all steps from `inception/workflow-planning.md`
-3. **MANDATORY**: Load content validation rules from `common/content-validation.md`
-4. Load all prior context:
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. **MANDATORY**: Load content validation rules from `common/content-validation.md`
+5. Load all prior context:
    - Reverse engineering artifacts (if brownfield)
    - Intent analysis
    - Requirements (if executed)
    - User stories (if executed)
-5. Execute workflow planning:
-   - Determine which phases to execute
+6. Execute workflow planning:
+   - Determine which phases to execute (Inception, Construction, AND Operations — see workflow-planning.md Step 3.5 for Operations determination)
    - Determine depth level for each phase
    - Create multi-package change sequence (if brownfield)
    - Generate workflow visualization (VALIDATE Mermaid syntax before writing)
-6. **MANDATORY**: Validate all content before file creation per content-validation.md rules
-7. **Wait for Explicit Approval**: Present recommendations using language from workflow-planning.md Step 9, emphasizing user control to override recommendations - DO NOT PROCEED until user confirms
-8. **MANDATORY**: Log user's response in audit.md with complete raw input
+7. **MANDATORY**: Validate all content before file creation per content-validation.md rules
+8. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+9. **Wait for Explicit Approval**: Present recommendations using language from workflow-planning.md Step 9, emphasizing user control to override recommendations - DO NOT PROCEED until user confirms
+10. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
 
 ## Application Design (CONDITIONAL)
 
@@ -259,12 +307,14 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - Pure implementation changes
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this phase in audit.md
+1. **MANDATORY**: You MUST log any user input during this phase in audit.md
 2. Load all steps from `inception/application-design.md`
-3. Load reverse engineering artifacts (if brownfield)
-4. Execute at appropriate depth (minimal/standard/comprehensive)
-5. **Wait for Explicit Approval**: Present detailed completion message (see application-design.md for message format) - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. Load reverse engineering artifacts (if brownfield)
+5. Execute at appropriate depth (minimal/standard/comprehensive)
+6. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+7. **Wait for Explicit Approval**: Present detailed completion message (see application-design.md for message format) - DO NOT PROCEED until user confirms
+8. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
 
 ## Units Generation (CONDITIONAL)
 
@@ -279,12 +329,14 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - Straightforward single-component implementation
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this phase in audit.md
+1. **MANDATORY**: You MUST log any user input during this phase in audit.md
 2. Load all steps from `inception/units-generation.md`
-3. Load reverse engineering artifacts (if brownfield)
-4. Execute at appropriate depth (minimal/standard/comprehensive)
-5. **Wait for Explicit Approval**: Present detailed completion message (see units-generation.md for message format) - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. Load reverse engineering artifacts (if brownfield)
+5. Execute at appropriate depth (minimal/standard/comprehensive)
+6. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+7. **Wait for Explicit Approval**: Present detailed completion message (see units-generation.md for message format) - DO NOT PROCEED until user confirms
+8. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
 
 ---
 
@@ -323,12 +375,14 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - No new business logic
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this stage in audit.md
+1. **MANDATORY**: You MUST log any user input during this stage in audit.md
 2. Load all steps from `construction/functional-design.md`
-3. Execute functional design for this unit
-4. **MANDATORY**: Present standardized 2-option completion message as defined in functional-design.md - DO NOT use emergent 3-option behavior
-5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. Execute functional design for this unit
+5. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+6. **MANDATORY**: You MUST present standardized 2-option completion message as defined in functional-design.md - DO NOT use emergent 3-option behavior
+7. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
+8. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
 
 ### NFR Requirements (CONDITIONAL, per-unit)
 
@@ -343,12 +397,14 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - Tech stack already determined
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this stage in audit.md
+1. **MANDATORY**: You MUST log any user input during this stage in audit.md
 2. Load all steps from `construction/nfr-requirements.md`
-3. Execute NFR assessment for this unit
-4. **MANDATORY**: Present standardized 2-option completion message as defined in nfr-requirements.md - DO NOT use emergent behavior
-5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. Execute NFR assessment for this unit
+5. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+6. **MANDATORY**: You MUST present standardized 2-option completion message as defined in nfr-requirements.md - DO NOT use emergent behavior
+7. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
+8. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
 
 ### NFR Design (CONDITIONAL, per-unit)
 
@@ -361,12 +417,14 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - NFR Requirements was skipped
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this stage in audit.md
+1. **MANDATORY**: You MUST log any user input during this stage in audit.md
 2. Load all steps from `construction/nfr-design.md`
-3. Execute NFR design for this unit
-4. **MANDATORY**: Present standardized 2-option completion message as defined in nfr-design.md - DO NOT use emergent behavior
-5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. Execute NFR design for this unit
+5. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+6. **MANDATORY**: You MUST present standardized 2-option completion message as defined in nfr-design.md - DO NOT use emergent behavior
+7. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
+8. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
 
 ### Infrastructure Design (CONDITIONAL, per-unit)
 
@@ -380,12 +438,17 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 - Infrastructure already defined
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this stage in audit.md
+1. **MANDATORY**: You MUST log any user input during this stage in audit.md
 2. Load all steps from `construction/infrastructure-design.md`
-3. Execute infrastructure design for this unit
-4. **MANDATORY**: Present standardized 2-option completion message as defined in infrastructure-design.md - DO NOT use emergent behavior
-5. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. Execute infrastructure design for this unit
+5. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+6. **MANDATORY**: You MUST present standardized 2-option completion message as defined in infrastructure-design.md - DO NOT use emergent behavior
+7. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
+8. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
+9. **If any extensions are active**: Produce extension plan rule mapping for this unit's resources and present rule mapping completion message as defined in infrastructure-design.md - DO NOT use emergent behavior
+10. **Wait for Explicit Approval**: User must approve the rule mapping before proceeding - DO NOT PROCEED until user confirms
+11. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
 
 ### Code Generation (ALWAYS EXECUTE, per-unit)
 
@@ -396,59 +459,126 @@ All subsequent rule detail file references (e.g., `common/process-overview.md`, 
 2. **Part 2 - Generation**: Execute approved plan to generate code, tests, and artifacts
 
 **Execution**:
-1. **MANDATORY**: Log any user input during this stage in audit.md
+1. **MANDATORY**: You MUST log any user input during this stage in audit.md
 2. Load all steps from `construction/code-generation.md`
-3. **PART 1 - Planning**: Create code generation plan with checkboxes, get user approval
-4. **PART 2 - Generation**: Execute approved plan to generate code for this unit
-5. **MANDATORY**: Present standardized 2-option completion message as defined in code-generation.md - DO NOT use emergent behavior
-6. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
-7. **MANDATORY**: Log user's response in audit.md with complete raw input
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. **PART 1 - Planning**: Create code generation plan with checkboxes, get user approval
+5. **PART 2 - Generation**: Execute approved plan to generate code for this unit
+6. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+7. **MANDATORY**: You MUST present standardized 2-option completion message as defined in code-generation.md - DO NOT use emergent behavior
+8. **Wait for Explicit Approval**: User must choose between "Request Changes" or "Continue to Next Stage" - DO NOT PROCEED until user confirms
+9. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
 
 ---
 
 ## Build and Test (ALWAYS EXECUTE)
 
-1. **MANDATORY**: Log any user input during this phase in audit.md
+1. **MANDATORY**: You MUST log any user input during this phase in audit.md
 2. Load all steps from `construction/build-and-test.md`
-3. Generate comprehensive build and test instructions:
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. Generate comprehensive build and test instructions:
    - Build instructions for all units
    - Unit test execution instructions
    - Integration test instructions (test interactions between units)
    - Performance test instructions (if applicable)
    - Additional test instructions as needed (contract tests, security tests, e2e tests)
-4. Create instruction files in build-and-test/ subdirectory: build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, build-and-test-summary.md
-5. **Wait for Explicit Approval**: Ask: "**Build and test instructions complete. Ready to proceed to Operations stage?**" - DO NOT PROCEED until user confirms
-6. **MANDATORY**: Log user's response in audit.md with complete raw input
+5. Create instruction files in build-and-test/ subdirectory: build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, build-and-test-summary.md
+6. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+7. **Wait for Explicit Approval**: Ask: "**Build and test instructions complete. Ready to proceed to Operations stage?**" - DO NOT PROCEED until user confirms
+8. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
 
 ---
 
 # 🟡 OPERATIONS PHASE
 
-**Purpose**: Placeholder for future deployment and monitoring workflows
+**Purpose**: Validate that Construction correctly implemented all applicable operational rules, deploy the workload to a real environment, and execute post-deployment testing to prove operational readiness.
 
-**Focus**: How to DEPLOY and RUN it (future expansion)
+**Focus**: Verify WHAT was built meets the rules, deploy it, and prove it works
 
 **Stages in OPERATIONS PHASE**:
-- Operations (PLACEHOLDER)
+- Rules Validation (CONDITIONAL)
+- Deployment (CONDITIONAL)
+- Post-Deployment Testing (CONDITIONAL)
 
 ---
 
-## Operations (PLACEHOLDER)
+## Rules Validation (CONDITIONAL)
 
-**Status**: This stage is currently a placeholder for future expansion.
+**Execute IF**:
+- At least one extension is active (answer other than D/No)
 
-The Operations stage will eventually include:
-- Deployment planning and execution
-- Monitoring and observability setup
-- Incident response procedures
-- Maintenance and support workflows
-- Production readiness checklists
+**Skip IF**:
+- No operational extensions were opted into (all answered D/No)
 
-**Current State**: All build and test activities are handled in the CONSTRUCTION phase.
+**Prerequisites** (evaluated at execution time, not at planning time):
+- Build and Test stage must be complete before this stage executes
+
+**Execution**:
+1. **MANDATORY**: You MUST log any user input during this phase in audit.md
+2. Load all steps from `operations/rules-validation.md`
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. Execute rules validation:
+   - Read Extension Configuration from `aidlc-docs/aidlc-state.md`
+   - For each opted-in extension with an `extensions/{domain}/` directory, load rules and validate Construction output
+   - Process domains in dependency order (observability → recovery → runbooks → deployment)
+   - Generate per-domain validation reports and documentation
+   - Generate operations summary
+5. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+6. **Wait for Explicit Approval**: Present standardized 2-option completion message - DO NOT PROCEED until user confirms
+7. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
+
+---
+
+## Deployment (CONDITIONAL)
+
+**Always Execute**: The execution plan always marks this stage EXECUTE. The opt-in check is performed internally by `operations/deployment.md` at runtime — if the deployment extension is not active, the stage asks the customer whether to proceed and may mark itself SKIPPED.
+
+**Prerequisites** (evaluated at execution time, not at planning time):
+- Rules Validation stage must be complete before this stage executes
+
+**Execution**:
+1. **MANDATORY**: You MUST log any user input during this phase in audit.md
+2. Load all steps from `operations/deployment.md`
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. Execute deployment:
+   - Check upstream artifact prerequisites (infra design, extension plan rule mapping, build summary)
+   - Verify environment prerequisites (IaC tool, CLI, credentials, bootstrapping)
+   - Verify deployment automation covers all components (infrastructure, application artifacts, assets/data)
+   - Deploy infrastructure (IaC stacks)
+   - Deploy application artifacts (Lambda code, container images, frontend bundles)
+   - Deploy assets/data if applicable (migrations, seed data, config)
+   - Verify every deployed component is present and observable in the environment
+   - Record deployment outputs
+5. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+6. **Wait for Explicit Approval**: Present standardized 2-option completion message - DO NOT PROCEED until user confirms
+7. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
+
+---
+
+## Post-Deployment Testing (CONDITIONAL)
+
+**Always Execute**: The execution plan always marks this stage EXECUTE. The opt-in check is performed internally by `operations/post-deployment-testing.md` at runtime — if deployment was skipped or blocked, the stage marks itself SKIPPED.
+
+**Prerequisites** (evaluated at execution time, not at planning time):
+- Deployment stage must have completed or been explicitly skipped
+
+**Execution**:
+1. **MANDATORY**: You MUST log any user input during this phase in audit.md
+2. Load all steps from `operations/post-deployment-testing.md`
+3. **MANDATORY**: You MUST record all steps identified in the loaded rule file in `aidlc-docs/step-decision-log.md` before executing any of them.
+4. Execute post-deployment testing:
+   - Discover test assets from Build and Test and active extensions
+   - Build test plan using the testing framework phases (per-rule, per-resource)
+   - Execute automatable tests against the deployed environment
+   - Document customer-staged tests for later execution
+   - Generate test report with evidence
+5. **MANDATORY**: You MUST verify the step-decision-log entry for this stage is complete and step counts match before presenting completion. For any missing step: re-execute it and all steps that depend on its output. Update the log. You MUST NOT present completion until all steps are logged.
+6. **Wait for Explicit Approval**: Present standardized 2-option completion message - DO NOT PROCEED until user confirms
+7. **MANDATORY**: You MUST log user's response in audit.md with complete raw input
 
 ## Key Principles
 
-- **Adaptive Execution**: Only execute stages that add value
+- **Adaptive Execution**: For stages not listed in any extension's Stage Enforcement section the model only executes stages that add value.
 - **Transparent Planning**: Always show execution plan before starting
 - **User Control**: User can request stage inclusion/exclusion
 - **Progress Tracking**: Update aidlc-state.md with executed and skipped stages
@@ -474,9 +604,9 @@ The Operations stage will eventually include:
 - **Update immediately**: All progress updates in SAME interaction where work is completed
 
 ## Prompts Logging Requirements
-- **MANDATORY**: Log EVERY user input (prompts, questions, responses) with timestamp in audit.md
+- **MANDATORY**: You MUST log EVERY user input (prompts, questions, responses) with timestamp in audit.md
 - **MANDATORY**: Capture user's COMPLETE RAW INPUT exactly as provided (never summarize)
-- **MANDATORY**: Log every approval prompt with timestamp before asking the user
+- **MANDATORY**: You MUST log every approval prompt with timestamp before asking the user
 - **MANDATORY**: Record every user response with timestamp after receiving it
 - **CRITICAL**: ALWAYS append changes to EDIT audit.md file, NEVER use tools and commands that completely overwrite its contents
 - **CRITICAL**: NEVER use file writing tools and commands that overwrite the entire contents of audit.md, as this causes duplication
@@ -528,7 +658,7 @@ The Operations stage will eventually include:
 │   │   │   ├── infrastructure-design/
 │   │   │   └── code/               # Markdown summaries only
 │   │   └── build-and-test/
-│   ├── operations/                 # 🟡 OPERATIONS PHASE (placeholder)
+│   ├── operations/                 # 🟡 OPERATIONS PHASE
 │   ├── aidlc-state.md
 │   └── audit.md
 ```

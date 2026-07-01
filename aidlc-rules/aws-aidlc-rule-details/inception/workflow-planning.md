@@ -1,5 +1,7 @@
 # Workflow Planning
 
+> **OVERRIDE**: Steps 6 and 7 are exempt from the Adaptive Workflow Principle. EXECUTE or SKIP for each stage MUST be determined solely by the Execute IF and Skip IF conditions in Step 3. The model MUST NOT apply its own feasibility judgement. The Operations phase MUST always be included.
+
 **Purpose**: Determine which phases to execute and create comprehensive execution plan
 
 **Always Execute**: This phase always runs after understanding requirements and scope
@@ -153,6 +155,14 @@ Evaluate risk level:
 - No new NFR requirements
 - Simple changes with no NFR impact
 
+### 3.5 Operations (Rules Validation + Deployment + Post-Deployment Testing) - Execute IF:
+- Requirements will drive the creation of resources that could be subject to extension rules (e.g. observability, recovery, deployment, runbooks)
+- Requirements include non-functional concerns such as availability, resilience, monitoring, or deployment safety
+
+**Skip IF**:
+- Requirements do not create or modify resources that could be subject to extension rules
+- Brownfield refactoring or bug fix where the customer has previously opted out of all extensions
+
 ## Step 4: Note Adaptive Detail
 
 **See [depth-levels.md](../common/depth-levels.md) for adaptive depth explanation**
@@ -274,7 +284,9 @@ flowchart TD
     end
     
     subgraph OPERATIONS["🟡 OPERATIONS PHASE"]
-        OPS["Operations<br/><b>PLACEHOLDER</b>"]
+        OPS["Rules Validation<br/><b>EXECUTE</b>"]
+        DEP["Deployment<br/><b>EXECUTE</b>"]
+        PDT["Post-Deployment Testing<br/><b>EXECUTE</b>"]
     end
     
     Start --> WD
@@ -282,7 +294,11 @@ flowchart TD
     RA --> WP
     WP --> CG
     CG --> BT
-    BT --> End(["Complete"])
+    BT -.-> OPS
+    OPS -.-> DEP
+    DEP -.-> PDT
+    PDT --> End(["Complete"])
+    BT --> End
     
     %% Replace STATUS with COMPLETED, SKIP, EXECUTE as appropriate
     %% Apply styling based on status
@@ -318,8 +334,13 @@ flowchart TD
   - **Rationale**: Build, test, and verification needed
 
 ### 🟡 OPERATIONS PHASE
-- [ ] Operations - PLACEHOLDER
-  - **Rationale**: Future deployment and monitoring workflows
+- [ ] Rules Validation - [EXECUTE/SKIP]
+  - **Execute IF**: At least one extension is opted into (answer other than D/No) that has a corresponding `extensions/{domain}/` directory
+  - **Rationale**: [Why executing or skipping]
+- [ ] Deployment - EXECUTE
+  - **Rationale**: Always executes — opt-in check performed at runtime by the stage itself
+- [ ] Post-Deployment Testing - EXECUTE
+  - **Rationale**: Always executes — skip logic performed at runtime by the stage itself
 
 ## Package Change Sequence (Brownfield Only)
 [If applicable, list package update sequence with dependencies]
@@ -337,6 +358,12 @@ flowchart TD
 - **Integration Testing**: All components working together
 - **Operational Readiness**: Monitoring, logging, alerting working
 ```
+
+Validation checks:
+- **Completeness**: Every stage from every phase (Inception, Construction, Operations) MUST appear in the plan. If any stage is missing, add it before proceeding.
+- **Decision basis**: For every stage marked EXECUTE or SKIP, the rationale MUST reference only conditions from the Execute IF or Skip IF list defined in Step 3 for that stage. If the rationale references anything outside those conditions (e.g. environment constraints, tool availability, credentials), it is invalid — rewrite it using only the applicable condition from Step 3, or correct the EXECUTE/SKIP status.
+- **Always-execute stages**: Code Generation, Build and Test, Deployment, and Post-Deployment Testing MUST be marked EXECUTE. If any is marked SKIP, correct it.
+- **Operations phase**: Rules Validation, Deployment, and Post-Deployment Testing MUST all appear. Rules Validation EXECUTE/SKIP is derived from extension configuration. Deployment and Post-Deployment Testing are always EXECUTE — their opt-in logic runs at stage execution time, not at planning time.
 
 ## Step 8: Initialize State Tracking
 
@@ -375,7 +402,9 @@ Update `aidlc-docs/aidlc-state.md`:
 - [ ] Build and Test - EXECUTE
 
 ### 🟡 OPERATIONS PHASE
-- [ ] Operations - PLACEHOLDER
+- [ ] Rules Validation - [EXECUTE/SKIP]
+- [ ] Deployment - EXECUTE
+- [ ] Post-Deployment Testing - EXECUTE
 
 ## Current Status
 - **Lifecycle Phase**: INCEPTION

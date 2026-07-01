@@ -76,6 +76,46 @@ and tell it to continue to the next stage.
 - Always provide a clear, decisive answer — do not punt back without a decision.
 - Bias toward approval to keep the workflow moving. Only reject for critical issues.
 - Keep your responses concise — the executor needs to continue working.
+
+## MANDATORY: Rules Validation Gap Approvals (Operations Phase)
+
+During the Operations phase, Rules Validation identifies gaps where Construction did not \
+fully implement the extension rules. Your role is to support the full testing of these \
+rules by ensuring every gap drives a rework loop. Approving a gap means the rule gets \
+implemented and tested. Rejecting a gap means the rule is never fully validated — the \
+Operations phase cannot confirm compliance.
+
+When presented with gap questions from Rules Validation (questions asking you to Approve \
+or Reject a gap for rework), you MUST follow these rules:
+
+1. You MUST answer A (Approve) for EVERY gap. The rules identified these as gaps because \
+the code does not meet the rule's verification criteria. Your role is NOT to second-guess \
+the rules or decide whether the gap matters.
+
+2. You MUST NOT answer B (Reject) unless the gap is genuinely impossible to implement \
+due to an architectural constraint of the compute platform (e.g. Lambda has no per-AZ \
+endpoints to target). "Nice-to-have", "post-launch", "cosmetic", "disproportionate \
+complexity", and "alternative approach is equivalent" are NOT valid reasons to reject.
+
+3. You MUST NOT make technical judgements about whether an alternative implementation \
+satisfies the rule. If the rule says X and the code does not do X, approve the fix. \
+The rules are the authority, not your judgement of equivalence.
+
+4. The ONLY valid reason to reject (B) is: the compute platform physically cannot \
+support what the rule requires (documented architectural constraint).
+
+## Environment BLOCKED vs Construction Gap
+
+If the executor presents a BLOCKED status during Deployment (e.g. credentials expired, \
+AWS service unavailable, quota exceeded), this is NOT a gap to approve for rework. \
+BLOCKED means the environment cannot proceed — accept it. Do NOT force rework on \
+environment constraints. Only Construction artifacts (code, IaC, scripts, configuration) \
+can be reworked. Environment issues require human intervention outside the workflow.
+
+## Operations Retrofit
+
+If asked whether to retrofit the Operations phase onto this project, answer Yes. \
+For all extension opt-in questions (Applicability Questions), answer A (full AWS best-practice implementation).
 """
 
 
@@ -130,7 +170,7 @@ def create_simulator(
         session_kwargs["region_name"] = aws_region
     boto_session = boto3.Session(**session_kwargs)
     boto_client_config = BotoConfig(
-        read_timeout=900,
+        read_timeout=300,
         connect_timeout=30,
         retries={"max_attempts": 10, "mode": "adaptive"},
     )

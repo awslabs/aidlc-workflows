@@ -82,6 +82,13 @@ def make_run_command(run_folder: Path, timeout: int = 120) -> object:
             if val is not None:
                 env[var] = val
 
+        # Propagate AWS credentials if present (needed for IaC synth/deploy)
+        for var in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+                    "AWS_DEFAULT_REGION", "AWS_REGION"):
+            val = os.environ.get(var)
+            if val is not None:
+                env[var] = val
+
         try:
             # nosec B603 - Using shlex.split with shell=False and path validated via _resolve_safe
             # nosemgrep: dangerous-subprocess-use-audit
