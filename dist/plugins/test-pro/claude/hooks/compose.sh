@@ -71,7 +71,13 @@ fi
 # are future work.
 "$BUN" "$PLUGIN_ROOT/hooks/compose-contributions.ts" 2>/dev/null || true
 
-# --- 5. Recompile the stage graph (picks up new stages + merged produces) ---
+# --- 5. Splice contribution PROSE fragments into target stage bodies ---
+# The prose half of the seam: `## fragment: <anchor>` blocks get inserted at
+# after-step:N / before-step:N / end-of-steps / in:Compartment anchors, ordered
+# by (order, bundle). Idempotent (matched by heading). Source edit → durable.
+"$BUN" "$PLUGIN_ROOT/hooks/compose-fragments.ts" 2>/dev/null || true
+
+# --- 6. Recompile the stage graph (picks up new stages + merged produces) ---
 "$BUN" "$HARNESS_DIR/tools/aidlc-graph.ts" compile 2>/dev/null || true
 
 exit 0
