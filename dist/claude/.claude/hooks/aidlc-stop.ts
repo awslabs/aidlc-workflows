@@ -439,6 +439,32 @@ function isPendingQuestionStop(stateContent: string): boolean {
   }
 }
 
+// --- Tier-2b: pending in-flight compose proposal carve-out --------------------
+//
+// The adaptive composer's IN-FLIGHT approve/edit/reject gate is a turn-stop
+// like a stage gate, but it has no [?]/[R] checkbox signal: the current stage
+// stays [ ]/[-], so this hook's bare-`next` probe sees the pending run-stage
+// and would block the turn - shoving the conductor back into stage execution
+// mid-compose and abandoning the gate (the mid-workflow trap class, reopened
+// for compose). POSITIVE-CONFIRMATION: the conductor writes the marker file
+// `aidlc/.aidlc-compose-pending` before presenting the gate (the engine's
+// compose dispatch print instructs it) and deletes it on approve/reject, the
+// same disk-signal discipline as tier-2's <slug>-questions.md. AUTONOMY GUARD:
+// never fires under autonomous Construction (an unattended run has no human to
+// answer the gate; a stray marker must not strand it). Fail-open: any read
+// error falls through to the cap-bounded block. Front/report composes are
+// unaffected (cold start has no state file; the hook allows before this).
+function isPendingComposeStop(stateContent: string): boolean {
+  try {
+    if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
+      return false; // autonomy guard - keep the loop alive
+    }
+    return existsSync(join(projectDir, "aidlc", ".aidlc-compose-pending"));
+  } catch {
+    return false;
+  }
+}
+
 // --- Tier-3: conversational-turn carve-out (issue #365 broader reading) -------
 //
 // Issue #365's literal fix is `park` (the conductor explicitly pauses the run).
@@ -926,6 +952,21 @@ if (isPendingQuestionStop(stateContent)) {
     projectDir,
     HOOK_NAME,
     `current stage ${currentStageSlug(stateContent)} has an unanswered question; allowing the stop (pending-question carve-out)`,
+  );
+  allowStop();
+}
+
+// Pending-compose carve-out (tier 2b): an in-flight compose proposal is
+// awaiting the human's approve/edit/reject (the conductor's marker file is on
+// disk) and we are NOT in autonomous Construction - the conductor is parked on
+// the human exactly like a stage gate, so allow the turn to end instead of
+// nudging it back into stage execution mid-compose. Positive-confirmation only
+// (the marker), autonomy-guarded, fail-open (see isPendingComposeStop).
+if (isPendingComposeStop(stateContent)) {
+  recordHookDrop(
+    projectDir,
+    HOOK_NAME,
+    "an in-flight compose proposal is pending human approval (aidlc/.aidlc-compose-pending present); allowing the stop (pending-compose carve-out)",
   );
   allowStop();
 }

@@ -19,6 +19,7 @@ import {
   loadRules,
   memoryDirFor,
   stageGraphDrift,
+  validateGrid,
   validateScope,
 } from "./aidlc-graph.ts";
 import { repointHarnessIncludes } from "./aidlc-includes.ts";
@@ -57,6 +58,7 @@ import {
   parseCheckboxes,
   parseRefsList,
   parseStageFrontmatter,
+  parseStateStageSuffixes,
   readAllAuditShards,
   readCurrentSessionId,
   readStateFile,
@@ -70,6 +72,7 @@ import {
   type StageEntry,
   setCheckbox,
   setField,
+  setStageSuffix,
   scopeGridPath,
   scopesDir,
   stagesInScope,
@@ -291,11 +294,17 @@ To get started:
     statusLine = `${displayName} approved — ready to advance`;
   }
 
-  // Checkbox counts — filter to in-scope stages when scope is known
+  // Checkbox counts - filter to the EFFECTIVE plan when scope is known: the
+  // state file's per-stage EXECUTE/SKIP suffixes (a recomposed plan) override
+  // the static grid, so status counts against what the router will actually
+  // run, not the pre-recompose column.
   const checkboxes = parseCheckboxes(content);
+  const suffixOverrides = parseStateStageSuffixes(content);
   const inScopeInfo = stagesInScope(scope);
   const inScopeSlugs = new Set(
-    inScopeInfo.filter((s) => s.action === "EXECUTE").map((s) => s.slug)
+    inScopeInfo
+      .filter((s) => (suffixOverrides.get(s.slug) ?? s.action) === "EXECUTE")
+      .map((s) => s.slug)
   );
   const scopedCheckboxes =
     scope !== "Unknown" && inScopeSlugs.size > 0
@@ -2968,6 +2977,180 @@ Completed: ${completedCount}/${executeStages.length}
 }
 
 // ---------------------------------------------------------------------------
+// recompose - flip a PENDING stage's plan suffix on the live state file
+// (the adaptive composer's in-flight write). `--skip <slugs>` drops stages
+// from the plan; `--add <slugs>` promotes them back (comma-separated). The
+// whole mutation runs under withAuditLock; validation is STRICT (a starved
+// required input rejects, not advises); the derived state fields are rebuilt
+// the way scope-change rebuilds them; a RECOMPOSED audit event lands with the
+// flip lists. A run that never calls recompose is byte-identical to before -
+// the verb is inert when unused.
+// ---------------------------------------------------------------------------
+
+function handleRecompose(projectDir: string, flags: Record<string, string>): void {
+  const skipList = (flags.skip ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  const addList = (flags.add ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (skipList.length === 0 && addList.length === 0) {
+    die("Usage: recompose [--skip <slug,...>] [--add <slug,...>] - name at least one flip.");
+  }
+  const overlap = skipList.filter((s) => addList.includes(s));
+  if (overlap.length > 0) {
+    die(`Cannot both --skip and --add the same stage: ${overlap.join(", ")}.`);
+  }
+
+  const sp = stateFilePath(projectDir, flags.intent, flags.space);
+  if (!existsSync(sp)) {
+    die("No state file found. recompose re-shapes a RUNNING workflow; start one first.");
+  }
+
+  withAuditLock(projectDir, () => {
+    let content = readStateFile(projectDir, flags.intent, flags.space);
+    const scope = getField(content, "Scope");
+    if (!scope) die("Cannot read current Scope from state file.");
+    const scopeDef = loadScopeMapping()[scope];
+    if (!scopeDef) die(`Unknown scope in state file: ${scope}.`);
+
+    const graph = loadStageGraph();
+    const knownSlugs = new Set(graph.map((s) => s.slug));
+    const checkboxes = parseCheckboxes(content);
+    const checkboxMap = new Map(checkboxes.map((c) => [c.slug, c.state]));
+    const suffixes = parseStateStageSuffixes(content);
+    const currentSlug = getField(content, "Current Stage") || "";
+    const currentIdx = graph.findIndex((s) => s.slug === currentSlug);
+
+    // The effective pre-flip plan (suffix override wins over the grid).
+    const effective = (slug: string): "EXECUTE" | "SKIP" => {
+      const v = suffixes.get(slug) ?? scopeDef.stages[slug];
+      return v === "EXECUTE" ? "EXECUTE" : "SKIP";
+    };
+
+    // --- Per-flip guards: pending-only, ahead-of-cursor, skeleton-gate ------
+    const reject = (slug: string, why: string): never =>
+      die(`Cannot recompose "${slug}": ${why}`);
+
+    for (const slug of [...skipList, ...addList]) {
+      if (!knownSlugs.has(slug)) {
+        reject(slug, "not a compiled stage.");
+      }
+      const state = checkboxMap.get(slug);
+      if (state === "completed" || state === "in-progress" || state === "skipped" ||
+          state === "awaiting-approval" || state === "revising") {
+        reject(slug, `its checkbox is not pending ([${state}]). Only a PENDING stage's plan can be re-shaped; completed/in-progress/skipped stages are frozen.`);
+      }
+      const idx = graph.findIndex((s) => s.slug === slug);
+      if (currentIdx !== -1 && idx !== -1 && idx <= currentIdx) {
+        reject(slug, `it is at or behind the current stage ("${currentSlug}"). In-flight recompose only reaches forward; re-running the past is out of scope.`);
+      }
+    }
+
+    // The walking-skeleton gate derivation keys off the FIRST construction
+    // EXECUTE stage (static). Flipping that stage to SKIP would silently move
+    // Bolt 1 and un-gate the stage that actually starts Construction - reject
+    // (the cheapest sound answer; a suffix-aware gate derivation is a larger
+    // change this verb must not smuggle in).
+    if (skipList.length > 0) {
+      const firstConstruction = graph.find(
+        (s) => s.phase === "construction" && effective(s.slug) === "EXECUTE",
+      );
+      if (firstConstruction && skipList.includes(firstConstruction.slug)) {
+        reject(
+          firstConstruction.slug,
+          "it is the first EXECUTE stage of Construction (the walking-skeleton gate anchor). Flipping it would silently move the skeleton gate; jump or change scope instead.",
+        );
+      }
+    }
+
+    // --- Build the proposed effective grid and validate STRICT --------------
+    // Strictness is a DIFF against the pre-flip baseline: a stock scope may be
+    // BORN with structural advisories (e.g. bugfix's code-generation consumes
+    // unit-of-work from the skipped units-generation - the scope author owns
+    // that upstream work), and those must not veto an unrelated flip. What the
+    // recompose validator hard-rejects is NEW starvation the flips introduce:
+    // any strict error present post-flip that was absent pre-flip.
+    const baseGrid: Record<string, string> = {};
+    for (const s of graph) baseGrid[s.slug] = effective(s.slug);
+    const proposed: Record<string, string> = { ...baseGrid };
+    for (const slug of skipList) proposed[slug] = "SKIP";
+    for (const slug of addList) proposed[slug] = "EXECUTE";
+    // Stages already completed [x] satisfy their consumers even if the plan
+    // now skips them - mark them EXECUTE for the dependency walk (in BOTH
+    // grids) so a flip after a producer already ran is not falsely starved.
+    for (const c of checkboxes) {
+      if (c.state === "completed") {
+        baseGrid[c.slug] = "EXECUTE";
+        proposed[c.slug] = "EXECUTE";
+      }
+    }
+    const projectType = (getField(content, "Project Type") || "").toLowerCase();
+    const pt = projectType === "brownfield" || projectType === "greenfield"
+      ? (projectType as "brownfield" | "greenfield")
+      : undefined;
+    const label = `recomposed ${scope}`;
+    const baseErrors = new Set(
+      validateGrid(baseGrid, { strict: true, projectType: pt, label }).errors,
+    );
+    const validation = validateGrid(proposed, {
+      strict: true,
+      projectType: pt,
+      label,
+    });
+    const newErrors = validation.errors.filter((e) => !baseErrors.has(e));
+    if (newErrors.length > 0) {
+      die(
+        `Recompose rejected by the strict validator:\n${newErrors.map((e) => `  - ${e}`).join("\n")}`,
+      );
+    }
+
+    // --- Apply the suffix flips ---------------------------------------------
+    for (const slug of skipList) content = setStageSuffix(content, slug, "SKIP");
+    for (const slug of addList) content = setStageSuffix(content, slug, "EXECUTE");
+
+    // --- Rebuild the derived fields against the EFFECTIVE plan --------------
+    // (the scope-change set: Stages to Execute / to Skip / Total / Completed).
+    const postSuffixes = parseStateStageSuffixes(content);
+    const eff = (slug: string): "EXECUTE" | "SKIP" => {
+      const v = postSuffixes.get(slug) ?? scopeDef.stages[slug];
+      return v === "EXECUTE" ? "EXECUTE" : "SKIP";
+    };
+    const executeStages: string[] = [];
+    const skipStages: string[] = [];
+    for (const s of graph) {
+      if (eff(s.slug) === "EXECUTE") executeStages.push(s.number);
+      else skipStages.push(s.slug);
+    }
+    content = setField(content, "Stages to Execute", executeStages.join(", "));
+    content = setField(content, "Stages to Skip", skipStages.length > 0 ? skipStages.join(", ") : "none");
+    content = setField(content, "Total Stages", String(executeStages.length));
+    const completedCount = parseCheckboxes(content).filter(
+      (c) => c.state === "completed" && eff(c.slug) === "EXECUTE",
+    ).length;
+    content = setField(content, "Completed", String(completedCount));
+    // The Next Stage projection over the recomposed plan (override-aware).
+    if (currentSlug) {
+      const next = nextInScopeStage(currentSlug, scope, content);
+      content = setField(content, "Next Stage", next ? next.slug : "none");
+    }
+    content = setField(content, "Last Updated", isoTimestamp());
+
+    writeStateFile(projectDir, content, flags.intent, flags.space);
+
+    appendAuditEvent(projectDir, "RECOMPOSED", {
+      Scope: scope,
+      "Stages skipped": skipList.length > 0 ? skipList.join(", ") : "none",
+      "Stages added": addList.length > 0 ? addList.join(", ") : "none",
+      "Stages in Scope": String(executeStages.length),
+    });
+
+    process.stdout.write(
+      `Recomposed: ${skipList.length} skipped (${skipList.join(", ") || "none"}), ` +
+        `${addList.length} added (${addList.join(", ") || "none"})\n` +
+        `Stages in scope: ${executeStages.length}\n` +
+        `Completed: ${completedCount}/${executeStages.length}\n`,
+    );
+  });
+}
+
+// ---------------------------------------------------------------------------
 // config-change — update depth and/or test-strategy without changing scope
 // ---------------------------------------------------------------------------
 
@@ -3449,6 +3632,12 @@ function main(): void {
       break;
     case "scope-change":
       handleScopeChange(projectDir, flags);
+      break;
+    // recompose - the adaptive composer's in-flight write: flip PENDING
+    // stages' plan suffixes (--skip/--add) under the audit lock, strict-
+    // validated, derived fields rebuilt, RECOMPOSED audited.
+    case "recompose":
+      handleRecompose(projectDir, flags);
       break;
     case "config-change":
       handleConfigChange(projectDir, flags);

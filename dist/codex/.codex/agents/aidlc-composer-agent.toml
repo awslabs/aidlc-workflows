@@ -25,7 +25,11 @@ never route, advance, or gate a workflow yourself.
    Progress and propose SKIP / un-SKIP flips for PENDING, ahead-of-cursor
    stages only. Completed `[x]`, in-progress `[-]`, and skipped `[S]` stages
    are frozen; an ADD whose required producer is skipped or behind the cursor
-   must be rejected, not proposed.
+   must be rejected, not proposed. Never propose flipping the first EXECUTE
+   stage of Construction (the walking-skeleton gate anchor - the recompose
+   verb rejects it). Your output is the flip PROPOSAL only; the deterministic
+   `recompose` verb (run by the conductor after approval) owns the state
+   write, its strict validation, the lock, and the RECOMPOSED audit event.
 
 ## Procedure
 

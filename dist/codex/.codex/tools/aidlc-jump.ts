@@ -14,6 +14,7 @@ import {
   PHASE_NUMBERS,
   PHASES,
   parseCheckboxes,
+  parseStateStageSuffixes,
   readStateFile,
   resolveProjectDir,
   resolveStage,
@@ -23,6 +24,19 @@ import {
   stageIndex,
   writeStateFile,
 } from "./aidlc-lib.js";
+
+// The EFFECTIVE per-stage action: the live state file's EXECUTE/SKIP suffix
+// (a recomposed plan) wins over the static scope grid - the same resolution
+// rule the router applies (nextInScopeStage's override seam). Every jump-side
+// grid read goes through this so a jump and an advance can never disagree
+// about which stages are on the plan.
+function effectiveAction(
+  suffixes: Map<string, "EXECUTE" | "SKIP">,
+  scopeMapping: { stages: Record<string, string> },
+  slug: string,
+): string | undefined {
+  return suffixes.get(slug) ?? scopeMapping.stages[slug];
+}
 
 // --- Audit emission helper ---
 function emitAudit(
@@ -99,6 +113,16 @@ function handleResolve(args: string[]): void {
   const scope = flags.scope || getField(content, "Scope") || "feature";
   const scopeMapping = loadScopeMapping()[scope];
   if (!scopeMapping) error(`Unknown scope: ${scope}`);
+  // The live plan's per-stage suffix overrides (a recomposed plan) - every
+  // grid read below resolves through effectiveAction so a suffix-promoted
+  // stage is jumpable and a suffix-SKIPped one is refused, matching the
+  // router's own resolution. ONLY when the resolved scope IS the state's own
+  // scope: an explicit `--scope <other>` asks about a DIFFERENT scope's plan,
+  // and the state's suffixes describe the current plan, not that one.
+  const suffixes =
+    scope === (getField(content, "Scope") || "")
+      ? parseStateStageSuffixes(content)
+      : new Map<string, "EXECUTE" | "SKIP">();
 
   // Determine current position
   const currentSlug = getField(content, "Current Stage") || "state-init";
@@ -112,8 +136,8 @@ function handleResolve(args: string[]): void {
     targetStage = resolveStage(flags.stage) || null;
     if (!targetStage) error(`Unknown stage: ${flags.stage}`);
 
-    // Check if target is in scope
-    if (scopeMapping.stages[targetStage.slug] === "SKIP") {
+    // Check if target is on the EFFECTIVE plan (suffix override wins).
+    if (effectiveAction(suffixes, scopeMapping, targetStage.slug) === "SKIP") {
       error(
         `Stage "${targetStage.slug}" is skipped for scope "${scope}". Choose a different stage or change scope.`
       );
@@ -125,7 +149,18 @@ function handleResolve(args: string[]): void {
       ((PHASES as readonly string[]).includes(phaseInput) ? phaseInput : null);
     if (!canonicalPhase) error(`Unknown phase: ${flags.phase}`);
 
-    targetStage = firstInScopeStageOfPhase(canonicalPhase, scope);
+    // The first EFFECTIVE-EXECUTE stage of the phase: walk the full graph in
+    // order applying the suffix override, so a recomposed plan targets the
+    // stage the router would actually run first. Falls back to the static
+    // firstInScopeStageOfPhase result when no suffix touches the phase (the
+    // two agree on an unrecomposed plan).
+    const graphForPhase = loadStageGraph();
+    targetStage =
+      graphForPhase.find(
+        (s) =>
+          s.phase === canonicalPhase &&
+          effectiveAction(suffixes, scopeMapping, s.slug) === "EXECUTE",
+      ) ?? firstInScopeStageOfPhase(canonicalPhase, scope);
     if (!targetStage) {
       error(
         `Phase "${canonicalPhase}" has no executable stages for scope "${scope}".`
@@ -144,21 +179,21 @@ function handleResolve(args: string[]): void {
   else if (targetIdx < currentIdx) direction = "backward";
   else direction = "redo";
 
-  // Compute affected stages
+  // Compute affected stages (against the EFFECTIVE plan, not the static grid)
   const graph = loadStageGraph();
   const affectedSlugs: string[] = [];
 
   if (direction === "forward") {
     // Stages between current (exclusive) and target (exclusive)
     for (let i = currentIdx + 1; i < targetIdx; i++) {
-      if (scopeMapping.stages[graph[i].slug] === "EXECUTE") {
+      if (effectiveAction(suffixes, scopeMapping, graph[i].slug) === "EXECUTE") {
         affectedSlugs.push(graph[i].slug);
       }
     }
   } else if (direction === "backward") {
-    // Target and all stages after (in scope)
+    // Target and all stages after (on the effective plan)
     for (let i = targetIdx; i < graph.length; i++) {
-      if (scopeMapping.stages[graph[i].slug] === "EXECUTE") {
+      if (effectiveAction(suffixes, scopeMapping, graph[i].slug) === "EXECUTE") {
         affectedSlugs.push(graph[i].slug);
       }
     }
@@ -202,14 +237,23 @@ function handleExecute(args: string[]): void {
   const scope = flags.scope || getField(content, "Scope") || "feature";
   const scopeMapping = loadScopeMapping()[scope];
   if (!scopeMapping) error(`Unknown scope: ${scope}`);
+  // The live plan's suffix overrides - execute resolves the same EFFECTIVE
+  // plan resolve does (see effectiveAction), so a recomposed stage is
+  // reachable and a recompose-SKIPped one refused here too. Same
+  // scope-matches-state guard as resolve: a foreign --scope consults the
+  // static grid only.
+  const suffixes =
+    scope === (getField(content, "Scope") || "")
+      ? parseStateStageSuffixes(content)
+      : new Map<string, "EXECUTE" | "SKIP">();
 
   const targetStage = findStageBySlug(targetSlug);
   if (!targetStage) error(`Unknown stage: ${targetSlug}`);
 
-  // Scope validation — target must be EXECUTE for this scope (mirrors resolve handler).
-  // Without this, an orchestrator bypassing resolve can land the workflow on a stage
-  // that scope says should be skipped.
-  if (scopeMapping.stages[targetSlug] === "SKIP") {
+  // Scope validation - target must be EXECUTE on the EFFECTIVE plan (mirrors
+  // resolve). Without this, an orchestrator bypassing resolve can land the
+  // workflow on a stage the plan says should be skipped.
+  if (effectiveAction(suffixes, scopeMapping, targetSlug) === "SKIP") {
     error(
       `Stage "${targetSlug}" is skipped for scope "${scope}". Choose a different target or change scope.`
     );
@@ -237,11 +281,14 @@ function handleExecute(args: string[]): void {
   ];
 
   if (direction === "forward") {
-    // Mark intermediate in-flight stages → [S], leave [x] alone
+    // Mark intermediate in-flight stages → [S], leave [x] alone. Gate on the
+    // EFFECTIVE plan so a recompose-ADDed stage (grid SKIP, suffix EXECUTE)
+    // is marked [S] like any other on-plan stage, and a recompose-SKIPped one
+    // is passed over.
     const currentIdx = stageIndex(currentSlug);
     for (let i = currentIdx + 1; i < targetIdx; i++) {
       const slug = graph[i].slug;
-      if (scopeMapping.stages[slug] !== "EXECUTE") continue;
+      if (effectiveAction(suffixes, scopeMapping, slug) !== "EXECUTE") continue;
       const state = checkboxMap.get(slug);
       if (state && IN_FLIGHT_STATES.includes(state)) {
         content = setCheckbox(content, slug, "skipped");
@@ -273,7 +320,9 @@ function handleExecute(args: string[]): void {
     ];
     for (let i = targetIdx; i < graph.length; i++) {
       const slug = graph[i].slug;
-      if (scopeMapping.stages[slug] !== "EXECUTE") continue;
+      // Effective plan again: a recompose-ADDed stage's [x] is reset by a
+      // backward jump like any on-plan stage (ADD-then-jump consistency).
+      if (effectiveAction(suffixes, scopeMapping, slug) !== "EXECUTE") continue;
       const state = checkboxMap.get(slug);
       if (state && RESETTABLE.includes(state)) {
         content = setCheckbox(content, slug, "pending");
@@ -298,8 +347,10 @@ function handleExecute(args: string[]): void {
   const crossesPhaseBoundary =
     !!currentStageForPhase && currentStageForPhase.phase !== targetStage.phase;
 
-  // Update state fields
-  const nextAfterTarget = nextInScopeStage(targetSlug, scope);
+  // Update state fields. Thread the (post-edit) state content so the Next
+  // Stage projection honours suffix overrides + checkboxes - the advance
+  // precedent's threading, applied to the jump path.
+  const nextAfterTarget = nextInScopeStage(targetSlug, scope, content);
   const timestamp = isoTimestamp();
 
   content = setField(content, "Lifecycle Phase", targetStage.phase.toUpperCase());

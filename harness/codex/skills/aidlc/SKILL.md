@@ -115,6 +115,8 @@ Render that proposal per `question-rendering.md` (`request_user_input` when avai
 2. For a CUSTOM grid, re-dispatch the composer to author the two files at the paths its `detect --json` printed: `.codex/scopes/aidlc-<name>.md` (frontmatter `name`, `depth`, and `keywords: []` - composed scopes are NOT inferable unless the human explicitly granted keywords at the gate) plus the `"<name>": { "stages": {...} }` entry in `scope-grid.json` (codex scope data lives under `.codex/`, NOT `.agents/`). BOTH files are required - a `.md` without a grid entry resolves as all-SKIP.
 3. Continue into the normal birth: run `bun .codex/tools/aidlc-orchestrate.ts next --scope <name>` and act on its birth print exactly as "Acting on a directive" describes (the `--label` essence and the duplicate-intent guard ride the same path as any birth).
 
+**In-flight recompose (a workflow is RUNNING):** the dispatch print carries the marker discipline - write `aidlc/.aidlc-compose-pending` BEFORE presenting the gate (it lets the turn end at the gate; the Stop hook honours it), and DELETE it the moment the gate resolves (approve, edit-then-resolve, or reject). On approve run the named `recompose --skip <slugs> --add <slugs>` command; it validates strictly (a starved required input rejects), flips only PENDING ahead-of-cursor stages, rebuilds the derived state fields, and audits RECOMPOSED - never edit the state file's suffixes by hand. A leftover marker after the gate resolves would mask the forwarding-loop enforcement; deleting it is part of acting on the directive.
+
 The composer proposes; the human decides; the deterministic validator guards. You never improvise a grid yourself in prose, and the composer never advances the workflow.
 
 ---

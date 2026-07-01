@@ -242,10 +242,11 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     // aidlc-audit.ts — which is stronger (it asserts the real count, not a
     // sibling test's transcription of it). bolt-plan-marker-conflict reuses
     // PRACTICES_OVERRIDE (discriminator-field disambiguation) and registers no
-    // new event. The framework total is 69: the v0.6.0 Wave 4 milestone 16
+    // new event. The framework total is 70: the v0.6.0 Wave 4 milestone 16
     // baseline of 67 (SWARM_DEGRADED was the last event born then), plus
     // WORKFLOW_PARKED + WORKFLOW_UNPARKED (the park/unpark lifecycle, +2),
-    // less TEST_RUN_MODE_ENABLED (removed, -1), plus HUMAN_TURN (+1).
+    // less TEST_RUN_MODE_ENABLED (removed, -1), plus HUMAN_TURN (+1), plus
+    // RECOMPOSED (the adaptive composer's in-flight re-shape, +1).
     const auditSrc = readFileSync(
       join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-audit.ts"),
       "utf-8",
@@ -253,7 +254,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     const block = auditSrc.match(/const VALID_EVENT_TYPES = new Set\(\[([\s\S]*?)\]\)/);
     expect(block).not.toBeNull();
     const count = (block ? block[1].match(/"[A-Z0-9_]+"/g) : null)?.length ?? -1;
-    expect(count).toBe(69);
+    expect(count).toBe(70);
   });
 
   // --- Test 4: milestone 8 write-failure path coexists (different Reason value) ---

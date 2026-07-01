@@ -2202,6 +2202,24 @@ export function setCheckbox(
   return content.replace(regex, `$1${marker}$2`);
 }
 
+// The suffix-setter twin of setCheckbox: flips ONE stage line's plan suffix
+// (the em-dash "— EXECUTE"/"— SKIP" tail the router's override channel reads)
+// in either direction, leaving the checkbox marker untouched. setCheckbox owns
+// the marker (run-state); this owns the suffix (the plan) - the two edit
+// disjoint fields of the same line, so recompose and jump compose cleanly.
+// Returns the content unchanged when the slug has no stage line.
+export function setStageSuffix(
+  content: string,
+  slug: string,
+  action: "EXECUTE" | "SKIP"
+): string {
+  const regex = new RegExp(
+    `^(- \\[[ xSR?-]\\] ${escapeRegex(slug)}\\s*—\\s*)(EXECUTE|SKIP)\\b`,
+    "m"
+  );
+  return content.replace(regex, `$1${action}`);
+}
+
 export function countCheckboxes(
   content: string,
   state: CheckboxState

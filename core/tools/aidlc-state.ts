@@ -1049,8 +1049,13 @@ function handleFinalize(args: string[]): void {
       `State file has invalid Scope "${scope}". Valid scopes: ${[...validScopes()].join(", ")}.`
     );
   }
-  const nextStage = nextInScopeStage(completedSlug, scope);
-  const nextAfterNext = nextStage ? nextInScopeStage(nextStage.slug, scope) : null;
+  // Thread the live state content into BOTH walks so per-stage EXECUTE/SKIP
+  // suffix overrides (a recomposed plan) and prior [x]/[S] checkboxes are
+  // honoured - the same threading the advance path does (:869/:935). Without
+  // it these two calls project the next move from the STATIC scope grid and
+  // route around any recompose flip.
+  const nextStage = nextInScopeStage(completedSlug, scope, content);
+  const nextAfterNext = nextStage ? nextInScopeStage(nextStage.slug, scope, content) : null;
   const timestamp = isoTimestamp();
 
   // 4. Update state fields (but do NOT mark next stage [-] or set In Progress)
@@ -2040,7 +2045,18 @@ function handleLookup(args: string[]): void {
     }
     case "next-stage": {
       if (subArgs.length < 2) error("Usage: lookup next-stage <slug> <scope>");
-      const next = nextInScopeStage(subArgs[0], subArgs[1]);
+      // Thread the live state file (when one exists) so the projection honours
+      // per-stage suffix overrides (a recomposed plan) and [x]/[S] checkboxes,
+      // matching the advance/finalize walks. A stateless workspace still
+      // answers from the static grid (read-only either way).
+      let stateForWalk: string | undefined;
+      try {
+        const pd = resolveProjectDir(projectDir);
+        stateForWalk = readStateFile(pd);
+      } catch {
+        stateForWalk = undefined;
+      }
+      const next = nextInScopeStage(subArgs[0], subArgs[1], stateForWalk);
       console.log(next ? next.slug : "none");
       break;
     }

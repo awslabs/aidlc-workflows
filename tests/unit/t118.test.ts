@@ -130,6 +130,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
   FIXTURES_DIR,
@@ -210,10 +211,27 @@ function emitScopeStage(scope: string, stage: string): EmitResult {
   tempDirs.push(proj);
   seedStateFile(proj, join(FIXTURES_DIR, "state-initialization-done.md"));
   const statePath = seededStateFile(proj);
-  // Swap ONLY the Scope field (mirrors the .sh sed_i on `- **Scope**: ...`).
-  const swapped = readFileSync(statePath, "utf-8").replace(
+  // Swap the Scope field (mirrors the .sh sed_i on `- **Scope**: ...`) AND
+  // rebuild the Stage Progress suffixes to the new scope's grid column. The
+  // fixture was authored for the feature scope; since the adaptive-composer
+  // work the jump path honours the state's per-stage suffixes as the live
+  // plan (they override the static grid, matching the router), so a state
+  // whose Scope says bugfix but whose suffixes still carry feature's plan is
+  // internally inconsistent - a shape the real tools (init/scope-change/
+  // recompose, which all rebuild suffixes) never produce. Rebuilding keeps
+  // this diff's intent intact: the target IS off the seeded plan.
+  const grid = JSON.parse(
+    readFileSync(join(AIDLC_SRC, "tools", "data", "scope-grid.json"), "utf-8"),
+  ) as Record<string, { stages: Record<string, string> }>;
+  const stages = grid[scope]?.stages ?? {};
+  let swapped = readFileSync(statePath, "utf-8").replace(
     /^- \*\*Scope\*\*: .*$/m,
     `- **Scope**: ${scope}`,
+  );
+  swapped = swapped.replace(
+    /^(- \[[ xSR?-]\] )(\S+)(\s*—\s*)(EXECUTE|SKIP)\b/gm,
+    (_m, pre: string, slug: string, dash: string) =>
+      `${pre}${slug}${dash}${stages[slug] === "EXECUTE" ? "EXECUTE" : "SKIP"}`,
   );
   writeFileSync(statePath, swapped, "utf-8");
   const res = spawnSync(
