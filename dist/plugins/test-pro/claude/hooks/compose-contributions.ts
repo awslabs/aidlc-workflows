@@ -5,11 +5,10 @@
 // later /aidlc --init or runtime-compile hook may trigger). Post-compile JSON
 // patching does NOT survive a recompile — hence source-file merge.
 //
-// Scope (MVP): additive LIST surfaces only — produces + sensors. These are the
-// surfaces that make the graph resolve (produced artifacts) and bind checks
-// (sensors). We append to the existing list, right before the next top-level
-// key — a surgical edit that never rewrites the surrounding YAML. consumes
-// (nested objects) and fragments (prose) are future work.
+// Scope: additive structural surfaces — produces, sensors (list append) and
+// consumes (nested {artifact,required} objects, surgical append). Each is a
+// surgical edit that never rewrites the surrounding YAML. Prose fragments are
+// handled separately by compose-fragments.ts.
 //
 // Idempotent: an item already present in the list is not appended again, so
 // re-running on every SessionStart is safe.
@@ -59,6 +58,48 @@ function appendToListField(content: string, field: string, items: string[]): str
   return content.replace(re, m[1] + additions);
 }
 
+// Parse adds.consumes — nested `{artifact, required}` objects.
+function parseAddsConsumes(fm: string): Array<{ artifact: string; required: boolean }> {
+  const addsMatch = fm.match(/^adds:\n([\s\S]*?)(?=^\S|$(?![\s\S]))/m);
+  if (!addsMatch) return [];
+  // The consumes sub-block within adds: (4-space `- artifact:` / 6-space `required:`).
+  const consumesMatch = addsMatch[1].match(/^  consumes:\n((?:    - artifact:.*\n(?:      required:.*\n)?)*)/m);
+  if (!consumesMatch) return [];
+  const out: Array<{ artifact: string; required: boolean }> = [];
+  const entryRe = /- artifact:\s*([\w-]+)\s*\n\s*required:\s*(true|false)/g;
+  for (const m of consumesMatch[1].matchAll(entryRe)) {
+    out.push({ artifact: m[1], required: m[2] === "true" });
+  }
+  return out;
+}
+
+// Append consumes objects into the target stage's `consumes:` list. Surgical:
+// inserts the 2-line objects right after the last existing consumes entry
+// (before the next top-level key), never rewriting the surrounding block.
+// Idempotent by artifact name. Handles both block form and `consumes: []`.
+function appendConsumes(content: string, entries: Array<{ artifact: string; required: boolean }>): string {
+  if (entries.length === 0) return content;
+  const render = (e: { artifact: string; required: boolean }) =>
+    `  - artifact: ${e.artifact}\n    required: ${e.required}`;
+
+  // Empty inline form: `consumes: []` → replace with a block of the new entries.
+  const emptyRe = /^consumes:\s*\[\s*\]\s*$/m;
+  if (emptyRe.test(content)) {
+    const block = "consumes:\n" + entries.map(render).join("\n");
+    return content.replace(emptyRe, block);
+  }
+
+  // Block form: capture `consumes:` + its `  - artifact:/    required:` lines.
+  const blockRe = /^(consumes:\n(?:  - artifact:.*\n(?:    required:.*\n)?)*)/m;
+  const m = content.match(blockRe);
+  if (!m) return content; // no consumes field — MVP only augments an existing one
+  const existing = new Set([...m[1].matchAll(/- artifact:\s*([\w-]+)/g)].map((x) => x[1]));
+  const toAdd = entries.filter((e) => !existing.has(e.artifact));
+  if (toAdd.length === 0) return content;
+  const additions = toAdd.map(render).join("\n") + "\n";
+  return content.replace(blockRe, m[1] + additions);
+}
+
 for (const phase of readdirSync(CONTRIB_DIR)) {
   const phaseDir = join(CONTRIB_DIR, phase);
   let files: string[];
@@ -82,11 +123,13 @@ for (const phase of readdirSync(CONTRIB_DIR)) {
 
     const produces = parseAddsList(fm, "produces");
     const sensors = parseAddsList(fm, "sensors");
-    if (produces.length === 0 && sensors.length === 0) continue;
+    const consumes = parseAddsConsumes(fm);
+    if (produces.length === 0 && sensors.length === 0 && consumes.length === 0) continue;
 
     let stageContent = readFileSync(stageFile, "utf-8");
     stageContent = appendToListField(stageContent, "produces", produces);
     stageContent = appendToListField(stageContent, "sensors", sensors);
+    stageContent = appendConsumes(stageContent, consumes);
     writeFileSync(stageFile, stageContent);
   }
 }
