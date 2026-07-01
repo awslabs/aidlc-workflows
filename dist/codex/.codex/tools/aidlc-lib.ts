@@ -2203,7 +2203,7 @@ export function setCheckbox(
 }
 
 // The suffix-setter twin of setCheckbox: flips ONE stage line's plan suffix
-// (the em-dash "— EXECUTE"/"— SKIP" tail the router's override channel reads)
+// (the em-dash EXECUTE/SKIP tail the router's override channel reads)
 // in either direction, leaving the checkbox marker untouched. setCheckbox owns
 // the marker (run-state); this owns the suffix (the plan) - the two edit
 // disjoint fields of the same line, so recompose and jump compose cleanly.
