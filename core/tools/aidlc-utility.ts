@@ -70,6 +70,8 @@ import {
   type StageEntry,
   setCheckbox,
   setField,
+  scopeGridPath,
+  scopesDir,
   stagesInScope,
   stateFilePath,
   withAuditLock,
@@ -2690,6 +2692,40 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
   process.stdout.write(`${dir}/\n`);
 }
 
+// `detect [--json]` - read-only. Runs the workspace scan (detectWorkspace) on
+// the bare project dir - it needs no aidlc/ workspace; it scans the app root -
+// and prints projectType (Greenfield/Brownfield), languages, frameworks, and
+// buildSystem. ALSO prints the resolved scope-registry paths (scopesDir +
+// scopeGridPath): those are module-relative to the installed tool, which a
+// prose agent cannot derive itself, so the composer agent is TOLD where the
+// runtime reads scope data (and therefore where an authored scope must land).
+// Writes nothing, no audit, no mkdir - mirrors codekb-path's read-only shape.
+function handleDetect(projectDir: string, flags: Record<string, string>): void {
+  const scan = detectWorkspace(projectDir);
+  const payload = {
+    projectType: scan.projectType,
+    languages: scan.languages,
+    frameworks: scan.frameworks,
+    buildSystem: scan.buildSystem,
+    scopesDir: scopesDir(),
+    scopeGridPath: scopeGridPath(),
+    scopes: [...validScopes()],
+  };
+  if (flags.json === "true") {
+    process.stdout.write(`${JSON.stringify(payload)}\n`);
+    return;
+  }
+  process.stdout.write(
+    `Project type: ${payload.projectType}\n` +
+      `Languages: ${payload.languages}\n` +
+      `Frameworks: ${payload.frameworks}\n` +
+      `Build system: ${payload.buildSystem}\n` +
+      `Scopes dir: ${payload.scopesDir}\n` +
+      `Scope grid: ${payload.scopeGridPath}\n` +
+      `Valid scopes: ${payload.scopes.join(", ")}\n`,
+  );
+}
+
 // `/aidlc space-create <name>` — seed a NEW space's memory. org.md is copied
 // from spaces/default/memory/org.md (the always-present SEED baseline), plus
 // fresh empty team.md/project.md/phases stubs + the templates/ floor. A new team
@@ -3394,6 +3430,12 @@ function main(): void {
     case "codekb-path":
       handleCodekbPath(projectDir, flags);
       break;
+    // detect - read-only query verb. Prints the workspace scan
+    // (greenfield/brownfield, languages) + the resolved scope-registry paths so
+    // the composer agent is told where scope data lives. No mutation, no audit.
+    case "detect":
+      handleDetect(projectDir, flags);
+      break;
     // init / state-init — deprecated aliases kept for back-compat only (not in
     // usage/help). The user-facing `/aidlc --init` is retired in P4: the
     // workspace shell ships in dist/ (SEED) and the engine auto-births the
@@ -3425,7 +3467,7 @@ function main(): void {
       break;
     default:
       die(
-        `Usage: aidlc-utility <help|version|status|doctor|intent-birth|intent|space|space-create|codekb-path|scope-change|config-change|set-status|detect-scope|resolve-env-scope|scope-table> [--project-dir <path>] [--scope <scope>] [--json]`
+        `Usage: aidlc-utility <help|version|status|doctor|intent-birth|intent|space|space-create|codekb-path|detect|scope-change|config-change|set-status|detect-scope|resolve-env-scope|scope-table> [--project-dir <path>] [--scope <scope>] [--json]`
       );
   }
 }

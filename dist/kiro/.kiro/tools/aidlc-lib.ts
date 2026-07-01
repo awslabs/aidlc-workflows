@@ -2789,7 +2789,10 @@ function stageGraphPath(): string {
   return process.env.AIDLC_STAGE_GRAPH ?? join(DATA_DIR, "stage-graph.json");
 }
 
-function scopeGridPath(): string {
+// Exported so the read-only `detect` verb can TELL the composer agent where
+// the runtime scope registry lives (the paths are module-relative to the
+// installed tool, which a prose agent cannot derive itself).
+export function scopeGridPath(): string {
   return process.env.AIDLC_SCOPE_GRID ?? join(DATA_DIR, "scope-grid.json");
 }
 
@@ -2807,7 +2810,9 @@ function scopeMappingPath(): string | null {
 // env-var seam mirrors AIDLC_SENSORS_DIR / AIDLC_RULES_DIR so fixture tests
 // can point the scope-metadata loader at an isolated tree. Evaluated at call
 // time so tests that set/unset mid-process see the change.
-function scopesDir(): string {
+// Exported for the same reason as scopeGridPath: `detect --json` prints it so
+// the composer agent is told the authoritative write target per harness.
+export function scopesDir(): string {
   return process.env.AIDLC_SCOPES_DIR ?? join(dirname(fileURLToPath(import.meta.url)), "..", "scopes");
 }
 

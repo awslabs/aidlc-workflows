@@ -107,11 +107,19 @@ When an intent is already active, `next` advances it (the engine is read-only an
 - **On DECLINE:** proceed with the active intent — the normal Branch-10 `run-stage`.
 - You switch between intents any time with `/aidlc intent <name>` (bare `/aidlc intent` lists them) — parallel to `/aidlc space <name>`.
 
+### Composing a workflow plan (the adaptive composer)
+
+The engine can name a COMPOSER DISPATCH instead of a scope confirm: on `/aidlc compose "<task>"`, `--new-scope`, `--report <path>`, or when the human answers a cold-start compose offer with "compose", `next` emits a `print` whose message names the composer agent. Act on it like any dispatch: run the composer via `Task(aidlc-composer-agent)` with the message's instructions as the prompt (the agent loads its own persona). The composer runs the read-only `detect` scan, reads the stock scopes, and returns a structured proposal: `{ mode: matched|custom, scopeName, grid, rationale[] }` with a reason for every SKIP.
+
+Render that proposal to the human and present an approve/edit/reject gate via `AskUserQuestion` (Approve / Edit the grid / Reject). This gate is a hard turn-stop, like a stage gate: never treat silence as approval, and never write scope data or birth a workflow before an explicit approve. On edit, fold the human's changes into the grid and re-present. On reject, stop; the human can name a scope directly instead.
+
+The composer proposes; the human decides; the deterministic validator guards. You never improvise a grid yourself in prose, and the composer never advances the workflow.
+
 ---
 
 ## Scope-to-Stage Mapping
 
-The orchestration engine resolves scope-level stage routing internally (it reads the compiled scope grid the table below summarises). The summary table is kept here as human-readable data — not dispatch logic — and is regenerated, never hand-edited.
+The orchestration engine resolves scope-level stage routing internally (it reads the compiled scope grid the table below summarises). The summary table is kept here as human-readable data — not dispatch logic — and is regenerated, never hand-edited. (One carve-out: the dispatched composer agent APPENDS approved composed scopes to the runtime scope registry (`scopes/aidlc-<name>.md` + a `scope-grid.json` entry) - that is the sanctioned write path for composed scopes, not a hand-edit; this summary table itself stays generated.)
 
 Source of truth: one file per scope under `.claude/scopes/aidlc-<name>.md` (identity + keywords + description) plus each stage's `scopes:` frontmatter (membership), transposed into the compiled grid at `bun .claude/tools/aidlc-graph.ts compile`. Adding a scope is the same muscle memory as authoring a sensor or agent — drop `.claude/scopes/aidlc-<name>.md`, tag the member stages' `scopes:` lists, recompile, then `bun .claude/tools/aidlc-utility.ts scope-table` to regenerate the table below + commit. No prose edit required. CI runs `scope-table --check` to prevent drift.
 

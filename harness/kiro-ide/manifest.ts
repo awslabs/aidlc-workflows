@@ -39,6 +39,7 @@ const manifest: HarnessManifest = {
     { src: "agents/aidlc-developer-agent.json", dst: "agents/aidlc-developer-agent.json" },
     { src: "agents/aidlc-product-lead-agent.json", dst: "agents/aidlc-product-lead-agent.json" },
     { src: "agents/aidlc-architecture-reviewer-agent.json", dst: "agents/aidlc-architecture-reviewer-agent.json" },
+    { src: "agents/aidlc-composer-agent.json", dst: "agents/aidlc-composer-agent.json" },
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
     { src: "hooks/aidlc-audit-logger.kiro.hook", dst: "hooks/aidlc-audit-logger.kiro.hook" },
     { src: "hooks/aidlc-mint.kiro.hook", dst: "hooks/aidlc-mint.kiro.hook" },

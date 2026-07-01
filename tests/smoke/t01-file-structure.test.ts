@@ -21,7 +21,7 @@
 //   .sh L12  SKILL.md exists                          -> "ships skills/aidlc/SKILL.md"
 //   .sh L15-17  3 stage-protocol files                -> "ships the 3 stage-protocol spine files" (each asserted)
 //   .sh L20-29  11 hooks (each)                        -> "ships each of the 11 framework hooks" + "ships EXACTLY the 11 expected aidlc-*.ts hooks" (count strengthening; grew to 11 with the human-turn mint hook)
-//   .sh L32-34  11 agents (loop)                       -> "ships each of the 13 domain-expert agent personas" + "ships EXACTLY 13 aidlc-*-agent.md files" (count strengthening; roster grew to 13 with the two reviewer personas)
+//   .sh L32-34  11 agents (loop)                       -> "ships each of the 14 agent personas" + "ships EXACTLY 14 aidlc-*-agent.md files" (count strengthening; roster grew to 13 with the two reviewer personas, then 14 with the composer)
 //   .sh L38-40  3 initialization stages (loop)         -> "ships the 3 initialization stages"
 //   .sh L43-45  7 ideation stages (loop)               -> "ships the 7 ideation stages"
 //   .sh L48-50  8 inception stages (loop)              -> "ships the 8 inception stages"
@@ -50,9 +50,9 @@ const at = (...parts: string[]): string => join(AIDLC_SRC, ...parts);
 const mem = (...parts: string[]): string =>
   join(AIDLC_SRC, "..", "aidlc", "spaces", "default", "memory", ...parts);
 
-// The 13 domain-expert agents (11 original personas + the two reviewer
-// personas product-lead and architecture-reviewer), in roster order
-// (SKILL.md / CLAUDE.md agent roster order).
+// The 14 agents (11 original domain-expert personas + the two reviewer
+// personas product-lead and architecture-reviewer + the adaptive-workflows
+// composer), in roster order (SKILL.md / CLAUDE.md agent roster order).
 const AGENTS = [
   "product",
   "design",
@@ -67,6 +67,7 @@ const AGENTS = [
   "operations",
   "product-lead",
   "architecture-reviewer",
+  "composer",
 ] as const;
 
 // The 10 framework hooks, exactly as the .sh listed them.
@@ -158,19 +159,19 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
     expect(shipped).toEqual([...HOOKS].sort());
   });
 
-  test("ships each of the 13 domain-expert agent personas [.sh L32-34]", () => {
+  test("ships each of the 14 agent personas [.sh L32-34]", () => {
     for (const a of AGENTS) {
       expect(existsSync(at("agents", `aidlc-${a}-agent.md`))).toBe(true);
     }
   });
 
-  // STRONGER than the .sh: the agents dir holds EXACTLY 13 aidlc-*-agent.md
+  // STRONGER than the .sh: the agents dir holds EXACTLY 14 aidlc-*-agent.md
   // files — pins the roster size, not only the named members.
-  test("ships EXACTLY 13 aidlc-*-agent.md files [.sh L32-34 — count strengthening]", () => {
+  test("ships EXACTLY 14 aidlc-*-agent.md files [.sh L32-34 — count strengthening]", () => {
     const shipped = readdirSync(at("agents")).filter(
       (f) => f.startsWith("aidlc-") && f.endsWith("-agent.md"),
     );
-    expect(shipped.length).toBe(13);
+    expect(shipped.length).toBe(14);
     const expected = AGENTS.map((a) => `aidlc-${a}-agent.md`).sort();
     expect(shipped.sort()).toEqual(expected);
   });
@@ -251,29 +252,30 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
   // TAP-plan parity guard: the .sh declared `plan 63` and made 63
   // assert_file_exists calls. The roster later grew by two reviewer agent
   // personas (product-lead, architecture-reviewer) to 65, then by the
-  // human-turn mint hook to 66. Re-derive the full path list from the same
-  // data the loops drove and pin its length, so the migrated suite cannot
-  // silently shrink the structural surface the .sh enforced.
-  test("asserts EXACTLY 66 shipped paths (TAP plan 63 + 2 reviewer agents + 1 presence hook) [.sh L9]", () => {
+  // human-turn mint hook to 66, then by the composer persona to 67. Re-derive
+  // the full path list from the same data the loops drove and pin its length,
+  // so the migrated suite cannot silently shrink the structural surface the
+  // .sh enforced.
+  test("asserts EXACTLY 67 shipped paths (TAP plan 63 + 2 reviewer agents + 1 presence hook + the composer) [.sh L9]", () => {
     const paths: string[] = [
       at("skills", "aidlc", "SKILL.md"), // 1
       at("aidlc-common", "protocols", "stage-protocol.md"), // 2
       at("aidlc-common", "protocols", "stage-protocol-recovery.md"), // 3
       at("aidlc-common", "protocols", "stage-protocol-governance.md"), // 4
       ...HOOKS.map((h) => at("hooks", h)), // 5-15 (11)
-      ...AGENTS.map((a) => at("agents", `aidlc-${a}-agent.md`)), // 16-28 (13)
+      ...AGENTS.map((a) => at("agents", `aidlc-${a}-agent.md`)), // 16-29 (14)
       ...Object.entries(STAGES).flatMap(([phase, stages]) =>
         stages.map((s) => at("aidlc-common", "stages", phase, `${s}.md`)),
-      ), // 29-60 (32)
-      at("settings.json"), // 61
-      at("settings.local.json.example"), // 62
-      at("knowledge", "aidlc-shared", "state-template.md"), // 63
-      mem("org.md"), // 64 — method relocated to aidlc/spaces/default/memory/
-      mem("project.md"), // 65
-      at("CLAUDE.md"), // 66
+      ), // 30-61 (32)
+      at("settings.json"), // 62
+      at("settings.local.json.example"), // 63
+      at("knowledge", "aidlc-shared", "state-template.md"), // 64
+      mem("org.md"), // 65 — method relocated to aidlc/spaces/default/memory/
+      mem("project.md"), // 66
+      at("CLAUDE.md"), // 67
     ];
-    expect(paths.length).toBe(66);
-    // Every one of the 65 must exist — the .sh's full TAP plan, re-proven as a
+    expect(paths.length).toBe(67);
+    // Every one of the 67 must exist — the .sh's full TAP plan, re-proven as a
     // single set so the count and the existence checks cannot drift apart.
     for (const p of paths) {
       expect(existsSync(p)).toBe(true);

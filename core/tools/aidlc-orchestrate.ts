@@ -113,6 +113,12 @@ import {
   producersOf,
   subgraphForScope,
 } from "./aidlc-graph.ts";
+// inferScopeFromText is a PURE function (keyword matching over the scope
+// registry) - importing it keeps `next` read-only. The audit-emitting
+// detect-scope verb remains the conductor's separate recording move; the
+// import is safe (aidlc-utility.ts main() runs only under import.meta.main,
+// and utility never imports this module - no cycle).
+import { inferScopeFromText } from "./aidlc-utility.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
 // a pure read: an absent state file is a legitimate branch (no workflow yet),
@@ -252,6 +258,9 @@ interface ParsedFlags {
   newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME birth directive (with the --label seam) the fresh-start path uses, instead of constructing intent-birth from SKILL.md prose
   intent?: string; // freeform request text (no leading --flag)
   workspaceVerb?: { verb: string; arg?: string }; // leading workspace verb (space/space-create/intent) + optional <name> arg
+  compose?: boolean; // leading `compose` verb: force the composer (front or in-flight)
+  newScope?: boolean; // --new-scope: force the composer to SYNTHESIZE a custom scope even when a stock scope matches
+  report?: string; // --report <path>: compose from a scan report (the composer triages the file)
   projectDir?: string;
 }
 
@@ -283,6 +292,19 @@ function parseNextFlags(args: string[]): ParsedFlags {
       if (arg !== undefined) i++;
       continue;
     }
+    // A LEADING `compose` verb forces the composer (front on a fresh workspace,
+    // in-flight recompose over an active one). DELIBERATELY its own check, NOT a
+    // WORKSPACE_VERBS entry: that set feeds classifyTerminalCommand, which the
+    // Kiro verb-intercept hook runs OFF-BAND as a terminal aidlc-utility
+    // subcommand (and arms the roll-forward latch) - compose is workflow work
+    // the conductor must dispatch, never a terminal utility. Only the FIRST
+    // positional token counts, so freeform prose containing "compose"
+    // mid-sentence stays intent text. Any text after the verb is the compose
+    // request (falls through to intentWords).
+    if (i === 0 && a === "compose") {
+      flags.compose = true;
+      continue;
+    }
     if (a === "--resume") {
       flags.resume = true;
     } else if (a === "--single") {
@@ -303,6 +325,13 @@ function parseNextFlags(args: string[]): ParsedFlags {
       i++;
     } else if (a === "--test-strategy" && i + 1 < args.length) {
       flags.testStrategy = args[i + 1];
+      i++;
+    } else if (a === "--new-scope") {
+      flags.newScope = true;
+    } else if (a === "--report" && i + 1 < args.length) {
+      // CONSUME the value: an unrecognized valued flag would leak its value
+      // into the freeform intent text (the path would read as intent words).
+      flags.report = args[i + 1];
       i++;
     } else if (!a.startsWith("--")) {
       intentWords.push(a);
@@ -348,6 +377,52 @@ function birthPrintDirective(scope: string, flags: ParsedFlags, description?: st
   return printDirective(
     `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\` to start the workflow, then re-run \`next\` to continue.${labelHint}`,
   );
+}
+
+// The composer-dispatch print for a compose request (the adaptive-workflows
+// composer). The engine stays read-only: it NAMES the dispatch move (the
+// conductor Tasks the composer agent, renders the proposal, and holds the
+// approve/edit/reject gate); it never dispatches or writes itself. Two modes:
+//   - front (no state file): compose a scope from the prompt (or a scan
+//     report) BEFORE birth. The composer proposes; on approval the conductor
+//     continues into the normal intent-birth with the chosen scope.
+//   - in-flight (state file present): re-shape the RUNNING workflow's pending
+//     stages (SKIP / un-SKIP), which lands as suffix flips via the recompose
+//     verb - never a silent advance of the current stage.
+// The message threads the compose inputs (task text, --new-scope, --report)
+// so the conductor forwards them to the composer verbatim.
+function composeDispatchDirective(
+  flags: ParsedFlags,
+  inFlight: boolean,
+): PrintDirective {
+  const hd = harnessDir();
+  const parts: string[] = [];
+  if (inFlight) {
+    parts.push(
+      `Dispatch the composer agent (${hd}/agents/aidlc-composer-agent.md) as a subagent to propose re-shaping the RUNNING workflow's pending stages` +
+        (flags.intent ? ` for: "${flags.intent}".` : "."),
+      "The composer reads the live state file's Stage Progress and proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages only (completed [x], in-progress [-], and skipped [S] stages are frozen).",
+    );
+  } else {
+    parts.push(
+      `Dispatch the composer agent (${hd}/agents/aidlc-composer-agent.md) as a subagent to propose the workflow plan for: "${flags.intent ?? ""}".`,
+    );
+    if (flags.report) {
+      parts.push(
+        `First have it read and triage the scan report at "${flags.report}" (auto-fixable vs human-decision findings), then compose a compact fix-and-ship grid - this often routes to the stock bugfix or security-patch scope rather than minting a new one.`,
+      );
+    }
+    if (flags.newScope) {
+      parts.push(
+        "--new-scope was passed: the composer must SYNTHESIZE a custom scope even if a stock scope matches.",
+      );
+    }
+  }
+  parts.push(
+    `The composer runs \`bun ${hd}/tools/aidlc-utility.ts detect --json\` (read-only scan + scope-registry paths) and reads the scope definitions under ${hd}/scopes/, then returns a structured proposal (mode matched|custom, scopeName, the per-stage EXECUTE/SKIP grid, and a per-SKIP rationale).`,
+    "Render the proposal to the human and present the approve/edit/reject gate (see the composer block in SKILL.md). Do NOT write any file and do NOT advance any stage before an explicit approval.",
+  );
+  return printDirective(parts.join(" "));
 }
 
 // Guard the birth gate against a DUPLICATE intent on a fresh clone of a
@@ -1036,7 +1111,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // open to the normal `next`.
   if (!flags.readOnly && !flags.workspaceVerb && !flags.stage && !flags.phase &&
       !flags.scope && !flags.intent && !flags.resume && !flags.depth && !flags.testStrategy &&
-      !flags.single) {
+      !flags.single && !flags.compose && !flags.newScope && !flags.report) {
     try {
       const pdLatch = resolveProjectDir(projectDir);
       const latchPath = join(pdLatch, "aidlc", ".aidlc-readonly-latch");
@@ -1238,6 +1313,30 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
+  // Branch 4c - the COMPOSE surfaces (adaptive workflows). A leading `compose`
+  // verb, `--new-scope`, or `--report <path>` each force the composer; the
+  // engine NAMES the dispatch (print) and stays read-only. Deliberately NOT a
+  // WORKSPACE_VERBS/classifyTerminalCommand entry (that would make the Kiro
+  // verb-intercept hook run `compose` off-band as a terminal aidlc-utility
+  // subcommand and arm the roll-forward latch - compose is workflow work the
+  // conductor dispatches). Two modes split on the state file: no state = the
+  // FRONT composer (propose a scope before birth); state present = the
+  // IN-FLIGHT composer (propose pending-stage flips over the running
+  // workflow), which is what keeps a bare mid-flow `compose` from falling
+  // through to Branch 10 and silently advancing the current stage. Precedes
+  // Branch 5 (scope/config-change) and Branch 7 (jump) so neither mutating
+  // path swallows a compose request.
+  if (flags.compose || flags.newScope || flags.report) {
+    if (flags.stage || flags.phase) {
+      emit(errorDirective(
+        "Cannot combine compose with --stage/--phase. Compose re-shapes the plan; jump moves the cursor. Run them separately.",
+      ));
+      return;
+    }
+    emit(composeDispatchDirective(flags, stateContent !== null));
+    return;
+  }
+
   // Branch 4a — --new-intent: the conductor recognized NEW WORK alongside an
   // already-active intent, ran the SKILL.md offer (AskUserQuestion), and the human
   // confirmed. Rather than have the conductor CONSTRUCT the intent-birth command
@@ -1406,25 +1505,43 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
-  // Branch 8 — freeform intent with no workflow yet (SKILL.md:355-362). The
-  // user described what to build in prose rather than naming a scope. Scope
-  // inference (`detect-scope`) and recording it are MUTATIONS the conductor
-  // performs; `next` stays read-only and surfaces the scope-confirmation
-  // question as an `ask` (the engine design's `ask` = "scope confirmation"). The engine
-  // never calls AskUserQuestion itself — it emits `ask` and stops. The resolved
-  // scope here is the precedence-ladder result (flag/env/default); the
-  // conductor's keyword inference may refine it before confirming. A bare
-  // KNOWN-SCOPE positional was already handled by Branch 7b above, so the guard
-  // excludes valid-scope intents — only genuine prose reaches the freeform ask.
+  // Branch 8 - freeform intent with no workflow yet (SKILL.md:355-362). The
+  // user described what to build in prose rather than naming a scope. `next`
+  // stays read-only and surfaces the routing question as an `ask` - the engine
+  // never calls AskUserQuestion itself. A bare KNOWN-SCOPE positional was
+  // already handled by Branch 7b above, so only genuine prose reaches here.
+  //
+  // Adaptive routing (replaces the old static feature-default confirm, which
+  // interpolated the precedence-ladder scope and silently defaulted rich prose
+  // to `feature`): keyword inference (inferScopeFromText, a pure read; the
+  // audit-emitting detect-scope verb remains the conductor's recording move)
+  // now drives the ask.
+  //   - CLEAR KEYWORD HIT (source "keyword": matched a scope's keywords and
+  //     is within the matcher's word bound): a one-line confirm naming the
+  //     MATCHED scope, with "name another scope" and "compose" as outs.
+  //   - NO HIT / RICH PROSE (source "freeform": no keyword matched, or the
+  //     description is long enough that the match is likely incidental): the
+  //     COMPOSE OFFER, never a silent feature default. The conductor renders
+  //     it; on "compose" it re-runs `next compose "<text>"` to reach the
+  //     Branch 4c dispatch.
   if (
     !stateContent &&
     flags.intent &&
     !flags.scope &&
     !validScopes().has(flags.intent)
   ) {
+    const inferred = inferScopeFromText(flags.intent);
+    if (inferred.source === "keyword") {
+      emit(askDirective(
+        `Starting a "${inferred.scope}" workflow for: "${flags.intent}". ` +
+          "Confirm to proceed, name a different scope, or say \"compose\" for a tailored plan.",
+      ));
+      return;
+    }
     emit(askDirective(
-      `This looks like a "${scope}" workflow for: "${flags.intent}". ` +
-        "Confirm the scope to proceed, or name a different one.",
+      `No stock scope clearly fits: "${flags.intent}". ` +
+        "I can compose a tailored plan for this task (recommended: reply \"compose\"), " +
+        "or you can name a scope directly (e.g. bugfix, feature, poc; see /aidlc --help for all).",
     ));
     return;
   }

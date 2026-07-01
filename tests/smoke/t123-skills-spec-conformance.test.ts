@@ -100,11 +100,16 @@ const RUNNER_SKILLS = graph
 // --- The init-phase runner: a single /aidlc-init wrapper over `/aidlc --init`.
 const INIT_RUNNER_SKILL = "aidlc-init";
 
+// --- The composer shortcut: a single /aidlc-compose wrapper over
+// `/aidlc compose ...` (the adaptive composer's typeable entry).
+const COMPOSE_RUNNER_SKILL = "aidlc-compose";
+
 const EXPECTED_SKILLS = [
   ...BASE_SKILLS,
   ...SCOPE_RUNNER_SKILLS,
   ...RUNNER_SKILLS,
   INIT_RUNNER_SKILL,
+  COMPOSE_RUNNER_SKILL,
 ].sort();
 
 /**

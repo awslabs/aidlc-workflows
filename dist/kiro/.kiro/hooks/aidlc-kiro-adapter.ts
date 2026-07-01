@@ -199,9 +199,14 @@ if (target === "pretool-block") {
   const ADVANCING_FLAGS = new Set([
     "--stage", "--phase", "--scope", "--resume", "--depth",
     "--test-strategy", "--single", "--init", "--force",
+    "--new-scope", "--report",
   ]);
+  // A leading `compose` verb is a deliberate composer dispatch (the engine's
+  // Branch 0 exempts flags.compose the same way) - never the spurious bare
+  // roll-forward this backstop exists to block.
   const isBareAdvancing =
     m !== null &&
+    nextArgs[0] !== "compose" &&
     !nextArgs.some((a) => ADVANCING_FLAGS.has(a)) &&
     classifyTerminalCommand(nextArgs) === null;
 

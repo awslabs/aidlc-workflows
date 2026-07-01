@@ -291,6 +291,7 @@ export default function emit(ctx: EmitContext): EmitResult {
     runnableStages: () => Array<{ slug: string }>;
     renderStageRunner: (node: { slug: string }) => string;
     renderInitRunner: () => string;
+    renderComposeRunner: () => string;
     FIRST_BATCH: readonly string[];
     discoverScopes: () => Record<string, { description: string }>;
     renderRunner: (scope: string, description: string) => string;
@@ -339,6 +340,8 @@ export default function emit(ctx: EmitContext): EmitResult {
   }
   emissions.push({ path: join(SKILLS_DST, "aidlc-init", "SKILL.md"), content: () => rewriteProse(gen.renderInitRunner()) });
   emissions.push({ path: join(SKILLS_DST, "aidlc-init", "agents", "openai.yaml"), content: () => IMPLICIT_GUARD });
+  emissions.push({ path: join(SKILLS_DST, "aidlc-compose", "SKILL.md"), content: () => rewriteProse(gen.renderComposeRunner()) });
+  emissions.push({ path: join(SKILLS_DST, "aidlc-compose", "agents", "openai.yaml"), content: () => IMPLICIT_GUARD });
   // (c) FIRST_BATCH scope runners
   const scopes = gen.discoverScopes();
   for (const scope of gen.FIRST_BATCH.filter((s) => s in scopes)) {

@@ -219,12 +219,63 @@ no standalone meaning.
 `;
 }
 
+// The dir name for the composer shortcut runner: `/aidlc-compose`. A thin
+// typeable wrapper over `/aidlc compose ...` - the same one-door path, never a
+// divergent flow.
+const COMPOSE_RUNNER_DIR = "aidlc-compose";
+
+// Render the `/aidlc-compose` runner: a thin wrapper over the engine's compose
+// dispatch (`next compose ...`). Modeled on renderInitRunner's shape (its own
+// hardcoded single-runner, NOT a reuse - renderInitRunner is init-specific).
+// Drift-guard note: this runner drives `next compose`, so NEITHER existing
+// guard counts it - the stage guard keys on the `--stage`+`--single` body
+// marker and the scope guard byte-compares the FIRST_BATCH set. Like
+// `/aidlc-init`, its parity is held by the packager's dist-level `--check`
+// (handleWrite is idempotent, so a stale or hand-edited copy fails the
+// byte-compare there).
+export function renderComposeRunner(): string {
+  return `---
+name: ${COMPOSE_RUNNER_DIR}
+description: >
+  Compose a tailored AI-DLC workflow plan - the adaptive composer reads your
+  task (or a scan report), proposes the EXECUTE/SKIP stage grid that fits,
+  and after your approval authors it as a scope and runs it. A typeable
+  shortcut for \`/aidlc compose\`; the same one door, forced to the full
+  composer even when a stock scope would match.
+argument-hint: "[description | --report <path> | --new-scope]"
+user-invocable: true
+---
+
+# AI-DLC - compose a workflow plan
+
+Force the adaptive composer on a task. This is packaging over
+\`/aidlc compose ...\` - it does not add a second entry point; the engine
+recognizes the compose request and names the composer dispatch, and the
+conductor runs the same forwarding loop as \`/aidlc\`.
+
+## Steps
+
+1. Forward the user's \`$ARGUMENTS\` into the engine with the leading
+   \`compose\` verb (pass \`--report <path>\` / \`--new-scope\` through as-is):
+
+   \`\`\`bash
+   bun ${harnessDir()}/tools/aidlc-orchestrate.ts next compose $ARGUMENTS
+   \`\`\`
+
+2. Act on the directive exactly as the \`aidlc\` skill's forwarding loop
+   describes (the composer-dispatch print names the composer agent; render
+   its proposal and hold the approve/edit/reject gate). From here the flow IS
+   the \`/aidlc\` flow - continue its loop until the directive says stop.
+`;
+}
+
 // Write (or refresh) every stage-runner dir from the RUNNABLE stage list (init
 // stages excluded — see isRunnableStage), plus the single `/aidlc-init` phase
-// wrapper. Idempotent: re-running emits byte-identical SKILL.md files. Also
-// PRUNES any stale init-phase stage-runner dir (aidlc-state-init,
-// aidlc-workspace-detection, aidlc-workspace-scaffold) left by an earlier
-// generation that emitted runners for all 32 stages. Returns the slugs written.
+// wrapper and the `/aidlc-compose` composer shortcut. Idempotent: re-running
+// emits byte-identical SKILL.md files. Also PRUNES any stale init-phase
+// stage-runner dir (aidlc-state-init, aidlc-workspace-detection,
+// aidlc-workspace-scaffold) left by an earlier generation that emitted runners
+// for all 32 stages. Returns the slugs written.
 function handleWrite(): string[] {
   const slugs = stageSlugs();
   for (const node of runnableStages()) {
@@ -236,6 +287,10 @@ function handleWrite(): string[] {
   const initDir = join(SKILLS_DIR, INIT_RUNNER_DIR);
   if (!existsSync(initDir)) mkdirSync(initDir, { recursive: true });
   writeFileSync(join(initDir, "SKILL.md"), renderInitRunner(), "utf-8");
+  // Emit the composer shortcut.
+  const composeDir = join(SKILLS_DIR, COMPOSE_RUNNER_DIR);
+  if (!existsSync(composeDir)) mkdirSync(composeDir, { recursive: true });
+  writeFileSync(join(composeDir, "SKILL.md"), renderComposeRunner(), "utf-8");
   // Prune stale per-init-stage runner dirs from an earlier all-32 generation.
   for (const node of loadGraph()) {
     if (isRunnableStage(node)) continue;

@@ -20,14 +20,14 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 405,
+    "total": 408,
     "enumeratedByClass": {
-      "function": 194,
+      "function": 196,
       "audit": 69,
       "scope": 9,
       "stage": 32,
       "hook": 11,
-      "subcommand": 83,
+      "subcommand": 84,
       "render-surface": 7
     },
     "coveredByClass": {
@@ -36,7 +36,7 @@
       "scope": 9,
       "stage": 8,
       "hook": 10,
-      "subcommand": 70,
+      "subcommand": 71,
       "render-surface": 7
     }
   },
@@ -1025,6 +1025,10 @@
         {
           "file": "tests/unit/t178-classify-terminal-command.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t198-compose-surfaces.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2267,6 +2271,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:scopeGridPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:scopesDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -4327,6 +4345,18 @@
         },
         {
           "file": "tests/unit/t27.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility detect",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t198-compose-surfaces.test.ts",
           "mechanism": "cli"
         }
       ],

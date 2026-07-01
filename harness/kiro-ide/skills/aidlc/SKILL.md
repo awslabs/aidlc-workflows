@@ -109,11 +109,19 @@ When an intent is already active, `next` advances it (the engine is read-only an
 - **On DECLINE:** proceed with the active intent — the normal Branch-10 `run-stage`.
 - You switch between intents any time with `/aidlc intent <name>` (bare `/aidlc intent` lists them) — parallel to `/aidlc space <name>`.
 
+### Composing a workflow plan (the adaptive composer)
+
+The engine can name a COMPOSER DISPATCH instead of a scope confirm: on `/aidlc compose "<task>"`, `--new-scope`, `--report <path>`, or when the human answers a cold-start compose offer with "compose", `next` emits a `print` whose message names the composer agent. Act on it like any dispatch: delegate to `aidlc-composer-agent` via the `subagent` tool with the message's instructions as the task (the agent config loads its own persona). The composer runs the read-only `detect` scan, reads the stock scopes, and returns a structured proposal: `{ mode: matched|custom, scopeName, grid, rationale[] }` with a reason for every SKIP.
+
+Render that proposal per `question-rendering.md` and present an approve/edit/reject gate (Approve / Edit the grid / Reject). This gate is a hard turn-stop, like a stage gate: never treat silence as approval, and never write scope data or birth a workflow before an explicit approve. On edit, fold the human's changes into the grid and re-present. On reject, stop; the human can name a scope directly instead. On this harness the approved scope write runs INSIDE the dispatched composer (its agent config grants the scope-registry paths); your own sandbox does not write `.kiro/scopes/` or `.kiro/tools/data/`.
+
+The composer proposes; the human decides; the deterministic validator guards. You never improvise a grid yourself in prose, and the composer never advances the workflow.
+
 ---
 
 ## Scope-to-Stage Mapping
 
-The engine resolves scope-level stage routing internally (it reads the compiled scope grid the table below summarises). The summary table is kept here as human-readable data — not dispatch logic — and is regenerated, never hand-edited. Source of truth: one file per scope under `.kiro/scopes/aidlc-<name>.md` plus each stage's `scopes:` frontmatter, transposed at `bun .kiro/tools/aidlc-graph.ts compile`; regenerate this table with `bun .kiro/tools/aidlc-utility.ts scope-table`.
+The engine resolves scope-level stage routing internally (it reads the compiled scope grid the table below summarises). The summary table is kept here as human-readable data — not dispatch logic — and is regenerated, never hand-edited. (One carve-out: the dispatched composer agent APPENDS approved composed scopes to the runtime scope registry (`.kiro/scopes/aidlc-<name>.md` + a `scope-grid.json` entry) - that is the sanctioned write path for composed scopes, not a hand-edit; this summary table itself stays generated.) Source of truth: one file per scope under `.kiro/scopes/aidlc-<name>.md` plus each stage's `scopes:` frontmatter, transposed at `bun .kiro/tools/aidlc-graph.ts compile`; regenerate this table with `bun .kiro/tools/aidlc-utility.ts scope-table`.
 
 <!-- BEGIN: compiled scope grid via `bun aidlc-utility.ts scope-table` — do NOT hand-edit -->
 
