@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "AIDLC_HARNESS_DIR=.claude bash \"${CLAUDE_PLUGIN_ROOT}/hooks/compose.sh\"",
+            "command": "AIDLC_HARNESS_DIR=.codex bash \"${PLUGIN_ROOT}/hooks/compose.sh\"",
             "statusMessage": "AIDLC test-pro: composing plugin"
           }
         ]

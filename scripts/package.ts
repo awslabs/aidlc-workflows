@@ -636,87 +636,110 @@ function discoverPluginNames(): string[] {
     .sort();
 }
 
+// Per-harness plugin projection descriptors. The hybrid: real host plugins for
+// Claude/Codex (host store + SessionStart hook), folder-drop + .kiro.hook for
+// Kiro. All share the generic compose hooks (harness-agnostic via
+// AIDLC_HARNESS_DIR); only the manifest wrapper + hook wiring differ.
+const PLUGIN_TARGETS: Record<string, { manifestDir: string; harnessLeaf: string }> = {
+  claude: { manifestDir: ".claude-plugin", harnessLeaf: ".claude" },
+  codex: { manifestDir: ".codex-plugin", harnessLeaf: ".codex" },
+  kiro: { manifestDir: ".kiro-plugin", harnessLeaf: ".kiro" },
+};
+
 function emitPlugins(harnesses: string[]): void {
   const plugins = discoverPluginNames();
   if (plugins.length === 0) return;
+  const templateHooks = join(REPO_ROOT, "scripts", "plugin-hooks-template");
+  const contentDirs = ["stages", "sensors", "tools", "contributions"];
 
   for (const pluginName of plugins) {
     const pluginSrc = join(PLUGINS_ROOT, pluginName);
     const manifest = JSON.parse(
       readFileSync(join(pluginSrc, ".aidlc-plugin", "plugin.json"), "utf-8")
     );
+    const version = manifest.version || "0.0.1";
+    const author = manifest.author || { name: "AIDLC" };
+    const description = manifest.description || "";
 
-    // For now, emit only a Claude projection (Codex + Kiro are future)
-    const harnessName = "claude";
-    if (!harnesses.includes(harnessName)) continue;
+    for (const harnessName of Object.keys(PLUGIN_TARGETS)) {
+      if (!harnesses.includes(harnessName)) continue;
+      const { manifestDir, harnessLeaf } = PLUGIN_TARGETS[harnessName];
 
-    const outDir = join(REPO_ROOT, "dist", "plugins", pluginName, harnessName);
-    if (existsSync(outDir)) rmSync(outDir, { recursive: true, force: true });
-    mkdirSync(outDir, { recursive: true });
+      const outDir = join(REPO_ROOT, "dist", "plugins", pluginName, harnessName);
+      if (existsSync(outDir)) rmSync(outDir, { recursive: true, force: true });
+      mkdirSync(outDir, { recursive: true });
 
-    // 1. Emit .claude-plugin/plugin.json (host-native manifest)
-    const hostManifest = {
-      name: `aidlc-${pluginName}`,
-      version: manifest.version || "0.0.1",
-      description: manifest.description || "",
-      author: manifest.author || { name: "AIDLC" },
-    };
-    const hostManifestDir = join(outDir, ".claude-plugin");
-    mkdirSync(hostManifestDir, { recursive: true });
-    writeFileSync(join(hostManifestDir, "plugin.json"), JSON.stringify(hostManifest, null, 2) + "\n");
+      // 1. Host-native manifest (.claude-plugin / .codex-plugin / .kiro-plugin).
+      const hostManifestDir = join(outDir, manifestDir);
+      mkdirSync(hostManifestDir, { recursive: true });
+      writeFileSync(
+        join(hostManifestDir, "plugin.json"),
+        JSON.stringify({ name: `aidlc-${pluginName}`, version, description, author }, null, 2) + "\n"
+      );
 
-    // 2. Emit marketplace.json
-    const marketplace = {
-      name: "aidlc-plugins",
-      owner: manifest.author || { name: "AIDLC" },
-      description: "AIDLC plugin catalogue.",
-      plugins: [{
-        name: `aidlc-${pluginName}`,
-        source: ".",
-        version: manifest.version || "0.0.1",
-        description: manifest.description || "",
-      }],
-    };
-    writeFileSync(join(hostManifestDir, "marketplace.json"), JSON.stringify(marketplace, null, 2) + "\n");
+      // 2. Marketplace catalogue entry (Claude/Codex have stores; harmless for Kiro).
+      writeFileSync(
+        join(hostManifestDir, "marketplace.json"),
+        JSON.stringify({
+          name: "aidlc-plugins",
+          owner: author,
+          description: "AIDLC plugin catalogue.",
+          plugins: [{ name: `aidlc-${pluginName}`, source: ".", version, description }],
+        }, null, 2) + "\n"
+      );
 
-    // 3. Emit hooks (compose.sh + compose-contributions.ts + hooks.json)
-    const hooksDir = join(outDir, "hooks");
-    mkdirSync(hooksDir, { recursive: true });
-    // Copy the generic compose hooks from the template
-    const templateHooks = join(REPO_ROOT, "scripts", "plugin-hooks-template");
-    for (const f of readdirSync(templateHooks)) {
-      cpSync(join(templateHooks, f), join(hooksDir, f));
-    }
-    // Generate hooks.json wiring the SessionStart → compose.sh
-    const hooksJson = {
-      hooks: {
-        SessionStart: [{
-          hooks: [{
-            type: "command",
-            command: `bash "\${CLAUDE_PLUGIN_ROOT}/hooks/compose.sh"`,
-            statusMessage: `AIDLC ${pluginName}: composing plugin into project`,
-          }],
-        }],
-      },
-    };
-    writeFileSync(join(hooksDir, "hooks.json"), JSON.stringify(hooksJson, null, 2) + "\n");
+      // 3. Generic compose hooks (harness-agnostic) + per-harness wiring.
+      const hooksDir = join(outDir, "hooks");
+      mkdirSync(hooksDir, { recursive: true });
+      for (const f of readdirSync(templateHooks)) cpSync(join(templateHooks, f), join(hooksDir, f));
 
-    // 4. Copy plugin content (stages, sensors, tools, contributions)
-    const contentDirs = ["stages", "sensors", "tools", "contributions"];
-    for (const dir of contentDirs) {
-      const srcDir = join(pluginSrc, dir);
-      if (!existsSync(srcDir)) continue;
-      for (const file of walk(srcDir)) {
-        const rel = relative(srcDir, file);
-        const outPath = join(outDir, dir, rel);
-        mkdirSync(dirname(outPath), { recursive: true });
-        // Copy verbatim — plugin stages keep number/name/bundle/when (the schema
-        // now accepts them; no strip-hack needed).
-        writeFileSync(outPath, readFileSync(file));
+      // Plugin-root env token differs: Claude/Codex populate {CLAUDE_,}PLUGIN_ROOT;
+      // the command exports AIDLC_HARNESS_DIR so the shared hook targets the right
+      // harness tree. Codex fires SessionStart lazily; Kiro uses a .kiro.hook
+      // (promptSubmit) instead of a hooks.json SessionStart block.
+      const rootExpr = harnessName === "claude" ? "${CLAUDE_PLUGIN_ROOT}" : "${PLUGIN_ROOT}";
+      const command = `AIDLC_HARNESS_DIR=${harnessLeaf} bash "${rootExpr}/hooks/compose.sh"`;
+
+      if (harnessName === "kiro") {
+        // Kiro's native agent-hook format: one <name>.kiro.hook JSON file.
+        writeFileSync(
+          join(hooksDir, "aidlc-plugin-compose.kiro.hook"),
+          JSON.stringify({
+            version: "1.0.0",
+            enabled: true,
+            name: `aidlc-${pluginName}-compose`,
+            description: `Composes the ${pluginName} AIDLC plugin on first interaction.`,
+            when: { type: "promptSubmit" },
+            then: { type: "runCommand", command },
+          }, null, 2) + "\n"
+        );
+      } else {
+        writeFileSync(
+          join(hooksDir, "hooks.json"),
+          JSON.stringify({
+            hooks: {
+              SessionStart: [{
+                hooks: [{ type: "command", command, statusMessage: `AIDLC ${pluginName}: composing plugin` }],
+              }],
+            },
+          }, null, 2) + "\n"
+        );
       }
-    }
 
-    console.log(`[plugin:${pluginName}] emitted dist/plugins/${pluginName}/${harnessName}/`);
+      // 4. Copy plugin content verbatim (stages keep number/name/bundle/when).
+      for (const dir of contentDirs) {
+        const srcDir = join(pluginSrc, dir);
+        if (!existsSync(srcDir)) continue;
+        for (const file of walk(srcDir)) {
+          const rel = relative(srcDir, file);
+          const outPath = join(outDir, dir, rel);
+          mkdirSync(dirname(outPath), { recursive: true });
+          writeFileSync(outPath, readFileSync(file));
+        }
+      }
+
+      console.log(`[plugin:${pluginName}] emitted dist/plugins/${pluginName}/${harnessName}/`);
+    }
   }
 }
 

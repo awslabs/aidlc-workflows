@@ -1,0 +1,13 @@
+{
+  "version": "1.0.0",
+  "enabled": true,
+  "name": "aidlc-test-pro-compose",
+  "description": "Composes the test-pro AIDLC plugin on first interaction.",
+  "when": {
+    "type": "promptSubmit"
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "AIDLC_HARNESS_DIR=.kiro bash \"${PLUGIN_ROOT}/hooks/compose.sh\""
+  }
+}

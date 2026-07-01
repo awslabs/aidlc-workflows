@@ -1,15 +1,28 @@
 #!/usr/bin/env bash
-# AIDLC test-pro plugin — SessionStart compose hook.
-# Runs automatically when installed as a Claude Code plugin. Merges the plugin's
-# stages, sensors, and tools into the project's .claude/ tree and recompiles the
+# AIDLC plugin — SessionStart compose hook (harness-agnostic).
+# Runs automatically when installed as a host plugin (Claude/Codex) or via
+# `aidlc plugin compose` (Kiro). Merges the plugin's stages, sensors, and tools
+# into the project's harness tree (.claude / .codex / .kiro) and recompiles the
 # stage graph so the orchestrator routes the new stages.
 #
 # Idempotent: safe to re-run on every session start (only copies + recompile).
 set -euo pipefail
 
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:?CLAUDE_PLUGIN_ROOT not set}"
-PROJECT_DIR="${CLAUDE_PROJECT_DIR:?CLAUDE_PROJECT_DIR not set}"
-HARNESS_DIR="$PROJECT_DIR/.claude"
+# Plugin root: Claude sets CLAUDE_PLUGIN_ROOT; Codex sets PLUGIN_ROOT (and aliases
+# CLAUDE_PLUGIN_ROOT). Kiro's thin CLI passes AIDLC_PLUGIN_ROOT.
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT:-${AIDLC_PLUGIN_ROOT:-}}}"
+# Project dir: Claude sets CLAUDE_PROJECT_DIR; Codex does NOT (use PWD); Kiro's
+# CLI passes AIDLC_PROJECT_DIR.
+PROJECT_DIR="${CLAUDE_PROJECT_DIR:-${AIDLC_PROJECT_DIR:-$PWD}}"
+# Harness leaf dir (.claude / .codex / .kiro) — set per-harness by hooks.json /
+# the Kiro CLI. Default .claude for backward compatibility.
+HARNESS_LEAF="${AIDLC_HARNESS_DIR:-.claude}"
+HARNESS_DIR="$PROJECT_DIR/$HARNESS_LEAF"
+
+if [ -z "$PLUGIN_ROOT" ]; then
+  echo "aidlc-plugin: plugin root env not set (CLAUDE_PLUGIN_ROOT/PLUGIN_ROOT/AIDLC_PLUGIN_ROOT); skipping" >&2
+  exit 0
+fi
 
 # Guard: only compose if this is an AIDLC project (has the graph compiler)
 if [ ! -f "$HARNESS_DIR/tools/aidlc-graph.ts" ]; then
@@ -31,10 +44,9 @@ fi
 
 # The harness-dir token substitution the packager applies to core .md prose.
 # Plugin .md files carry {{HARNESS_DIR}}; substitute it to the actual dir
-# (.claude) so composed stage/sensor prose is harness-correct. Applied only to
-# the files this plugin adds (by relative path), never the wider tree.
-HARNESS_LEAF=".claude"
-
+# (HARNESS_LEAF, resolved above) so composed stage/sensor prose is
+# harness-correct. Applied only to the files this plugin adds, never the tree.
+#
 # copy_and_substitute <src-dir> <dst-dir> — copy the tree, then substitute the
 # harness-dir token in every copied .md file.
 copy_and_substitute() {

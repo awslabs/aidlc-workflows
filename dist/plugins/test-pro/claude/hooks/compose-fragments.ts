@@ -23,11 +23,12 @@
 import { readdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
-const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT!;
-const PROJECT_DIR = process.env.CLAUDE_PROJECT_DIR!;
-const STAGES_DIR = join(PROJECT_DIR, ".claude", "aidlc-common", "stages");
+// Harness-agnostic env resolution (Claude / Codex / Kiro CLI).
+const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || process.env.PLUGIN_ROOT || process.env.AIDLC_PLUGIN_ROOT!;
+const PROJECT_DIR = process.env.CLAUDE_PROJECT_DIR || process.env.AIDLC_PROJECT_DIR || process.env.PWD!;
+const HARNESS_LEAF = process.env.AIDLC_HARNESS_DIR || ".claude";
+const STAGES_DIR = join(PROJECT_DIR, HARNESS_LEAF, "aidlc-common", "stages");
 const CONTRIB_DIR = join(PLUGIN_ROOT, "contributions");
-const HARNESS_LEAF = ".claude";
 
 if (!existsSync(CONTRIB_DIR) || !existsSync(STAGES_DIR)) process.exit(0);
 
