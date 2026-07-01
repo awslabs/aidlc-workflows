@@ -1,4 +1,4 @@
-// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-log(answer), cli:aidlc-audit(append), function:handleApprove, function:handleGateStart, function:handleAnswer, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:isAutonomousMode, function:humanPresenceGuardDisabled, file:hooks/aidlc-mint-presence.ts
+// covers: cli:aidlc-state(approve,gate-start), cli:aidlc-log(answer), cli:aidlc-audit(append), function:handleApprove, function:handleGateStart, function:handleAnswer, function:humanActedSinceGate, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, file:hooks/aidlc-mint-presence.ts
 //
 // t188 - human-presence approval gate (ledger-event design).
 //
@@ -263,8 +263,59 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       "../../dist/claude/.claude/tools/aidlc-lib.ts"
     );
     // proj here has a seeded state file but no audit shard (no event emitted yet).
-    expect(humanActedSinceGate(proj, "feasibility")).toBe(true);
-    expect(humanActedSinceGate(proj, null)).toBe(true);
+    expect(humanActedSinceGate(proj)).toBe(true);
+  });
+
+  // --- Scenario G: multi-shard chronological ordering -------------------------
+  //
+  // readAllAuditShards concatenates per-clone shards in FILENAME order, which is
+  // NOT time order (a second shard appears after a re-clone or on another
+  // machine). The predicate must order by Timestamp, not buffer position: an OLD
+  // resolution living in a lexically-LATER shard must not outrank a fresh
+  // HUMAN_TURN in the current shard.
+  test("G: an old resolution in a lexically-later shard does not mask a fresh HUMAN_TURN", async () => {
+    const { humanActedSinceGate, auditShardDir } = await import(
+      "../../dist/claude/.claude/tools/aidlc-lib.ts"
+    );
+    // Fresh HUMAN_TURN lands in this clone's shard via the real appender.
+    recordHumanTurn(proj);
+    // Simulate a prior clone's committed shard whose filename sorts AFTER the
+    // current shard (zzz- prefix) but whose events are OLDER.
+    const dir = auditShardDir(proj);
+    if (dir === null) throw new Error("no audit shard dir resolved");
+    writeFileSync(
+      join(dir, "zzz-oldclone.md"),
+      "# AI-DLC Audit Log\n\n## Gate Approved\n**Timestamp**: 2020-01-01T00:00:00Z\n**Event**: GATE_APPROVED\n**Stage**: feasibility\n\n---\n",
+      "utf-8",
+    );
+    expect(humanActedSinceGate(proj)).toBe(true);
+  });
+
+  // --- hasOpenGate (the preToolUse floors' gate-open predicate) ---------------
+  //
+  // The per-harness preToolUse floors must refuse ONLY while a stage actually
+  // sits at [?]: after a legitimate approval the last resolution follows the
+  // turn's HUMAN_TURN, and without this predicate the floor would block the
+  // mandated same-turn continuation into the next stage.
+  describe("hasOpenGate (state-file [?] predicate for the preToolUse floors)", () => {
+    test("false with no state / no [?]; true once a stage awaits approval", async () => {
+      const { hasOpenGate } = await import(
+        "../../dist/claude/.claude/tools/aidlc-lib.ts"
+      );
+      expect(hasOpenGate(null)).toBe(false);
+      const before = readFileSync(seededStateFile(proj), "utf-8");
+      expect(hasOpenGate(before)).toBe(false); // fixture has no [?] stage
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      const open = readFileSync(seededStateFile(proj), "utf-8");
+      expect(hasOpenGate(open)).toBe(true);
+      // Approving closes it again: the floor stops firing post-approval.
+      recordHumanTurn(proj);
+      expect(guarded(proj, ["approve", slug, "--user-input", "ok"]).rc).toBe(0);
+      const after = readFileSync(seededStateFile(proj), "utf-8");
+      expect(hasOpenGate(after)).toBe(false);
+    });
   });
 
   // --- handleAnswer twin (interview path) ------------------------------------

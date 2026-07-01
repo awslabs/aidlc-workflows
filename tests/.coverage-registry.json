@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 404,
+    "total": 405,
     "enumeratedByClass": {
-      "function": 193,
+      "function": 194,
       "audit": 69,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 84,
+      "function": 85,
       "audit": 29,
       "scope": 9,
       "stage": 8,
@@ -1357,6 +1357,18 @@
         {
           "file": "tests/unit/t153-engine-directive-harness-seam.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hasOpenGate",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t188-human-presence-gate.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

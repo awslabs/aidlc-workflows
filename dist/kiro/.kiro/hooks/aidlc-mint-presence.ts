@@ -8,15 +8,22 @@
 //
 // Presence-only: the prompt text is irrelevant, so stdin is not read.
 // appendAuditEntry resolves the active intent from the on-disk cursor using only
-// the project dir (no payload needed). The mint is fail-open (try/catch, exit 0):
-// a mint failure must never block the human's turn, and the gate fails open on a
-// harness whose ledger has no HUMAN_TURN yet.
-import { resolveProjectDirFromHook } from "../tools/aidlc-lib.ts";
+// the project dir (no payload needed). No workflow state on disk means nothing
+// to gate, so the hook exits without writing (same self-gate as
+// aidlc-session-start.ts) - otherwise every prompt in a project that carries the
+// harness shell but never ran the framework would scaffold and grow audit
+// shards. The gate fails open on an empty ledger, so skipping the mint there is
+// safe. The mint is fail-open (try/catch, exit 0): a mint failure must never
+// block the human's turn.
+import { existsSync } from "node:fs";
+import { resolveProjectDirFromHook, stateFilePath } from "../tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
-  appendAuditEntry("HUMAN_TURN", {}, projectDir);
+  if (existsSync(stateFilePath(projectDir))) {
+    appendAuditEntry("HUMAN_TURN", {}, projectDir);
+  }
 } catch {
   // Non-fatal — a mint failure must never block the human's turn.
 }

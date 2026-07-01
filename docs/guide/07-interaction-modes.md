@@ -68,7 +68,7 @@ The default approval gate presents two options:
 - **Approve** marks the stage as completed, updates `aidlc-state.md`, shows a progress line, and advances to the next stage
 - **Request Changes** lets you provide specific feedback; the agent revises its work and re-presents the approval gate
 
-The gate requires a real human acknowledgement: typing a prompt records a human turn (a `HUMAN_TURN` event) in the audit ledger, and the approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution, so a model running on autopilot cannot fabricate an approval with no human having acted since. If you only click **Approve** in a widget without typing anything since the last gate, type a short message once (for example "approve") so a human turn is on record. (On a harness whose ledger has no human turn yet, the gate fails open and does not require this.)
+The gate requires a real human acknowledgement: typing a prompt or answering an `AskUserQuestion` widget records a human turn (a `HUMAN_TURN` event) in the audit ledger, and the approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution, so a model running on autopilot cannot fabricate an approval with no human having acted since. On a harness whose gate widget does not record a human turn, type a short message once (for example "approve") so one is on record. (On a harness whose ledger has no human turn yet, the gate fails open and does not require this.)
 
 ### Approval Gate Flow
 

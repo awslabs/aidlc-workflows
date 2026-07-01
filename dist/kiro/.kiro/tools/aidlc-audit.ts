@@ -42,8 +42,8 @@ const VALID_EVENT_TYPES = new Set([
   "SESSION_COMPACTED",
   "SESSION_ENDED",
   // Human presence (hook-owned): one event per real human prompt turn. The
-  // approval/interview gate requires a HUMAN_TURN appended AFTER the gate-open
-  // event (in ledger order) before it commits.
+  // approval/interview gate requires a HUMAN_TURN appended AFTER the last gate
+  // resolution (in ledger order) before it commits.
   "HUMAN_TURN",
   // Initialization events (fire IN ADDITION TO STAGE_COMPLETED)
   "WORKSPACE_SCAFFOLDED",

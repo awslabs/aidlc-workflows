@@ -88,6 +88,15 @@
         ]
       },
       {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-mint-presence.ts"
+          }
+        ]
+      },
+      {
         "matcher": "Bash",
         "hooks": [
           {

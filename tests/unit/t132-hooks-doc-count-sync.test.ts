@@ -58,8 +58,12 @@ function diskHookCount(): number {
 }
 
 // --- Ground truth B: settings.json registrations ----------------------------
-// Byte-for-byte the .sh's `bun -e` parse: count every command in the `hooks`
-// block, plus 1 for the top-level `statusLine` key when it carries a command.
+// The .sh's `bun -e` parse counted every command in the `hooks` block, which
+// was 1:1 with scripts while each script had exactly one registration. The
+// mint-presence hook is now wired at TWO events (UserPromptSubmit + PostToolUse
+// AskUserQuestion), so count UNIQUE commands instead: the guard's subject is
+// "scripts wired vs scripts on disk", and a wired-but-missing script still
+// changes the unique count. statusLine stays +1 (its own top-level key).
 interface SettingsCounts {
   block: number;
   statusline: number;
@@ -67,17 +71,19 @@ interface SettingsCounts {
 }
 function settingsCounts(): SettingsCounts {
   const s = JSON.parse(readFileSync(SETTINGS, "utf-8")) as {
-    hooks?: Record<string, Array<{ hooks?: unknown[] }>>;
+    hooks?: Record<string, Array<{ hooks?: Array<{ command?: string }> }>>;
     statusLine?: { command?: string };
   };
-  let block = 0;
+  const commands = new Set<string>();
   for (const ev of Object.keys(s.hooks ?? {})) {
     for (const g of s.hooks![ev]) {
-      for (const _ of g.hooks ?? []) block++;
+      for (const h of g.hooks ?? []) {
+        if (h.command) commands.add(h.command);
+      }
     }
   }
   const statusline = s.statusLine?.command ? 1 : 0;
-  return { block, statusline, total: block + statusline };
+  return { block: commands.size, statusline, total: commands.size + statusline };
 }
 
 // --- Doc count-words (number-word -> int) ------------------------------------

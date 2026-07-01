@@ -30,7 +30,9 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  hasOpenGate,
   humanActedSinceGate,
+  humanPresenceGuardDisabled,
   isAutonomousMode,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
@@ -74,11 +76,16 @@ if (!process.stdin.isTTY) {
 // resolves the active intent from the on-disk cursor
 // (aidlc/spaces/<space>/intents/active-intent) using only cwd, so the event lands
 // in the correct per-intent shard with no payload. One ledger event per human
-// turn; no marker file, no turn counter. Fail-open (try/catch, exit 0) so a mint
-// failure never blocks the human's turn.
+// turn; no marker file, no turn counter. Gated on workflow state existing (same
+// self-gate as the core mint hook) so a prompt in a project that never ran the
+// framework does not scaffold audit shards. Fail-open (try/catch, exit 0) so a
+// mint failure never blocks the human's turn.
 if (target === "mint") {
   try {
-    appendAuditEntry("HUMAN_TURN", {}, kiro.cwd ?? process.cwd());
+    const pd = kiro.cwd ?? process.cwd();
+    if (existsSync(stateFilePath(pd))) {
+      appendAuditEntry("HUMAN_TURN", {}, pd);
+    }
   } catch {
     /* advisory - mint never blocks the turn */
   }
@@ -87,23 +94,27 @@ if (target === "mint") {
 
 // --- block: the preToolUse human-presence floor ---
 //
-// Wired by aidlc-block.kiro.hook (preToolUse). Hard-blocks tool calls while an
-// approval gate is open and no HUMAN_TURN has been recorded since it opened - the
-// exit-2 floor behind the core handleApprove CHECK. Autonomous Construction is
-// carved out (swarm/Bolt has no human at the gate). All read from disk (empty
-// stdin is fine). Fail-open on any read/parse error (advisory).
+// Wired by aidlc-block.kiro.hook (preToolUse). Hard-blocks tool calls ONLY while
+// an approval gate is actually OPEN (a stage sits at [?] in the state file) and
+// no HUMAN_TURN has been recorded since the last gate resolution - the exit-2
+// floor behind the core handleApprove check. The gate-open predicate is
+// load-bearing: after a legitimate approval the resolution follows the turn's
+// HUMAN_TURN, and without it the floor would block the mandated same-turn
+// continuation into the next stage. Carve-outs mirror the core gate: autonomous
+// Construction (swarm/Bolt has no human at the gate) and the deterministic
+// off-switch. All read from disk (empty stdin is fine). Fail-open on any
+// read/parse error (advisory).
 if (target === "block") {
   try {
     const pd = kiro.cwd ?? process.cwd();
     const sp = stateFilePath(pd);
     const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
-    // Autonomy carve-out first: autonomous Construction has no human at the gate.
+    // Carve-outs first: autonomous Construction, the deterministic off-switch,
+    // and no-open-gate (nothing awaits approval, so nothing to floor).
     if (isAutonomousMode(content)) process.exit(0);
-    // The active slug is the state file's "Current Stage" field. humanActedSinceGate
-    // refuses iff a gate is open for that slug with no HUMAN_TURN appended after it
-    // (ledger order); it fails open when no gate is recorded.
-    const slug = content ? auditField(content, "Current Stage") : null;
-    if (humanActedSinceGate(pd, slug)) process.exit(0); // a human acted since the gate opened
+    if (humanPresenceGuardDisabled()) process.exit(0);
+    if (!hasOpenGate(content)) process.exit(0);
+    if (humanActedSinceGate(pd)) process.exit(0); // a human acted at this gate
     process.stderr.write(
       "An approval gate is open and no human has acted since it opened. The gate " +
         "requires a typed human turn before any tool call proceeds. Acknowledge the " +
@@ -113,19 +124,6 @@ if (target === "block") {
   } catch {
     process.exit(0); // advisory - any read/parse failure fails open
   }
-}
-
-// Read a `**Field**: value` line out of an audit block OR state file. The audit
-// emitter writes `**Key**: value` (no leading `- `, mirror aidlc-state.ts's
-// private auditField); the state file writes `- **Key**: value` (getField form).
-// Tolerate an optional leading `- ` so the one reader serves both surfaces.
-function auditField(block: string, fieldName: string): string | null {
-  const prefix = `**${fieldName}**:`;
-  for (const raw of block.split("\n")) {
-    const line = raw.startsWith("- ") ? raw.slice(2) : raw;
-    if (line.startsWith(prefix)) return line.slice(prefix.length).trim();
-  }
-  return null;
 }
 
 // Normalize Kiro's alias tool names to the canonical names the core hooks

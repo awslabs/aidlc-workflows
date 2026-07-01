@@ -56,6 +56,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
+import { stateFilePath } from "../tools/aidlc-lib.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const target = process.argv[2] ?? "";
@@ -345,10 +346,14 @@ switch (target) {
 
   case "mint": {
     // UserPromptSubmit: a real human acted this turn — record a HUMAN_TURN event
-    // in the active intent's audit shard (human-presence gate). Fail-open: a mint
-    // failure must never block the turn. Advisory, no stdout.
+    // in the active intent's audit shard (human-presence gate). Gated on workflow
+    // state existing (same self-gate as the core mint hook) so a prompt in a
+    // project that never ran the framework does not scaffold audit shards.
+    // Fail-open: a mint failure must never block the turn. Advisory, no stdout.
     try {
-      appendAuditEntry("HUMAN_TURN", {}, projectDir);
+      if (existsSync(stateFilePath(projectDir))) {
+        appendAuditEntry("HUMAN_TURN", {}, projectDir);
+      }
     } catch {
       // best-effort presence record — advisory
     }

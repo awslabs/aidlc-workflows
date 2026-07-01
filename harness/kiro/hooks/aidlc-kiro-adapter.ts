@@ -33,7 +33,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   classifyTerminalCommand,
+  hasOpenGate,
   humanActedSinceGate,
+  humanPresenceGuardDisabled,
   isAutonomousMode,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
@@ -115,13 +117,21 @@ if (target === "verb-intercept") {
       ? (Number.parseInt(readFileSync(cp, "utf-8").trim(), 10) || 0) + 1
       : 1;
     writeFileSync(cp, String(turn) + "\n", "utf-8");
-    // Human presence: this seam fires on a real human turn, so record a HUMAN_TURN
-    // event in the active intent's audit shard. The gate (handleApprove/handleAnswer)
-    // refuses unless a HUMAN_TURN was recorded since the last gate resolution; the
-    // preToolUse block below is the exit-2 floor. SEPARATE from the turn-counter bump
-    // above (that is the roll-forward latch clock — kept intact).
-    appendAuditEntry("HUMAN_TURN", {}, cwd);
-  } catch { /* turn-clock + presence best-effort */ }
+  } catch { /* turn-clock best-effort */ }
+  // Human presence: this seam fires on a real human turn, so record a HUMAN_TURN
+  // event in the active intent's audit shard. The gate (handleApprove/handleAnswer)
+  // refuses unless a HUMAN_TURN was recorded since the last gate resolution; the
+  // preToolUse block below is the exit-2 floor. Own try block, SEPARATE from the
+  // turn-counter bump above (that is the roll-forward latch clock - a counter I/O
+  // failure must not skip the mint, or a genuine approval gets refused). Gated on
+  // workflow state existing (same self-gate as the core mint hook) so a prompt in
+  // a project that never ran the framework does not scaffold audit shards.
+  try {
+    const cwd = kiro.cwd ?? process.cwd();
+    if (existsSync(stateFilePath(cwd))) {
+      appendAuditEntry("HUMAN_TURN", {}, cwd);
+    }
+  } catch { /* presence best-effort - mint never blocks the turn */ }
   if (cmd === null) process.exit(0); // not a terminal command — conductor handles it
 
   const cwd = kiro.cwd ?? process.cwd();
@@ -219,28 +229,26 @@ if (target === "pretool-block") {
 
   // --- human-presence floor (second exit-2 branch) ---
   //
-  // Refuse ANY tool call while an approval gate is open and no HUMAN_TURN has been
-  // recorded since the last gate resolution: the hard floor that stops a model under
-  // autopilot from fabricating an approval (the verb-intercept seam above records a
-  // HUMAN_TURN on a real human turn). Distinct from the roll-forward latch above.
-  // Autonomy carve-out is checked FIRST so autonomous
-  // Construction (swarm/Bolt) is never blocked. Fail-open on any read/parse
-  // error: advisory, must never wedge a legitimate turn.
+  // Refuse a tool call ONLY while an approval gate is actually OPEN (a stage sits
+  // at [?] in the state file) and no HUMAN_TURN has been recorded since the last
+  // gate resolution: the hard floor that stops a model under autopilot from
+  // fabricating an approval (the verb-intercept seam above records a HUMAN_TURN
+  // on a real human turn). The gate-open predicate is load-bearing: after a
+  // legitimate approval the resolution follows the turn's HUMAN_TURN, and without
+  // it the floor would block the mandated same-turn continuation into the next
+  // stage. Distinct from the roll-forward latch above. Carve-outs mirror the core
+  // gate: autonomous Construction (swarm/Bolt) first, then the deterministic
+  // off-switch, then no-open-gate. Fail-open on any read/parse error: advisory,
+  // must never wedge a legitimate turn.
   try {
     const content = existsSync(stateFilePath(cwd))
       ? readFileSync(stateFilePath(cwd), "utf-8")
       : null;
     if (isAutonomousMode(content)) process.exit(0); // autonomous: never block
+    if (humanPresenceGuardDisabled()) process.exit(0); // deterministic off-switch
+    if (!hasOpenGate(content)) process.exit(0); // no gate awaits approval
 
-    // The active slug is the state file's "Current Stage" field.
-    // humanActedSinceGate refuses iff a gate is open with no HUMAN_TURN recorded
-    // since the last gate resolution (ledger order); it fails open when no ledger
-    // / no gate exists, so a missing/backfilled gate never false-blocks.
-    const slug = (() => {
-      const m = content?.match(/^- \*\*Current Stage\*\*:[ \t]*(.*)$/m);
-      return m ? m[1].trim() : "";
-    })();
-    if (!humanActedSinceGate(cwd, slug || null)) {
+    if (!humanActedSinceGate(cwd)) {
       process.stderr.write(
         "an approval gate is open and no human has acted since it opened: refusing the tool call. A real human must respond at the gate. End the turn.\n",
       );

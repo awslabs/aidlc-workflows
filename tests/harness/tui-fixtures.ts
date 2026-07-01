@@ -48,7 +48,7 @@ const REPO_ROOT = join(HARNESS_DIR, "..", "..");
 export const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 export const KIRO_SRC = join(REPO_ROOT, "dist", "kiro", ".kiro");
 // The Kiro IDE distributable ships the .kiro.hook files the IDE actually reads
-// (mint + block for issue #451); dist/kiro/.kiro/hooks has none. Seed this tree
+// (the human-presence mint + block); dist/kiro/.kiro/hooks has none. Seed this tree
 // for IDE-shaped tests.
 export const KIRO_IDE_SRC = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
 const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures");
@@ -86,7 +86,7 @@ export interface TuiProjectOptions {
    *  Kiro install shape — workspace default agent + steering ride along);
    *  "kiro-ide" copies dist/kiro-ide/.kiro → <proj>/.kiro plus
    *  dist/kiro-ide/AGENTS.md → <proj>/AGENTS.md (the IDE install shape, which
-   *  carries the .kiro.hook files the IDE reads — mint + block for issue #451).
+   *  carries the .kiro.hook files the IDE reads - the human-presence mint + block).
    *  Everything else (state, audit, stubs) is harness-neutral. */
   harness?: "claude" | "kiro" | "kiro-ide";
   /** Seed aidlc-docs/aidlc-state.md from tests/fixtures/<withState> (a filename like
