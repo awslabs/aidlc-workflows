@@ -127,15 +127,38 @@ The engine analyzes your intent against keyword patterns:
 | "workshop", "lab", "training" | `workshop` |
 | Everything else | `feature` |
 
-**Disambiguation rule:** If your input contains both a scope keyword and a longer project description (more than 5 words), the orchestrator defaults to `feature` and asks you to confirm. This prevents mismatches like "Fix the infrastructure monitoring dashboard" being routed to `infra` when `feature` is more appropriate.
+**Disambiguation rule:** If your input contains both a scope keyword and a longer project description (more than 5 words), the match is treated as incidental and the compose offer fires instead (below). This prevents mismatches like "Fix the infrastructure monitoring dashboard" being routed to `infra` when a tailored plan is more appropriate.
 
-After detection, you always get a confirmation prompt naming the scope and the stage count:
+After a clear keyword match, you get a one-line confirmation naming the MATCHED scope:
 
 ```
-This looks like a feature workflow. I'll run 32 stages. OK?
+Starting a "bugfix" workflow for: "fix login bug". Confirm to proceed,
+name a different scope, or say "compose" for a tailored plan.
 ```
 
-Confirm to proceed, or reply with a different scope (or `--depth <level>`) to course-correct before the workflow starts.
+Confirm to proceed, or reply with a different scope (or `compose`) to course-correct before the workflow starts.
+
+---
+
+## The Adaptive Composer
+
+When no stock scope clearly fits (rich prose, no keyword hit, or a keyword buried in a long description), `/aidlc` offers to COMPOSE a tailored plan instead of silently defaulting to `feature`. You can also force it:
+
+```
+/aidlc compose "harden the deployment pipeline and add observability"
+/aidlc-compose "same thing, as a typeable shortcut"
+/aidlc compose --report sonar.json     # compose from a scan report
+/aidlc --new-scope "..."               # force a custom scope even on a stock match
+```
+
+The composer agent reads your task and the workspace scan (brownfield/greenfield, languages), then proposes the EXECUTE/SKIP grid that fits, with a reason for every skipped stage. You approve, edit, or reject at a gate; nothing is written and no workflow starts before an explicit approval. On approve:
+
+- If the proposal MATCHED a stock scope, the workflow births on that scope directly (a scan report full of code-level findings usually routes to `bugfix` or `security-patch` this way).
+- For a CUSTOM grid, the composer authors a real scope (a `scopes/aidlc-<name>.md` plus a `scope-grid.json` entry) and the workflow births on it in the same turn. The composed scope resolves like any stock scope afterwards (`/aidlc --scope <name>`).
+
+**Keyword hygiene:** composed scopes ship with `keywords: []`, so a one-off plan never participates in keyword auto-detection. Making a composed scope inferable for future prompts is an explicit question at the gate, never a side effect.
+
+**In-flight recompose:** mid-workflow, `/aidlc compose` proposes re-shaping the PENDING stages of the running workflow - skip what you no longer need, add back a pending stage you realize you need. Flips apply only to pending, ahead-of-cursor stages (completed and in-progress stages are frozen), are validated so no remaining stage is starved of a required input, and land through the deterministic `recompose` verb under the audit lock with a `RECOMPOSED` audit event. The first EXECUTE stage of Construction (the walking-skeleton gate anchor) cannot be flipped.
 
 ---
 

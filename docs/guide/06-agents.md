@@ -261,6 +261,10 @@ challenge it, representing the customer (or the review board) at the gate.
 | `aidlc-product-lead-agent` | Requirements, user stories, and UX/mockup artifacts — completeness, business alignment, testability | sonnet |
 | `aidlc-architecture-reviewer-agent` | Technical design artifacts — soundness, implementability, broken cross-references, unachievable NFR targets | sonnet |
 
+## The Composer Agent
+
+One more agent sits outside both groups: `aidlc-composer-agent`, the adaptive-workflows composer. The conductor dispatches it on a compose request (`/aidlc compose`, a compose offer on a cold start, `--report`, or `--new-scope`). It reads the task and the workspace scan, proposes the EXECUTE/SKIP stage grid with a per-SKIP rationale, and - only after your approval at the gate - authors the composed scope (front/report) or proposes pending-stage flips the deterministic `recompose` verb applies (in-flight). Its persona is deliberately keep-biased: it justifies presence and interrogates absence, never strips stages to "go faster". See [Scopes and Depth - The Adaptive Composer](05-scopes-and-depth.md#the-adaptive-composer).
+
 A reviewer fires only when a stage declares a `reviewer:` field. Today the product
 lead reviews `rough-mockups`, `refined-mockups`, `requirements-analysis`, and
 `user-stories`; the architecture reviewer reviews `application-design`,

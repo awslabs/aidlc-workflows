@@ -14,7 +14,10 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | Command | Description |
 |---------|-------------|
 | `/aidlc [scope]` | Start a new workflow with an explicit scope |
-| `/aidlc [description]` | Start a new workflow; scope is auto-detected from your description |
+| `/aidlc [description]` | Start a new workflow; scope is auto-detected from your description (rich/unmatched prose gets a compose offer) |
+| `/aidlc compose "<task>"` | Force the adaptive composer: propose a tailored EXECUTE/SKIP plan for the task |
+| `/aidlc compose --report <path>` | Compose from a scan report (triage findings into a compact fix-and-ship run) |
+| `/aidlc --new-scope "<task>"` | Force the composer to synthesize a custom scope even when a stock scope matches |
 | `/aidlc` | Resume an existing workflow (if an intent exists) or birth the first intent and start new |
 | `/aidlc --status` | Display a read-only status summary |
 | `/aidlc --doctor` | Run a health check on your setup |
@@ -108,7 +111,7 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 /aidlc Fix the login timeout bug
 ```
 
-**Behavior:** The engine analyzes keywords in your description (e.g., "fix" suggests bugfix, "build" suggests feature) and proposes a scope. You confirm or override before the workflow begins.
+**Behavior:** The engine analyzes keywords in your description (e.g., "fix" suggests bugfix). A clear match asks a one-line confirm naming the MATCHED scope; rich or unmatched prose gets the compose offer (see `/aidlc compose` below) instead of a silent default. You confirm or override before the workflow begins.
 
 **Example:**
 
@@ -117,6 +120,22 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 > Detected scope: bugfix (Minimal depth, Minimal test strategy, 8 stages)
 > Approve scope? [Yes / Change scope / Change depth / Change test strategy]
 ```
+
+---
+
+### `/aidlc compose` - The adaptive composer
+
+Force the composer even when a stock scope would match. Works in three moments:
+
+```
+/aidlc compose "harden the deployment pipeline and add observability"
+/aidlc compose --report sonar.json
+/aidlc compose            (mid-workflow: re-shape the pending stages)
+```
+
+**Behavior:** the conductor dispatches the composer agent, which reads your task (or the scan report, or the running workflow's state), runs the read-only `detect` scan, and proposes an EXECUTE/SKIP grid with a reason for every SKIP. You approve, edit, or reject at a gate. On approve: a stock match births directly; a custom grid is authored as a real scope (two files in the installed tree) and the workflow births on it in the same turn; an in-flight proposal lands as pending-stage suffix flips via the `recompose` verb (under the audit lock, strict-validated, `RECOMPOSED` audited). `--new-scope` forces synthesis; `--report <path>` seeds the triaged findings into the intent. The `/aidlc-compose` skill is a typeable shortcut over the same path.
+
+See [Scopes and Depth - The Adaptive Composer](05-scopes-and-depth.md#the-adaptive-composer) for the full flow.
 
 ---
 
@@ -410,6 +429,18 @@ Display a summary of available commands and flags.
 Beyond the `/aidlc` flags above, this implementation ships three Bun/TypeScript tools that the hooks call automatically as a workflow runs. You rarely invoke them by hand — they keep the audit trail, the Sensor results, and the runtime graph in sync without you asking. They are documented here because they surface in `--doctor` output and in the `audit/` shards, and because each one is a useful debug handle when you want to see what the framework saw.
 
 Run any of them with `bun .claude/tools/<tool>.ts <subcommand>`.
+
+### `aidlc-utility detect` - read-only workspace scan
+
+`bun .claude/tools/aidlc-utility.ts detect --json` prints the workspace scan (project type, languages, frameworks, build system) plus the resolved scopes dir and scope-grid path. Pure read; the composer runs it to learn where scope data lives on the current harness.
+
+### `aidlc-utility recompose` - in-flight plan flips
+
+`bun .claude/tools/aidlc-utility.ts recompose --skip <slugs> --add <slugs>` (comma-separated) flips PENDING, ahead-of-cursor stages' plan suffixes on the live state file. Runs under the audit lock, rejects flips that would starve a remaining stage of a required input (and flips of completed/in-progress stages, behind-cursor stages, or the first EXECUTE stage of Construction), rebuilds the derived state fields, and emits `RECOMPOSED`. Normally reached through `/aidlc compose` mid-workflow, not typed directly.
+
+### `aidlc-graph validate-grid` - arbitrary-grid dependency check
+
+`bun .claude/tools/aidlc-graph.ts validate-grid --proposal <path> [--strict] [--project-type <t>]` validates an arbitrary `{"<stage>": "EXECUTE"|"SKIP"}` JSON grid. Lenient mode mirrors `validate-scope` (an off-path required producer is advisory); `--strict` hard-rejects it (the recompose posture). Exit 1 iff invalid; the JSON result lands on stdout.
 
 ### `aidlc-sensor` — inspect and fire Sensors
 

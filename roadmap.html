@@ -200,7 +200,7 @@
     <p class="lead">Delivery against the seven 2.0 North Star goals — organized as a <b>semver release ladder</b>:
     the in-flight hardening lands on the <code style="background:rgba(255,255,255,.18);color:#fff">2.0.x</code> patch line,
     and <b>each major feature steps the minor</b> (<code style="background:rgba(255,255,255,.18);color:#fff">2.x.0</code>).
-    2.0 ships as <b>GA Preview</b>; <b>full GA lands at 2.3.0</b>, once per-intent workspace, reviewer-as-verifier, and adaptive
+    2.0 ships as <b>GA Preview</b>; <b>full GA lands at 2.3.0</b>, once per-intent workspace, adaptive workflows, and reviewer-as-
     workflows are all in place. The North Star serves two needs at once: low-effort configurability for customers, and cross-harness reusability
     for us — one hand-authored <code style="background:rgba(255,255,255,.18);color:#fff">core/</code>, projected to Claude, Kiro CLI, Kiro IDE, and Codex.</p>
     <div class="chips">
@@ -242,15 +242,15 @@
         <td><span class="feat">Per-intent workspace</span><span class="desc">Spaces · intents · multi-repo · space-level knowledge</span></td>
         <td>7</td><td><span class="badge inflight"><span class="d"></span>In flight</span></td>
       </tr>
-      <tr>
-        <td><span class="ver patch">2.2.0</span></td>
-        <td><span class="feat">Reviewer-as-verifier</span><span class="desc">Domain-aware validation tools · token budget · adversarial framing</span></td>
-        <td>4</td><td><span class="badge inflight"><span class="d"></span>In flight</span></td>
-      </tr>
       <tr class="highlight">
-        <td><span class="ver now">2.3.0</span></td>
-        <td><span class="feat">Adaptive workflows <span class="ver now">Full GA</span></span><span class="desc">Per-unit iteration · dynamic stage composition · scale-in triage — completes the GA bar (per-intent + reviewer + adaptive)</span></td>
-        <td>3</td><td><span class="badge planned"><span class="d"></span>Planned</span></td>
+        <td><span class="ver now">2.2.0</span></td>
+        <td><span class="feat">Adaptive workflows</span><span class="desc">Dynamic stage composition (the composer under /aidlc) · scale-in triage · in-flight recompose (per-unit iteration landed in 2.1.2)</span></td>
+        <td>3</td><td><span class="badge shipped"><span class="d"></span>Shipped</span></td>
+      </tr>
+      <tr>
+        <td><span class="ver patch">2.3.0</span></td>
+        <td><span class="feat">Reviewer-as-verifier <span class="ver now">Full GA</span></span><span class="desc">Domain-aware validation tools · token budget · adversarial framing; completes the GA bar (per-intent + adaptive + reviewer)</span></td>
+        <td>4</td><td><span class="badge inflight"><span class="d"></span>In flight</span></td>
       </tr>
       <tr>
         <td><span class="ver patch">2.4.0</span></td>
@@ -269,7 +269,7 @@
       </tr>
     </tbody>
   </table>
-  <div class="card note"><span class="label">Versioning convention</span>Per <code>AGENTS.md</code> changelog policy, patch versions accumulate through a release-prep cycle and a minor cut consolidates them. Here <code>2.0.x</code> carries the current hardening; <code>2.1.0</code> is the first <i>major feature</i> cut, and each subsequent major feature gets its own <code>2.x.0</code>. <b>2.0 is GA Preview; full GA is declared at <code>2.3.0</code></b>, the point at which per-intent workspace (2.1.0), reviewer-as-verifier (2.2.0), and adaptive workflows (2.3.0) are all in place. Version assignments are a planning proposal, not yet reflected in <code>core/tools/aidlc-version.ts</code>.</div>
+  <div class="card note"><span class="label">Versioning convention</span>Per <code>AGENTS.md</code> changelog policy, patch versions accumulate through a release-prep cycle and a minor cut consolidates them. Here <code>2.0.x</code> carries the current hardening; <code>2.1.0</code> is the first <i>major feature</i> cut, and each subsequent major feature gets its own <code>2.x.0</code>. <b>2.0 is GA Preview; full GA is declared at <code>2.3.0</code></b>, the point at which per-intent workspace (2.1.0), adaptive workflows (2.2.0), and reviewer-as-verifier (2.3.0) are all in place. Version assignments are a planning proposal, not yet reflected in <code>core/tools/aidlc-version.ts</code>.</div>
 
   <!-- SCORECARD -->
   <h2 class="section">Goal → version map</h2>
@@ -278,8 +278,8 @@
     <tbody>
       <tr><td class="num">1</td><td><a href="#g1">Mimic what we practice in the real world</a></td><td><span class="badge partial"><span class="d"></span>Partial</span></td><td><span class="ver patch">2.0.x</span> <span class="ver">2.4.0</span></td></tr>
       <tr><td class="num">2</td><td><a href="#g2">Customization of behaviour</a></td><td><span class="badge shipped"><span class="d"></span>Shipped</span></td><td><span class="ver patch">2.0.x</span></td></tr>
-      <tr><td class="num">3</td><td><a href="#g3">Adaptiveness of workflows</a></td><td><span class="badge partial"><span class="d"></span>Partial</span></td><td><span class="ver">2.3.0</span></td></tr>
-      <tr><td class="num">4</td><td><a href="#g4">Verifier as a true adversary</a></td><td><span class="badge partial"><span class="d"></span>Partial</span> <span class="badge inflight"><span class="d"></span>In flight</span></td><td><span class="ver patch">2.0.x</span> <span class="ver patch">2.2.0</span></td></tr>
+      <tr><td class="num">3</td><td><a href="#g3">Adaptiveness of workflows</a></td><td><span class="badge shipped"><span class="d"></span>Shipped</span></td><td><span class="ver now">2.2.0</span></td></tr>
+      <tr><td class="num">4</td><td><a href="#g4">Verifier as a true adversary</a></td><td><span class="badge partial"><span class="d"></span>Partial</span> <span class="badge inflight"><span class="d"></span>In flight</span></td><td><span class="ver patch">2.0.x</span> <span class="ver patch">2.3.0</span></td></tr>
       <tr><td class="num">5</td><td><a href="#g5">Support for cyclic, directional flows</a></td><td><span class="badge partial"><span class="d"></span>Partial</span></td><td><span class="ver patch">2.0.x</span> <span class="ver">2.5.0</span></td></tr>
       <tr><td class="num">6</td><td><a href="#g6">Preserve artefact traceability</a></td><td><span class="badge partial"><span class="d"></span>Partial</span></td><td><span class="ver">2.6.0</span></td></tr>
       <tr><td class="num">7</td><td><a href="#g7">Organizational, not project-local, repository</a></td><td><span class="badge inflight"><span class="d"></span>In flight</span></td><td><span class="ver patch">2.1.0</span></td></tr>
@@ -361,11 +361,12 @@
       </ul>
     </div>
     <div class="lane">
-      <h4><span class="d gap"></span>Gap to North Star <span class="ver">2.3.0</span> — largest divergence</h4>
+      <h4><span class="d gap"></span>Gap to North Star</h4>
       <ul class="items">
-        <li class="l-plan"><b>Dynamic stage composition.</b> Composition is fixed at <code>--init</code> by scope; the engine does not assess accumulated context / remaining uncertainty at a boundary to decide the next stage(s). <span class="src">aidlc-orchestrate.ts (nextInScopeStage)</span></li>
-        <li class="l-plan"><b>Scale-in from an external report.</b> No mechanism to ingest a scan report, triage findings into auto-fixable vs human-decision, and launch a compact Fix→Test→PR run.</li>
-        <li class="l-plan">Per-unit iteration plumbing: <code>for_each: unit-of-work</code> emits one directive but the conductor doesn't yet iterate per unit.</li>
+        <li class="l-ship"><b>Dynamic stage composition</b> shipped in 2.2.0: the composer agent under <code>/aidlc</code> reads the task and proposes the EXECUTE/SKIP grid (front, report, and in-flight recompose), human-gated with a strict dependency validator. <span class="src">core/agents/aidlc-composer-agent.md · aidlc-orchestrate.ts (compose dispatch) · aidlc-utility.ts (recompose)</span></li>
+        <li class="l-ship"><b>Scale-in from an external report</b> shipped in 2.2.0: <code>/aidlc compose --report &lt;path&gt;</code> triages findings into auto-fixable vs human-decision and routes to a compact fix-and-ship grid.</li>
+        <li class="l-ship">Per-unit iteration landed in 2.1.2 (engine-driven <code>for_each</code> loop).</li>
+        <li class="l-plan">Boundary auto-assessment: the composer runs when INVOKED (or offered on a cold start); the engine does not yet self-assess at every stage boundary whether to propose a recompose. Deliberate: mid-flow re-shaping stays human-initiated.</li>
       </ul>
     </div>
   </div>
@@ -479,9 +480,9 @@
 
     <div class="card hl"><span class="label">2.1.0 — Per-intent workspace · next minor</span>The workspace replaces the project as the anchor. Spaces hold multiple coexisting intents; an intent can span multiple repos; domain knowledge and practices live in a shared, clonable, team-scoped org-KB (<code>org-ai-kb/&lt;team&gt;/</code>) that compounds across intents and is shareable across teams; audit is sharded per-intent (no merge conflicts); flat <code>aidlc-docs/</code> projects auto-migrate. Wholly delivers Goal 7 — all six scenarios plus the org-KB layer. <span class="src">feature/workspace-anchor</span> <span class="goalref">G7</span></div>
 
-    <div class="card"><span class="label">2.2.0 — Reviewer-as-verifier</span>Promotes the reviewer from advisory to a true adversary: domain-aware validation tools (validate-domain-model / entities / rules) checking against explicit contracts and schemas; a token/iteration budget governing the self-heal loop; reviewer prompted to refute, not confirm. <span class="goalref">G4</span></div>
+    <div class="card hl"><span class="label">2.2.0 - Adaptive workflows · shipped</span>Stage composition stops being hard-wired: a composer agent under <code>/aidlc</code> reads the task (prompt, scan report, or the running workflow), proposes the EXECUTE/SKIP grid that fits, and after human approval authors it as a scope (front/report) or flips pending stages in place (in-flight recompose, under the audit lock with a strict starved-input validator). Scale-in triages external reports (e.g. SonarQube) into a compact fix-and-ship run. Per-unit <code>for_each</code> iteration landed earlier in 2.1.2. <span class="goalref">G3</span></div>
 
-    <div class="card hl"><span class="label">2.3.0 — Adaptive workflows · Full GA</span>Stage composition stops being hard-wired: the engine assesses accumulated context and remaining uncertainty at each boundary to decide the next stage(s); per-unit <code>for_each</code> iteration lands; scale-in triages external reports (e.g. SonarQube) into a compact Fix→Test→PR run. <b>This cut declares full GA</b> — per-intent workspace (2.1.0), reviewer-as-verifier (2.2.0), and adaptive workflows are all in place. <span class="goalref">G3</span></div>
+    <div class="card"><span class="label">2.3.0 - Reviewer-as-verifier · Full GA</span>Promotes the reviewer from advisory to a true adversary: domain-aware validation tools (validate-domain-model / entities / rules) checking against explicit contracts and schemas; a token/iteration budget governing the self-heal loop; reviewer prompted to refute, not confirm. <b>This cut declares full GA</b>: per-intent workspace (2.1.0), adaptive workflows (2.2.0), and reviewer-as-verifier are then all in place. <span class="goalref">G4</span></div>
 
     <div class="card"><span class="label">2.4.0 — Three-role ensemble</span>Owner → <b>Contributor</b> → Reviewer: contributors become independent subagents (not inline voices), and the collaboration pattern (pipeline / swarm / review-loop / mob) becomes a per-stage selectable knob. <span class="goalref">G1</span></div>
 

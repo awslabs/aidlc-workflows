@@ -56,10 +56,18 @@ When the argument is freeform text (not a known scope keyword):
    - "proof of concept" / "prototype" / "poc" / "spike" maps to `poc`
    - "mvp" / "minimum viable" maps to `mvp`
    - Anything else defaults to `feature`
-3. Disambiguation rule: if the text contains BOTH a scope keyword AND a longer project description (more than 5 words), defaults to `feature` and confirms with the user.
-4. Confirms with the user: "This looks like a **[scope]** workflow. I'll run [stage count] stages. OK?"
-5. On confirmation, proceeds as with an explicit scope. The original freeform text is stored as `Initial Intent` in `aidlc-state.md`.
-6. If the user overrides the detected scope, uses the user's chosen scope instead.
+3. Disambiguation rule: if the text contains BOTH a scope keyword AND a longer project description (more than 5 words), the match is treated as incidental and the COMPOSE OFFER fires instead of a silent default.
+4. On a clear keyword match, confirms with the user: `Starting a "[scope]" workflow for: "[text]". Confirm to proceed, name a different scope, or say "compose" for a tailored plan.`
+5. On no match / rich prose, offers the adaptive composer: the composer agent proposes an EXECUTE/SKIP grid for the task, human-gated (see the compose surfaces below).
+6. On confirmation, proceeds as with an explicit scope. The original freeform text is stored as `Initial Intent` in `aidlc-state.md`.
+7. If the user overrides the detected scope, uses the user's chosen scope instead.
+
+### `/aidlc compose` -- The Adaptive Composer
+
+The compose surfaces (a leading `compose` verb, `--new-scope`, or `--report <path>`) make the engine emit a composer-dispatch `print` instead of a scope confirm. The verb is deliberately NOT a workspace verb (workspace verbs are terminal utility commands the Kiro seam runs off-band; compose is workflow work the conductor dispatches). Two modes split on the state file:
+
+1. **Front / report (no workflow yet):** the conductor dispatches `aidlc-composer-agent`, which runs the read-only `detect --json` scan, reads the stock scopes, and returns a structured proposal (`mode matched|custom`, the grid, per-SKIP rationale) validated by `aidlc-graph.ts validate-grid`. The conductor renders the approve/edit/reject gate; on approve a stock match births directly, a custom grid is authored as scope data (`scopes/aidlc-<name>.md` + a `scope-grid.json` entry, `keywords: []` by default) and the birth continues in the same turn.
+2. **In-flight (workflow running):** the composer proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages. The conductor writes the pending-proposal marker (`aidlc/.aidlc-compose-pending`) before the gate (the Stop hook honours it as a turn-stop signal); on approve it runs `aidlc-utility.ts recompose --skip <slugs> --add <slugs>`, which flips the plan suffixes under the audit lock, strict-validates against new starvation, rebuilds the derived fields, and emits `RECOMPOSED`.
 
 ### `/aidlc --status` -- Progress Check
 
