@@ -29,25 +29,38 @@ if [ -z "$BUN" ]; then
   fi
 fi
 
-# --- 1. Copy NEW stages into the project's stage tree ---
-STAGE_SRC="$PLUGIN_ROOT/stages"
-STAGE_DST="$HARNESS_DIR/aidlc-common/stages"
-if [ -d "$STAGE_SRC" ]; then
-  cp -rn "$STAGE_SRC"/* "$STAGE_DST/" 2>/dev/null || cp -r "$STAGE_SRC"/* "$STAGE_DST/"
-fi
+# The harness-dir token substitution the packager applies to core .md prose.
+# Plugin .md files carry {{HARNESS_DIR}}; substitute it to the actual dir
+# (.claude) so composed stage/sensor prose is harness-correct. Applied only to
+# the files this plugin adds (by relative path), never the wider tree.
+HARNESS_LEAF=".claude"
 
-# --- 2. Copy sensors into the project's sensor tree ---
-SENSOR_SRC="$PLUGIN_ROOT/sensors"
-SENSOR_DST="$HARNESS_DIR/sensors"
-if [ -d "$SENSOR_SRC" ]; then
-  cp -rn "$SENSOR_SRC"/* "$SENSOR_DST/" 2>/dev/null || cp -r "$SENSOR_SRC"/* "$SENSOR_DST/"
-fi
+# copy_and_substitute <src-dir> <dst-dir> — copy the tree, then substitute the
+# harness-dir token in every copied .md file.
+copy_and_substitute() {
+  local src="$1" dst="$2"
+  [ -d "$src" ] || return 0
+  cp -rn "$src"/* "$dst/" 2>/dev/null || cp -r "$src"/* "$dst/"
+  # substitute the token in the files we just copied (match by relative path)
+  while IFS= read -r f; do
+    local rel="${f#"$src"/}"
+    local target="$dst/$rel"
+    [ -f "$target" ] || continue
+    case "$target" in
+      *.md) sed -i "s|{{HARNESS_DIR}}|${HARNESS_LEAF}|g" "$target" ;;
+    esac
+  done < <(find "$src" -type f)
+}
 
-# --- 3. Copy tools (sensor scripts) into the project's tools tree ---
-TOOLS_SRC="$PLUGIN_ROOT/tools"
-TOOLS_DST="$HARNESS_DIR/tools"
-if [ -d "$TOOLS_SRC" ]; then
-  cp -rn "$TOOLS_SRC"/* "$TOOLS_DST/" 2>/dev/null || cp -r "$TOOLS_SRC"/* "$TOOLS_DST/"
+# --- 1. Copy NEW stages into the project's stage tree (with token substitution) ---
+copy_and_substitute "$PLUGIN_ROOT/stages" "$HARNESS_DIR/aidlc-common/stages"
+
+# --- 2. Copy sensors into the project's sensor tree (with token substitution) ---
+copy_and_substitute "$PLUGIN_ROOT/sensors" "$HARNESS_DIR/sensors"
+
+# --- 3. Copy tools (sensor scripts) into the project's tools tree (verbatim; .ts) ---
+if [ -d "$PLUGIN_ROOT/tools" ]; then
+  cp -rn "$PLUGIN_ROOT/tools"/* "$HARNESS_DIR/tools/" 2>/dev/null || cp -r "$PLUGIN_ROOT/tools"/* "$HARNESS_DIR/tools/"
 fi
 
 # --- 4. Merge contributions into the STAGE SOURCE files (before compile) ---
