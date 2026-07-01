@@ -175,6 +175,11 @@ Read it in order the first time:
 9. **[Porting to a New Harness](09-porting-to-a-new-harness.md)** — add another
    CLI harness with one `harness/<name>/` directory and a manifest row, no
    `core/` edits: the manifest contract, the hook adapter, and `emit.ts`.
+10. **[Authoring a Plugin](10-authoring-a-plugin.md)** — package a reusable,
+    optional **AIDLC plugin** in `plugins/<name>/`: new stages/agents/scopes/
+    sensors + additive contributions to existing core stages, emitted as a real
+    host plugin per harness. Design set in the Developer Reference
+    ([18 mechanism](../reference/18-plugin-mechanism.md) + companions).
 
 ## Next
 

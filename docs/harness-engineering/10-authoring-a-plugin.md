@@ -1,11 +1,9 @@
 # Authoring a Plugin
 
-> Part of the [Harness Engineer Guide](../../docs/harness-engineering/00-overview.md). Prerequisite:
-> [Anatomy of a Stage](../../docs/harness-engineering/01-anatomy-of-a-stage.md). Design reference:
-> [Plugin Mechanism](18-plugin-mechanism.md). For *why* the
-> system composes the way it does, see
-> [Composition: Build-Time vs Install-Time](19-plugin-composition-timing.md);
-> for the end-to-end picture, [Plugin System Vision](20-plugin-system-vision.md).
+> Part of the [Harness Engineer Guide](00-overview.md). Prerequisite:
+> [Anatomy of a Stage](01-anatomy-of-a-stage.md). Design reference (the mechanism,
+> the install-time rationale, the hybrid distribution model, and as-built status):
+> [Plugin Mechanism](../reference/18-plugin-mechanism.md).
 
 An **AIDLC plugin** (a **plugin**) is a reusable, optional set of AIDLC
 contributions — new stages, agents, scopes, method/rules (the memory layer),
@@ -24,7 +22,7 @@ This chapter walks the `test-pro` plugin end to end. Copy its shape for your own
 
 ## When to write a plugin vs. a plain stage/rule
 
-- **A stage/agent/rule** ([chapters 2–6](../../docs/harness-engineering/00-overview.md)) is a permanent part of
+- **A stage/agent/rule** ([chapters 2–6](00-overview.md)) is a permanent part of
   the framework everyone gets.
 - **A plugin** is _optional and owned_ — it ships in its own repo, activates
   only under an opt-in scope (and/or a `when:` predicate), and a consumer chooses
@@ -92,7 +90,7 @@ those. A plugin that does ship them gets one section each below (§4).
 ## 2. Add a new stage
 
 A plugin stage is an ordinary stage file (see
-[Anatomy of a Stage](../../docs/harness-engineering/01-anatomy-of-a-stage.md)) with two extra rules:
+[Anatomy of a Stage](01-anatomy-of-a-stage.md)) with two extra rules:
 
 - Its `plugin:` field names your plugin.
 - Any artifact it `produces:` must be prefixed `<plugin>-` (e.g.
@@ -116,7 +114,7 @@ when:
   producer-in-plan: test-pro-regression-suite
 ```
 
-See [Scopes](../../docs/harness-engineering/04-scopes.md) for scope membership and the `when:` predicate.
+See [Scopes](04-scopes.md) for scope membership and the `when:` predicate.
 
 ## 3. Modify an existing core stage (a contribution)
 
@@ -183,23 +181,23 @@ scopes, method/rules, or knowledge — one rule each:
 - **Agents.** Drop `agents/<slug>-agent.md` with `plugin:` set. It is discovered
   automatically and your plugin's stages may name it as `lead_agent`/
   `support_agents`. An agent slug that collides with core or another plugin is a
-  compose error (no silent shadowing). See [Adding an Agent](../../docs/harness-engineering/03-adding-an-agent.md).
+  compose error (no silent shadowing). See [Adding an Agent](03-adding-an-agent.md).
 - **Sensors.** Ship the manifest `sensors/aidlc-<id>.md` **and** its script under
   `tools/` (both — a manifest alone is discoverable but its script must live in
   `tools/` to run). Bind it to your own stages via `sensors:`, or to a core stage
-  via a contribution's `adds.sensors`. See [Sensors](../../docs/harness-engineering/06-sensors.md).
+  via a contribution's `adds.sensors`. See [Sensors](06-sensors.md).
 - **Method/rules.** Ship a `memory/` subtree — `memory/phases/<phase>.md` (or
   `memory/{org,team,project}.md`) — via `contributes.memory`. It **merges into
   the default-space method seed** (`aidlc/spaces/default/memory/`), and a phase
   file's guardrails load strict-additively for every stage in that phase. Do
   **not** ship a `rules/` dir — that path is no longer read (the rule layer moved
-  into per-space memory). See [Rules and the Loop](../../docs/harness-engineering/05-rules-and-the-loop.md).
+  into per-space memory). See [Rules and the Loop](05-rules-and-the-loop.md).
 - **Knowledge.** Ship per-agent **methodology** knowledge under
   `knowledge/<agent-slug>/`, projected into the framework-shipped
   `<harness>/knowledge/` tree and loaded when that agent leads a stage. Note:
   **domain/team knowledge** (`aidlc/spaces/<space>/knowledge/`) is empty-at-
   bootstrap user runtime state — a plugin does not ship it. See
-  [Team Knowledge](../../docs/harness-engineering/07-team-knowledge.md).
+  [Team Knowledge](07-team-knowledge.md).
 - **Scopes.** A scope has two parts. Its **identity** is one file you ship under
   `scopes/aidlc-<name>.md`. Its **membership** — which stages run under it — is
   additive, declared two ways:
@@ -210,7 +208,7 @@ scopes, method/rules, or knowledge — one rule each:
     into one specific core stage's membership.
 
   Membership is additive-only — a stage can gain a scope from a plugin but never
-  lose one. See [Scopes](../../docs/harness-engineering/04-scopes.md).
+  lose one. See [Scopes](04-scopes.md).
 
 ## 5. Distribution + install
 
@@ -258,8 +256,9 @@ Trust is **host-native** — you don't build anything:
 
 > **Concrete examples** — `plugin.json`, `marketplace.json`,
 > `managed-settings.json` (the org trust config), `aidlc.lock.json` — are in
-> [`examples/test-pro/`](examples/test-pro/). See also the
-> [vision doc §5](20-plugin-system-vision.md) for the full platform-team story.
+> [`examples/test-pro/`](../reference/examples/test-pro/). See also
+> [Plugin Mechanism §8](../reference/18-plugin-mechanism.md) for the full
+> platform-team worked example.
 
 ## Rules of the road
 
@@ -278,13 +277,9 @@ Trust is **host-native** — you don't build anything:
 
 ## See also
 
-- [Plugin Mechanism](18-plugin-mechanism.md) — the normative
-  design (the manifest, composition model, the contribution seam, invariants).
-- [Plugin Composition Timing](19-plugin-composition-timing.md)
-  — why install-time, with evidence.
-- [Plugin System Vision](20-plugin-system-vision.md) — the
-  end-to-end picture + worked per-host example.
-- [Implementation Plan](21-plugin-implementation-plan.md) — the
-  sequenced work to build it.
-- [Anatomy of a Stage](../../docs/harness-engineering/01-anatomy-of-a-stage.md), [Scopes](../../docs/harness-engineering/04-scopes.md),
-  [Sensors](../../docs/harness-engineering/06-sensors.md) — the building blocks a plugin composes.
+- [Plugin Mechanism](../reference/18-plugin-mechanism.md) — the normative
+  design: manifest, composition model, the contribution seam, the install-time
+  rationale, the hybrid distribution model, multi-tenant guards, and as-built
+  status (all consolidated in this one chapter).
+- [Anatomy of a Stage](01-anatomy-of-a-stage.md), [Scopes](04-scopes.md),
+  [Sensors](06-sensors.md) — the building blocks a plugin composes.

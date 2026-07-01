@@ -15,7 +15,7 @@ export interface StageFrontmatter {
   // number — authored display order, `<phase-prefix>.<index>` (e.g. "2.7", "4.50").
   // Optional at the schema layer (shape-checked when present). Display/ordering
   // only; slug is identity. A plugin authors its own numbers without renumbering
-  // core (plugin mechanism — see plugins/docs/18-plugin-mechanism.md §2).
+  // core (plugin mechanism — see docs/reference/18-plugin-mechanism.md §2).
   number?: string;
   // name — authored human-readable display name. Optional; shape-checked (string)
   // when present.

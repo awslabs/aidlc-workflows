@@ -2,7 +2,7 @@
 
 > A first-party **AIDLC plugin**: comprehensive, traceable test coverage layered
 > onto the AI-DLC workflow. Reference implementation of the plugin mechanism —
-> copy its shape for your own plugin. Design: [`plugins/docs/18-plugin-mechanism.md`](../docs/18-plugin-mechanism.md).
+> copy its shape for your own plugin. Design: [`docs/reference/18-plugin-mechanism.md`](../../docs/reference/18-plugin-mechanism.md).
 
 ## 1. What it does
 
@@ -24,7 +24,7 @@ It reuses the framework's `aidlc-quality-agent` as the test lead — no new agen
 
 test-pro is emitted by the packager as a real host plugin per harness. Install it
 the way each host installs plugins (the hybrid model — see
-[`plugins/docs/20-plugin-system-vision.md`](../docs/20-plugin-system-vision.md)):
+[`docs/reference/18-plugin-mechanism.md`](../../docs/reference/18-plugin-mechanism.md)):
 
 **Author / build** (from the repo):
 ```bash
@@ -150,6 +150,6 @@ bun test plugins/test-pro/tests/plugin.test.ts
 `tests/integration/t188-plugin-compose.test.ts`.)
 
 ## See also
-- [Plugin Mechanism](../docs/18-plugin-mechanism.md) — the normative design
-- [Authoring a Plugin](../docs/10-authoring-a-plugin.md) — the author guide
-- [Plugin System Vision](../docs/20-plugin-system-vision.md) — hybrid distribution + install
+- [Plugin Mechanism](../../docs/reference/18-plugin-mechanism.md) — the normative design
+- [Authoring a Plugin](../../docs/harness-engineering/10-authoring-a-plugin.md) — the author guide
+- [Plugin Mechanism §8](../../docs/reference/18-plugin-mechanism.md) — hybrid distribution + install
