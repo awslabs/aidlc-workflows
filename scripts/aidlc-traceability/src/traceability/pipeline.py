@@ -213,7 +213,7 @@ def run_pipeline(
             # Stage 3d: Components → Code
             if components and code_artifacts:
                 console.print(f"  [bold cyan]Stage 3d:[/] Mapping {len(components)} components to {len(code_artifacts)} code files...")
-                agent_cc = create_component_code_agent(profile_name=aws_profile, region=aws_region)
+                agent_cc = create_component_code_agent(project_root, profile_name=aws_profile, region=aws_region)
                 cc_rels, cc_insights = run_component_code_analysis(agent_cc, components, code_artifacts)
                 all_relationships.extend(cc_rels)
                 ai_insights.extend(cc_insights)

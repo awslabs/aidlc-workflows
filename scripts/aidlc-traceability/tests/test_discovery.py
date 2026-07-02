@@ -108,3 +108,41 @@ class TestDiscoverSourceCode:
         (src / "Component.tsx").write_text("")
         files = discover_source_code(tmp_path)
         assert len(files) == 3
+
+    def test_skips_symlink_to_outside_file(self, tmp_path: Path):
+        """Finding 3 (CWE-59): a symlink in src/ pointing at a host file
+        outside the project must not be followed and read."""
+        project = tmp_path / "project"
+        src = project / "src"
+        src.mkdir(parents=True)
+        (src / "real.py").write_text("# real code\n")
+
+        # Sensitive file outside the project root
+        secret = tmp_path / "secret.py"
+        secret.write_text("SECRET = 'do-not-read'\n")
+
+        link = src / "leak.py"
+        link.symlink_to(secret)
+
+        files = discover_source_code(project)
+        names = [f.name for f in files]
+        assert "real.py" in names
+        assert "leak.py" not in names
+        assert secret not in [f.resolve() for f in files]
+
+    def test_skips_symlinked_directory(self, tmp_path: Path):
+        """A symlinked directory under src/ must not be traversed into."""
+        project = tmp_path / "project"
+        src = project / "src"
+        src.mkdir(parents=True)
+        (src / "real.py").write_text("")
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "leak.py").write_text("SECRET = 1\n")
+
+        (src / "linkdir").symlink_to(outside, target_is_directory=True)
+
+        files = discover_source_code(project)
+        resolved = [f.resolve() for f in files]
+        assert (outside / "leak.py").resolve() not in resolved

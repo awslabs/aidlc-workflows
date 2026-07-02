@@ -62,25 +62,59 @@ def list_artifact_files(directory: str) -> str:
     return json.dumps(files, indent=2)
 
 
-@tool
-def read_source_code_file(file_path: str, max_lines: int = 200) -> str:
-    """Read the contents of a source code file.
+def _resolve_within_project(project_root: Path, file_path: str) -> Path:
+    """Resolve a source path within the project root, preventing traversal.
 
-    Args:
-        file_path: Path to the source code file to read.
-        max_lines: Maximum number of lines to return (default 200).
+    Accepts absolute paths or paths relative to the project root. Strips an
+    optional "CODE:" artifact-ID prefix. Rejects any path (including symlink
+    targets) that resolves outside the project boundary.
     """
-    p = Path(file_path)
-    if not p.exists():
-        return f"Error: File not found: {file_path}"
-    try:
-        content = p.read_text(encoding="utf-8", errors="ignore")
-        lines = content.split("\n")
-        if len(lines) > max_lines:
-            return "\n".join(lines[:max_lines]) + f"\n\n... ({len(lines) - max_lines} more lines truncated)"
-        return content
-    except Exception as e:
-        return f"Error reading file: {e}"
+    root = project_root.resolve()
+    raw = file_path[len("CODE:"):] if file_path.startswith("CODE:") else file_path
+    candidate = Path(raw)
+    combined = candidate if candidate.is_absolute() else (root / candidate)
+    resolved = combined.resolve()
+    if resolved != root and root not in resolved.parents:
+        raise ValueError(f"Path outside project root denied: {file_path}")
+    return resolved
+
+
+def make_source_code_reader(project_root: Path):
+    """Create a source-code reading tool bound to a specific project root.
+
+    All file access is confined to ``project_root``; requests that resolve
+    outside the boundary (via traversal or symlinks) are rejected. Binding the
+    root in a closure prevents the AI agent from being directed to read
+    arbitrary host files via prompt injection in artifact content.
+    """
+    root = project_root.resolve()
+
+    @tool
+    def read_source_code_file(file_path: str, max_lines: int = 200) -> str:
+        """Read the contents of a source code file within the project.
+
+        Args:
+            file_path: Path to the source code file, relative to the project root.
+            max_lines: Maximum number of lines to return (default 200).
+        """
+        try:
+            p = _resolve_within_project(root, file_path)
+        except ValueError as e:
+            return f"Error: {e}"
+        if not p.exists():
+            return f"Error: File not found: {file_path}"
+        if not p.is_file():
+            return f"Error: Not a file: {file_path}"
+        try:
+            content = p.read_text(encoding="utf-8", errors="ignore")
+            lines = content.split("\n")
+            if len(lines) > max_lines:
+                return "\n".join(lines[:max_lines]) + f"\n\n... ({len(lines) - max_lines} more lines truncated)"
+            return content
+        except Exception as e:
+            return f"Error reading file: {e}"
+
+    return read_source_code_file
 
 
 def create_req_story_agent(profile_name: str | None = None, region: str = "us-east-1") -> Agent:
@@ -156,8 +190,17 @@ Rules:
     return Agent(model=model, tools=[], system_prompt=system_prompt)
 
 
-def create_component_code_agent(profile_name: str | None = None, region: str = "us-east-1") -> Agent:
-    """Create an agent focused on mapping components to code files (can read actual code)."""
+def create_component_code_agent(
+    project_root: Path,
+    profile_name: str | None = None,
+    region: str = "us-east-1",
+) -> Agent:
+    """Create an agent focused on mapping components to code files (can read actual code).
+
+    The agent's file-reading tool is confined to ``project_root`` so that
+    prompt injection in artifact content cannot direct it to read host files
+    outside the project boundary.
+    """
     model = create_bedrock_model(profile_name, region)
 
     system_prompt = """You are a component-to-code traceability specialist. Your ONLY job is to map logical components to the source code files that implement them.
@@ -181,7 +224,7 @@ Rules:
 
     return Agent(
         model=model,
-        tools=[read_source_code_file],
+        tools=[make_source_code_reader(project_root)],
         system_prompt=system_prompt,
     )
 

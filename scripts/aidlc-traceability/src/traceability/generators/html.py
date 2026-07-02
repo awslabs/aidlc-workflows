@@ -379,7 +379,7 @@ def generate_html(report: TraceabilityReport, G: nx.DiGraph) -> str:
 
 <script>
 // Artifact data
-const artifacts = """ + json.dumps(artifact_data, indent=2) + """;
+const artifacts = """ + json.dumps(artifact_data, indent=2).replace("</", "<\\/") + """;
 
 let currentArtifact = null;
 

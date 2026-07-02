@@ -101,6 +101,34 @@ class TestGenerateHtml:
         # The artifact title should be escaped (not rendered as raw HTML)
         assert '&lt;script&gt;alert("xss")&lt;/script&gt;' in html
 
+    def test_script_block_no_breakout(self):
+        """Finding 1 (CWE-79): a title containing </script> must not break out
+        of the embedded JSON <script> block."""
+        from traceability.models import Artifact, ArtifactType, TraceabilityReport, CoverageMetrics
+        arts = [
+            Artifact(
+                id="REQ-XSS",
+                title='</script><script>alert(1)</script>',
+                artifact_type=ArtifactType.REQUIREMENT,
+                description='foo </SCRIPT> bar',
+            )
+        ]
+        report = TraceabilityReport(
+            project_name="Proj",
+            artifacts=arts,
+            metrics=CoverageMetrics(total_requirements=1),
+        )
+        G, _ = build_graph(arts, [])
+        html = generate_html(report, G)
+
+        # The raw closing-tag sequences from the malicious title must never
+        # appear verbatim in the output; they must be neutralized to <\/ so the
+        # browser cannot terminate the <script> block early.
+        assert "</script><script>alert(1)" not in html
+        assert "</SCRIPT>" not in html
+        assert "<\\/script><script>alert(1)<\\/script>" in html
+        assert "foo <\\/SCRIPT> bar" in html
+
     def test_empty_report(self):
         from traceability.models import TraceabilityReport
         report = TraceabilityReport()

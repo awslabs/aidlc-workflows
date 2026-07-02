@@ -90,12 +90,19 @@ def discover_source_code(project_root: Path) -> list[Path]:
     # File extensions to include
     code_extensions = {".py", ".js", ".ts", ".tsx", ".jsx"}
 
+    root_resolved = project_root.resolve()
+
     for dir_name in source_dirs:
         src_dir = project_root / dir_name
         if not src_dir.is_dir():
             continue
 
         for code_file in src_dir.rglob("*"):
+            # Skip symlinks: a symlink under src/ could point at a sensitive
+            # host file outside the project (CWE-59). Do not follow it.
+            if code_file.is_symlink():
+                continue
+
             # Skip if not a file
             if not code_file.is_file():
                 continue
@@ -106,6 +113,13 @@ def discover_source_code(project_root: Path) -> list[Path]:
 
             # Skip if in excluded directory
             if any(excl in code_file.parts for excl in exclude_patterns):
+                continue
+
+            # Defense in depth: ensure the resolved path stays within the
+            # project root before reading it (guards against symlinked
+            # parent directories that rglob may have traversed).
+            resolved = code_file.resolve()
+            if resolved != root_resolved and root_resolved not in resolved.parents:
                 continue
 
             # Skip test files (but keep them if they're in tests/ for dedicated test parsing)
