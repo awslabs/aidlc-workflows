@@ -77,6 +77,20 @@ export type HarnessManifest = {
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */
   harnessFiles: FileMap[];
   /**
+   * Per-file YAML frontmatter lines appended (before the closing `---`) to
+   * core-projected .md files - the seam for a harness-NATIVE frontmatter
+   * field that must not ship to other harnesses, declared as manifest DATA
+   * instead of forking the whole core file. `file` is the harness-relative
+   * output path (e.g. "agents/aidlc-composer-agent.md"). The packager errors
+   * on an unmatched file (typo guard), a missing frontmatter block, and a
+   * key the core file already declares (so core later adding the key is a
+   * loud conflict, never a silent double). Example: the Kiro IDE resolves a
+   * delegated subagent's tool grants from the agent .md frontmatter
+   * (`tools: ["read", "write", "shell"]`), not from the CLI's agent-v1
+   * JSON - without the injected line an IDE delegate runs toolless.
+   */
+  frontmatterAdditions?: Array<{ file: string; lines: string[] }>;
+  /**
    * How to render this harness's onboarding doc from core/templates/onboarding.md.
    * null when the harness generates it elsewhere (codex, via emit) or ships none.
    */

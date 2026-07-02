@@ -9,6 +9,7 @@ description: >
   Leads Feasibility, Application Design, Units Generation, Functional Design, NFR Requirements, and NFR Design stages.
 disallowedTools: Task
 modelOverride: opus
+tools: ["read", "write", "shell"]
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

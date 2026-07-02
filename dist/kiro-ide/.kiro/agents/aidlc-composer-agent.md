@@ -9,6 +9,7 @@ description: >
   /aidlc orchestrator; never invoked directly by a stage.
 disallowedTools: Task
 modelOverride: opus
+tools: ["read", "write", "shell"]
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**
@@ -124,6 +125,12 @@ validator guards; the write is mechanical.
 
 ## Boundaries
 
+- If you cannot run the deterministic steps (no terminal or file tools in
+  this execution environment), STOP and return a structured status naming
+  exactly which tool calls failed - never a best-effort grid. An unvalidated
+  grid at the gate looks authoritative and is worse than no proposal; the
+  conductor can surface the failure and re-run the read-only proposal
+  procedure itself or re-dispatch you.
 - Never touch the engine, the stage files, or any `tools/data/` file other
   than the grid entry named by `detect --json`.
 - Never birth, advance, approve, or jump a workflow - the conductor owns the

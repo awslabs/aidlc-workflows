@@ -45,7 +45,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import type { HarnessManifest } from "./manifest-types.ts";
@@ -101,6 +101,41 @@ function transform(
     return Buffer.from(s, "utf-8");
   }
   return content;
+}
+
+// Append manifest-declared frontmatter lines to a projected .md, just before
+// the closing `---` of its YAML block (manifest-types.ts frontmatterAdditions).
+// Hard errors, never silent: the file must open with a frontmatter block, and
+// no added line's key may already exist in it - if core later grows the same
+// key, the build fails loudly instead of shipping a double.
+function applyFrontmatterAdditions(
+  content: string,
+  lines: string[],
+  file: string,
+): string {
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n(---\r?\n)/);
+  if (!m) {
+    throw new Error(
+      `frontmatterAdditions: ${file} has no leading frontmatter block to extend.`,
+    );
+  }
+  const fm = m[1];
+  for (const line of lines) {
+    const key = line.split(":")[0]?.trim();
+    if (!key || !/^[A-Za-z_][\w-]*$/.test(key)) {
+      throw new Error(
+        `frontmatterAdditions: line "${line}" for ${file} does not start with a YAML key.`,
+      );
+    }
+    if (new RegExp(`^${key}:`, "m").test(fm)) {
+      throw new Error(
+        `frontmatterAdditions: ${file} already declares "${key}:" in core - ` +
+          `resolve the collision instead of shipping a duplicate key.`,
+      );
+    }
+  }
+  const insertAt = m[0].length - m[2].length;
+  return `${content.slice(0, insertAt)}${lines.join("\n")}\n${content.slice(insertAt)}`;
 }
 
 function* walk(dir: string): Generator<string> {
@@ -259,7 +294,14 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   // returned for checkHarness's byte-diff of files OUTSIDE <harnessDir>.
   const outsideHarness: string[] = [];
 
-  // 1. Copy core dirs with token substitution + rules rename.
+  // 1. Copy core dirs with token substitution + rules rename. Manifest-declared
+  //    frontmatter additions (harness-native fields, e.g. the Kiro IDE's
+  //    subagent `tools:` grant) are appended during this projection; every
+  //    declared file must be hit exactly once (typo/rename guard).
+  const fmAdditions = new Map(
+    (m.frontmatterAdditions ?? []).map(({ file, lines }) => [file, lines]),
+  );
+  const fmApplied = new Set<string>();
   for (const { src, dst } of m.coreDirs) {
     const srcDir = join(CORE_ROOT, src);
     if (!existsSync(srcDir)) continue;
@@ -268,8 +310,27 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
       const rel = relative(srcDir, file);
       const outPath = join(treeRoot, finalDst, rel);
       mkdirSync(dirname(outPath), { recursive: true });
-      writeFileSync(outPath, transform(file, readFileSync(file), harnessDir, m.rulesRename));
+      let out = transform(file, readFileSync(file), harnessDir, m.rulesRename);
+      // Manifest keys are POSIX; normalize the platform separator so the
+      // lookup works on Windows too.
+      const harnessRel = join(finalDst, rel).split(sep).join("/");
+      const fmLines = fmAdditions.get(harnessRel);
+      if (fmLines) {
+        out = Buffer.from(
+          applyFrontmatterAdditions(out.toString("utf-8"), fmLines, harnessRel),
+          "utf-8",
+        );
+        fmApplied.add(harnessRel);
+      }
+      writeFileSync(outPath, out);
     }
+  }
+  const fmMissed = [...fmAdditions.keys()].filter((f) => !fmApplied.has(f));
+  if (fmMissed.length > 0) {
+    throw new Error(
+      `[${m.name}] frontmatterAdditions name file(s) the core projection never produced: ` +
+        `${fmMissed.join(", ")} - fix the path(s) in the manifest.`,
+    );
   }
 
   // 2. Copy authored harness surfaces (token substitution on .md). projectRoot

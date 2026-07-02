@@ -88,6 +88,50 @@ describe("t148 dist/kiro file structure", () => {
     }
   });
 
+  test("IDE-native tools: frontmatter grant on delegation targets - kiro-ide ONLY", () => {
+    // The Kiro IDE resolves a delegated subagent's tools from the agent .md
+    // frontmatter, not from the agent-v1 JSON the CLI reads (field-proven:
+    // a dispatched composer without the grant ran toolless). The kiro-ide
+    // manifest injects the grant during projection; it must land on every
+    // delegation target there and must NOT leak into any other harness's
+    // agents (on Claude a `tools:` frontmatter field would RESTRICT the
+    // agent to non-Claude tool names, breaking it).
+    const IDE_AGENTS = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "agents");
+    const fmToolsOf = (p: string): string | undefined =>
+      /^tools:\s*(.+)$/m.exec(
+        /^---\r?\n([\s\S]*?)\r?\n---/.exec(readFileSync(p, "utf-8"))?.[1] ?? "",
+      )?.[1];
+    // The delegation-target roster IS the set of hand-authored agent JSONs
+    // (minus the conductor aidlc.json) - derive it from disk so a future
+    // delegate added without a grant reds here instead of shipping toolless
+    // (the original field bug). Every delegate gets read+write+shell:
+    // builders author artifacts and reviewers append a `## Review` section
+    // to the primary artifact (stage protocol 12a - the same fs_write their
+    // CLI JSONs grant). Every NON-delegate kiro-ide agent must have NO grant
+    // (catches the injection landing on the wrong file).
+    const delegates = readdirSync(IDE_AGENTS)
+      .filter((n) => n.endsWith("-agent.json"))
+      .map((n) => n.replace(/\.json$/, ".md"));
+    expect(delegates.length).toBeGreaterThanOrEqual(5);
+    for (const f of readdirSync(IDE_AGENTS).filter((n) => n.endsWith(".md"))) {
+      if (delegates.includes(f)) {
+        expect(fmToolsOf(join(IDE_AGENTS, f))).toBe(`["read", "write", "shell"]`);
+      } else {
+        expect(fmToolsOf(join(IDE_AGENTS, f))).toBeUndefined();
+      }
+    }
+    // Leak guard: the grant is IDE-native and must not ship anywhere else.
+    for (const tree of [
+      join(REPO_ROOT, "dist", "claude", ".claude", "agents"),
+      join(K, "agents"), // dist/kiro (CLI)
+      join(REPO_ROOT, "dist", "codex", ".codex", "agents"),
+    ]) {
+      for (const f of readdirSync(tree).filter((n) => n.endsWith(".md"))) {
+        expect(fmToolsOf(join(tree, f))).toBeUndefined();
+      }
+    }
+  });
+
   test("conductor hooks all route through the adapter", () => {
     const a = readJson(join(K, "agents", "aidlc.json"));
     const hooks = a.hooks as Record<string, Array<{ command: string; matcher?: string }>>;

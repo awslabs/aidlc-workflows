@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 413,
+    "total": 414,
     "enumeratedByClass": {
-      "function": 198,
+      "function": 199,
       "audit": 70,
       "scope": 9,
       "stage": 32,
@@ -1538,6 +1538,13 @@
     {
       "unitClass": "function",
       "unitId": "function:isValidRepoName",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:keywordCollisions",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

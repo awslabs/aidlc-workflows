@@ -55,6 +55,13 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `harnessFiles: FileMap[]` — authored surfaces copied verbatim from
   `harness/<name>/<src>` into the dist (`.md` get token substitution).
   `projectRoot: true` lands a file beside the harness dir (e.g. `AGENTS.md`).
+- `frontmatterAdditions` (optional) - per-file YAML lines appended to a
+  core-projected `.md`'s frontmatter during projection, for a harness-NATIVE
+  field that must not ship to other harnesses (kiro-ide injects
+  `tools: ["read", "write", "shell"]` into its delegation-target agent files -
+  the IDE reads subagent tool grants from the `.md` frontmatter). Declared as
+  manifest data so core stays single-source; the packager errors on a typo'd
+  path, a missing frontmatter block, or a key core already declares.
 - `rulesRename` — the renamed rules dir (`"steering"` | `"aidlc-rules"` | `null`).
   The packager applies it to the copied dir AND to in-prose `<harnessDir>/rules/`
   references AND to the compiled stage-graph rule paths (it sets

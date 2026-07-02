@@ -89,7 +89,7 @@ You will see a "Run Command Hook" line in chat each time one fires.
 | Hook registration | `settings.json` `hooks` block | `.kiro/hooks/*.kiro.hook` files (shown in the Agent Hooks panel) |
 | Gates & questions | `AskUserQuestion` widget | Numbered prose options (reply with a number); the questions FILE with `[Answer]:` tags stays the source of truth |
 | Statusline | Current stage + model + context % | Not available — use `/aidlc --status` and the progress line at each gate |
-| Subagent stages (2.1, 3.5) | `Task` tool | Kiro `subagent` tool → `aidlc-developer-agent` / `aidlc-architect-agent` configs |
+| Subagent stages (2.1, 3.5) | `Task` tool | Kiro `subagent` tool → `aidlc-developer-agent` / `aidlc-architect-agent`; the IDE reads a delegate's tool grants from the agent `.md` frontmatter (`tools:`), injected at packaging - the agent-v1 JSONs are CLI-only |
 | Construction swarm | Parallel `Task` floor, optional ultracode Workflow | Subagent fan-out only; `AIDLC_USE_SWARM=1` is announced as a no-op |
 | Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` / `SESSION_ENDED` (no pre-compaction event) |
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped |
@@ -115,10 +115,16 @@ Kiro IDE surfaces live in `harness/kiro-ide/`: the orchestrator skill
 `.kiro.hook` files (`hooks/`), `settings/cli.json`, and `AGENTS.md` — edit
 those (or `core/`), never the generated `dist/kiro-ide`.
 
-The IDE harness differs from the CLI harness (`harness/kiro/`) in exactly two
-ways: it ships `.kiro.hook` files (the CLI relies on the agent-JSON `hooks`
-block, which the IDE ignores), and its `aidlc.json` omits that dead `hooks`
-block. See [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).
+The IDE harness differs from the CLI harness (`harness/kiro/`) in three ways:
+it ships `.kiro.hook` files (the CLI relies on the agent-JSON `hooks` block,
+which the IDE ignores); its `aidlc.json` omits that dead `hooks` block; and
+its manifest injects a `tools:` frontmatter grant into the delegation-target
+agent `.md` files (`frontmatterAdditions`), because the IDE resolves a
+delegated subagent's tools from the `.md` frontmatter rather than the agent-v1
+JSON - without the grant an IDE delegate runs toolless. Note the frontmatter
+grant is unscoped (the IDE has no `allowedCommands`/`allowedPaths` equivalent
+there), wider than the CLI JSON sandbox.
+See [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).
 
 ## Next steps
 

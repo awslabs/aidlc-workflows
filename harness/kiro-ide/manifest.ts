@@ -3,6 +3,12 @@
 // Identical to the Kiro CLI harness (harness/kiro/) EXCEPT:
 //   - Ships .kiro.hook files for hook registration (IDE ignores agent JSON hooks)
 //   - The aidlc.json agent config omits the `hooks` field (dead weight in IDE)
+//   - Injects a `tools:` frontmatter grant into the delegation-target agent
+//     .md files (frontmatterAdditions below) - the IDE resolves a delegated
+//     subagent's tools from the agent .md frontmatter, not from the agent-v1
+//     JSON the CLI reads, so without the injected line an IDE delegate runs
+//     toolless (field-proven: the dispatched composer reported "terminal tool
+//     not available" until the grant was added).
 //
 // The CLI harness relies on agent JSON hooks (the `hooks` object inside
 // aidlc.json); the IDE harness relies on .kiro.hook files (the only mechanism
@@ -61,6 +67,25 @@ const manifest: HarnessManifest = {
     // block) - both spike-proven on the IDE; the latch lines describe what is wired,
     // not a platform limit.)
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
+  ],
+
+  // IDE-native tool grants for the five delegation targets (the agents the
+  // conductor dispatches via the `subagent` tool: composer, the two
+  // subagent-mode stage workers, and the two reviewers). The IDE reads these
+  // from the .md frontmatter; the agent-v1 JSONs above are CLI-only. Kiro IDE
+  // frontmatter tool names: "read" / "write" / "shell". NOTE the IDE grant is
+  // UNSCOPED (no allowedCommands/allowedPaths equivalent) - wider than the
+  // CLI JSON sandbox; the persona Boundaries prose and the conductor's gates
+  // remain the behavioral constraint. Reviewers need "write" too: the stage
+  // protocol has them append a `## Review` section to the primary artifact
+  // (the same grant their CLI JSONs carry). Never grant a delegation tool
+  // here - delegates must not nest.
+  frontmatterAdditions: [
+    { file: "agents/aidlc-composer-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
+    { file: "agents/aidlc-developer-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
+    { file: "agents/aidlc-architect-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
+    { file: "agents/aidlc-product-lead-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
+    { file: "agents/aidlc-architecture-reviewer-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
   ],
 
   onboarding: { dst: "AGENTS.md", projectRoot: true, fills: onboardingFills },
