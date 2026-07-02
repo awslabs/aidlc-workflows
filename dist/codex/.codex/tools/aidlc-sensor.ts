@@ -32,7 +32,7 @@
 
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve as pathResolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -41,10 +41,20 @@ import {
 	loadGraph,
 	loadSensors,
 	memoryTemplatesDir,
+	producersOf,
 	type SensorFile,
 	templateEligibleArtifacts,
 } from "./aidlc-graph.ts";
-import { errorMessage, isoTimestamp, isPlainObject, resolveProjectDir, sensorsDir, withAuditLock } from "./aidlc-lib.ts";
+import {
+	codekbDir,
+	errorMessage,
+	isoTimestamp,
+	isPlainObject,
+	recordDir,
+	resolveProjectDir,
+	sensorsDir,
+	withAuditLock,
+} from "./aidlc-lib.ts";
 
 // --- Constants ---
 
@@ -190,6 +200,79 @@ function handleDescribe(args: string[]): void {
 	console.log(`path: ${sensor.path}`);
 }
 
+// --- upstream-coverage consume filtering ---
+//
+// Thread only consumes whose artifact EXISTS on disk. A consume whose
+// producing stage was skipped by the scope (the lean scopes deliberately
+// skip producers — the scope author owns the upstream) or runtime-skipped
+// (reverse-engineering on greenfield, conditional_on consumes) never
+// produced its file; demanding the output prose reference it is a
+// guaranteed false SENSOR_FAILED on every run of that stage in that scope.
+//
+// Existence resolves under the PRODUCER's directory (the artifact
+// vocabulary's 1:1 producer rule), mirroring aidlc-state.ts's
+// producesDirsForStage / aidlc-orchestrate.ts's resolveArtifactPath seams:
+//   - codekb producers (reverse-engineering): glob every repo dir under the
+//     space-level codekb root.
+//   - per-unit Construction producers (for_each: unit-of-work): the unit is
+//     unknown here, so glob every <record>/construction/<unit>/<slug>/.
+//   - everything else: <record>/<phase>/<slug>/<name>.md.
+//
+// Fail-open: when no intent record resolves (recordDir null — a bare test
+// fixture or a pre-birth shell), the workspace shape is unknowable, so the
+// full list threads unchanged. An orphan consume (no producer anywhere in
+// the graph) also threads unchanged — that is a graph defect the doctor
+// surfaces; hiding it here would mask it.
+
+const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set([
+	"reverse-engineering",
+]);
+
+function artifactDirsForProducer(
+	pd: string,
+	producer: { slug: string; phase: string; for_each?: string },
+): string[] {
+	if (KNOWN_CODEKB_STAGES.has(producer.slug)) {
+		const codekbRoot = join(codekbDir(pd, "_"), "..");
+		if (!existsSync(codekbRoot)) return [];
+		const dirs: string[] = [];
+		for (const repo of readdirSync(codekbRoot)) {
+			const d = join(codekbRoot, repo);
+			try {
+				if (statSync(d).isDirectory()) dirs.push(d);
+			} catch {
+				/* unreadable entry — skip */
+			}
+		}
+		return dirs;
+	}
+	const rec = recordDir(pd);
+	if (rec === null) return [];
+	if (producer.for_each === "unit-of-work") {
+		const ctorRoot = join(rec, "construction");
+		if (!existsSync(ctorRoot)) return [];
+		const dirs: string[] = [];
+		for (const unit of readdirSync(ctorRoot)) {
+			const d = join(ctorRoot, unit, producer.slug);
+			if (existsSync(d)) dirs.push(d);
+		}
+		return dirs;
+	}
+	return [join(rec, producer.phase, producer.slug)];
+}
+
+function presentConsumes(pd: string, slugs: string[]): string[] {
+	if (recordDir(pd) === null) return slugs;
+	return slugs.filter((name) => {
+		const producer = producersOf(name)[0];
+		if (!producer) return true;
+		for (const dir of artifactDirsForProducer(pd, producer)) {
+			if (existsSync(join(dir, `${name}.md`))) return true;
+		}
+		return false;
+	});
+}
+
 // --- Subcommand: fire ---
 //
 // Step 1 — validate + resolve all inputs + generate Fire id (no lock).
@@ -262,10 +345,19 @@ function handleFire(args: string[]): void {
 	// --- 1e. Generate Fire id (8 hex chars) ---
 	const fireId = generateFireId();
 
+	// Resolve the project dir once — used by the consume filter in step 2 and
+	// the detail-file path in step 3.
+	const projectDir = resolveProjectDir();
+
 	// --- 2. Compute extra args for the per-sensor script ---
 	// Markdown sensors take --output-path; code sensors take --file-path.
 	// upstream-coverage additionally takes --consumes "art1,art2,..." sourced
-	// from the GraphStage.consumes[].artifact field.
+	// from the GraphStage.consumes[].artifact field, filtered to artifacts
+	// that exist on disk: a consume whose producing stage was skipped by the
+	// scope (or runtime-skipped, e.g. reverse-engineering on greenfield)
+	// never produced its file, and demanding the output prose reference it
+	// would be a guaranteed false SENSOR_FAILED on every run of that stage
+	// in that scope.
 	const isCodeSensor = id === "linter" || id === "type-check";
 	const scriptArgs: string[] = ["--stage", stageSlug];
 	if (isCodeSensor) {
@@ -277,12 +369,14 @@ function handleFire(args: string[]): void {
 		const consumeSlugs = (stageNode.consumes ?? [])
 			.map((c) => c.artifact)
 			.filter((a) => typeof a === "string" && a.length > 0);
-		scriptArgs.push("--consumes", consumeSlugs.join(","));
+		scriptArgs.push(
+			"--consumes",
+			presentConsumes(projectDir, consumeSlugs).join(","),
+		);
 	}
 
 	// --- 3. Pre-compute detail-file path (used only on FAILED) ---
 	// aidlc-docs/.aidlc-sensors/<stage-slug>/<sensor-id>-<fire-id>.md
-	const projectDir = resolveProjectDir();
 
 	// required-sections additionally takes the TPL template seam: the
 	// templates source-of-truth dir + the stage's template-eligible artifact

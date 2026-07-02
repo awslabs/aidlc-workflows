@@ -350,7 +350,7 @@ const GOLDEN: GoldenRow[] = [
   { scope: "bugfix", fingerprint: "reverse-engineering", phase: "inception", skip: "intent-capture" },
   { scope: "refactor", fingerprint: "reverse-engineering", phase: "inception", skip: "market-research" },
   { scope: "infra", fingerprint: "practices-discovery", phase: "inception", skip: "reverse-engineering" },
-  { scope: "security-patch", fingerprint: "reverse-engineering", phase: "inception", skip: "requirements-analysis" },
+  { scope: "security-patch", fingerprint: "reverse-engineering", phase: "inception", skip: "user-stories" },
   { scope: "workshop", fingerprint: "reverse-engineering", phase: "inception", skip: "intent-capture" },
 ];
 

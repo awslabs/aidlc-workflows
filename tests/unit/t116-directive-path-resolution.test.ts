@@ -78,7 +78,8 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
@@ -131,6 +132,7 @@ interface RunStageDirective {
   kind: string;
   stage: string;
   consumes: string[];
+  consumes_absent?: Array<{ path: string; expected: boolean }>;
   produces: string[];
 }
 
@@ -144,10 +146,15 @@ interface RunStageDirective {
  * sed_i). The bare `next` lands on Branch 10 and emits the run-stage for the
  * in-flight stage with produces/consumes RESOLVED.
  */
-function emitFor(fixture: string, slug: string): RunStageDirective {
+function emitFor(
+  fixture: string,
+  slug: string,
+  seedArtifacts?: (proj: string) => void,
+): RunStageDirective {
   const proj = createTestProject();
   tempDirs.push(proj);
   seedStateFile(proj, join(FIXTURES_DIR, fixture));
+  seedArtifacts?.(proj);
   const state = seededStateFile(proj);
   // Pivot Current Stage to the target (matches any current value).
   sedReplaceInFile(
@@ -185,6 +192,16 @@ function emitFor(fixture: string, slug: string): RunStageDirective {
   return dir;
 }
 
+// The union of a directive's PRESENT and ABSENT consume paths. This suite
+// asserts path RESOLUTION (which producer dir a consume is keyed under), which
+// is orthogonal to the presence split: the bare fixtures seed only
+// aidlc-state.md, so every consumed artifact is absent on disk and lands in
+// consumes_absent. Resolution assertions run over the union; the split's own
+// contract (present vs absent membership) is asserted separately below.
+function allConsumePaths(dir: RunStageDirective): string[] {
+  return [...dir.consumes, ...(dir.consumes_absent ?? []).map((e) => e.path)];
+}
+
 // ============================================================================
 // Brownfield application-design — produces resolve under the stage's own dir;
 // the conditional_on:brownfield consumes are PRESENT and keyed on their
@@ -193,7 +210,27 @@ function emitFor(fixture: string, slug: string): RunStageDirective {
 describe("t116 brownfield application-design (migrated from t116-directive-path-resolution.sh, plan 13)", () => {
   let BF: RunStageDirective;
   beforeAll(() => {
-    BF = emitFor("state-brownfield-feature.md", "application-design");
+    // Seed every consumed artifact on disk so the RESOLUTION assertions below
+    // observe all five paths in `consumes`. The presence SPLIT (absent
+    // required → consumes_absent, absent optional → dropped) is asserted by
+    // its own describe block below; this block tests WHERE paths resolve, so
+    // all inputs are made present. The two RE artifacts live in the
+    // space-level codekb keyed by repo name = basename(projectDir) (the
+    // no-recorded-repos default).
+    BF = emitFor("state-brownfield-feature.md", "application-design", (proj) => {
+      const rels = [
+        `${RP}/inception/requirements-analysis/requirements.md`,
+        `${RP}/inception/user-stories/stories.md`,
+        `${RP}/inception/practices-discovery/team-practices.md`,
+        `aidlc/spaces/${DEFAULT_SPACE}/codekb/${basename(proj)}/architecture.md`,
+        `aidlc/spaces/${DEFAULT_SPACE}/codekb/${basename(proj)}/component-inventory.md`,
+      ];
+      for (const rel of rels) {
+        const abs = join(proj, ...rel.split("/"));
+        mkdirSync(dirname(abs), { recursive: true });
+        writeFileSync(abs, "# seeded\n", "utf-8");
+      }
+    });
   });
 
   // .sh test 1: a bare produces name resolves to the canonical non-per-unit path.
@@ -232,29 +269,31 @@ describe("t116 brownfield application-design (migrated from t116-directive-path-
   // record dir and NOT the consuming application-design dir (the isCodekb
   // resolver branch, codekb-determinism placement fix).
   test("4: brownfield consume 'architecture' → space-level codekb/<repo>/architecture.md (codekb-keyed)", () => {
-    const hit = BF.consumes.find(
+    const paths = allConsumePaths(BF);
+    const hit = paths.find(
       (p) => p.startsWith(CODEKB_PREFIX) && p.endsWith("/architecture.md"),
     );
-    expect(hit, `no codekb-resolved architecture.md in ${JSON.stringify(BF.consumes)}`).toBeDefined();
+    expect(hit, `no codekb-resolved architecture.md in ${JSON.stringify(paths)}`).toBeDefined();
     // It must NOT carry the old record-dir RE tail.
-    expect(BF.consumes).not.toContain(`${RP}/inception/reverse-engineering/architecture.md`);
+    expect(paths).not.toContain(`${RP}/inception/reverse-engineering/architecture.md`);
   });
 
   // .sh test 5: the second conditional_on:brownfield consume 'component-inventory'
   // is PRESENT for Brownfield and ALSO resolves under the space-level codekb store.
   test("5: brownfield consume 'component-inventory' → space-level codekb/<repo>/component-inventory.md", () => {
-    const hit = BF.consumes.find(
+    const paths = allConsumePaths(BF);
+    const hit = paths.find(
       (p) => p.startsWith(CODEKB_PREFIX) && p.endsWith("/component-inventory.md"),
     );
-    expect(hit, `no codekb-resolved component-inventory.md in ${JSON.stringify(BF.consumes)}`).toBeDefined();
-    expect(BF.consumes).not.toContain(`${RP}/inception/reverse-engineering/component-inventory.md`);
+    expect(hit, `no codekb-resolved component-inventory.md in ${JSON.stringify(paths)}`).toBeDefined();
+    expect(paths).not.toContain(`${RP}/inception/reverse-engineering/component-inventory.md`);
   });
 
   // .sh test 12: the NON-conditional required consume 'requirements' also resolves
   // under its producer (requirements-analysis), proving producer-keying applies to
   // every consume, not just the conditional ones.
   test("12: consume 'requirements' → requirements-analysis/requirements.md (producer-keyed, not conditional)", () => {
-    expect(BF.consumes).toContain(
+    expect(allConsumePaths(BF)).toContain(
       `${RP}/inception/requirements-analysis/requirements.md`,
     );
   });
@@ -265,7 +304,7 @@ describe("t116 brownfield application-design (migrated from t116-directive-path-
   // than the .sh's single assert_not_contains: assert the invariant over EVERY
   // consume entry, not the raw joined string.
   test("13: no application-design consume resolves under its own dir — each lives under its producer", () => {
-    const selfKeyed = BF.consumes.filter((p) =>
+    const selfKeyed = allConsumePaths(BF).filter((p) =>
       p.startsWith(`${RP}/inception/application-design/`),
     );
     expect(selfKeyed).toEqual([]);
@@ -285,12 +324,12 @@ describe("t116 greenfield application-design — conditional_on drop", () => {
   // .sh test 6: 'architecture' (conditional_on:brownfield) is DROPPED for greenfield.
   // STRONGER: assert NO consume path contains architecture.md (over the array).
   test("6: greenfield drops conditional_on:brownfield consume 'architecture'", () => {
-    expect(GF.consumes.some((p) => p.includes("architecture.md"))).toBe(false);
+    expect(allConsumePaths(GF).some((p) => p.includes("architecture.md"))).toBe(false);
   });
 
   // .sh test 7: 'component-inventory' (conditional_on:brownfield) is DROPPED for greenfield.
   test("7: greenfield drops conditional_on:brownfield consume 'component-inventory'", () => {
-    expect(GF.consumes.some((p) => p.includes("component-inventory.md"))).toBe(
+    expect(allConsumePaths(GF).some((p) => p.includes("component-inventory.md"))).toBe(
       false,
     );
   });
@@ -348,5 +387,80 @@ describe("t116 per-unit {unit-name} injection", () => {
       p.includes("construction/{unit-name}/"),
     );
     expect(perUnit).toEqual([]);
+  });
+});
+
+// ============================================================================
+// consumes presence split — the directive's `consumes` carries only inputs
+// that EXIST on disk; declared-but-missing inputs move to `consumes_absent`
+// with an `expected` annotation (producer off the scope path = true, producer
+// on the path but file missing = false). Paths still carrying the {unit-name}
+// placeholder are exempt from the split (existence unknowable pre-Bolt).
+// ============================================================================
+describe("t116 consumes presence split (consumes_absent)", () => {
+  // application-design (brownfield feature) declares ONE required consume
+  // (requirements) and four optional ones (stories, team-practices, and the
+  // two brownfield-conditional RE artifacts). Seeding team-practices while
+  // leaving the rest unseeded exercises all three split outcomes at once:
+  // present-optional → consumes, absent-required → consumes_absent, and
+  // absent-optional → dropped from the directive entirely.
+  test("14: present optional stays in consumes; absent required lands in consumes_absent; absent optional is dropped", () => {
+    const teamPracticesRel = `${RP}/inception/practices-discovery/team-practices.md`;
+    const reqRel = `${RP}/inception/requirements-analysis/requirements.md`;
+    const dir = emitFor(
+      "state-brownfield-feature.md",
+      "application-design",
+      (proj) => {
+        const abs = join(proj, ...teamPracticesRel.split("/"));
+        mkdirSync(dirname(abs), { recursive: true });
+        writeFileSync(abs, "# Team Practices\n\nseeded\n", "utf-8");
+      },
+    );
+    // The seeded optional input is PRESENT.
+    expect(dir.consumes).toContain(teamPracticesRel);
+    // The unseeded REQUIRED input (requirements) is absent — and its
+    // producer requirements-analysis is EXECUTE for feature scope, so it is
+    // a should-have-existed gap: expected=false. (The optional consumes'
+    // producers — user-stories, practices-discovery, reverse-engineering —
+    // are also all on the feature path, but optional entries never reach
+    // consumes_absent regardless.)
+    const absent = dir.consumes_absent ?? [];
+    expect(absent).toEqual([{ path: reqRel, expected: false }]);
+    // The unseeded OPTIONAL inputs (stories + the two brownfield RE
+    // artifacts) appear in NEITHER array — absent optional means dropped.
+    const everywhere = [...dir.consumes, ...absent.map((e) => e.path)];
+    expect(everywhere.some((p) => p.endsWith("/stories.md"))).toBe(false);
+    expect(everywhere.some((p) => p.endsWith("/architecture.md"))).toBe(false);
+  });
+
+  test("15: with nothing seeded, consumes is empty and consumes_absent carries only the required consume", () => {
+    const dir = emitFor("state-brownfield-feature.md", "application-design");
+    expect(dir.consumes).toEqual([]);
+    expect(dir.consumes_absent).toEqual([
+      {
+        path: `${RP}/inception/requirements-analysis/requirements.md`,
+        expected: false,
+      },
+    ]);
+  });
+
+  // nfr-requirements consumes business-logic-model/business-rules, produced by
+  // the PER-UNIT functional-design — with no Bolt context the resolved consume
+  // paths keep the {unit-name} placeholder, so they must stay in `consumes`
+  // (existence is unknowable), while the resolvable-but-unseeded requirements
+  // consume still splits to consumes_absent.
+  test("16: {unit-name}-placeholder consume paths are exempt from the split (stay in consumes)", () => {
+    const dir = emitFor("state-construction.md", "nfr-requirements");
+    const placeholder = dir.consumes.filter((p) =>
+      p.includes("{unit-name}"),
+    );
+    expect(placeholder.length).toBeGreaterThan(0);
+    const absentPlaceholder = (dir.consumes_absent ?? []).filter((e) =>
+      e.path.includes("{unit-name}"),
+    );
+    expect(absentPlaceholder).toEqual([]);
+    expect((dir.consumes_absent ?? []).map((e) => e.path)).toContain(
+      `${RP}/inception/requirements-analysis/requirements.md`,
+    );
   });
 });

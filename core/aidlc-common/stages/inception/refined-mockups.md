@@ -56,6 +56,8 @@ Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledg
 - Read user stories from `<record>/inception/user-stories/`
 - Read requirements from `<record>/inception/requirements-analysis/`
 
+The workshop scope skips rough-mockups by design (no Ideation phase); when the wireframes and user-flow inputs are absent, design the refined mockups directly from the user stories and requirements — never invent the content of a missing artifact.
+
 ### Step 3: Generate Clarifying Questions
 
 Create `<record>/inception/refined-mockups/refined-mockups-questions.md` with questions:

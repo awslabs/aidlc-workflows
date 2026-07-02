@@ -83,8 +83,10 @@ Load aidlc-aws-platform-agent (lead) persona from `agents/aidlc-aws-platform-age
 Read all prior design artifacts for context:
 - NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
 - Functional design from `<record>/construction/{unit-name}/functional-design/` (if exists)
-- Application design from `<record>/inception/application-design/`
+- Application design from `<record>/inception/application-design/` (if exists)
 - NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
+
+Incremental scopes (infra) skip the application-design and functional-design chain by design. When those inputs are absent, derive the component/service topology from the NFR requirements and, on brownfield, the reverse-engineered code knowledge base at `aidlc/spaces/<active-space>/codekb/<repo>/` — never invent the content of a missing artifact.
 
 ### Step 3: Generate Infrastructure Questions
 

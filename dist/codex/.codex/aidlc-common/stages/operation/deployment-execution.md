@@ -49,9 +49,12 @@ Load aidlc-pipeline-deploy-agent persona from `agents/aidlc-pipeline-deploy-agen
 
 ### Step 2: Load Prior Context
 
-- Read CD pipeline config from `<record>/operation/deployment-pipeline/`
-- Read environment inventory from `<record>/operation/environment-provisioning/`
-- Read rollback runbook
+- Read CD pipeline config and deployment strategy from `<record>/operation/deployment-pipeline/` (if they exist)
+- Read environment inventory from `<record>/operation/environment-provisioning/` (if exists)
+- Read build/test results from `<record>/construction/build-and-test/` (if exists)
+- Read rollback runbook (if exists)
+
+Incremental scopes (security-patch, infra) skip environment-provisioning or build-and-test by design; a brownfield production system already has environments and a deploy path. When those inputs are absent, inventory the actual environments from the workspace's existing configuration and deploy through the pipeline that exists — never invent the content of a missing artifact.
 
 ### Step 3: Pre-Deployment Checks
 

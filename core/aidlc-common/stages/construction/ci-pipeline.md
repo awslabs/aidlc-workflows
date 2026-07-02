@@ -46,9 +46,12 @@ Load aidlc-pipeline-deploy-agent persona from `agents/aidlc-pipeline-deploy-agen
 
 ### Step 2: Load Prior Context
 
-- Read build/test results from `<record>/construction/build-and-test/`
+- Read build/test results from `<record>/construction/build-and-test/` (if exists)
+- Read code summary from `<record>/construction/{unit-name}/code-generation/` (if exists)
 - Read infrastructure design from `<record>/construction/infrastructure-design/` (if exists)
 - Read workspace profile for existing CI configuration
+
+Incremental scopes (infra) skip code-generation and build-and-test by design; when those inputs are absent, base the pipeline stages on the workspace's existing build/test setup (detected from the repo itself) instead — never invent the content of a missing artifact.
 
 ### Step 3: Generate Clarifying Questions
 

@@ -27,7 +27,7 @@
 //     (b) it lands on that scope's first EXECUTE stage (the brownfield
 //         conditional stages SKIP on an empty greenfield workspace, so
 //         security-patch's reverse-engineering is greenfield-skipped and the
-//         engine lands on nfr-requirements), and
+//         engine lands on requirements-analysis), and
 //     (c) the directive carries the conductor persona — decision D-E: the runner
 //         does NOT load the persona by hand; the ENGINE bakes it into the FIRST
 //         run-stage of the workflow.
@@ -52,7 +52,7 @@
 //   - The per-scope first-EXECUTE-stage routing the engine derives from the
 //     compiled scope grid (verified live: bugfix->requirements-analysis,
 //     feature->intent-capture, mvp->intent-capture, security-patch->
-//     nfr-requirements).
+//     requirements-analysis).
 //
 // Old TAP -> new test parity (1:1; the .sh emitted 3 `ok` lines per scope ->
 // each is one expect() here, grouped under one test() per scope = STRONGER:
@@ -93,7 +93,12 @@ const CASES: ReadonlyArray<{ scope: string; wantStage: string }> = [
   { scope: "bugfix", wantStage: "requirements-analysis" },
   { scope: "feature", wantStage: "intent-capture" },
   { scope: "mvp", wantStage: "intent-capture" },
-  { scope: "security-patch", wantStage: "nfr-requirements" },
+  // security-patch's first EXECUTE is reverse-engineering, but that brownfield
+  // conditional stage greenfield-SKIPs on the empty workspace, so the engine
+  // lands on the next EXECUTE: requirements-analysis (in scope so the
+  // `requirements` artifact its downstream consumers hard-require has a
+  // producer — scopes/aidlc-security-patch.md).
+  { scope: "security-patch", wantStage: "requirements-analysis" },
   // infra skips ideation + application-code construction; practices-discovery is
   // its first EXECUTE stage (scopes/aidlc-infra.md). Measured live.
   { scope: "infra", wantStage: "practices-discovery" },

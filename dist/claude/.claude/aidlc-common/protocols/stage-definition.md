@@ -137,6 +137,17 @@ human-facing documentation only; the engine hands the conductor the resolved
 `produces[]` path. Treat a rooted path literal in a stage file as a doc bug, not
 a behavior contract.
 
+The same emit-time resolution splits the consumed inputs by presence: the
+directive's `consumes` lists only resolved paths that exist on disk, and any
+REQUIRED declared input whose file is absent moves to `consumes_absent`,
+annotated `expected: true` when the producing stage is off the active scope's
+path (the scope deliberately skipped it — see `consumes[].required` above) or
+`expected: false` when a producer is on the path but the file is still
+missing. A `required: false` consume that is absent is simply dropped — an
+optional input that does not exist is not an input, never a gap. The
+conductor is never pointed at a path that cannot be read; absence-by-design
+arrives as data, not as a failed read.
+
 ---
 
 ## Body compartments

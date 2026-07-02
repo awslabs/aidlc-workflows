@@ -71,9 +71,12 @@ Read all design artifacts for the current unit:
 - NFR requirements from `<record>/construction/{unit-name}/nfr-requirements/` (if exists)
 - NFR design from `<record>/construction/{unit-name}/nfr-design/` (if exists)
 - Infrastructure design from `<record>/construction/{unit-name}/infrastructure-design/` (if exists)
-- Application design from `<record>/inception/application-design/`
-- Unit definition from `<record>/inception/units-generation/unit-of-work.md`
-- Story map from `<record>/inception/units-generation/unit-of-work-story-map.md`
+- Application design from `<record>/inception/application-design/` (if exists)
+- Unit definition from `<record>/inception/units-generation/unit-of-work.md` (if exists)
+- Story map from `<record>/inception/units-generation/unit-of-work-story-map.md` (if exists)
+- Requirements from `<record>/inception/requirements-analysis/requirements.md` (if exists)
+
+Incremental scopes (bugfix, poc, refactor, security-patch) skip units-generation and application-design by design; when those inputs are absent, scope the work from the requirements and, on brownfield, the reverse-engineered code knowledge base at `aidlc/spaces/<active-space>/codekb/<repo>/` — never invent the content of a missing artifact.
 
 ### Step 2: PART 1 — Planning
 

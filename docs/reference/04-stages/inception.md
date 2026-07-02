@@ -66,7 +66,7 @@ and a parallel multi-agent dispatch at Stage 2.2 (Practices Discovery).
 | bugfix           | 2.1 (always -- find the bug), 2.3 (minimal -- bug description) |
 | refactor         | 2.1 (always -- understand current code), 2.3 (minimal)         |
 | infra            | 2.2, 2.3 (infra requirements)                                  |
-| security-patch   | 2.1 (find vulnerability context)                                |
+| security-patch   | 2.1 (find vulnerability context), 2.3 (minimal)                 |
 | workshop         | 2.1--2.8                                                       |
 
 ---

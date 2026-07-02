@@ -14,7 +14,7 @@
 // invariant tracks the data — if a future scope edit moves a stage EXECUTE->SKIP,
 // this test's expectation moves with it, automatically. And it runs a DIFFERENT
 // scope: `security-patch` (Minimal; its SKIP set differs from bugfix — e.g.
-// requirements-analysis is SKIP for security-patch but EXECUTE for bugfix), so it
+// the deployment stages are EXECUTE for security-patch but SKIP for bugfix), so it
 // exercises a distinct exclusion shape rather than re-proving bugfix's.
 //
 // THE INVARIANT (stated as data): let SKIP(scope) = { stage : scope-grid.json

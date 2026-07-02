@@ -68,7 +68,7 @@ Every workflow runs under one of 9 named scopes. Each scope defines a stage set 
 
 **Use when:** Responding to a CVE or security vulnerability. Fast path through security-relevant stages.
 
-- **Stages:** 9 of 32
+- **Stages:** 10 of 32
 - **Default depth:** Minimal
 - **Skips:** Market Research, Team Formation, Mockups, non-security design stages
 
@@ -98,7 +98,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `bugfix` | 7 / 32 | Minimal | Minimal | Fix a specific bug |
 | `refactor` | 8 / 32 | Minimal | Minimal | Clean up existing code |
 | `infra` | 13 / 32 | Standard | Standard | Infrastructure change |
-| `security-patch` | 9 / 32 | Minimal | Minimal | CVE response |
+| `security-patch` | 10 / 32 | Minimal | Minimal | CVE response |
 | `workshop` | 25 / 32 | Standard | **Minimal** | AI-DLC workshop or training session |
 | (auto-detect) | Varies | Varies | Varies | AI determines from freeform intent |
 

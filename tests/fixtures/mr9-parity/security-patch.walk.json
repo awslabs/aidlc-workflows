@@ -3,6 +3,7 @@
   "workspace-detection",
   "state-init",
   "reverse-engineering",
+  "requirements-analysis",
   "nfr-requirements",
   "code-generation",
   "build-and-test",

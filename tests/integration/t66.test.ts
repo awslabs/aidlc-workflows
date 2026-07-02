@@ -745,6 +745,67 @@ describe("t66 validateScope (in-process)", () => {
     expect(r.errors.length).toBe(0);
     expect(r.advisories.length).toBeGreaterThan(0);
   });
+
+  // Pin the EXACT advisory edge set per scope — the deliberate "producer
+  // skipped by the scope" shortcuts the incremental scopes take (the scope
+  // author owns the upstream; the stage bodies degrade gracefully). Any NEW
+  // dangling required consume — a scope edit that drops a producer, or a
+  // stage edit that hard-requires an artifact its scopes never produce —
+  // changes one of these sets and fails here as a scope-authoring error,
+  // instead of hiding among the accepted advisories. An edge LEAVING a set
+  // (producer added to the scope, or consume relaxed) also fails, so the
+  // baseline is updated consciously in the same commit.
+  test("validateScope: the per-scope advisory edge sets are exactly the accepted baseline", () => {
+    const EXPECTED: Record<string, string[]> = {
+      bugfix: ["code-generation->unit-of-work"],
+      enterprise: [],
+      feature: [],
+      infra: [
+        "ci-pipeline->build-and-test-summary",
+        "ci-pipeline->build-test-results",
+        "ci-pipeline->code-summary",
+        "deployment-execution->build-test-results",
+        "infrastructure-design->business-logic-model",
+        "infrastructure-design->components",
+        "infrastructure-design->services",
+        "nfr-design->business-logic-model",
+        "nfr-requirements->business-logic-model",
+        "nfr-requirements->business-rules",
+      ],
+      mvp: [],
+      poc: ["code-generation->unit-of-work"],
+      refactor: [
+        "code-generation->unit-of-work",
+        "functional-design->component-methods",
+        "functional-design->components",
+        "functional-design->services",
+        "functional-design->unit-of-work",
+      ],
+      "security-patch": [
+        "code-generation->unit-of-work",
+        "deployment-execution->environment-inventory",
+        "deployment-pipeline->ci-config",
+        "deployment-pipeline->cicd-pipeline",
+        "deployment-pipeline->deployment-architecture",
+        "deployment-pipeline->quality-gates",
+        "nfr-requirements->business-logic-model",
+        "nfr-requirements->business-rules",
+      ],
+      workshop: ["refined-mockups->user-flow", "refined-mockups->wireframes"],
+    };
+    const actual: Record<string, string[]> = {};
+    for (const scope of Object.keys(EXPECTED)) {
+      const r = validateScope(scope);
+      expect(r.errors).toEqual([]);
+      actual[scope] = r.advisories
+        .map((a) => {
+          const m = a.match(/^Stage "([^"]+)" requires artifact "([^"]+)"/);
+          return m ? `${m[1]}->${m[2]}` : a;
+        })
+        .sort();
+    }
+    expect(actual).toEqual(EXPECTED);
+  });
 });
 
 // =============================================================================

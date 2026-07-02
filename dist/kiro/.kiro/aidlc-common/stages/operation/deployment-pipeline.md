@@ -48,9 +48,11 @@ Load aidlc-pipeline-deploy-agent persona from `agents/aidlc-pipeline-deploy-agen
 
 ### Step 2: Load Prior Context
 
-- Read CI pipeline config from `<record>/construction/ci-pipeline/`
-- Read infrastructure design from `<record>/construction/infrastructure-design/`
-- Read NFR design (deployment-related NFRs) from `<record>/construction/nfr-design/`
+- Read CI pipeline config from `<record>/construction/ci-pipeline/` (if exists)
+- Read infrastructure design from `<record>/construction/infrastructure-design/` (if exists)
+- Read NFR design (deployment-related NFRs) from `<record>/construction/nfr-design/` (if exists)
+
+Incremental scopes (security-patch) skip ci-pipeline and infrastructure-design by design; a brownfield production system already has CI and deployment infrastructure. When those inputs are absent, inspect the workspace's existing pipeline and infrastructure configuration (and the code knowledge base on brownfield) and design the CD path against what is actually deployed — never invent the content of a missing artifact.
 
 ### Step 3: Generate Clarifying Questions
 

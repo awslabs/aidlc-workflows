@@ -68,6 +68,9 @@ export interface RunStageDirective {
   // classify round-trip — see GATE_UNRESOLVED above).
   gate: GateValue;
   memory_path: string;
+  // consumes carries only the declared inputs that EXIST on disk at emit time;
+  // declared inputs whose file is absent move to consumes_absent so the
+  // conductor is never pointed at a path that cannot be read.
   consumes: string[];
   produces: string[];
   rules_in_context: string[];
@@ -99,6 +102,19 @@ export interface RunStageDirective {
   // build a gate:false unit and re-run `next` rather than approve it. See
   // aidlc-orchestrate.ts emitPerUnitRunStage.
   unit?: string;
+  // consumes_absent: REQUIRED declared inputs whose resolved file does NOT
+  // exist on disk at emit time, each annotated with why. `expected: true` =
+  // the producing stage is not on the active scope's path (the scope
+  // deliberately skipped it — absence is by design; substitute available
+  // context, do not invent the artifact). `expected: false` = a producer IS
+  // on the path but the file is still missing (runtime-skipped conditional
+  // producer, or a real gap worth surfacing per stage-protocol-recovery).
+  // Optional (`required: false`) consumes never appear here — missing means
+  // dropped, not flagged. Omitted entirely when nothing qualifies, and on
+  // the ctx-less emit path (no projectDir to check against). Paths with an
+  // unresolved {unit-name} placeholder are never listed here (existence is
+  // unknowable).
+  consumes_absent?: Array<{ path: string; expected: boolean }>;
 }
 
 // dispatch-subagent — same as run-stage, but the stage runs via a Task call to
@@ -120,6 +136,7 @@ export interface DispatchSubagentDirective {
   stage_file: string;
   worker: string;
   conductor_persona?: string;
+  consumes_absent?: Array<{ path: string; expected: boolean }>;
 }
 
 // invoke-swarm — fan out N parallel workers across N worktrees for a build
@@ -254,6 +271,7 @@ const RUN_STAGE_FIELDS = [
   "reviewer_max_iterations",
   "conductor_persona",
   "unit",
+  "consumes_absent",
 ] as const;
 
 // dispatch-subagent = run-stage fields + `worker`.
@@ -404,6 +422,9 @@ function checkRunStageShared(
   // Construction directive resolved to a concrete Unit of Work). A present
   // value must be a string; absent is valid.
   checkOptionalString(o, "unit", kind, errors);
+  // consumes_absent: optional (present only when a declared consume's file is
+  // missing at emit time). Each entry must be {path: string, expected: boolean}.
+  checkOptionalConsumesAbsent(o, "consumes_absent", kind, errors);
 }
 
 // --- Helpers (mirror aidlc-stage-schema.ts: presence first, then type) ---
@@ -482,6 +503,43 @@ function checkOptionalPositiveInteger(
       `${kind}: ${field} must be a positive integer, got ${describe(v)}`,
     );
   }
+}
+
+// checkOptionalConsumesAbsent — a field that may be absent, but if present
+// must be an array of {path: string, expected: boolean} objects. Mirrors the
+// checkOptional* early-return idiom and checkStringArray's per-element error
+// wording.
+function checkOptionalConsumesAbsent(
+  o: Record<string, unknown>,
+  field: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) return;
+  const v: unknown = o[field];
+  if (!Array.isArray(v)) {
+    errors.push(`${kind}: ${field} must be array, got ${describe(v)}`);
+    return;
+  }
+  const arr: unknown[] = v;
+  arr.forEach((item: unknown, i: number) => {
+    if (!isPlainObject(item)) {
+      errors.push(
+        `${kind}: ${field}[${i}] must be object, got ${describe(item)}`,
+      );
+      return;
+    }
+    if (typeof item.path !== "string") {
+      errors.push(
+        `${kind}: ${field}[${i}].path must be string, got ${describe(item.path)}`,
+      );
+    }
+    if (typeof item.expected !== "boolean") {
+      errors.push(
+        `${kind}: ${field}[${i}].expected must be boolean, got ${describe(item.expected)}`,
+      );
+    }
+  });
 }
 
 function checkStringArray(

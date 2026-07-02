@@ -265,7 +265,7 @@
       "approval-handoff": "SKIP",
       "reverse-engineering": "EXECUTE",
       "practices-discovery": "SKIP",
-      "requirements-analysis": "SKIP",
+      "requirements-analysis": "EXECUTE",
       "user-stories": "SKIP",
       "refined-mockups": "SKIP",
       "application-design": "SKIP",

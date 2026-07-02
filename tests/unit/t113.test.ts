@@ -393,6 +393,55 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   });
 
   // ============================================================
+  // consumes_absent is an optional run-stage/dispatch-subagent field, present
+  // only when a declared consume's file is missing at emit time. Each entry
+  // must be {path: string, expected: boolean}. Absent is fine; a valid array
+  // validates; a non-array, non-object element, or badly typed member is
+  // rejected with a field-precise error.
+
+  test("run-stage consumes_absent valid array -> VALID", () => {
+    expect(
+      errs({
+        ...runStage(),
+        consumes_absent: [
+          { path: "aidlc-docs/inception/units-generation/unit-of-work.md", expected: true },
+          { path: "aidlc-docs/inception/requirements/requirements.md", expected: false },
+        ],
+      }),
+    ).toBe("VALID");
+  });
+
+  test("dispatch-subagent consumes_absent valid -> VALID (shared field set)", () => {
+    expect(
+      errs({
+        ...dispatchSubagent(),
+        consumes_absent: [{ path: "a/b.md", expected: true }],
+      }),
+    ).toBe("VALID");
+  });
+
+  test("run-stage consumes_absent non-array -> type error", () => {
+    expect(errs({ ...runStage(), consumes_absent: "nope" })).toContain(
+      "run-stage: consumes_absent must be array, got string",
+    );
+  });
+
+  test("run-stage consumes_absent non-object element -> element error", () => {
+    expect(errs({ ...runStage(), consumes_absent: ["a/b.md"] })).toContain(
+      "run-stage: consumes_absent[0] must be object, got string",
+    );
+  });
+
+  test("run-stage consumes_absent bad member types -> per-field errors", () => {
+    const e = errs({
+      ...runStage(),
+      consumes_absent: [{ path: 42, expected: "yes" }],
+    });
+    expect(e).toContain("run-stage: consumes_absent[0].path must be string, got number");
+    expect(e).toContain("run-stage: consumes_absent[0].expected must be boolean, got string");
+  });
+
+  // ============================================================
   // Shape failures — non-object inputs (3 assertions)
   // .sh lines 186-188
   // ============================================================

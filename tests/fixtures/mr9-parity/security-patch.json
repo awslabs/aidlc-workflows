@@ -62,7 +62,7 @@
   {
     "slug": "requirements-analysis",
     "phase": "inception",
-    "action": "SKIP"
+    "action": "EXECUTE"
   },
   {
     "slug": "user-stories",

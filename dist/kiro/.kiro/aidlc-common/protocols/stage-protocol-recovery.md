@@ -131,11 +131,12 @@ If `aidlc-state.md` exists but cannot be parsed (missing required sections, inva
 ### Missing artifact recovery
 If a stage references prior artifacts that do not exist on disk:
 1. Check which expected artifacts are missing (list them)
-2. Check if the stage that should have produced them is marked complete in state
-3. If marked complete but artifacts missing:
+2. Check whether the producing stage is on the active scope's path at all (SKIP stages never produce). If the producer is SKIP for this scope, the artifact is absent BY DESIGN — this is not an error and re-running the producer is not an option. Proceed with the stage's documented fallback (work from the requirements, the code knowledge base, or the workspace's existing configuration, per the stage body), or, if the human has the artifact from elsewhere, they may provide it manually at the expected path. Do not invent the missing artifact's content and do not treat the gap as a failure.
+3. If the producer IS on the scope path, check if it is marked complete in state
+4. If marked complete but artifacts missing:
    - Inform the user: "Stage [X] is marked complete but its artifacts are missing."
    - Offer two options: re-run the stage, or provide the artifacts manually
-4. If not marked complete, simply run the stage normally
+5. If not marked complete, simply run the stage normally
 
 ### Error Severity Levels
 

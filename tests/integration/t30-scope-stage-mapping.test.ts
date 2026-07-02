@@ -56,7 +56,7 @@
 //     committed SKILL.md region against canonicalScopeTableRegion(
 //     renderScopeTable()) — the committed table is provably the transpose of
 //     the grid, not merely "contains the markers / count agrees".
-//   - Section C asserts exact integers (7, 32, 13, 22, 8, 8, 9, 25) derived
+//   - Section C asserts exact integers (7, 32, 13, 22, 8, 8, 10, 25) derived
 //     from the grid AND read from the table cell, on the SAME scope row —
 //     co-located, not "the number appears somewhere".
 //   - Section D guards against a vacuous pass: both the ideation slug set and

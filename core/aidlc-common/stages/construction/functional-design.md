@@ -73,7 +73,9 @@ Load aidlc-architect-agent (lead) persona from `agents/aidlc-architect-agent.md`
 
 ### Step 2: Read Unit Context
 
-Read the unit definition from `<record>/inception/units-generation/unit-of-work.md` and assigned stories from `<record>/inception/units-generation/unit-of-work-story-map.md`. Read `<record>/inception/requirements-analysis/requirements.md` and any application design artifacts from `<record>/inception/application-design/`.
+Read the unit definition from `<record>/inception/units-generation/unit-of-work.md` and assigned stories from `<record>/inception/units-generation/unit-of-work-story-map.md` (if they exist). Read `<record>/inception/requirements-analysis/requirements.md` (if exists) and any application design artifacts from `<record>/inception/application-design/` (if they exist).
+
+Incremental scopes (refactor) deliberately skip units-generation and application-design, so those inputs are absent by design there. When an input is absent, work from what the scope does provide — the requirements and, on a brownfield workspace, the reverse-engineered code knowledge base at `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints) — and treat the existing code structure as the de-facto application design. Never invent the content of a missing artifact.
 
 ### Step 3: Create Functional Design Plan
 

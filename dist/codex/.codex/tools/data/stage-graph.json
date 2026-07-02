@@ -905,6 +905,7 @@
       "bugfix",
       "refactor",
       "infra",
+      "security-patch",
       "workshop"
     ],
     "reviewer": "aidlc-product-lead-agent",

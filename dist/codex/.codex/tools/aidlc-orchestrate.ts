@@ -827,6 +827,12 @@ function projectTypeFrom(
 // resolveConsumePath): the filter decides WHICH consumes appear; the producer
 // lookup decides WHERE each one lives. `node` is passed only for the orphan
 // fallback, not as the resolution key.
+// A resolved consume: the artifact NAME and required flag carried alongside
+// the resolved path, so the presence split downstream can key producer lookups
+// and required-ness off the authored vocabulary instead of re-deriving the
+// name from the path shape.
+type ResolvedConsume = { artifact: string; required: boolean; path: string };
+
 function resolveConsumes(
   consumes: Consume[],
   node: GraphStage,
@@ -834,8 +840,8 @@ function resolveConsumes(
   unit: string,
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
-): string[] {
-  const paths: string[] = [];
+): ResolvedConsume[] {
+  const resolved: ResolvedConsume[] = [];
   for (const consume of consumes) {
     if (
       consume.conditional_on &&
@@ -844,9 +850,60 @@ function resolveConsumes(
     ) {
       continue;
     }
-    paths.push(resolveConsumePath(consume.artifact, node, unit, recordPrefix, codekbCtx));
+    resolved.push({
+      artifact: consume.artifact,
+      required: consume.required,
+      path: resolveConsumePath(consume.artifact, node, unit, recordPrefix, codekbCtx),
+    });
   }
-  return paths;
+  return resolved;
+}
+
+// Split resolved consumes into PRESENT (file exists on disk) and ABSENT
+// (it does not), so the directive never points the conductor at a path that
+// cannot be read. Only REQUIRED absent consumes are reported: an optional
+// (`required: false`) input that does not exist simply is not an input — it
+// is dropped from the directive entirely, never flagged as a gap. Each
+// required absent entry is annotated: `expected: true` when no producer of
+// the artifact is on the active scope's path (the scope deliberately skipped
+// the producer — the lean scopes' designed shortcut, so absence is by
+// design), `expected: false` when a producer IS on the path but the file is
+// still missing (a runtime-skipped conditional producer, or a real gap the
+// recovery protocol owns).
+//
+// Existence resolves like unitCovered: the resolved paths are
+// workspace-RELATIVE with forward slashes, re-rooted absolutely under
+// codekbCtx.projectDir (splitting on "/" so the join is OS-correct). Two
+// deliberate skips keep the split total:
+//   - no codekbCtx (the ctx-less test/default path) → no absolute base to
+//     check against; everything stays in `consumes`, exactly as before.
+//   - a path still carrying the {unit-name} placeholder → existence is
+//     unknowable pre-Bolt; it stays in `consumes`.
+function splitConsumesByPresence(
+  consumes: ResolvedConsume[],
+  scope: string,
+  codekbCtx?: CodekbCtx,
+): { present: string[]; absent: Array<{ path: string; expected: boolean }> } {
+  if (!codekbCtx) return { present: consumes.map((c) => c.path), absent: [] };
+  const onPath = new Set(subgraphForScope(scope).map((s) => s.slug));
+  const present: string[] = [];
+  const absent: Array<{ path: string; expected: boolean }> = [];
+  for (const c of consumes) {
+    if (c.path.includes(UNIT_NAME_PLACEHOLDER)) {
+      present.push(c.path);
+      continue;
+    }
+    const abs = join(codekbCtx.projectDir, ...c.path.split("/"));
+    if (existsSync(abs)) {
+      present.push(c.path);
+      continue;
+    }
+    if (!c.required) continue; // optional + missing → not an input, not a gap
+    const producers = producersOf(c.artifact);
+    const producerOnPath = producers.some((p) => onPath.has(p.slug));
+    absent.push({ path: c.path, expected: !producerOnPath });
+  }
+  return { present, absent };
 }
 
 // Resolve a node's produces[] (always bare names, even for per-unit stages) to
@@ -915,6 +972,10 @@ function buildRunStageDirective(
   recordPrefix: string | null = null,
   codekbCtx?: CodekbCtx,
 ): RunStageDirective {
+  const resolvedConsumes = resolveConsumes(
+    node.consumes ?? [], node, projectType, unit, recordPrefix, codekbCtx,
+  );
+  const { present, absent } = splitConsumesByPresence(resolvedConsumes, scope, codekbCtx);
   const directive: RunStageDirective = {
     kind: "run-stage",
     stage: node.slug,
@@ -928,12 +989,13 @@ function buildRunStageDirective(
     mode: node.mode as RunStageDirective["mode"],
     gate: computeGate(node, scope, stateContent),
     memory_path: memoryPathFor(node.phase, node.slug, recordPrefix),
-    consumes: resolveConsumes(node.consumes ?? [], node, projectType, unit, recordPrefix, codekbCtx),
+    consumes: present,
     produces: resolveProduces(node, unit, recordPrefix, codekbCtx),
     rules_in_context: (node.rules_in_context ?? []).map((r) => r.path),
     sensors_applicable: (node.sensors_applicable ?? []).map((s) => s.id),
     stage_file: stageFileFor(node.phase, node.slug),
   };
+  if (absent.length > 0) directive.consumes_absent = absent;
   // Reviewer — include if the stage declares one (§12a).
   if (node.reviewer) {
     directive.reviewer = node.reviewer;
