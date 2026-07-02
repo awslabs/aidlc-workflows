@@ -3112,11 +3112,36 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
       const v = postSuffixes.get(slug) ?? scopeDef.stages[slug];
       return v === "EXECUTE" ? "EXECUTE" : "SKIP";
     };
+    // The Stages to Skip row carries birth/scope-change annotations (entry
+    // shape "<number> (<slug>)", e.g. "2.1 (reverse-engineering — greenfield)")
+    // that a bare-slug rebuild would destroy. Preserve each existing entry
+    // VERBATIM, in its existing position, when its stage is still skipped;
+    // drop entries whose stage was promoted; append newly-skipped stages in
+    // graph order, rendered the way scope-change renders them. A skip+add
+    // round trip therefore leaves the row byte-identical.
+    const priorSkipRow = getField(content, "Stages to Skip") || "";
+    const priorTokens =
+      priorSkipRow.trim() === "" || priorSkipRow.trim() === "none"
+        ? []
+        : priorSkipRow.split(", ");
+    const slugOfSkipToken = (token: string): string => {
+      const m = /^\S+ \((.+)\)$/.exec(token);
+      const inner = m ? m[1] : token;
+      return inner.split(" — ")[0];
+    };
     const executeStages: string[] = [];
     const skipStages: string[] = [];
+    const preservedSlugs = new Set<string>();
+    for (const token of priorTokens) {
+      const slug = slugOfSkipToken(token);
+      if (knownSlugs.has(slug) && eff(slug) === "SKIP") {
+        skipStages.push(token);
+        preservedSlugs.add(slug);
+      }
+    }
     for (const s of graph) {
       if (eff(s.slug) === "EXECUTE") executeStages.push(s.number);
-      else skipStages.push(s.slug);
+      else if (!preservedSlugs.has(s.slug)) skipStages.push(`${s.number} (${s.slug})`);
     }
     content = setField(content, "Stages to Execute", executeStages.join(", "));
     content = setField(content, "Stages to Skip", skipStages.length > 0 ? skipStages.join(", ") : "none");

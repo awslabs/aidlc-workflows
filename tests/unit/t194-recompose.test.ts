@@ -128,6 +128,30 @@ describe("t194 recompose - flips land as suffix edits and the router honours the
     expect(audit).toContain("market-research, team-formation");
   });
 
+  test("Stages to Skip round trip: skip+add leaves the row byte-identical to birth (annotations preserved)", () => {
+    // Birth writes annotated entries ("<number> (<slug>)", and for a
+    // greenfield feature birth the rationale form
+    // "2.1 (reverse-engineering — greenfield)"). The rebuild must preserve
+    // those bytes for stages whose skip-membership did not change.
+    const proj = bornProject();
+    const rowOf = (state: string): string =>
+      /- \*\*Stages to Skip\*\*: (.*)/.exec(state)?.[1] ?? "";
+    const birthRow = rowOf(readState(proj));
+    expect(birthRow).toContain("(reverse-engineering — greenfield)");
+
+    const skip = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
+    expect(skip.status).toBe(0);
+    const midRow = rowOf(readState(proj));
+    // The untouched birth annotation survives the flip verbatim, and the
+    // newly-skipped stage renders the scope-change way: number (slug).
+    expect(midRow).toContain("(reverse-engineering — greenfield)");
+    expect(midRow).toContain("1.2 (market-research)");
+
+    const add = run(proj, "aidlc-utility.ts", ["recompose", "--add", "market-research"]);
+    expect(add.status).toBe(0);
+    expect(rowOf(readState(proj))).toBe(birthRow);
+  });
+
   test("derived fields rebuilt: Total/Completed/Next Stage + --status counts track the plan", () => {
     const proj = bornProject();
     const before = readState(proj);
