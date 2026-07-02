@@ -97,8 +97,12 @@ start). Therefore:
   never participate in inference.
 - Making a scope inferable is an explicit human choice at the gate ("make
   this scope inferable for future prompts? which keywords?") - never a side
-  effect of composing. If keywords are granted, check them for collisions
-  with the stock scopes' keywords first and surface any collision.
+  effect of composing. If keywords are granted, run the deterministic
+  collision check BEFORE writing them:
+  `bun .codex/tools/aidlc-graph.ts validate-grid --proposal <path> --keywords <granted,csv>`
+  (the same proposal file from the Validate step). A collision is a hard
+  error naming the scope that already claims the keyword - drop or rename
+  the colliding keyword (or take it back to the human), never write it.
 
 ## Adversarial framing - bias toward keeping
 

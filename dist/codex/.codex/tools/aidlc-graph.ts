@@ -1059,6 +1059,36 @@ export function validateGrid(
   return { valid: errors.length === 0, errors, advisories };
 }
 
+/** Check proposed (granted-at-the-gate) keywords against the keywords the
+ *  existing scopes already claim - the same loadScopeMapping data both
+ *  inference (inferScopeFromText) and findScopeByKeyword read. Inference
+ *  takes the FIRST ALPHABETICAL keyword match, so a duplicate keyword would
+ *  permanently shadow the incumbent scope on every future cold start; a
+ *  collision is therefore a hard error naming the colliding scope, never an
+ *  advisory. Comparison is case-insensitive exact equality, matching
+ *  findScopeByKeyword. */
+export function keywordCollisions(granted: string[]): string[] {
+  const mapping = loadScopeMapping();
+  const errors: string[] = [];
+  for (const kw of granted) {
+    const holders = Object.keys(mapping)
+      .filter((scope) =>
+        (mapping[scope]?.keywords ?? []).some(
+          (k) => k.toLowerCase() === kw.toLowerCase()
+        )
+      )
+      .sort();
+    if (holders.length > 0) {
+      errors.push(
+        `Keyword "${kw}" is already claimed by scope${holders.length > 1 ? "s" : ""} ` +
+          `[${holders.join(", ")}] - granting it would shadow that scope in ` +
+          `keyword inference. Pick a keyword no existing scope claims.`
+      );
+    }
+  }
+  return errors;
+}
+
 /** Union of produces[] across all stages. */
 export function artifactsRegistry(): ReadonlySet<string> {
   if (!_artifactsRegistry) {
@@ -1616,17 +1646,28 @@ const COMMANDS: Record<string, Handler> = {
       process.exit(1);
     }
   },
-  // validate-grid --proposal <path> [--strict] [--project-type <bg>] -
-  // validate an ARBITRARY {slug: EXECUTE|SKIP} grid (the composer's proposal
-  // JSON; also accepts a { stages: {...} } wrapper matching a scope-grid
-  // entry). Lenient mode mirrors validate-scope (off-path producer of a
-  // required consume = advisory); --strict is the recompose mode that
-  // REJECTS a starved required input. Prints a JSON ScopeValidation on
-  // stdout; exit 1 iff invalid - callers branch on the exit code and read
-  // the reasons off stdout.
+  // validate-grid --proposal <path> [--strict] [--project-type <bg>]
+  // [--keywords <csv>] - validate an ARBITRARY {slug: EXECUTE|SKIP} grid
+  // (the composer's proposal JSON; also accepts a { stages: {...} } wrapper
+  // matching a scope-grid entry). Lenient mode mirrors validate-scope
+  // (off-path producer of a required consume = advisory); --strict is the
+  // recompose mode that REJECTS a starved required input. --keywords checks
+  // each granted keyword against the keywords already claimed by existing
+  // scopes (the same loadScopeMapping data inference reads): a collision is
+  // a hard ERROR naming the colliding scope, because inference takes the
+  // first alphabetical keyword match and a duplicate would permanently
+  // shadow the incumbent. Prints a JSON ScopeValidation on stdout; exit 1
+  // iff invalid - callers branch on the exit code and read the reasons off
+  // stdout.
   "validate-grid": (args) => {
     const proposalPath = requireFlag(args, "--proposal");
     const strict = args.includes("--strict");
+    const kwIdx = args.indexOf("--keywords");
+    const kwRaw = kwIdx >= 0 ? args[kwIdx + 1] : undefined;
+    if (kwIdx >= 0 && (kwRaw === undefined || kwRaw.startsWith("--"))) {
+      console.error("validate-grid: --keywords requires a comma-separated value.");
+      process.exit(1);
+    }
     const ptIdx = args.indexOf("--project-type");
     const ptRaw = ptIdx >= 0 ? args[ptIdx + 1] : undefined;
     let projectType: "brownfield" | "greenfield" | undefined;
@@ -1663,6 +1704,11 @@ const COMMANDS: Record<string, Handler> = {
     const grid: Record<string, string> = {};
     for (const [slug, action] of Object.entries(gridRaw)) grid[slug] = String(action);
     const r = validateGrid(grid, { strict, projectType });
+    if (kwRaw !== undefined) {
+      const granted = kwRaw.split(",").map((k) => k.trim()).filter(Boolean);
+      for (const err of keywordCollisions(granted)) r.errors.push(err);
+      r.valid = r.errors.length === 0;
+    }
     process.stdout.write(`${JSON.stringify(r, null, 2)}\n`);
     if (!r.valid) process.exit(1);
   },
@@ -1765,9 +1811,10 @@ Common forms:
   aidlc-graph cycles --scope <name>    Cycle check on scope sub-DAG
   aidlc-graph scope <name>             Stages on a scope's path
   aidlc-graph validate-scope <name>    Validate scope dependencies
-  aidlc-graph validate-grid --proposal <path> [--strict] [--project-type <t>]
+  aidlc-graph validate-grid --proposal <path> [--strict] [--project-type <t>] [--keywords <csv>]
                                        Validate an arbitrary EXECUTE/SKIP grid
-                                       (--strict rejects a starved required input)
+                                       (--strict rejects a starved required input;
+                                       --keywords rejects keywords an existing scope claims)
   aidlc-graph compile                  Regenerate stage-graph.json + scope-grid.json from YAML
   aidlc-graph compile --check          CI drift guard (exit 1 on mismatch)
   aidlc-graph resolve <name>           Emit .aidlc-plan.json for a scope (AIDLC_GRAPH_RESOLVE=1)

@@ -252,3 +252,112 @@ describe("t190 validate-grid CLI - fixture graph (TRUE orphan, conditional_on)",
     expect(r.out).toContain("cannot read");
   });
 });
+
+// ===========================================================================
+// --keywords: the gate-time collision check (composed-scope keyword grants).
+// Compares against loadScopeMapping's keywords - the same data inference
+// reads - so a granted keyword that would shadow an existing scope is a hard
+// ERROR naming the incumbent, never a silent write.
+// ===========================================================================
+describe("t190 validate-grid --keywords - collision check", () => {
+  // A mapping fixture with two scopes claiming known keywords, riding the
+  // AIDLC_SCOPE_MAPPING seam (fresh process per spawn, no cache leak).
+  const MAPPING = {
+    bugfix: {
+      depth: "Minimal",
+      stages: {},
+      keywords: ["fix", "bug", "broken"],
+    },
+    feature: { depth: "Standard", stages: {}, keywords: [] },
+  };
+
+  function seamEnv(dir: string): Record<string, string> {
+    const mappingPath = join(dir, "mapping.json");
+    writeFileSync(mappingPath, JSON.stringify(MAPPING), "utf-8");
+    return { AIDLC_SCOPE_MAPPING: mappingPath };
+  }
+
+  test("a colliding keyword is a hard error naming both the keyword and the incumbent scope", () => {
+    const { graphPath, dir } = writeFixture();
+    const proposal = join(dir, "p.json");
+    writeFileSync(proposal, JSON.stringify({ alpha: "EXECUTE" }), "utf-8");
+    const r = runValidateGrid(proposal, ["--keywords", "fix,tune-up"], {
+      AIDLC_STAGE_GRAPH: graphPath,
+      ...seamEnv(dir),
+    });
+    expect(r.rc).toBe(1);
+    const body = JSON.parse(r.out) as { valid: boolean; errors: string[] };
+    expect(body.valid).toBe(false);
+    const collision = body.errors.find((e) => e.includes('Keyword "fix"'));
+    expect(collision).toBeDefined();
+    expect(collision).toContain("bugfix");
+    // The non-colliding keyword in the same grant raises no error.
+    expect(body.errors.some((e) => e.includes('"tune-up"'))).toBe(false);
+  });
+
+  test("collision matching is case-insensitive (matches findScopeByKeyword)", () => {
+    const { graphPath, dir } = writeFixture();
+    const proposal = join(dir, "p.json");
+    writeFileSync(proposal, JSON.stringify({ alpha: "EXECUTE" }), "utf-8");
+    const r = runValidateGrid(proposal, ["--keywords", "FIX"], {
+      AIDLC_STAGE_GRAPH: graphPath,
+      ...seamEnv(dir),
+    });
+    expect(r.rc).toBe(1);
+    expect(r.out).toContain("bugfix");
+  });
+
+  test("non-colliding keywords pass (exit 0, valid:true, no errors)", () => {
+    const { graphPath, dir } = writeFixture();
+    const proposal = join(dir, "p.json");
+    writeFileSync(proposal, JSON.stringify({ alpha: "EXECUTE" }), "utf-8");
+    const r = runValidateGrid(proposal, ["--keywords", "pipeline,observability"], {
+      AIDLC_STAGE_GRAPH: graphPath,
+      ...seamEnv(dir),
+    });
+    expect(r.rc).toBe(0);
+    const body = JSON.parse(r.out) as { valid: boolean; errors: string[] };
+    expect(body.valid).toBe(true);
+    expect(body.errors).toEqual([]);
+  });
+
+  test("omitted flag = today's behavior byte-for-byte (same grid, same JSON)", () => {
+    const { graphPath, dir } = writeFixture();
+    const proposal = join(dir, "p.json");
+    writeFileSync(proposal, JSON.stringify({ alpha: "EXECUTE" }), "utf-8");
+    const env = { AIDLC_STAGE_GRAPH: graphPath, ...seamEnv(dir) };
+    const without = runValidateGrid(proposal, [], env);
+    const withEmptyGrant = runValidateGrid(proposal, ["--keywords", ""], env);
+    expect(without.rc).toBe(0);
+    // An empty csv grants nothing, so the output matches the flag-less run.
+    expect(withEmptyGrant.rc).toBe(0);
+    expect(withEmptyGrant.out).toBe(without.out);
+  });
+
+  test("--keywords with a missing value is a legible usage error", () => {
+    const { graphPath, dir } = writeFixture();
+    const proposal = join(dir, "p.json");
+    writeFileSync(proposal, JSON.stringify({ alpha: "EXECUTE" }), "utf-8");
+    const r = runValidateGrid(proposal, ["--keywords"], {
+      AIDLC_STAGE_GRAPH: graphPath,
+      ...seamEnv(dir),
+    });
+    expect(r.rc).toBe(1);
+    expect(r.out).toContain("--keywords requires");
+  });
+
+  test("keyword collision composes with grid validation (both error families in one result)", () => {
+    const { graphPath, dir } = writeFixture();
+    // beta requires ghost-artifact (TRUE orphan) AND the grant collides.
+    const proposal = join(dir, "p.json");
+    writeFileSync(proposal, JSON.stringify({ beta: "EXECUTE" }), "utf-8");
+    const r = runValidateGrid(proposal, ["--keywords", "bug"], {
+      AIDLC_STAGE_GRAPH: graphPath,
+      ...seamEnv(dir),
+    });
+    expect(r.rc).toBe(1);
+    const body = JSON.parse(r.out) as { errors: string[] };
+    expect(body.errors.some((e) => e.includes("no stage in the graph produces it"))).toBe(true);
+    expect(body.errors.some((e) => e.includes('Keyword "bug"'))).toBe(true);
+  });
+});
