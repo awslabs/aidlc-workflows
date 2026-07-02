@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.1.6] - 2026-06-30
+## [2.1.6] - 2026-07-03
 
 Gates the approval and interview checkpoints on deterministic proof that a real human acted (issue #451). Deep into a long session, an agent under an autonomous IDE mode (observed on the Kiro IDE harness with autopilot) could fabricate the user's own approval ("Approve") or interview answer inside one un-ended turn and advance the workflow, because the gate recorded the conductor-supplied `--user-input` verbatim after only the artifact-existence check (issue #366) with no check that a human actually responded. Now a real human prompt records a `HUMAN_TURN` event in the audit ledger, and the approve/answer gate refuses unless a `HUMAN_TURN` was recorded since the last gate resolution (`GATE_APPROVED` / `GATE_REJECTED` / `QUESTION_ANSWERED`) in ledger order. There is no marker file, no turn counter, and no consumed flag: the ledger itself is the record. On the Kiro CLI and Kiro IDE harnesses a `preToolUse` hook hard-blocks tool calls while a gate is open and no human has acted since, as the enforcement floor. The gate is scoped off under autonomous Construction (swarm / Bolt) so unattended runs do not deadlock, and fail-opens on an empty ledger, so existing flows are unaffected until a `HUMAN_TURN` has been recorded. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; no action is needed for normal interactive use. For synthetic CI that drives `approve`/`answer` against bare fixtures with no human turn, set `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` (mirrors the existing `AIDLC_SKIP_ARTIFACT_GUARD`).
 
