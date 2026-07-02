@@ -4632,6 +4632,10 @@
           "mechanism": "sdk"
         },
         {
+          "file": "tests/integration/t197-compose-chat-inflight.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
           "file": "tests/unit/t194-recompose.test.ts",
           "mechanism": "cli"
         }
