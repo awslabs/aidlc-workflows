@@ -84,6 +84,14 @@ Incorporate NFR requirements into unit design using patterns and logical compone
 ---
 ```
 
+**`[next-stage-name]` substitution**: Replace `[next-stage-name]` with the name of the next
+ENABLED stage for this unit, following the Construction phase order:
+1. **Infrastructure Design** (if enabled for this unit)
+2. **Code Generation** (if Infrastructure Design is skipped)
+
+Check `aidlc-docs/aidlc-state.md` or the execution plan to determine which stages are enabled.
+
+
 ### Step 8: Wait for Explicit Approval
 - Do not proceed until the user explicitly approves the NFR design
 - Approval must be clear and unambiguous

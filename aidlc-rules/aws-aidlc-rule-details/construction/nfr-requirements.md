@@ -88,6 +88,15 @@ Determine non-functional requirements for the unit and make tech stack choices.
 ---
 ```
 
+**`[next-stage-name]` substitution**: Replace `[next-stage-name]` with the name of the next
+ENABLED stage for this unit, following the Construction phase order:
+1. **NFR Design** (if enabled for this unit)
+2. **Infrastructure Design** (if NFR Design is skipped)
+3. **Code Generation** (if both NFR Design and Infrastructure Design are skipped)
+
+Check `aidlc-docs/aidlc-state.md` or the execution plan to determine which stages are enabled.
+
+
 ### Step 8: Wait for Explicit Approval
 - Do not proceed until the user explicitly approves the NFR requirements
 - Approval must be clear and unambiguous
