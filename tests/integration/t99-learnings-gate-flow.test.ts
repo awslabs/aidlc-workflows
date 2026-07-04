@@ -225,6 +225,9 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     // STRONGER than the .sh's "3:1" string: assert the two array LENGTHS directly.
     expect(j.candidates.length).toBe(3);
     expect(j.parked_open_questions.length).toBe(1);
+    // The fixture memory_path carries the per-intent record dir, so the phase
+    // must be the real one, not a prefix segment like "spaces".
+    expect(j.phase).toBe("inception");
   }, TIMEOUT);
 
   test("Case 1: project pick lands as a practice in project.md [.sh 2]", () => {
