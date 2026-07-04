@@ -6,7 +6,7 @@
 //
 //   seed:      an active mid-ideation feature workflow (the born shape).
 //   drive:     `/aidlc compose "drop market research and team formation"`.
-//   engine:    Branch 4c WITH-STATE dispatch (t188 pins it does not advance).
+//   engine:    Branch 4c WITH-STATE dispatch (t198 pins it does not advance).
 //   conductor: dispatches the composer -> proposal (SKIP flips for the two
 //              named pending stages) -> writes the pending marker -> gate
 //              (answerScript approves) -> runs `recompose --skip ...` ->
@@ -118,7 +118,7 @@ describe("t196 in-flight recompose journey (/aidlc compose mid-workflow, sdk liv
         // marker-deletion step has run by that instant is a live-timing race
         // (both orders observed across runs). The deterministic halves are
         // pinned elsewhere - t195 proves the Stop hook honours the marker and
-        // blocks again once it is gone; the dispatch print (t188's shape)
+        // blocks again once it is gone; the dispatch print (t198's shape)
         // carries the write/delete instruction verbatim.
       } finally {
         cleanupTestProject(proj);

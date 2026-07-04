@@ -19,7 +19,7 @@
 //   disk:      NO new scope file (still 9 + 9 - the matched path skips the
 //              write); a born intent whose state carries Scope: bugfix.
 //
-// The deterministic halves are pinned by t188 (the --report flag parses,
+// The deterministic halves are pinned by t198 (the --report flag parses,
 // value not leaked). This proves the LIVE triage->route->birth arc.
 //
 // It SPENDS TOKENS - driveAidlc drives the real /aidlc on Opus/Bedrock. Gated

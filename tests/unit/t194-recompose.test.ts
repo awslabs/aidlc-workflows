@@ -30,7 +30,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   cleanupTestProject,
@@ -197,6 +197,31 @@ describe("t194 recompose - rejections", () => {
     const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "functional-design"]);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("walking-skeleton gate");
+  });
+
+  test("ADD-direction anchor move rejected: promoting a construction stage AHEAD of the anchor", () => {
+    // bugfix's first construction EXECUTE is code-generation; functional-design
+    // sits ahead of it in the grid. Promoting it would silently relocate the
+    // walking-skeleton gate anchor, so the ADD must reject like the SKIP does.
+    const proj = bornProject("bugfix");
+    const r = run(proj, "aidlc-utility.ts", ["recompose", "--add", "functional-design"]);
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain("walking-skeleton gate anchor");
+    // And the state file is untouched by the rejection.
+    expect(readState(proj)).toMatch(/- \[ \] functional-design — SKIP/);
+  });
+
+  test("completed workflow rejected: recompose refuses when Status is not Running", () => {
+    const proj = bornProject();
+    // Terminalize the workflow the way complete-workflow does.
+    const sp = statePathOf(proj);
+    const terminal = readFileSync(sp, "utf-8").replace(/- \*\*Status\*\*: Running/, "- **Status**: Completed");
+    expect(terminal).toContain("- **Status**: Completed");
+    writeFileSync(sp, terminal, "utf-8");
+    const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain("not Running");
+    expect(readState(proj)).toBe(terminal);
   });
 
   test("unknown slug, overlap, and empty flips all reject", () => {

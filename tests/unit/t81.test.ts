@@ -235,7 +235,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
   });
 
   // --- Test 3: t28 audit count unchanged BY THIS PR's discriminator reuse ---
-  test("3: framework event count pinned at 69 (no bump from this PR's discriminator reuse)", () => {
+  test("3: framework event count pinned at 70 (no bump from this PR's discriminator reuse)", () => {
     // The .sh read t28's pinned $TS_COUNT. Under milestone 4, t28 is now a
     // .test.ts (no `assert_eq N "$TS_COUNT"` line to grep), so pin the SAME
     // observable against the SOURCE OF TRUTH instead — VALID_EVENT_TYPES in

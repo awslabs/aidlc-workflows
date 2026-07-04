@@ -1242,6 +1242,40 @@ export function canonicalScopeGridJson(grid: ScopeGrid): string {
   return `${JSON.stringify(grid, null, 2)}\n`;
 }
 
+/** Fold COMPOSED-scope entries from the on-disk grid into a freshly
+ *  transposed one. The transpose derives only the stock scopes (those a
+ *  stage's `scopes:` frontmatter names); a composed scope's grid entry is
+ *  appended at approval time by the composer and has no frontmatter
+ *  producer, so a bare re-transpose would silently drop it — and with the
+ *  scope's `.md` still present the name stays "valid" and resolves as
+ *  all-SKIP, an emptied plan with no diagnostic. Any on-disk entry whose
+ *  scope name the transpose does not produce survives the recompile; keys
+ *  re-sort so the canonical emitter stays deterministic. Unparseable or
+ *  malformed on-disk grids contribute nothing (fresh wins). */
+export function mergeComposedScopes(fresh: ScopeGrid, onDiskJson: string | null): ScopeGrid {
+  if (!onDiskJson) return fresh;
+  let onDisk: unknown;
+  try {
+    onDisk = JSON.parse(onDiskJson);
+  } catch {
+    return fresh;
+  }
+  if (typeof onDisk !== "object" || onDisk === null || Array.isArray(onDisk)) return fresh;
+  const merged: ScopeGrid = { ...fresh };
+  for (const [name, entry] of Object.entries(onDisk as Record<string, unknown>)) {
+    if (name in merged) continue;
+    if (
+      typeof entry === "object" && entry !== null && !Array.isArray(entry) &&
+      typeof (entry as { stages?: unknown }).stages === "object"
+    ) {
+      merged[name] = entry as ScopeGrid[string];
+    }
+  }
+  const sorted: ScopeGrid = {};
+  for (const k of Object.keys(merged).sort()) sorted[k] = merged[k];
+  return sorted;
+}
+
 /** Parse a numeric stage identifier like "3.5" into a tuple [phase, index]
  *  for total-ordering comparison. Returns negative, zero, or positive. */
 export function numericStageOrder(a: string, b: string): number {
@@ -1468,9 +1502,21 @@ export function compileStageGraph(): {
     }
   }
 
+  // The grid transpose covers only frontmatter-declared (stock) scopes;
+  // composed scopes live solely as appended grid entries, so fold the
+  // on-disk grid's composed entries back in before emitting — a recompile
+  // must never destroy an approved composed scope.
+  let onDiskGrid: string | null = null;
+  try {
+    onDiskGrid = readFileSync(scopeGridPath(), "utf-8");
+  } catch {
+    /* first compile: no grid on disk yet */
+  }
   return {
     json: canonicalStageGraphJson(stages),
-    gridJson: canonicalScopeGridJson(transposeScopeGrid(stages)),
+    gridJson: canonicalScopeGridJson(
+      mergeComposedScopes(transposeScopeGrid(stages), onDiskGrid),
+    ),
     stages,
   };
 }
@@ -1568,12 +1614,25 @@ function runCompileCheck(): void {
   // stage's scopes:). Same drift discipline as stage-graph.json — a stale
   // grid (someone edited a stage's scopes: without recompiling) fails CI.
   // Read the grid path lazily so a missing grid file reports the same way
-  // as a stale one rather than throwing an unhandled ENOENT.
+  // as a stale one rather than throwing an unhandled ENOENT. The on-disk
+  // bytes are re-emitted through the canonical emitter before comparing:
+  // the composer APPENDS its approved entry (insertion order, end of file)
+  // while the emitter sorts scope keys, so a purely positional difference
+  // must not read as drift — only a real content difference (a cell, a
+  // scope, a stage set) fails the check.
   let gridOnDisk: string;
   try {
     gridOnDisk = readFileSync(scopeGridPath(), "utf-8");
   } catch {
     gridOnDisk = "";
+  }
+  try {
+    const parsed = JSON.parse(gridOnDisk) as ScopeGrid;
+    const sorted: ScopeGrid = {};
+    for (const k of Object.keys(parsed).sort()) sorted[k] = parsed[k];
+    gridOnDisk = canonicalScopeGridJson(sorted);
+  } catch {
+    /* unparseable/missing grid: compare the raw bytes (guaranteed drift) */
   }
   if (gridJson !== gridOnDisk) {
     console.error(

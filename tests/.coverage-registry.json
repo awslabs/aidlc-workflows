@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 414,
+    "total": 415,
     "enumeratedByClass": {
-      "function": 199,
+      "function": 200,
       "audit": 70,
       "scope": 9,
       "stage": 32,
@@ -1734,6 +1734,13 @@
     {
       "unitClass": "function",
       "unitId": "function:MERGE_SUCCEEDED_TAG_REGEX",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:mergeComposedScopes",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

@@ -3005,6 +3005,20 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
 
   withAuditLock(projectDir, () => {
     let content = readStateFile(projectDir, flags.intent, flags.space);
+    // Only a RUNNING workflow has a live plan to re-shape. A Completed (or
+    // Parked/terminated) state file is a terminal record: flipping its rows
+    // would grow Total Stages under a summary computed at completion and
+    // leave no cursor to ever reach the added stage — a corrupted record,
+    // not a plan change. (With no cursor, the behind-cursor guard below is
+    // also inert, so this check is the only thing standing between recompose
+    // and a finished workflow.)
+    const wfStatus = getField(content, "Status") || "";
+    if (wfStatus !== "Running") {
+      die(
+        `Cannot recompose: workflow Status is "${wfStatus || "unknown"}", not Running. ` +
+          "Recompose re-shapes a LIVE plan; for finished work start a new workflow instead.",
+      );
+    }
     const scope = getField(content, "Scope");
     if (!scope) die("Cannot read current Scope from state file.");
     const scopeDef = loadScopeMapping()[scope];
@@ -3044,20 +3058,27 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
     }
 
     // The walking-skeleton gate derivation keys off the FIRST construction
-    // EXECUTE stage (static). Flipping that stage to SKIP would silently move
-    // Bolt 1 and un-gate the stage that actually starts Construction - reject
+    // EXECUTE stage (static). A flip that MOVES that anchor - skipping the
+    // current anchor, or adding a construction stage AHEAD of it - would
+    // silently relocate Bolt 1 and the skeleton stance round-trip. Compare
+    // the anchor before and after the proposed flips and reject any move
     // (the cheapest sound answer; a suffix-aware gate derivation is a larger
     // change this verb must not smuggle in).
-    if (skipList.length > 0) {
-      const firstConstruction = graph.find(
-        (s) => s.phase === "construction" && effective(s.slug) === "EXECUTE",
+    const anchorOf = (plan: (slug: string) => "EXECUTE" | "SKIP"): string | undefined =>
+      graph.find((s) => s.phase === "construction" && plan(s.slug) === "EXECUTE")?.slug;
+    const anchorBefore = anchorOf(effective);
+    const anchorAfter = anchorOf((slug) => {
+      if (skipList.includes(slug)) return "SKIP";
+      if (addList.includes(slug)) return "EXECUTE";
+      return effective(slug);
+    });
+    if (anchorBefore !== anchorAfter) {
+      const mover =
+        anchorBefore && skipList.includes(anchorBefore) ? anchorBefore : (anchorAfter ?? anchorBefore ?? "construction");
+      reject(
+        mover,
+        `the flip moves the first EXECUTE stage of Construction (the walking-skeleton gate anchor) from "${anchorBefore ?? "none"}" to "${anchorAfter ?? "none"}". The skeleton gate must stay anchored; jump or change scope instead.`,
       );
-      if (firstConstruction && skipList.includes(firstConstruction.slug)) {
-        reject(
-          firstConstruction.slug,
-          "it is the first EXECUTE stage of Construction (the walking-skeleton gate anchor). Flipping it would silently move the skeleton gate; jump or change scope instead.",
-        );
-      }
     }
 
     // --- Build the proposed effective grid and validate STRICT --------------

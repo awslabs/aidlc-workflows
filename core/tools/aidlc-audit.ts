@@ -15,7 +15,7 @@ import {
   worktreePath,
 } from "./aidlc-lib.ts";
 
-// --- Canonical event types (69) ---
+// --- Canonical event types (70) ---
 // See docs/reference/12-state-machine.md for the state transitions that emit each event.
 
 const VALID_EVENT_TYPES = new Set([

@@ -2,7 +2,7 @@
 //
 // t189-compose-dispatch.sdk.test.ts - the P0 composer-dispatch beat (sdk).
 //
-// The deterministic half is pinned by t188 (the engine's Branch 4c emits the
+// The deterministic half is pinned by t198 (the engine's Branch 4c emits the
 // composer-dispatch print for compose/--new-scope/--report; Branch 8 emits the
 // inference confirm / compose offer; classifyTerminalCommand stays null). What
 // only a LIVE run can prove is the CONDUCTOR half the SKILL.md composer block
@@ -13,7 +13,7 @@
 //
 // Journey (one interactive run, stopped at the gate):
 //   drive:     `/aidlc compose "<task>"` on a fresh project (no workspace).
-//   engine:    Branch 4c print naming the composer agent (t188 pins the shape).
+//   engine:    Branch 4c print naming the composer agent (t198 pins the shape).
 //   conductor: dispatches the composer via the Task tool; the composer runs
 //              `detect --json` (its tool-result carries the scan payload);
 //              the conductor surfaces an AskUserQuestion gate.

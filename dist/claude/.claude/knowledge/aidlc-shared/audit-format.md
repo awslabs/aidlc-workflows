@@ -8,7 +8,7 @@
 
 All event names follow `SUBJECT_PAST_VERB` — every event answers "what happened?"
 
-## Event Registry (69 events, 18 categories)
+## Event Registry (70 events, 18 categories)
 
 ### Workflow Lifecycle (4 events)
 

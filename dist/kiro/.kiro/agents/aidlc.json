@@ -31,7 +31,8 @@
     "fs_write": {
       "allowedPaths": [
         "aidlc/spaces/**",
-        ".kiro/sensors/**"
+        ".kiro/sensors/**",
+        "aidlc/.aidlc-compose-pending"
       ]
     },
     "subagent": {

@@ -49,7 +49,7 @@ Below the frontmatter, the markdown body defines:
 
 ## Shared Configuration
 
-All 13 agents share a common configuration baseline. None declares a `tools:` allowlist, so every agent inherits the **full session toolset** — all of Claude Code's built-in tools plus any MCP tools provisioned to the session. The one shipped restriction is `disallowedTools: Task`.
+All 14 agents share a common configuration baseline. None declares a `tools:` allowlist, so every agent inherits the **full session toolset** — all of Claude Code's built-in tools plus any MCP tools provisioned to the session. The one shipped restriction is `disallowedTools: Task`.
 
 ### The session toolset (inherited by every agent)
 

@@ -293,3 +293,55 @@ describe("aidlc-graph compile / --check (Bun spawnSync env seam)", () => {
     );
   }, 30000);
 });
+
+// ===========================================================================
+// Composed-scope survival across compile (the recompile-clobber guard).
+// A composed scope exists ONLY as an appended grid entry (no stage
+// frontmatter names it), so a bare re-transpose would drop it while the
+// scope's .md keeps the name "valid" — the born plan silently resolves
+// all-SKIP. compile must fold composed entries back in, and --check must
+// treat a grid carrying them as clean.
+// ===========================================================================
+describe("compile preserves composed scope-grid entries", () => {
+  test("a composed entry survives recompile and --check stays clean with it present", () => {
+    const graphPath = mkTempPath("graph");
+    const gridPath = mkTempPath("grid");
+    copyFileSync(GRAPH_JSON, graphPath);
+    copyFileSync(GRID_JSON, gridPath);
+
+    // Append a composed entry the way the composer writes it.
+    const grid = JSON.parse(readFileSync(gridPath, "utf-8")) as Record<
+      string,
+      { stages: Record<string, "EXECUTE" | "SKIP"> }
+    >;
+    const donor = Object.keys(grid)[0];
+    grid["composed-t124"] = { stages: { ...grid[donor].stages } };
+    writeFileSync(gridPath, `${JSON.stringify(grid, null, 2)}\n`, "utf-8");
+
+    // A grid carrying a composed entry is NOT drift: --check exits 0.
+    const check = runGraph(["compile", "--check"], graphPath, gridPath);
+    expect(check.status).toBe(0);
+
+    // A full recompile keeps the composed entry (and the stock scopes).
+    const r = runGraph(["compile"], graphPath, gridPath);
+    expect(r.status).toBe(0);
+    const after = JSON.parse(readFileSync(gridPath, "utf-8")) as Record<
+      string,
+      { stages: Record<string, string> }
+    >;
+    expect(Object.keys(after)).toContain("composed-t124");
+    expect(Object.keys(after)).toContain(donor);
+    expect(after["composed-t124"].stages).toEqual(grid["composed-t124"].stages);
+  }, 30000);
+
+  test("a malformed on-disk grid contributes nothing (fresh transpose wins)", () => {
+    const graphPath = mkTempPath("graph");
+    const gridPath = mkTempPath("grid");
+    copyFileSync(GRAPH_JSON, graphPath);
+    writeFileSync(gridPath, "{ not json", "utf-8");
+    const r = runGraph(["compile"], graphPath, gridPath);
+    expect(r.status).toBe(0);
+    const after = JSON.parse(readFileSync(gridPath, "utf-8"));
+    expect(Object.keys(after).length).toBeGreaterThan(0);
+  }, 30000);
+});
