@@ -8,7 +8,11 @@ byte-identical to every other harness distribution; only the shell differs. Run
 `$aidlc --status` for progress, `$aidlc --help` for usage, `$aidlc intent`
 to list intents, `$aidlc --doctor` to validate setup, and
 `$aidlc --stage <slug>` / `--phase <name>` / `--depth <level>` /
-`--test-strategy <level>` for the usual overrides.
+`--test-strategy <level>` for the usual overrides. Run `$aidlc compose
+"<task>"` to have the adaptive composer propose a tailored EXECUTE/SKIP plan
+(up front, from a scan report via `--report <path>`, or mid-workflow to
+re-shape the pending stages - every proposal stops at an approve/edit/reject
+gate).
 
 ## Prerequisites
 

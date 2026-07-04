@@ -164,6 +164,9 @@ Scopes (set depth, test strategy, and stage count):
 const HELP_TEXT_TAIL = `
 Utilities:
   --status          Show current workflow progress (read-only)
+  compose "<task>"  Propose a tailored EXECUTE/SKIP plan (mid-workflow: re-shape the pending stages)
+  compose --report <path>  Compose from a scan report (triage findings into a fix-and-ship run)
+  --new-scope "<task>"  Force the composer to synthesize a custom scope even when a stock scope matches
   intent            List intents in the active space (read-only; --json for structured output)
   intent <name>     Switch the active intent
   space             List spaces (read-only; --json for structured output)
@@ -186,6 +189,7 @@ Other:
 Examples:
   /aidlc feature                                Start a feature workflow
   /aidlc Fix the login timeout bug              Auto-detected as bugfix scope
+  /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
   /aidlc                                        Resume or begin
   /aidlc --stage code-generation                Jump to code-generation stage
   /aidlc --phase construction --scope bugfix    Jump to construction with bugfix scope
@@ -3702,7 +3706,7 @@ function main(): void {
       break;
     default:
       die(
-        `Usage: aidlc-utility <help|version|status|doctor|intent-birth|intent|space|space-create|codekb-path|detect|scope-change|config-change|set-status|detect-scope|resolve-env-scope|scope-table> [--project-dir <path>] [--scope <scope>] [--json]`
+        `Usage: aidlc-utility <help|version|status|doctor|intent-birth|intent|space|space-create|codekb-path|detect|recompose|scope-change|config-change|set-status|detect-scope|resolve-env-scope|scope-table> [--project-dir <path>] [--scope <scope>] [--json]`
       );
   }
 }

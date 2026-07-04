@@ -154,7 +154,7 @@ When no stock scope clearly fits (rich prose, no keyword hit, or a keyword burie
 The composer agent reads your task and the workspace scan (brownfield/greenfield, languages), then proposes the EXECUTE/SKIP grid that fits, with a reason for every skipped stage. You approve, edit, or reject at a gate; nothing is written and no workflow starts before an explicit approval. On approve:
 
 - If the proposal MATCHED a stock scope, the workflow births on that scope directly (a scan report full of code-level findings usually routes to `bugfix` or `security-patch` this way).
-- For a CUSTOM grid, the composer authors a real scope (a `scopes/aidlc-<name>.md` plus a `scope-grid.json` entry) and the workflow births on it in the same turn. The composed scope resolves like any stock scope afterwards (`/aidlc --scope <name>`).
+- For a CUSTOM grid, the composer authors a real scope (a `scopes/aidlc-<name>.md` plus a `scope-grid.json` entry) and the workflow births on it in the same turn. The composed scope resolves like any stock scope afterwards (`/aidlc --scope <name>`), and it survives a graph recompile: `aidlc-graph.ts compile` folds composed grid entries back into the regenerated `scope-grid.json` rather than rebuilding the grid from stage frontmatter alone.
 
 **Keyword hygiene:** composed scopes ship with `keywords: []`, so a one-off plan never participates in keyword auto-detection. Making a composed scope inferable for future prompts is an explicit question at the gate, never a side effect.
 
