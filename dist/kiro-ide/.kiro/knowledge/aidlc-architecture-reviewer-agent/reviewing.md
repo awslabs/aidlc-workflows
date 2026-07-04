@@ -57,7 +57,7 @@ Append a `## Review` section to the PRIMARY artifact file. Use this exact format
 
 **Verdict:** READY | NOT-READY
 **Reviewer:** aidlc-architect-agent
-**Date:** [ISO timestamp]
+**Date:** [ISO timestamp from Bash]
 **Iteration:** [1, 2, etc.]
 
 ### Findings
@@ -79,6 +79,8 @@ Append a `## Review` section to the PRIMARY artifact file. Use this exact format
 
 [1-2 sentences: what's the main architectural concern, or why it's ready.]
 ```
+
+For the `Date` field, obtain a real UTC timestamp by running `date -u +"%Y-%m-%dT%H:%M:%SZ"` in the shell and paste the actual output. Never guess or infer the date.
 
 ### Severity Levels
 

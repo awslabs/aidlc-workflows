@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.4] - 2026-07-05
+
+The two review-only agents now record a real UTC timestamp on the `## Review` section they append, instead of a guessed date. The Review template's `Date` field was a bare `[ISO timestamp]` placeholder with no sourcing instruction, so reviewers filled it in from memory; it now instructs the reviewer to run `date -u +"%Y-%m-%dT%H:%M:%SZ"` in the shell and paste the actual output, matching the `[ISO timestamp from Bash]` convention already used elsewhere. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Reviewer `## Review` sections (product-lead and architecture-reviewer agents) now carry a real shell-sourced UTC timestamp in the `Date` field rather than an inferred date.
+
 ## [2.2.3] - 2026-07-05
 
 Fixes a fragile process respawn in the Kiro CLI, Kiro IDE, and Codex hook adapters. Each adapter dispatches the framework's core lifecycle hooks (and, on Kiro, the off-band utility commands) by spawning a child process named `bun` by bare name. That child inherits the hook environment's `$PATH`, which on GUI-launched apps and minimal server environments often omits the bun install dir (`~/.bun/bin`), so the spawn fails with `Executable not found in $PATH: bun` and the whole hook layer dies. The adapters now respawn via the absolute path of the bun binary already running them (`process.execPath`), so the hooks themselves run again without `bun` on `PATH`: audit logging, session lifecycle, state validation, and subagent tracking are fully restored. Known limitation: four core hooks spawn a further `bun` child of their own (the stop guard's engine consult, the statusline state sync, the runtime-graph compile, and the sensor dispatch), and those children still resolve `bun` off `PATH`, so on a `bun`-less `PATH` they stay degraded (the stop guard fails open, the statusline does not update, the runtime graph is not recompiled, sensors do not fire); a follow-up threads the running binary down to those spawns. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
