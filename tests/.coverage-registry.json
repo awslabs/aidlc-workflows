@@ -3924,6 +3924,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t199-learnings-memory-path.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t97.test.ts",
           "mechanism": "cli"
         }
@@ -3985,6 +3989,10 @@
         },
         {
           "file": "tests/unit/t133-bolt-dag-compile.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t199-learnings-memory-path.test.ts",
           "mechanism": "cli"
         }
       ],

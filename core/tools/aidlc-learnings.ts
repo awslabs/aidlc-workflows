@@ -194,7 +194,13 @@ function handleSurface(args: string[], projectDir: string): void {
   const raw = existsSync(memAbs) ? readFileSync(memAbs, "utf-8") : "";
   const entries = parseMemoryEntries(raw);
 
-  const phase = memRel.split("/")[1] ?? "";
+  // memory_path always ends `<prefix>/<phase>/<stageSlug>/memory.md` (see
+  // relativeMemoryPath), so the phase is the third-from-last segment regardless
+  // of prefix shape: the per-intent record dir, the bare space prefix, or the
+  // legacy flat `aidlc-docs` root all share that tail. Indexing from the front
+  // assumed the flat layout and yielded "spaces" under the workspace prefix.
+  const segs = memRel.split("/");
+  const phase = segs.at(-3) ?? "";
 
   const candidates: SurfaceCandidate[] = [];
   const parked: SurfaceParkedQuestion[] = [];

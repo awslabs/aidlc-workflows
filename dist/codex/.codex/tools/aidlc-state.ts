@@ -995,7 +995,7 @@ function handleAdvance(args: string[]): void {
       completed_count: completedCount,
       next_after: nextAfterNext ? nextAfterNext.slug : null,
       already_completed: alreadyMarkedCompleted,
-      memory_path: relativeMemoryPath(nextStage.phase, nextStage.slug),
+      memory_path: relativeMemoryPath(nextStage.phase, nextStage.slug, relativeRecordDir(pd)),
       timestamp,
     })
   );

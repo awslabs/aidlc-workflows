@@ -354,6 +354,13 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
   const stages: RuntimeStage[] = [];
   const zeroEntryApprovedStages: { slug: string; completed_at: string }[] = [];
 
+  // The active intent's RELATIVE record-dir prefix (aidlc/spaces/<sp>/intents/
+  // <slug>-<id8>), so each row's memory_path resolves under the active intent
+  // rather than the bare space prefix. null -> the bare space record prefix (a
+  // pre-birth shell with no intent). Resolved once: the active intent is stable
+  // across a single compile.
+  const recordPrefix = relativeRecordDir(projectDir);
+
   for (const [slug, entry] of slugsByStartTime) {
     const phaseInfo = phaseMap.get(slug);
     if (!phaseInfo) continue; // unknown slug — skip rather than fail
@@ -367,7 +374,7 @@ function compile(opts: CompileOptions): { skipped?: string; written?: string } {
       started_at: entry.started_at,
       completed_at: entry.completed_at,
       agent: entry.agent || phaseInfo.agent,
-      memory_path: relativeMemoryPath(phaseInfo.phase, slug),
+      memory_path: relativeMemoryPath(phaseInfo.phase, slug, recordPrefix),
       memory_entries: memory.memory_entries,
       memory_breakdown: memory.memory_breakdown,
       sensor_firings: [],

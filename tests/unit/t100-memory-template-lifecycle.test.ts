@@ -68,6 +68,7 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
+  DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   FIXTURES_DIR,
   resetAidlcEnv,
@@ -76,11 +77,12 @@ import {
 
 resetAidlcEnv();
 
-// P9: advance/approve emit memory_path against the BARE space record prefix
-// (relativeMemoryPath called with no recordPrefix -> relativeSpaceRecordPrefix);
-// the flat aidlc-docs/ prefix is retired. `advance` does not thread the active
-// intent's record dir, so the row carries the bare-space prefix.
-const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents`;
+// advance/approve emit memory_path against the ACTIVE INTENT's record prefix
+// (relativeMemoryPath threaded relativeRecordDir(pd) -> aidlc/spaces/<sp>/intents/
+// <slug>-<id8>); the flat aidlc-docs/ prefix is retired. midIdeationProject seeds
+// the active-intent cursor at DEFAULT_RECORD_DIR (via createTestProject), so the
+// row carries the per-intent record dir.
+const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-state.ts");

@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.2] - 2026-07-05
+
+Fixes the learnings gate returning zero candidates (or the wrong phase) once a project moved to the per-intent workspace layout. The runtime-graph row's `memory_path` was recorded without the active intent's record dir, and the learnings surface read the phase from the wrong path segment, so `learnings surface` looked for the diary in the wrong place and mislabeled its phase. Both the write side (runtime-graph compile and the state advance transition) and the read side (surface's phase extraction) now use the per-intent record path. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `learnings surface` now finds a stage's captured learnings under the workspace layout instead of surfacing zero candidates: the runtime-graph `memory_path` it reads now includes the active intent's record dir.
+* The `phase` field in the `learnings surface` JSON is now correct under the workspace layout (it previously reported `spaces` for any per-intent project); the legacy flat layout still reports the right phase.
+
 ## [2.2.1] - 2026-07-04
 
 Stops help requests from accidentally creating intents. `/aidlc intent help` was parsed as "switch to an intent named help"; the failed switch died with an error inviting the agent to "describe what to build to start a new one", which a conductor mid-task read as an instruction and birthed an unwanted intent. Bare `/aidlc help` and `/aidlc -h` were worse: they fell into the freeform-description funnel and offered to birth an intent literally named "help" (or silently advanced the active stage). All help-shaped inputs now route to the help text. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
