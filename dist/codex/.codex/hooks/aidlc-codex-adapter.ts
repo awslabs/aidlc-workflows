@@ -160,7 +160,9 @@ try {
 // --- Core-hook subprocess plumbing ------------------------------------------
 
 function runCore(hookFile: string, input: string): { stdout: string; code: number } {
-  const r = Bun.spawnSync(["bun", join(HOOKS_DIR, hookFile)], {
+  // Reuse the exact bun binary running this adapter; the child must not depend on
+  // PATH containing bun (the hook environment often lacks the bun install dir).
+  const r = Bun.spawnSync([process.execPath, join(HOOKS_DIR, hookFile)], {
     stdin: Buffer.from(input, "utf-8"),
     stdout: "pipe",
     stderr: "ignore",

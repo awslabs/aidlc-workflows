@@ -32,7 +32,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { birthIntent } from "../../core/tools/aidlc-lib.ts";
 import {
@@ -426,6 +426,68 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // --- Adapter respawns children via the running bun, not a PATH lookup ---
+  //
+  // The adapter dispatches every core lifecycle hook (runCore) and the off-band
+  // utility commands by spawning a child bun process. A bare-name "bun" argv[0]
+  // inherits the hook environment's $PATH; on GUI-launched apps / minimal server
+  // environments that PATH often lacks the bun install dir, so the child spawn
+  // fails ENOENT and the whole hook layer dies. The fix reuses the exact bun
+  // running the adapter (process.execPath), which needs no PATH at all.
+
+  /** PATH stripped of every dir that resolves a `bun` binary (the fragile hook
+   *  environment the fix targets). Deterministic: reads real disk. */
+  function pathWithoutBun(): string {
+    const entries = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
+    return entries.filter((d) => !existsSync(join(d, "bun"))).join(delimiter);
+  }
+
+  test("14: session-start dispatches even when the child PATH has no bun (respawn uses process.execPath)", () => {
+    // The adapter is launched via the ABSOLUTE bun (process.execPath), so it
+    // starts regardless of PATH; the contract under test is that its OWN child
+    // respawn (runCore) also does not need bun on PATH. Under the old bare-"bun"
+    // argv[0] this session-start would ENOENT in runCore and emit nothing.
+    const dir = scratchProject(true);
+    try {
+      const strippedPath = pathWithoutBun();
+      // Premise guard: bun must genuinely be unresolvable on the stripped PATH,
+      // else the test proves nothing.
+      expect(strippedPath.split(delimiter).some((d) => existsSync(join(d, "bun")))).toBe(false);
+      const r = spawnSync(
+        process.execPath,
+        [join(dir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "session-start"],
+        {
+          cwd: dir,
+          input: JSON.stringify(FIXTURES.agentSpawn),
+          encoding: "utf-8",
+          env: { ...process.env, CLAUDE_PROJECT_DIR: dir, PATH: strippedPath },
+          timeout: 30_000,
+        },
+      );
+      expect(r.status ?? -1).toBe(0);
+      // The core hook ran (its output made it back through the child respawn).
+      expect(r.stdout ?? "").toContain("AIDLC WORKFLOW ACTIVE");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("15: shipped kiro + kiro-ide adapter sources respawn via process.execPath, never a bare 'bun' argv[0]", () => {
+    // Source pin (matches this suite's grep-pin style). Both shipped adapter
+    // copies must spawn children via the running interpreter, so a stale
+    // regeneration or a hand-edit reintroducing the bare-name respawn reds here.
+    for (const adapter of [
+      join(REPO_ROOT, "dist", "kiro", ".kiro", "hooks", "aidlc-kiro-adapter.ts"),
+      join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks", "aidlc-kiro-adapter.ts"),
+    ]) {
+      const src = readFileSync(adapter, "utf-8");
+      // No spawn whose argv[0] is the bare literal "bun".
+      expect(/spawnSync\(\s*\[\s*"bun"/.test(src)).toBe(false);
+      // The respawn seam names process.execPath.
+      expect(src).toContain("process.execPath");
     }
   });
 });

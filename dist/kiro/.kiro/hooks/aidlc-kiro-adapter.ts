@@ -137,7 +137,9 @@ if (target === "verb-intercept") {
   const cwd = kiro.cwd ?? process.cwd();
   const utilArgs = [join(".kiro", "tools", "aidlc-utility.ts"), cmd.subcommand];
   if (cmd.arg !== undefined) utilArgs.push(cmd.arg);
-  const run = Bun.spawnSync(["bun", ...utilArgs], { cwd, stdout: "pipe", stderr: "pipe" });
+  // Reuse the exact bun binary running this adapter; the child must not depend on
+  // PATH containing bun (the hook environment often lacks the bun install dir).
+  const run = Bun.spawnSync([process.execPath, ...utilArgs], { cwd, stdout: "pipe", stderr: "pipe" });
   const out = ((run.stdout?.toString() ?? "") + (run.stderr?.toString() ?? "")).trim();
 
   // Turn-scoped latch: a terminal command was handled OFF-BAND this turn (the
@@ -376,7 +378,9 @@ function buildForward(): Forward {
 }
 
 function runCore(hookFile: string, input: Record<string, unknown>): { stdout: string; code: number } {
-  const r = Bun.spawnSync(["bun", join(HOOKS_DIR, hookFile)], {
+  // Reuse the exact bun binary running this adapter; the child must not depend on
+  // PATH containing bun (the hook environment often lacks the bun install dir).
+  const r = Bun.spawnSync([process.execPath, join(HOOKS_DIR, hookFile)], {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",
     stderr: "ignore",

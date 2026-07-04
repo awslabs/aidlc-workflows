@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.3] - 2026-07-05
+
+Fixes a fragile process respawn in the Kiro CLI, Kiro IDE, and Codex hook adapters. Each adapter dispatches the framework's core lifecycle hooks (and, on Kiro, the off-band utility commands) by spawning a child process named `bun` by bare name. That child inherits the hook environment's `$PATH`, which on GUI-launched apps and minimal server environments often omits the bun install dir (`~/.bun/bin`), so the spawn fails with `Executable not found in $PATH: bun` and the whole hook layer dies (no audit logging, no session lifecycle, no stop guard, no statusline sync). The adapters now respawn via the absolute path of the bun binary already running them (`process.execPath`), so the child never depends on `bun` being on `PATH`. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Kiro CLI, Kiro IDE, and Codex hook adapters no longer fail with `Executable not found in $PATH: "bun"` when the hook environment lacks the bun install dir; they reuse the exact bun binary running the adapter instead of resolving `bun` off `PATH`.
+* No new commands or flags; no breaking change for CI or scripts.
+
 ## [2.2.2] - 2026-07-05
 
 Fixes the learnings gate returning zero candidates (or the wrong phase) once a project moved to the per-intent workspace layout. The runtime-graph row's `memory_path` was recorded without the active intent's record dir, and the learnings surface read the phase from the wrong path segment, so `learnings surface` looked for the diary in the wrong place and mislabeled its phase. Both the write side (runtime-graph compile and the state advance transition) and the read side (surface's phase extraction) now use the per-intent record path. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

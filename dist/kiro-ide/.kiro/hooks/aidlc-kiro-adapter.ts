@@ -231,7 +231,9 @@ function buildForward(): Forward {
 }
 
 function runCore(hookFile: string, input: Record<string, unknown>): { stdout: string; code: number } {
-  const r = Bun.spawnSync(["bun", join(HOOKS_DIR, hookFile)], {
+  // Reuse the exact bun binary running this adapter; the child must not depend on
+  // PATH containing bun (the hook environment often lacks the bun install dir).
+  const r = Bun.spawnSync([process.execPath, join(HOOKS_DIR, hookFile)], {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",
     stderr: "ignore",

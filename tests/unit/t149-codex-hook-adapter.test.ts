@@ -43,7 +43,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { birthIntent } from "../../core/tools/aidlc-lib.ts";
 import {
@@ -559,5 +559,67 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // --- Adapter respawns children via the running bun, not a PATH lookup ---
+  //
+  // The Codex adapter dispatches every core lifecycle hook (runCore) by spawning
+  // a child bun process. A bare-name "bun" argv[0] inherits the hook
+  // environment's $PATH; on a minimal environment that PATH often lacks the bun
+  // install dir, so the child spawn fails ENOENT and the whole hook layer dies.
+  // The fix reuses the exact bun running the adapter (process.execPath).
+
+  /** PATH stripped of every dir that resolves a `bun` binary (the fragile hook
+   *  environment the fix targets). Deterministic: reads real disk. */
+  function pathWithoutBun(): string {
+    const entries = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
+    return entries.filter((d) => !existsSync(join(d, "bun"))).join(delimiter);
+  }
+
+  test("16: session-start dispatches even when the child PATH has no bun (respawn uses process.execPath)", () => {
+    // The adapter is launched via the ABSOLUTE bun (process.execPath), so it
+    // starts regardless of PATH; the contract under test is that its OWN child
+    // respawn (runCore) also does not need bun on PATH. Under the old bare-"bun"
+    // argv[0] this session-start would ENOENT in runCore and emit nothing.
+    const dir = scratchProject(true);
+    try {
+      const strippedPath = pathWithoutBun();
+      // Premise guard: bun must genuinely be unresolvable on the stripped PATH.
+      expect(strippedPath.split(delimiter).some((d) => existsSync(join(d, "bun")))).toBe(false);
+      const r = spawnSync(
+        process.execPath,
+        [join(dir, ".codex", "hooks", "aidlc-codex-adapter.ts"), "session-start"],
+        {
+          cwd: dir,
+          input: JSON.stringify(withCwd(FIXTURES.sessionStart, dir)),
+          encoding: "utf-8",
+          env: {
+            ...process.env,
+            CLAUDE_PROJECT_DIR: undefined,
+            PATH: strippedPath,
+          } as NodeJS.ProcessEnv,
+          timeout: 30_000,
+        },
+      );
+      expect(r.status ?? -1).toBe(0);
+      const out = JSON.parse(r.stdout ?? "{}") as {
+        hookSpecificOutput?: { additionalContext?: string };
+      };
+      // The core hook ran (its output made it back through the child respawn).
+      expect(out.hookSpecificOutput?.additionalContext ?? "").toContain("AIDLC WORKFLOW ACTIVE");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("17: shipped codex adapter source respawns via process.execPath, never a bare 'bun' argv[0]", () => {
+    // Source pin (matches this suite's grep-pin style). A stale regeneration or a
+    // hand-edit reintroducing the bare-name respawn reds here.
+    const src = readFileSync(
+      join(REPO_ROOT, "dist", "codex", ".codex", "hooks", "aidlc-codex-adapter.ts"),
+      "utf-8",
+    );
+    expect(/spawnSync\(\s*\[\s*"bun"/.test(src)).toBe(false);
+    expect(src).toContain("process.execPath");
   });
 });
