@@ -360,8 +360,9 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
       // to a record named "help" (no per-verb help exists; the failed switch's
       // error text steers the conductor into birthing an intent, and "help" is
       // a reserved record name - see RESERVED_RECORD_NAMES). Mirrors
-      // parseNextFlags. space-create is excluded: it dies on the reserved name
-      // with its own actionable error rather than silently printing help.
+      // parseNextFlags. space-create is excluded: its handler refuses a
+      // help-shaped name itself rather than silently printing help (the
+      // reserved-name guard alone would miss "-h", which slugifies to "h").
       if ((a === "intent" || a === "space") && (arg === "help" || arg === "-h")) {
         return { subcommand: "help", source: "read-only-flag" };
       }

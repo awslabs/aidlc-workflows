@@ -2778,6 +2778,12 @@ function handleDetect(projectDir: string, flags: Record<string, string>): void {
 function handleSpaceCreate(projectDir: string, positional: string[], _flags: Record<string, string>): void {
   const raw = positional[1];
   if (!raw) die("Usage: aidlc-utility space-create <name>");
+  // A help-shaped arg is a help request, not a name. Checked BEFORE slugify:
+  // slugify("-h") is "h", which is not a reserved name, so the guard below
+  // would let it through and a junk space would be created.
+  if (raw === "-h" || raw === "help") {
+    die("Did you mean /aidlc --help? To create a space, pass a name: /aidlc space-create <name>.");
+  }
   const name = slugify(raw);
   // "help" is grammar (`space help` prints help), so a space with that slug
   // would be unswitchable by name - refuse it here, the creation chokepoint.

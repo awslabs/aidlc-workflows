@@ -303,8 +303,9 @@ function parseNextFlags(args: string[]): ParsedFlags {
       // switch would die with an error whose recovery text steers the
       // conductor into birthing an intent ("help" is also a reserved record
       // name - RESERVED_RECORD_NAMES - so no real record is shadowed). Route
-      // it to the global help print. space-create is excluded: it dies on the
-      // reserved name with its own actionable error.
+      // it to the global help print. space-create is excluded: its handler
+      // refuses a help-shaped name itself with an actionable error (the
+      // reserved-name guard alone would miss "-h", which slugifies to "h").
       // PARITY: classifyTerminalCommand (aidlc-lib.ts) mirrors this rule.
       if ((a === "intent" || a === "space") && (arg === "help" || arg === "-h")) {
         return { readOnly: "--help" };

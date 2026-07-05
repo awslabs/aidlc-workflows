@@ -412,7 +412,7 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
     expect(s.out).not.toContain("Unknown space");
   });
 
-  test("'help' is a reserved record name at both creation chokepoints", () => {
+  test("'help' is refused at both creation chokepoints", () => {
     // The router treats `intent help` / `space help` as help requests, so a
     // record slugged "help" would be unswitchable by name. Creation refuses it.
     const b = util(["intent-birth", "--scope", "poc", "--label", "help"]);
@@ -422,9 +422,33 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
     // created on this stripped workspace, and if present it holds no record.
     const dirs = existsSync(intentsDir(proj)) ? readdirSync(intentsDir(proj)) : [];
     expect(dirs.filter((d) => d.endsWith("-help"))).toEqual([]);
+    // space-create refuses help-shaped names with a help steer (before
+    // slugify, so it also covers the "-h" case below).
     const c = util(["space-create", "help"]);
     expect(c.status).not.toBe(0);
-    expect(c.out).toContain("reserved name");
+    expect(c.out).toContain("Did you mean /aidlc --help");
+  });
+
+  test("`space-create -h` is a help request, not a space named h", () => {
+    // slugify("-h") is "h", which is NOT a reserved name, so the reserved-name
+    // guard alone would create a junk space. The handler refuses help-shaped
+    // args before slugify.
+    const c = util(["space-create", "-h"]);
+    expect(c.status).not.toBe(0);
+    expect(c.out).toContain("Did you mean /aidlc --help");
+    // No space was created - neither "h" nor anything help-shaped.
+    expect(existsSync(join(proj, "aidlc", "spaces", "h"))).toBe(false);
+  });
+
+  test("an unknown-space switch fails without inviting creation", () => {
+    // Pins the wording the same way the unknown-intent case below is pinned:
+    // the error must steer to switching between EXISTING spaces only, never
+    // read as an instruction to create one.
+    const r = util(["space", "no-such-space"]);
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain("Unknown space");
+    expect(r.out).toContain("no-such-space");
+    expect(r.out).toContain("Do not create a space to recover");
   });
 
   test("an unknown-intent switch fails without inviting new work", () => {

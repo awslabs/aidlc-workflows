@@ -290,6 +290,16 @@ describe("t114 help-request routing", () => {
     expect(out).toContain("aidlc-utility.ts help");
   });
 
+  test("`space -h` routes to help like `space help`", () => {
+    // The engine parser and classifyTerminalCommand are supposed to mirror
+    // each other; the Kiro seam is pinned elsewhere, this pins the engine.
+    proj = createTestProject();
+    const out = runNext(proj, ["space", "-h"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-utility.ts help");
+    expect(out).not.toContain("aidlc-utility.ts space -h");
+  });
+
   test("a marker-led blob stays freeform and reaches the safe ask funnel", () => {
     // The engine does NOT repair a conductor that echoes the whole invocation
     // line - re-tokenizing prose deterministically hijacked real descriptions.
