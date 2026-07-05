@@ -68,6 +68,10 @@ Reply with a number (or just tell me).
 
 Rules (both tracks):
 
+- **Approval gate `[next stage]`**: on an approval question, render the
+  `Continue to [next stage]` placeholder from the run-stage directive's
+  `next_stage` field verbatim (e.g. `Continue to NFR Requirements`); render
+  `Complete workflow` when `next_stage` is null. Never guess the next stage.
 - **No emergent options**: render exactly the spec's options (+ the escape).
   The NO EMERGENT BEHAVIOR rule applies to the rendering, not just the spec.
 - **multiSelect: true** → prose track says "Reply with all numbers that apply

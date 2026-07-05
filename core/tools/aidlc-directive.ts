@@ -89,6 +89,14 @@ export interface RunStageDirective {
   // in-context, with no skill referencing that file by path. Absent on every
   // later directive (the persona persists in the session once delivered).
   conductor_persona?: string;
+  // next_stage: the display name of the in-scope stage that FOLLOWS this one,
+  // resolved by the engine so the approval gate's Approve option can read
+  // "Continue to <next_stage>" verbatim. null = this is the final in-scope
+  // stage (the conductor renders "Complete workflow" instead). Optional: absent
+  // and null both carry no next-stage name. The conductor renders this value
+  // verbatim and NEVER infers the next stage itself (issue: the placeholder used
+  // to render as a guessed "Code Generation" regardless of the real target).
+  next_stage?: string | null;
   // unit: present ONLY on a per-unit Construction directive (for_each:
   // unit-of-work) that the engine resolved to a CONCRETE Unit of Work; absent
   // otherwise, and absent when the engine fell back to the {unit-name}
@@ -136,6 +144,7 @@ export interface DispatchSubagentDirective {
   stage_file: string;
   worker: string;
   conductor_persona?: string;
+  next_stage?: string | null;
   consumes_absent?: Array<{ path: string; expected: boolean }>;
 }
 
@@ -270,6 +279,7 @@ const RUN_STAGE_FIELDS = [
   "reviewer",
   "reviewer_max_iterations",
   "conductor_persona",
+  "next_stage",
   "unit",
   "consumes_absent",
 ] as const;
@@ -413,6 +423,11 @@ function checkRunStageShared(
   checkStringArray(o, "sensors_applicable", kind, errors);
   checkString(o, "stage_file", kind, errors);
   checkOptionalString(o, "conductor_persona", kind, errors);
+  // next_stage: optional-nullable on a run-stage directive. Present as a string
+  // names the following in-scope stage; null means this is the final in-scope
+  // stage; absent carries no name. So string OR null validates; any other
+  // present value is rejected.
+  checkOptionalNullableString(o, "next_stage", kind, errors);
   // reviewer fields — optional on a run-stage directive (present only when the
   // stage declares a reviewer). Mirror the stage-schema validator: reviewer is
   // an optional string, reviewer_max_iterations an optional positive integer.
@@ -483,6 +498,22 @@ function checkOptionalString(
   if (!(field in o)) return;
   if (typeof o[field] !== "string") {
     errors.push(`${kind}: ${field} must be string, got ${describe(o[field])}`);
+  }
+}
+
+// checkOptionalNullableString - a field that may be absent, but if present must
+// be a string OR null (e.g. next_stage, where null is the meaningful "final
+// in-scope stage" signal, distinct from absent).
+function checkOptionalNullableString(
+  o: Record<string, unknown>,
+  field: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) return;
+  const v = o[field];
+  if (v !== null && typeof v !== "string") {
+    errors.push(`${kind}: ${field} must be string or null, got ${describe(v)}`);
   }
 }
 
@@ -609,6 +640,7 @@ if (import.meta.main) {
       ],
       sensors_applicable: ["required-sections", "upstream-coverage"],
       stage_file: ".claude/aidlc-common/stages/inception/application-design.md",
+      next_stage: "Units Generation",
     },
     {
       kind: "dispatch-subagent",

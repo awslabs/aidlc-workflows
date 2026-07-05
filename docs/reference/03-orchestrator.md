@@ -727,6 +727,11 @@ AskUserQuestion({
 })
 ```
 
+`[next stage]` is rendered verbatim from the run-stage directive's `next_stage`
+field (the display name of the next in-scope stage, computed by the engine at
+emit time), or `Complete workflow` when `next_stage` is null. The conductor
+never infers the next stage.
+
 ### Conditional 3-Option Gate (Ideation and Inception only)
 
 ```

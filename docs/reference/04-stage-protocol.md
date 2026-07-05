@@ -116,6 +116,11 @@ AskUserQuestion({
 })
 ```
 
+`[next stage]` is rendered verbatim from the run-stage directive's `next_stage`
+field (the display name of the next in-scope stage, computed by the engine at
+emit time), or `Complete workflow` when `next_stage` is null. The conductor
+never guesses the next stage.
+
 **No Emergent Behavior Rule:** Construction and Operation stages (phases 3-4)
 must always use this 2-option format. They must never introduce additional
 navigation options.

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.6] - 2026-07-05
+
+Approval options during Construction now name the real next stage instead of always saying Code Generation. The run-stage directive carries a computed `next_stage` field (the display name of the following in-scope stage, honouring the active scope and any recomposed EXECUTE/SKIP plan), and the harness question-rendering annexes render the Approve option's "Continue to ..." text from that field verbatim, showing "Complete workflow" on the final in-scope stage. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* The Approve option at each approval gate now reads "Continue to <the actual next stage>" (e.g. "Continue to NFR Requirements"), not a fixed "Continue to Code Generation". No command or flag changes.
+
 ## [2.2.5] - 2026-07-05
 
 An autonomous Construction run now advances through every Bolt batch of a multi-batch swarm instead of stalling on the first. Previously, once the first parallel batch merged, the engine re-emitted that same batch forever and the run could not reach the later batches or the stage's approval gate; any project whose Units of Work have dependency edges (more than one topological batch) hit this. The engine now climbs the compiled Bolt DAG batch by batch, re-fanning only the units a partially-converged batch still owes, and presents the single stage gate once every batch has converged. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

@@ -152,12 +152,15 @@ header: Approval
 multiSelect: false
 options:
   - label: Approve
-    description: Continue to next stage
+    description: Continue to [next stage]
   - label: Request Changes
     description: Provide revision feedback
   - label: Add User Stories
     description: Include User Stories stage (currently skipped)
 ```
+Render `[next stage]` verbatim from the run-stage directive's `next_stage`
+field (per the stage-protocol.md approval-gate binding), or `Complete workflow`
+when it is null. Never guess the next stage name.
 If "Add User Stories" selected: update aidlc-state.md to mark User Stories as pending execution.
 
 IF User Stories is NOT set to SKIP: use standard 2-option approval (Approve / Request Changes).

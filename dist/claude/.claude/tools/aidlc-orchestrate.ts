@@ -1146,6 +1146,17 @@ function buildRunStageDirective(
     stage_file: stageFileFor(node.phase, node.slug),
   };
   if (absent.length > 0) directive.consumes_absent = absent;
+  // next_stage: the display name of the in-scope stage that follows this one, so
+  // the approval gate's Approve option reads "Continue to <next_stage>" verbatim
+  // instead of a guessed constant. Computed here at emit time: the gate is
+  // presented and answered within the same forwarding beat, and any recompose
+  // between emit and approval re-runs `next`, which re-emits with a fresh value.
+  // nextInScopeStage honours the state file's EXECUTE/SKIP overrides + prior
+  // [x]/[S] checkboxes, the same walk the post-approval advance uses, so the
+  // named stage is the one the workflow will actually run next. null = this is
+  // the final in-scope stage (the conductor renders "Complete workflow").
+  const nextStage = nextInScopeStage(node.slug, scope, stateContent ?? undefined);
+  directive.next_stage = nextStage ? nextStage.name : null;
   // Reviewer — include if the stage declares one (§12a).
   if (node.reviewer) {
     directive.reviewer = node.reviewer;

@@ -442,6 +442,36 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   });
 
   // ============================================================
+  // next_stage - optional-nullable run-stage/dispatch-subagent field. Present as
+  // a string names the following in-scope stage (rendered verbatim into the
+  // Approve gate option); null means this is the final in-scope stage; absent
+  // carries no name. So string OR null validates; any other present value is
+  // rejected. Fixes the gate always saying "Continue to Code Generation".
+  // ============================================================
+
+  test("run-stage next_stage string -> VALID", () => {
+    expect(errs({ ...runStage(), next_stage: "NFR Requirements" })).toBe(
+      "VALID",
+    );
+  });
+
+  test("run-stage next_stage null -> VALID (final in-scope stage)", () => {
+    expect(errs({ ...runStage(), next_stage: null })).toBe("VALID");
+  });
+
+  test("dispatch-subagent next_stage string -> VALID (shared field set)", () => {
+    expect(errs({ ...dispatchSubagent(), next_stage: "Build and Test" })).toBe(
+      "VALID",
+    );
+  });
+
+  test("run-stage next_stage non-string non-null -> type error", () => {
+    expect(errs({ ...runStage(), next_stage: 42 })).toContain(
+      "run-stage: next_stage must be string or null, got number",
+    );
+  });
+
+  // ============================================================
   // Shape failures — non-object inputs (3 assertions)
   // .sh lines 186-188
   // ============================================================

@@ -48,6 +48,12 @@ options:
     description: Provide revision feedback
 ```
 
+**Naming the next stage:** render `[next stage]` verbatim from the run-stage
+directive's `next_stage` field (e.g. `Continue to NFR Requirements`). When
+`next_stage` is null, render `Complete workflow` instead. NEVER infer or guess
+the next stage name from the phase or your own expectations - the engine
+computes it from the active scope and state, and only that value is correct.
+
 ### For stages with conditional options:
 IDEATION and INCEPTION stages may include a 3rd option to add a previously skipped stage:
 

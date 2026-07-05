@@ -37,6 +37,10 @@ Reply with a number (or just tell me).
 
 Rules:
 
+- **Approval gate `[next stage]`**: on an approval question, render the
+  `Continue to [next stage]` placeholder from the run-stage directive's
+  `next_stage` field verbatim (e.g. `Continue to NFR Requirements`); render
+  `Complete workflow` when `next_stage` is null. Never guess the next stage.
 - **Bold the header**, then the prompt, then the numbered options in spec
   order. When a question has a recommended option, list it FIRST and append
   "(Recommended)" to its label.

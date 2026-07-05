@@ -50,6 +50,10 @@ AskUserQuestion({
 
 ## Harness-specific behaviors
 
+- **Approval gate `[next stage]`**: on an approval question, render the
+  `Continue to [next stage]` placeholder from the run-stage directive's
+  `next_stage` field verbatim (e.g. `Continue to NFR Requirements`); render
+  `Complete workflow` when `next_stage` is null. Never guess the next stage.
 - **Batching limits**: max 4 questions per `AskUserQuestion` call, max 4
   options per question. For 5+ options, split across multiple calls (options
   A-D, then E+); the questions file retains the full option set as the

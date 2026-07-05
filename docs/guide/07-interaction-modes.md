@@ -65,6 +65,8 @@ The default approval gate presents two options:
   (2) Request Changes — Provide revision feedback
 ```
 
+`[next stage]` shows the actual next stage the workflow will run (for example "Continue to NFR Requirements"), or "Complete workflow" on the final stage; the engine computes it, so it is always correct rather than a guess.
+
 - **Approve** marks the stage as completed, updates `aidlc-state.md`, shows a progress line, and advances to the next stage
 - **Request Changes** lets you provide specific feedback; the agent revises its work and re-presents the approval gate
 
