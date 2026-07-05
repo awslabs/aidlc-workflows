@@ -85,8 +85,9 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 2. Count files by extension to determine primary/secondary languages
 3. Detect frameworks via known config filenames (Next.js, Vite, Angular, Nuxt, Remix, Gatsby, Astro, Svelte, NestJS) and React via `package.json` dependencies
 4. Detect build system via manifest + lockfile (npm/yarn/pnpm/bun/poetry/uv/hatch/pip/cargo/go/maven/gradle/composer/bundler)
-5. Classify greenfield vs brownfield using the rules in `stages/initialization/workspace-detection.md`
-6. Append `STAGE_STARTED` + `WORKSPACE_SCANNED` + `STAGE_COMPLETED` events
+5. Read `.gitmodules` (if present) for declared submodule paths, probing each for initialization
+6. Classify greenfield vs brownfield using the rules in `stages/initialization/workspace-detection.md`
+7. Append `STAGE_STARTED` + `WORKSPACE_SCANNED` + `STAGE_COMPLETED` events
 
 ### Inputs
 - Project filesystem (read-only scan)
@@ -101,6 +102,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 - Symbolic links are not followed (cycle protection via `lstatSync`)
 - Excludes `.claude/`, `<record>/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`
 - `package.json` with only `devDependencies` is treated as tooling/scaffolding and does not alone cause brownfield classification
+- A parseable `.gitmodules` with at least one submodule path entry is a brownfield signal (repo metadata declares code even when the submodule dirs are uninitialized). When submodule paths are uninitialized, the scan warns and names `git submodule update --init --recursive` - surfaced in the `WORKSPACE_SCANNED` event (`Submodules` field + `Details` remedy) and on birth stdout so the conductor can relay it; languages stay as scanned
 
 ---
 

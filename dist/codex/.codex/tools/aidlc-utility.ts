@@ -633,6 +633,40 @@ function handleDoctor(projectDir: string): void {
     fix: `copy the workspace shell from \`dist/${harnessDir().replace(/^\./, "")}/\` into your project root`,
   });
 
+  // 5a. Git submodules - an uninitialized submodule leaves its dir empty, so the
+  // scanner would classify a submodule-only workspace greenfield and auto-skip
+  // reverse-engineering. This ADVISORY row surfaces the state and the remedy.
+  // pass:true always (an uninitialized submodule is a user-environment pre-flight
+  // state, not framework breakage, and doctor's exit code feeds CI/scripts): the
+  // detail lives in the LABEL because the renderer prints `fix` only on a FAILED
+  // row (mirrors the intent-registry advisory).
+  if (!existsSync(join(projectDir, ".gitmodules"))) {
+    results.push({
+      pass: true,
+      label: "Submodules: no .gitmodules at workspace root",
+    });
+  } else {
+    const submodules = scanSubmodules(projectDir);
+    const uninit = submodules.filter((s) => !s.initialized);
+    if (submodules.length === 0) {
+      results.push({
+        pass: true,
+        label:
+          "Submodules: .gitmodules present but no parseable submodule entries",
+      });
+    } else if (uninit.length === 0) {
+      results.push({
+        pass: true,
+        label: `Submodules: ${submodules.length} declared, all initialized`,
+      });
+    } else {
+      results.push({
+        pass: true,
+        label: `Submodules: ${submodules.length} declared, ${uninit.length} uninitialized (advisory) (${enumerateSubmodulePaths(uninit)}) - run \`${SUBMODULE_INIT_REMEDY}\` to fetch them so reverse-engineering can read the code`,
+      });
+    }
+  }
+
   // 6. Hook heartbeats
   // Three states:
   //   (a) .aidlc-hooks-health/ missing entirely → fresh install, hooks haven't
@@ -1763,6 +1797,13 @@ function handleDoctor(projectDir: string): void {
 // Deterministic workspace scanner
 // ---------------------------------------------------------------------------
 
+interface SubmoduleEntry {
+  name: string;
+  path: string;          // as written in .gitmodules (validated relative)
+  url: string;           // "" when absent
+  initialized: boolean;  // existsSync(join(projectDir, path, ".git"))
+}
+
 interface ScanResult {
   projectType: string;   // "Greenfield" | "Brownfield"
   languages: string;     // e.g. "TypeScript, JavaScript"
@@ -1773,6 +1814,20 @@ interface ScanResult {
   // (the common case). Surfaced only in the WORKSPACE_SCANNED audit event and
   // the `detect --json` payload, never in the state file.
   nestedRoot?: string;
+  submodules: SubmoduleEntry[]; // [] when no .gitmodules / none parseable
+}
+
+// The remedy naming the git command that fetches uninitialized submodules.
+// Shared by every warning surface so the wording never drifts.
+const SUBMODULE_INIT_REMEDY = "git submodule update --init --recursive";
+
+// Enumerate submodule paths for a warning string: at most 5, then "(+N more)".
+// Returns the bare comma-joined list (no parens) so each surface wraps it as
+// it needs. Caps the enumerated set to keep audit/stdout lines bounded.
+function enumerateSubmodulePaths(entries: SubmoduleEntry[]): string {
+  const paths = entries.map((e) => e.path);
+  if (paths.length <= 5) return paths.join(", ");
+  return `${paths.slice(0, 5).join(", ")} (+${paths.length - 5} more)`;
 }
 
 const LANG_BY_EXT: Record<string, string> = {
@@ -2067,6 +2122,66 @@ function scanSignals(dir: string, fileScanDepth: number): DirSignals {
   };
 }
 
+// Parse .gitmodules (ini-like) into submodule entries. Pure and exported for
+// direct unit testing. Line-oriented, tolerant: malformed content degrades to
+// whatever parses (total garbage yields []); it never throws. An entry with no
+// path is dropped, as is any path that is absolute or escapes the project via a
+// `..` segment (a caller joins path under projectDir and must not follow it out).
+export function parseGitmodules(
+  content: string
+): Array<{ name: string; path: string; url: string }> {
+  const entries: Array<{ name: string; path: string; url: string }> = [];
+  let current: { name: string; path: string; url: string } | null = null;
+  const finish = () => {
+    if (!current) return;
+    const p = current.path;
+    const isUnsafe =
+      p === "" ||
+      p.startsWith("/") ||
+      /^[A-Za-z]:[\\/]/.test(p) || // Windows drive-absolute
+      p.split(/[/\\]/).includes("..");
+    if (!isUnsafe) entries.push(current);
+    current = null;
+  };
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line === "" || line.startsWith("#") || line.startsWith(";")) continue;
+    if (line.startsWith("[")) {
+      finish();
+      const m = line.match(/^\[submodule\s+"(.+)"\]$/);
+      current = m ? { name: m[1], path: "", url: "" } : null;
+      continue;
+    }
+    if (!current) continue;
+    const eq = line.indexOf("=");
+    if (eq < 0) continue;
+    const key = line.slice(0, eq).trim();
+    const value = line.slice(eq + 1).trim();
+    if (key === "path") current.path = value;
+    else if (key === "url") current.url = value;
+  }
+  finish();
+  return entries;
+}
+
+// Read + parse the workspace-root .gitmodules and probe each declared path for
+// initialization. A missing/unreadable file yields [] (the swallow idiom of the
+// scanner neighbors). `initialized` mirrors isGitRepoDir (aidlc-lib.ts): the dir
+// must exist AND hold a `.git` entry - so a missing dir, an empty dir, and a dir
+// without `.git` all classify uninitialized.
+function scanSubmodules(projectDir: string): SubmoduleEntry[] {
+  let content: string;
+  try {
+    content = readFileSync(join(projectDir, ".gitmodules"), "utf-8");
+  } catch {
+    return [];
+  }
+  return parseGitmodules(content).map((e) => ({
+    ...e,
+    initialized: existsSync(join(projectDir, e.path, ".git")),
+  }));
+}
+
 export function detectWorkspace(projectDir: string): ScanResult {
   let topEntries: string[] = [];
   try {
@@ -2136,11 +2251,20 @@ export function detectWorkspace(projectDir: string): ScanResult {
     languages = [primary, ...extras].join(", ");
   }
 
+  // Repo metadata: a .gitmodules with >= 1 valid submodule path declares code,
+  // even when the submodule dirs are empty/uninitialized. Languages stay AS
+  // SCANNED (Unknown is truthful until the submodules are fetched). A root
+  // signal: folded in after the nested fallback so nested aggregation (and
+  // nestedRoot attribution) still runs when submodules are the only signal.
+  const submodules = scanSubmodules(projectDir);
+  if (submodules.length > 0) brownfield = true;
+
   const result: ScanResult = {
     projectType: brownfield ? "Brownfield" : "Greenfield",
     languages,
     frameworks: frameworks.length > 0 ? frameworks.join(", ") : "Unknown",
     buildSystem,
+    submodules,
   };
   if (nestedHits.length > 0) result.nestedRoot = nestedHits.join(", ");
   return result;
@@ -2430,6 +2554,11 @@ function handleIntentBirthStateBuild(
   });
 
   const scan = detectWorkspace(projectDir);
+  const uninitSubmodules = scan.submodules.filter((s) => !s.initialized);
+  const submoduleRemedy =
+    uninitSubmodules.length > 0
+      ? `${uninitSubmodules.length} uninitialized submodule path(s) (${enumerateSubmodulePaths(uninitSubmodules)}) - run '${SUBMODULE_INIT_REMEDY}' to fetch them`
+      : "";
 
   appendAuditEvent(projectDir, "WORKSPACE_SCANNED", {
     "Project Type": scan.projectType,
@@ -2437,7 +2566,15 @@ function handleIntentBirthStateBuild(
     Frameworks: scan.frameworks,
     "Build System": scan.buildSystem,
     ...(scan.nestedRoot ? { "Nested Root": scan.nestedRoot } : {}),
-    Details: "Deterministic rule-based scan",
+    ...(scan.submodules.length > 0
+      ? {
+          Submodules: `${scan.submodules.length} declared, ${uninitSubmodules.length} uninitialized`,
+        }
+      : {}),
+    Details:
+      uninitSubmodules.length > 0
+        ? `Deterministic rule-based scan; ${submoduleRemedy}`
+        : "Deterministic rule-based scan",
   });
   appendAuditEvent(projectDir, "STAGE_COMPLETED", {
     Stage: "workspace-detection",
@@ -2673,6 +2810,10 @@ ${stageProgress}
   // cursor + the record dir were set by birthIntent above; the state file lives
   // under the born intent's record (resolved by writeStateFile's default).
   const bornDir = activeIntent(projectDir) ?? "(legacy flat record)";
+  const submoduleWarningLine =
+    uninitSubmodules.length > 0
+      ? `Warning: ${uninitSubmodules.length} uninitialized git submodule path(s) (${enumerateSubmodulePaths(uninitSubmodules)}) - run '${SUBMODULE_INIT_REMEDY}' before proceeding so reverse-engineering can read the code.\n`
+      : "";
   process.stdout.write(
     `Intent born: ${bornDir} (space: ${activeSpace(projectDir)})
 State initialized: ${scope} scope, ${totalInScope} stages, ${effectiveDepth} depth
@@ -2680,7 +2821,7 @@ Project type: ${scan.projectType}
 Languages: ${scan.languages}
 Frameworks: ${scan.frameworks}
 Build System: ${scan.buildSystem}
-First post-init stage: ${firstPostInit} (${firstPostInitPhase})
+${submoduleWarningLine}First post-init stage: ${firstPostInit} (${firstPostInitPhase})
 `
   );
 }
@@ -2905,6 +3046,7 @@ function handleDetect(projectDir: string, flags: Record<string, string>): void {
     frameworks: scan.frameworks,
     buildSystem: scan.buildSystem,
     ...(scan.nestedRoot ? { nestedRoot: scan.nestedRoot } : {}),
+    submodules: scan.submodules,
     scopesDir: scopesDir(),
     scopeGridPath: scopeGridPath(),
     scopes: [...validScopes()],
@@ -2913,12 +3055,18 @@ function handleDetect(projectDir: string, flags: Record<string, string>): void {
     process.stdout.write(`${JSON.stringify(payload)}\n`);
     return;
   }
+  const uninitCount = scan.submodules.filter((s) => !s.initialized).length;
+  const submoduleLine =
+    scan.submodules.length > 0
+      ? `Submodules: ${scan.submodules.length} declared, ${uninitCount} uninitialized\n`
+      : "";
   process.stdout.write(
     `Project type: ${payload.projectType}\n` +
       `Languages: ${payload.languages}\n` +
       `Frameworks: ${payload.frameworks}\n` +
       `Build system: ${payload.buildSystem}\n` +
       (scan.nestedRoot ? `Nested root: ${scan.nestedRoot}\n` : "") +
+      submoduleLine +
       `Scopes dir: ${payload.scopesDir}\n` +
       `Scope grid: ${payload.scopeGridPath}\n` +
       `Valid scopes: ${payload.scopes.join(", ")}\n`,

@@ -51,6 +51,16 @@
       "file": "docs/reference/07-sensor-system.md",
       "text": "| `aidlc-upstream-coverage.md` | `**/{aidlc-docs,intents}/**` |",
       "why": "shipped upstream-coverage sensor matches-glob value"
+    },
+    {
+      "file": "docs/guide/12-cli-commands.md",
+      "text": "| Submodules | If a `.gitmodules` is present, reports how many submodule paths are declared and how many are uninitialized, naming `git submodule update --init --recursive` when any are (advisory - never fails) |",
+      "why": "the `--init` is part of the canonical `git submodule update --init --recursive` remedy (the doctor Submodules row names it), NOT the retired aidlc `--init` command"
+    },
+    {
+      "file": "docs/reference/04-stages/initialization.md",
+      "text": "- A parseable `.gitmodules` with at least one submodule path entry is a brownfield signal (repo metadata declares code even when the submodule dirs are uninitialized). When submodule paths are uninitialized, the scan warns and names `git submodule update --init --recursive` - surfaced in the `WORKSPACE_SCANNED` event (`Submodules` field + `Details` remedy) and on birth stdout so the conductor can relay it; languages stay as scanned",
+      "why": "the `--init` is part of the canonical `git submodule update --init --recursive` remedy the workspace-detection scanner names, NOT the retired aidlc `--init` command"
     }
   ]
 }

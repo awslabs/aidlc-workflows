@@ -842,6 +842,8 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t203-nested-workspace-detection.test.ts",
     "unit/t204-compose-marker-doctor.test.ts",
     "unit/t206-optional-produces-coverage.test.ts",
+    "unit/t211-detect-submodules.test.ts",
+    "unit/t212-doctor-submodules.test.ts",
     "unit/t17.test.ts",
     "unit/t18.test.ts",
     "unit/t19.test.ts",

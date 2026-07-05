@@ -50,6 +50,7 @@ Scan signals:
 - Build system files (Makefile, Dockerfile, docker-compose, CI/CD configs)
 - Package/dependency files (lock files, vendor directories)
 - Source code directories and their languages
+- Repo metadata (`.gitmodules` submodule declarations)
 - Test infrastructure (test directories, test config files, coverage config)
 - Documentation (README, docs/, wiki/)
 
@@ -69,6 +70,7 @@ Signals are evaluated at the root first; if none fires, the nested-project fallb
 - Application framework configuration detected (next.config, vite.config, angular.json, etc.)
 - Package manifest with application dependencies (package.json with non-dev deps, requirements.txt, Cargo.toml, go.mod, pom.xml, etc.)
 - Application source directories exist (src/, app/, lib/, pages/, components/)
+- A parseable `.gitmodules` at the workspace root with at least one submodule path entry (repo metadata declares code even when the submodule dirs are not yet initialized)
 
 **Greenfield** — ALL of these must be true:
 - No source code files in any recognized language
@@ -95,6 +97,15 @@ From the scan results, identify:
 1. Mark workspace-detection as `[x]` completed in `<record>/aidlc-state.md`
 2. Update Workspace State section with detected languages, frameworks, build system
 3. Append WORKSPACE_SCANNED event to `<record>/audit/<host>-<clone>.md` with scan results and classification
+
+### Step 6a: Relay the Submodule Warning (if present)
+
+When the birth output carries the uninitialized-submodules warning (the scanner
+found a `.gitmodules` whose submodule paths are empty/uninitialized), relay it to
+the user verbatim and tell them to run `git submodule update --init --recursive`
+before proceeding, since reverse-engineering needs the code on disk. Do NOT offer
+to run the command yourself, and do NOT block auto-proceed - this is an advisory
+relay only.
 
 ### Step 7: Auto-Proceed
 

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.10] - 2026-07-06
+
+Workspace detection now recognizes git submodules. A workspace whose code lives in uninitialized submodules (empty dirs plus a `.gitmodules` file) previously scanned as Greenfield, so reverse-engineering was auto-skipped and every design stage ran with zero code understanding. The scanner gains a sixth brownfield signal: a parseable `.gitmodules` with at least one submodule path entry classifies the workspace Brownfield. When submodule paths are uninitialized, the scan warns and names the remedy (`git submodule update --init --recursive`) at birth, in the doctor report, and on `detect`. Languages stay as scanned (Unknown is truthful until the submodules are fetched). **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Workspace detection classifies a workspace with a parseable `.gitmodules` (at least one submodule path entry) as Brownfield, so reverse-engineering is no longer skipped for submodule-based projects.
+* The `WORKSPACE_SCANNED` audit event gains a `Submodules` field (`N declared, M uninitialized`) when submodules are present, and its `Details` names the `git submodule update --init --recursive` remedy when any submodule path is uninitialized. Projects without a `.gitmodules` produce a byte-identical event.
+* Birth stdout prints a one-line warning when submodule paths are uninitialized, telling you to fetch them before proceeding so reverse-engineering can read the code.
+* `/aidlc --doctor` gains an advisory `Submodules:` row: no `.gitmodules`, all initialized, uninitialized (names the count, the paths, and the remedy), or present-but-unparseable. Advisory only - it never flips doctor's exit code.
+* The read-only `detect` utility gains a `submodules` key in its `--json` payload and a `Submodules:` line in its human output when submodules are present.
 ## [2.2.9] - 2026-07-06
 
 Per-unit Construction stages no longer demand CONDITIONAL artifacts before a unit counts as covered. A new optional stage-frontmatter key `optional_produces:` names artifacts a stage writes only when the unit needs them - `functional-design`'s `frontend-components` (only when the unit has a UI) and `infrastructure-design`'s `shared-infrastructure` (only when units share infrastructure). Those names moved out of `produces:` into `optional_produces:`, so a backend-only unit completes without an N/A stub file and the stage gate is reachable. The conductor still gets the artifact's write path in the run-stage directive when the unit does produce it, and the artifact name stays in the vocabulary registry. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
@@ -73,6 +82,7 @@ Stops help requests from accidentally creating intents. `/aidlc intent help` was
 ||||||| parent of ef64a3e (fix: detect nested projects in workspace detection (2.2.7))
 ||||||| parent of 48f8b61 (fix: bound the compose-pending carve-out and guard recompose against autonomy (2.2.8))
 ||||||| parent of 4fd686b (fix: exempt optional produces from per-unit coverage so conditional artifacts can be skipped (2.2.9))
+||||||| parent of 4ad1db9 (fix: detect git submodules as a brownfield signal in workspace detection (2.2.10))
 
 ## [2.2.0] - 2026-07-04
 
