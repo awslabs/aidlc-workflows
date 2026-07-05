@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.5] - 2026-07-05
+
+An autonomous Construction run now advances through every Bolt batch of a multi-batch swarm instead of stalling on the first. Previously, once the first parallel batch merged, the engine re-emitted that same batch forever and the run could not reach the later batches or the stage's approval gate; any project whose Units of Work have dependency edges (more than one topological batch) hit this. The engine now climbs the compiled Bolt DAG batch by batch, re-fanning only the units a partially-converged batch still owes, and presents the single stage gate once every batch has converged. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Autonomous Construction (`Construction Autonomy Mode: autonomous`) with a multi-batch Bolt DAG now progresses: `next` emits the next unconverged batch as `invoke-swarm`, then presents the stage's approval gate after the final batch converges, rather than re-emitting the first batch indefinitely.
+* Single-batch autonomous swarms and gated (non-autonomous) Construction are unchanged.
+
 ## [2.2.4] - 2026-07-05
 
 The two review-only agents now record a real UTC timestamp and their own name on the `## Review` section they append. The Review template's `Date` field was a bare `[ISO timestamp]` placeholder with no sourcing instruction, so reviewers filled it in from memory; it now instructs the reviewer to run `date -u +"%Y-%m-%dT%H:%M:%SZ"` in the shell and paste the actual output, matching the `[ISO timestamp from Bash]` convention already used elsewhere. The template's `Reviewer` field also named the PRODUCER agent (the artifact's author) instead of the reviewer persona, so every review on disk was attributed to the agent whose work was being reviewed; it now names the reviewer persona. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

@@ -479,13 +479,16 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
   }, 30000);
 
   // 13: autonomous-swarm carve-out. code-generation under an autonomy grant with a
-  // MULTI-batch DAG [[alpha],[beta]] runs via the swarm (invoke-swarm batches[0]),
-  // which gates PER BATCH. The report-side coverage guard must NOT demand every
-  // unit across all batches: after batch 1 (alpha) is covered, reporting the stage
-  // approved must NOT be refused with a per-unit coverage error (that would
-  // deadlock the multi-batch swarm, since the swarm re-emits batch 1 and never
-  // advances). The guard is scoped to exclude the autonomous swarm, so the report
-  // takes the normal forward path, not a per-unit-coverage error.
+  // MULTI-batch DAG [[alpha],[beta]] runs via the swarm (the engine emits the first
+  // unconverged batch as invoke-swarm). The report-side coverage guard must NOT
+  // demand disk artifacts for every unit: a swarm unit builds in its own Bolt
+  // worktree and complete --merge consolidates only the AIDLC metadata back to the
+  // main checkout, so the unit's produced artifacts never land in the main record
+  // tree. An all-units disk-coverage check would therefore find EVERY swarm unit
+  // uncovered and refuse the approve outright. The guard is scoped to exclude the
+  // autonomous swarm, so the report takes the normal forward path, not a per-unit
+  // coverage error (the swarm's own SWARM_UNIT_CONVERGED ledger is its coverage
+  // proof, and the engine advances batches on that signal).
   const CG_PRODUCES = ["code-generation-plan", "code-summary"];
   test("13: autonomous multi-batch code-generation swarm is not blocked by the coverage guard", () => {
     const proj = seedProject("code-generation", "on");

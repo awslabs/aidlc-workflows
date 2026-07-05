@@ -83,9 +83,11 @@ import {
 } from "./aidlc-directive.ts";
 import {
   activeSpace,
+  auditBlockField,
   type CheckboxLine,
   codekbRepoName,
   errorMessage,
+  findAllEvents,
   firstInScopeStageOfPhase,
   getField,
   intentRepos,
@@ -95,6 +97,7 @@ import {
   PHASE_NUMBERS,
   PHASES,
   READ_ONLY_FLAGS,
+  readAllAuditShards,
   relativeCodekbDir,
   relativeRecordDir,
   relativeSpaceRecordPrefix,
@@ -699,6 +702,30 @@ function readBoltDagBatches(projectDir: string): string[][] | null {
     // Malformed runtime graph — fail safe to "no DAG"; the swarm does not fire.
   }
   return null;
+}
+
+// The set of Units of Work the swarm referee has recorded as CONVERGED for the
+// active intent, read from the audit ledger. This is the swarm's completion
+// signal, NOT on-disk artifact presence. A swarm unit builds inside an isolated
+// Bolt worktree and `aidlc-bolt complete --merge` consolidates only the AIDLC
+// metadata (state + audit + runtime-graph fragment) back to the main checkout;
+// the unit's produced artifacts (code-generation-plan.md / code-summary.md and
+// the generated source) are NOT copied into the main record tree by the swarm
+// finalize flow. So unitCovered's disk check (the INLINE per-unit ledger) never
+// sees a swarm unit as covered, and the batch-advance signal must instead be the
+// `SWARM_UNIT_CONVERGED` audit rows `aidlc-swarm.ts finalize` writes from the
+// main checkout, one per genuinely-converged unit, each carrying `Unit name`.
+// Composes the same shard-concat + block-parse the other audit readers use; an
+// absent/empty audit yields the empty set (no batch has converged yet).
+function swarmConvergedUnits(projectDir: string): Set<string> {
+  const audit = readAllAuditShards(projectDir);
+  if (!audit) return new Set();
+  const converged = new Set<string>();
+  for (const { block } of findAllEvents(audit, "SWARM_UNIT_CONVERGED")) {
+    const unit = auditBlockField(block, "Unit name");
+    if (unit) converged.add(unit);
+  }
+  return converged;
 }
 
 // True when `node` is the SKELETON-GATE stage for `scope` — the FIRST
@@ -1641,14 +1668,15 @@ function handleNext(args: string[], projectDir: string | undefined): void {
 
   if (currentIsInFlight) {
     // Under an autonomy grant, an eligible per-unit build stage fans out as a
-    // swarm batch instead of a single run-stage. tryEmitSwarm emits the
-    // invoke-swarm directive (and returns true) only when all trigger
-    // conditions hold; otherwise emitForSlug fires, which itself drives the
-    // engine's per-unit for_each loop for a per-unit Construction stage (one
-    // unit per `next`, gate suppressed on every uncovered unit with the real
+    // swarm batch instead of a single run-stage. tryEmitSwarm advances the swarm
+    // one batch per `next` (the first batch with an unconverged unit, then the
+    // stage's settle gate once every batch has converged) and returns true only
+    // when all trigger conditions hold; otherwise emitForSlug fires, which itself
+    // drives the engine's per-unit for_each loop for a per-unit Construction stage
+    // (one unit per `next`, gate suppressed on every uncovered unit with the real
     // gate only on the all-covered re-entry; issue #368) and emits a single
     // directive for every other stage.
-    if (!tryEmitSwarm(currentSlug, scope, stateContent, pd)) {
+    if (!tryEmitSwarm(currentSlug, scope, stateContent, pd, projectType, recordPrefix, codekbCtx)) {
       emitForSlug(currentSlug, projectType, scope, stateContent, recordPrefix, codekbCtx, pd);
     }
     return;
@@ -1674,7 +1702,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // swarm path, emitForSlug drives the engine's per-unit for_each loop for a
   // per-unit Construction stage (issue #368) and emits a single directive
   // otherwise.
-  if (!tryEmitSwarm(next.slug, scope, stateContent, pd)) {
+  if (!tryEmitSwarm(next.slug, scope, stateContent, pd, projectType, recordPrefix, codekbCtx)) {
     emitForSlug(next.slug, projectType, scope, stateContent, recordPrefix, codekbCtx, pd);
   }
 }
@@ -1689,30 +1717,51 @@ function handleNext(args: string[], projectDir: string | undefined): void {
 const SWARM_FOR_EACH = "unit-of-work";
 const SWARM_MODE = "subagent";
 
-// Try to emit an `invoke-swarm` directive instead of a run-stage, returning true
-// (and emitting) ONLY when every trigger condition holds:
+// Try to handle an eligible autonomous swarm stage, returning true (and emitting)
+// ONLY when every trigger condition holds:
 //   - the slug resolves to a Construction stage that is the per-unit build stage
-//     (for_each:unit-of-work + mode:subagent — code-generation today);
+//     (for_each:unit-of-work + mode:subagent, code-generation today);
 //   - the human granted autonomy at the walking-skeleton ladder
 //     (Construction Autonomy Mode: autonomous);
-//   - the compiled Bolt/unit DAG yields a non-empty first batch.
-// On all-true it emits `{kind:"invoke-swarm", units: batches[0]}` — the first
-// topological level, the units eligible to fan out now — and returns true. On any
-// miss it returns false and emits nothing, so the caller falls back to the normal
-// run-stage emit (which keeps its computed gate, including the skeleton round-trip
-// sentinel). The skeleton Bolt 1 is protected two ways: temporally (autonomy stays
-// unset until the ladder fires after Bolt 1 ships) AND structurally — the
-// isSkeletonGateStage guard below refuses to swarm the walking-skeleton gate stage
-// regardless of autonomy state. The structural guard matters for scopes where the
-// per-unit build stage (code-generation) IS the skeleton-gate stage (poc / bugfix /
-// security-patch): there the skeleton's always-gated approval must never be bypassed
-// by a stray autonomous setting, so the engine enforces it rather than trusting the
-// conductor's ordering.
+//   - the compiled Bolt/unit DAG yields a non-empty batch.
+// The swarm advances ONE Bolt BATCH per `next`: it walks the batches in
+// topological order and selects the FIRST batch that still has an unconverged
+// unit, emitting `{kind:"invoke-swarm", units: <that batch's unconverged units>}`
+// so a batch with a partial pass (some units baton-returned) re-fans only the
+// units still owed. Earlier batches are never re-emitted once every one of their
+// units has converged, so the run climbs the DAG batch by batch instead of
+// re-emitting batch 1 forever. The completion signal is the audit ledger
+// (swarmConvergedUnits, the `SWARM_UNIT_CONVERGED` rows the referee writes back
+// to the main checkout), NOT artifact presence: a swarm unit's produced files
+// stay in its Bolt worktree, so the inline per-unit disk-coverage ledger never
+// sees them (that is why this path owns its own signal).
+//
+// When EVERY unit in EVERY batch has converged, the stage is built: the engine
+// emits the stage's settle directive (a run-stage for the last unit carrying the
+// stage's computed gate, the SAME shape emitPerUnitRunStage's all-covered
+// re-entry produces) so the conductor completes the stage and the workflow moves
+// on, and returns true. It does NOT return false there: the caller's fallback
+// (emitPerUnitRunStage) keys on disk coverage the swarm never lands in the main
+// tree, so it would wrongly re-run unit one inline instead of settling.
+//
+// On any trigger miss it returns false and emits nothing, so the caller falls
+// back to the normal run-stage emit (which keeps its computed gate, including the
+// skeleton round-trip sentinel). The skeleton Bolt 1 is protected two ways:
+// temporally (autonomy stays unset until the ladder fires after Bolt 1 ships) AND
+// structurally: the isSkeletonGateStage guard below refuses to swarm the
+// walking-skeleton gate stage regardless of autonomy state. The structural guard
+// matters for scopes where the per-unit build stage (code-generation) IS the
+// skeleton-gate stage (poc / bugfix / security-patch): there the skeleton's
+// always-gated approval must never be bypassed by a stray autonomous setting, so
+// the engine enforces it rather than trusting the conductor's ordering.
 function tryEmitSwarm(
   slug: string,
   scope: string,
   stateContent: string | null,
   projectDir: string,
+  projectType: "brownfield" | "greenfield" | null,
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
 ): boolean {
   const node = nodeForSlug(slug);
   if (!node) return false;
@@ -1724,8 +1773,39 @@ function tryEmitSwarm(
   if (readAutonomyMode(stateContent) !== "autonomous") return false;
   const batches = readBoltDagBatches(projectDir);
   if (!batches || batches.length === 0) return false;
-  const firstBatch = batches[0];
-  if (!Array.isArray(firstBatch) || firstBatch.length === 0) return false;
+
+  // Select the first topological batch with an unconverged unit; emit only that
+  // batch's still-owed units. Ledger signal = SWARM_UNIT_CONVERGED (see above).
+  const converged = swarmConvergedUnits(projectDir);
+  let pendingUnits: string[] | null = null;
+  for (const batch of batches) {
+    if (!Array.isArray(batch) || batch.length === 0) continue;
+    const owed = batch.filter((u) => !converged.has(u));
+    if (owed.length > 0) {
+      pendingUnits = owed;
+      break;
+    }
+  }
+
+  // Every unit in every batch has converged (and the DAG had at least one unit):
+  // the stage is fully built. Emit its settle directive, a run-stage for the
+  // last unit carrying the stage's computed gate, so the conductor runs the
+  // learnings ritual + single stage gate and `report --approved` advances the
+  // workflow (the report-side per-unit coverage guard already exempts the
+  // autonomous swarm, so the approve is not refused for the worktree-only
+  // artifacts).
+  if (pendingUnits === null) {
+    const flatUnits = batches.flat();
+    if (flatUnits.length === 0) return false;
+    const lastUnit = flatUnits[flatUnits.length - 1];
+    const directive = buildRunStageDirective(
+      node, projectType, lastUnit, scope, stateContent, recordPrefix, codekbCtx,
+    );
+    directive.unit = lastUnit;
+    emit(directive);
+    return true;
+  }
+
   // Thread the construction repo to the conductor when the engine can resolve it
   // DETERMINISTICALLY (read-only — intentRepos never throws; it returns [] for a
   // legacy/flat intent). NOT resolveConstructionRepo here: that THROWS on >1, and
@@ -1740,9 +1820,9 @@ function tryEmitSwarm(
   //     intent, surfacing the choice rather than guessing.
   const repos = intentRepos(projectDir);
   if (repos.length === 1) {
-    emit({ kind: "invoke-swarm", units: firstBatch, repo: repos[0] });
+    emit({ kind: "invoke-swarm", units: pendingUnits, repo: repos[0] });
   } else {
-    emit({ kind: "invoke-swarm", units: firstBatch });
+    emit({ kind: "invoke-swarm", units: pendingUnits });
   }
   return true;
 }
@@ -2685,18 +2765,19 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // the guard must not turn a harmless replay into an error.
   //
   // Scoped to the INLINE per-unit loop, NOT the autonomous code-generation swarm.
-  // The swarm advances ONE Bolt BATCH at a time (tryEmitSwarm emits batches[0])
-  // and gates per BATCH (stage-protocol.md: "a single Bolt-level gate (or
-  // batch-level gate for parallel batches)"), with the swarm referee
-  // (aidlc-swarm.ts finalize) verifying each batch's convergence before its merge.
-  // An all-units coverage check is WRONG there: after batch 1 of a multi-batch
-  // DAG merges, the later batches' units are legitimately still uncovered, so
-  // requiring every unit would refuse the batch-1 approve AND `next` would
-  // re-emit batch 1 (no batch-advance), deadlocking the run. So we exclude the
-  // swarm condition (per-unit + mode:subagent + autonomous) verbatim from
-  // tryEmitSwarm's trigger and let the swarm's own per-batch verification stand.
-  // The guard remains for every inline per-unit stage (the four design stages,
-  // and code-generation when it falls back to the inline path off the swarm).
+  // The swarm climbs the Bolt DAG one BATCH per `next` (tryEmitSwarm emits the
+  // first batch with an unconverged unit, then presents the stage's single gate
+  // once every batch has converged), with the swarm referee (aidlc-swarm.ts
+  // finalize) verifying each batch's convergence before its merge. The referee's
+  // `complete --merge` consolidates only the AIDLC metadata back to the main
+  // checkout (a converged unit's produced artifacts stay in its Bolt worktree),
+  // so this disk-coverage check would find EVERY swarm unit uncovered and refuse
+  // the approve outright even after the whole stage has built. So we exclude the
+  // swarm condition (per-unit + mode:subagent + autonomous) from the guard and
+  // let the swarm's own per-batch convergence (SWARM_UNIT_CONVERGED, the ledger
+  // signal tryEmitSwarm advances on) stand as its coverage proof. The guard
+  // remains for every inline per-unit stage (the four design stages, and
+  // code-generation when it falls back to the inline path off the swarm).
   const isAutonomousSwarm =
     node.mode === SWARM_MODE && readAutonomyMode(stateContent) === "autonomous";
   if (isGated && isPerUnit(node) && stageCheckbox.state !== "completed" && !isAutonomousSwarm) {
