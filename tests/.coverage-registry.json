@@ -20,14 +20,14 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 423,
+    "total": 424,
     "enumeratedByClass": {
       "function": 208,
       "audit": 70,
       "scope": 9,
       "stage": 32,
       "hook": 11,
-      "subcommand": 86,
+      "subcommand": 87,
       "render-surface": 7
     },
     "coveredByClass": {
@@ -36,7 +36,7 @@
       "scope": 9,
       "stage": 8,
       "hook": 10,
-      "subcommand": 73,
+      "subcommand": 74,
       "render-surface": 7
     }
   },
@@ -4450,6 +4450,18 @@
         },
         {
           "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state set-construction-iteration",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t209-unit-major-iteration.test.ts",
           "mechanism": "cli"
         }
       ],

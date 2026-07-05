@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.13] - 2026-07-09
+
+Opt-in unit-major iteration for the inline construction design stages. By default the engine still walks those stages stage-major (functional-design for every unit, then nfr-requirements for every unit, and so on). When you record `Construction Iteration: unit-major`, the engine instead authors one unit's four design documents (functional-design, nfr-requirements, nfr-design, infrastructure-design) consecutively before moving to the next unit, giving the approved bolt-plan its first executable effect on design order. The four per-stage approval gates are unchanged in count and machinery, but under unit-major they fire late, in a cascade at the end of the design block, one human approval per stage. code-generation and the autonomous swarm are untouched. This is zero-risk for existing users: with no field set, behaviour is byte-identical. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* NEW `aidlc-state.ts set-construction-iteration <unit-major|stage-major>` subcommand: records the `Construction Iteration` runtime-state field. Strict read - only the exact value `unit-major` activates the new walk; absent, `stage-major`, or any other value is stage-major (today's behaviour).
+* delivery-planning now classifies whether the approved plan calls for unit-first design execution and, if so, records `set-construction-iteration unit-major`; a human can set or unset it at any time with the same subcommand.
+* Under unit-major, a run-stage directive's `directive.stage` may name a later design stage than the state's Current Stage, and a stage's `STAGE_STARTED` audit event may land after that stage's per-unit artifacts were written; the audit trail stays complete and stage-keyed. Always act on the directive's own stage and unit.
+
 ## [2.2.12] - 2026-07-09
 
 The scope confirmation now previews the cost before you commit to it. A cold-start confirm and the compose offer carry exact stage and approval-gate counts read from the compiled grid (never estimates), the birth print and `scope-change` output name the same counts, and the composer proposal leads with a validator-computed `N stages EXECUTE / M SKIP, G approval gates` line. So confirming a scope tells you what you are consenting to (a `feature` runs 32 stages and 29 gates; a `bugfix` runs 7 and 4) instead of only a name. No upgrade action needed beyond re-copying your `dist/<harness>/` shell to pick up the regenerated strings.

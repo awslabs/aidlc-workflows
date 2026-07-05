@@ -846,6 +846,8 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t212-doctor-submodules.test.ts",
     "unit/t205-gate-revision-backstop.test.ts",
     "unit/t214-routing-cost-strings.test.ts",
+    "unit/t209-unit-major-iteration.test.ts",
+    "unit/t210-iteration-knob-default.test.ts",
     "unit/t17.test.ts",
     "unit/t18.test.ts",
     "unit/t19.test.ts",

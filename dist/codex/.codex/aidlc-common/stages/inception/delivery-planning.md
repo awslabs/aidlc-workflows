@@ -130,6 +130,20 @@ Run Inception → Construction verification check:
 Mark delivery-planning as `[x]` completed in `<record>/aidlc-state.md`.
 Update Lifecycle Phase to CONSTRUCTION.
 
+**Construction iteration.** Classify how the approved `bolt-plan.md` wants the
+inline construction DESIGN stages (functional-design, nfr-requirements,
+nfr-design, infrastructure-design) to iterate over Units of Work. A
+unit-at-a-time or walking-skeleton-first plan typically calls for authoring one
+unit's four design documents consecutively before the next unit begins; a plan
+that reasons stage-by-stage across all units does not. Only when the plan calls
+for the unit-first order, record it:
+`bun .codex/tools/aidlc-state.ts set-construction-iteration unit-major`.
+The default is `stage-major` (each design stage runs for every unit, then the
+next stage), needs no write, and is byte-identical to prior behaviour. Under
+`unit-major` the same four per-stage design gates still fire, but late and in a
+cascade at the end of the design block (one human approval per stage), so opt in
+only when the plan justifies the per-unit design coherence.
+
 ### Step 8: Present Completion & Request Approval
 
 Completion emoji: :calendar:

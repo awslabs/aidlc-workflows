@@ -93,8 +93,10 @@ import {
   intentRepos,
   isPerUnitStage,
   listIntents,
+  loadScopeMapping,
   nextInScopeStage,
   parseCheckboxes,
+  parseStateStageSuffixes,
   PHASE_NUMBERS,
   PHASES,
   READ_ONLY_FLAGS,
@@ -702,6 +704,27 @@ function readAutonomyMode(stateContent: string | null): "autonomous" | null {
   const raw = stateContent ? getField(stateContent, AUTONOMY_MODE_FIELD) : null;
   if (!raw) return null;
   return raw.trim() === "autonomous" ? "autonomous" : null;
+}
+
+// The state field recording how construction DESIGN stages iterate over units.
+// Runtime metadata set by the delivery-planning classify round-trip (or a human)
+// via `aidlc-state.ts set-construction-iteration`. ONLY the exact value
+// "unit-major" activates the unit-outer / stage-inner walk; unset / absent /
+// "stage-major" / any other value all read as stage-major (today's behaviour, the
+// safe default). Deliberately strict, mirroring readAutonomyMode: an empty or
+// unrecognised value never activates the new order.
+const CONSTRUCTION_ITERATION_FIELD = "Construction Iteration";
+
+// Read the recorded Construction iteration mode, or null when it is not exactly
+// "unit-major". Any other value (including "stage-major") is stage-major.
+function readConstructionIteration(
+  stateContent: string | null,
+): "unit-major" | null {
+  const raw = stateContent
+    ? getField(stateContent, CONSTRUCTION_ITERATION_FIELD)
+    : null;
+  if (!raw) return null;
+  return raw.trim() === "unit-major" ? "unit-major" : null;
 }
 
 // Read the compiled batch DAG (the Bolt/unit topological levels) off the
@@ -2066,6 +2089,118 @@ function emitPerUnitRunStage(
   emit(directive);
 }
 
+// The in-scope, not-yet-settled INLINE per-unit Construction design stages, in
+// GRAPH order. This is the unit-major walk's inner list: functional-design,
+// nfr-requirements, nfr-design, infrastructure-design (each `for_each:
+// unit-of-work` + `mode: inline`), minus any this scope SKIPs or the state has
+// already completed/skipped. code-generation (`mode: subagent`) is excluded by
+// the mode filter, so the walk never touches the swarm path. Graph order is
+// preserved by filtering loadGraph() in place, and graph order respects
+// `requires_stage` by the compile-time edge-direction invariant
+// (aidlc-graph.ts), so a stage's per-unit dependency is honoured per unit by
+// construction. Effective action uses the same state-override-wins rule as
+// nextInScopeStage (state overrides beat scope-mapping); completed or skipped
+// checkboxes are dropped, the same fresh-clone carve-out the report guard makes.
+function constructionDesignBlock(
+  scope: string,
+  stateContent: string | null,
+): GraphStage[] {
+  const mapping = loadScopeMapping()[scope];
+  if (!mapping) return [];
+  const stateOverrides = stateContent
+    ? parseStateStageSuffixes(stateContent)
+    : null;
+  const checkboxStates = stateContent ? parseCheckboxes(stateContent) : [];
+  return loadGraph().filter((n) => {
+    if (n.phase !== "construction") return false;
+    if (!isPerUnit(n)) return false;
+    if (n.mode !== "inline") return false;
+    const cb = checkboxStates.find((c) => c.slug === n.slug);
+    if (cb && (cb.state === "completed" || cb.state === "skipped")) return false;
+    const effectiveAction = stateOverrides?.get(n.slug) ?? mapping.stages[n.slug];
+    return effectiveAction === "EXECUTE";
+  });
+}
+
+// Emit ONE iteration of the UNIT-MAJOR construction design walk (opt-in via the
+// `Construction Iteration: unit-major` state field). Where emitPerUnitRunStage
+// is stage-outer / unit-inner (all units of the current stage before the next
+// stage), this is unit-outer / stage-inner: it walks the ordered unit list
+// (Bolt DAG topo order) OUTER and the design block (graph order) INNER, emitting
+// the first uncovered (stage, unit) pair with the gate suppressed. So a unit's
+// four design documents are authored consecutively before the next unit begins.
+// The four per-stage gates are UNCHANGED: they fire late, in stage order, once
+// the whole (stage x unit) grid is covered: the fully-covered walk delegates to
+// emitPerUnitRunStage for the CURRENT slug, whose pick === null branch presents
+// that stage's real gate on the last unit. `handleApprove` then advances Current
+// Stage to the next design stage; its `next` re-enters here, finds the grid
+// still fully covered, and presents ITS gate, so the four gates cascade at the
+// block's end, one per human turn (the presence guard enforces one resolution
+// per turn). No gate/approve/audit machinery changes.
+function emitUnitMajorRunStage(
+  node: GraphStage,
+  projectType: "brownfield" | "greenfield" | null,
+  scope: string,
+  stateContent: string | null,
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+  projectDir: string,
+): void {
+  // Skeleton-gate precedence, exactly as emitPerUnitRunStage: never begin the
+  // walk before the walking-skeleton stance is resolved. functional-design is
+  // both the first block stage and the skeleton-gate stage for
+  // feature/enterprise/mvp (nfr-requirements for infra); emit the classify
+  // directive and return until the stance is recorded.
+  if (isSkeletonGateStage(node, scope) && readSkeletonStance(stateContent) === null) {
+    emitRunStageForSlug(node.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
+    return;
+  }
+
+  // No compiled unit DAG: degrade to the stage-major per-unit path, which itself
+  // degrades to today's single {unit-name} directive. Zero behaviour change off
+  // the DAG path.
+  const units = orderedUnits(projectDir);
+  if (units.length === 0) {
+    emitPerUnitRunStage(node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir);
+    return;
+  }
+
+  const block = constructionDesignBlock(scope, stateContent);
+  // Defensive: if the current node is not itself an active block stage (e.g. it
+  // was completed between the read and here, or a scope with no inline design
+  // block routed here), fall back to the stage-major path for this slug.
+  if (!block.some((n) => n.slug === node.slug)) {
+    emitPerUnitRunStage(node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir);
+    return;
+  }
+
+  // Walk units OUTER (Bolt DAG topo order: dependencies before dependents),
+  // block stages INNER (graph order, dependency-safe per unit by the compile
+  // invariant). Emit the first uncovered (stage, unit) pair with the gate
+  // suppressed, using the same post-build override pattern as
+  // emitPerUnitRunStage (the conductor acts on directive.stage + directive.unit,
+  // not on Current Stage, so an interleaved slug needs no protocol change).
+  for (const u of units) {
+    for (const k of block) {
+      if (!unitCovered(projectDir, k, u, recordPrefix, codekbCtx)) {
+        const directive = buildRunStageDirective(
+          k, projectType, u, scope, stateContent, recordPrefix, codekbCtx,
+        );
+        directive.gate = false;
+        directive.unit = u;
+        emit(directive);
+        return;
+      }
+    }
+  }
+
+  // The whole (stage x unit) grid is covered: delegate to the stage-major path
+  // for the CURRENT slug, whose pick === null branch presents that stage's real
+  // gate on the last unit. The per-stage gate cascade of the block then runs on
+  // stock machinery.
+  emitPerUnitRunStage(node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir);
+}
+
 // Route a slug to its emit path: a per-unit Construction stage drives the
 // engine's for_each loop (emitPerUnitRunStage); every other stage emits the
 // single {unit-name}-or-non-per-unit directive (emitRunStageForSlug). Called
@@ -2082,6 +2217,12 @@ function emitForSlug(
 ): void {
   const node = nodeForSlug(slug);
   if (node && isPerUnit(node)) {
+    // Unit-major iteration (opt-in) applies only to the INLINE design stages;
+    // mode:subagent (code-generation) is left to the swarm / stage-major path.
+    if (node.mode === "inline" && readConstructionIteration(stateContent) === "unit-major") {
+      emitUnitMajorRunStage(node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir);
+      return;
+    }
     emitPerUnitRunStage(node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir);
     return;
   }

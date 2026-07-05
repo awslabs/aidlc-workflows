@@ -403,6 +403,9 @@ function main(): void {
       case "set-skeleton-stance":
         handleSetSkeletonStance(args.slice(1));
         break;
+      case "set-construction-iteration":
+        handleSetConstructionIteration(args.slice(1));
+        break;
       case "checkbox":
         handleCheckbox(args.slice(1));
         break;
@@ -465,7 +468,7 @@ function main(): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, park, unpark`
+          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, park, unpark`
         );
     }
   } catch (e) {
@@ -567,6 +570,45 @@ function handleSetSkeletonStance(args: string[]): void {
   );
   writeStateFile(pd, updated);
   console.log(JSON.stringify({ updated: true, skeleton_stance: stance }));
+  });
+}
+
+// set-construction-iteration <unit-major|stage-major>: record how construction
+// design stages iterate over units. `Construction Iteration` is runtime metadata
+// (like Skeleton Stance): it is NOT in the base state template, so we use
+// setOrInsertField to update-if-present / insert-under-`## Runtime State`-if-absent.
+// No audit row: the field is metadata the next `aidlc-orchestrate next` reads to
+// pick the (stage, unit) walk order, not a state-machine transition; it rides no
+// event, exactly like `set` and `set-skeleton-stance`. The classify round-trip is
+// initiated by the delivery-planning stage prose (or set directly by a human); the
+// engine writes nothing itself.
+function handleSetConstructionIteration(args: string[]): void {
+  // Declared inside the handler for the same TDZ reason as skeleton stance:
+  // main() runs at module load before a module-level const would initialise.
+  const constructionIterationValues = ["unit-major", "stage-major"];
+  if (args.length < 1) {
+    error(
+      `Usage: aidlc-state.ts set-construction-iteration <${constructionIterationValues.join("|")}>`,
+    );
+  }
+  const value = args[0];
+  if (!constructionIterationValues.includes(value)) {
+    error(
+      `Invalid construction iteration "${value}". Valid: ${constructionIterationValues.join(", ")}.`,
+    );
+  }
+  const pd = resolveProjectDir(projectDir);
+  // Lost-update safety: read-then-write under one lock, as for the stance write.
+  withAuditLock(pd, () => {
+  const content = readStateFile(pd);
+  const updated = setOrInsertField(
+    content,
+    "## Runtime State",
+    "Construction Iteration",
+    value,
+  );
+  writeStateFile(pd, updated);
+  console.log(JSON.stringify({ updated: true, construction_iteration: value }));
   });
 }
 
