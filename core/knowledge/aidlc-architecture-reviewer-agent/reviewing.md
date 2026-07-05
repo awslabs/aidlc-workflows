@@ -56,7 +56,7 @@ Append a `## Review` section to the PRIMARY artifact file. Use this exact format
 ## Review
 
 **Verdict:** READY | NOT-READY
-**Reviewer:** aidlc-architect-agent
+**Reviewer:** aidlc-architecture-reviewer-agent
 **Date:** [ISO timestamp from Bash]
 **Iteration:** [1, 2, etc.]
 

@@ -35,5 +35,15 @@ describe("t200 reviewer Date field carries a sourcing instruction", () => {
       expect(body).toContain('date -u +"%Y-%m-%dT%H:%M:%SZ"');
       expect(body.toLowerCase()).toContain("guess");
     });
+
+    test(`${agent}: template attributes the review to the reviewer persona, not the producer`, () => {
+      // The maker-checker split exists so the review record shows an
+      // independent checker; a template stamping the PRODUCER's name would
+      // misattribute every review to the agent that wrote the artifact.
+      const body = readFileSync(join(AIDLC_SRC, rel), "utf-8");
+      const reviewerLines = body.split("\n").filter((l) => l.startsWith("**Reviewer:**"));
+      expect(reviewerLines.length).toBe(1);
+      expect(reviewerLines[0]).toBe(`**Reviewer:** ${agent}`);
+    });
   }
 });

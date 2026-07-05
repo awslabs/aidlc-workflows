@@ -4,9 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [2.2.4] - 2026-07-05
 
-The two review-only agents now record a real UTC timestamp on the `## Review` section they append, instead of a guessed date. The Review template's `Date` field was a bare `[ISO timestamp]` placeholder with no sourcing instruction, so reviewers filled it in from memory; it now instructs the reviewer to run `date -u +"%Y-%m-%dT%H:%M:%SZ"` in the shell and paste the actual output, matching the `[ISO timestamp from Bash]` convention already used elsewhere. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+The two review-only agents now record a real UTC timestamp and their own name on the `## Review` section they append. The Review template's `Date` field was a bare `[ISO timestamp]` placeholder with no sourcing instruction, so reviewers filled it in from memory; it now instructs the reviewer to run `date -u +"%Y-%m-%dT%H:%M:%SZ"` in the shell and paste the actual output, matching the `[ISO timestamp from Bash]` convention already used elsewhere. The template's `Reviewer` field also named the PRODUCER agent (the artifact's author) instead of the reviewer persona, so every review on disk was attributed to the agent whose work was being reviewed; it now names the reviewer persona. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
 
 * Reviewer `## Review` sections (product-lead and architecture-reviewer agents) now carry a real shell-sourced UTC timestamp in the `Date` field rather than an inferred date.
+* The `Reviewer` field in those sections now records the reviewer persona (`aidlc-product-lead-agent` / `aidlc-architecture-reviewer-agent`) instead of the producer agent whose artifact was under review.
 
 ## [2.2.3] - 2026-07-05
 
