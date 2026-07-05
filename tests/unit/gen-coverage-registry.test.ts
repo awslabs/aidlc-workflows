@@ -839,6 +839,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t199-learnings-memory-path.test.ts",
     "unit/t201-swarm-batch-advance.test.ts",
     "unit/t202-gate-next-stage.test.ts",
+    "unit/t203-nested-workspace-detection.test.ts",
     "unit/t17.test.ts",
     "unit/t18.test.ts",
     "unit/t19.test.ts",

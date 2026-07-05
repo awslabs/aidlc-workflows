@@ -42,6 +42,8 @@ MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
 
 The scanner walks the project directory one level deep plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`), excluding the harness directories (`.claude/`, `.kiro/`, `.codex/`), `aidlc/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`.
 
+Nested-project fallback: when NO top-level signal fires (the layout that would otherwise classify greenfield), the scanner then descends one level into each arbitrarily-named top-level subdirectory (skipping the excluded directories above, hidden dirs, and symlinks) and re-applies the same signal set rooted at that subdirectory. If any subdirectory looks brownfield, the workspace is classified brownfield and that subdirectory's languages/frameworks/build system are merged into the result. This catches a project whose source lives one container down (e.g. `wordbook/`, `backend/`) instead of at the root. The fallback is depth-1 only and never runs when the root already has a source signal.
+
 Scan signals:
 - Directory structure (top-level and key subdirectories)
 - Configuration files (package.json, pom.xml, build.gradle, Cargo.toml, pyproject.toml, etc.)
@@ -59,6 +61,8 @@ Scan signals:
 ### Step 3: Detect Project Type
 
 Classify based on the scanner's evidence:
+
+Signals are evaluated at the root first; if none fires, the nested-project fallback re-evaluates the same signals one level down (see Step 2).
 
 **Brownfield** — ANY of these indicators present:
 - Source code files exist (`.js`, `.ts`, `.jsx`, `.tsx`, `.py`, `.java`, `.go`, `.rs`, `.rb`, `.cs`, `.cpp`, `.c`, `.kt`, `.swift`, `.php`)

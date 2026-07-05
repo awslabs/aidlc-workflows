@@ -81,7 +81,7 @@ All three stages run inside a single deterministic `bun .claude/tools/aidlc-util
 | Mode | Auto-proceed (no approval gate) |
 
 ### Steps
-1. Walk the project directory one level deep, plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`) if present
+1. Walk the project directory one level deep, plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`) if present. When no top-level signal fires, fall back to scanning one level into each arbitrarily-named subdirectory with the same signal set, so a project nested in a container folder (e.g. `wordbook/`) is detected instead of misclassified greenfield
 2. Count files by extension to determine primary/secondary languages
 3. Detect frameworks via known config filenames (Next.js, Vite, Angular, Nuxt, Remix, Gatsby, Astro, Svelte, NestJS) and React via `package.json` dependencies
 4. Detect build system via manifest + lockfile (npm/yarn/pnpm/bun/poetry/uv/hatch/pip/cargo/go/maven/gradle/composer/bundler)

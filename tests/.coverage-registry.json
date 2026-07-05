@@ -3454,6 +3454,10 @@
         {
           "file": "tests/integration/t71-stage-workspace-detection-brownfield.test.ts",
           "mechanism": "sdk"
+        },
+        {
+          "file": "tests/unit/t203-nested-workspace-detection.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.7] - 2026-07-05
+
+Workspace detection now finds projects nested in a container folder. A project whose source lives one folder down (e.g. `wordbook/`, `backend/`) was classified Greenfield because the scanner only looked at the workspace root plus a fixed source-dir list, so Reverse Engineering was skipped and no codebase understanding was produced. When no top-level signal fires, the scanner now falls back to a one-level-deep scan of each subdirectory (skipping the excluded, sample, and hidden dirs), so a nested codebase is detected as Brownfield. Starting an incremental workflow (`bugfix`, `refactor`, `security-patch`) on a workspace that still scans Greenfield now prints a one-line advisory pointing at fixing the Project Type or the layout; routing is unchanged, since an empty workspace has nothing to reverse-engineer. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Workspace detection classifies a nested project (source in an arbitrarily-named subdirectory) as Brownfield instead of Greenfield, so Reverse Engineering runs. The fallback is depth-1 only and does not change classification for a normal top-level project. The detected subdirectory is surfaced as `Nested Root` in the `WORKSPACE_SCANNED` audit event and as `nestedRoot` in `/aidlc detect --json`.
+* Starting a `bugfix`, `refactor`, or `security-patch` workflow on a Greenfield-scanned workspace prints a stderr advisory (the scope targets existing code but none was found); it does not change routing or Project Type.
 ## [2.2.6] - 2026-07-05
 
 Approval options during Construction now name the real next stage instead of always saying Code Generation. The run-stage directive carries a computed `next_stage` field (the display name of the following in-scope stage, honouring the active scope and any recomposed EXECUTE/SKIP plan), and the harness question-rendering annexes render the Approve option's "Continue to ..." text from that field verbatim, showing "Complete workflow" on the final in-scope stage. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
@@ -49,6 +55,7 @@ Stops help requests from accidentally creating intents. `/aidlc intent help` was
 * The "Unknown intent" error from a failed `/aidlc intent <name>` switch no longer suggests describing new work; it points at the read-only `/aidlc intent` listing and explicitly says not to start a new workflow to recover. The "Unknown space" error likewise no longer instructs creating the missing space - creation stays a separate, deliberate move.
 * The orchestrator skill's second-intent CONFIRM step named the wrong binary (`aidlc-utility.ts next ...`, which dies with a usage error listing `intent-birth` - a guard-bypass temptation); it now names `aidlc-orchestrate.ts next` on all four harnesses.
 * The Codex orchestrator skill's forwarding loop now tells the conductor to drop the leading `$aidlc`/`/aidlc` invocation marker and forward the remaining text as separate arguments (observed live on Codex exec: the conductor echoed the whole slash line as one quoted token, which hid `intent help` from the router and dead-ended on a scope ask). The engine deliberately does NOT try to repair marker-prefixed input - a mangled echo lands in the scope-confirmation ask, a safe human gate.
+||||||| parent of ef64a3e (fix: detect nested projects in workspace detection (2.2.7))
 
 ## [2.2.0] - 2026-07-04
 

@@ -48,7 +48,7 @@ Space-level dirs ensured:
 
 ### Stage 0.2: Workspace Detection
 
-A deterministic rule-based scanner walks one level deep into the project plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`). It classifies greenfield vs brownfield based on source files, framework configs, and package manifests.
+A deterministic rule-based scanner walks one level deep into the project plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`). It classifies greenfield vs brownfield based on source files, framework configs, and package manifests. When no top-level signal fires, it also descends one level into each arbitrarily-named subdirectory, so a project whose source lives in a container folder (e.g. `wordbook/`, `backend/`) is still detected as brownfield.
 
 ### Stage 0.3: State Initialization
 
