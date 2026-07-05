@@ -44,6 +44,33 @@ export interface StageEntry {
   workspace_requires?: boolean;
 }
 
+// The per-unit marker carried by the Construction stages that run once per
+// Unit of Work. It lives on the stage's `for_each` field (stage frontmatter,
+// compiled onto the GraphStage and into stage-graph.json). The canonical
+// 5-stage set (nfr-requirements, nfr-design, functional-design,
+// infrastructure-design, code-generation) is the defensive cross-check; the
+// node's own `for_each` is the source of truth so a future per-unit stage is
+// picked up without editing this file. Exported so both the runtime resolver
+// (isPerUnit in aidlc-orchestrate.ts) and the cost summary (gridCostSummary
+// below) resolve per-unit identically.
+export const PER_UNIT_FOR_EACH = "unit-of-work";
+export const KNOWN_PER_UNIT_STAGES: ReadonlySet<string> = new Set([
+  "nfr-requirements",
+  "nfr-design",
+  "functional-design",
+  "infrastructure-design",
+  "code-generation",
+]);
+
+// True when a stage runs once per Unit of Work. Reads the node's own
+// `for_each` marker (source of truth); the known-set membership is a defensive
+// cross-check so a typo'd marker on one of the five canonical stages still
+// resolves per-unit. Structural param so both a GraphStage and a bare
+// {slug, for_each} record satisfy it.
+export function isPerUnitStage(e: { slug: string; for_each?: string }): boolean {
+  return e.for_each === PER_UNIT_FOR_EACH || KNOWN_PER_UNIT_STAGES.has(e.slug);
+}
+
 export interface ScopeDefinition {
   depth: string;
   stages: Record<string, "EXECUTE" | "SKIP">;
@@ -3786,6 +3813,57 @@ export function stagesInScope(
     phase: s.phase,
     action: onPath.has(s.slug) ? ("EXECUTE" as const) : ("SKIP" as const),
   }));
+}
+
+// --- Scope cost summary ---
+//
+// One source of truth for the ceremony a scope (or an arbitrary composer grid)
+// carries: stage counts, approval-gate count, and per-unit fan-out. The routing
+// strings, the birth print, the scope-change output, and the composer validator
+// all read these numbers instead of recomputing them, so the confirm the user
+// sees agrees with the grid the engine runs.
+
+export interface ScopeCostSummary {
+  total: number;         // stages in the grid (32 today, never hardcoded)
+  execute: number;       // EXECUTE count
+  skip: number;          // total - execute
+  gates: number;         // EXECUTE stages outside initialization; mirrors
+                         // computeGate() in aidlc-orchestrate.ts - change together
+  perUnitStages: number; // EXECUTE stages that repeat per Unit of Work
+}
+
+// Cost of an arbitrary EXECUTE/SKIP grid (the composer-proposal shape). Indexes
+// the compiled graph by slug once, then walks the grid entries. The gate rule
+// (EXECUTE stage whose phase is not initialization) is the closed form of
+// computeGate() in aidlc-orchestrate.ts - if a per-stage gate flag ever lands,
+// change both. Grid slugs missing from the graph contribute to total/execute
+// but not gates/perUnit (defensive; validate-grid already rejects unknown slugs
+// for a real proposal, so this only matters for a stale composed scope).
+export function gridCostSummary(
+  stages: Record<string, "EXECUTE" | "SKIP">,
+): ScopeCostSummary {
+  const byslug = new Map<string, StageEntry>();
+  for (const s of loadStageGraph()) byslug.set(s.slug, s);
+  const total = Object.keys(stages).length;
+  let execute = 0;
+  let gates = 0;
+  let perUnitStages = 0;
+  for (const [slug, action] of Object.entries(stages)) {
+    if (action !== "EXECUTE") continue;
+    execute++;
+    const node = byslug.get(slug);
+    if (!node) continue;
+    if (node.phase !== "initialization") gates++;
+    if (isPerUnitStage(node)) perUnitStages++;
+  }
+  return { total, execute, skip: total - execute, gates, perUnitStages };
+}
+
+// Cost of a named scope's grid. Returns null for an unknown scope.
+export function scopeCostSummary(scope: string): ScopeCostSummary | null {
+  const def = loadScopeMapping()[scope];
+  if (!def) return null;
+  return gridCostSummary(def.stages);
 }
 
 // --- Timestamp ---

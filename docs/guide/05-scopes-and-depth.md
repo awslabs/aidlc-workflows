@@ -102,6 +102,8 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 | `workshop` | 25 / 32 | Standard | **Minimal** | AI-DLC workshop or training session |
 | (auto-detect) | Varies | Varies | Varies | AI determines from freeform intent |
 
+Scopes differ by an order of magnitude in ceremony: `poc` runs 8 stages with 5 approval gates, while `feature` runs all 32 with 29 gates and five design stages that fan out per Unit of Work in Construction. So the scope confirmation line always names the exact numbers - stage count, approval-gate count, and any per-unit fan-out - computed from the compiled grid, never estimated. You know what you are consenting to before the workflow starts.
+
 > **Per-project default scope:** teams can pre-set the default scope for a project by setting `AWS_AIDLC_DEFAULT_SCOPE` in `.claude/settings.json` — useful for workshops where every participant should start at `workshop` without remembering the flag. See [Customization § Per-Project Default Scope](13-customization.md#per-project-default-scope).
 
 ---
@@ -129,10 +131,10 @@ The engine analyzes your intent against keyword patterns:
 
 **Disambiguation rule:** If your input contains both a scope keyword and a longer project description (more than 5 words), the match is treated as incidental and the compose offer fires instead (below). This prevents mismatches like "Fix the infrastructure monitoring dashboard" being routed to `infra` when a tailored plan is more appropriate.
 
-After a clear keyword match, you get a one-line confirmation naming the MATCHED scope:
+After a clear keyword match, you get a one-line confirmation naming the MATCHED scope and the ceremony it carries, straight from the compiled grid:
 
 ```
-Starting a "bugfix" workflow for: "fix login bug". Confirm to proceed,
+Starting a "bugfix" workflow for: "fix login bug" - 7 of 32 stages, 4 approval gates, 1 stage repeats per unit of work in Construction. Confirm to proceed,
 name a different scope, or say "compose" for a tailored plan.
 ```
 

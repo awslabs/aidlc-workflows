@@ -91,6 +91,7 @@ import {
   firstInScopeStageOfPhase,
   getField,
   intentRepos,
+  isPerUnitStage,
   listIntents,
   nextInScopeStage,
   parseCheckboxes,
@@ -103,6 +104,7 @@ import {
   relativeSpaceRecordPrefix,
   resolveProjectDir,
   runtimeGraphPath,
+  scopeCostSummary,
   type StageEntry,
   stateFilePath,
   validScopes,
@@ -245,6 +247,20 @@ function errorDirective(message: string): ErrorDirective {
 // the conductor can end its turn at a clean inter-stage boundary.
 function parkedDirective(reason: string, stage: string): ParkedDirective {
   return { kind: "parked", reason, stage };
+}
+
+// The one-line ceremony preview for a scope, deterministic from the compiled
+// grid (scopeCostSummary in aidlc-lib.ts): "N of T stages, G approval gates"
+// plus a per-unit clause when Construction stages fan out per Unit of Work.
+// Returns "" for a scope that does not resolve (a fixture tree without it), so
+// callers can drop the whole clause rather than emit a broken preview.
+function costClause(scope: string): string {
+  const c = scopeCostSummary(scope);
+  if (!c) return "";
+  const perUnit = c.perUnitStages > 0
+    ? `, ${c.perUnitStages} ${c.perUnitStages === 1 ? "stage repeats" : "stages repeat"} per unit of work in Construction`
+    : "";
+  return `${c.execute} of ${c.total} stages, ${c.gates} approval gates${perUnit}`;
 }
 
 // --- Flag parsing ---
@@ -399,8 +415,13 @@ function birthPrintDirective(scope: string, flags: ParsedFlags, description?: st
   }
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
+  // Disclose the ceremony on the print: an explicitly named scope births
+  // directly (no confirm ask by design), so the stage/gate counts ride here.
+  // Omit the parenthetical when the scope does not resolve (fixture trees).
+  const clause = costClause(scope);
+  const cost = clause ? ` (${clause})` : "";
   return printDirective(
-    `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\` to start the workflow, then re-run \`next\` to continue.${labelHint}`,
+    `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\` to start the workflow${cost}, then re-run \`next\` to continue.${labelHint}`,
   );
 }
 
@@ -447,8 +468,8 @@ function composeDispatchDirective(
     }
   }
   parts.push(
-    `The composer runs \`bun ${hd}/tools/aidlc-utility.ts detect --json\` (read-only scan + scope-registry paths) and reads the scope definitions under ${hd}/scopes/, then returns a structured proposal (mode matched|custom, scopeName, the per-stage EXECUTE/SKIP grid, and a per-SKIP rationale).`,
-    "Render the proposal to the human and present the approve/edit/reject gate (see the composer block in SKILL.md). Do NOT write any file and do NOT advance any stage before an explicit approval.",
+    `The composer runs \`bun ${hd}/tools/aidlc-utility.ts detect --json\` (read-only scan + scope-registry paths) and reads the scope definitions under ${hd}/scopes/, then returns a structured proposal (mode matched|custom, scopeName, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, and a summary the validator computed).`,
+    "Render the proposal to the human and present the approve/edit/reject gate (see the composer block in SKILL.md), LEADING with the validator's summary line formatted \"<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates\" - use the validator's numbers verbatim, never recount by hand. Do NOT write any file and do NOT advance any stage before an explicit approval.",
   );
   return printDirective(parts.join(" "));
 }
@@ -825,23 +846,6 @@ function resolveSkeletonGate(stance: SkeletonStance, scope: string): boolean {
 // whole thesis"). The mapping is documented at
 // docs/reference/16-artifact-vocabulary.md:144-167.
 
-// The per-unit marker carried by the five Construction stages that run once per
-// Unit of Work. It lives on the stage's `for_each` field (stage frontmatter,
-// compiled onto the GraphStage and into stage-graph.json) — NOT as a
-// `**Per-Unit:**` line (no such field exists) and NOT behind a later wave. The
-// canonical 5-stage set (nfr-requirements, nfr-design, functional-design,
-// infrastructure-design, code-generation) is the defensive cross-check; the
-// node's own `for_each` is the source of truth so a future per-unit stage is
-// picked up without editing this file.
-const PER_UNIT_FOR_EACH = "unit-of-work";
-const KNOWN_PER_UNIT_STAGES: ReadonlySet<string> = new Set([
-  "nfr-requirements",
-  "nfr-design",
-  "functional-design",
-  "infrastructure-design",
-  "code-generation",
-]);
-
 // The literal token used in the per-unit path shape when no concrete Unit of
 // Work is supplied at emit time. The unit value comes from active Bolt context
 // (a later engine increment threads it in); when absent, the faithful emission
@@ -849,12 +853,11 @@ const KNOWN_PER_UNIT_STAGES: ReadonlySet<string> = new Set([
 // 16-artifact-vocabulary.md:159.
 const UNIT_NAME_PLACEHOLDER = "{unit-name}";
 
-// True when the node runs once per Unit of Work. Reads the node's own
-// `for_each` marker (source of truth); the known-set membership is a defensive
-// cross-check so a typo'd marker on one of the five canonical stages still
-// resolves per-unit.
+// True when the node runs once per Unit of Work. The marker + known-set rule
+// lives in aidlc-lib.ts (isPerUnitStage) so the runtime resolver and the cost
+// summary (gridCostSummary) agree on the per-unit set.
 function isPerUnit(node: GraphStage): boolean {
-  return node.for_each === PER_UNIT_FOR_EACH || KNOWN_PER_UNIT_STAGES.has(node.slug);
+  return isPerUnitStage(node);
 }
 
 // The KNOWN SET of stages whose artifacts live in the durable, space-level
@@ -1089,6 +1092,11 @@ function resolveProduces(
 // models the 3 init stages as individual gate:false run-stages (masked on every
 // real path; only a synthetic mid-init fixture surfaces one — t118's gate-axis
 // anchor).
+//
+// gridCostSummary() in aidlc-lib.ts counts a scope's approval gates as the
+// closed form of this rule (EXECUTE stages whose phase is not initialization);
+// if a per-stage gate flag ever lands here, update that counter too so the
+// preview matches what the engine gates.
 function computeGate(
   node: GraphStage,
   scope: string,
@@ -1621,16 +1629,30 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   ) {
     const inferred = inferScopeFromText(flags.intent);
     if (inferred.source === "keyword") {
+      // Preview the ceremony the user is confirming: stage/gate counts from the
+      // compiled grid (never estimates). Drop the clause if the scope does not
+      // resolve (a fixture tree without it) rather than emit a broken preview.
+      const clause = costClause(inferred.scope);
+      const cost = clause ? ` - ${clause}` : "";
       emit(askDirective(
-        `Starting a "${inferred.scope}" workflow for: "${flags.intent}". ` +
+        `Starting a "${inferred.scope}" workflow for: "${flags.intent}"${cost}. ` +
           "Confirm to proceed, name a different scope, or say \"compose\" for a tailored plan.",
       ));
       return;
     }
+    // Anchor the compose offer with the counts for the three named scopes so the
+    // user calibrates the order-of-magnitude difference before deciding. Fall
+    // back to bare names if any scope does not resolve.
+    const bf = scopeCostSummary("bugfix");
+    const poc = scopeCostSummary("poc");
+    const feat = scopeCostSummary("feature");
+    const examples = bf && poc && feat
+      ? `bugfix = ${bf.execute} of ${bf.total} stages, poc = ${poc.execute}, feature = all ${feat.execute}`
+      : "bugfix, feature, poc";
     emit(askDirective(
       `No stock scope clearly fits: "${flags.intent}". ` +
         "I can compose a tailored plan for this task (recommended: reply \"compose\"), " +
-        "or you can name a scope directly (e.g. bugfix, feature, poc; see /aidlc --help for all).",
+        `or you can name a scope directly (e.g. ${examples}; see /aidlc --help for all).`,
     ));
     return;
   }

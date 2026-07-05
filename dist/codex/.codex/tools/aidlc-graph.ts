@@ -49,12 +49,14 @@ import {
   activeSpace,
   type AgentMetadata,
   errorMessage,
+  gridCostSummary,
   loadAgents,
   loadScopeMapping,
   harnessDir,
   PHASES,
   type Phase,
   loadStageGraph,
+  type ScopeCostSummary,
   mustGet,
   mustPop,
   mustShift,
@@ -169,6 +171,10 @@ export interface ScopeValidation {
   valid: boolean;
   errors: string[];
   advisories: string[];
+  // The deterministic ceremony count of the validated grid (stage/gate/per-unit
+  // counts). The composer copies this into its proposal verbatim so the gate the
+  // human sees leads with numbers the validator computed, not an LLM recount.
+  summary?: ScopeCostSummary;
 }
 
 // --- Module-local state ---
@@ -1070,7 +1076,14 @@ export function validateGrid(
     }
   }
 
-  return { valid: errors.length === 0, errors, advisories };
+  // The ceremony count travels with the validation so the composer relays the
+  // validator's numbers, not a hand recount. Computed over the raw proposal
+  // entries; unknown slugs already produced errors above and contribute only to
+  // total/execute per gridCostSummary's graph-lookup guard.
+  const summary = gridCostSummary(
+    grid as Record<string, "EXECUTE" | "SKIP">,
+  );
+  return { valid: errors.length === 0, errors, advisories, summary };
 }
 
 /** Check proposed (granted-at-the-gate) keywords against the keywords the

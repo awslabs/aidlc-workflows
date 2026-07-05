@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 418,
+    "total": 423,
     "enumeratedByClass": {
-      "function": 203,
+      "function": 208,
       "audit": 70,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 88,
+      "function": 90,
       "audit": 30,
       "scope": 9,
       "stage": 8,
@@ -1385,6 +1385,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:gridCostSummary",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t213-scope-cost-summary.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:harnessDir",
       "minMechanism": "none",
       "coveredBy": [
@@ -1552,6 +1564,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isPerUnitStage",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isPlainObject",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1582,6 +1601,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:KNOWN_PER_UNIT_STAGES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -1977,6 +2003,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:PER_UNIT_FOR_EACH",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:PHASE_NUMBERS",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2342,6 +2375,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:scopeCostSummary",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t213-scope-cost-summary.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:scopeGridPath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2618,6 +2663,10 @@
         {
           "file": "tests/unit/t190-validate-grid.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t213-scope-cost-summary.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -4743,6 +4792,10 @@
       "unitId": "aidlc-utility scope-change",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/unit/t214-routing-cost-strings.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t27.test.ts",
           "mechanism": "cli"

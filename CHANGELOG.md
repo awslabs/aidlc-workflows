@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.12] - 2026-07-09
+
+The scope confirmation now previews the cost before you commit to it. A cold-start confirm and the compose offer carry exact stage and approval-gate counts read from the compiled grid (never estimates), the birth print and `scope-change` output name the same counts, and the composer proposal leads with a validator-computed `N stages EXECUTE / M SKIP, G approval gates` line. So confirming a scope tells you what you are consenting to (a `feature` runs 32 stages and 29 gates; a `bugfix` runs 7 and 4) instead of only a name. No upgrade action needed beyond re-copying your `dist/<harness>/` shell to pick up the regenerated strings.
+
+* The keyword-hit confirm now reads `Starting a "<scope>" workflow for: "<intent>" - N of T stages, G approval gates. ...`, with a trailing clause naming per-unit fan-out when the scope's Construction stages repeat per Unit of Work. The compose offer's example scope list carries counts too (`bugfix = 7 of 32 stages, poc = 8, feature = all 32`).
+* Explicit-scope birth prints (`next bugfix`, `next --scope <name>`, new-intent births) name the stage/gate counts in the run-then-continue message.
+* `scope-change` stdout gains an `Approval gates: <n>` line alongside the existing `Stages in scope:` line, and the `SCOPE_CHANGED` audit event gains an `Approval Gates` field.
+* `validate-grid` JSON output gains a `summary` field (stage/gate/per-unit counts of the validated grid). This is additive - existing parsers that read only `valid`/`errors`/`advisories` are unaffected.
+
 ## [2.2.11] - 2026-07-08
 
 Gate-revision backstop: the conductor sometimes revises a stage's artifact at an open approval gate but forgets to run the `reject` verb that records it, leaving `Revision Count: 0` and no `GATE_REJECTED`/`STAGE_REVISING` audit pair for a revision the user actually saw happen. The `approve` command now detects this deterministically and backfills the missing pair (tagged `Recovered: true`) before it commits, so the on-disk state and audit trail reflect the revision. It reconciles the record rather than refusing the approval you already gave, and it will not fire on the reviewer's pre-approval `## Review` append. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
@@ -86,11 +95,6 @@ Stops help requests from accidentally creating intents. `/aidlc intent help` was
 * The "Unknown intent" error from a failed `/aidlc intent <name>` switch no longer suggests describing new work; it points at the read-only `/aidlc intent` listing and explicitly says not to start a new workflow to recover. The "Unknown space" error likewise no longer instructs creating the missing space - creation stays a separate, deliberate move.
 * The orchestrator skill's second-intent CONFIRM step named the wrong binary (`aidlc-utility.ts next ...`, which dies with a usage error listing `intent-birth` - a guard-bypass temptation); it now names `aidlc-orchestrate.ts next` on all four harnesses.
 * The Codex orchestrator skill's forwarding loop now tells the conductor to drop the leading `$aidlc`/`/aidlc` invocation marker and forward the remaining text as separate arguments (observed live on Codex exec: the conductor echoed the whole slash line as one quoted token, which hid `intent help` from the router and dead-ended on a scope ask). The engine deliberately does NOT try to repair marker-prefixed input - a mangled echo lands in the scope-confirmation ask, a safe human gate.
-||||||| parent of ef64a3e (fix: detect nested projects in workspace detection (2.2.7))
-||||||| parent of 48f8b61 (fix: bound the compose-pending carve-out and guard recompose against autonomy (2.2.8))
-||||||| parent of 4fd686b (fix: exempt optional produces from per-unit coverage so conditional artifacts can be skipped (2.2.9))
-||||||| parent of 4ad1db9 (fix: detect git submodules as a brownfield signal in workspace detection (2.2.10))
-||||||| parent of 7fad329 (fix: backfill a skipped gate rejection at approve time (2.2.9))
 
 ## [2.2.0] - 2026-07-04
 

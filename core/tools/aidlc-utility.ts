@@ -49,6 +49,7 @@ import {
   codekbRepoName,
   relativeCodekbDir,
   RESERVED_RECORD_NAMES,
+  gridCostSummary,
   listIntents,
   listSpaces,
   loadAgents,
@@ -3310,17 +3311,26 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   const stageDelta = executeStages.length - oldExecuteCount;
   const deltaStr = stageDelta >= 0 ? `+${stageDelta}` : String(stageDelta);
 
+  // Ceremony preview for the switch: gate count from the effective grid (the
+  // reverse-engineering greenfield adjustment already applied) so the same
+  // disclosure exists on a scope switch as on the cold-start confirm.
+  const gates = gridCostSummary(
+    adjustedMapping as Record<string, "EXECUTE" | "SKIP">,
+  ).gates;
+
   appendAuditEvent(projectDir, "SCOPE_CHANGED", {
     "Old Scope": oldScope,
     "New Scope": newScope,
     "Stage Count Delta": deltaStr,
     "Stages in Scope": String(executeStages.length),
+    "Approval Gates": String(gates),
     Depth: effectiveDepth,
   });
 
   process.stdout.write(
     `Scope changed: ${oldScope} → ${newScope}
 Stages in scope: ${executeStages.length} (${deltaStr})
+Approval gates: ${gates}
 Depth: ${effectiveDepth}
 Completed: ${completedCount}/${executeStages.length}
 `
