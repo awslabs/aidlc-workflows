@@ -8,12 +8,15 @@ command line.
 
 The registry itself is **derived**, not written. The authoritative source
 for "which canonical names exist" is the `produces[]` field on every stage
-file. A helper in `dist/claude/.claude/tools/aidlc-graph.ts` reads
-the compiled stage graph and returns the union as a set — the same pattern
-used for scopes (`validScopes()` at `aidlc-lib.ts:772`) and for agents
-(`loadAgents()` at `aidlc-lib.ts:794`). Keeping the registry out
-of this chapter prevents the drift that parallel hand-maintained lists
-invite.
+file, unioned with each stage's `optional_produces[]` (artifacts a stage may
+conditionally write per unit, see the field reference in
+`15-stage-definition.md`), so a conditionally-produced name stays registered
+and resolvable to its producer. A helper in
+`dist/claude/.claude/tools/aidlc-graph.ts` reads the compiled stage graph and
+returns the union as a set — the same pattern used for scopes
+(`validScopes()` at `aidlc-lib.ts:772`) and for agents (`loadAgents()` at
+`aidlc-lib.ts:794`). Keeping the registry out of this chapter prevents the
+drift that parallel hand-maintained lists invite.
 
 ---
 

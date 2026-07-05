@@ -196,6 +196,44 @@ For unconditional consumes, **omit the field entirely**. There is no
 `always` value — an unconditional consume simply has no `conditional_on`
 key.
 
+### `optional_produces`
+
+A plain kebab-case string list, parallel to `produces:`. It names artifacts
+the stage **may** write per unit but is **not required** to. Absent means
+none; only the two stages that need it declare it, so the compiled
+`stage-graph.json` stays minimal.
+
+Why it exists: a per-unit Construction stage (`for_each: unit-of-work`) is
+COVERED for a unit only when every `produces[]` artifact exists on disk under
+that unit's record dir (the per-unit coverage check in
+`aidlc-orchestrate.ts`). Some artifacts are genuinely conditional on the unit
+- `functional-design` writes `frontend-components` only when the unit has a
+UI; `infrastructure-design` writes `shared-infrastructure` only when units
+share infrastructure. Listing those under `produces:` forced a backend-only
+unit to write an N/A stub just to satisfy coverage, and left the stage gate
+unreachable until it did. Moving them to `optional_produces:` exempts them:
+
+- **Coverage exemption.** `optional_produces` entries are ignored by the
+  per-unit coverage loop. A unit is covered once its **required** `produces[]`
+  artifacts exist; the optional ones never block `next` from advancing or
+  `approve` from committing.
+- **Still resolved for the conductor.** The run-stage directive's `produces`
+  paths union `produces` + `optional_produces`, so when the unit DOES write
+  the conditional artifact the conductor still knows where it lands.
+- **Still in the vocabulary.** `artifactsRegistry()` and `producersOf()` union
+  both lists, so the artifact name and its producer stage stay registered.
+
+**Pairing convention.** Every `optional_produces` entry MUST have a
+`(CONDITIONAL - ...)` marker in the stage body prose (and the `outputs:`
+string) that tells the agent when to write it. The frontmatter key is the
+engine's coverage view; the prose is the agent's instruction. Keep them in
+sync.
+
+**Warning.** An artifact marked `optional_produces` is invisible to the
+per-unit coverage ledger - the engine cannot prove the unit produced it. Use
+it only for artifacts that are legitimately conditional on the unit, never to
+quietly relax coverage for an artifact a stage should always write per unit.
+
 ### `mode`
 
 Dispatch mechanism, three values:

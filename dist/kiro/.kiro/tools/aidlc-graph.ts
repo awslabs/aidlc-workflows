@@ -120,6 +120,13 @@ export interface SensorResolution {
 export interface GraphStage extends StageEntry {
   condition?: string;
   produces: string[];
+  // optional_produces - artifacts the stage MAY write per unit (marked
+  // CONDITIONAL in the stage body). Genuinely optional per spec, like
+  // for_each: only annotated stages carry it. Exempt from the per-unit
+  // coverage check in aidlc-orchestrate.ts unitCovered, but still resolved
+  // into the run-stage directive's produces paths and unioned into the
+  // artifact registry / producersOf lookups.
+  optional_produces?: string[];
   consumes: Consume[];
   requires_stage: string[];
   // sensors is the stage-side pull import — a list of sensor manifest
@@ -367,6 +374,7 @@ const FIELD_ORDER = [
   "for_each",
   "workspace_requires",
   "produces",
+  "optional_produces",
   "consumes",
   "requires_stage",
   "sensors",
@@ -713,9 +721,15 @@ export function loadGraph(): GraphStage[] {
 }
 
 /** Stages that produce the given artifact. Empty array = orphan
- *  consumer candidate (doctor surfaces). */
+ *  consumer candidate (doctor surfaces). Unions produces and
+ *  optional_produces so a conditionally-produced artifact still resolves to
+ *  its producer stage. */
 export function producersOf(artifact: string): GraphStage[] {
-  return loadGraph().filter((s) => (s.produces ?? []).includes(artifact));
+  return loadGraph().filter(
+    (s) =>
+      (s.produces ?? []).includes(artifact) ||
+      (s.optional_produces ?? []).includes(artifact)
+  );
 }
 
 /** Stages that consume the given artifact. */
@@ -1089,13 +1103,16 @@ export function keywordCollisions(granted: string[]): string[] {
   return errors;
 }
 
-/** Union of produces[] across all stages. */
+/** Union of produces[] and optional_produces[] across all stages. */
 export function artifactsRegistry(): ReadonlySet<string> {
   if (!_artifactsRegistry) {
     const stages = loadGraph();
     const names = new Set<string>();
     for (const stage of stages) {
       for (const name of stage.produces ?? []) {
+        names.add(name);
+      }
+      for (const name of stage.optional_produces ?? []) {
         names.add(name);
       }
     }
@@ -1575,6 +1592,9 @@ function buildGraphStage(
   }
   if (parsed.workspace_requires !== undefined) {
     stage.workspace_requires = parsed.workspace_requires;
+  }
+  if (parsed.optional_produces !== undefined) {
+    stage.optional_produces = parsed.optional_produces;
   }
   if (parsed.sensors !== undefined) {
     stage.sensors = parsed.sensors;

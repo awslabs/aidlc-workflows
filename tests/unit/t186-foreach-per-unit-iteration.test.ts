@@ -64,13 +64,14 @@ const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 // active intent's record dir (relativeRecordDir over the seeded default intent).
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
-// functional-design's produces[] (verified frontmatter), the artifacts that
-// constitute a unit's coverage for that stage.
-const FD_PRODUCES = [
+// functional-design's REQUIRED produces[] (verified frontmatter), the artifacts
+// that constitute a unit's coverage for that stage. frontend-components is
+// declared under optional_produces and is exempt from per-unit coverage, so it
+// is deliberately NOT in this set.
+const FD_REQUIRED_PRODUCES = [
   "business-logic-model",
   "business-rules",
   "domain-entities",
-  "frontend-components",
 ];
 
 const tempDirs: string[] = [];
@@ -280,7 +281,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
   test("3: covering the first unit advances the iteration to the next unit", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
-    coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.unit).toBe("beta");
@@ -297,7 +298,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
   test("4: gate stays suppressed (false) on the last uncovered unit (its artifacts do not exist yet)", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
-    coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
     const d = runNext(proj);
     expect(d.unit).toBe("beta");
     expect(d.gate).toBe(false);
@@ -342,7 +343,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
   test("6b: approving with only the last unit uncovered is still refused", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
-    coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
     const d = runReport(proj, [
       "--stage",
       "functional-design",
@@ -385,8 +386,8 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
   test("9: with every unit covered, next presents the real gate on the last unit", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
-    coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
-    coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+    coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
+    coverUnit(proj, "beta", "functional-design", FD_REQUIRED_PRODUCES);
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.stage).toBe("functional-design");
@@ -399,8 +400,8 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
   test("9b: approving once every unit is covered is allowed and commits", () => {
     const proj = seedProject("functional-design", "on");
     seedBoltDag(proj, ["alpha", "beta"]);
-    coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
-    coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+    coverUnit(proj, "alpha", "functional-design", FD_REQUIRED_PRODUCES);
+    coverUnit(proj, "beta", "functional-design", FD_REQUIRED_PRODUCES);
     const d = runReport(proj, [
       "--stage",
       "functional-design",

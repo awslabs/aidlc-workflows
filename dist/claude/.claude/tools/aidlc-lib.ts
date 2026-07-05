@@ -26,6 +26,10 @@ export interface StageEntry {
   // fields uses the GraphStage type in aidlc-graph.ts (required there).
   condition?: string;
   produces?: string[];
+  // Artifacts the stage MAY write per unit; exempt from the per-unit
+  // coverage check in aidlc-orchestrate.ts unitCovered. See GraphStage in
+  // aidlc-graph.ts.
+  optional_produces?: string[];
   consumes?: Array<{ artifact: string; required: boolean; conditional_on?: string }>;
   requires_stage?: string[];
   scopes?: string[];
@@ -3211,6 +3215,9 @@ export function parseStageFrontmatter(
   for (const key of topLevelKeys) {
     if (key === CONSUMES_KEY) continue;
     if (ARRAY_KEYS.has(key)) continue;
+    // optional_produces is a presence-gated array field parsed below; skip it
+    // here so the scalar loop does not stamp it with an empty-string value.
+    if (key === "optional_produces") continue;
     // The key was discovered at the start of some line, so it IS
     // present. scalarField returns "" for both absent AND empty-quoted
     // ("") — since we know it's present, assign the result
@@ -3230,6 +3237,15 @@ export function parseStageFrontmatter(
   }
 
   obj.consumes = objectListField(fm, CONSUMES_KEY);
+
+  // optional_produces is an OPTIONAL array field: an absent key yields an
+  // absent property (mirrors for_each), so only annotated stages carry it
+  // through compile and the stage-graph JSON stays minimal. listField's regex
+  // anchors `^optional_produces:` (multiline), so it cannot cross-match the
+  // `produces:` block and vice versa.
+  if (topLevelKeys.has("optional_produces")) {
+    obj.optional_produces = listField(fm, "optional_produces");
+  }
 
   // reviewer_max_iterations is the one numeric scalar field. The generic
   // scalar loop above captured it as a string ("2"); coerce it to a real
@@ -3489,6 +3505,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "for_each",
     "workspace_requires",
     "produces",
+    "optional_produces",
     "consumes",
     "requires_stage",
     "sensors",

@@ -16,6 +16,7 @@ produces:
   - infrastructure-services
   - monitoring-design
   - cicd-pipeline
+optional_produces:
   - shared-infrastructure
 consumes:
   - artifact: performance-design

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.9] - 2026-07-06
+
+Per-unit Construction stages no longer demand CONDITIONAL artifacts before a unit counts as covered. A new optional stage-frontmatter key `optional_produces:` names artifacts a stage writes only when the unit needs them - `functional-design`'s `frontend-components` (only when the unit has a UI) and `infrastructure-design`'s `shared-infrastructure` (only when units share infrastructure). Those names moved out of `produces:` into `optional_produces:`, so a backend-only unit completes without an N/A stub file and the stage gate is reachable. The conductor still gets the artifact's write path in the run-stage directive when the unit does produce it, and the artifact name stays in the vocabulary registry. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Per-unit `next` now advances past a unit that skipped a CONDITIONAL artifact (e.g. a backend-only unit with no `frontend-components.md`); previously the unit was re-emitted on every `next` and the stage gate never opened.
+* `approve` for `functional-design` / `infrastructure-design` is no longer blocked when a unit legitimately omitted its conditional artifact - coverage keys off the required `produces:` only. A missing REQUIRED artifact still blocks, unchanged.
+* NEW stage-frontmatter key `optional_produces:` (a plain kebab string list, parallel to `produces:`): artifacts a stage may write per unit but that are exempt from the per-unit coverage check. Documented in the stage-definition field reference; every entry must pair with a `(CONDITIONAL - ...)` marker in the stage body.
+* No new commands or flags; no breaking change for CI or scripts.
 ## [2.2.8] - 2026-07-05
 
 Hardens two 2.2.0 Adaptive Workflows follow-ups so the "never under autonomous Construction" rules have deterministic anchors instead of prose alone. The in-flight compose carve-out is now bounded: a crashed or abandoned session can no longer leave a marker that permanently disables the Stop hook's forwarding-loop enforcement, and `/aidlc --doctor` surfaces an orphaned marker if one exists. Recompose refuses to run under an autonomous swarm/Bolt run rather than flipping stages with no human at the gate. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
@@ -64,6 +72,7 @@ Stops help requests from accidentally creating intents. `/aidlc intent help` was
 * The Codex orchestrator skill's forwarding loop now tells the conductor to drop the leading `$aidlc`/`/aidlc` invocation marker and forward the remaining text as separate arguments (observed live on Codex exec: the conductor echoed the whole slash line as one quoted token, which hid `intent help` from the router and dead-ended on a scope ask). The engine deliberately does NOT try to repair marker-prefixed input - a mangled echo lands in the scope-confirmation ask, a safe human gate.
 ||||||| parent of ef64a3e (fix: detect nested projects in workspace detection (2.2.7))
 ||||||| parent of 48f8b61 (fix: bound the compose-pending carve-out and guard recompose against autonomy (2.2.8))
+||||||| parent of 4fd686b (fix: exempt optional produces from per-unit coverage so conditional artifacts can be skipped (2.2.9))
 
 ## [2.2.0] - 2026-07-04
 

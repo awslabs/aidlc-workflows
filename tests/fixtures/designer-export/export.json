@@ -1421,7 +1421,9 @@
       "produces": [
         "business-logic-model",
         "business-rules",
-        "domain-entities",
+        "domain-entities"
+      ],
+      "optional_produces": [
         "frontend-components"
       ],
       "consumes": [
@@ -1741,7 +1743,9 @@
         "deployment-architecture",
         "infrastructure-services",
         "monitoring-design",
-        "cicd-pipeline",
+        "cicd-pipeline"
+      ],
+      "optional_produces": [
         "shared-infrastructure"
       ],
       "consumes": [

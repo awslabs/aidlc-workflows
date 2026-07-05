@@ -393,7 +393,13 @@ function handleFire(args: string[]): void {
 	// packager emit use, so the sensor's lookup can never drift from where SEED
 	// ships the floor (resolution falls through gracefully when absent).
 	if (id === "required-sections") {
-		const eligible = templateEligibleArtifacts(stageNode.produces ?? []);
+		// Union produces + optional_produces: a conditionally-produced artifact
+		// that IS written (e.g. frontend-components.md) still gets its
+		// required-sections template applied.
+		const eligible = templateEligibleArtifacts([
+			...(stageNode.produces ?? []),
+			...(stageNode.optional_produces ?? []),
+		]);
 		const templatesDir =
 			process.env.AIDLC_TEMPLATES_DIR ?? memoryTemplatesDir(projectDir);
 		scriptArgs.push("--templates-dir", templatesDir);

@@ -160,7 +160,7 @@ A stage is authored as a Markdown file with YAML frontmatter under `core/aidlc-c
 
 ### Steps
 
-1. **Write the stage file** — create `core/aidlc-common/stages/<phase>/<slug>.md`. Frontmatter declares `slug`, `phase`, `execution`/`condition`, `lead_agent` and any `support_agents` (by agent slug), `mode` (`inline` or `subagent`), `consumes` / `produces` (artifact vocabulary names), `requires_stage` (ordering edges), the `scopes:` membership list, any `sensors:` to bind, and `for_each` if it iterates per Unit. The body carries the stage's three compartments. See [Stage Definition](15-stage-definition.md) for the full field contract.
+1. **Write the stage file** — create `core/aidlc-common/stages/<phase>/<slug>.md`. Frontmatter declares `slug`, `phase`, `execution`/`condition`, `lead_agent` and any `support_agents` (by agent slug), `mode` (`inline` or `subagent`), `consumes` / `produces` (artifact vocabulary names), `optional_produces` for artifacts the stage writes only conditionally per unit (exempt from per-unit coverage), `requires_stage` (ordering edges), the `scopes:` membership list, any `sensors:` to bind, and `for_each` if it iterates per Unit. The body carries the stage's three compartments. See [Stage Definition](15-stage-definition.md) for the full field contract.
 
 2. **Recompile the graph** — `bun .claude/tools/aidlc-graph.ts compile` reads the new frontmatter into `tools/data/stage-graph.json` and transposes the `scopes:` tags into `tools/data/scope-grid.json`. Run `bun .claude/tools/aidlc-graph.ts compile --check` to confirm exit 0 (no drift). The stage is runnable immediately via `bun .claude/tools/aidlc-orchestrate.ts next --stage <slug> --single`.
 

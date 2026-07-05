@@ -25,6 +25,12 @@ export interface StageFrontmatter {
   // Absent -> false.
   workspace_requires?: boolean;
   produces: string[];
+  // optional_produces - artifacts the stage MAY write per unit (the stage
+  // body marks them CONDITIONAL). Excluded from the per-unit coverage
+  // check in aidlc-orchestrate.ts unitCovered; still resolved into the
+  // run-stage directive's produces paths so the conductor knows where a
+  // written one lands. Absent means none.
+  optional_produces?: string[];
   consumes: Array<{
     artifact: string;
     required: boolean;
@@ -112,7 +118,7 @@ const REQUIRED_FIELDS = [
   "outputs",
 ] as const;
 
-const OPTIONAL_FIELDS = ["for_each", "workspace_requires", "sensors", "scopes", "reviewer", "reviewer_max_iterations"] as const;
+const OPTIONAL_FIELDS = ["for_each", "workspace_requires", "optional_produces", "sensors", "scopes", "reviewer", "reviewer_max_iterations"] as const;
 
 const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 
@@ -237,6 +243,24 @@ export function validateStageFrontmatter(
   }
 
   checkStringArray(o, "produces", errors);
+
+  // optional_produces - optional. When present, must be a list of kebab-case
+  // artifact names (same shape as produces). Semantically these are artifacts
+  // the stage MAY write per unit; they are exempt from the per-unit coverage
+  // check but still resolved into directive paths. Mirrors the sensors
+  // optional-list block, plus the artifact slug-shape check.
+  if ("optional_produces" in o && o.optional_produces !== undefined) {
+    checkStringArray(o, "optional_produces", errors);
+    const optVal: unknown = o.optional_produces;
+    if (Array.isArray(optVal)) {
+      const opt: unknown[] = optVal;
+      opt.forEach((name: unknown, i: number) => {
+        if (typeof name === "string" && !ARTIFACT_SLUG_RE.test(name)) {
+          errors.push(`optional_produces[${i}] must be kebab-case, got "${name}"`);
+        }
+      });
+    }
+  }
 
   // Rule 8: nested consumes[] — array of {artifact, required, conditional_on?}.
   if ("consumes" in o) {

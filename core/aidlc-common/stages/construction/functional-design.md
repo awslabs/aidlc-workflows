@@ -14,6 +14,7 @@ produces:
   - business-logic-model
   - business-rules
   - domain-entities
+optional_produces:
   - frontend-components
 consumes:
   - artifact: unit-of-work

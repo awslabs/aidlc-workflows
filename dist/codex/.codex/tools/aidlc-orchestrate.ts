@@ -1056,16 +1056,19 @@ function splitConsumesByPresence(
   return { present, absent };
 }
 
-// Resolve a node's produces[] (always bare names, even for per-unit stages) to
-// canonical paths. produces has no conditional_on axis, so every name resolves.
+// Resolve a node's produces[] + optional_produces[] (always bare names, even for
+// per-unit stages) to canonical paths. produces has no conditional_on axis, so
+// every name resolves; optional_produces entries resolve too (the conductor
+// still needs the path when the unit DOES write the conditional artifact) but
+// are exempt from the per-unit coverage check in unitCovered.
 function resolveProduces(
   node: GraphStage,
   unit: string,
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
 ): string[] {
-  return (node.produces ?? []).map((name) =>
-    resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx),
+  return [...(node.produces ?? []), ...(node.optional_produces ?? [])].map(
+    (name) => resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx),
   );
 }
 
@@ -1917,15 +1920,18 @@ function orderedUnits(projectDir: string): string[] {
   return batches.flat();
 }
 
-// True when `unit` is COVERED for `node`, every artifact in node.produces[]
-// exists on disk under the resolved per-unit path
-// (<recordPrefix>/construction/<unit>/<owner.slug>/<name>.md). The resolved path
+// True when `unit` is COVERED for `node`: every artifact in node.produces[]
+// (the REQUIRED set) exists on disk under the resolved per-unit path
+// (<recordPrefix>/construction/<unit>/<owner.slug>/<name>.md). node.optional_produces
+// entries are DELIBERATELY not checked here - they are artifacts the unit MAY
+// write (marked CONDITIONAL in the stage body, e.g. frontend-components for a
+// backend-only unit), so their absence never blocks coverage. The resolved path
 // is workspace-RELATIVE with forward slashes, so we re-root it absolutely under
 // projectDir (splitting on "/" so the join is OS-correct). A stage with no
-// produces can never be "covered" by artifacts, but all five per-unit stages
-// declare >=2 produces (verified), so the empty case is unreachable in practice;
-// we treat empty-produces as NOT covered so the engine never silently skips a
-// unit it cannot prove it ran.
+// required produces can never be "covered" by artifacts, but all five per-unit
+// stages declare >=2 required produces (verified), so the empty case is
+// unreachable in practice; we treat empty-produces as NOT covered so the engine
+// never silently skips a unit it cannot prove it ran.
 function unitCovered(
   projectDir: string,
   node: GraphStage,
