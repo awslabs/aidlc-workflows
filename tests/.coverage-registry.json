@@ -4178,6 +4178,10 @@
         {
           "file": "tests/unit/t17.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t205-gate-revision-backstop.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

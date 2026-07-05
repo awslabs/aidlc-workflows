@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.11] - 2026-07-07
+
+Gate-revision backstop: the conductor sometimes revises a stage's artifact at an open approval gate but forgets to run the `reject` verb that records it, leaving `Revision Count: 0` and no `GATE_REJECTED`/`STAGE_REVISING` audit pair for a revision the user actually saw happen. The `approve` command now detects this deterministically and backfills the missing pair (tagged `Recovered: true`) before it commits, so the on-disk state and audit trail reflect the revision. It reconciles the record rather than refusing the approval you already gave, and it will not fire on the reviewer's pre-approval `## Review` append. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `Revision Count` now reflects a revision made at an open gate even when the conductor skipped the `reject` verb: `approve` backfills the count and the audit pair. Run `reject` yourself when you request changes so your feedback text is still recorded.
+* NEW `Recovered: true` variants of the `GATE_REJECTED` and `STAGE_REVISING` audit rows, emitted by the approve-time backstop when it backfills a skipped rejection.
+* NEW `AIDLC_SKIP_REVISION_BACKSTOP=1` off-switch disables the backstop (mirrors `AIDLC_SKIP_ARTIFACT_GUARD`); the test suite sets it globally so existing approve flows are unaffected.
 ## [2.2.10] - 2026-07-06
 
 Workspace detection now recognizes git submodules. A workspace whose code lives in uninitialized submodules (empty dirs plus a `.gitmodules` file) previously scanned as Greenfield, so reverse-engineering was auto-skipped and every design stage ran with zero code understanding. The scanner gains a sixth brownfield signal: a parseable `.gitmodules` with at least one submodule path entry classifies the workspace Brownfield. When submodule paths are uninitialized, the scan warns and names the remedy (`git submodule update --init --recursive`) at birth, in the doctor report, and on `detect`. Languages stay as scanned (Unknown is truthful until the submodules are fetched). **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
@@ -83,6 +90,7 @@ Stops help requests from accidentally creating intents. `/aidlc intent help` was
 ||||||| parent of 48f8b61 (fix: bound the compose-pending carve-out and guard recompose against autonomy (2.2.8))
 ||||||| parent of 4fd686b (fix: exempt optional produces from per-unit coverage so conditional artifacts can be skipped (2.2.9))
 ||||||| parent of 4ad1db9 (fix: detect git submodules as a brownfield signal in workspace detection (2.2.10))
+||||||| parent of 7fad329 (fix: backfill a skipped gate rejection at approve time (2.2.9))
 
 ## [2.2.0] - 2026-07-04
 

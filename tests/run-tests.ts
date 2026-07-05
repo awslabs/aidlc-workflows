@@ -482,11 +482,18 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
   // so the suite sets the bypass globally. The dedicated guard test
   // (t188-human-presence-gate) clears this var in its own tool spawns to
   // exercise real enforcement.
+  //
+  // Disable the approve-time gate-revision backstop for the suite by default,
+  // for the same reason: many approve tests drive a revision-shaped ledger
+  // against bare fixtures and must not have their Revision Count / audit trail
+  // reconciled out from under them. The dedicated test (t205-gate-revision-
+  // backstop) clears this var in its own tool spawns to exercise the backfill.
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AIDLC_TEST_NAME: base,
     AIDLC_SKIP_ARTIFACT_GUARD: "1",
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+    AIDLC_SKIP_REVISION_BACKSTOP: "1",
   };
   process.stdout.write(`\n=== START ${base} ===\n`);
 
