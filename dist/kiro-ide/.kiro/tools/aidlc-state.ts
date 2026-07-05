@@ -13,6 +13,7 @@ import {
   emitError,
   errorMessage,
   extractMarkdownSection,
+  filterProducesByKind,
   findStageBySlug,
   findAllEvents,
   firstInScopeStageOfPhase,
@@ -30,6 +31,8 @@ import {
   parseRefsList,
   parseStateStageSuffixes,
   readAllAuditShards,
+  readBoltDagUnitKinds,
+  readBoltDagUnits,
   readStateFile,
   recordDir,
   relativeMemoryPath,
@@ -829,12 +832,31 @@ function producesDirsForStage(
 
 // True when at least one declared produces[] artifact exists on disk under the
 // stage's resolved directory. A stage with empty produces[] vacuously passes.
+//
+// Unit-kind all-vacuous exemption: a per-unit stage carrying a produces_kinds
+// map can legitimately owe ZERO artifacts across ALL units (e.g. a workflow of
+// only packaging units on functional-design). No unit ever wrote a per-unit
+// dir, so the ANY-exists glob below is empty and would refuse the approval the
+// engine just presented. When a bolt_dag with unit kinds exists AND every unit
+// in the dag filters to an empty required set, return true (the stage does not
+// apply to any unit). Any unit owing any artifact leaves the ANY-exists check
+// exactly as strict as today.
 function producesArtifactsExist(
   pd: string,
-  stage: { slug: string; phase: string; for_each?: string; produces?: string[] }
+  stage: { slug: string; phase: string; for_each?: string; produces?: string[]; produces_kinds?: Record<string, string[]> }
 ): boolean {
   const produces = stage.produces ?? [];
   if (produces.length === 0) return true; // nothing declared -> nothing to verify
+  if (stage.for_each === "unit-of-work" && stage.produces_kinds !== undefined) {
+    const units = readBoltDagUnits(pd);
+    const kinds = readBoltDagUnitKinds(pd);
+    if (units !== null && kinds !== null) {
+      const allVacuous = units.every(
+        (u) => filterProducesByKind(stage.produces_kinds, produces, kinds.get(u) ?? null).length === 0,
+      );
+      if (allVacuous) return true;
+    }
+  }
   for (const dir of producesDirsForStage(pd, stage)) {
     for (const name of produces) {
       if (existsSync(join(dir, `${name}.md`))) return true;
@@ -985,7 +1007,7 @@ function workspaceHasWork(pd: string): boolean {
 // untouched. `stage` is the StageEntry being completed. No-op when bypass active.
 function verifyStageArtifacts(
   pd: string,
-  stage: { slug: string; name: string; phase: string; for_each?: string; produces?: string[]; workspace_requires?: boolean }
+  stage: { slug: string; name: string; phase: string; for_each?: string; produces?: string[]; produces_kinds?: Record<string, string[]>; workspace_requires?: boolean }
 ): void {
   if (artifactGuardDisabled()) return;
 

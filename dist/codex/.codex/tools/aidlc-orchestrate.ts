@@ -87,6 +87,7 @@ import {
   type CheckboxLine,
   codekbRepoName,
   errorMessage,
+  filterProducesByKind,
   findAllEvents,
   firstInScopeStageOfPhase,
   getField,
@@ -102,6 +103,7 @@ import {
   PHASES,
   READ_ONLY_FLAGS,
   readAllAuditShards,
+  readBoltDagUnitKinds,
   relativeCodekbDir,
   relativeRecordDir,
   relativeSpaceRecordPrefix,
@@ -1140,15 +1142,22 @@ function splitConsumesByPresence(
 // every name resolves; optional_produces entries resolve too (the conductor
 // still needs the path when the unit DOES write the conditional artifact) but
 // are exempt from the per-unit coverage check in unitCovered.
+// `unitKind` prunes the COMBINED list to the artifacts that apply to that unit
+// kind (via the stage's produces_kinds map, which may point at either list);
+// null (an untagged unit, or a non-per-unit stage) keeps the full list: zero
+// behaviour change off the kind path.
 function resolveProduces(
   node: GraphStage,
   unit: string,
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
+  unitKind: string | null = null,
 ): string[] {
-  return [...(node.produces ?? []), ...(node.optional_produces ?? [])].map(
-    (name) => resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx),
-  );
+  return filterProducesByKind(
+    node.produces_kinds,
+    [...(node.produces ?? []), ...(node.optional_produces ?? [])],
+    unitKind,
+  ).map((name) => resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx));
 }
 
 // Compute the `gate` value for a run-stage directive — the human-judgement
@@ -1208,6 +1217,7 @@ function buildRunStageDirective(
   stateContent: string | null = null,
   recordPrefix: string | null = null,
   codekbCtx?: CodekbCtx,
+  unitKind: string | null = null,
 ): RunStageDirective {
   const resolvedConsumes = resolveConsumes(
     node.consumes ?? [], node, projectType, unit, recordPrefix, codekbCtx,
@@ -1227,7 +1237,7 @@ function buildRunStageDirective(
     gate: computeGate(node, scope, stateContent),
     memory_path: memoryPathFor(node.phase, node.slug, recordPrefix),
     consumes: present,
-    produces: resolveProduces(node, unit, recordPrefix, codekbCtx),
+    produces: resolveProduces(node, unit, recordPrefix, codekbCtx, unitKind),
     rules_in_context: (node.rules_in_context ?? []).map((r) => r.path),
     sensors_applicable: (node.sensors_applicable ?? []).map((s) => s.id),
     stage_file: stageFileFor(node.phase, node.slug),
@@ -2020,28 +2030,35 @@ function orderedUnits(projectDir: string): string[] {
   return r.batches.flat();
 }
 
-// True when `unit` is COVERED for `node`: every artifact in node.produces[]
-// (the REQUIRED set) exists on disk under the resolved per-unit path
-// (<recordPrefix>/construction/<unit>/<owner.slug>/<name>.md). node.optional_produces
-// entries are DELIBERATELY not checked here - they are artifacts the unit MAY
-// write (marked CONDITIONAL in the stage body, e.g. frontend-components for a
-// backend-only unit), so their absence never blocks coverage. The resolved path
+// True when `unit` is COVERED for `node`: every APPLICABLE artifact in
+// node.produces[] (the REQUIRED set) exists on disk under the resolved per-unit
+// path (<recordPrefix>/construction/<unit>/<owner.slug>/<name>.md).
+// node.optional_produces entries are DELIBERATELY not checked here - they are
+// artifacts the unit MAY write (marked CONDITIONAL in the stage body), so their
+// absence never blocks coverage. The resolved path
 // is workspace-RELATIVE with forward slashes, so we re-root it absolutely under
-// projectDir (splitting on "/" so the join is OS-correct). A stage with no
-// required produces can never be "covered" by artifacts, but all five per-unit
-// stages declare >=2 required produces (verified), so the empty case is
-// unreachable in practice; we treat empty-produces as NOT covered so the engine
-// never silently skips a unit it cannot prove it ran.
+// projectDir (splitting on "/" so the join is OS-correct).
+//
+// The empty-produces guard runs on the UNFILTERED required list: a stage that
+// declares no required produces at all can never be proven-covered, so the
+// engine never silently skips a unit it cannot prove it ran. But after that
+// guard the required set is filtered by the unit's kind (produces_kinds): a
+// kind to which NO required artifact applies filters to empty and is VACUOUSLY
+// covered (the stage does not apply to that unit). `unitKind` null (untagged
+// unit or no map) keeps the full list, so behaviour is unchanged off the kind
+// path.
 function unitCovered(
   projectDir: string,
   node: GraphStage,
   unit: string,
   recordPrefix: string | null,
   codekbCtx: CodekbCtx,
+  unitKind: string | null,
 ): boolean {
   const names = node.produces ?? [];
   if (names.length === 0) return false;
-  for (const name of names) {
+  const applicable = filterProducesByKind(node.produces_kinds, names, unitKind);
+  for (const name of applicable) {
     const rel = resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx);
     const abs = join(projectDir, ...rel.split("/"));
     if (!existsSync(abs)) return false;
@@ -2063,9 +2080,10 @@ function nextUncoveredUnit(
   units: string[],
   recordPrefix: string | null,
   codekbCtx: CodekbCtx,
+  kinds: Map<string, string> | null,
 ): { unit: string; uncovered: string[] } | null {
   const uncovered = units.filter(
-    (u) => !unitCovered(projectDir, node, u, recordPrefix, codekbCtx),
+    (u) => !unitCovered(projectDir, node, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null),
   );
   if (uncovered.length === 0) return null;
   return { unit: uncovered[0], uncovered };
@@ -2118,7 +2136,10 @@ function emitPerUnitRunStage(
   }
   const units = r.batches.flat();
 
-  const pick = nextUncoveredUnit(projectDir, node, units, recordPrefix, codekbCtx);
+  // Read the per-unit kinds map ONCE (matches orderedUnits' single-read
+  // pattern). null = no kinds known = every unit on the full matrix.
+  const kinds = readBoltDagUnitKinds(projectDir);
+  const pick = nextUncoveredUnit(projectDir, node, units, recordPrefix, codekbCtx, kinds);
   if (pick === null) {
     // Every unit is already covered, but the checkbox is still in-flight: the
     // conductor wrote the LAST unit's artifacts and re-ran `next` to settle the
@@ -2132,6 +2153,7 @@ function emitPerUnitRunStage(
     const lastUnit = units[units.length - 1];
     const directive = buildRunStageDirective(
       node, projectType, lastUnit, scope, stateContent, recordPrefix, codekbCtx,
+      kinds?.get(lastUnit) ?? null,
     );
     directive.unit = lastUnit;
     emit(directive);
@@ -2140,6 +2162,7 @@ function emitPerUnitRunStage(
 
   const directive = buildRunStageDirective(
     node, projectType, pick.unit, scope, stateContent, recordPrefix, codekbCtx,
+    kinds?.get(pick.unit) ?? null,
   );
   // Suppress the gate on EVERY not-yet-covered unit. A per-unit directive with an
   // uncovered unit carries gate:false: the conductor completes the body, writes
@@ -2245,11 +2268,15 @@ function emitUnitMajorRunStage(
   // suppressed, using the same post-build override pattern as
   // emitPerUnitRunStage (the conductor acts on directive.stage + directive.unit,
   // not on Current Stage, so an interleaved slug needs no protocol change).
+  // Kinds read ONCE (the single-read pattern): coverage must see the same
+  // kind-pruned artifact set the directive names, or a pruned unit never covers.
+  const kinds = readBoltDagUnitKinds(projectDir);
   for (const u of units) {
     for (const k of block) {
-      if (!unitCovered(projectDir, k, u, recordPrefix, codekbCtx)) {
+      if (!unitCovered(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null)) {
         const directive = buildRunStageDirective(
           k, projectType, u, scope, stateContent, recordPrefix, codekbCtx,
+          kinds?.get(u) ?? null,
         );
         directive.gate = false;
         directive.unit = u;
@@ -3064,7 +3091,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     const codekbCtx = codekbCtxFor(pd);
     if (r.state === "ok") {
       const units = r.batches.flat();
-      const pick = nextUncoveredUnit(pd, node, units, recordPrefix, codekbCtx);
+      const kinds = readBoltDagUnitKinds(pd);
+      const pick = nextUncoveredUnit(pd, node, units, recordPrefix, codekbCtx, kinds);
       if (pick !== null) {
         emit({
           kind: "error",

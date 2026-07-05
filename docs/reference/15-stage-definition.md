@@ -150,6 +150,43 @@ config-emitting stage (a contract generator, an IaC executor) should set
 `workspace_requires: true` on it so the same guard applies. Bypass it for CI
 with `AIDLC_SKIP_ARTIFACT_GUARD=1`.
 
+### `produces_kinds`
+
+Optional map on a `for_each: unit-of-work` stage: each key is one of the stage's
+`produces` artifact names, each value the list of Unit **kinds** that artifact
+applies to. Kinds are declared per Unit in units-generation's edge block (see
+[Runtime graph](13-runtime-graph.md) `bolt_dag.units[].kind`) and are one of
+`service | spec | ui | packaging | library`.
+
+```yaml
+produces:
+  - performance-requirements
+  - security-requirements
+  - scalability-requirements
+produces_kinds:
+  performance-requirements: [service, ui]
+  scalability-requirements: [service]
+```
+
+Why it exists: the four construction design stages ran with a fixed produces
+list applied identically to every Unit, so a spec Unit owed a scalability doc
+and a packaging Unit a business-logic model - N/A stubs the human had to write.
+`produces_kinds` lets the engine prune the matrix per Unit: when a Unit carries
+a `kind`, the engine keeps only the produces entries whose kind list includes
+that kind. An artifact **not** listed in the map applies to all kinds (annotate
+only the kind-specific ones). A Unit with **no** kind, or a stage with no
+`produces_kinds` map at all, keeps the full matrix - so this is inert for every
+existing workflow.
+
+The pruning is symmetric: it filters both the run-stage directive's `produces`
+paths (what the conductor writes) and the per-unit coverage check (what the
+approve-path guard requires). A Unit whose required set prunes to **empty** is
+covered by definition - the stage does not apply to it - and a per-unit stage
+where *every* Unit prunes to empty approves as a no-op rather than deadlocking
+at the artifact guard. The default kind matrix for the four stages is stage
+frontmatter data, reviewable and revertible per entry; removing a wrong entry
+restores the full matrix for that artifact.
+
 ### `consumes[].required`
 
 Boolean per consume entry. Semantically **scoped to the active plan**,

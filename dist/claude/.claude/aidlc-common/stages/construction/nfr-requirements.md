@@ -18,6 +18,10 @@ produces:
   - scalability-requirements
   - reliability-requirements
   - tech-stack-decisions
+produces_kinds:
+  performance-requirements: [service, ui]
+  scalability-requirements: [service]
+  reliability-requirements: [service]
 consumes:
   - artifact: business-logic-model
     required: true
@@ -44,7 +48,7 @@ scopes:
   - security-patch
   - workshop
 inputs: functional design artifacts, requirements.md, RE artifacts
-outputs: performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md (under this stage's per-unit record dir, engine-resolved)
+outputs: "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
 ---
 
 # NFR Requirements

@@ -46,7 +46,7 @@ interface RuntimeGraph {
 }
 
 interface BoltDag {
-  units: { name: string; depends_on: string[] }[]; // verbatim from the authored edge block
+  units: { name: string; depends_on: string[]; kind?: string }[]; // verbatim from the authored edge block; kind (service|spec|ui|packaging|library) present only when the edge block tags the unit
   batches: string[][];            // topological levels; each level = units whose deps are all satisfied by prior levels; level entries sorted lexicographically (deterministic)
 }
 
@@ -109,10 +109,20 @@ the permission" for a swarm fan-out. Its source is the **fenced
 ```yaml
 units:
   - name: auth
+    kind: service
     depends_on: []
   - name: api
     depends_on: [auth]
 ```
+
+Each unit may carry an optional `kind` (`service | spec | ui | packaging |
+library`), what the unit IS. It rides verbatim into `bolt_dag.units[].kind`
+and drives the per-unit construction design pruning (see
+[Stage definition](15-stage-definition.md) `produces_kinds`): a stage's produces
+artifacts are filtered to the ones that apply to each unit's kind. An untagged
+unit carries no `kind` key and keeps the full design-artifact matrix. An invalid
+kind value makes the whole block `malformed` (see below), so a typo fails loud at
+the 2.7 gate rather than pruning wrong.
 
 `compile` parses *that structured block* — a pure-data parse, no model
 call — into `units` (verbatim edges) and `batches` (topological

@@ -86,7 +86,7 @@ Collect answers following stage-protocol.md §3 question flow (offer interaction
 ### Step 5: Get Plan Approval
 
 Present the decomposition plan to the user as a structured question:
-- Summarize the approach: unit boundary strategy, estimated unit count, dependency structure
+- Summarize the approach: unit boundary strategy, estimated unit count, dependency structure, and the proposed kind per unit (service/spec/ui/packaging/library) so the human confirms the design-artifact scope each unit will carry into Construction
 - Options: Approve Plan / Revise Plan
 
 ---
@@ -102,6 +102,7 @@ Based on the approved plan, generate 3 artifacts in `<record>/inception/units-ge
 - Unit responsibilities (what each unit owns and delivers)
 - Deployment model per unit (standalone, shared, embedded)
 - Relative complexity estimate per unit (S/M/L/XL)
+- Unit kind per unit: `service` | `spec` | `ui` | `packaging` | `library` (what the unit IS, which drives which construction design artifacts apply to it: a spec owes no scalability doc, a packaging unit no business-logic model). `service` = a deployed executable; `spec` = a contract/schema consumed in place; `ui` = a frontend surface; `packaging` = build/distribution artefacts; `library` = reusable code with no standalone runtime. Omit only if none genuinely fits; an untagged unit receives the full design-artifact matrix.
 - Implementation notes and constraints per unit
 
 **unit-of-work-dependency.md:**
@@ -110,13 +111,15 @@ Based on the approved plan, generate 3 artifacts in `<record>/inception/units-ge
 - Parallel development opportunities (sets of units with no dependency between them — multiple valid topological orderings exist)
 - A REQUIRED fenced `yaml` edge block (below) — the machine-readable mirror of the prose DAG. The downstream batch fan-out is computed from this block, not the prose, so it must be present, well-formed, and cycle-free. The `required-sections` sensor checks it at this stage's gate.
 
-The fenced block lists every unit with its direct dependencies (the unit names it depends on). Independent units carry `depends_on: []`. Name each unit exactly once; every name in a `depends_on` list must be a declared unit; no unit may depend on itself; the edges must be acyclic:
+The fenced block lists every unit with its direct dependencies (the unit names it depends on) and, optionally, each unit's `kind`. Independent units carry `depends_on: []`. Name each unit exactly once; every name in a `depends_on` list must be a declared unit; no unit may depend on itself; the edges must be acyclic. Each `kind:`, when present, must be one of `service | spec | ui | packaging | library` (an invalid value fails the edge-block sensor at this gate); omit it to keep the unit on the full construction design-artifact matrix:
 
 ```yaml
 units:
   - name: <unit-name>
+    kind: service
     depends_on: []
   - name: <another-unit>
+    kind: spec
     depends_on: [<unit-name>]
 ```
 
@@ -138,7 +141,7 @@ Update `<record>/aidlc-state.md`:
 ### Step 8: Present Completion & Request Approval
 
 Use stage-protocol.md completion template with completion emoji: :wrench:
-- Summary of units defined, dependencies mapped, stories assigned
+- Summary of units defined (with each unit's kind), dependencies mapped, stories assigned
 - Review path: `<record>/inception/units-generation/`
 - Structured approval question with options: Approve (continue to Construction phase) / Request Changes
 

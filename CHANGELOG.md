@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.18] - 2026-07-09
+
+Unit kinds prune the per-unit construction design matrix. Tag each Unit of Work in units-generation's edge block with an optional `kind:` (service, spec, ui, packaging, or library) and the four construction design stages (functional-design, nfr-requirements, nfr-design, infrastructure-design) now emit and require only the artifacts that apply to that kind: a spec unit owes no scalability doc, a packaging unit no business-logic model. A unit with no kind, a stage with no per-kind map, or an artifact left unannotated all behave exactly as before (the full matrix), so existing workflows are unchanged. A unit whose required set prunes to empty is covered by definition (the stage does not apply to it). **Upgrade:** re-copy your `dist/<harness>/` shell into the project; an older engine run against a kind-tagged edge block fails the units-generation gate loudly (re-copy dist to fix) rather than pruning wrong.
+
+* NEW optional `kind:` key on each unit in units-generation's `unit-of-work-dependency.md` edge block: one of `service | spec | ui | packaging | library`. An invalid value fails the `required-sections` sensor at the units-generation gate (edge block reported malformed), the same fail-loud channel a dangling dependency uses; omit the key to keep a unit on the full design-artifact matrix.
+* NEW `produces_kinds:` stage frontmatter field (a map of artifact name to the unit kinds it applies to) on the four construction design stages. An artifact may live in `produces:` or `optional_produces:`; the schema validator rejects a map key that names no entry in either list, an unknown kind, or an empty kind list. An artifact not listed in the map applies to all kinds.
+* The engine prunes both the run-stage directive's `produces` paths (required and optional alike) and the per-unit coverage check to the current unit's kind, so the conductor is never pointed at, and the approve-path guard never demands, an artifact the unit does not owe. Kind pruning composes with `optional_produces:`: an optional artifact still resolves into the directive for the kinds it applies to and stays exempt from coverage.
+* A per-unit construction stage where every unit's required set prunes to empty now approves as a no-op (the stage does not apply to any unit) instead of deadlocking at the artifact guard.
+
 ## [2.2.17] - 2026-07-09
 
 Fixes the Kiro IDE harness's hooks, which previously no-op'd for everything that

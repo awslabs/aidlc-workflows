@@ -926,8 +926,8 @@ All 3 artifacts written to `<record>/inception/units-generation/`:
 
 | File                            | Contents                                                    |
 |---------------------------------|-------------------------------------------------------------|
-| `unit-of-work.md`               | Unit definitions (name, description, boundaries), responsibilities, deployment model per Unit (standalone/shared/embedded), relative complexity estimate (S/M/L/XL), implementation notes and constraints |
-| `unit-of-work-dependency.md`    | Dependency DAG between Units (directed edges, cycle-free), integration points (APIs/shared data/events), parallel development opportunities (sets of Units with no dependency between them). Topology only — economic path-choice (recommended order, critical path) is 2.8's job |
+| `unit-of-work.md`               | Unit definitions (name, description, boundaries), responsibilities, deployment model per Unit (standalone/shared/embedded), relative complexity estimate (S/M/L/XL), unit kind (`service`/`spec`/`ui`/`packaging`/`library`, drives which construction design artifacts apply), implementation notes and constraints |
+| `unit-of-work-dependency.md`    | Dependency DAG between Units (directed edges, cycle-free), integration points (APIs/shared data/events), parallel development opportunities (sets of Units with no dependency between them). Topology only, economic path-choice (recommended order, critical path) is 2.8's job. The fenced `yaml` edge block mirrors the DAG and may tag each unit with an optional `kind:` (see [Runtime graph](../13-runtime-graph.md) `bolt_dag.units[].kind`) |
 | `unit-of-work-story-map.md`     | Each user story mapped to implementing Unit(s), cross-cutting stories spanning multiple Units, story implementation order within each Unit, coverage verification (every story assigned, every Unit has stories) |
 
 Additionally, a questions file is created as input:

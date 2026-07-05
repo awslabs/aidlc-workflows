@@ -170,12 +170,14 @@ The welcome message is rendered at session start via `companyAnnouncements` in `
 
 Stages 3.1-3.5 repeat per unit of work. Artifacts go in `construction/{unit-name}/{stage-name}/`. Stages 3.6-3.7 run once after all units.
 
+The four design stages (3.1-3.4) prune their artifacts to each unit's **kind** (tagged in 2.7's edge block: `service`, `spec`, `ui`, `packaging`, or `library`). A `spec` unit owes no scalability doc, a `packaging` unit no business-logic model; a unit left untagged receives the full matrix below. Which artifact applies to which kind is stage frontmatter data (`produces_kinds`, see [Stage definition](../reference/15-stage-definition.md)). A unit for which none of a stage's artifacts apply is complete for that stage with zero files.
+
 | Stage | Key Artifacts | Condition |
 |-------|--------------|-----------|
-| 3.1 Functional Design | `business-logic-model.md`, `business-rules.md` | Per plan, per unit |
-| 3.2 NFR Requirements | `security-requirements.md`, `performance-requirements.md` | Per plan, per unit |
-| 3.3 NFR Design | `security-design.md`, `performance-design.md` | Per plan, per unit |
-| 3.4 Infrastructure Design | `deployment-architecture.md`, `infrastructure-services.md` | Per plan, per unit |
+| 3.1 Functional Design | `business-logic-model.md`, `business-rules.md` | Per plan, per unit (by kind) |
+| 3.2 NFR Requirements | `security-requirements.md`, `performance-requirements.md` | Per plan, per unit (by kind) |
+| 3.3 NFR Design | `security-design.md`, `performance-design.md` | Per plan, per unit (by kind) |
+| 3.4 Infrastructure Design | `deployment-architecture.md`, `infrastructure-services.md` | Per plan, per unit (by kind) |
 | 3.5 Code Generation | `code-generation-plan.md`, `code-summary.md` (code goes to workspace root) | Always, per unit |
 | 3.6 Build and Test | `build-instructions.md`, `test-results.md` | Always, after all units |
 | 3.7 CI Pipeline | `ci-config.md`, `quality-gates.md` | Conditional, after all units |

@@ -131,6 +131,14 @@ declaring `for_each: unit-of-work` in its frontmatter:
 | `infrastructure-design` | once per Unit |
 | `code-generation` | once per Unit |
 
+For the four design stages the per-Unit coverage is further **kind-filtered**:
+each Unit's `kind` (tagged in the 2.7 edge block) selects, via the stage's
+`produces_kinds` map, which of its produces artifacts that Unit actually owes.
+The engine prunes both the run-stage directive's produces paths and the
+coverage check to that set, so a `spec` Unit is complete for infrastructure-
+design without a deployment doc and a `packaging` Unit is complete for
+functional-design with zero files. An untagged Unit keeps the full matrix.
+
 (The remaining two Construction stages, `build-and-test` and `ci-pipeline`, run
 once at the end across everything, so they are not part of the per-Unit fan-out.)
 

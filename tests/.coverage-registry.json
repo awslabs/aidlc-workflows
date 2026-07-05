@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 427,
+    "total": 431,
     "enumeratedByClass": {
-      "function": 211,
+      "function": 215,
       "audit": 70,
       "scope": 9,
       "stage": 32,
@@ -1233,6 +1233,10 @@
           "mechanism": "none"
         },
         {
+          "file": "tests/unit/t207-unit-kind-schema.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t64.test.ts",
           "mechanism": "none"
         }
@@ -1287,6 +1291,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:filterProducesByKind",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -1905,6 +1916,10 @@
         {
           "file": "tests/unit/t133-bolt-dag-compile.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t207-unit-kind-schema.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2009,6 +2024,10 @@
           "mechanism": "none"
         },
         {
+          "file": "tests/unit/t207-unit-kind-schema.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t64.test.ts",
           "mechanism": "none"
         }
@@ -2089,6 +2108,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readBoltDagUnitKinds",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readBoltDagUnits",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2637,6 +2670,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:UNIT_KINDS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -4097,6 +4137,10 @@
         },
         {
           "file": "tests/unit/t199-learnings-memory-path.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t207-unit-kind-schema.test.ts",
           "mechanism": "cli"
         }
       ],
