@@ -1742,6 +1742,24 @@ export function stopHookDir(projectDir: string, intent?: string, space?: string)
   return join(docsRoot(projectDir, intent, space), ".aidlc-stop-hook");
 }
 
+// `<projectDir>/aidlc/.aidlc-compose-pending`: the in-flight compose gate
+// marker the conductor writes before presenting the approve/edit/reject gate
+// and deletes on resolve. It lives at the WORKSPACE level (not a per-intent
+// record) so a single spelling is shared by the Stop-hook carve-out (which
+// honours it as a turn-stop signal) and the doctor probe (which flags an
+// orphaned one). Hoisted here so the path is spelled once.
+export function composeMarkerPath(projectDir: string): string {
+  return join(projectDir, "aidlc", ".aidlc-compose-pending");
+}
+
+// Freshness window for the compose marker. The Stop hook honours the carve-out
+// only while the marker's mtime is younger than this; an older marker is an
+// orphan (a session that crashed between write and gate-resolve) and is ignored
+// plus best-effort cleaned up, so it cannot silently disable forwarding-loop
+// enforcement forever. 24h is generous enough to cover a long human pause at an
+// open gate while still catching a stranded marker.
+export const COMPOSE_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
+
 // `<baseDir>/.aidlc-sensors` — the sensor detail-output / tsbuildinfo directory.
 // `baseDir` is the project dir for the dispatcher, or a tsconfig anchor for the
 // type-check sensor; callers append a stage slug as needed. The tsconfig-anchor

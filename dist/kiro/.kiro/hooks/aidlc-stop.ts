@@ -86,10 +86,12 @@
 // blocked. Any unexpected error also falls through to allow the stop — failing
 // open is the only safe failure mode for a hook that can otherwise trap a turn.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   auditFilePath,
+  composeMarkerPath,
+  COMPOSE_MARKER_TTL_MS,
   errorMessage,
   getField,
   hooksHealthDir,
@@ -454,12 +456,42 @@ function isPendingQuestionStop(stateContent: string): boolean {
 // answer the gate; a stray marker must not strand it). Fail-open: any read
 // error falls through to the cap-bounded block. Front/report composes are
 // unaffected (cold start has no state file; the hook allows before this).
+//
+// STALENESS BOUND. The conductor owns the write/delete, but a session that
+// crashes or is killed between "write the marker" and "gate resolves" leaves the
+// marker on disk forever - a permanently open carve-out that silently disables
+// the forwarding-loop enforcement for the whole workspace until someone
+// hand-deletes a hidden file they have never heard of. So the carve-out honours
+// the marker ONLY while it is FRESH: younger than COMPOSE_MARKER_TTL_MS by its
+// mtime. The window is generous (24h) so a human who steps away from an open
+// gate for a long pause is still covered; anything older is an orphan, not a
+// live gate. A stale marker is IGNORED (fall through to the cap-bounded block)
+// AND best-effort deleted here (the janitor), so the next turn starts clean.
+// The delete is wrapped so a failure to unlink never changes the stop decision.
+// The path spelling and the TTL are shared with the doctor probe via aidlc-lib.
 function isPendingComposeStop(stateContent: string): boolean {
   try {
     if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
       return false; // autonomy guard - keep the loop alive
     }
-    return existsSync(join(projectDir, "aidlc", ".aidlc-compose-pending"));
+    const marker = composeMarkerPath(projectDir);
+    if (!existsSync(marker)) return false;
+    const ageMs = Date.now() - statSync(marker).mtimeMs;
+    if (ageMs <= COMPOSE_MARKER_TTL_MS) return true; // fresh - honour the carve-out
+    // Orphaned marker: do not honour it, and best-effort clean it up so it
+    // cannot disable the enforcement loop indefinitely.
+    try {
+      unlinkSync(marker);
+    } catch {
+      // Unlink failure is non-fatal - the staleness check above already refused
+      // to honour the marker, so the loop stays enforced regardless.
+    }
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      "ignoring an orphaned compose marker (aidlc/.aidlc-compose-pending older than the freshness window); cleaned it up and falling through to the cap-bounded block",
+    );
+    return false;
   } catch {
     return false;
   }

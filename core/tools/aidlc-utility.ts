@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -29,6 +30,8 @@ import {
   auditFilePath,
   auditShards,
   birthIntent,
+  composeMarkerPath,
+  COMPOSE_MARKER_TTL_MS,
   DEFAULT_SPACE,
   detectLeakedLocks,
   docsDir,
@@ -761,6 +764,33 @@ function handleDoctor(projectDir: string): void {
     } catch {
       // State-version check failure is non-fatal for doctor report
     }
+  }
+
+  // Orphaned compose-marker probe: a read-only tripwire. The conductor writes
+  // the compose marker before an in-flight compose gate and deletes it on
+  // resolve; the Stop hook treats a FRESH marker as a carve-out (the turn may
+  // end at the gate). A crash between write and resolve can leave the marker on
+  // disk, so doctor flags a present marker with its age and the remediation
+  // (delete it if no compose gate is actually pending). The age is compared to
+  // the shared freshness window so the label says whether the Stop hook still
+  // honours it (fresh) or has begun ignoring it (stale). Silent when absent (no
+  // marker means nothing to report). Read-only: doctor never deletes it (the Stop
+  // hook is the janitor for a stale one). No behavior change.
+  try {
+    const composeMarker = composeMarkerPath(projectDir);
+    if (existsSync(composeMarker)) {
+      const ageMs = Date.now() - statSync(composeMarker).mtimeMs;
+      const ageHours = Math.floor(ageMs / (60 * 60 * 1000));
+      const ageLabel = ageHours >= 1 ? `${ageHours}h old` : "under 1h old";
+      const staleLabel = ageMs > COMPOSE_MARKER_TTL_MS ? ", stale" : ", fresh";
+      results.push({
+        pass: false,
+        label: `Compose marker present (aidlc/.aidlc-compose-pending, ${ageLabel}${staleLabel})`,
+        fix: "if no in-flight compose gate is actually pending, delete it ('rm aidlc/.aidlc-compose-pending') or resolve the pending gate. A stale marker no longer disables the Stop hook, but it should not linger.",
+      });
+    }
+  } catch {
+    // Compose-marker probe failure is non-fatal for the doctor report.
   }
 
   // ===========================================================================
@@ -3174,6 +3204,23 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
 
   withAuditLock(projectDir, () => {
     let content = readStateFile(projectDir, flags.intent, flags.space);
+    // AUTONOMY GUARD (mirrors the park guard's shape in aidlc-state.ts): an
+    // unattended autonomous Construction run has no human at the gate, so a
+    // conductor that drifts into "improving the plan" must not flip pending
+    // stages on its own. The SKILL.md prose says plan-reshape never runs under
+    // autonomous Construction on any harness; this is the deterministic anchor
+    // that enforcement was missing (the strict validator catches starvation and
+    // anchor moves, but not the absence of a human). Refuse outright; a
+    // legitimate unattended-recompose story, if one ever arrives, comes as an
+    // explicit flag, not the default.
+    if (getField(content, "Construction Autonomy Mode")?.trim() === "autonomous") {
+      die(
+        "Cannot recompose: Construction Autonomy Mode is autonomous. Re-shaping the " +
+          "plan needs a human at the gate, and an unattended run has none. Switch to " +
+          "gated Construction first (aidlc-bolt set-autonomy --mode gated) or let the " +
+          "swarm finish, then recompose.",
+      );
+    }
     // Only a RUNNING workflow has a live plan to re-shape. A Completed (or
     // Parked/terminated) state file is a terminal record: flipping its rows
     // would grow Total Stages under a summary computed at completion and

@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.8] - 2026-07-05
+
+Hardens two 2.2.0 Adaptive Workflows follow-ups so the "never under autonomous Construction" rules have deterministic anchors instead of prose alone. The in-flight compose carve-out is now bounded: a crashed or abandoned session can no longer leave a marker that permanently disables the Stop hook's forwarding-loop enforcement, and `/aidlc --doctor` surfaces an orphaned marker if one exists. Recompose refuses to run under an autonomous swarm/Bolt run rather than flipping stages with no human at the gate. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* A crashed compose gate no longer permanently disables the Stop hook. The forwarding-loop carve-out for an in-flight compose proposal now honours the `aidlc/.aidlc-compose-pending` marker only while it is fresh (younger than 24h by mtime); an older orphaned marker is ignored and best-effort cleaned up, so enforcement is restored automatically instead of staying silently off until the file is hand-deleted. The hook stays fail-open on any read error.
+* `/aidlc --doctor` now flags a present `aidlc/.aidlc-compose-pending` marker with its age and a remediation hint (delete it if no compose gate is pending, or resolve the gate). Silent when the marker is absent; read-only.
+* `recompose` refuses under autonomous Construction. `bun .../aidlc-utility.ts recompose` (and the chat-first in-flight reshape it backs) now exits non-zero with a clear error when `Construction Autonomy Mode` is `autonomous`, naming the remediation (`aidlc-bolt set-autonomy --mode gated`, or let the swarm finish). Gated and unset modes proceed as before.
 ## [2.2.7] - 2026-07-05
 
 Workspace detection now finds projects nested in a container folder. A project whose source lives one folder down (e.g. `wordbook/`, `backend/`) was classified Greenfield because the scanner only looked at the workspace root plus a fixed source-dir list, so Reverse Engineering was skipped and no codebase understanding was produced. When no top-level signal fires, the scanner now falls back to a one-level-deep scan of each subdirectory (skipping the excluded, sample, and hidden dirs), so a nested codebase is detected as Brownfield. Starting an incremental workflow (`bugfix`, `refactor`, `security-patch`) on a workspace that still scans Greenfield now prints a one-line advisory pointing at fixing the Project Type or the layout; routing is unchanged, since an empty workspace has nothing to reverse-engineer. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
@@ -56,6 +63,7 @@ Stops help requests from accidentally creating intents. `/aidlc intent help` was
 * The orchestrator skill's second-intent CONFIRM step named the wrong binary (`aidlc-utility.ts next ...`, which dies with a usage error listing `intent-birth` - a guard-bypass temptation); it now names `aidlc-orchestrate.ts next` on all four harnesses.
 * The Codex orchestrator skill's forwarding loop now tells the conductor to drop the leading `$aidlc`/`/aidlc` invocation marker and forward the remaining text as separate arguments (observed live on Codex exec: the conductor echoed the whole slash line as one quoted token, which hid `intent help` from the router and dead-ended on a scope ask). The engine deliberately does NOT try to repair marker-prefixed input - a mangled echo lands in the scope-confirmation ask, a safe human gate.
 ||||||| parent of ef64a3e (fix: detect nested projects in workspace detection (2.2.7))
+||||||| parent of 48f8b61 (fix: bound the compose-pending carve-out and guard recompose against autonomy (2.2.8))
 
 ## [2.2.0] - 2026-07-04
 

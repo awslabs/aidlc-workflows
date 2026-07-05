@@ -211,6 +211,44 @@ describe("t194 recompose - rejections", () => {
     expect(readState(proj)).toMatch(/- \[ \] functional-design — SKIP/);
   });
 
+  test("autonomous Construction rejected: recompose refuses with the remediation named", () => {
+    // The engine-side anchor for the "never recompose under autonomous
+    // Construction" rule (mirrors the park guard). A born feature project has no
+    // Construction Autonomy Mode field, so inject it as autonomous the way
+    // set-autonomy would, then confirm the verb refuses and the state is
+    // untouched by the rejection.
+    const proj = bornProject();
+    const sp = statePathOf(proj);
+    const withAutonomy = readFileSync(sp, "utf-8").replace(
+      /- \*\*Status\*\*: Running/,
+      "- **Status**: Running\n- **Construction Autonomy Mode**: autonomous",
+    );
+    expect(withAutonomy).toContain("- **Construction Autonomy Mode**: autonomous");
+    writeFileSync(sp, withAutonomy, "utf-8");
+    const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain("Construction Autonomy Mode is autonomous");
+    expect(r.out).toContain("set-autonomy --mode gated");
+    // The state file is untouched by the refusal (still autonomous, still EXECUTE).
+    expect(readState(proj)).toBe(withAutonomy);
+  });
+
+  test("gated Construction proceeds: recompose flips as today when autonomy is not autonomous", () => {
+    // The complement: an explicitly gated run has a human at the gate, so the
+    // guard does not fire and the flip lands exactly as the default (no-field)
+    // born-project cases above.
+    const proj = bornProject();
+    const sp = statePathOf(proj);
+    const gated = readFileSync(sp, "utf-8").replace(
+      /- \*\*Status\*\*: Running/,
+      "- **Status**: Running\n- **Construction Autonomy Mode**: gated",
+    );
+    writeFileSync(sp, gated, "utf-8");
+    const r = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "market-research"]);
+    expect(r.status).toBe(0);
+    expect(readState(proj)).toMatch(/- \[ \] market-research — SKIP/);
+  });
+
   test("completed workflow rejected: recompose refuses when Status is not Running", () => {
     const proj = bornProject();
     // Terminalize the workflow the way complete-workflow does.

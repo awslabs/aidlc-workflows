@@ -208,6 +208,7 @@ Run the health check to confirm everything is in place:
 | Scope validation | All 9 scopes walk cleanly against the graph (advisories for scope-truncation gaps are expected) |
 | Schema + references | Every stage's YAML frontmatter validates, and every consumes/requires_stage reference resolves |
 | Keyword overlap | No keyword is claimed by more than one scope across the `.claude/scopes/*.md` files |
+| Pending-compose marker | Flags a lingering `aidlc/.aidlc-compose-pending` (the in-flight compose gate marker) with its age; a crashed compose gate can strand it. Silent when absent. Remediation: delete it if no compose gate is pending, or resolve the gate |
 
 ### Example output
 
