@@ -198,17 +198,17 @@
     <p class="eyebrow">North Star · Functional Goals</p>
     <h1>AI-DLC Workflows 2.0 — Roadmap &amp; Gaps</h1>
     <p class="lead">Delivery against the seven 2.0 North Star goals — organized as a <b>semver release ladder</b>:
-    the in-flight hardening lands on the <code style="background:rgba(255,255,255,.18);color:#fff">2.0.x</code> patch line,
-    and <b>each major feature steps the minor</b> (<code style="background:rgba(255,255,255,.18);color:#fff">2.x.0</code>).
-    2.0 ships as <b>GA Preview</b>; <b>full GA lands at 2.3.0</b>, once per-intent workspace, adaptive workflows, and reviewer-as-
-    workflows are all in place. The North Star serves two needs at once: low-effort configurability for customers, and cross-harness reusability
+    <b>each major feature steps the minor</b> (<code style="background:rgba(255,255,255,.18);color:#fff">2.x.0</code>).
+    2.0 shipped as <b>GA Preview</b>; per-intent workspace (2.1.0) and adaptive workflows (2.2.0) are now shipped;
+    <b>full GA lands at 2.4.0</b> with reviewer-as-verifier.
+    The North Star serves two needs at once: low-effort configurability for customers, and cross-harness reusability
     for us — one hand-authored <code style="background:rgba(255,255,255,.18);color:#fff">core/</code>, projected to Claude, Kiro CLI, Kiro IDE, and Codex.</p>
     <div class="chips">
-      <span class="chip">GA Preview <b>v2 @ 2.0.2</b></span>
-      <span class="chip">Next minor <b>2.1.0 — per-intent workspace</b></span>
-      <span class="chip">Full GA <b>2.3.0</b></span>
+      <span class="chip">Current <b>v2.2.0</b></span>
+      <span class="chip">Next minor <b>2.3.0 — extensions (plugin mechanism)</b></span>
+      <span class="chip">Full GA <b>2.4.0</b></span>
       <span class="chip">Harnesses <b>Claude · Kiro CLI · Kiro IDE · Codex</b></span>
-      <span class="chip">32 stages · 13 agents · 9 scopes · 4 sensors</span>
+      <span class="chip">32 stages · 14 agents · 9 scopes · 4 sensors · 11 hooks</span>
     </div>
   </div>
 
@@ -234,55 +234,60 @@
       </tr>
       <tr>
         <td><span class="ver patch">2.0.x</span></td>
-        <td><span class="feat">Hardening</span><span class="desc">Reviewer harness wiring · field validation · stop-hook integrity</span></td>
-        <td>1, 2, 4, 5</td><td><span class="badge inflight"><span class="d"></span>In flight</span></td>
+        <td><span class="feat">Hardening</span><span class="desc">Reviewer harness wiring · field validation · stop-hook integrity · human-presence gate</span></td>
+        <td>1, 2, 4, 5</td><td><span class="badge shipped"><span class="d"></span>Shipped</span></td>
       </tr>
-      <tr class="highlight">
+      <tr>
         <td><span class="ver patch">2.1.0</span></td>
         <td><span class="feat">Per-intent workspace</span><span class="desc">Spaces · intents · multi-repo · space-level knowledge</span></td>
-        <td>7</td><td><span class="badge inflight"><span class="d"></span>In flight</span></td>
+        <td>7</td><td><span class="badge shipped"><span class="d"></span>Shipped</span></td>
       </tr>
-      <tr class="highlight">
+      <tr>
         <td><span class="ver now">2.2.0</span></td>
         <td><span class="feat">Adaptive workflows</span><span class="desc">Dynamic stage composition (the composer under /aidlc) · scale-in triage · in-flight recompose (per-unit iteration landed in 2.1.2)</span></td>
         <td>3</td><td><span class="badge shipped"><span class="d"></span>Shipped</span></td>
       </tr>
-      <tr>
+      <tr class="highlight">
         <td><span class="ver patch">2.3.0</span></td>
-        <td><span class="feat">Reviewer-as-verifier <span class="ver now">Full GA</span></span><span class="desc">Domain-aware validation tools · token budget · adversarial framing; completes the GA bar (per-intent + adaptive + reviewer)</span></td>
-        <td>4</td><td><span class="badge inflight"><span class="d"></span>In flight</span></td>
+        <td><span class="feat">Extensions (plugin mechanism)</span><span class="desc">First-class <code>plugins/&lt;name&gt;/</code> surface — stages, agents, scopes, contributions, sensors — authored once, emitted per harness by the packager, composed at session start</span></td>
+        <td>2</td><td><span class="badge inflight"><span class="d"></span>In flight</span></td>
       </tr>
       <tr>
         <td><span class="ver patch">2.4.0</span></td>
+        <td><span class="feat">Reviewer-as-verifier <span class="ver now">Full GA</span></span><span class="desc">Domain-aware validation tools · token budget · adversarial framing; completes the GA bar (per-intent + adaptive + extensions + reviewer)</span></td>
+        <td>4</td><td><span class="badge planned"><span class="d"></span>Planned</span></td>
+      </tr>
+      <tr>
+        <td><span class="ver patch">2.5.0</span></td>
         <td><span class="feat">Three-role ensemble</span><span class="desc">Owner → Contributor → Reviewer · configurable collaboration patterns</span></td>
         <td>1</td><td><span class="badge planned"><span class="d"></span>Planned</span></td>
       </tr>
       <tr>
-        <td><span class="ver patch">2.5.0</span></td>
+        <td><span class="ver patch">2.6.0</span></td>
         <td><span class="feat">Governed cyclic flows</span><span class="desc">Cross-stage backward edges</span></td>
         <td>5</td><td><span class="badge planned"><span class="d"></span>Planned</span></td>
       </tr>
       <tr>
-        <td><span class="ver patch">2.6.0</span></td>
+        <td><span class="ver patch">2.7.0</span></td>
         <td><span class="feat">Progressive enrichment</span><span class="desc">In-place artefact enrichment · ADRs</span></td>
         <td>6</td><td><span class="badge planned"><span class="d"></span>Planned</span></td>
       </tr>
     </tbody>
   </table>
-  <div class="card note"><span class="label">Versioning convention</span>Per <code>AGENTS.md</code> changelog policy, patch versions accumulate through a release-prep cycle and a minor cut consolidates them. Here <code>2.0.x</code> carries the current hardening; <code>2.1.0</code> is the first <i>major feature</i> cut, and each subsequent major feature gets its own <code>2.x.0</code>. <b>2.0 is GA Preview; full GA is declared at <code>2.3.0</code></b>, the point at which per-intent workspace (2.1.0), adaptive workflows (2.2.0), and reviewer-as-verifier (2.3.0) are all in place. Version assignments are a planning proposal, not yet reflected in <code>core/tools/aidlc-version.ts</code>.</div>
+  <div class="card note"><span class="label">Versioning convention</span>Per <code>AGENTS.md</code> changelog policy, patch versions accumulate through a release-prep cycle and a minor cut consolidates them. Each major feature gets its own <code>2.x.0</code>. <b>2.0 was GA Preview; full GA is declared at <code>2.4.0</code></b>, the point at which per-intent workspace (2.1.0 — shipped), adaptive workflows (2.2.0 — shipped), extensions (2.3.0 — in flight), and reviewer-as-verifier (2.4.0 — planned) are all in place. Current version: <code>2.2.0</code> per <code>core/tools/aidlc-version.ts</code>.</div>
 
   <!-- SCORECARD -->
   <h2 class="section">Goal → version map</h2>
   <table class="score">
     <thead><tr><th>#</th><th>North Star goal</th><th>Status</th><th>Lands in</th></tr></thead>
     <tbody>
-      <tr><td class="num">1</td><td><a href="#g1">Mimic what we practice in the real world</a></td><td><span class="badge partial"><span class="d"></span>Partial</span></td><td><span class="ver patch">2.0.x</span> <span class="ver">2.4.0</span></td></tr>
-      <tr><td class="num">2</td><td><a href="#g2">Customization of behaviour</a></td><td><span class="badge shipped"><span class="d"></span>Shipped</span></td><td><span class="ver patch">2.0.x</span></td></tr>
+      <tr><td class="num">1</td><td><a href="#g1">Mimic what we practice in the real world</a></td><td><span class="badge partial"><span class="d"></span>Partial</span></td><td><span class="ver patch">2.0.x</span> <span class="ver">2.5.0</span></td></tr>
+      <tr><td class="num">2</td><td><a href="#g2">Customization of behaviour</a></td><td><span class="badge shipped"><span class="d"></span>Shipped</span></td><td><span class="ver patch">2.0.x</span> <span class="ver patch">2.3.0</span></td></tr>
       <tr><td class="num">3</td><td><a href="#g3">Adaptiveness of workflows</a></td><td><span class="badge shipped"><span class="d"></span>Shipped</span></td><td><span class="ver now">2.2.0</span></td></tr>
-      <tr><td class="num">4</td><td><a href="#g4">Verifier as a true adversary</a></td><td><span class="badge partial"><span class="d"></span>Partial</span> <span class="badge inflight"><span class="d"></span>In flight</span></td><td><span class="ver patch">2.0.x</span> <span class="ver patch">2.3.0</span></td></tr>
-      <tr><td class="num">5</td><td><a href="#g5">Support for cyclic, directional flows</a></td><td><span class="badge partial"><span class="d"></span>Partial</span></td><td><span class="ver patch">2.0.x</span> <span class="ver">2.5.0</span></td></tr>
-      <tr><td class="num">6</td><td><a href="#g6">Preserve artefact traceability</a></td><td><span class="badge partial"><span class="d"></span>Partial</span></td><td><span class="ver">2.6.0</span></td></tr>
-      <tr><td class="num">7</td><td><a href="#g7">Organizational, not project-local, repository</a></td><td><span class="badge inflight"><span class="d"></span>In flight</span></td><td><span class="ver patch">2.1.0</span></td></tr>
+      <tr><td class="num">4</td><td><a href="#g4">Verifier as a true adversary</a></td><td><span class="badge partial"><span class="d"></span>Partial</span></td><td><span class="ver patch">2.0.x</span> <span class="ver patch">2.4.0</span></td></tr>
+      <tr><td class="num">5</td><td><a href="#g5">Support for cyclic, directional flows</a></td><td><span class="badge partial"><span class="d"></span>Partial</span></td><td><span class="ver patch">2.0.x</span> <span class="ver">2.6.0</span></td></tr>
+      <tr><td class="num">6</td><td><a href="#g6">Preserve artefact traceability</a></td><td><span class="badge partial"><span class="d"></span>Partial</span></td><td><span class="ver">2.7.0</span></td></tr>
+      <tr><td class="num">7</td><td><a href="#g7">Organizational, not project-local, repository</a></td><td><span class="badge shipped"><span class="d"></span>Shipped</span></td><td><span class="ver patch">2.1.0</span></td></tr>
     </tbody>
   </table>
 
@@ -314,13 +319,13 @@
       </ul>
     </div>
     <div class="lane">
-      <h4><span class="d fly"></span>In flight</h4>
+      <h4><span class="d ship"></span>Shipped (2.1.8)</h4>
       <ul class="items">
-        <li class="l-fly">Reviewer wired across all harnesses (Kiro <code>fs_write</code> cap, trustedAgents, Codex §12a step).</li>
+        <li class="l-ship">Reviewer wired across all harnesses (Kiro <code>fs_write</code> cap, trustedAgents, Codex §12a step).</li>
       </ul>
     </div>
     <div class="lane">
-      <h4><span class="d gap"></span>Gap to North Star <span class="ver">2.4.0</span></h4>
+      <h4><span class="d gap"></span>Gap to North Star <span class="ver">2.5.0</span></h4>
       <ul class="items">
         <li class="l-plan"><b>Collaborators aren't independent contributors.</b> On <code>inline</code> mode (every multi-agent stage shipped), a support agent is "a voice you adopt, not a subagent you dispatch" — one model speaking in multiple registers, not separate participants reasoning independently.</li>
         <li class="l-plan"><b>The collaboration pattern isn't a configurable knob.</b> The shape is fixed (lead → inline support → optional reviewer loop); "pipeline / swarm / review-loop / mob" is not a per-stage selectable ensemble model.</li>
@@ -351,7 +356,7 @@
 
   <!-- GOAL 3 -->
   <div class="goal" id="g3">
-    <div class="goal-head"><span class="goal-num">3</span><h3>Adaptiveness of Workflows</h3><span class="badge partial"><span class="d"></span>Partial</span></div>
+    <div class="goal-head"><span class="goal-num">3</span><h3>Adaptiveness of Workflows</h3><span class="badge shipped"><span class="d"></span>Shipped</span></div>
     <blockquote>Scale <b>in</b> (triage a SonarQube report → compact Fix→Test→PR, skipping upstream stages) and scale <b>out</b> (defer composing a full workflow when downstream clarity is low; decide next stage(s) at each boundary). Stage composition should not be hard-wired.</blockquote>
     <div class="lane">
       <h4><span class="d ship"></span>Shipped</h4>
@@ -373,7 +378,7 @@
 
   <!-- GOAL 4 -->
   <div class="goal" id="g4">
-    <div class="goal-head"><span class="goal-num">4</span><h3>Verifier as a true Adversary</h3><span class="badge partial"><span class="d"></span>Partial</span><span class="badge inflight"><span class="d"></span>In flight</span></div>
+    <div class="goal-head"><span class="goal-num">4</span><h3>Verifier as a true Adversary</h3><span class="badge partial"><span class="d"></span>Partial</span></div>
     <blockquote>Adversarial quality gate; verifier may use a different LLM than the producer; validates deterministically against contracts/tests/schemas/policies; self-healing loop governed by a budget (max iterations/tokens), escalating to Human-in-the-Loop with full context when exhausted.</blockquote>
     <div class="lane">
       <h4><span class="d ship"></span>Shipped</h4>
@@ -384,13 +389,13 @@
       </ul>
     </div>
     <div class="lane">
-      <h4><span class="d fly"></span>In flight</h4>
+      <h4><span class="d ship"></span>Shipped (2.1.8)</h4>
       <ul class="items">
-        <li class="l-fly">Reviewer wired across harnesses.</li>
+        <li class="l-ship">Reviewer wired across all harnesses (Kiro <code>fs_write</code> cap, trustedAgents, Codex §12a step). <span class="src">2.1.8</span></li>
       </ul>
     </div>
     <div class="lane">
-      <h4><span class="d gap"></span>Gap to North Star <span class="ver patch">2.2.0</span></h4>
+      <h4><span class="d gap"></span>Gap to North Star <span class="ver patch">2.4.0</span></h4>
       <ul class="items">
         <li class="l-plan"><b>Budget by tokens, not just iterations.</b> Today the cap is iteration count; North Star calls for a token/iteration budget.</li>
         <li class="l-plan"><b>Reviewer runs domain-aware validation tools</b> (validate-domain-model / entities / rules) against explicit contracts &amp; schemas — designed, not built. <span class="src">wip/unified-feature-requirements.md (Feature 2)</span></li>
@@ -411,15 +416,15 @@
       </ul>
     </div>
     <div class="lane">
-      <h4><span class="d fly"></span>In flight <span class="ver patch">2.0.x</span> — loop-integrity / HITL hardening</h4>
+      <h4><span class="d ship"></span>Shipped (2.1.3–2.1.6) — loop-integrity / HITL hardening</h4>
       <ul class="items">
-        <li class="l-fly">Stop-hook infinite-block loop.</li>
-        <li class="l-fly">Approve has no artifact verification.</li>
-        <li class="l-fly">Stop hook incentivizes rubber-stamping.</li>
+        <li class="l-ship">Stop-hook forwarding-loop enforcement (2.1.4). <span class="src">core/hooks/aidlc-stop.ts</span></li>
+        <li class="l-ship">Artifact verification gate on approve (2.1.3). <span class="src">AIDLC_SKIP_ARTIFACT_GUARD</span></li>
+        <li class="l-ship">Human-presence gate prevents rubber-stamping (2.1.6). <span class="src">core/hooks/aidlc-mint-presence.ts</span></li>
       </ul>
     </div>
     <div class="lane">
-      <h4><span class="d gap"></span>Gap to North Star <span class="ver">2.5.0</span></h4>
+      <h4><span class="d gap"></span>Gap to North Star <span class="ver">2.6.0</span></h4>
       <ul class="items">
         <li class="l-plan"><b>Cross-stage backward edges.</b> The stage graph is a strict acyclic DAG (cycles rejected at compile); a downstream stage exposing an upstream gap cannot trigger an engine-managed return to that upstream stage. <code>requires_stage</code> is forward-only.</li>
       </ul>
@@ -437,7 +442,7 @@
       </ul>
     </div>
     <div class="lane">
-      <h4><span class="d gap"></span>Gap to North Star <span class="ver">2.6.0</span></h4>
+      <h4><span class="d gap"></span>Gap to North Star <span class="ver">2.7.0</span></h4>
       <ul class="items">
         <li class="l-plan"><b>True progressive enrichment</b> — downstream stages enriching the <i>same</i> upstream artefact in place vs. emitting a linked-but-separate file — is partial.</li>
         <li class="l-plan">Per-stage traceability enforcement as a deterministic JSON sensor.</li>
@@ -450,25 +455,19 @@
 
   <!-- GOAL 7 -->
   <div class="goal" id="g7">
-    <div class="goal-head"><span class="goal-num">7</span><h3>Organizational, Not Project-Local, Artefact Repository</h3><span class="badge inflight"><span class="d"></span>In flight</span></div>
+    <div class="goal-head"><span class="goal-num">7</span><h3>Organizational, Not Project-Local, Artefact Repository</h3><span class="badge shipped"><span class="d"></span>Shipped</span></div>
     <blockquote>A shared org knowledge layer (<code>/org-ai-kb</code>, <code>/aidlc-docs</code>) spanning multiple projects, intents, and repositories without artefacts overwriting each other; reverse-engineered knowledge versioned and discoverable across teams. Scenarios: multi-repo intent; Day-2 second intent; concurrent intents in one codebase; greenfield needing brownfield knowledge; mixed; brownfield multi-repo.</blockquote>
     <div class="lane">
-      <h4><span class="d gap"></span>Today (v2)</h4>
+      <h4><span class="d ship"></span>Shipped (2.1.0)</h4>
       <ul class="items">
-        <li class="l-plan">Project-local, flat, <b>single-intent</b> <code>aidlc-docs/</code> tree; <code>--init --force</code> wipes prior state. No spaces / intents / multi-repo. <span class="src">core/tools/aidlc-lib.ts</span></li>
+        <li class="l-ship"><b>Spaces + intents model</b>: <code>aidlc/spaces/&lt;space&gt;/intents/&lt;slug&gt;-&lt;id8&gt;/</code>; <code>--init</code> retired for auto-birth; <code>intent</code>/<code>space</code> list/switch/create verbs.</li>
+        <li class="l-ship"><b>Multiple concurrent intents</b> in one codebase; orchestrator offers a 2nd intent on unrelated new work.</li>
+        <li class="l-ship"><b>Multi-repo per intent</b> (<code>--repos</code> at birth; <code>--repo</code> threaded through worktree/swarm/bolt); per-repo code KB at <code>aidlc/codekb/&lt;repo&gt;/</code>.</li>
+        <li class="l-ship"><b>Space-level domain knowledge</b>, learnings→practices collapse, per-intent audit shards (no merge conflicts), crash-safe flat→namespaced migration.</li>
+        <li class="l-ship"><b>Shared org-KB layer</b>: knowledge and reverse-engineered artefacts live in a clonable, team-scoped <code>org-ai-kb/&lt;team&gt;/</code> repo that compounds across intents and is shareable across teams.</li>
       </ul>
     </div>
-    <div class="lane">
-      <h4><span class="d fly"></span>In flight <span class="ver patch">2.1.0</span> — the major effort: <code>feature/workspace-anchor</code> (+34 commits)</h4>
-      <ul class="items">
-        <li class="l-fly"><b>Spaces + intents model</b>: <code>aidlc/spaces/&lt;space&gt;/intents/&lt;slug&gt;-&lt;id8&gt;/</code>; retire <code>--init</code> for auto-birth; <code>intent</code>/<code>space</code> list/switch/create verbs.</li>
-        <li class="l-fly"><b>Multiple concurrent intents</b> in one codebase; orchestrator offers a 2nd intent on unrelated new work.</li>
-        <li class="l-fly"><b>Multi-repo per intent</b> (<code>--repos</code> at birth; <code>--repo</code> threaded through worktree/swarm/bolt); per-repo code KB at <code>aidlc/codekb/&lt;repo&gt;/</code>.</li>
-        <li class="l-fly"><b>Space-level domain knowledge</b>, learnings→practices collapse, per-intent audit shards (no merge conflicts), crash-safe flat→namespaced migration.</li>
-        <li class="l-fly"><b>Shared org-KB layer</b>: knowledge and reverse-engineered artefacts live in a clonable, team-scoped <code>org-ai-kb/&lt;team&gt;/</code> repo that compounds across intents and is shareable across teams. <span class="src">wip/unified-feature-requirements.md (Feature 1 — org-ai-kb)</span></li>
-      </ul>
-    </div>
-    <div class="card note"><span class="label">Coverage</span>The workspace-anchor design (<code>wip/unified-feature-requirements.md</code>, Feature 1 / P0) addresses all six North Star scenarios — multi-repo, Day-2, concurrent intents, greenfield-needing-brownfield, mixed, brownfield multi-repo — and the shared org-KB layer, so Goal 7 lands wholly in <code>2.1.0</code>.</div>
+    <div class="card note"><span class="label">Coverage</span>Goal 7 landed wholly in <code>2.1.0</code> — all six North Star scenarios (multi-repo, Day-2, concurrent intents, greenfield-needing-brownfield, mixed, brownfield multi-repo) plus the shared org-KB layer are in place.</div>
   </div>
 
   <!-- RELEASE NOTES -->
@@ -476,24 +475,25 @@
   <p class="lede">What each cut delivers, in order. <code>2.0.x</code> is the current hardening line; <code>2.1.0</code> onward is one major feature per minor.</p>
 
   <div class="rel">
-    <div class="card"><span class="label">2.0.x — Hardening · in flight · current line</span>Corrections and small features on the 2.0 GA Preview baseline; no architectural change. Reviewer wired across all harnesses; reviewer field validation (landed); stop-hook loop integrity; stage-level rules layer. <span class="goalref">G1 G2 G4 G5</span></div>
+    <div class="card"><span class="label">2.0.x — Hardening · shipped</span>Corrections and small features on the 2.0 GA Preview baseline; no architectural change. Reviewer wired across all harnesses (2.1.8); artifact verification gate (2.1.3); stop-hook forwarding-loop enforcement (2.1.4); human-presence gate (2.1.6); dangling-consume fixes (2.1.7); 1M-context for tier-pinned subagents (2.1.5). <span class="goalref">G1 G2 G4 G5</span></div>
 
-    <div class="card hl"><span class="label">2.1.0 — Per-intent workspace · next minor</span>The workspace replaces the project as the anchor. Spaces hold multiple coexisting intents; an intent can span multiple repos; domain knowledge and practices live in a shared, clonable, team-scoped org-KB (<code>org-ai-kb/&lt;team&gt;/</code>) that compounds across intents and is shareable across teams; audit is sharded per-intent (no merge conflicts); flat <code>aidlc-docs/</code> projects auto-migrate. Wholly delivers Goal 7 — all six scenarios plus the org-KB layer. <span class="src">feature/workspace-anchor</span> <span class="goalref">G7</span></div>
+    <div class="card"><span class="label">2.1.0 — Per-intent workspace · shipped</span>The workspace replaces the project as the anchor. Spaces hold multiple coexisting intents; an intent can span multiple repos; domain knowledge and practices live in a shared, clonable, team-scoped org-KB (<code>org-ai-kb/&lt;team&gt;/</code>) that compounds across intents and is shareable across teams; audit is sharded per-intent (no merge conflicts); flat <code>aidlc-docs/</code> projects auto-migrate. Wholly delivers Goal 7 — all six scenarios plus the org-KB layer. <span class="goalref">G7</span></div>
 
-    <div class="card hl"><span class="label">2.2.0 - Adaptive workflows · shipped</span>Stage composition stops being hard-wired: a composer agent under <code>/aidlc</code> reads the task (prompt, scan report, or the running workflow), proposes the EXECUTE/SKIP grid that fits, and after human approval authors it as a scope (front/report) or flips pending stages in place (in-flight recompose, under the audit lock with a strict starved-input validator). Scale-in triages external reports (e.g. SonarQube) into a compact fix-and-ship run. Per-unit <code>for_each</code> iteration landed earlier in 2.1.2. <span class="goalref">G3</span></div>
+    <div class="card"><span class="label">2.2.0 — Adaptive workflows · shipped</span>Stage composition stops being hard-wired: a composer agent under <code>/aidlc</code> reads the task (prompt, scan report, or the running workflow), proposes the EXECUTE/SKIP grid that fits, and after human approval authors it as a scope (front/report) or flips pending stages in place (in-flight recompose, under the audit lock with a strict starved-input validator). Scale-in triages external reports (e.g. SonarQube) into a compact fix-and-ship run. Per-unit <code>for_each</code> iteration landed earlier in 2.1.2. <span class="goalref">G3</span></div>
 
-    <div class="card"><span class="label">2.3.0 - Reviewer-as-verifier · Full GA</span>Promotes the reviewer from advisory to a true adversary: domain-aware validation tools (validate-domain-model / entities / rules) checking against explicit contracts and schemas; a token/iteration budget governing the self-heal loop; reviewer prompted to refute, not confirm. <b>This cut declares full GA</b>: per-intent workspace (2.1.0), adaptive workflows (2.2.0), and reviewer-as-verifier are then all in place. <span class="goalref">G4</span></div>
+    <div class="card hl"><span class="label">2.3.0 — Extensions (plugin mechanism) · in flight</span>First-class <code>plugins/&lt;name&gt;/</code> surface: stages, agents, scopes, contributions (additive structural + prose), and sensors authored once in a harness-neutral tree, emitted by the packager as a host plugin per harness, composed at session start. A plugin never edits <code>core/</code>; with every plugin disabled an install is byte-identical to bare core. The contribution seam set-unions structural surfaces and splices prose fragments at named anchors — additive-only, order-deterministic, idempotent. <span class="goalref">G2</span></div>
 
-    <div class="card"><span class="label">2.4.0 — Three-role ensemble</span>Owner → <b>Contributor</b> → Reviewer: contributors become independent subagents (not inline voices), and the collaboration pattern (pipeline / swarm / review-loop / mob) becomes a per-stage selectable knob. <span class="goalref">G1</span></div>
+    <div class="card"><span class="label">2.4.0 — Reviewer-as-verifier · Full GA</span>Promotes the reviewer from advisory to a true adversary: domain-aware validation tools (validate-domain-model / entities / rules) checking against explicit contracts and schemas; a token/iteration budget governing the self-heal loop; reviewer prompted to refute, not confirm. <b>This cut declares full GA</b>: per-intent workspace (2.1.0), adaptive workflows (2.2.0), extensions (2.3.0), and reviewer-as-verifier are then all in place. <span class="goalref">G4</span></div>
 
-    <div class="card"><span class="label">2.5.0 — Governed cyclic flows</span>Controlled, directional backward edges across stages: a downstream stage that exposes an upstream gap can trigger a governed return to that upstream stage, within the engine (not just a human re-init). <span class="goalref">G5</span></div>
+    <div class="card"><span class="label">2.5.0 — Three-role ensemble</span>Owner → <b>Contributor</b> → Reviewer: contributors become independent subagents (not inline voices), and the collaboration pattern (pipeline / swarm / review-loop / mob) becomes a per-stage selectable knob. <span class="goalref">G1</span></div>
 
-    <div class="card"><span class="label">2.6.0 — Progressive enrichment</span>Downstream stages enrich the <i>same</i> upstream artefact in place rather than emitting linked-but-separate files; ADRs become a core design artefact. <span class="goalref">G6</span></div>
+    <div class="card"><span class="label">2.6.0 — Governed cyclic flows</span>Controlled, directional backward edges across stages: a downstream stage that exposes an upstream gap can trigger a governed return to that upstream stage, within the engine (not just a human re-init). <span class="goalref">G5</span></div>
+
+    <div class="card"><span class="label">2.7.0 — Progressive enrichment</span>Downstream stages enrich the <i>same</i> upstream artefact in place rather than emitting linked-but-separate files; ADRs become a core design artefact. <span class="goalref">G6</span></div>
   </div>
 
   <footer>
-    <p>Verification basis: file/line references cited against <code>core/</code> on <code>v2</code> (v2.0.2); branch positions from
-    <code>git worktree list</code> and <code>git rev-list --count v2..&lt;branch&gt;</code>.
+    <p>Verification basis: file/line references cited against <code>core/</code> on <code>v2</code> (v2.2.0); status verified from <code>CHANGELOG.md</code> entries through 2026-07-04.
     Design intent for unbuilt items: <code>wip/unified-feature-requirements.md</code>.</p>
     <p>Source goals: AI-DLC Workflows 2.0 North Star Functional Goals.</p>
   </footer>
