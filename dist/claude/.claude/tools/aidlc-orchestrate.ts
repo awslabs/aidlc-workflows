@@ -95,6 +95,7 @@ import {
   listIntents,
   loadScopeMapping,
   nextInScopeStage,
+  parseBoltDag,
   parseCheckboxes,
   parseStateStageSuffixes,
   PHASE_NUMBERS,
@@ -109,6 +110,7 @@ import {
   scopeCostSummary,
   type StageEntry,
   stateFilePath,
+  unitDependencyPath,
   validScopes,
   harnessDir,
   WORKSPACE_VERBS,
@@ -793,6 +795,57 @@ function swarmConvergedUnits(projectDir: string, slug: string): Set<string> {
     if (unit) converged.add(unit);
   }
   return converged;
+}
+
+// The resolved unit batch DAG for the active intent, cache-first with a
+// self-heal: the compiled runtime graph's bolt_dag is authoritative when
+// present, but a graph that is missing, malformed, or lacking the node while
+// units-generation's dependency artifact exists on disk is a STALE CACHE, not
+// a zero-unit workflow. In that case the batches are recomputed directly from
+// unit-of-work-dependency.md via the same pure parse the runtime compiler
+// uses, so the per-unit loop, the approve-side coverage guard, and the swarm
+// fan-out never truncate a multi-unit plan because a hook failed to refresh
+// the graph. Three states:
+//   ok        - batches resolved (healed=true when recomputed; a heal writes
+//               one stderr note, since the compile hook should have run).
+//   none      - no dependency artifact: a genuine zero-unit scope; callers
+//               keep the single-iteration degrade byte-identical.
+//   malformed - the artifact exists but its fenced units block does not
+//               parse; the unit list is unknowable, callers surface an error
+//               instead of silently building one unit.
+// Pure in-memory: never writes the graph (next stays read-only); the
+// runtime-compile hook repairs the cache on the next transition.
+type BoltBatchesResolution =
+  | { state: "ok"; batches: string[][]; healed: boolean }
+  | { state: "none" }
+  | { state: "malformed"; reason: string; detail: string };
+
+function resolveBoltBatches(projectDir: string): BoltBatchesResolution {
+  // A cached DAG with zero units (a hand-corrupted graph; no shipped writer
+  // emits empty batches) is treated as a miss, not an "ok" empty plan: falling
+  // through to the heal guarantees callers see either real batches, "none", or
+  // a loud "malformed", never an empty unit list that would strand the settle
+  // branch on an undefined unit.
+  const cached = readBoltDagBatches(projectDir);
+  if (cached && cached.flat().length > 0) {
+    return { state: "ok", batches: cached, healed: false };
+  }
+  const depPath = unitDependencyPath(projectDir);
+  if (!existsSync(depPath)) return { state: "none" };
+  let body: string;
+  try {
+    body = readFileSync(depPath, "utf-8");
+  } catch (e) {
+    return { state: "malformed", reason: "unreadable", detail: errorMessage(e) };
+  }
+  const parsed = parseBoltDag(body);
+  if (!parsed.ok) {
+    return { state: "malformed", reason: parsed.reason, detail: parsed.detail };
+  }
+  process.stderr.write(
+    `aidlc-orchestrate: runtime-graph.json has no bolt_dag; recomputed ${parsed.batches.length} unit batch(es) from unit-of-work-dependency.md (stale runtime graph; check the runtime-compile hook)\n`,
+  );
+  return { state: "ok", batches: parsed.batches, healed: true };
 }
 
 // True when `node` is the SKELETON-GATE stage for `scope` — the FIRST
@@ -1853,8 +1906,9 @@ function tryEmitSwarm(
   // human-approved before any batch fans out (structural defense-in-depth).
   if (isSkeletonGateStage(node, scope)) return false;
   if (readAutonomyMode(stateContent) !== "autonomous") return false;
-  const batches = readBoltDagBatches(projectDir);
-  if (!batches || batches.length === 0) return false;
+  const r = resolveBoltBatches(projectDir);
+  if (r.state !== "ok" || r.batches.length === 0) return false;
+  const batches = r.batches;
 
   // Select the first topological batch with an unconverged unit; emit only that
   // batch's still-owed units. Ledger signal = SWARM_UNIT_CONVERGED (see above),
@@ -1958,11 +2012,12 @@ function emitRunStageForSlug(
 
 // The ordered Unit-of-Work list for the active intent: the compiled Bolt DAG's
 // batches flattened to topological order (each batch is already lexicographically
-// sorted by computeBatches). [] when there is no compiled DAG (degrade path).
+// sorted by computeBatches). [] when there is no dependency artifact or the
+// artifact is unparseable; a stale graph heals through the resolver.
 function orderedUnits(projectDir: string): string[] {
-  const batches = readBoltDagBatches(projectDir);
-  if (!batches) return [];
-  return batches.flat();
+  const r = resolveBoltBatches(projectDir);
+  if (r.state !== "ok") return [];
+  return r.batches.flat();
 }
 
 // True when `unit` is COVERED for `node`: every artifact in node.produces[]
@@ -2044,14 +2099,24 @@ function emitPerUnitRunStage(
     return;
   }
 
-  // No compiled unit DAG (a scope that SKIPs units-generation, refactor /
-  // security-patch / infra / bugfix / poc, or a pre-compile moment): degrade to
-  // today's single {unit-name} directive. Zero behaviour change off this path.
-  const units = orderedUnits(projectDir);
-  if (units.length === 0) {
-    emitRunStageForSlug(node.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
-    return;
+  const r = resolveBoltBatches(projectDir);
+  switch (r.state) {
+    case "none":
+      // No dependency artifact exists on disk: degrade to today's single
+      // {unit-name} directive for genuinely zero-unit scopes.
+      emitRunStageForSlug(node.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
+      return;
+    case "malformed":
+      emit({
+        kind: "error",
+        message:
+          `Cannot iterate units for stage "${node.slug}": runtime-graph.json has no bolt_dag and inception/units-generation/unit-of-work-dependency.md is ${r.reason} (${r.detail}). Fix the fenced units block in that artifact, then run next again.`,
+      });
+      return;
+    case "ok":
+      break;
   }
+  const units = r.batches.flat();
 
   const pick = nextUncoveredUnit(projectDir, node, units, recordPrefix, codekbCtx);
   if (pick === null) {
@@ -2986,10 +3051,19 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   const isAutonomousSwarm =
     node.mode === SWARM_MODE && readAutonomyMode(stateContent) === "autonomous";
   if (isGated && isPerUnit(node) && stageCheckbox.state !== "completed" && !isAutonomousSwarm) {
+    const r = resolveBoltBatches(pd);
+    if (r.state === "malformed") {
+      emit({
+        kind: "error",
+        message:
+          `Stage "${slug}" is per-unit (for_each: unit-of-work) but the unit list cannot be resolved: inception/units-generation/unit-of-work-dependency.md is ${r.reason} (${r.detail}). Fix the fenced units block in that artifact before approving.`,
+      });
+      return;
+    }
     const recordPrefix = relativeRecordDir(pd);
     const codekbCtx = codekbCtxFor(pd);
-    const units = orderedUnits(pd);
-    if (units.length > 0) {
+    if (r.state === "ok") {
+      const units = r.batches.flat();
       const pick = nextUncoveredUnit(pd, node, units, recordPrefix, codekbCtx);
       if (pick !== null) {
         emit({

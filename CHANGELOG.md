@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.14] - 2026-07-09
+
+Fixes a silent-data-loss failure in Construction: when the compiled runtime graph was missing its bolt_dag node (a stale or deleted runtime-graph.json, for example when the runtime-compile hook never fired), every per-unit Construction stage silently degraded to a single iteration, so a multi-unit project shipped only its first unit with no error and the workflow completed as if done. The engine now self-heals on the read side: when the cached bolt_dag is absent it recomputes the unit batch DAG directly from inception/units-generation/unit-of-work-dependency.md (the same pure parse the compiler uses), so per-unit iteration, the approve-side coverage guard, and the autonomous swarm all see the full unit list regardless of whether a hook refreshed the graph. Scopes that never run units-generation are unaffected. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Per-unit Construction stages (functional-design, nfr-requirements, nfr-design, infrastructure-design, code-generation) now iterate every unit even when runtime-graph.json is missing or lacks its bolt_dag node, recomputing batches from unit-of-work-dependency.md on the fly. A recompute writes a one-line stderr note naming the stale graph.
+* `report --result approved` on a per-unit stage now enforces the all-units coverage guard against the recomputed unit list too, so a stale graph can no longer let an early approve commit a partially built stage.
+* A unit-of-work-dependency.md whose fenced units block is missing, malformed, or cyclic (with no cached bolt_dag to fall back on) now surfaces as an error directive naming the artifact and the parse failure, instead of silently building one unit.
+* Workflows with no units-generation dependency artifact on disk keep the existing single-iteration behaviour, byte-identical.
+
 ## [2.2.13] - 2026-07-09
 
 Opt-in unit-major iteration for the inline construction design stages. By default the engine still walks those stages stage-major (functional-design for every unit, then nfr-requirements for every unit, and so on). When you record `Construction Iteration: unit-major`, the engine instead authors one unit's four design documents (functional-design, nfr-requirements, nfr-design, infrastructure-design) consecutively before moving to the next unit, giving the approved bolt-plan its first executable effect on design order. The four per-stage approval gates are unchanged in count and machinery, but under unit-major they fire late, in a cascade at the end of the design block, one human approval per stage. code-generation and the autonomous swarm are untouched. This is zero-risk for existing users: with no field set, behaviour is byte-identical. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
