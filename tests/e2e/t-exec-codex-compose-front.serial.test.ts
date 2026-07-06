@@ -23,15 +23,23 @@
 //            Either way: gate before write, nothing on disk.
 //   beat 2:  codex exec resume --last "Approve" - same session (asserted via
 //            the stderr session id), the conductor completes the write +
-//            birth arc: intent record, aidlc-state.md, WORKFLOW_STARTED
-//            audited.
+//            birth arc: the intent record, aidlc-state.md, WORKFLOW_STARTED
+//            audited, and the birth's scope resolving through the on-disk
+//            registry (`.codex/scopes/aidlc-<name>.md` + scope-grid entry) -
+//            for a CUSTOM grid that file is authored fresh on the sanctioned
+//            path this session.
 //
-// Deliberately JOURNEY-LEVEL: the composed scope's NAME is the model's
-// choice, and the sanctioned `.codex/scopes/` write is sandbox-denied under
-// plain codex exec (the conductor self-recovers via the scope-mapping env
-// seam - spike section 5), so this test pins the observable contract (gate
-// stop with no birth; same-session approve -> birth + audit) and leaves
-// scope-file placement to the sandbox-grant design.
+// The composed scope's NAME is the model's choice, so beat 2 pins the SHAPE of
+// the sanctioned write (a composed `.codex/scopes/aidlc-*.md` exists and the
+// state's Scope field names it) rather than a literal name. The sanctioned
+// write needs a sandbox grant: under workspace-write codex carves the project-
+// root `.codex/` out of the writable root (same read-only-by-design treatment
+// as `.git/`), so the composer's `.codex/scopes/` + scope-grid write is
+// EPERM-denied and a headless exec run cannot escalate it to an approval. The
+// config.toml below grants `<proj>/.codex` up front (see setupCodexProject),
+// which is what lets this test prove the REAL product arc instead of the
+// model's env-seam improvisation. Denied-path + mechanism pinned by
+// tmp/adaptive-workflows/spike-codex-resume/FINDINGS.md §5.
 //
 // `--last` filters recorded sessions by cwd, so beat 2 MUST run with the same
 // cwd as beat 1 (both use the project dir).
@@ -55,7 +63,24 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getField } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+
+// The nine shipped stock scopes. A composed scope whose name is NOT one of
+// these is a CUSTOM grid: the composer authors it fresh on the sanctioned path,
+// which is exactly the write the sandbox grant enables (a stock name reuses a
+// file that already ships).
+const STOCK_SCOPES = new Set([
+  "bugfix",
+  "enterprise",
+  "feature",
+  "infra",
+  "mvp",
+  "poc",
+  "refactor",
+  "security-patch",
+  "workshop",
+]);
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
 const CODEX_BIN = process.env.AIDLC_CODEX_BIN ?? "codex";
@@ -126,6 +151,22 @@ function setupCodexProject(): { proj: string; home: string; root: string } {
       `[shell_environment_policy]`,
       `set = { AIDLC_RULES_DIR = ".codex/aidlc-rules" }`,
       ``,
+      // Under workspace-write, codex carves the project-root `.codex/` out of
+      // the writable workspace root (the same read-only-by-design treatment it
+      // gives `.git/`), so the composer's sanctioned scope-file write
+      // (`.codex/scopes/aidlc-<name>.md` + the scope-grid entry) is EPERM-denied.
+      // An interactive session would escalate that denial to an approval; a
+      // headless `codex exec` run cannot, so it must grant the path up front.
+      // This is the codex-exec twin of the `.git` grant the shipped
+      // dist/codex/.codex/config.toml documents for headless runs. Granting it
+      // lets beat 2 prove the REAL product arc (scope persisted on the
+      // sanctioned path) rather than the model's env-seam improvisation.
+      // Path pinned by tmp/adaptive-workflows/spike-codex-resume/FINDINGS.md §5.
+      `sandbox_mode = "workspace-write"`,
+      ``,
+      `[sandbox_workspace_write]`,
+      `writable_roots = ["${join(proj, ".codex")}"]`,
+      ``,
       `[projects."${proj}"]`,
       `trust_level = "trusted"`,
       ``,
@@ -168,6 +209,17 @@ function intentRecords(proj: string): string[] {
   return readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isDirectory() && !e.name.startsWith("."))
     .map((e) => e.name);
+}
+
+// Sanctioned scope files on disk: `.codex/scopes/aidlc-<name>.md`. The set the
+// dist ships, plus any the composer authored this session (the grant lets the
+// authored one land here rather than only in the env-seam mapping).
+function scopeFiles(proj: string): string[] {
+  const dir = join(proj, ".codex", "scopes");
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.startsWith("aidlc-") && f.endsWith(".md"))
+    .map((f) => f.slice("aidlc-".length, -".md".length));
 }
 
 describe("t-exec-codex-compose-front - interactive compose over exec + exec resume", () => {
@@ -227,6 +279,31 @@ describe("t-exec-codex-compose-front - interactive compose over exec + exec resu
           .map((f) => readFileSync(join(auditDir, f), "utf-8"))
           .join("\n");
         expect(audit).toContain("**Event**: WORKFLOW_STARTED");
+
+        // The composed scope persisted on its SANCTIONED path, not only in the
+        // env-seam mapping. The state's Scope field names the scope the birth
+        // resolved against; that name must resolve through the on-disk registry
+        // - BOTH halves the composer writes: `.codex/scopes/aidlc-<name>.md`
+        // and the `scope-grid.json` entry (a `.md` without a grid entry resolves
+        // all-SKIP). For a CUSTOM grid (a name outside the stock set) those
+        // files exist only because the composer authored them this session on
+        // the granted `.codex/` path - the direct proof the sandbox grant made
+        // the sanctioned write succeed; had `.codex/` stayed EPERM-denied, birth
+        // could only have limped along on the env-seam mapping and left no
+        // sanctioned file for its name.
+        const scope = getField(state, "Scope") ?? "";
+        expect(scope.length).toBeGreaterThan(0);
+        expect(scopeFiles(proj)).toContain(scope);
+        const grid = JSON.parse(
+          readFileSync(join(proj, ".codex", "tools", "data", "scope-grid.json"), "utf-8"),
+        );
+        expect(Object.keys(grid)).toContain(scope);
+        // A composed name outside the nine shipped scopes confirms the CUSTOM
+        // arc actually ran (not a stock match), so the two assertions above
+        // exercised the composer's fresh sanctioned write, not a shipped file.
+        if (!STOCK_SCOPES.has(scope)) {
+          expect(scopeFiles(proj).filter((s) => !STOCK_SCOPES.has(s))).toContain(scope);
+        }
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
