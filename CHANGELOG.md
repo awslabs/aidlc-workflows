@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.19] - 2026-07-09
+
+Hooks and the statusline no longer break when the project path contains spaces. Every `$CLAUDE_PROJECT_DIR` reference in the shipped Claude settings is now double-quoted, so the hook commands survive word-splitting shells (bash) as well as zsh. **Upgrade:** re-copy `dist/claude/.claude/settings.json` into your project (or re-copy the whole `dist/claude/` shell).
+
+* Fixed: all 11 hook commands, the statusline command, and the pre-approved bun-tools permission glob in the Claude `settings.json` quote `$CLAUDE_PROJECT_DIR` (`bun "$CLAUDE_PROJECT_DIR/.claude/hooks/<hook>.ts"`); previously a workspace path with a space made every hook fail with `Module not found` under bash-backed hook runners (#519).
+
 ## [2.2.18] - 2026-07-09
 
 Unit kinds prune the per-unit construction design matrix. Tag each Unit of Work in units-generation's edge block with an optional `kind:` (service, spec, ui, packaging, or library) and the four construction design stages (functional-design, nfr-requirements, nfr-design, infrastructure-design) now emit and require only the artifacts that apply to that kind: a spec unit owes no scalability doc, a packaging unit no business-logic model. A unit with no kind, a stage with no per-kind map, or an artifact left unannotated all behave exactly as before (the full matrix), so existing workflows are unchanged. A unit whose required set prunes to empty is covered by definition (the stage does not apply to it). **Upgrade:** re-copy your `dist/<harness>/` shell into the project; an older engine run against a kind-tagged edge block fails the units-generation gate loudly (re-copy dist to fix) rather than pruning wrong.
