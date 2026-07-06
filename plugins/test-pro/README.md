@@ -48,7 +48,7 @@ codex plugin add aidlc-test-pro@aidlc-plugins   # approve the one-time hook trus
 ```bash
 cp -r dist/plugins/test-pro/kiro/. <project>/     # or git pull the plugin repo
 AIDLC_PLUGIN_ROOT=<…>/kiro AIDLC_PROJECT_DIR=<project> AIDLC_HARNESS_DIR=.kiro \
-  bash <…>/kiro/hooks/compose.sh
+  bun <…>/kiro/hooks/compose.ts
 ```
 
 Then confirm and run:
@@ -100,10 +100,11 @@ plugins/test-pro/
 A contribution declares **structural** additions (`adds.produces` / `consumes` /
 `sensors` / `required_sections`) and **prose** additions (`fragments` at anchors
 like `after-step:9`, `in:Sensors`). At compose:
-- **structural surfaces** are set-unioned into the target stage's compiled node
-  (`compose-contributions.ts`);
+- **structural surfaces** are set-unioned into the target stage's compiled node;
 - **prose fragments** are spliced into the target stage's body at their anchor,
-  ordered by `(order, bundle)` (`compose-fragments.ts`).
+  ordered by `(order, bundle)`.
+
+Both halves run in the single portable `compose.ts` hook (bun).
 
 All additive — a contribution can only *add*, never override or remove (the
 core-immutability guarantee). The merge edits **stage source**, so it is durable

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "AIDLC_HARNESS_DIR=.codex bash \"${PLUGIN_ROOT}/hooks/compose.sh\"",
+            "command": "sh -c 'BUN=$(command -v bun || echo \"$HOME/.bun/bin/bun\"); AIDLC_HARNESS_DIR=.codex \"$BUN\" \"${PLUGIN_ROOT}/hooks/compose.ts\"'",
             "statusMessage": "AIDLC test-pro: composing plugin"
           }
         ]

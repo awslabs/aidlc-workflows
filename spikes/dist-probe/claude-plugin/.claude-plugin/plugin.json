@@ -1,6 +1,0 @@
-{
-  "name": "aidlc-dist-probe",
-  "version": "0.0.1",
-  "description": "Throwaway probe: does a plugin SessionStart hook fire unattended and write the project tree + its own data? (Gap 1)",
-  "author": { "name": "AIDLC spike" }
-}

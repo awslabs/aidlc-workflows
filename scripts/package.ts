@@ -638,109 +638,148 @@ function discoverPluginNames(): string[] {
 
 // Per-harness plugin projection descriptors. The hybrid: real host plugins for
 // Claude/Codex (host store + SessionStart hook), folder-drop + .kiro.hook for
-// Kiro. All share the generic compose hooks (harness-agnostic via
-// AIDLC_HARNESS_DIR); only the manifest wrapper + hook wiring differ.
-const PLUGIN_TARGETS: Record<string, { manifestDir: string; harnessLeaf: string }> = {
-  claude: { manifestDir: ".claude-plugin", harnessLeaf: ".claude" },
-  codex: { manifestDir: ".codex-plugin", harnessLeaf: ".codex" },
-  kiro: { manifestDir: ".kiro-plugin", harnessLeaf: ".kiro" },
+// the two Kiro harnesses. All share the one bun compose hook (harness-agnostic
+// via AIDLC_HARNESS_DIR); only the manifest wrapper + hook wiring differ. Keyed
+// by harness name so it stays in lockstep with discoverHarnessNames() — every
+// harness with a manifest (claude, codex, kiro, kiro-ide) gets a projection.
+const PLUGIN_TARGETS: Record<string, { manifestDir: string; harnessLeaf: string; kind: "store" | "kiro" }> = {
+  claude: { manifestDir: ".claude-plugin", harnessLeaf: ".claude", kind: "store" },
+  codex: { manifestDir: ".codex-plugin", harnessLeaf: ".codex", kind: "store" },
+  kiro: { manifestDir: ".kiro-plugin", harnessLeaf: ".kiro", kind: "kiro" },
+  "kiro-ide": { manifestDir: ".kiro-plugin", harnessLeaf: ".kiro", kind: "kiro" },
 };
 
-function emitPlugins(harnesses: string[]): void {
-  const plugins = discoverPluginNames();
-  if (plugins.length === 0) return;
+// Render ONE plugin's projection for ONE harness into `outDir`. Pure builder —
+// no logging, no dist-path assumptions — so both the write path (into dist/) and
+// the --check path (into a temp dir, then byte-compare) call it identically.
+function buildPluginProjection(pluginName: string, harnessName: string, outDir: string): void {
+  const pluginSrc = join(PLUGINS_ROOT, pluginName);
+  const manifest = JSON.parse(readFileSync(join(pluginSrc, ".aidlc-plugin", "plugin.json"), "utf-8"));
+  const version = manifest.version || "0.0.1";
+  const author = manifest.author || { name: "AIDLC" };
+  const description = manifest.description || "";
+  const { manifestDir, harnessLeaf, kind } = PLUGIN_TARGETS[harnessName];
   const templateHooks = join(REPO_ROOT, "scripts", "plugin-hooks-template");
   const contentDirs = ["stages", "sensors", "tools", "contributions"];
 
-  for (const pluginName of plugins) {
-    const pluginSrc = join(PLUGINS_ROOT, pluginName);
-    const manifest = JSON.parse(
-      readFileSync(join(pluginSrc, ".aidlc-plugin", "plugin.json"), "utf-8")
+  if (existsSync(outDir)) rmSync(outDir, { recursive: true, force: true });
+  mkdirSync(outDir, { recursive: true });
+
+  // 1. Host-native manifest (.claude-plugin / .codex-plugin / .kiro-plugin).
+  const hostManifestDir = join(outDir, manifestDir);
+  mkdirSync(hostManifestDir, { recursive: true });
+  writeFileSync(
+    join(hostManifestDir, "plugin.json"),
+    JSON.stringify({ name: `aidlc-${pluginName}`, version, description, author }, null, 2) + "\n"
+  );
+
+  // 2. Marketplace catalogue entry.
+  writeFileSync(
+    join(hostManifestDir, "marketplace.json"),
+    JSON.stringify({
+      name: "aidlc-plugins",
+      owner: author,
+      description: "AIDLC plugin catalogue.",
+      plugins: [{ name: `aidlc-${pluginName}`, source: ".", version, description }],
+    }, null, 2) + "\n"
+  );
+
+  // 3. The one bun compose hook + per-harness wiring. The hook command's only
+  //    shell job is finding bun on a bare PATH (PATH, then ~/.bun/bin); all
+  //    compose logic is in compose.ts. Claude populates CLAUDE_PLUGIN_ROOT,
+  //    Codex PLUGIN_ROOT; AIDLC_HARNESS_DIR targets the right harness tree.
+  const hooksDir = join(outDir, "hooks");
+  mkdirSync(hooksDir, { recursive: true });
+  for (const f of readdirSync(templateHooks)) cpSync(join(templateHooks, f), join(hooksDir, f));
+  const rootExpr = harnessName === "claude" ? "${CLAUDE_PLUGIN_ROOT}" : "${PLUGIN_ROOT}";
+  const bunExpr = 'BUN=$(command -v bun || echo "$HOME/.bun/bin/bun")';
+  const command = `sh -c '${bunExpr}; AIDLC_HARNESS_DIR=${harnessLeaf} "$BUN" "${rootExpr}/hooks/compose.ts"'`;
+
+  if (kind === "kiro") {
+    writeFileSync(
+      join(hooksDir, "aidlc-plugin-compose.kiro.hook"),
+      JSON.stringify({
+        version: "1.0.0",
+        enabled: true,
+        name: `aidlc-${pluginName}-compose`,
+        description: `Composes the ${pluginName} AIDLC plugin on first interaction.`,
+        when: { type: "promptSubmit" },
+        then: { type: "runCommand", command },
+      }, null, 2) + "\n"
     );
-    const version = manifest.version || "0.0.1";
-    const author = manifest.author || { name: "AIDLC" };
-    const description = manifest.description || "";
+  } else {
+    writeFileSync(
+      join(hooksDir, "hooks.json"),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [{
+            hooks: [{ type: "command", command, statusMessage: `AIDLC ${pluginName}: composing plugin` }],
+          }],
+        },
+      }, null, 2) + "\n"
+    );
+  }
 
-    for (const harnessName of Object.keys(PLUGIN_TARGETS)) {
-      if (!harnesses.includes(harnessName)) continue;
-      const { manifestDir, harnessLeaf } = PLUGIN_TARGETS[harnessName];
+  // 4. Copy plugin content verbatim (stages keep number/name/bundle/when).
+  for (const dir of contentDirs) {
+    const srcDir = join(pluginSrc, dir);
+    if (!existsSync(srcDir)) continue;
+    for (const file of walk(srcDir)) {
+      const outPath = join(outDir, dir, relative(srcDir, file));
+      mkdirSync(dirname(outPath), { recursive: true });
+      writeFileSync(outPath, readFileSync(file));
+    }
+  }
+}
 
-      const outDir = join(REPO_ROOT, "dist", "plugins", pluginName, harnessName);
-      if (existsSync(outDir)) rmSync(outDir, { recursive: true, force: true });
-      mkdirSync(outDir, { recursive: true });
+// Which harnesses get a projection = the intersection of the built harness set
+// and PLUGIN_TARGETS (every manifest'd harness has a target).
+function pluginHarnessesFor(harnesses: string[]): string[] {
+  return harnesses.filter((h) => h in PLUGIN_TARGETS);
+}
 
-      // 1. Host-native manifest (.claude-plugin / .codex-plugin / .kiro-plugin).
-      const hostManifestDir = join(outDir, manifestDir);
-      mkdirSync(hostManifestDir, { recursive: true });
-      writeFileSync(
-        join(hostManifestDir, "plugin.json"),
-        JSON.stringify({ name: `aidlc-${pluginName}`, version, description, author }, null, 2) + "\n"
-      );
-
-      // 2. Marketplace catalogue entry (Claude/Codex have stores; harmless for Kiro).
-      writeFileSync(
-        join(hostManifestDir, "marketplace.json"),
-        JSON.stringify({
-          name: "aidlc-plugins",
-          owner: author,
-          description: "AIDLC plugin catalogue.",
-          plugins: [{ name: `aidlc-${pluginName}`, source: ".", version, description }],
-        }, null, 2) + "\n"
-      );
-
-      // 3. Generic compose hooks (harness-agnostic) + per-harness wiring.
-      const hooksDir = join(outDir, "hooks");
-      mkdirSync(hooksDir, { recursive: true });
-      for (const f of readdirSync(templateHooks)) cpSync(join(templateHooks, f), join(hooksDir, f));
-
-      // Plugin-root env token differs: Claude/Codex populate {CLAUDE_,}PLUGIN_ROOT;
-      // the command exports AIDLC_HARNESS_DIR so the shared hook targets the right
-      // harness tree. Codex fires SessionStart lazily; Kiro uses a .kiro.hook
-      // (promptSubmit) instead of a hooks.json SessionStart block.
-      const rootExpr = harnessName === "claude" ? "${CLAUDE_PLUGIN_ROOT}" : "${PLUGIN_ROOT}";
-      const command = `AIDLC_HARNESS_DIR=${harnessLeaf} bash "${rootExpr}/hooks/compose.sh"`;
-
-      if (harnessName === "kiro") {
-        // Kiro's native agent-hook format: one <name>.kiro.hook JSON file.
-        writeFileSync(
-          join(hooksDir, "aidlc-plugin-compose.kiro.hook"),
-          JSON.stringify({
-            version: "1.0.0",
-            enabled: true,
-            name: `aidlc-${pluginName}-compose`,
-            description: `Composes the ${pluginName} AIDLC plugin on first interaction.`,
-            when: { type: "promptSubmit" },
-            then: { type: "runCommand", command },
-          }, null, 2) + "\n"
-        );
-      } else {
-        writeFileSync(
-          join(hooksDir, "hooks.json"),
-          JSON.stringify({
-            hooks: {
-              SessionStart: [{
-                hooks: [{ type: "command", command, statusMessage: `AIDLC ${pluginName}: composing plugin` }],
-              }],
-            },
-          }, null, 2) + "\n"
-        );
-      }
-
-      // 4. Copy plugin content verbatim (stages keep number/name/bundle/when).
-      for (const dir of contentDirs) {
-        const srcDir = join(pluginSrc, dir);
-        if (!existsSync(srcDir)) continue;
-        for (const file of walk(srcDir)) {
-          const rel = relative(srcDir, file);
-          const outPath = join(outDir, dir, rel);
-          mkdirSync(dirname(outPath), { recursive: true });
-          writeFileSync(outPath, readFileSync(file));
-        }
-      }
-
+function emitPlugins(harnesses: string[]): void {
+  for (const pluginName of discoverPluginNames()) {
+    for (const harnessName of pluginHarnessesFor(harnesses)) {
+      buildPluginProjection(pluginName, harnessName, join(REPO_ROOT, "dist", "plugins", pluginName, harnessName));
       console.log(`[plugin:${pluginName}] emitted dist/plugins/${pluginName}/${harnessName}/`);
     }
   }
+}
+
+// --check for plugins: build each projection into a temp dir and byte-compare
+// against the committed dist/plugins/ tree — the same drift guard writeHarness
+// gets, closing the gap where a hand-edited plugin dist passed CI silently.
+function checkPlugins(harnesses: string[]): string[] {
+  const problems: string[] = [];
+  const tmp = mkdtempSync(join(tmpdir(), "aidlc-pkg-plugins-"));
+  try {
+    for (const pluginName of discoverPluginNames()) {
+      for (const harnessName of pluginHarnessesFor(harnesses)) {
+        const committed = join(REPO_ROOT, "dist", "plugins", pluginName, harnessName);
+        const built = join(tmp, pluginName, harnessName);
+        buildPluginProjection(pluginName, harnessName, built);
+        const rel = `plugins/${pluginName}/${harnessName}`;
+        const builtFiles = new Set<string>();
+        for (const f of walk(built)) {
+          const r = relative(built, f);
+          builtFiles.add(r);
+          const c = join(committed, r);
+          if (!existsSync(c)) problems.push(`MISSING in dist: ${rel}/${r}`);
+          else if (!readFileSync(f).equals(readFileSync(c))) problems.push(`DIFFERS: ${rel}/${r}`);
+        }
+        if (existsSync(committed)) {
+          for (const f of walk(committed)) {
+            const r = relative(committed, f);
+            if (!builtFiles.has(r)) problems.push(`ORPHAN in dist: ${rel}/${r}`);
+          }
+        }
+      }
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+  return problems;
 }
 
 const check = argv.includes("--check");
@@ -759,6 +798,7 @@ if (absent.length > 0) console.log(`(skipping harness(es) without a manifest: ${
 if (check) {
   let problems: string[] = [];
   for (const n of present) problems = problems.concat(checkHarness(n));
+  problems = problems.concat(checkPlugins(present)); // drift-guard dist/plugins/ too
   if (problems.length > 0) {
     console.error(`\npackage --check FAILED (${problems.length} problem(s)):`);
     for (const p of problems.slice(0, 40)) console.error("  " + p);

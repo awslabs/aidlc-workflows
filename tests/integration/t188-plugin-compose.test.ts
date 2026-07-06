@@ -1,6 +1,6 @@
 // t188-plugin-compose: the AIDLC plugin system end-to-end guard.
 //
-// covers: file:scripts/package.ts (emitPlugins), file:scripts/plugin-hooks-template/
+// covers: file:scripts/package.ts (emitPlugins), file:scripts/plugin-hooks-template/compose.ts
 //
 // WHAT. A plugin authored in plugins/<name>/ is emitted by the packager as a
 // per-harness host plugin (dist/plugins/<name>/<harness>/), and its compose hook
@@ -66,7 +66,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     cpSync(CLAUDE_DIST, join(project, ".claude"), { recursive: true });
 
     // 3. Run the real compose hook (as a host SessionStart hook would).
-    const compose = spawnSync("bash", [join(PLUGIN_CLAUDE, "hooks", "compose.sh")], {
+    const compose = spawnSync(BUN, [join(PLUGIN_CLAUDE, "hooks", "compose.ts")], {
       cwd: project,
       encoding: "utf-8",
       timeout: TIMEOUT_MS - 5_000,
@@ -77,7 +77,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         AIDLC_HARNESS_DIR: ".claude",
       },
     });
-    if (compose.status !== 0) throw new Error(`compose.sh failed: ${compose.stderr}`);
+    if (compose.status !== 0) throw new Error(`compose.ts failed: ${compose.stderr}`);
   });
 
   afterAll(() => {
@@ -87,12 +87,12 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   // --- Packager emits the projection ---
   test("packager emits a Claude host-plugin projection", () => {
     expect(existsSync(join(PLUGIN_CLAUDE, ".claude-plugin", "plugin.json"))).toBe(true);
-    expect(existsSync(join(PLUGIN_CLAUDE, "hooks", "compose.sh"))).toBe(true);
+    expect(existsSync(join(PLUGIN_CLAUDE, "hooks", "compose.ts"))).toBe(true);
     expect(existsSync(join(PLUGIN_CLAUDE, "hooks", "hooks.json"))).toBe(true);
   });
 
-  test("all three harness projections emit", () => {
-    for (const h of ["claude", "codex", "kiro"]) {
+  test("all four harness projections emit", () => {
+    for (const h of ["claude", "codex", "kiro", "kiro-ide"]) {
       expect(existsSync(join(REPO_ROOT, "dist", "plugins", PLUGIN, h))).toBe(true);
     }
   });
@@ -146,7 +146,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
 
   // --- Idempotency ---
   test("re-running compose does not duplicate fragments", () => {
-    const rerun = spawnSync("bash", [join(PLUGIN_CLAUDE, "hooks", "compose.sh")], {
+    const rerun = spawnSync(BUN, [join(PLUGIN_CLAUDE, "hooks", "compose.ts")], {
       cwd: project,
       encoding: "utf-8",
       timeout: TIMEOUT_MS - 5_000,

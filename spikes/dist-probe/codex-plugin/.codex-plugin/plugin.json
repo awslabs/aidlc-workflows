@@ -1,6 +1,0 @@
-{
-  "name": "aidlc-dist-probe",
-  "version": "0.0.1",
-  "description": "Throwaway probe for Codex: does a plugin SessionStart hook fire (after trust) and write project + plugin data? Also confirms the agents gap.",
-  "hooks": "./hooks/hooks.json"
-}

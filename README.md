@@ -8,7 +8,7 @@ A native implementation of the **AI-DLC methodology** (AI-Driven Development Lif
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.2.10-blue)
+![version](https://img.shields.io/badge/version-2.3.0-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
@@ -253,6 +253,9 @@ aidlc-claude/
 │   ├── kiro/                   #   manifest.ts · orchestrator · agent JSONs · settings · onboarding fills (CLI — agent-JSON hooks)
 │   └── codex/                  #   manifest.ts · emit.ts (Codex-only emissions) · orchestrator · hooks adapter
 │
+├── plugins/                    # optional, owned AIDLC plugins — new stages + the additive contribution seam
+│   └── test-pro/               #   reference fixture: .aidlc-plugin/plugin.json · stages/ · contributions/ · sensors/ · tools/ · tests/
+│
 ├── scripts/
 │   ├── package.ts              # THE build entry: copy core+harness per manifest → graph compile →
 │   │                           #   runner-gen → emit() per tree.  --check = total drift guard (CI)
@@ -263,7 +266,8 @@ aidlc-claude/
 │   ├── claude/.claude/                       # what Claude Code users copy
 │   ├── kiro-ide/{AGENTS.md, .kiro/}          # what Kiro IDE users copy
 │   ├── kiro/{AGENTS.md, .kiro/}              # what Kiro CLI users copy
-│   └── codex/{AGENTS.md, .agents/, .codex/}  # what Codex CLI users copy
+│   ├── codex/{AGENTS.md, .agents/, .codex/}  # what Codex CLI users copy
+│   └── plugins/<name>/{claude,codex,kiro,kiro-ide}/  # one real host plugin per harness — install alongside dist/<harness>/
 │
 │  ─────────── SUPPORTING ───────────
 ├── tests/                      # all-TypeScript suite (t*.test.ts) — resolves dist via AIDLC_SRC
