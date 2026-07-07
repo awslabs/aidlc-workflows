@@ -29,7 +29,10 @@ const TIMEOUT_MS = 60_000;
 
 const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
-const PLUGIN_CLAUDE = join(REPO_ROOT, "dist", "plugins", PLUGIN, "claude");
+// The COMMITTED projection — only existsSync-probed (never mutated) by the
+// "packager emits" assertions. The compose run below uses a FRESHLY BUILT copy
+// under tmp (see beforeAll) so this test never regenerates the committed dist.
+const PLUGIN_CLAUDE_COMMITTED = join(REPO_ROOT, "dist", "plugins", PLUGIN, "claude");
 
 // Absolute path to a stage's compiled node in a composed project.
 function graph(projectDir: string): Array<Record<string, any>> {
@@ -50,29 +53,35 @@ function stageBody(projectDir: string, phase: string, slug: string): string {
 describe("t188 plugin compose — emit + compose the contribution seam", () => {
   let tmp: string;
   let project: string;
+  let pluginBuilt: string;
 
   beforeAll(() => {
-    // 1. Regenerate to ensure the plugin projection is current.
-    const pkg = spawnSync(BUN, [PACKAGE_TS], {
+    tmp = mkdtempSync(join(tmpdir(), "aidlc-t188-"));
+
+    // 1. Build the plugin projection into tmp via the target-dir seam — NEVER
+    //    regenerate the committed dist/ (write-mode package.ts rmSync's the
+    //    committed trees, which masks drift and races sibling tests under the
+    //    parallel integration tier). This exercises the real emitter in isolation.
+    pluginBuilt = join(tmp, "plugin", "claude");
+    const build = spawnSync(BUN, [PACKAGE_TS, "plugin", "build", PLUGIN, "claude", pluginBuilt], {
       cwd: REPO_ROOT,
       encoding: "utf-8",
       timeout: TIMEOUT_MS - 5_000,
     });
-    if (pkg.status !== 0) throw new Error(`package.ts failed: ${pkg.stderr}`);
+    if (build.status !== 0) throw new Error(`plugin build failed: ${build.stderr}`);
 
-    // 2. Fresh base project = a copy of dist/claude/.claude.
-    tmp = mkdtempSync(join(tmpdir(), "aidlc-t188-"));
+    // 2. Fresh base project = a copy of dist/claude/.claude (read-only source).
     project = join(tmp, "proj");
     cpSync(CLAUDE_DIST, join(project, ".claude"), { recursive: true });
 
     // 3. Run the real compose hook (as a host SessionStart hook would).
-    const compose = spawnSync(BUN, [join(PLUGIN_CLAUDE, "hooks", "compose.ts")], {
+    const compose = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
       cwd: project,
       encoding: "utf-8",
       timeout: TIMEOUT_MS - 5_000,
       env: {
         ...process.env,
-        CLAUDE_PLUGIN_ROOT: PLUGIN_CLAUDE,
+        CLAUDE_PLUGIN_ROOT: pluginBuilt,
         CLAUDE_PROJECT_DIR: project,
         AIDLC_HARNESS_DIR: ".claude",
       },
@@ -86,9 +95,9 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
 
   // --- Packager emits the projection ---
   test("packager emits a Claude host-plugin projection", () => {
-    expect(existsSync(join(PLUGIN_CLAUDE, ".claude-plugin", "plugin.json"))).toBe(true);
-    expect(existsSync(join(PLUGIN_CLAUDE, "hooks", "compose.ts"))).toBe(true);
-    expect(existsSync(join(PLUGIN_CLAUDE, "hooks", "hooks.json"))).toBe(true);
+    expect(existsSync(join(PLUGIN_CLAUDE_COMMITTED, ".claude-plugin", "plugin.json"))).toBe(true);
+    expect(existsSync(join(PLUGIN_CLAUDE_COMMITTED, "hooks", "compose.ts"))).toBe(true);
+    expect(existsSync(join(PLUGIN_CLAUDE_COMMITTED, "hooks", "hooks.json"))).toBe(true);
   });
 
   test("all four harness projections emit", () => {
@@ -114,7 +123,19 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   test("contribution merges consumes into the target stage node", () => {
     const bat = stage(project, "build-and-test");
     const consumed = (bat?.consumes ?? []).map((c: any) => c.artifact);
+    // BOTH test-pro consumes must land — not just the first (round-2 blocker:
+    // the old parser dropped every entry after the first).
     expect(consumed).toContain("test-pro-testability-requirements");
+    expect(consumed).toContain("test-pro-test-harness-design");
+    // ...and each authored `required: false` must be preserved, not flipped to
+    // true by an empty `required` scan (the same blocker's second half).
+    for (const art of ["test-pro-testability-requirements", "test-pro-test-harness-design"]) {
+      const entry = (bat?.consumes ?? []).find((c: any) => c.artifact === art);
+      expect(entry?.required).toBe(false);
+    }
+    // The pre-existing core consumes are untouched (still required: true).
+    const core = (bat?.consumes ?? []).find((c: any) => c.artifact === "code-generation-plan");
+    expect(core?.required).toBe(true);
   });
 
   test("contribution merges sensors into the target stage node", () => {
@@ -122,6 +143,17 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const sensors = (bat?.sensors_applicable ?? []).map((s: any) => s.id);
     expect(sensors).toContain("coverage-threshold");
     expect(sensors).toContain("requirement-coverage");
+  });
+
+  test("contribution adds required_sections to the target stage source", () => {
+    // build-and-test ships NO required_sections in core, so the merge must ADD
+    // the field (as a quoted-string list) to the stage frontmatter.
+    const body = stageBody(project, "construction", "build-and-test");
+    const fm = body.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
+    expect(fm).toMatch(/^required_sections:/m);
+    for (const s of ["Branch Coverage", "Edge Cases", "API Positive and Negative", "Requirement Traceability"]) {
+      expect(fm).toContain(`- "${s}"`);
+    }
   });
 
   // --- Contribution seam: prose fragments ---
@@ -146,13 +178,13 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
 
   // --- Idempotency ---
   test("re-running compose does not duplicate fragments", () => {
-    const rerun = spawnSync(BUN, [join(PLUGIN_CLAUDE, "hooks", "compose.ts")], {
+    const rerun = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
       cwd: project,
       encoding: "utf-8",
       timeout: TIMEOUT_MS - 5_000,
       env: {
         ...process.env,
-        CLAUDE_PLUGIN_ROOT: PLUGIN_CLAUDE,
+        CLAUDE_PLUGIN_ROOT: pluginBuilt,
         CLAUDE_PROJECT_DIR: project,
         AIDLC_HARNESS_DIR: ".claude",
       },

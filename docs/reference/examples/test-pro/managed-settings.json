@@ -1,5 +1,5 @@
 {
-  "$comment": "EXAMPLE org trust policy (managed scope). Mirrors Claude Code's strictKnownMarketplaces mechanism (doc 21 §B.4): managed-only, highest precedence, no cross-scope merge — a developer's user/project settings cannot override or add to it. Lives at the machine's managed-settings path (Linux /etc/claude-code/, macOS /Library/Application Support/ClaudeCode/, Windows Program Files\\ClaudeCode\\, or MDM/registry/server-managed).",
+  "$comment": "EXAMPLE org trust policy (managed scope). Mirrors Claude Code's strictKnownMarketplaces mechanism (doc 18 §8 Status — trust enforcement via managed settings is future work): managed-only, highest precedence, no cross-scope merge — a developer's user/project settings cannot override or add to it. Lives at the machine's managed-settings path (Linux /etc/claude-code/, macOS /Library/Application Support/ClaudeCode/, Windows Program Files\\ClaudeCode\\, or MDM/registry/server-managed).",
   "aidlc": {
     "strictKnownPluginSources": [
       {

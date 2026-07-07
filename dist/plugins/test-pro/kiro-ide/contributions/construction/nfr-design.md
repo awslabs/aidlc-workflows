@@ -18,9 +18,10 @@ fragments:
 
 ### Step (test-pro): Design the test harness
 
-Design the test harness that the build-and-test stage will implement. Write it
-to `aidlc-docs/construction/{unit-name}/nfr-design/test-pro-test-harness-design.md`
-under a `## Test Harness Design` heading. Cover:
+Design the test harness that the build-and-test stage will implement. Write
+`test-pro-test-harness-design` to this stage's engine-resolved per-unit record
+dir (the same dir nfr-design's core artifacts land in) under a `## Test Harness
+Design` heading. Cover:
 
 - **Framework selection** per unit (runner, assertion lib) consistent with the
   tech stack.

@@ -104,8 +104,8 @@ sensibly (`test-pro-integration` is `3.85`, after `build-and-test` at `3.6`), bu
 inserting it never renumbers core and you claim no range.
 
 Gate a stage onto a scope with `scopes:` (it is SKIP everywhere else), and
-optionally with a `when:` predicate. `test-pro-full-suite` only runs when its
-upstream producer is on the plan:
+optionally declare a `when:` predicate. `test-pro-full-suite` is *intended* to run
+only when its upstream producer is on the plan:
 
 ```yaml
 scopes:
@@ -113,6 +113,11 @@ scopes:
 when:
   producer-in-plan: test-pro-regression-suite
 ```
+
+> **`when:` is parsed but not yet evaluated.** The schema validates the predicate
+> and the parser reads it, but no engine consumer acts on it today — a stage
+> carrying `when:` is EXECUTE under its declared `scopes:` unconditionally. Author
+> it for forward-compatibility, but gate real behavior on `scopes:` for now.
 
 See [Scopes](04-scopes.md) for scope membership and the `when:` predicate.
 
@@ -234,18 +239,22 @@ compiles the stage graph + scope grid, and projects the result. The orchestrator
 routes entirely off that compiled graph, so a plugin stage runs the moment it is
 composed in — no prose or skill file to edit.
 
-### Kiro (no store — folder-drop + compose)
+### Kiro (no store — folder-drop, then run the composer explicitly)
 
 ```bash
 # git pull your plugin repo, copy the Kiro projection into the project:
-cp -r <plugin-repo>/kiro-projection/.kiro/ <project>/.kiro/
-# run the composer:
-aidlc plugin compose --project <project>
+cp -r dist/plugins/<name>/kiro/. <project>/
+# run the composer explicitly (the one working invocation today):
+AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
+  AIDLC_HARNESS_DIR=.kiro bun "<plugin-root>/hooks/compose.ts"
 # open in Kiro IDE or kiro-cli chat → /aidlc
 ```
 
-On Kiro IDE the shipped `.kiro.hook` fires the composer on first prompt, so
-`aidlc plugin compose` is needed only for CLI or pre-caching.
+> **Not yet wired.** A `.kiro.hook` that auto-fires the composer on first prompt,
+> and an `aidlc plugin compose` wrapper CLI, are designed but not implemented —
+> the emitted `.kiro.hook` is inert (Kiro CLI does not read `.kiro.hook`, and its
+> `${PLUGIN_ROOT}` is set by no Kiro host). Use the explicit `bun compose.ts`
+> invocation above until they land. See doc 18 §8 "Status" for the full deferral list.
 
 ### Trust
 

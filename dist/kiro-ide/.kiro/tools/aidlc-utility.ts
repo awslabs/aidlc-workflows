@@ -714,6 +714,32 @@ function handleDoctor(projectDir: string): void {
     });
   }
 
+  // 6b. Hook drop records. A hook that hit a non-fatal failure appends a line to
+  // `<hook>.drops` in the health dir (e.g. the plugin compose hook logging a
+  // contribution it could not merge). These are advisory — surface them so a
+  // silent degradation (a dropped contribution, a failed recompile) is visible
+  // in --doctor rather than buried in a file nothing reads. Never fails the run.
+  if (heartbeatDirExists) {
+    try {
+      const dropFiles = readdirSync(healthDir).filter((f) => f.endsWith(".drops"));
+      for (const f of dropFiles) {
+        try {
+          const lines = readFileSync(join(healthDir, f), "utf-8").split("\n").filter((l) => l.trim() !== "");
+          if (lines.length === 0) continue;
+          const last = lines[lines.length - 1].split("\t").slice(1).join(" ").slice(0, 160);
+          results.push({
+            pass: true,
+            label: `Hook drops (${f.replace(".drops", "")}): ${lines.length} recorded; latest: ${last}`,
+          });
+        } catch {
+          // skip unreadable
+        }
+      }
+    } catch {
+      // skip unreadable dir
+    }
+  }
+
   // State / audit drift check — if latest audit event implies the state file
   // should be in a certain shape (e.g., Status=Completed after WORKFLOW_COMPLETED),
   // verify the state actually matches. Covers the rare case where audit-first

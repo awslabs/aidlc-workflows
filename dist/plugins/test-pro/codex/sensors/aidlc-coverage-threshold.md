@@ -5,7 +5,7 @@ command: bun {{HARNESS_DIR}}/tools/aidlc-sensor-coverage-threshold.ts
 default_severity: advisory
 description: Reports whether branch+line coverage in test-pro-coverage-summary.json meet their targets (test-pro plugin, advisory)
 category: document-shape
-matches: "**/aidlc-docs/**"
+matches: "**/{aidlc-docs,intents}/**"
 input_schema:
   output_path: string
   stage_slug: string

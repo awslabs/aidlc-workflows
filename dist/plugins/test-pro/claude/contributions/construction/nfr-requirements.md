@@ -17,8 +17,9 @@ fragments:
 ### Step 6b (test-pro): Capture testability NFRs
 
 For each unit of work, capture OPERATIONAL TESTABILITY requirements alongside
-the standard NFR categories. Write them to
-`aidlc-docs/construction/{unit-name}/nfr-requirements/test-pro-testability-requirements.md`.
+the standard NFR categories. Write `test-pro-testability-requirements` to this
+stage's engine-resolved per-unit record dir (the same dir nfr-requirements' core
+artifacts land in).
 
 Cover, under a `## Testability Requirements` heading:
 

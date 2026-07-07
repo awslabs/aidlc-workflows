@@ -80,6 +80,11 @@ const manifest: HarnessManifest = {
 
   // Kiro ships no per-shell emissions — all its surfaces are authored files.
   emit: null,
+
+  // Kiro has no host plugin store — AIDLC plugins arrive by folder-drop + a
+  // .kiro.hook that composes on first interaction (kind "kiro"). Manifest dir is
+  // shared with Kiro IDE (both are .kiro trees).
+  plugin: { manifestDir: ".kiro-plugin", kind: "kiro" },
 };
 
 export default manifest;

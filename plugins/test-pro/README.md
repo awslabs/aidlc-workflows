@@ -28,7 +28,7 @@ the way each host installs plugins (the hybrid model — see
 
 **Author / build** (from the repo):
 ```bash
-bun scripts/package.ts          # emits dist/plugins/test-pro/{claude,codex,kiro}/
+bun scripts/package.ts          # emits dist/plugins/test-pro/{claude,codex,kiro,kiro-ide}/
 ```
 
 **Claude Code** (host store):
@@ -70,7 +70,7 @@ its `contributions/<phase>/<slug>.md` files are merged at compose time.
 |---|---|
 | **`nfr-requirements`** (construction) | Produces `test-pro-testability-requirements`; required sections **Testability Requirements**, **Coverage Targets**. Captures per-requirement test-type matrix + coverage targets. |
 | **`nfr-design`** (construction) | Produces `test-pro-test-harness-design` (consumes testability reqs); required section **Test Harness Design**. Designs the runner, coverage instrumentation, fixtures, determinism. |
-| **`build-and-test`** (construction) | The big one — produces 7 artifacts (branch-coverage / edge-case / API-contract instructions, `test-pro-regression-suite`, requirement-traceability-matrix, `test-pro-test-results`, `test-pro-coverage-summary`); binds the 2 sensors; required sections **Branch Coverage**, **Edge Cases**, **API Positive and Negative**, **Requirement Traceability**; splices 6 prose steps (9a–9c branch/edge/API, 10a–10b regression+traceability & machine-readable results, plus a Sensors note). |
+| **`build-and-test`** (construction) | The big one — produces 5 `.md` artifacts (branch-coverage / edge-case / API-contract instructions, `test-pro-regression-suite`, `test-pro-requirement-traceability-matrix`); binds the 2 sensors; required sections **Branch Coverage**, **Edge Cases**, **API Positive and Negative**, **Requirement Traceability**; splices 6 prose steps (9a–9c branch/edge/API, 10a–10b regression+traceability & the two machine-readable JSON side-inputs, plus a Sensors note). The `test-pro-test-results.json` / `test-pro-coverage-summary.json` files are sensor side-inputs (not `produces:` deliverables). |
 | **`performance-validation`** (operation) | Produces `test-pro-load-regression-matrix`; required section **Load Regression**. Cross-references the regression suite against load results. |
 
 ## 4. New stages it creates
@@ -128,10 +128,13 @@ scripts (no framework-lib import) and degrade gracefully when their input JSON
 isn't present yet.
 
 ### Machine-readable contract
-`build-and-test` (via test-pro) emits two JSON artifacts under
-`aidlc-docs/construction/build-and-test/` that the sensors read:
+`build-and-test` (via test-pro) emits two JSON files beside its `.md` artifacts,
+under the engine-resolved record dir for the stage, that the sensors read:
 - `test-pro-test-results.json` — `{ tests, requirements: {<id>: {covered, test_ids}}, summary }`
 - `test-pro-coverage-summary.json` — `{ line_pct, branch_pct, targets: {line, branch} }`
+
+These are sensor side-inputs, not `produces:` deliverables (which resolve to
+`.md`), so they are intentionally absent from the contribution's `produces:` list.
 
 ### Activation
 `test-pro-full-suite` carries `when: {producer-in-plan: test-pro-regression-suite}` —

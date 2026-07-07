@@ -554,15 +554,39 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
   }
 }
 
+// Plugin content tests live beside each plugin (plugins/<name>/tests/*.test.ts),
+// NOT under tests/<level>/, so the level-dir scan alone never discovered them —
+// the AGENTS.md "guarded by plugins/<name>/tests/" claim was hollow. They run the
+// framework's real validators against plugin content, which is integration-grade,
+// so they join the integration tier. Discovered (any plugins/*/tests/), so a new
+// plugin's suite is picked up with zero runner edits.
+function pluginTestFiles(): string[] {
+  const pluginsRoot = join(SCRIPT_DIR, "..", "plugins");
+  if (!existsSync(pluginsRoot)) return [];
+  const out: string[] = [];
+  for (const name of readdirSync(pluginsRoot).sort()) {
+    const testsDir = join(pluginsRoot, name, "tests");
+    if (!existsSync(testsDir)) continue;
+    for (const f of readdirSync(testsDir).filter((f) => f.endsWith(".test.ts")).sort()) {
+      out.push(join(testsDir, f));
+    }
+  }
+  return out;
+}
+
 function levelFiles(level: Level, excludes: string[] = []): string[] {
   const dir = join(SCRIPT_DIR, level);
-  if (!existsSync(dir)) return [];
   const excludeSet = new Set(excludes);
-  return readdirSync(dir)
-    .filter((f) => f.endsWith(".test.ts"))
-    .filter((f) => !excludeSet.has(f))
-    .sort()
-    .map((f) => join(dir, f));
+  const files = existsSync(dir)
+    ? readdirSync(dir)
+        .filter((f) => f.endsWith(".test.ts"))
+        .filter((f) => !excludeSet.has(f))
+        .sort()
+        .map((f) => join(dir, f))
+    : [];
+  // Fold plugin content tests into the integration tier.
+  if (level === "integration") files.push(...pluginTestFiles().filter((f) => !excludeSet.has(basename(f))));
+  return files;
 }
 
 async function runFileBand(

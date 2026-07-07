@@ -42,10 +42,22 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
+// A pass-through result — the sensor fired on a write it doesn't own, so it
+// reports a clean no-op rather than a failure. The dispatcher fires on EVERY
+// write under the record dir (matches glob), not only this sensor's JSON, so
+// most fires are for some other artifact and must not raise a false finding.
+function passThrough(): never {
+  process.stdout.write(`${JSON.stringify({ pass: true, findings_count: 0, line_pct: 0, branch_pct: 0, targets: DEFAULT_TARGETS })}\n`);
+  process.exit(0);
+}
+
 function main(): void {
   const flags = parseFlags(process.argv.slice(2));
   if (!flags.outputPath) fail("--output-path is required");
-  if (!existsSync(flags.outputPath)) fail(`--output-path not found: ${flags.outputPath}`);
+  // Only act on this sensor's own machine-readable file; any other write is a
+  // clean pass-through (not a failure).
+  if (!flags.outputPath.endsWith("test-pro-coverage-summary.json")) passThrough();
+  if (!existsSync(flags.outputPath)) passThrough();
 
   let parsed: {
     line_pct?: number;

@@ -38,17 +38,39 @@ const HARNESS_DIR = join(PROJECT_DIR, HARNESS_LEAF);
 const STAGES_DIR = join(HARNESS_DIR, "aidlc-common", "stages");
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"];
 
-// Health-file logging (mirrors core's recordHookDrop) — no silent failures.
-// The bare workspace-level health dir (`aidlc/.aidlc-hooks-health/`) matches where
-// core hooks write drops and where --doctor reads them; compose runs before any
-// intent exists, so it stays at the workspace root rather than a per-intent record.
-function recordDrop(reason: string): void {
+// Resolve the hooks-health dir from the INSTALLED tree so compose drops land
+// exactly where core hooks write theirs (hooksHealthDir under docsRoot) and where
+// --doctor scans — not a bespoke flat path (round-2 major: the old path was read
+// by nothing). Memoized; falls back to the workspace-level dir if the lib can't be
+// loaded (e.g. a partial install), so a drop is never lost.
+let _healthDir: string | null = null;
+async function resolveHealthDir(): Promise<string> {
+  if (_healthDir) return _healthDir;
+  let dir: string;
   try {
-    const healthDir = join(PROJECT_DIR, "aidlc", ".aidlc-hooks-health");
+    const lib = await import(join(HARNESS_DIR, "tools", "aidlc-lib.ts"));
+    dir = lib.hooksHealthDir(PROJECT_DIR) as string;
+  } catch {
+    dir = join(PROJECT_DIR, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+  }
+  _healthDir = dir;
+  return dir;
+}
+
+// Buffer drops synchronously so callers stay sync; flush to disk once at the end
+// (and eagerly on the pre-guard early exits). No silent failures.
+const _drops: string[] = [];
+function recordDrop(reason: string): void {
+  _drops.push(`${new Date().toISOString()}\t${reason.replace(/\r?\n/g, " ")}`);
+}
+async function flushDrops(): Promise<void> {
+  if (_drops.length === 0) return;
+  try {
+    const healthDir = await resolveHealthDir();
     mkdirSync(healthDir, { recursive: true });
-    const line = `${new Date().toISOString()}\tplugin-compose\t${reason.replace(/\r?\n/g, " ")}\n`;
-    writeFileSync(join(healthDir, "plugin-compose.drops"), line, { flag: "a" });
+    writeFileSync(join(healthDir, "plugin-compose.drops"), _drops.map((l) => l + "\n").join(""), { flag: "a" });
   } catch { /* truly non-fatal */ }
+  _drops.length = 0;
 }
 
 function escapeRegExp(s: string): string {
@@ -56,12 +78,13 @@ function escapeRegExp(s: string): string {
 }
 
 // Guard: only compose in an AIDLC project, with a resolvable plugin root.
+if (!existsSync(join(HARNESS_DIR, "tools", "aidlc-graph.ts"))) {
+  process.exit(0); // not an AIDLC project — nothing to do (no drop: not our project)
+}
 if (!PLUGIN_ROOT) {
   recordDrop("plugin root env not set (CLAUDE_PLUGIN_ROOT/PLUGIN_ROOT/AIDLC_PLUGIN_ROOT)");
+  await flushDrops();
   process.exit(0);
-}
-if (!existsSync(join(HARNESS_DIR, "tools", "aidlc-graph.ts"))) {
-  process.exit(0); // not an AIDLC project — nothing to do
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -136,16 +159,24 @@ function mergeListField(content: string, field: string, items: string[], target:
   return content.replace(blockRe, m[1] + toAdd.map((i) => `  - ${i}`).join("\n") + "\n");
 }
 
-// Append consumes objects (artifact + required). Handles block + `consumes: []`.
-function mergeConsumes(content: string, entries: Array<{ artifact: string; required: boolean }>, target: string): string {
+// Append consumes objects (artifact + required + optional conditional_on).
+// Handles block + `consumes: []`.
+type ConsumeEntry = { artifact: string; required: boolean; conditional_on?: string };
+function mergeConsumes(content: string, entries: ConsumeEntry[], target: string): string {
   if (entries.length === 0) return content;
-  const render = (e: { artifact: string; required: boolean }) =>
-    `  - artifact: ${e.artifact}\n    required: ${e.required}`;
+  const render = (e: ConsumeEntry) =>
+    `  - artifact: ${e.artifact}\n    required: ${e.required}` +
+    (e.conditional_on ? `\n    conditional_on: ${e.conditional_on}` : "");
   const emptyRe = /^consumes:\s*\[\s*\]\s*$/m;
   if (emptyRe.test(content)) {
     return content.replace(emptyRe, "consumes:\n" + entries.map(render).join("\n"));
   }
-  const blockRe = /^(consumes:\n(?:  - artifact:.*\n(?:    required:.*\n)?)*)/m;
+  // Each entry is `- artifact:` plus every following indented continuation line
+  // (`required:`, `conditional_on:`). Matching those continuations is what keeps
+  // an append AFTER the last core entry — omit `conditional_on` and the block
+  // ends early, splicing the new entry INSIDE a core entry and stealing its
+  // brownfield gate (round-2 major). The new entries land past the whole block.
+  const blockRe = /^(consumes:\n(?:  - artifact:.*\n(?:    (?:required|conditional_on):.*\n)*)*)/m;
   const m = content.match(blockRe);
   if (!m) {
     recordDrop(`contribution to ${target}: no 'consumes:' field to append to`);
@@ -155,6 +186,35 @@ function mergeConsumes(content: string, entries: Array<{ artifact: string; requi
   const toAdd = entries.filter((e) => !existing.has(e.artifact));
   if (toAdd.length === 0) return content;
   return content.replace(blockRe, m[1] + toAdd.map(render).join("\n") + "\n");
+}
+
+// Merge required_sections (quoted-string values, e.g. "Branch Coverage"). Unlike
+// produces/sensors, a core stage often has NO required_sections field, so this
+// ADDS the field (before the closing frontmatter `---`) when absent, appends to
+// the block form, and replaces the inline-empty `[]` form. Idempotent by value.
+function mergeRequiredSections(content: string, items: string[], target: string): string {
+  if (items.length === 0) return content;
+  const render = (list: string[]) => list.map((s) => `  - "${s}"`).join("\n");
+  const emptyRe = /^required_sections:\s*\[\s*\]\s*$/m;
+  if (emptyRe.test(content)) {
+    return content.replace(emptyRe, "required_sections:\n" + render(items));
+  }
+  const blockRe = /^(required_sections:\n(?:  - .+\n)*)/m;
+  const m = content.match(blockRe);
+  if (m) {
+    const existing = new Set([...m[1].matchAll(/^  - "?([^"\n]+?)"?\s*$/gm)].map((x) => x[1].trim()));
+    const toAdd = items.filter((s) => !existing.has(s));
+    if (toAdd.length === 0) return content;
+    return content.replace(blockRe, m[1] + render(toAdd) + "\n");
+  }
+  // Field absent — insert it just before the closing frontmatter `---`.
+  const fmClose = content.match(/^---\r?\n[\s\S]*?\n(---\r?\n)/);
+  if (!fmClose) {
+    recordDrop(`contribution to ${target}: cannot add required_sections (no frontmatter block)`);
+    return content;
+  }
+  const insertAt = fmClose.index! + fmClose[0].length - fmClose[1].length;
+  return content.slice(0, insertAt) + "required_sections:\n" + render(items) + "\n" + content.slice(insertAt);
 }
 
 // Resolve a fragment anchor to a char offset. Anchors are validated + escaped
@@ -192,6 +252,63 @@ function locateAnchor(content: string, anchor: string, target: string): number {
   return -1;
 }
 
+// FNV-1a 32-bit hex — a dependency-free content fingerprint. Embedded in a
+// fragment's sentinel so a plugin UPGRADE (rewritten prose) is detected and the
+// old block replaced, rather than filtered as already-present forever.
+function hashProse(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+interface Fragment { bundle: string; anchor: string; order: number; prose: string; }
+
+// Splice ONE fragment into stage source, idempotently and order-deterministically.
+// Each spliced block is delimited by an open sentinel carrying (bundle, anchor,
+// order, content-hash) and a matching close sentinel. Because blocks are
+// self-delimiting we can (a) skip when the same block is already present, (b)
+// replace it when only the hash changed (upgrade), and (c) insert a NEW block at
+// its correct (order, bundle) slot among peer plugin blocks at the same anchor —
+// so plugins composing in separate hook runs still interleave by (order, bundle),
+// never by hook-firing order. Never relies on "the next heading" to bound a block.
+function spliceFragment(content: string, f: Fragment, target: string): string {
+  const hash = hashProse(f.prose);
+  const bE = escapeRegExp(f.bundle), aE = escapeRegExp(f.anchor);
+  const closeMarker = `<!-- /plugin:${f.bundle}:${f.anchor}:${f.order} -->`;
+  const block = `<!-- plugin:${f.bundle}:${f.anchor}:${f.order}:${hash} -->\n${f.prose}\n${closeMarker}`;
+
+  // Present already? Skip on hash match; replace the whole block on hash change.
+  const mine = content.match(new RegExp(`<!-- plugin:${bE}:${aE}:${f.order}:([0-9a-f]+) -->`));
+  if (mine) {
+    if (mine[1] === hash) return content;
+    const start = mine.index!;
+    const end = content.indexOf(closeMarker, start);
+    if (end === -1) { recordDrop(`contribution to ${target}: fragment block for "${f.anchor}" order ${f.order} missing close marker; left as-is`); return content; }
+    return content.slice(0, start) + block + content.slice(end + closeMarker.length);
+  }
+
+  // Insert at the ordered slot among peer plugin blocks at this anchor (any bundle).
+  const peers: Array<{ order: number; bundle: string; start: number; end: number }> = [];
+  for (const m of content.matchAll(new RegExp(`<!-- plugin:([^:]+):${aE}:(\\d+):[0-9a-f]+ -->`, "g"))) {
+    const pBundle = m[1], pOrder = Number(m[2]);
+    const close = `<!-- /plugin:${pBundle}:${f.anchor}:${pOrder} -->`;
+    const cIdx = content.indexOf(close, m.index!);
+    if (cIdx === -1) continue;
+    peers.push({ order: pOrder, bundle: pBundle, start: m.index!, end: cIdx + close.length });
+  }
+  if (peers.length > 0) {
+    const after = peers.find((p) => p.order > f.order || (p.order === f.order && p.bundle.localeCompare(f.bundle) > 0));
+    if (after) return content.slice(0, after.start) + block + "\n\n" + content.slice(after.start);
+    const lastEnd = Math.max(...peers.map((p) => p.end));
+    return content.slice(0, lastEnd) + "\n\n" + block + content.slice(lastEnd);
+  }
+
+  // Virgin anchor — use the structural locator for the base insertion point.
+  const base = locateAnchor(content, f.anchor, target);
+  if (base === -1) return content;
+  return content.slice(0, base) + "\n" + block + "\n" + content.slice(base);
+}
+
 // --- main compose ----------------------------------------------------------
 
 let changed = false;
@@ -226,11 +343,44 @@ try {
         return s ? [...s[1].matchAll(/^    - ([\w-]+)/gm)].map((x) => x[1]) : [];
       };
       const consumes = (() => {
-        const s = addsBlock.match(/consumes:\n((?:\s+- (?:artifact|required).*\n)*)/);
+        // Parse consumes per-entry, NOT by zipping two independent artifact/required
+        // scans: a dash-less `required:`/`conditional_on:` continuation line must
+        // bind to the artifact above it, or entry 2+ is dropped and required flips
+        // (round-2 blocker). Each entry starts at `- artifact:` and owns every
+        // following indented non-dash line until the next `- artifact:`.
+        const block = addsBlock.match(/^  consumes:\n((?:    -? .*\n?)*)/m)?.[1];
+        if (!block) return [];
+        const out: Array<{ artifact: string; required: boolean; conditional_on?: string }> = [];
+        for (const chunk of block.split(/^(?=    - artifact:)/m)) {
+          const artifact = chunk.match(/- artifact:\s*([\w-]+)/)?.[1];
+          if (!artifact) continue;
+          // `required` defaults to true ONLY when the key is genuinely absent;
+          // an explicit `required: false` must survive.
+          const reqRaw = chunk.match(/^\s*required:\s*(true|false)\b/m)?.[1];
+          const conditional_on = chunk.match(/^\s*conditional_on:\s*(\w+)/m)?.[1];
+          out.push({ artifact, required: reqRaw !== "false", ...(conditional_on ? { conditional_on } : {}) });
+        }
+        return out;
+      })();
+
+      // Drop-log any adds.* key compose does not implement — no silent no-op.
+      // Implemented merge surfaces: produces / sensors / consumes / required_sections.
+      // A documented-but-deferred surface (e.g. scopes) is recorded as a drop so an
+      // author sees it had no effect, per the no-silent-failures contract. (When a
+      // surface graduates, add it to IMPLEMENTED_ADDS + a merge call below.)
+      const IMPLEMENTED_ADDS = new Set(["produces", "sensors", "consumes", "required_sections"]);
+      for (const km of addsBlock.matchAll(/^  ([a-z_]+):/gm)) {
+        if (!IMPLEMENTED_ADDS.has(km[1])) {
+          recordDrop(`contribution to ${target}: adds.${km[1]} is not yet an implemented merge surface (only produces/sensors/consumes/required_sections); ignored`);
+        }
+      }
+
+      // required_sections values are quoted strings ("Branch Coverage"), unlike
+      // the kebab slugs in produces/sensors — parse them with a quote-aware list.
+      const requiredSections = (() => {
+        const s = addsBlock.match(/^  required_sections:\n((?:    - .*\n?)*)/m)?.[1];
         if (!s) return [];
-        const arts = [...s[1].matchAll(/artifact:\s*([\w-]+)/g)];
-        const reqs = [...s[1].matchAll(/required:\s*(true|false)/g)];
-        return arts.map((m, i) => ({ artifact: m[1], required: reqs[i]?.[1] !== "false" }));
+        return [...s.matchAll(/^    - "?([^"\n]+?)"?\s*$/gm)].map((x) => x[1]);
       })();
 
       let stageContent = readFileSync(stageFile, "utf-8");
@@ -238,6 +388,7 @@ try {
       stageContent = mergeListField(stageContent, "produces", listOf("produces"), target);
       stageContent = mergeListField(stageContent, "sensors", listOf("sensors"), target);
       stageContent = mergeConsumes(stageContent, consumes, target);
+      stageContent = mergeRequiredSections(stageContent, requiredSections, target);
 
       // prose fragments — paired positionally with the frontmatter fragments list.
       const body = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)$/)?.[1] ?? "";
@@ -245,27 +396,22 @@ try {
         .matchAll(/-\s*anchor:\s*(\S+)\s*\n\s*order:\s*(\d+)/g)].map((m) => ({ anchor: m[1], order: Number(m[2]) }));
       const blocks = [...body.matchAll(/^## fragment:\s*(\S+)\s*\n([\s\S]*?)(?=^## fragment:|$(?![\s\S]))/gm)]
         .map((m) => m[2].trim());
-      const frags = fragMeta.map((meta, i) => ({
+      const frags: Fragment[] = fragMeta.map((meta, i) => ({
         ...meta, bundle,
         prose: (blocks[i] ?? "").replaceAll("{{HARNESS_DIR}}", HARNESS_LEAF),
       })).filter((f) => f.prose);
 
-      // group by anchor, order by (order, bundle); idempotent via a sentinel marker.
-      const byAnchor = new Map<string, typeof frags>();
-      for (const f of frags) { (byAnchor.get(f.anchor) ?? byAnchor.set(f.anchor, []).get(f.anchor)!).push(f); }
-      for (const [anchor, list] of byAnchor) {
-        list.sort((a, b) => a.order - b.order || a.bundle.localeCompare(b.bundle));
-        const fresh = list.filter((f) => {
-          const marker = `<!-- plugin:${f.bundle}:${anchor}:${f.order} -->`;
-          return !stageContent.includes(marker);
-        });
-        if (fresh.length === 0) continue;
-        const at = locateAnchor(stageContent, anchor, target);
-        if (at === -1) continue;
-        const combined = fresh
-          .map((f) => `<!-- plugin:${f.bundle}:${anchor}:${f.order} -->\n${f.prose}`)
-          .join("\n\n");
-        stageContent = stageContent.slice(0, at) + "\n" + combined + "\n" + stageContent.slice(at);
+      // Splice each fragment at its ordered (order, bundle) slot. Detect a
+      // same-(bundle, anchor, order) collision WITHIN this contribution — the
+      // author guide promises this is a build error, so drop-with-log the dup
+      // rather than silently keeping only one.
+      const seen = new Set<string>();
+      const ordered = [...frags].sort((a, b) => a.order - b.order || a.bundle.localeCompare(b.bundle));
+      for (const f of ordered) {
+        const key = `${f.bundle}:${f.anchor}:${f.order}`;
+        if (seen.has(key)) { recordDrop(`contribution to ${target}: duplicate fragment ${key} (same bundle/anchor/order); second dropped`); continue; }
+        seen.add(key);
+        stageContent = spliceFragment(stageContent, f, target);
       }
 
       if (stageContent !== before) { // compare-before-write (review #11)
@@ -275,8 +421,28 @@ try {
     }
   }
 
-  // 3. Recompile only if something changed (short-circuit — review #7).
-  if (changed) {
+  // 3. Recompile when something changed OR when a prior compile did not land —
+  //    a transient failure (disk full, killed mid-session-start) must self-heal
+  //    next session. Under the no-clobber + sentinel + compare-before-write gates
+  //    `changed` stays false on reruns, so gating on `changed` alone would make a
+  //    failed compile permanent (round-2 major). Detect it by checking the
+  //    compiled graph actually contains this plugin's stage slugs.
+  const pluginSlugs: string[] = [];
+  for (const phase of PHASES) {
+    const dir = join(PLUGIN_ROOT, "stages", phase);
+    if (!existsSync(dir)) continue;
+    for (const f of readdirSync(dir)) if (f.endsWith(".md")) pluginSlugs.push(f.slice(0, -3));
+  }
+  const graphPath = join(HARNESS_DIR, "tools", "data", "stage-graph.json");
+  const graphMissingPluginStage = (() => {
+    if (pluginSlugs.length === 0) return false;
+    try {
+      const graph = JSON.parse(readFileSync(graphPath, "utf-8")) as Array<{ slug?: string }>;
+      const present = new Set(graph.map((s) => s.slug));
+      return pluginSlugs.some((s) => !present.has(s));
+    } catch { return true; } // unreadable/absent graph — compile
+  })();
+  if (changed || graphMissingPluginStage) {
     const bun = process.execPath;
     const r = spawnSync(bun, [join(HARNESS_DIR, "tools", "aidlc-graph.ts"), "compile"], {
       cwd: PROJECT_DIR, encoding: "utf-8",
@@ -287,3 +453,7 @@ try {
   recordDrop(`compose threw: ${e instanceof Error ? e.message : String(e)}`);
   // Non-fatal: never break the user's session over a compose failure.
 }
+
+// Flush any recorded drops to the installed hooks-health dir (--doctor surfaces
+// them). Best-effort — flushDrops swallows its own errors.
+await flushDrops();

@@ -110,4 +110,18 @@ export type HarnessManifest = {
   skipRunnerGen?: boolean;
   /** Optional per-shell emission plugin (codex only today). */
   emit: ((ctx: EmitContext) => EmitResult) | null;
+  /**
+   * How AIDLC plugins project into THIS harness (the hybrid delivery seam).
+   * Optional: when omitted, the packager derives a sensible default from
+   * `harnessDir` (manifestDir = "<harnessDir>-plugin", kind = "store"), so a
+   * NEW harness added per the one-core-many-harnesses promise automatically
+   * gets a plugin projection instead of being silently skipped. A harness with
+   * no host plugin store (folder-drop + hook, like Kiro) sets kind "kiro".
+   */
+  plugin?: {
+    /** Host plugin-manifest dir name (".claude-plugin", ".codex-plugin", ".kiro-plugin"). */
+    manifestDir: string;
+    /** "store" = host plugin store (Claude/Codex); "kiro" = folder-drop + .kiro.hook. */
+    kind: "store" | "kiro";
+  };
 };

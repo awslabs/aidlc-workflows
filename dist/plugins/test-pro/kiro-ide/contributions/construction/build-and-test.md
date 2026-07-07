@@ -8,8 +8,6 @@ adds:
     - test-pro-api-contract-instructions
     - test-pro-regression-suite
     - test-pro-requirement-traceability-matrix
-    - test-pro-test-results
-    - test-pro-coverage-summary
   consumes:
     - artifact: test-pro-testability-requirements
       required: false
@@ -82,12 +80,16 @@ is a gap to flag.
 
 ### Step 10b (test-pro): Emit machine-readable results
 
-After executing the build and tests, emit two machine-readable artifacts the
-advisory test-pro sensors read:
+After executing the build and tests, emit two machine-readable JSON files the
+advisory test-pro sensors read. These are sensor SIDE-INPUTS, not stage
+deliverables — they are not in `produces:` (which resolves to `.md` artifacts);
+write them beside this stage's other outputs, under the engine-resolved record
+dir (`<record>/construction/build-and-test/`, the same dir the stage's `.md`
+artifacts land in):
 
-- `aidlc-docs/construction/build-and-test/test-pro-test-results.json` —
+- `test-pro-test-results.json` —
   `{ "tests": [...], "requirements": { "<req-id>": { "covered": <bool>, "test_ids": [...] } }, "summary": { "total": n, "passed": n, "failed": n } }`
-- `aidlc-docs/construction/build-and-test/test-pro-coverage-summary.json` —
+- `test-pro-coverage-summary.json` —
   `{ "line_pct": <n>, "branch_pct": <n>, "targets": { "line": 80, "branch": 70 } }`
 
 ## fragment: in:Sensors

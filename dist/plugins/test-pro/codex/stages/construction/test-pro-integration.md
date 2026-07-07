@@ -26,7 +26,7 @@ scopes:
   - mvp
   - workshop
 inputs: All per-unit build/test outputs and the regression suite from build-and-test
-outputs: aidlc-docs/construction/test-pro-integration/test-pro-integration-test-plan.md, aidlc-docs/construction/test-pro-integration/test-pro-integration-test-results.md, aidlc-docs/construction/test-pro-integration/test-pro-cross-unit-contract-matrix.md
+outputs: test-pro-integration-test-plan.md, test-pro-integration-test-results.md, test-pro-cross-unit-contract-matrix.md (under this stage's record dir, engine-resolved)
 ---
 
 # Cross-Unit Integration Testing
@@ -45,8 +45,8 @@ Load aidlc-quality-agent persona from `agents/aidlc-quality-agent.md` and knowle
 
 ### Step 2: Read All Per-Unit Outputs
 
-Read every unit's code summary and build-and-test output from
-`aidlc-docs/construction/*/` and the cross-unit `build-and-test-summary`. Build
+Read every unit's code summary and build-and-test output from the per-unit
+construction record dirs and the cross-unit `build-and-test-summary`. Build
 the cross-unit view: which units call which, the shared contracts, the data that
 crosses unit boundaries.
 
@@ -70,22 +70,22 @@ each failure touches).
 
 ### Step 6: Update State
 
-Mark test-pro-integration as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Update `<record>/aidlc-state.md`: mark test-pro-integration as `[x]` completed and update "Current Status".
 
 ### Step 7: Present Completion & Request Approval
 
 Completion emoji: :link:
-Review path: `aidlc-docs/construction/test-pro-integration/`
+Review path: this stage's engine-resolved record dir.
 Standard 2-option approval (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/construction/test-pro-integration/`. The imported `required-sections` and `upstream-coverage` sensors check those outputs.
+This stage's outputs are markdown artefacts under its record dir. The imported `required-sections` and `upstream-coverage` sensors check those outputs.
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under: Interpretations, Deviations, Tradeoffs, Open questions —
 each with an ISO 8601 timestamp.
 

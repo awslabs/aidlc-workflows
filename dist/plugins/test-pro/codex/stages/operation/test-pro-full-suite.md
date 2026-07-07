@@ -27,7 +27,7 @@ scopes:
 when:
   producer-in-plan: test-pro-regression-suite
 inputs: Deployed environment coordinates, the construction regression suite, and integration results
-outputs: aidlc-docs/operation/test-pro-full-suite/test-pro-full-suite-results.md, aidlc-docs/operation/test-pro-full-suite/test-pro-edge-api-report.md
+outputs: test-pro-full-suite-results.md, test-pro-edge-api-report.md (under this stage's record dir, engine-resolved)
 ---
 
 # Full Test Suite Execution
@@ -62,22 +62,22 @@ with any failures and the requirement each touches).
 
 ### Step 5: Update State
 
-Mark test-pro-full-suite as `[x]` completed in `aidlc-docs/aidlc-state.md`.
+Update `<record>/aidlc-state.md`: mark test-pro-full-suite as `[x]` completed and update "Current Status".
 
 ### Step 6: Present Completion & Request Approval
 
 Completion emoji: :test_tube:
-Review path: `aidlc-docs/operation/test-pro-full-suite/`
+Review path: this stage's engine-resolved record dir.
 Standard 2-option approval (Approve / Request Changes).
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `aidlc-docs/operation/test-pro-full-suite/`. The imported `required-sections` and `upstream-coverage` sensors check those outputs.
+This stage's outputs are markdown artefacts under its record dir. The imported `required-sections` and `upstream-coverage` sensors check those outputs.
 
 ## Learn
 
 While running this stage, maintain a running log in
-`aidlc-docs/<phase>/<stage>/memory.md` (create on stage start if absent).
+`<record>/<phase>/<stage>/memory.md` (create on stage start if absent).
 Append entries under: Interpretations, Deviations, Tradeoffs, Open questions —
 each with an ISO 8601 timestamp.
 

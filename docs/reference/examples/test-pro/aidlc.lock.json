@@ -1,10 +1,10 @@
 {
-  "$comment": "EXAMPLE aidlc.lock for an install that chose the test-pro plugin. Written by `aidlc plugin add test-pro` (the installer is future work — doc 21 §B.6). Pins everything that determines the composed result, so `aidlc plugin sync` reproduces a byte-identical install on another machine. The sha256 values below are ILLUSTRATIVE placeholders.",
+  "$comment": "EXAMPLE aidlc.lock for an install that chose the test-pro plugin. Would be written by `aidlc plugin add test-pro` — the installer and lockfile writer are FUTURE WORK (doc 18 §8 Status); nothing reads or writes a lockfile today. Pins everything that determines the composed result, so a future `aidlc plugin sync` could reproduce a byte-identical install. The sha256 values below are ILLUSTRATIVE placeholders.",
   "lockfileVersion": 1,
   "harness": "claude",
   "composer": {
     "version": "2.1.0",
-    "$comment": "the AIDLC composer that produced this install (doc 21 §B.7)"
+    "$comment": "the AIDLC composer that produced this install (doc 18 §8 Status — future work)"
   },
   "core": {
     "version": "2.0.8",

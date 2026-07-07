@@ -95,6 +95,9 @@ const manifest: HarnessManifest = {
   authoredExempt: [/^agents\/[^/]+\.json$/, /^hooks\/aidlc-kiro-[^/]+\.ts$/, /^hooks\/[^/]+\.kiro\.hook$/],
 
   emit: null,
+
+  // Folder-drop + .kiro.hook, same as Kiro CLI (both .kiro trees). No host store.
+  plugin: { manifestDir: ".kiro-plugin", kind: "kiro" },
 };
 
 export default manifest;

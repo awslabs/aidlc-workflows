@@ -3221,9 +3221,11 @@ export function parseStageFrontmatter(
     if (key === CONSUMES_KEY) continue;
     if (key === WHEN_KEY) continue;
     if (ARRAY_KEYS.has(key)) continue;
-    // optional_produces is a presence-gated array field parsed below; skip it
-    // here so the scalar loop does not stamp it with an empty-string value.
+    // optional_produces and required_sections are presence-gated array fields
+    // parsed below; skip them here so the scalar loop does not stamp them with
+    // an empty-string value.
     if (key === "optional_produces") continue;
+    if (key === "required_sections") continue;
     // The key was discovered at the start of some line, so it IS
     // present. scalarField returns "" for both absent AND empty-quoted
     // ("") — since we know it's present, assign the result
@@ -3251,6 +3253,16 @@ export function parseStageFrontmatter(
   // `produces:` block and vice versa.
   if (topLevelKeys.has("optional_produces")) {
     obj.optional_produces = listField(fm, "optional_produces");
+  }
+
+  // required_sections is an OPTIONAL array field (plugin contribution mechanism
+  // §6): named `## ` H2 sections a stage's output must contain. Absent key ->
+  // absent property, so core stages that don't author it stay byte-identical.
+  // Without this, an authored `required_sections:` block list would fall to the
+  // scalar loop and parse as the string "- ...", failing schema validation with
+  // "required_sections must be array, got string".
+  if (topLevelKeys.has("required_sections")) {
+    obj.required_sections = listField(fm, "required_sections");
   }
 
   // reviewer_max_iterations is the one numeric scalar field. The generic
