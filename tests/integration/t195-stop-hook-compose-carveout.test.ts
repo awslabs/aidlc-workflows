@@ -42,9 +42,13 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-// The hook and this test agree on the freshness window through the shipped lib
-// constant, so the stale-marker backdate is derived from it, not a magic number.
-import { COMPOSE_MARKER_TTL_MS } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+// The hook and this test agree on the marker path and the freshness window
+// through the shipped lib exports, so neither the spelling nor the stale-marker
+// backdate can drift from the hook (no magic strings or numbers here).
+import {
+  composeMarkerPath,
+  COMPOSE_MARKER_TTL_MS,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -102,7 +106,7 @@ function seedActive(proj: string, opts: { autonomy?: string } = {}): void {
   );
 }
 
-const markerPath = (proj: string): string => join(proj, "aidlc", ".aidlc-compose-pending");
+const markerPath = composeMarkerPath;
 
 function runHook(proj: string): { rc: number; out: string } {
   const res = spawnSync(BUN, [HOOK_TS], {

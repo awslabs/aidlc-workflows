@@ -770,21 +770,25 @@ function handleDoctor(projectDir: string): void {
   // the compose marker before an in-flight compose gate and deletes it on
   // resolve; the Stop hook treats a FRESH marker as a carve-out (the turn may
   // end at the gate). A crash between write and resolve can leave the marker on
-  // disk, so doctor flags a present marker with its age and the remediation
-  // (delete it if no compose gate is actually pending). The age is compared to
-  // the shared freshness window so the label says whether the Stop hook still
-  // honours it (fresh) or has begun ignoring it (stale). Silent when absent (no
-  // marker means nothing to report). Read-only: doctor never deletes it (the Stop
-  // hook is the janitor for a stale one). No behavior change.
+  // disk, so doctor reports a present marker with its age and the remediation
+  // (delete it if no compose gate is actually pending). Pass/fail follows the
+  // shared freshness window: a FRESH marker is the normal state while a compose
+  // gate is legitimately open (written before the gate, deleted on resolve), so
+  // it renders as an advisory pass (running doctor in a second terminal during
+  // a live gate must not exit 1 on a healthy workspace). Only a STALE marker
+  // (older than the TTL, i.e. an orphan the Stop hook has begun ignoring) is a
+  // fault. Silent when absent (no marker means nothing to report). Read-only:
+  // doctor never deletes it (the Stop hook is the janitor for a stale one).
   try {
     const composeMarker = composeMarkerPath(projectDir);
     if (existsSync(composeMarker)) {
       const ageMs = Date.now() - statSync(composeMarker).mtimeMs;
       const ageHours = Math.floor(ageMs / (60 * 60 * 1000));
       const ageLabel = ageHours >= 1 ? `${ageHours}h old` : "under 1h old";
-      const staleLabel = ageMs > COMPOSE_MARKER_TTL_MS ? ", stale" : ", fresh";
+      const stale = ageMs > COMPOSE_MARKER_TTL_MS;
+      const staleLabel = stale ? ", stale" : ", fresh";
       results.push({
-        pass: false,
+        pass: !stale,
         label: `Compose marker present (aidlc/.aidlc-compose-pending, ${ageLabel}${staleLabel})`,
         fix: "if no in-flight compose gate is actually pending, delete it ('rm aidlc/.aidlc-compose-pending') or resolve the pending gate. A stale marker no longer disables the Stop hook, but it should not linger.",
       });
