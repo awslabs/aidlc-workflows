@@ -773,6 +773,25 @@ The installer automatically detects your workspace root and installs the hook to
 
 ---
 
+### AIDLC Code Reviewer
+
+> [!NOTE]
+> The AIDLC Code Reviewer lives in its own repository:
+> **[aws-samples/sample-aidlc-code-reviewer](https://github.com/aws-samples/sample-aidlc-code-reviewer)**.
+> It was previously maintained under `scripts/aidlc-codereview/` in this repo and has since moved out.
+
+Agent-native code review toolkit for AIDLC projects. It pairs local static analysis with assistant-guided review phases — the assistant does the reasoning while local Python tools handle discovery, static tool execution, normalization, scoring, and Markdown/HTML report generation.
+
+**Features:**
+
+- **Three review phases** — critical technical findings, structure critique, and business logic review
+- **Static + AI analysis** — combines tools such as `ruff`, `mypy`, and `bandit` with AI-powered critique, with attribution badges (`AI`, `Static`, `AI + Static`)
+- **Multi-assistant support** — Claude Code, Kiro, GitHub Copilot, and Codex
+
+**Documentation:** See [aws-samples/sample-aidlc-code-reviewer](https://github.com/aws-samples/sample-aidlc-code-reviewer) for installation and usage.
+
+---
+
 ## Tenets
 
 These are our core principles to guide our decision making.
