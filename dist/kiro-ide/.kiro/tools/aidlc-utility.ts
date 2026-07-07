@@ -1764,6 +1764,9 @@ const LANG_BY_EXT: Record<string, string> = {
 };
 
 const SCAN_SOURCE_DIRS = ["src", "app", "lib", "pages", "components", "tests"];
+// Set view for the sweep-side skip in scanSignals: the depth-6 recurse there
+// is the SOLE counter for these dirs, so the file sweep must never enter them.
+const SCAN_SOURCE_DIR_SET: ReadonlySet<string> = new Set(SCAN_SOURCE_DIRS);
 const SCAN_EXCLUDE = new Set([
   ".claude",
   ".kiro",
@@ -1806,13 +1809,22 @@ const NESTED_SCAN_EXCLUDE = new Set([
   "example",
   "samples",
   "sample",
+  "demos",
+  "demo",
+  "reference",
+  "testdata",
+  "fixtures",
+  "templates",
   "scripts",
 ]);
 
+// skipDirs: directory names to skip at THIS level only (not propagated into
+// the recursion); the caller counts those dirs through a separate deeper call.
 function countFilesByLang(
   dir: string,
   counts: Record<string, number>,
-  maxDepth: number
+  maxDepth: number,
+  skipDirs?: ReadonlySet<string>
 ): void {
   if (maxDepth < 0) return;
   let entries: string[];
@@ -1833,6 +1845,7 @@ function countFilesByLang(
     // Don't follow symlinks — cycle protection.
     if (st.isSymbolicLink()) continue;
     if (st.isDirectory()) {
+      if (skipDirs?.has(entry)) continue;
       countFilesByLang(full, counts, maxDepth - 1);
     } else if (st.isFile()) {
       const dot = entry.lastIndexOf(".");
@@ -1959,8 +1972,11 @@ function hasNonDevDeps(projectDir: string): boolean {
 //       countFilesByLang(dir, counts, 0), same SCAN_EXCLUDE filter + symlink
 //       skip, files only) PLUS a depth-6 recurse into each present
 //       SCAN_SOURCE_DIRS entry.
-//     - a nested container: 6, scanning the whole container one level in so a
-//       project under `wordbook/src/**` or `backend/server/**` is seen.
+//     - a nested container: 1, sweeping the container's own files plus one
+//       level of arbitrary subdirs so a project under `wordbook/**` or
+//       `backend/server/**` is seen. A present SCAN_SOURCE_DIRS entry is
+//       skipped by the sweep: the depth-6 recurse below is its only counter,
+//       so files directly under it are never counted twice.
 interface DirSignals {
   brownfield: boolean;
   langCounts: Record<string, number>;
@@ -1980,9 +1996,14 @@ function scanSignals(dir: string, fileScanDepth: number): DirSignals {
   // Source-file count. countFilesByLang(dir, counts, 0) counts files directly
   // under dir (its recursion guard returns immediately at depth -1), matching
   // the base top-level file sweep. Any present known source dir is then
-  // recursed at the base depth cap.
+  // recursed at the base depth cap. The sweep itself never enters a
+  // SCAN_SOURCE_DIRS entry: at depth 1 (the nested-container scan) it would
+  // count the files directly under <dir>/src etc. that the depth-6 recurse
+  // below counts again, inflating that language and potentially flipping the
+  // reported primary. (At the root's depth 0 the skip is a no-op: the sweep
+  // never enters subdirs there.)
   const langCounts: Record<string, number> = {};
-  countFilesByLang(dir, langCounts, fileScanDepth);
+  countFilesByLang(dir, langCounts, fileScanDepth, SCAN_SOURCE_DIR_SET);
   for (const dirName of SCAN_SOURCE_DIRS) {
     if (entrySet.has(dirName)) {
       countFilesByLang(join(dir, dirName), langCounts, 6);

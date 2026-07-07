@@ -83,9 +83,31 @@ describe("t203 nested-project detection (the depth-1 fallback)", () => {
     const scan = detectWorkspace(d);
     expect(scan.projectType).toBe("Brownfield");
     expect(scan.nestedRoot).toBe("wordbook");
-    // The nested subdir's findings merge into the result.
-    expect(scan.languages).toContain("TypeScript");
+    // The nested subdir's findings merge into the result. Pinned EXACT so a
+    // count inflation (each file seen once and only once) cannot hide.
+    expect(scan.languages).toBe("TypeScript");
     expect(scan.frameworks).toContain("React");
+  });
+
+  test("nested source-dir files are counted ONCE: 4 top-level .py beat 3 .ts under src/", () => {
+    // Regression pin for the depth-1 double count: the container file sweep
+    // used to enter <sub>/src at depth 1 AND the SCAN_SOURCE_DIRS recurse
+    // counted it again, doubling TypeScript (3 -> 6) past Python (4) and
+    // flipping the reported primary language. The same layout at the root
+    // already reported Python; nested must agree.
+    const d = tmp();
+    for (const f of ["a", "b", "c", "e"]) {
+      put(d, ["engine", `${f}.py`], "print(1)\n");
+    }
+    for (const f of ["x", "y", "z"]) {
+      put(d, ["engine", "src", `${f}.ts`], "export const v = 1;\n");
+    }
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Brownfield");
+    expect(scan.nestedRoot).toBe("engine");
+    // Python (4) primary, TypeScript (3) secondary (>= 20% threshold). The
+    // doubled count would report "TypeScript, Python".
+    expect(scan.languages).toBe("Python, TypeScript");
   });
 
   test("deep backend/server/main.go -> Brownfield with nestedRoot", () => {
@@ -94,7 +116,7 @@ describe("t203 nested-project detection (the depth-1 fallback)", () => {
     const scan = detectWorkspace(d);
     expect(scan.projectType).toBe("Brownfield");
     expect(scan.nestedRoot).toBe("backend");
-    expect(scan.languages).toContain("Go");
+    expect(scan.languages).toBe("Go");
   });
 
   test("manifest-only svc/go.mod -> Brownfield (manifest signal, no source files)", () => {
@@ -119,12 +141,23 @@ describe("t203 nested-project detection (the depth-1 fallback)", () => {
     const scan = detectWorkspace(d);
     expect(scan.projectType).toBe("Brownfield");
     expect(scan.nestedRoot).toBeUndefined();
-    expect(scan.languages).toContain("TypeScript");
+    expect(scan.languages).toBe("TypeScript");
   });
 
-  test("excluded-dirs-only (docs, examples, scripts, .github) -> Greenfield (no false positive)", () => {
+  test("excluded-dirs-only (docs, examples, demo, fixtures, ...) -> Greenfield (no false positive)", () => {
     const d = tmp();
-    for (const dir of ["docs", "examples", "scripts", ".github"]) {
+    for (const dir of [
+      "docs",
+      "examples",
+      "scripts",
+      ".github",
+      "demo",
+      "demos",
+      "reference",
+      "testdata",
+      "fixtures",
+      "templates",
+    ]) {
       put(d, [dir, "sample.py"], "print(1)\n");
     }
     const scan = detectWorkspace(d);
@@ -197,6 +230,16 @@ describe("t203 greenfield advisory (incremental scopes, no routing override)", (
     expect(stderr.toLowerCase()).toContain("greenfield");
     expect(stderr).toContain("Project Type");
   });
+
+  test.each(["refactor", "security-patch"])(
+    "%s on an empty workspace also emits the advisory (all three incremental scopes covered)",
+    (scope: string) => {
+      const { stderr, stateFile } = birth(scope);
+      expect(stateFile).toContain("- **Project Type**: Greenfield");
+      expect(stderr).toContain(`scope "${scope}"`);
+      expect(stderr).toContain("usually targets existing code");
+    },
+  );
 
   test("poc on an empty workspace stays Greenfield and emits NO advisory (not an incremental scope)", () => {
     const { stderr, stateFile } = birth("poc");
