@@ -7,6 +7,8 @@ All notable changes to this project will be documented in this file.
 An autonomous Construction run now advances through every Bolt batch of a multi-batch swarm instead of stalling on the first. Previously, once the first parallel batch merged, the engine re-emitted that same batch forever and the run could not reach the later batches or the stage's approval gate; any project whose Units of Work have dependency edges (more than one topological batch) hit this. The engine now climbs the compiled Bolt DAG batch by batch, re-fanning only the units a partially-converged batch still owes, and presents the single stage gate once every batch has converged. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
 
 * Autonomous Construction (`Construction Autonomy Mode: autonomous`) with a multi-batch Bolt DAG now progresses: `next` emits the next unconverged batch as `invoke-swarm`, then presents the stage's approval gate after the final batch converges, rather than re-emitting the first batch indefinitely.
+* The converged-unit read is scoped to the stage's current run: rows recorded before the stage's latest start (a backward/redo jump re-running Construction with the same unit names) no longer count as coverage, so a re-run rebuilds its batches instead of silently settling on the prior run's ledger.
+* `aidlc-swarm.ts finalize` no longer records `SWARM_UNIT_CONVERGED` for a converged unit whose merge-back failed (named in the envelope's `merge_failures`, exit 2). Resolve the blocker and re-run `finalize` scoped to that unit - the worktree is preserved; do not re-run `prepare` for it.
 * Single-batch autonomous swarms and gated (non-autonomous) Construction are unchanged.
 
 ## [2.2.4] - 2026-07-05

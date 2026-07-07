@@ -334,7 +334,7 @@ Pre-registered for v0.6.0 in milestone 2. All six swarm events now emit from the
 | Event | Emitter | Trigger |
 |---|---|---|
 | `SWARM_STARTED` | `tools/aidlc-swarm.ts` | Swarm referee `prepare` forked a batch of dependency-linked Units |
-| `SWARM_UNIT_CONVERGED` | `tools/aidlc-swarm.ts` | A swarm Unit re-verified green (and untampered) at the `finalize` gate |
+| `SWARM_UNIT_CONVERGED` | `tools/aidlc-swarm.ts` | A swarm Unit re-verified green (and untampered) at the `finalize` gate and merged back (a converged unit whose merge-back failed gets no row until a finalize retry merges it) |
 | `SWARM_UNIT_FAILED` | `tools/aidlc-swarm.ts` | A swarm Unit failed the `finalize` re-verify (not claimed, claimed-but-red, or tampered) |
 | `SWARM_BATON_RETURNED` | `tools/aidlc-swarm.ts` | A swarm Unit returned the baton to the conductor for orchestrator-mediated coordination |
 | `SWARM_COMPLETED` | `tools/aidlc-swarm.ts` | All Units in the batch finished (converged or failed); batch closed |

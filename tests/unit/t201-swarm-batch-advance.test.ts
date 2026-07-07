@@ -45,7 +45,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -136,26 +136,67 @@ function seedMultiBatchDag(proj: string, batches: string[][]): void {
 }
 
 /**
- * Append SWARM_UNIT_CONVERGED audit rows (one per unit) into the deterministic
- * audit shard, in the exact `\n## <heading>\n**Timestamp**: …\n**Event**: …\n…\n
- * ---\n` block shape appendAuditEntryUnlocked writes, so findAllEvents +
- * auditBlockField parse them the way they parse a real finalize's rows. `ts` is
- * a monotonically-increasing suffix so the blocks carry distinct timestamps.
+ * One audit block in the exact `\n## <heading>\n**Timestamp**: …\n**Event**: …\n
+ * …\n---\n` shape appendAuditEntryUnlocked writes, so findAllEvents +
+ * auditBlockField parse it the way they parse a real emitter's rows.
  */
-function seedConverged(proj: string, units: string[]): void {
+function auditBlock(
+  heading: string,
+  ts: string,
+  event: string,
+  fields: [string, string][],
+): string {
+  let body = `\n## ${heading}\n`;
+  body += `**Timestamp**: ${ts}\n`;
+  body += `**Event**: ${event}\n`;
+  for (const [k, v] of fields) body += `**${k}**: ${v}\n`;
+  return `${body}\n---\n`;
+}
+
+/** Append raw block content to the deterministic audit shard. */
+function appendShard(proj: string, content: string): void {
   const shard = seededAuditShard(proj);
   mkdirSync(dirname(shard), { recursive: true });
+  writeFileSync(shard, content, { flag: "a" });
+}
+
+/**
+ * Append SWARM_UNIT_CONVERGED audit rows (one per unit) into the deterministic
+ * audit shard, exactly the way a real finalize's rows would look. `atSecond`
+ * offsets the (monotonically-increasing) timestamps so a caller can place rows
+ * before or after a seeded STAGE_STARTED floor; the default keeps the original
+ * base the pre-floor cases used.
+ */
+function seedConverged(proj: string, units: string[], atSecond = 0): void {
   let body = "";
   units.forEach((unit, i) => {
-    const ts = `2026-07-05T00:00:0${i}.000Z`;
-    body += `\n## Swarm Unit Converged\n`;
-    body += `**Timestamp**: ${ts}\n`;
-    body += `**Event**: SWARM_UNIT_CONVERGED\n`;
-    body += `**Batch number**: 1\n`;
-    body += `**Unit name**: ${unit}\n`;
-    body += `\n---\n`;
+    const ts = `2026-07-05T00:00:${String(atSecond + i).padStart(2, "0")}.000Z`;
+    body += auditBlock("Swarm Unit Converged", ts, "SWARM_UNIT_CONVERGED", [
+      ["Batch number", "1"],
+      ["Unit name", unit],
+    ]);
   });
-  writeFileSync(shard, body);
+  appendShard(proj, body);
+}
+
+/**
+ * Append a STAGE_STARTED row for a slug — the freshness floor the converged-set
+ * reader keys on. `workflow` mirrors the synthetic `Workflow: single-stage:<slug>`
+ * tag a --single stage-runner row carries (absent on main-workflow rows).
+ */
+function seedStageStarted(
+  proj: string,
+  slug: string,
+  atSecond: number,
+  workflow?: string,
+): void {
+  const ts = `2026-07-05T00:00:${String(atSecond).padStart(2, "0")}.000Z`;
+  const fields: [string, string][] = [
+    ["Stage", slug],
+    ["Agent", "aidlc-developer-agent"],
+  ];
+  if (workflow) fields.push(["Workflow", workflow]);
+  appendShard(proj, auditBlock("Stage Start", ts, "STAGE_STARTED", fields));
 }
 
 /** Seed a fresh autonomous Construction project at code-generation. */
@@ -233,5 +274,76 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["b"]);
+  }, 30000);
+});
+
+describe("t201 converged-set freshness floor (stage re-run replay guard)", () => {
+  // The audit is append-only and per-intent, and the stage can re-run within
+  // the same intent (backward/redo jump resets checkboxes but never deletes
+  // ledger rows, and the autonomy grant survives the jump). The converged set
+  // is therefore FLOORED at the stage's latest main-workflow STAGE_STARTED:
+  // rows older than the floor belong to a prior run and are not coverage.
+
+  // 5: the replay scenario itself. Every unit converged in a prior run, then
+  // the stage re-entered (a fresh STAGE_STARTED lands after those rows). The
+  // stale rows must NOT settle the stage - the swarm re-fans batch 1.
+  test("5: converged rows older than the stage's latest STAGE_STARTED are ignored", () => {
+    const proj = seedProject();
+    seedMultiBatchDag(proj, [["auth"], ["api"]]);
+    seedConverged(proj, ["auth", "api"]); // prior run, seconds 0-1
+    seedStageStarted(proj, "code-generation", 10); // re-entry floor
+    const d = runNext(proj);
+    expect(d.kind).toBe("invoke-swarm");
+    expect(d.units).toEqual(["auth"]);
+  }, 30000);
+
+  // 6: rows AFTER the floor are the current run's coverage - the normal flow
+  // with the floor present. Also proves earlier-batch rows from the same run
+  // are never orphaned (no new STAGE_STARTED fires between batches).
+  test("6: converged rows newer than the floor still advance the batches", () => {
+    const proj = seedProject();
+    seedMultiBatchDag(proj, [["auth"], ["api"]]);
+    seedStageStarted(proj, "code-generation", 0);
+    seedConverged(proj, ["auth"], 10);
+    const d = runNext(proj);
+    expect(d.kind).toBe("invoke-swarm");
+    expect(d.units).toEqual(["api"]);
+  }, 30000);
+
+  // 7: a --single stage-runner's STAGE_STARTED carries the synthetic
+  // `Workflow: single-stage:<slug>` tag and must NOT move the floor - it
+  // belongs to no main workflow (mirrors hasStageAuditEvent's filter).
+  test("7: a single-stage-runner STAGE_STARTED does not move the floor", () => {
+    const proj = seedProject();
+    seedMultiBatchDag(proj, [["auth"], ["api"]]);
+    seedConverged(proj, ["auth", "api"]); // seconds 0-1
+    seedStageStarted(proj, "code-generation", 10, "single-stage:code-generation");
+    const d = runNext(proj);
+    // The single-stage row is not a floor, so the converged rows still count:
+    // every batch converged -> settle directive, not a re-fan.
+    expect(d.kind).toBe("run-stage");
+    expect(d.gate).toBe(true);
+  }, 30000);
+
+  // 8: a STAGE_STARTED for a DIFFERENT slug is not this stage's floor.
+  test("8: another stage's STAGE_STARTED does not move the floor", () => {
+    const proj = seedProject();
+    seedMultiBatchDag(proj, [["auth"], ["api"]]);
+    seedConverged(proj, ["auth", "api"]); // seconds 0-1
+    seedStageStarted(proj, "build-and-test", 10);
+    const d = runNext(proj);
+    expect(d.kind).toBe("run-stage");
+    expect(d.gate).toBe(true);
+  }, 30000);
+
+  // 9: no qualifying STAGE_STARTED at all -> the floor degrades to "count all
+  // rows" (never to "exclude all"), preserving cases 1-4's fixture shape.
+  test("9: with no STAGE_STARTED row the converged set counts every row", () => {
+    const proj = seedProject();
+    seedMultiBatchDag(proj, [["auth"], ["api"]]);
+    seedConverged(proj, ["auth", "api"]);
+    const d = runNext(proj);
+    expect(d.kind).toBe("run-stage");
+    expect(d.gate).toBe(true);
   }, 30000);
 });

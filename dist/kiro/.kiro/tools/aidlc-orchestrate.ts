@@ -717,11 +717,34 @@ function readBoltDagBatches(projectDir: string): string[][] | null {
 // main checkout, one per genuinely-converged unit, each carrying `Unit name`.
 // Composes the same shard-concat + block-parse the other audit readers use; an
 // absent/empty audit yields the empty set (no batch has converged yet).
-function swarmConvergedUnits(projectDir: string): Set<string> {
+//
+// The read is FLOORED at the stage's latest STAGE_STARTED row. The audit is
+// append-only and per-intent, and the stage CAN legitimately re-run within the
+// same intent with the same unit names: a backward/redo jump resets completed
+// stages to pending without touching the ledger (and without clearing the
+// autonomy grant), and a re-init appends a second WORKFLOW_STARTED to the same
+// shards. Without the floor, the prior run's converged rows would make the
+// fresh run's batches look already built and the rebuild would be silently
+// skipped. Every (re-)entry into the stage lands a fresh STAGE_STARTED naming
+// the slug (advance and jump both emit it), and no STAGE_STARTED fires between
+// batches of one run, so the floor admits exactly the current run's rows.
+// Mirrors hasStageAuditEvent's boundary idiom (aidlc-state.ts): rows from a
+// `--single` stage-runner carry `Workflow: single-stage:<slug>` and never move
+// the floor; with no qualifying STAGE_STARTED the floor degrades to "count all
+// rows", never to "exclude all".
+function swarmConvergedUnits(projectDir: string, slug: string): Set<string> {
   const audit = readAllAuditShards(projectDir);
   if (!audit) return new Set();
+  let since = "";
+  for (const ev of findAllEvents(audit, "STAGE_STARTED")) {
+    if (auditBlockField(ev.block, "Workflow")?.startsWith("single-stage:")) continue;
+    if (auditBlockField(ev.block, "Stage") !== slug) continue;
+    // findAllEvents returns chronological order; keep the latest.
+    since = ev.timestamp;
+  }
   const converged = new Set<string>();
-  for (const { block } of findAllEvents(audit, "SWARM_UNIT_CONVERGED")) {
+  for (const { timestamp, block } of findAllEvents(audit, "SWARM_UNIT_CONVERGED")) {
+    if (since && timestamp < since) continue;
     const unit = auditBlockField(block, "Unit name");
     if (unit) converged.add(unit);
   }
@@ -1775,8 +1798,10 @@ function tryEmitSwarm(
   if (!batches || batches.length === 0) return false;
 
   // Select the first topological batch with an unconverged unit; emit only that
-  // batch's still-owed units. Ledger signal = SWARM_UNIT_CONVERGED (see above).
-  const converged = swarmConvergedUnits(projectDir);
+  // batch's still-owed units. Ledger signal = SWARM_UNIT_CONVERGED (see above),
+  // floored at this stage's latest STAGE_STARTED so a jump-driven re-run never
+  // reads a prior run's rows as coverage.
+  const converged = swarmConvergedUnits(projectDir, slug);
   let pendingUnits: string[] | null = null;
   for (const batch of batches) {
     if (!Array.isArray(batch) || batch.length === 0) continue;

@@ -599,10 +599,18 @@ function handleFinalize(rest: string[]): void {
   }
 
   // Authoritative audit trail: one row per unit, the baton per failed unit, the
-  // batch tally to close.
+  // batch tally to close. A converged unit whose merge-back FAILED gets no
+  // SWARM_UNIT_CONVERGED row: that row is the engine's batch-advance signal, and
+  // emitting it for a unit whose metadata never landed on main would advance the
+  // run past an unmerged unit. It gets no SWARM_UNIT_FAILED row either - the
+  // unit did converge; the failure envelope + exit 2 carry the merge outcome.
+  // The row lands when a finalize retry scoped to that unit merges cleanly (the
+  // worktree is preserved and release-merge is idempotent, so the retry is a
+  // pure re-invocation - no prepare).
+  const mergeFailed = new Set(mergeFailures.map((f) => f.unit));
   for (const r of results) {
     if (r.status === "converged") {
-      emitUnitConverged(projectDir, batch, r.unit);
+      if (!mergeFailed.has(r.unit)) emitUnitConverged(projectDir, batch, r.unit);
     } else {
       emitUnitFailed(projectDir, batch, r.unit, r.reason ?? "error");
       emitBoltFailed(projectDir, r.unit, r.detail ?? `unit "${r.unit}" failed: ${r.reason}`);

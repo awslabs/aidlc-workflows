@@ -36,7 +36,9 @@
 //     with reason "error". A DECLINED (unclaimed) unit carries the conductor's
 //     --reasons attribution (:463-477,:523), defaulting to "cap-exhausted".
 //     Merges the genuine passes (serialised, :541), then emits one
-//     SWARM_UNIT_CONVERGED / SWARM_UNIT_FAILED row per unit, a
+//     SWARM_UNIT_CONVERGED / SWARM_UNIT_FAILED row per unit (except a
+//     converged unit whose merge-back failed, which gets NEITHER row: its
+//     converged row lands only when a finalize retry merges it), a
 //     SWARM_BATON_RETURNED per failed unit, and a closing SWARM_COMPLETED
 //     (:555-570); prints the pretty-printed envelope and exits 2 if any unit or
 //     merge failed, else 0 (:582).
@@ -76,10 +78,11 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
+  DEFAULT_RECORD_DIR,
   FIXTURES_DIR,
   cleanupWorktreeFixture,
   seededAuditDir,
@@ -534,5 +537,58 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     // "error", never the laundered "unsatisfiable".
     expect(sneaky.reason).toBe("error");
     expect(sneaky.reason).not.toBe("unsatisfiable");
+  }, 120000);
+
+  // ===========================================================================
+  // Case 14: a converged unit whose MERGE-BACK failed gets NO SWARM_UNIT_CONVERGED
+  // row. That row is the engine's batch-advance signal; emitting it for a unit
+  // whose metadata never landed on main would advance the run past an unmerged
+  // unit. It gets no SWARM_UNIT_FAILED row either (the unit did converge) — the
+  // failure envelope + exit 2 carry the merge outcome, and the row lands when a
+  // finalize retry scoped to the unit merges cleanly.
+  // ===========================================================================
+  test("14 merge failure: converged-but-unmerged unit gets no SWARM_UNIT_CONVERGED row", () => {
+    const proj = makeSwarmFixture();
+    runRef(proj, ["prepare", "--batch", "1", "--units", "orphan", "--base", "main"]);
+    writeFileSync(join(wtPath(proj, "orphan"), "impl.txt"), "done\n");
+    // Force a deterministic merge failure: delete the worktree's forked state
+    // mirror. Re-verify still passes (impl.txt is on disk), but `aidlc-state
+    // merge` refuses ("worktree state file does not exist"), so complete --merge
+    // fails and the unit lands in merge_failures.
+    rmSync(
+      join(
+        wtPath(proj, "orphan"),
+        "aidlc",
+        "spaces",
+        "default",
+        "intents",
+        DEFAULT_RECORD_DIR,
+        "aidlc-state.md",
+      ),
+    );
+    const f = runRef(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "orphan",
+      "--claimed",
+      "orphan",
+      "--check-cmd",
+      "test -f impl.txt",
+    ]);
+    // Exit 2: the merge failure demands the baton back.
+    expect(f.rc).toBe(2);
+    const env = JSON.parse(f.out);
+    // The unit genuinely converged (envelope row + tally say so)...
+    expect(env.converged).toBe(1);
+    expect(env.units.find((u: { unit: string }) => u.unit === "orphan")?.status).toBe(
+      "converged",
+    );
+    // ...and the failure envelope names it as unmerged.
+    expect(env.merge_failures.map((m: { unit: string }) => m.unit)).toEqual(["orphan"]);
+    // The load-bearing advance signal did NOT fire — and no false FAILED row either.
+    expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
+    expect(eventCount(proj, "SWARM_UNIT_FAILED")).toBe(0);
   }, 120000);
 });
