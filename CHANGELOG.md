@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.2.11] - 2026-07-07
+## [2.2.11] - 2026-07-08
 
 Gate-revision backstop: the conductor sometimes revises a stage's artifact at an open approval gate but forgets to run the `reject` verb that records it, leaving `Revision Count: 0` and no `GATE_REJECTED`/`STAGE_REVISING` audit pair for a revision the user actually saw happen. The `approve` command now detects this deterministically and backfills the missing pair (tagged `Recovered: true`) before it commits, so the on-disk state and audit trail reflect the revision. It reconciles the record rather than refusing the approval you already gave, and it will not fire on the reviewer's pre-approval `## Review` append. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
 

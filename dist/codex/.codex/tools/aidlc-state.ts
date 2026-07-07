@@ -182,17 +182,22 @@ function producesArtifactFile(
 // rather than silently under-record the revision (leaving Revision Count 0 and
 // no audit pair for a revision the user actually saw happen).
 //
-// Chronological interleave of five event types across every shard (Timestamp,
+// Chronological interleave of six event types across every shard (Timestamp,
 // then buffer position as the tiebreak): the SAME sort idiom humanActedSinceGate
 // uses (aidlc-lib.ts). readAllAuditShards concatenates per-clone shards in
 // FILENAME order, which is NOT time order, so a raw-position scan could misrank
 // an older event living in a lexically-later shard. findAllEvents is NOT usable
 // here: it filters ONE event type per call, and this predicate needs one
-// interleaved ordering across all five to reason about "after the gate opened".
+// interleaved ordering across all six to reason about "after the gate opened".
 //
 // The four conjuncts, all required:
-//   1. a STAGE_AWAITING_APPROVAL for this slug exists (anchor = the LAST one, the
-//      currently open gate), AND
+//   1. an anchor exists: the LAST ORGANIC (non-Recovered) STAGE_AWAITING_APPROVAL
+//      for this slug, or, when the stage was (re)started after it / it never
+//      happened, the LAST STAGE_STARTED for this slug (the current stage run's
+//      boundary). Recovered=true gate rows are NEVER the anchor: report
+//      synthesizes one right before approve when the conductor skipped
+//      gate-start, so its timestamp postdates the human turns and revision
+//      writes the predicate needs inside the window, AND
 //   2. no GATE_REJECTED for this slug after that anchor (a recorded reject means
 //      the verb already ran, nothing to backfill), AND
 //   3. at least one HUMAN_TURN after the anchor (the human responded at the
@@ -206,6 +211,15 @@ function producesArtifactFile(
 // Anchoring the artifact window at the first post-anchor human turn (not the gate
 // open) excludes that legitimate pre-response append, so the reviewer's edit is
 // never mistaken for a human-driven revision.
+//
+// When the anchor is the STAGE_STARTED fallback (no organic gate row for this
+// run), one extra conjunct applies: a produces-file write must ALSO exist
+// BETWEEN the anchor and the first post-anchor HUMAN_TURN. Without a recorded
+// gate-open, "the artifact already existed when the human weighed in" is the
+// evidence separating a gate revision from ordinary production: mid-stage
+// coaching (human speaks BEFORE any write, conductor then produces) must not
+// bump Revision Count. An SAA anchor needs no such guard - production precedes
+// gate-open by construction there.
 //
 // Fail-open everywhere (empty ledger, no anchor, no post-anchor human turn ->
 // false): the backstop only ever ADDS a reject it can prove happened; when the
@@ -221,6 +235,7 @@ function unrecordedRevisionSinceGateOpen(
   if (audit.length === 0) return false; // no ledger -> nothing to reconcile
   const RELEVANT = new Set([
     "STAGE_AWAITING_APPROVAL",
+    "STAGE_STARTED",
     "GATE_REJECTED",
     "HUMAN_TURN",
     "ARTIFACT_CREATED",
@@ -233,6 +248,7 @@ function unrecordedRevisionSinceGateOpen(
     event: string;
     stage: string | null;
     file: string | null;
+    recovered: boolean;
   }[] = [];
   for (let i = 0; i < blocks.length; i++) {
     const ev = auditField(blocks[i], "Event");
@@ -243,36 +259,61 @@ function unrecordedRevisionSinceGateOpen(
       event: ev,
       stage: auditField(blocks[i], "Stage"),
       file: auditField(blocks[i], "File"),
+      recovered: auditField(blocks[i], "Recovered") === "true",
     });
   }
   events.sort((a, b) => {
     if (a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
     return a.pos - b.pos;
   });
-  // 1. Anchor: the LAST gate-open for this slug (the currently open gate).
+  // 1. Anchor: the LAST ORGANIC gate-open for this slug, else the LAST
+  // STAGE_STARTED for it, whichever is later. A Recovered=true gate row is
+  // report's own approve-time backfill: it postdates the human turns and the
+  // revision this predicate is looking for, so anchoring on it empties the
+  // window and produces the false negative on the skip-everything flow (the
+  // common shape of the bug). The stage-start fallback bounds the window to
+  // the current run when the conductor never opened the gate at all.
   let anchor = -1;
+  let anchorIsGateOpen = false;
   for (let i = 0; i < events.length; i++) {
-    if (
-      events[i].event === "STAGE_AWAITING_APPROVAL" &&
-      events[i].stage === stage.slug
-    ) {
+    if (events[i].stage !== stage.slug) continue;
+    if (events[i].event === "STAGE_AWAITING_APPROVAL" && !events[i].recovered) {
       anchor = i;
+      anchorIsGateOpen = true;
+    } else if (events[i].event === "STAGE_STARTED") {
+      anchor = i;
+      anchorIsGateOpen = false;
     }
   }
   if (anchor === -1) return false;
   // 2 + 3 in one pass after the anchor: any recorded reject for this slug means
   // the verb ran (return false); otherwise capture the FIRST human turn as the
-  // artifact-window pivot.
+  // artifact-window pivot. For the stage-start fallback anchor, also require a
+  // produces write BEFORE that pivot (see the function comment): without a
+  // recorded gate-open, an artifact that predates the human's response is the
+  // evidence the human was reacting to produced work rather than coaching a
+  // stage that had produced nothing yet.
   let firstHuman = -1;
+  let wroteBeforeHuman = false;
   for (let i = anchor + 1; i < events.length; i++) {
-    if (events[i].event === "GATE_REJECTED" && events[i].stage === stage.slug) {
+    const e = events[i];
+    if (e.event === "GATE_REJECTED" && e.stage === stage.slug) {
       return false;
     }
-    if (firstHuman === -1 && events[i].event === "HUMAN_TURN") {
-      firstHuman = i;
+    if (firstHuman === -1) {
+      if (e.event === "HUMAN_TURN") {
+        firstHuman = i;
+      } else if (
+        (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") &&
+        e.file !== null &&
+        producesArtifactFile(stage, e.file)
+      ) {
+        wroteBeforeHuman = true;
+      }
     }
   }
   if (firstHuman === -1) return false;
+  if (!anchorIsGateOpen && !wroteBeforeHuman) return false;
   // 4. A produces-file artifact write after the first post-anchor human turn.
   for (let i = firstHuman + 1; i < events.length; i++) {
     const e = events[i];

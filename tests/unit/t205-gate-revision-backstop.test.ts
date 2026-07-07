@@ -13,15 +13,20 @@
 // normally - reconciliation, never refusal.
 //
 // The predicate (unrecordedRevisionSinceGateOpen), all four conjuncts required,
-// over one chronological interleave of five event types across every shard:
-//   1. a STAGE_AWAITING_APPROVAL for the slug is open (anchor = the LAST one),
+// over one chronological interleave of six event types across every shard:
+//   1. an anchor exists: the LAST ORGANIC (non-Recovered) STAGE_AWAITING_APPROVAL
+//      for the slug, else the LAST STAGE_STARTED for it (report synthesizes a
+//      Recovered=true gate row right before approve when the conductor skipped
+//      gate-start; anchoring there would empty the window - scenario 9),
 //   2. no GATE_REJECTED for the slug after that anchor (else the verb ran),
 //   3. a HUMAN_TURN after the anchor (the human responded at the gate),
 //   4. an ARTIFACT_CREATED/ARTIFACT_UPDATED to a declared produces file AFTER the
 //      FIRST post-anchor HUMAN_TURN (the human-turn pivot excludes the reviewer's
 //      pre-response `## Review` append - the critical false-positive guard).
-// Fail-open everywhere; codekb stages excluded; off-switch
-// AIDLC_SKIP_REVISION_BACKSTOP=1.
+// With the STAGE_STARTED fallback anchor, a produces write must ALSO precede the
+// first post-anchor HUMAN_TURN (mid-stage coaching before any production is not
+// a revision - scenario 10). Fail-open everywhere; codekb stages excluded;
+// off-switch AIDLC_SKIP_REVISION_BACKSTOP=1.
 //
 // This is a PROCESS-boundary test: it spawns the real dist tools (state, audit)
 // and drives the real audit-logger hook over stdin, so the audit File shape and
@@ -46,6 +51,8 @@ import {
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
+  seededAuditDir,
+  seededAuditShard,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
@@ -97,6 +104,19 @@ function recordHumanTurn(proj: string): void {
   });
   if ((r.status ?? -1) !== 0) {
     throw new Error(`recordHumanTurn failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  }
+}
+
+// Record a STAGE_STARTED for the slug via the real audit-append CLI - the same
+// row the advance path emits when the stage run begins (the fallback anchor).
+function recordStageStarted(proj: string, slug: string): void {
+  const r = spawnSync(
+    BUN,
+    [AUDIT, "append", "STAGE_STARTED", "--field", `Stage=${slug}`, "--project-dir", proj],
+    { encoding: "utf-8", env: process.env },
+  );
+  if ((r.status ?? -1) !== 0) {
+    throw new Error(`recordStageStarted failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
   }
 }
 
@@ -335,11 +355,12 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 
-  // --- Scenario 8: no gate-open anchor recorded (the gate was opened via a bare
-  // checkbox flip, so no STAGE_AWAITING_APPROVAL event exists) -> the predicate
+  // --- Scenario 8: NO anchor at all (the gate was opened via a bare checkbox
+  // flip, and the fixture never emitted STAGE_STARTED either) -> the predicate
   // has no anchor -> false. Documents the accepted false negative: the backstop
-  // only reconciles a revision it can anchor to a recorded open gate.
-  test("8: no recorded gate-open anchor - the accepted false negative, no backfill", () => {
+  // only reconciles a revision it can anchor to a recorded gate-open OR a
+  // recorded stage start.
+  test("8: no recorded anchor at all - the accepted false negative, no backfill", () => {
     const slug = field(proj, "Current Stage");
     // Open the gate by flipping the checkbox directly (checkbox emits NO audit
     // event, so there is no STAGE_AWAITING_APPROVAL anchor in the ledger).
@@ -351,5 +372,96 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(field(proj, "Revision Count")).toBe("0");
     expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
+  // --- Scenario 9: the COMMON shape of the bug (PR review finding). The
+  // conductor skips gate-start AND reject: STAGE_STARTED; initial production
+  // (ARTIFACT_CREATED); human requests changes (HUMAN_TURN); revision
+  // (ARTIFACT_UPDATED); human approves (HUMAN_TURN); report auto-injects
+  // `gate-start --recovered` right before approve. The synthesized Recovered
+  // gate row postdates everything, so anchoring on it would empty the window;
+  // the predicate must skip it and anchor on STAGE_STARTED -> backfill fires.
+  test("9: no organic gate-start - the Recovered row is not the anchor, backfill fires", () => {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    recordStageStarted(proj, slug); // the stage run's boundary (fallback anchor)
+    fireArtifact(proj, feasibilityArtifact(proj, PRIMARY_ARTIFACT)); // initial production
+    recordHumanTurn(proj); // human requests changes at the presented gate
+    fireArtifact(proj, feasibilityArtifact(proj, PRIMARY_ARTIFACT)); // unrecorded revision
+    recordHumanTurn(proj); // human approves
+    // report's approve path on a [-] stage: gate-start --recovered, then approve.
+    const gs = guarded(proj, ["gate-start", slug, "--recovered"]);
+    expect(gs.rc).toBe(0);
+    const r = guarded(proj, ["approve", slug, "--user-input", "looks good now"]);
+    expect(r.rc).toBe(0);
+
+    expect(field(proj, "Revision Count")).toBe("1");
+    const blocks = auditBlocks(proj);
+    const rejected = blocks.filter((b) => b.event === "GATE_REJECTED" && b.stage === slug);
+    expect(rejected.length).toBe(1);
+    expect(rejected[0].recovered).toBe(true);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+    expect(stateContent(proj)).toContain(`- [x] ${slug}`);
+  });
+
+  // --- Scenario 10: the guard the STAGE_STARTED fallback needs. Mid-stage
+  // coaching: the human speaks BEFORE any production, the conductor then
+  // produces the artifact once, and the human's input was direction - not a
+  // revision request against produced work. No produces write precedes the
+  // first post-anchor human turn -> no backfill.
+  test("10: stage-start anchor without pre-human production is coaching, no backfill", () => {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    recordStageStarted(proj, slug);
+    recordHumanTurn(proj); // human coaches before anything was produced
+    fireArtifact(proj, feasibilityArtifact(proj, PRIMARY_ARTIFACT)); // sole production
+    const gs = guarded(proj, ["gate-start", slug, "--recovered"]);
+    expect(gs.rc).toBe(0);
+    const r = guarded(proj, ["approve", slug, "--user-input", "approved"]);
+    expect(r.rc).toBe(0);
+    expect(field(proj, "Revision Count")).toBe("0");
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
+  // --- Scenario 11: two audit shards - the chronological sort is load-bearing.
+  // The scenario-9 ledger split across a MAIN shard and a lexically-EARLIER
+  // clone shard holding the chronologically-LATER events: readAllAuditShards
+  // concatenates in filename order, so a raw-position scan would misplace the
+  // anchor; the (Timestamp, position) sort must reassemble the true order and
+  // still fire the backfill.
+  test("11: events split across two shards still anchor and backfill correctly", () => {
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    recordStageStarted(proj, slug);
+    fireArtifact(proj, feasibilityArtifact(proj, PRIMARY_ARTIFACT));
+    recordHumanTurn(proj);
+    fireArtifact(proj, feasibilityArtifact(proj, PRIMARY_ARTIFACT));
+    recordHumanTurn(proj);
+    // Split the single seeded shard: move the tail (revision + approval turn)
+    // into a clone shard whose filename sorts BEFORE the main shard ("0-" prefix
+    // beats any hostname slug), so concatenation order inverts chronology and
+    // only the (Timestamp, position) sort can fix it.
+    const mainShard = seededAuditShard(proj);
+    const cloneShard = join(seededAuditDir(proj), "0-aaa.md");
+    const body = readFileSync(mainShard, "utf-8");
+    const blocks = body.split("\n---\n");
+    // Keep header + first events in main; last two event blocks go to the clone.
+    const cut = blocks.length - 2;
+    writeFileSync(mainShard, blocks.slice(0, cut).join("\n---\n"), "utf-8");
+    writeFileSync(
+      cloneShard,
+      `# AI-DLC Audit Log\n\n---\n${blocks.slice(cut).join("\n---\n")}`,
+      "utf-8",
+    );
+
+    const gs = guarded(proj, ["gate-start", slug, "--recovered"]);
+    expect(gs.rc).toBe(0);
+    const r = guarded(proj, ["approve", slug, "--user-input", "looks good now"]);
+    expect(r.rc).toBe(0);
+    expect(field(proj, "Revision Count")).toBe("1");
+    expect(
+      auditBlocks(proj).filter((b) => b.event === "GATE_REJECTED" && b.stage === slug).length,
+    ).toBe(1);
   });
 });
