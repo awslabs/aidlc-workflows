@@ -117,6 +117,7 @@ import {
   _resetStageGraphForTests,
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
+import { upgrade, type UpgradeReport } from "./aidlc-upgrade.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   compiledExecutable,
@@ -148,9 +149,6 @@ const NO_STATE_FILE_MESSAGE =
   "No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").";
 const INIT_TRANSITION_MESSAGE =
   "init now lays down the project data tree and is not yet available in this release. To start work, describe what to build: /aidlc \"build the auth service\".";
-const UPGRADE_UNAVAILABLE_MESSAGE =
-  "upgrade is not available in this install; it arrives with the packaged binary distribution.";
-
 let errorArgs: string[] = [];
 let errorProjectDirArg: string | undefined;
 
@@ -228,6 +226,9 @@ Utilities:
   --depth <level>   Override depth (minimal, standard, comprehensive)
   --test-strategy <level>  Override test strategy (minimal, standard, comprehensive)
   --version         Show the framework version
+  upgrade           Download the latest AI-DLC release and apply it (backs up
+                    first, preserves any files you have modified)
+  upgrade --dry-run Show what an upgrade would change without writing anything
   --help            Show this help message
 
 Other:
@@ -932,6 +933,82 @@ async function handlePluginSync(projectDir: string): Promise<void> {
   }
 
   process.stdout.write(`plugin sync complete: ${composePaths.length} plugin(s)\n`);
+}
+
+// ---------------------------------------------------------------------------
+// upgrade
+// ---------------------------------------------------------------------------
+
+// One subcommand, one flag:
+//   `upgrade`            → downloads the latest matching-major upstream tag,
+//                           backs up the harness dir, copies new files in,
+//                           PRESERVES any file the user has modified.
+//   `upgrade --dry-run`  → same discovery + download + diff, but no writes.
+// Auto-detects the harness by looking for .claude/.kiro/.codex under the
+// project dir; --harness <name> forces a specific pick when ambiguous.
+async function handleUpgrade(projectDir: string, flags: Record<string, string>): Promise<void> {
+  const dryRun = flags["dry-run"] !== undefined || flags.check !== undefined;
+  const override = flags.harness;
+  try {
+    const report = await upgrade(projectDir, { dryRun, harnessOverride: override });
+    printUpgrade(report);
+  } catch (err) {
+    die(`upgrade failed: ${(err as Error).message}`);
+  }
+}
+
+function printUpgrade(r: UpgradeReport): void {
+  if (r.reason === "no-upstream-version") {
+    process.stdout.write(
+      `aidlc ${r.installed} installed\n` +
+      `Could not resolve a latest upstream version. Try again in a minute, or download manually from https://github.com/awslabs/aidlc-workflows/releases\n`
+    );
+    return;
+  }
+  if (r.reason === "up-to-date") {
+    process.stdout.write(
+      `aidlc ${r.installed} installed — up to date (matches upstream ${r.latest}).\n`
+    );
+    return;
+  }
+  if (r.reason === "ahead-of-upstream") {
+    process.stdout.write(
+      `aidlc ${r.installed} installed — ahead of upstream (latest published: ${r.latest}).\n` +
+      `You are on an unreleased build. Nothing to upgrade to.\n`
+    );
+    return;
+  }
+  if (r.reason === "dry-run") {
+    const d = r.diff;
+    process.stdout.write(
+      `aidlc ${r.installed} installed — would upgrade to ${r.latest} on ${r.harnessLabel}\n` +
+      `  harness dir: ${r.harnessDir}\n` +
+      `  added:       ${d?.added.length ?? 0} files\n` +
+      `  unchanged:   ${d?.unchanged.length ?? 0} files (safe to overwrite)\n` +
+      `  kept local:  ${d?.kept.length ?? 0} files (user-modified — will NOT be overwritten)\n`
+    );
+    if (d && d.kept.length > 0) {
+      process.stdout.write(`\nUser-modified files that would be kept as-is:\n`);
+      for (const rel of d.kept) process.stdout.write(`  ${rel}\n`);
+    }
+    process.stdout.write(`\nDry run — no files were changed. Run \`upgrade\` (without --dry-run) to apply.\n`);
+    return;
+  }
+  // reason === "applied"
+  process.stdout.write(
+    `aidlc upgraded ${r.installed} → ${r.latest} on ${r.harnessLabel}\n` +
+    `  harness dir:  ${r.harnessDir}\n` +
+    `  files written: ${r.filesWritten}\n` +
+    `  files kept (user-modified, not overwritten): ${r.filesKept}\n`
+  );
+  if (r.diff && r.diff.kept.length > 0) {
+    process.stdout.write(`\nUser-modified files preserved:\n`);
+    for (const rel of r.diff.kept) process.stdout.write(`  ${rel}\n`);
+    process.stdout.write(
+      `\nTo take the upstream copy for one of these, delete the local file and re-run \`upgrade\`.\n`
+    );
+  }
+  process.stdout.write(`\nRelease notes: ${r.releaseNotesUrl}\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -3999,10 +4076,6 @@ function handleStateInit(_projectDir: string, _flags: Record<string, string>): v
   );
 }
 
-function handleUpgrade(): void {
-  die(UPGRADE_UNAVAILABLE_MESSAGE);
-}
-
 // ---------------------------------------------------------------------------
 // intent / space — the verb families + the deterministic query layer
 // ---------------------------------------------------------------------------
@@ -5614,7 +5687,7 @@ export async function main(argv: string[]): Promise<void> {
       handleStateInit(projectDir, flags);
       break;
     case "upgrade":
-      handleUpgrade();
+      await handleUpgrade(projectDir, flags);
       break;
     case "scope-change":
       handleScopeChange(projectDir, flags);

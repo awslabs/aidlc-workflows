@@ -5703,6 +5703,10 @@
         {
           "file": "tests/unit/t231-handler-additions.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t259-upgrade-subcommand.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

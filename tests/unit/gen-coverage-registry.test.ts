@@ -949,6 +949,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "e2e/t11-halt-and-ask-retry-correlation.test.ts",
     "e2e/t12-bolt-runtime-graph-fork.test.ts",
     "e2e/t134-swarm-referee.test.ts",
+    "unit/t259-upgrade-subcommand.test.ts",
   ];
 
   test("the none->cli reclassification set is exactly the deterministic spawners", () => {

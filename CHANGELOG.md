@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.40] - 2026-08-03
+
+Adds an `upgrade` utility subcommand that replaces the manual "download the release zip and `cp -r dist/<harness>/` into your project" recipe every prior `## [N.N.N]` entry has documented. One command fetches the newest tag in the installed major series from the upstream tags API (not `releases/latest`, which answers the v1 line for this repo), auto-detects the harness (`.claude` / `.kiro` / `.codex` / `.aidlc`), and copies new files in — PRESERVING any file whose local bytes differ from the incoming upstream file (the user-modification signal). No backup dir is created — commit your harness dir or take a snapshot yourself before running upgrade if you want rollback insurance. Windows requires Git Bash or WSL (uses system `tar`).
+
+* NEW `aidlc-utility upgrade`: runs the upgrade. Reports installed vs latest, prints `up to date` / `ahead of upstream` and exits when no work is needed. Otherwise: downloads the tarball to /tmp, copies added + byte-identical upstream files into the harness dir, and preserves user-modified files (naming each one).
+* NEW `aidlc-utility upgrade --dry-run`: same discovery + download + diff, but writes nothing. Prints the per-file counts (added / unchanged / kept-local) and lists the user-modified files that would be preserved. Useful before letting a script mutate a live install.
+* The installed version is read from the target project's `.claude/tools/aidlc-version.ts` (or `.kiro/...` / `.codex/...` / `.aidlc/...`), not from the tool binary's own compiled-in constant, so `upgrade` reports the truth for the install being operated on even when the tool binary lives elsewhere.
+* Cross-major upgrades are refused deliberately: a 2.x install is never auto-offered a 3.x jump — the pick keeps to `v<installed-major>.*` tags. Pre-release tags (`-rc1`, etc.) are also filtered out.
+* Auto-detects the target harness by looking for `.claude/` / `.kiro/` / `.codex/` / `.aidlc/` under the project. Errors clearly if none exist ("install AI-DLC first") or if multiple are present ("pick one with `--harness <name>`").
+
 ## [2.5.36] - 2026-08-03
 
 Adds an optional declared workspace manifest for multi-repo teams. AI-DLC already auto-discovers sibling code repos on disk at intent birth; this release lets a team also declare that expected set in a `repos.json` file at the workspace root and reconcile it with a new `aidlc-workspace-sync` tool that clones missing repos, maintains a managed `.gitignore` block, and generates a VSCode multi-root workspace. The manifest is a convenience layer only: disk discovery remains the runtime source of truth, so a repo works the moment it is cloned whether or not it is declared. `--doctor` gains three advisory rows about manifest state. **Upgrade:** re-copy your `dist/<harness>/` shell to pick up the new tool; without `repos.json`, sync stays dormant and doctor adds only the advisory workspace-records row.
