@@ -10,6 +10,7 @@ description: >
   Supports Scope Definition and Units Generation.
 disallowedTools: Task
 model: sonnet
+effort: medium
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

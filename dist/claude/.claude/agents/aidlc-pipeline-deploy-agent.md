@@ -9,6 +9,7 @@ description: >
   Leads CI Pipeline, Deployment Pipeline, and Deployment Execution stages.
 disallowedTools: Task
 model: sonnet
+effort: medium
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

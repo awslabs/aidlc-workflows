@@ -8,7 +8,7 @@ description: >
   Solutions architect responsible for application design, domain modelling, NFR patterns, and component decomposition.
   Leads Feasibility, Application Design, Units Generation, Functional Design, NFR Requirements, and NFR Design stages.
 disallowedTools: Task
-model: opus
+model: claude-opus-4.8
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

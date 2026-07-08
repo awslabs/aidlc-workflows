@@ -9,7 +9,8 @@ description: >
   Leads Observability Setup, Incident Response, and Feedback & Optimization stages.
   Supports Performance Validation.
 disallowedTools: Task
-model: sonnet
+model: openai.gpt-5.4
+effort: medium
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**
