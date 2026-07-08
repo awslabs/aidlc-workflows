@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.16] - 2026-07-09
+
+The architecture reviewer's read scope is now bounded to the artifacts under review plus the shared inception contracts the stage `consumes:`. On per-unit Construction stages (`functional-design`, `nfr-requirements`, `nfr-design`, `infrastructure-design`, `code-generation`) the reviewer previously had no read-scope constraint and its persona pushed a "cross-reference everything" sweep, so reviewing unit N read sibling units' `construction/<other-unit>/` directories and per-unit cost grew linearly with unit count. Stage-protocol §12a now extends the per-unit reviewer pass-list with `directive.consumes`, the persona and knowledge scope "cross-reference" to what was passed, and the four harness orchestrators (Claude Code, Kiro CLI, Kiro IDE, Codex CLI) append the same bound to their reviewer step. Cross-unit contract verification runs against the shared inception artifacts; sibling-unit files may be spot-checked only when the current unit's design explicitly names an integration point in them. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Per-unit reviewer invocations now receive the resolved paths in `directive.consumes` in addition to the `produces` paths, so cross-unit contract claims can be verified against the shared inception artifacts (`components.md`, `component-methods.md`, `services.md`, `unit-of-work.md`, plus any other upstream artifacts the stage declares) without opening sibling units' design directories.
+* The four harness orchestrator skills (`.claude/`, `.kiro/`, `.kiro-ide/`, `.codex/`) carry the same read-scope bound in their `Reviewer step (§12a)` bullet: read what was passed, spot-check only the file the current unit's design explicitly names as an integration point.
+* `aidlc-architecture-reviewer-agent` persona gains a `## Review Scope` section and the "Cross-reference everything" line is scoped to the artifacts under review and the passed contracts; the knowledge file's Functional Design checklist names the shared contracts as the verification source instead of "cross-unit contract boundaries respected?" in isolation.
+
+
 ## [2.2.15] - 2026-07-09
 
 Agent frontmatter now uses Claude Code's real `model:` key instead of the inert `modelOverride:` key, preserving the same Opus/Sonnet policy while keeping Codex and Kiro behavior stable. **Upgrade:** re-copy your dist/<harness>/ shell into the project.

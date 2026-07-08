@@ -861,14 +861,18 @@ If the `run-stage` directive includes a `reviewer` field (non-null), the orchest
    - The stage definition file path (`directive.stage_file`)
    - The Q&A file path (e.g., `<record>/<phase>/<stage>/<stage>-questions.md`)
    - All artifact file paths produced by the stage (the `produces` artifacts)
+   - For a per-unit stage (`directive.unit` present), also the resolved paths in `directive.consumes` (the shared inception contracts - `components.md`, `component-methods.md`, `services.md`, `unit-of-work.md`, and any other upstream artifacts the stage declares - paths only, per the context-budget rule)
    - The validation tools list from the stage definition's frontmatter (if any)
 
    Do NOT pass: `memory.md` (builder's diary) or any plan/reasoning files. The reviewer forms independent judgment.
+
+   **Reviewer read scope.** The reviewer's scope is the current unit's artifacts plus the passed contract paths. On a per-unit stage the reviewer MUST NOT read other units' `construction/<other-unit>/` directories except to spot-check an integration point the current unit's design explicitly names, and only the specific file that names it. Cross-unit contract verification runs against the shared inception artifacts passed above, not against a sweep of sibling units' design prose.
 
 2. **Reviewer executes.** The reviewer sub-agent:
    - Reads the stage definition to understand what SHOULD have been produced
    - Reads the Q&A to understand context and constraints
    - Reads the artifact(s) to evaluate what WAS produced
+   - Verifies cross-unit contract claims against the passed shared inception contracts, not by sweeping sibling units' design directories; opens another unit's file only when the current unit's design explicitly names it as an integration point, and only that file
    - Runs any validation tools listed (via shell) and includes results in findings
    - Appends a `## Review` section to the primary artifact file with verdict: READY or NOT-READY
 
