@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 424,
+    "total": 427,
     "enumeratedByClass": {
-      "function": 208,
+      "function": 211,
       "audit": 70,
       "scope": 9,
       "stage": 32,
@@ -1441,6 +1441,20 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:hookDebug",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hookDebugEnabled",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:hooksHealthDir",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1605,6 +1619,13 @@
     {
       "unitClass": "function",
       "unitId": "function:KNOWN_PER_UNIT_STAGES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:latestStartedStageSlug",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"

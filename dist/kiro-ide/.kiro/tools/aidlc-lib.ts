@@ -2869,6 +2869,29 @@ export function findAllEvents(
   return results.map(({ timestamp, block }) => ({ timestamp, block }));
 }
 
+// Latest STAGE_STARTED slug in an audit buffer, or null if none. findAllEvents
+// returns events in chronological order (timestamp, then buffer position), so
+// the last STAGE_STARTED block is the most recent transition. The slug lives in
+// the block's `**Stage**:` field (appendAuditEntry writes the fields verbatim).
+// Payload-free derivation of "what stage are we on" — used by the Kiro IDE
+// sync-statusline path, where the hook receives no task payload and must read
+// the current stage from the audit tail instead.
+//
+// EXCLUDES synthetic `--single` stage-runner rows (Workflow: single-stage:<slug>)
+// — those belong to no main workflow and must never rewrite the main pointer
+// (mirrors the filter in aidlc-state.ts hasStageAuditEvent). Without this a
+// single-stage run's STAGE_STARTED would become the "latest" and the IDE
+// sync would repoint the main Current Stage at it.
+export function latestStartedStageSlug(audit: string): string | null {
+  const started = findAllEvents(audit, "STAGE_STARTED").filter(
+    (ev) => !/^\*\*Workflow\*\*:\s*single-stage:/m.test(ev.block),
+  );
+  if (started.length === 0) return null;
+  const last = started[started.length - 1];
+  const m = last.block.match(/^\*\*Stage\*\*:\s*([a-z][a-z0-9-]*)\s*$/m);
+  return m ? m[1] : null;
+}
+
 // --- Data loaders ---
 
 const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), "data");
@@ -3892,6 +3915,56 @@ export function recordHookDrop(
     appendFileSync(dropFile, line, "utf-8");
   } catch {
     // Drop-log failure is truly non-fatal — we're already in a failure path.
+  }
+}
+
+// --- Hook debug log ---
+//
+// Append a structured debug line to `<health>/hook-debug.log` so a hook's
+// decision path can be inspected after a run WITHOUT re-deriving it by
+// hypothesis. OPT-IN ONLY, off by default (zero log growth / zero write cost on
+// a normal run). Two independent switches, either enables it:
+//   1. Env var `AIDLC_HOOK_DEBUG` — best for the CLI/Claude/Codex:
+//      `AIDLC_HOOK_DEBUG=1 <command>` or export it.
+//   2. Filesystem marker `aidlc/.aidlc-hook-debug` — best for Kiro IDE, where
+//      the hook subprocesses are spawned by the IDE and an env var needs an IDE
+//      restart to take effect. `touch aidlc/.aidlc-hook-debug` turns logging on
+//      for the very next hook fire (no restart); `rm` it to turn off. When
+//      projectDir cannot be resolved (rare), only the env var is consulted.
+// Never throws; logging must never break a hook's advisory exit-0 contract.
+export function hookDebugEnabled(projectDir?: string): boolean {
+  if (process.env.AIDLC_HOOK_DEBUG) return true;
+  if (projectDir) {
+    try {
+      return existsSync(join(workspaceRoot(projectDir), ".aidlc-hook-debug"));
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+export function hookDebug(
+  projectDir: string,
+  hookName: string,
+  message: string,
+  fields?: Record<string, unknown>,
+): void {
+  if (!hookDebugEnabled(projectDir)) return;
+  try {
+    const healthDir = hooksHealthDir(projectDir);
+    mkdirSync(healthDir, { recursive: true });
+    const logFile = join(healthDir, "hook-debug.log");
+    const parts = [isoTimestamp(), hookName, message];
+    if (fields && Object.keys(fields).length > 0) {
+      const flat = Object.entries(fields)
+        .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+        .join(" ");
+      parts.push(flat);
+    }
+    appendFileSync(logFile, `${parts.join("\t").replace(/\r?\n/g, " ")}\n`, "utf-8");
+  } catch {
+    // Debug-log failure is non-fatal — observability is best-effort.
   }
 }
 

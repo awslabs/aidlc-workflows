@@ -2,6 +2,72 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.17] - 2026-07-09
+
+Fixes the Kiro IDE harness's hooks, which previously no-op'd for everything that
+needed to know what the agent just did. Kiro IDE delivers hook context through
+the `USER_PROMPT` environment variable (not stdin, which it opens but never
+writes), and it leaves the tool arguments empty — so the IDE adapter now reads
+`USER_PROMPT`, recovers the written file path from the tool result text, and
+drives the command/payload-free hooks off the audit trail instead. The audit
+logger, sensor firing, runtime-graph recompile, and statusline sync now work in
+Kiro IDE without the agent having to compile the graph by hand. Dropping the
+stdin read also removes the 2s stdin-race timeout the CLI adapter paid on every
+hook; the human-presence mint/block hooks now resolve the project dir from
+`process.cwd()`. The Kiro CLI harness is unaffected (it uses a separate adapter
+and a working stdin channel). Re-copy your `dist/kiro-ide/.kiro/` to pick up the
+fix.
+
+* **Kiro IDE hooks fire correctly** — `aidlc-audit-logger`, `aidlc-sensor-fire`,
+  `aidlc-runtime-compile`, and `aidlc-sync-statusline` now do real work on Kiro
+  IDE. Artifact writes are audited, sensors run, the runtime graph recompiles on
+  transitions, and `Current Stage` stays in sync.
+* **File paths are resolved relative to the workspace root.** Kiro IDE reports
+  the written path relative to the project root in the tool-result text; the
+  adapter resolves it to absolute so `audit-logger`'s record-root check passes.
+* **`aidlc-runtime-compile` and `aidlc-sync-statusline` are payload-free on the
+  IDE** — both gate on the audit tail (latest transition / latest
+  `STAGE_STARTED`) instead of the tool command or task payload the IDE does not
+  surface. `aidlc-sync-statusline` is wired to the `shell` tool event.
+* **The IDE audit-tail gating is forward-only and idempotent.**
+  `aidlc-sync-statusline` never rewinds `Current Stage`: it skips when the
+  workflow is not `Running`, when the pointer is `none`, or when the audit's
+  latest stage is already completed/skipped. `latestStartedStageSlug` ignores
+  synthetic `--single` stage-runner rows. `aidlc-runtime-compile`'s IDE path
+  adds an mtime idempotency guard so a lingering transition (e.g. after
+  `WORKFLOW_COMPLETED`) does not recompile on every subsequent shell command.
+* **The `str_replace`/`fs_append` path extraction is robust.** The adapter
+  tolerates trailing newlines, strips a `str_replace` ` (N occurrences)`
+  suffix, and records a visible hook-drop when a write-class tool yields no
+  extractable path (no silent no-op).
+* **The human-presence mint/block hooks survive the stdin removal.** The
+  `promptSubmit` mint (`HUMAN_TURN`) and the `preToolUse` block floor now
+  resolve the project dir from `process.cwd()` (the IDE gives no `cwd` payload),
+  so the Kiro IDE human-presence gate keeps working; dropping the stdin read
+  also removes the 2s stdin-race the block hook paid on every `preToolUse`.
+* **`log-subagent` records the delegate's identity.** The adapter no longer
+  hardcodes `agent_type: "unknown"`; it extracts the self-identifying first line
+  (`**Reviewer:** <name>` / `**Agent:** <name>`) from the subagent result and
+  forwards the result text, so `SUBAGENT_COMPLETED` carries the real agent. The
+  two reviewer agents (`aidlc-product-lead-agent`,
+  `aidlc-architecture-reviewer-agent`) now emit that identity marker as the
+  first line of their response (an Output Contract in their persona, reinforced
+  in stage-protocol §12a), so the audit trail names which reviewer ran instead
+  of recording `unknown`.
+* **Failed tool calls are not audited as writes.** `audit-and-sensors`
+  explicitly guards `toolSuccess === false`, so a failed op no longer relies on
+  its error prose failing to match the path regexes.
+* **Opt-in hook debug log.** Enable it to have every hook append its decision
+  path to `<record>/.aidlc-hooks-health/hook-debug.log` — either set
+  `AIDLC_HOOK_DEBUG=1`, or `touch aidlc/.aidlc-hook-debug` (the filesystem
+  marker takes effect on the next hook fire with no IDE restart). Off by
+  default (no log, no overhead); see the Kiro IDE harness guide.
+* **Behaviour for Kiro CLI, Claude Code, and Codex is unchanged.** The shared
+  core hooks are edited and re-shipped to all four dists, but the new branches
+  are gated behind the IDE-only `ide-audit-sync` marker (and the opt-in
+  `AIDLC_HOOK_DEBUG` env var), so the CLI/Claude/Codex payload paths behave
+  exactly as before.
+
 ## [2.2.16] - 2026-07-09
 
 The architecture reviewer's read scope is now bounded to the artifacts under review plus the shared inception contracts the stage `consumes:`. On per-unit Construction stages (`functional-design`, `nfr-requirements`, `nfr-design`, `infrastructure-design`, `code-generation`) the reviewer previously had no read-scope constraint and its persona pushed a "cross-reference everything" sweep, so reviewing unit N read sibling units' `construction/<other-unit>/` directories and per-unit cost grew linearly with unit count. Stage-protocol §12a now extends the per-unit reviewer pass-list with `directive.consumes`, the persona and knowledge scope "cross-reference" to what was passed, and the four harness orchestrators (Claude Code, Kiro CLI, Kiro IDE, Codex CLI) append the same bound to their reviewer step. Cross-unit contract verification runs against the shared inception artifacts; sibling-unit files may be spot-checked only when the current unit's design explicitly names an integration point in them. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
@@ -53,6 +119,7 @@ Gate-revision backstop: the conductor sometimes revises a stage's artifact at an
 * `Revision Count` now reflects a revision made at an open gate even when the conductor skipped the `reject` verb: `approve` backfills the count and the audit pair. Run `reject` yourself when you request changes so your feedback text is still recorded.
 * NEW `Recovered: true` variants of the `GATE_REJECTED` and `STAGE_REVISING` audit rows, emitted by the approve-time backstop when it backfills a skipped rejection.
 * NEW `AIDLC_SKIP_REVISION_BACKSTOP=1` off-switch disables the backstop (mirrors `AIDLC_SKIP_ARTIFACT_GUARD`); the test suite sets it globally so existing approve flows are unaffected.
+
 ## [2.2.10] - 2026-07-06
 
 Workspace detection now recognizes git submodules. A workspace whose code lives in uninitialized submodules (empty dirs plus a `.gitmodules` file) previously scanned as Greenfield, so reverse-engineering was auto-skipped and every design stage ran with zero code understanding. The scanner gains a sixth brownfield signal: a parseable `.gitmodules` with at least one submodule path entry classifies the workspace Brownfield. When submodule paths are uninitialized, the scan warns and names the remedy (`git submodule update --init --recursive`) at birth, in the doctor report, and on `detect`. Languages stay as scanned (Unknown is truthful until the submodules are fetched). **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

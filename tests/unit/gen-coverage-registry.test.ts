@@ -844,6 +844,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t206-optional-produces-coverage.test.ts",
     "unit/t211-detect-submodules.test.ts",
     "unit/t212-doctor-submodules.test.ts",
+    "unit/t218-kiro-ide-hook-adapter.test.ts",
     "unit/t205-gate-revision-backstop.test.ts",
     "unit/t214-routing-cost-strings.test.ts",
     "unit/t209-unit-major-iteration.test.ts",
