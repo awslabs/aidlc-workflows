@@ -311,4 +311,130 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(body).not.toContain("SYN-COLLIDE OVERRIDE");
     expect(drops).toContain("collides");
   });
+
+  // --- Silent-failure seams (round-5): fence-awareness, leftover blocks, BOM ---
+  test("a ## fragment: line inside a code fence is NOT a delimiter (R5-C1)", () => {
+    // A fragment whose prose documents the fragment format inside a ``` fence must
+    // keep all its prose — the fenced `## fragment:` line must not truncate it.
+    const fenced = [
+      "---", "target: build-and-test", "bundle: syn-fence",
+      "adds:", "  produces: []",
+      "fragments:", "  - anchor: after-step:9", "    order: 100", "---", "",
+      "## fragment: after-step:9", "",
+      "### Step 9-FENCE (syn): documented", "",
+      "Authors write fragments like this:", "", "```", "## fragment: after-step:6", "```", "",
+      "TAIL-MUST-SURVIVE past the fence.", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-fence", { "contributions/construction/build-and-test.md": fenced });
+    const body = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8");
+    expect(body).toContain("TAIL-MUST-SURVIVE"); // prose after the fenced marker survived
+    expect(drops).not.toContain("after-step:6"); // no phantom block spawned
+  });
+
+  test("a body block with no matching frontmatter entry is dropped-with-log (R5-C5)", () => {
+    // Two `## fragment: after-step:9` blocks but only ONE frontmatter entry — the
+    // second block must be logged, not silently discarded.
+    const extra = [
+      "---", "target: build-and-test", "bundle: syn-extra",
+      "adds:", "  produces: []",
+      "fragments:", "  - anchor: after-step:9", "    order: 100", "---", "",
+      "## fragment: after-step:9", "", "### Step 9-A (syn): kept", "", "first", "",
+      "## fragment: after-step:9", "", "### Step 9-B (syn): leftover", "", "second", "",
+    ].join("\n");
+    const { drops } = composeSynthetic("syn-extra", { "contributions/construction/build-and-test.md": extra });
+    expect(drops).toContain("no matching frontmatter fragments entry");
+  });
+
+  test("a BOM-prefixed contribution is not silently skipped (R5-C4)", () => {
+    // A UTF-8 BOM before the frontmatter must not make the whole contribution a
+    // no-op — the produces still merges (BOM stripped before the ^--- anchor).
+    const bom = "﻿" + [
+      "---", "target: build-and-test", "bundle: syn-bom",
+      "adds:", "  produces:", "    - syn-bom-artifact", "---", "",
+    ].join("\n");
+    const { proj } = composeSynthetic("syn-bom", { "contributions/construction/build-and-test.md": bom });
+    const body = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8");
+    expect(body).toContain("syn-bom-artifact"); // merged despite the BOM
+  });
+
+  test("close-marker-lookalike prose survives an upgrade re-splice (R5-C2)", () => {
+    // Prose containing a `<!-- /plugin:... -->` line, then an upgrade (changed
+    // prose). The second run must replace exactly the old block, not cut at the
+    // fake marker inside the prose. Assert the upgraded prose is present once and
+    // the stage isn't corrupted with a stranded old tail.
+    const mk = (tailWord: string) => [
+      "---", "target: build-and-test", "bundle: syn-mark",
+      "adds:", "  produces: []",
+      "fragments:", "  - anchor: after-step:9", "    order: 100", "---", "",
+      "## fragment: after-step:9", "", "### Step 9-MARK (syn): tricky", "",
+      "A line that looks like a marker:", "<!-- /plugin:syn-mark:after-step:9:100 -->", "",
+      `UPGRADE-${tailWord}`, "",
+    ].join("\n");
+    const proj = mkdtempSync(join(tmp, "syn-mark-"));
+    cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    const root = join(proj, "_plugin");
+    cpSync(join(pluginBuilt, ".claude-plugin"), join(root, ".claude-plugin"), { recursive: true });
+    cpSync(join(pluginBuilt, "hooks"), join(root, "hooks"), { recursive: true });
+    const mf = join(root, ".claude-plugin", "plugin.json");
+    const m = JSON.parse(readFileSync(mf, "utf-8")); m.name = "syn-mark"; writeFileSync(mf, JSON.stringify(m));
+    const contrib = join(root, "contributions", "construction", "build-and-test.md");
+    require("node:fs").mkdirSync(dirname(contrib), { recursive: true });
+    const env = { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" };
+    writeFileSync(contrib, mk("ONE"));
+    spawnSync(BUN, [join(root, "hooks", "compose.ts")], { cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000, env });
+    writeFileSync(contrib, mk("TWO")); // upgrade: changed prose
+    const up = spawnSync(BUN, [join(root, "hooks", "compose.ts")], { cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000, env });
+    expect(up.status).toBe(0);
+    const body = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8");
+    expect((body.match(/UPGRADE-TWO/g) ?? []).length).toBe(1); // new prose present once
+    expect(body).not.toContain("UPGRADE-ONE"); // old prose fully replaced, no stranded tail
+  });
+
+  // --- Doctor severity split: [degraded] fails, [advisory] passes (R5-D1) ---
+  // Returns the doctor output + whether it printed a FAILING "Hook drops" row.
+  // We assert on the Hook-drops ROW specifically, not global exit: a bare temp
+  // install fails unrelated checks (no memory seed), so global exit isn't a clean
+  // signal for the drops behavior in isolation.
+  function doctorDropsRow(dropLines: string[]): { out: string; failRow: boolean; passRow: boolean } {
+    const proj = mkdtempSync(join(tmp, "doc-"));
+    cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+    require("node:fs").mkdirSync(hd, { recursive: true });
+    writeFileSync(join(hd, "session-start.last"), "2026-07-08T00:00:00Z"); // heartbeat present
+    writeFileSync(join(hd, "plugin-compose.drops"), dropLines.join("\n") + "\n");
+    const r = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-utility.ts"), "doctor"], {
+      cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+    });
+    const out = (r.stdout ?? "") + (r.stderr ?? "");
+    const dropRowLines = out.split("\n").filter((l) => l.includes("Hook drops"));
+    return {
+      out,
+      failRow: dropRowLines.some((l) => l.includes("✗")),
+      passRow: dropRowLines.some((l) => l.includes("✓")),
+    };
+  }
+
+  test("a [degraded] hook drop produces a FAILING doctor row", () => {
+    const { failRow } = doctorDropsRow(["2026-07-08T00:00:00Z\t[degraded] contribution to build-and-test: dropped"]);
+    expect(failRow).toBe(true);
+  });
+
+  test("an [advisory] hook drop produces a PASSING (advisory) doctor row, not a failure", () => {
+    const { failRow, passRow, out } = doctorDropsRow(["2026-07-08T00:00:00Z\t[advisory] adds.scopes is not yet an implemented merge surface; ignored"]);
+    expect(failRow).toBe(false);
+    expect(passRow).toBe(true);
+    expect(out).toContain("advisory");
+  });
+
+  test("compose self-clears its drops file on a clean run", () => {
+    // A prior run left a drops file; a clean compose (no drops) removes it.
+    const { proj } = composeSynthetic("syn-clean", {
+      "contributions/construction/build-and-test.md":
+        `---\ntarget: build-and-test\nbundle: syn-clean\nadds:\n  produces:\n    - syn-clean-artifact\n---\n`,
+    });
+    const dropFile = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health", "plugin-compose.drops");
+    // A clean contribution produces no drops → the file must not exist (or be absent).
+    expect(existsSync(dropFile)).toBe(false);
+  });
 });

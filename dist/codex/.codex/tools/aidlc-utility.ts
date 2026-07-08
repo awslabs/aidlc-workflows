@@ -715,13 +715,16 @@ function handleDoctor(projectDir: string): void {
   }
 
   // 6b. Hook drop records. A hook that hit a non-fatal failure appends a line to
-  // `<hook>.drops` in the health dir (e.g. the plugin compose hook logging a
-  // contribution it could not merge, or a failed graph recompile). A recorded
-  // drop means something was SILENTLY DEGRADED — a half-applied contribution,
-  // stale routing. That must FAIL doctor (non-zero exit) so a CI gate catches it,
-  // NOT roll up green: surfacing it as a passing advisory row would just move the
-  // masking from "a file nothing reads" to "a file doctor reads but scores OK"
-  // (round-4). The remedy is to read the .drops file and fix or re-compose.
+  // `<hook>.drops` in the health dir. Each line is severity-tagged (`[degraded]`
+  // vs `[advisory]`): a DEGRADED drop means something was silently half-applied
+  // (a dropped contribution, a failed recompile) and must FAIL doctor so a CI gate
+  // catches it; an ADVISORY drop is an expected/benign condition (a documented-
+  // deferred surface declared, a version-skew skip, a core sensor timeout) and is
+  // surfaced as a passing row — failing on it would red the gate on legal author
+  // behavior and contradict the "advisory rows never change the exit code"
+  // contract (round-5). An UNTAGGED line (legacy / core recordHookDrop) is treated
+  // as advisory. The compose hook rewrites its .drops each run, so a fixed +
+  // re-composed install self-clears; a stale degraded drop is not sticky.
   if (heartbeatDirExists) {
     try {
       const dropFiles = readdirSync(healthDir).filter((f) => f.endsWith(".drops"));
@@ -730,12 +733,21 @@ function handleDoctor(projectDir: string): void {
           const lines = readFileSync(join(healthDir, f), "utf-8").split("\n").filter((l) => l.trim() !== "");
           if (lines.length === 0) continue;
           const hook = f.replace(".drops", "");
-          const last = lines[lines.length - 1].split("\t").slice(1).join(" ").slice(0, 160);
-          results.push({
-            pass: false,
-            label: `Hook drops (${hook}): ${lines.length} recorded`,
-            fix: `${hook} degraded silently — read ${join(healthDir, f)} (latest: ${last}); fix the cause and re-run, then delete the .drops file`,
-          });
+          const reasons = lines.map((l) => l.split("\t").slice(1).join(" "));
+          const degraded = reasons.filter((r) => r.includes("[degraded]"));
+          const last = reasons[reasons.length - 1].slice(0, 160);
+          if (degraded.length > 0) {
+            results.push({
+              pass: false,
+              label: `Hook drops (${hook}): ${degraded.length} degraded of ${lines.length}`,
+              fix: `${hook} degraded silently — read ${join(healthDir, f)} (latest: ${last}); fix the cause and re-compose (the file self-clears on a clean run)`,
+            });
+          } else {
+            results.push({
+              pass: true,
+              label: `Hook drops (${hook}, advisory): ${lines.length} recorded; latest: ${last}`,
+            });
+          }
         } catch {
           // skip unreadable
         }

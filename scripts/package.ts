@@ -845,14 +845,22 @@ if (argv[0] === "plugin" && argv[1] === "build") {
   // non-empty dir that is not itself a prior projection (its manifestDir marks
   // one) unless --force — `plugin build test-pro claude .` must not wipe cwd.
   const resolvedOut = isAbsolute(outDir) ? outDir : join(process.cwd(), outDir);
-  if (existsSync(resolvedOut) && readdirSync(resolvedOut).length > 0) {
-    const isPriorProjection = existsSync(join(resolvedOut, target.manifestDir));
-    if (!isPriorProjection && !force) {
-      console.error(
-        `refusing to build into non-empty "${outDir}" — it is not a prior plugin projection ` +
-        `(no ${target.manifestDir}/). Pass --force to overwrite, or point at a fresh/empty dir.`
-      );
+  if (existsSync(resolvedOut)) {
+    // A FILE (not a directory) outDir would make readdirSync throw a raw ENOTDIR
+    // stack — give a proper usage error instead (the round-3 guard's promise).
+    if (!statSync(resolvedOut).isDirectory()) {
+      console.error(`refusing to build into "${outDir}" — it is a file, not a directory.`);
       process.exit(1);
+    }
+    if (readdirSync(resolvedOut).length > 0) {
+      const isPriorProjection = existsSync(join(resolvedOut, target.manifestDir));
+      if (!isPriorProjection && !force) {
+        console.error(
+          `refusing to build into non-empty "${outDir}" — it is not a prior plugin projection ` +
+          `(no ${target.manifestDir}/). Pass --force to overwrite, or point at a fresh/empty dir.`
+        );
+        process.exit(1);
+      }
     }
   }
   buildPluginProjection(pluginName, harnessName, resolvedOut);

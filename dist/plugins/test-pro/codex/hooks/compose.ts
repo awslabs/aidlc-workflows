@@ -59,17 +59,31 @@ async function resolveHealthDir(): Promise<string> {
 }
 
 // Buffer drops synchronously so callers stay sync; flush to disk once at the end
-// (and eagerly on the pre-guard early exits). No silent failures.
+// (and eagerly on the pre-guard early exits). No silent failures. Each drop is
+// tagged with a severity so --doctor can FAIL on a genuinely-degrading drop
+// (a half-applied contribution, a failed compile) but treat a benign/expected one
+// (a documented-deferred surface declared, a version-skew skip) as advisory. The
+// severity is a leading `[degraded]`/`[advisory]` token on the reason field.
+type DropSeverity = "degraded" | "advisory";
 const _drops: string[] = [];
-function recordDrop(reason: string): void {
-  _drops.push(`${new Date().toISOString()}\t${reason.replace(/\r?\n/g, " ")}`);
+function recordDrop(reason: string, severity: DropSeverity = "degraded"): void {
+  _drops.push(`${new Date().toISOString()}\t[${severity}] ${reason.replace(/\r?\n/g, " ")}`);
 }
+// Flush drops as the CURRENT run's complete record: OVERWRITE (not append), and
+// REMOVE the file when the run had none. So the drops file always reflects only
+// the latest compose — it self-clears when the cause is fixed and re-composed,
+// and can't grow unboundedly on a persistent collision (round-5). Doctor reading
+// it therefore sees a live signal, not accumulated history.
 async function flushDrops(): Promise<void> {
-  if (_drops.length === 0) return;
   try {
     const healthDir = await resolveHealthDir();
-    mkdirSync(healthDir, { recursive: true });
-    writeFileSync(join(healthDir, "plugin-compose.drops"), _drops.map((l) => l + "\n").join(""), { flag: "a" });
+    const dropFile = join(healthDir, "plugin-compose.drops");
+    if (_drops.length === 0) {
+      if (existsSync(dropFile)) rmSync(dropFile, { force: true });
+    } else {
+      mkdirSync(healthDir, { recursive: true });
+      writeFileSync(dropFile, _drops.map((l) => l + "\n").join(""), { flag: "w" });
+    }
   } catch { /* truly non-fatal */ }
   _drops.length = 0;
 }
@@ -250,7 +264,7 @@ function mergeRequiredSections(content: string, items: string[], target: string)
   const blockRe = /^(required_sections:\n(?:  - .+\n)*)/m;
   const m = content.match(blockRe);
   if (m) {
-    const existing = new Set([...m[1].matchAll(/^  - "?([^"\n]+?)"?\s*$/gm)].map((x) => x[1].trim()));
+    const existing = new Set([...m[1].matchAll(/^  - (.+?)\s*$/gm)].map((x) => x[1].replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1")));
     const toAdd = items.filter((s) => !existing.has(s));
     if (toAdd.length === 0) return content;
     return content.replace(blockRe, m[1] + render(toAdd) + "\n");
@@ -336,24 +350,30 @@ interface Fragment { bundle: string; anchor: string; order: number; prose: strin
 function spliceFragment(content: string, f: Fragment, target: string): string {
   const hash = hashProse(f.prose);
   const bE = escapeRegExp(f.bundle), aE = escapeRegExp(f.anchor);
-  const closeMarker = `<!-- /plugin:${f.bundle}:${f.anchor}:${f.order} -->`;
-  const block = `<!-- plugin:${f.bundle}:${f.anchor}:${f.order}:${hash} -->\n${f.prose}\n${closeMarker}`;
+  // The close marker carries the SAME content hash as the open, so the block's
+  // boundary is content-specific: a close-marker-lookalike line inside the prose
+  // (which lacks the exact hash) can't be mistaken for the real close on an
+  // upgrade re-splice (round-5 — the old hashless close matched the first
+  // occurrence, so prose containing the marker corrupted the block).
+  const closeOf = (h: string) => `<!-- /plugin:${f.bundle}:${f.anchor}:${f.order}:${h} -->`;
+  const block = `<!-- plugin:${f.bundle}:${f.anchor}:${f.order}:${hash} -->\n${f.prose}\n${closeOf(hash)}`;
 
   // Present already? Skip on hash match; replace the whole block on hash change.
   const mine = content.match(new RegExp(`<!-- plugin:${bE}:${aE}:${f.order}:([0-9a-f]+) -->`));
   if (mine) {
     if (mine[1] === hash) return content;
     const start = mine.index!;
-    const end = content.indexOf(closeMarker, start);
+    const oldClose = closeOf(mine[1]); // the OLD block's own hash-qualified close
+    const end = content.indexOf(oldClose, start);
     if (end === -1) { recordDrop(`contribution to ${target}: fragment block for "${f.anchor}" order ${f.order} missing close marker; left as-is`); return content; }
-    return content.slice(0, start) + block + content.slice(end + closeMarker.length);
+    return content.slice(0, start) + block + content.slice(end + oldClose.length);
   }
 
   // Insert at the ordered slot among peer plugin blocks at this anchor (any bundle).
   const peers: Array<{ order: number; bundle: string; start: number; end: number }> = [];
-  for (const m of content.matchAll(new RegExp(`<!-- plugin:([^:]+):${aE}:(\\d+):[0-9a-f]+ -->`, "g"))) {
-    const pBundle = m[1], pOrder = Number(m[2]);
-    const close = `<!-- /plugin:${pBundle}:${f.anchor}:${pOrder} -->`;
+  for (const m of content.matchAll(new RegExp(`<!-- plugin:([^:]+):${aE}:(\\d+):([0-9a-f]+) -->`, "g"))) {
+    const pBundle = m[1], pOrder = Number(m[2]), pHash = m[3];
+    const close = `<!-- /plugin:${pBundle}:${f.anchor}:${pOrder}:${pHash} -->`;
     const cIdx = content.indexOf(close, m.index!);
     if (cIdx === -1) continue;
     peers.push({ order: pOrder, bundle: pBundle, start: m.index!, end: cIdx + close.length });
@@ -395,12 +415,19 @@ try {
     try { files = readdirSync(phaseDir); } catch { continue; }
     for (const file of files) {
       if (!file.endsWith(".md")) continue;
-      // Normalize CRLF once so every downstream block/list regex is newline-safe
-      // regardless of the OS a contribution was authored on (review #8: one parser).
-      const content = readFileSync(join(phaseDir, file), "utf-8").replace(/\r\n/g, "\n");
+      // Normalize CRLF once so every downstream block/list regex is newline-safe;
+      // strip a leading UTF-8 BOM and any leading blank lines so the `^---`
+      // frontmatter anchor still matches a file saved with a BOM (common on
+      // Windows) or a stray blank first line — otherwise the whole contribution
+      // was silently skipped with no drop (round-5).
+      const content = readFileSync(join(phaseDir, file), "utf-8")
+        .replace(/\r\n/g, "\n").replace(/^﻿/, "").replace(/^\n+/, "");
       const fm = frontmatter(content);
       const target = fm.match(/^target:\s*(.+)$/m)?.[1].trim();
-      if (!target) continue;
+      // A .md in contributions/ with no parseable `target:` is a malformed
+      // contribution — log it (a present-but-unknown target is already logged
+      // below; a missing one was a silent bare continue).
+      if (!target) { recordDrop(`contribution "${file}" has no parseable frontmatter target: — skipped (check for a BOM, a leading blank line, or a missing target: key)`); continue; }
       const bundle = fm.match(/^bundle:\s*(.+)$/m)?.[1].trim() ?? "";
       const stageFile = findStageFile(target);
       if (!stageFile) { recordDrop(`contribution "${file}" targets missing stage "${target}"`); continue; }
@@ -447,16 +474,19 @@ try {
       const IMPLEMENTED_ADDS = new Set(["produces", "sensors", "consumes", "required_sections"]);
       for (const km of addsBlock.matchAll(/^  ([a-z_]+):/gm)) {
         if (!IMPLEMENTED_ADDS.has(km[1])) {
-          recordDrop(`contribution to ${target}: adds.${km[1]} is not yet an implemented merge surface (only produces/sensors/consumes/required_sections); ignored`);
+          recordDrop(`contribution to ${target}: adds.${km[1]} is not yet an implemented merge surface (only produces/sensors/consumes/required_sections); ignored`, "advisory");
         }
       }
 
       // required_sections values are quoted strings ("Branch Coverage"), unlike
-      // the kebab slugs in produces/sensors — parse them with a quote-aware list.
+      // the kebab slugs in produces/sensors. Capture the whole value then strip
+      // only a MATCHED pair of outer quotes — a `[^"]` class dropped any value
+      // with an interior quote (`"Say "Hi" Section"`) silently (round-5).
       const requiredSections = (() => {
         const s = addsBlock.match(/^  required_sections:\n((?:    - .*\n?)*)/m)?.[1];
         if (!s) return [];
-        return [...s.matchAll(/^    - "?([^"\n]+?)"?\s*$/gm)].map((x) => x[1]);
+        return [...s.matchAll(/^    - (.+?)\s*$/gm)]
+          .map((x) => x[1].replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1"));
       })();
 
       // Normalize CRLF up front so a merge never inserts LF lines into a CRLF
@@ -469,7 +499,7 @@ try {
       // Only merge required_sections if the installed engine accepts the key —
       // otherwise skip + drop-log rather than break the install's next compile.
       if (requiredSections.length > 0 && !requiredSectionsSafe) {
-        recordDrop(`contribution to ${target}: installed engine does not accept 'required_sections' (older dist); skipped its merge — re-copy your dist/<harness> shell to enable it`);
+        recordDrop(`contribution to ${target}: installed engine does not accept 'required_sections' (older dist); skipped its merge — re-copy your dist/<harness> shell to enable it`, "advisory");
       } else {
         stageContent = mergeRequiredSections(stageContent, requiredSections, target);
       }
@@ -485,9 +515,28 @@ try {
       const body = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)$/)?.[1] ?? "";
       const fragMeta = [...(fm.match(/^fragments:\n([\s\S]*?)(?=^\S|$(?![\s\S]))/m)?.[1] ?? "")
         .matchAll(/-\s*anchor:\s*(\S+)\s*\n\s*order:\s*(\d+)/g)].map((m) => ({ anchor: m[1], order: Number(m[2]) }));
+      // Split the body into `## fragment: <anchor>` blocks with a FENCE-AWARE line
+      // scanner, not a global regex: a `## fragment:` line INSIDE a ``` code fence
+      // (exactly how an author documents the fragment format) must NOT be treated
+      // as a delimiter — the regex form truncated the block there and spawned
+      // phantom blocks, silently dropping trailing real prose (round-5).
       const blocksByAnchor = new Map<string, string[]>();
-      for (const m of body.matchAll(/^## fragment:\s*(\S+)\s*\n([\s\S]*?)(?=^## fragment:|$(?![\s\S]))/gm)) {
-        (blocksByAnchor.get(m[1]) ?? blocksByAnchor.set(m[1], []).get(m[1])!).push(m[2].trim());
+      {
+        let curAnchor: string | null = null; let curLines: string[] = [];
+        let inFence = false; let fenceTok = "";
+        const flush = () => { if (curAnchor !== null) (blocksByAnchor.get(curAnchor) ?? blocksByAnchor.set(curAnchor, []).get(curAnchor)!).push(curLines.join("\n").trim()); };
+        for (const line of body.split("\n")) {
+          const fence = line.match(/^(\s*)(`{3,}|~{3,})/);
+          if (fence) {
+            const tok = fence[2][0];
+            if (!inFence) { inFence = true; fenceTok = tok; }
+            else if (tok === fenceTok) { inFence = false; fenceTok = ""; }
+          }
+          const hdr = !inFence && line.match(/^## fragment:\s*(\S+)\s*$/);
+          if (hdr) { flush(); curAnchor = hdr[1]; curLines = []; continue; }
+          if (curAnchor !== null) curLines.push(line);
+        }
+        flush();
       }
       const frags: Fragment[] = [];
       for (const meta of fragMeta) {
@@ -495,6 +544,14 @@ try {
         const prose = (queue && queue.length > 0 ? queue.shift()! : "").replaceAll("{{HARNESS_DIR}}", HARNESS_LEAF);
         if (!prose) { recordDrop(`contribution to ${target}: fragment anchor "${meta.anchor}" order ${meta.order} has no matching "## fragment: ${meta.anchor}" prose block; dropped`); continue; }
         frags.push({ ...meta, bundle, prose });
+      }
+      // Leftover body blocks with no matching frontmatter entry are dropped-with-
+      // log — the "or vice versa" half the prior comment promised but never did
+      // (round-5). An empty leftover (blank prose) is ignored, not logged.
+      for (const [anchor, remaining] of blocksByAnchor) {
+        for (const leftover of remaining) {
+          if (leftover) recordDrop(`contribution to ${target}: "## fragment: ${anchor}" prose block has no matching frontmatter fragments entry; dropped`);
+        }
       }
 
       // Splice each fragment at its ordered (order, bundle) slot. A same

@@ -468,7 +468,10 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
     ? `plugin-${pluginMatch[1]}-${base.replace(/\.test\.ts$/, "")}`
     : base.replace(/\.test\.ts$/, "");
 
-  if (filterRegex && !filterRegex.test(base)) return;
+  // Match the filter against BOTH the basename and the qualified name shown in
+  // output/summary — a user who copies the displayed `plugin-<plugin>-<stem>`
+  // name into --filter would otherwise select nothing and see a green run (round-5).
+  if (filterRegex && !filterRegex.test(base) && !filterRegex.test(name)) return;
 
   if (shouldSkipForClaude(file)) {
     process.stdout.write(`\n=== SKIP ${base} ===\n`);
@@ -505,7 +508,10 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
 
   if (args.debug) {
     process.stdout.write(`Debug artifacts for ${base}:\n`);
-    process.stdout.write(`  log: ${displayLogDirPath(join(logDir, `${base}.log`))}\n`);
+    // Log filename keys on the QUALIFIED name (not bare basename): two plugins
+    // both shipping plugin.test.ts would otherwise write the same log file, and
+    // the failing one's detail would be overwritten by a passing sibling (round-5).
+    process.stdout.write(`  log: ${displayLogDirPath(join(logDir, `${name}.log`))}\n`);
     process.stdout.write(`  driver traces: ${displayLogDirPath(logDir)}/{sdk,tui,kiro-acp}-drive-*.ndjson\n`);
   }
 
@@ -545,7 +551,7 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
   rmSync(junitXml, { force: true });
 
   if (args.verbose) {
-    const logFile = join(logDir, `${base}.log`);
+    const logFile = join(logDir, `${name}.log`);
     writeFileSync(
       logFile,
       [
@@ -723,7 +729,7 @@ function writeVerboseSummary(): void {
     for (const row of resultRows) {
       if (row.status !== "FAIL") continue;
       failures.push(`FAIL: ${row.name} (${row.failed} failed assertions)`);
-      const logFile = join(logDir, `${row.name}.test.ts.log`);
+      const logFile = join(logDir, `${row.name}.log`);
       if (existsSync(logFile)) {
         // bun:test marks a failing case with a line that STARTS WITH `(fail)`
         // (e.g. `(fail) my test name [0.4ms]`) and prints the assertion detail
