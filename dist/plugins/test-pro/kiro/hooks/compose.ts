@@ -433,7 +433,9 @@ try {
         return [...s.matchAll(/^    - "?([^"\n]+?)"?\s*$/gm)].map((x) => x[1]);
       })();
 
-      let stageContent = readFileSync(stageFile, "utf-8");
+      // Normalize CRLF up front so a merge never inserts LF lines into a CRLF
+      // stage (mixed endings). Contribution content is already normalized above.
+      let stageContent = readFileSync(stageFile, "utf-8").replace(/\r\n/g, "\n");
       const before = stageContent;
       stageContent = mergeListField(stageContent, "produces", listOf("produces"), target);
       stageContent = mergeListField(stageContent, "sensors", listOf("sensors"), target);
@@ -504,9 +506,23 @@ try {
   // covers that case: written on compile failure, deleted on success, and any
   // presence forces a retry next run — so a transient failure self-heals for
   // stage-carrying AND contributions-only plugins alike (round-3). The marker is
-  // PROJECT-side (never in PLUGIN_ROOT, which may be read-only / under dist/),
-  // keyed by the plugin root's basename so two plugins don't clobber each other.
-  const pluginKey = PLUGIN_ROOT.replace(/\\/g, "/").replace(/\/+$/, "").split("/").pop() || "plugin";
+  // PROJECT-side (never in PLUGIN_ROOT, which may be read-only / under dist/), and
+  // keyed by the PLUGIN'S IDENTITY. NOT the plugin-root basename: a projection root
+  // is `dist/plugins/<name>/<harness>`, so its basename is the harness leaf
+  // (claude/kiro), shared by every plugin — two plugins on one harness would then
+  // share one marker and one's successful compose would erase another's pending
+  // retry. Prefer the manifest `name`; fall back to the parent-dir (the <name>
+  // segment) so the key is still plugin-specific even without a readable manifest.
+  const pluginKey = (() => {
+    for (const md of [".claude-plugin", ".codex-plugin", ".kiro-plugin"]) {
+      try {
+        const m = JSON.parse(readFileSync(join(PLUGIN_ROOT, md, "plugin.json"), "utf-8"));
+        if (typeof m?.name === "string" && m.name) return m.name.replace(/[^\w.-]/g, "_");
+      } catch { /* try next / fall through */ }
+    }
+    const parts = PLUGIN_ROOT.replace(/\\/g, "/").replace(/\/+$/, "").split("/");
+    return (parts[parts.length - 2] || parts[parts.length - 1] || "plugin").replace(/[^\w.-]/g, "_");
+  })();
   const retryMarker = join(PROJECT_DIR, "aidlc", `.plugin-compose-retry-${pluginKey}`);
   const retryPending = existsSync(retryMarker);
   if (changed || graphMissingPluginStage || retryPending) {

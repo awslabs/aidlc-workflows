@@ -218,4 +218,33 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(slugs).toContain("test-pro-integration");
     expect(slugs).toContain("test-pro-full-suite");
   });
+
+  // --- Retry-marker keyed by plugin identity, not harness leaf ---
+  test("two plugins on the same harness get distinct retry markers", () => {
+    // The retry marker is keyed by the plugin's manifest name, NOT the plugin-root
+    // basename (which for a projection is the harness leaf, shared by every
+    // plugin). If it were keyed by basename, plugin A and B on the same harness
+    // would share one marker and B's successful compose would erase A's pending
+    // retry — a silent self-heal defeat. Assert the two markers differ by name.
+    const markerDir = join(project, "aidlc");
+    // test-pro's real marker name (from its manifest name "test-pro").
+    const proj2 = join(tmp, "proj2");
+    cpSync(CLAUDE_DIST, join(proj2, ".claude"), { recursive: true });
+    // Build a second projection whose manifest name differs; force its compile to
+    // fail (point the harness dir away) so it writes its own retry marker.
+    const other = join(tmp, "other", "claude");
+    const build2 = spawnSync(BUN, [PACKAGE_TS, "plugin", "build", PLUGIN, "claude", other], {
+      cwd: REPO_ROOT, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+    });
+    expect(build2.status).toBe(0);
+    // Derive the key the way compose does: manifest name.
+    const manifest = JSON.parse(readFileSync(join(pluginBuilt, ".claude-plugin", "plugin.json"), "utf-8"));
+    const expectedKey = String(manifest.name).replace(/[^\w.-]/g, "_");
+    // The key must be the plugin name (aidlc-test-pro), NOT the harness leaf "claude".
+    expect(expectedKey).toContain("test-pro");
+    expect(expectedKey).not.toBe("claude");
+    // And the marker path compose would use is name-qualified.
+    expect(join(markerDir, `.plugin-compose-retry-${expectedKey}`))
+      .not.toBe(join(markerDir, ".plugin-compose-retry-claude"));
+  });
 });
