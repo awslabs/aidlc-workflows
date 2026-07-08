@@ -115,8 +115,8 @@ Workspace detection (0.2) used to be a subagent; it now runs deterministically i
 
 | Model | Agents | Rationale |
 |-------|--------|-----------|
-| `opus` | architect, product, design, developer, quality, devsecops, compliance, aws-platform (8) | High-judgment, multi-constraint reasoning whose decisions cascade downstream — architectural boundaries, intent interpretation, UX trade-offs, code synthesis, threat prioritisation, regulatory edge-cases, cloud architecture |
-| `sonnet` | delivery, pipeline-deploy, operations (3) | Output is dominantly templated planning tables, CI/CD YAML, or observability/runbook scaffolding; methodology is encoded in the agent's knowledge files |
+| `opus` | architect, product, design, developer, quality, devsecops, compliance, aws-platform, composer (9) | High-judgment, multi-constraint reasoning whose decisions cascade downstream - architectural boundaries, intent interpretation, UX trade-offs, code synthesis, threat prioritisation, regulatory edge-cases, cloud architecture |
+| `sonnet` | architecture-reviewer, product-lead, delivery, pipeline-deploy, operations (5) | Output is dominantly templated planning tables, CI/CD YAML, or observability/runbook scaffolding, or review against an explicit checklist; methodology is encoded in the agent's knowledge files |
 
 ---
 

@@ -83,10 +83,10 @@ Every agent *can* reach Bash and WebSearch by inheritance; the table records whi
 
 | Model | Agents |
 |-------|--------|
-| opus | aidlc-architect-agent, aidlc-product-agent, aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-aws-platform-agent |
-| sonnet | aidlc-delivery-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
+| opus | aidlc-architect-agent, aidlc-product-agent, aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-aws-platform-agent, aidlc-composer-agent |
+| sonnet | aidlc-architecture-reviewer-agent, aidlc-product-lead-agent, aidlc-delivery-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
 
-Omitting `model:` uses Claude Code's `inherit` default, so a delegated subagent runs on the session model. The shipped agents declare explicit values; an agent uses sonnet only when its output is dominantly templated or pattern-following (delivery plans, CI/CD YAML, observability/runbook scaffolding) and the methodology is already encoded in knowledge files.
+Omitting `model:` uses Claude Code's `inherit` default, so a delegated subagent runs on the session model. The shipped agents declare explicit values; an agent uses sonnet only when its output is dominantly templated or pattern-following (delivery plans, CI/CD YAML, observability/runbook scaffolding) and the methodology is already encoded in knowledge files. The Claude Code and Codex harnesses read `model:` from the agent .md frontmatter; Kiro CLI and Kiro IDE read the per-agent `"model"` field in `harness/kiro*/agents/aidlc-*-agent.json` and ignore the .md value.
 
 Opus is used for any agent whose work involves high-judgment, multi-constraint reasoning that cascades downstream:
 
@@ -119,7 +119,7 @@ Opus is used for any agent whose work involves high-judgment, multi-constraint r
 
 **Observations:**
 - aidlc-architect-agent has the broadest stage involvement (9 stages across 3 phases).
-- Eight of 11 agents run on opus; the three sonnet agents (delivery, pipeline-deploy, operations) handle dominantly templated planning, CI/CD, and runbook work.
+- Across the full 14-agent roster, nine run on opus and five on sonnet; the sonnet agents (architecture-reviewer, product-lead, delivery, pipeline-deploy, operations) produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
 - aidlc-compliance-agent operates purely in an advisory capacity (4 support stages, no lead stages).
 - Six of 11 agents have Bash access, all in roles that need CLI interaction.
 - Three agents have WebSearch access for research tasks.
