@@ -37,6 +37,8 @@ describe("t217 reviewer read-scope bound is stated on every surface", () => {
     expect(body).toMatch(/directive\.unit.*directive\.consumes/s);
     // Explicit prohibition on reading sibling units.
     expect(body).toMatch(/must not read other units'? .*construction/i);
+    // The bound is tool-agnostic: grep/glob/shell patterns spanning siblings count as reads.
+    expect(body).toMatch(/grep, glob, or shell patterns/);
     // The spot-check carve-out is present.
     expect(body.toLowerCase()).toContain("spot-check");
   });
@@ -72,6 +74,8 @@ describe("t217 reviewer read-scope bound is stated on every surface", () => {
       expect(labelledBody).toMatch(/Reviewer step \(§12a\)/);
       expect(labelledBody).toMatch(/directive\.consumes/);
       expect(labelledBody).toMatch(/must not read other units'? .*construction/i);
+      // The bound is tool-agnostic on every harness surface.
+      expect(labelledBody).toMatch(/grep, glob, and shell patterns/);
     }
   });
 });

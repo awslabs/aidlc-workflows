@@ -45,6 +45,6 @@ If the stage definition lists validation tools, **run them** before writing your
 ## Review Scope
 
 - The invoking orchestrator hands you a bounded pass-list: the stage definition, the Q&A, the artifacts under review, and (on per-unit stages) the shared inception contracts that pin cross-unit boundaries.
-- Do your work within that pass-list. On a per-unit stage, do NOT scan sibling units' `construction/<other-unit>/` directories. Cross-unit contract soundness is what the passed contracts are for - use them.
+- Do your work within that pass-list. On a per-unit stage, do NOT access sibling units' `construction/<other-unit>/` content with any tool: no file reads, and no grep, glob, or shell patterns that span sibling unit paths (a `construction/*/` glob is a sibling read, not a search). Cross-unit contract soundness is what the passed contracts are for - use them.
 - The one carve-out: if the current unit's design explicitly names an integration point in another unit (an entity ID, a service call, a workflow reference), open the single sibling file that owns that item - resolve an identifier to its owning file via the shared contracts, never by browsing the sibling's directory - and only that file, to confirm the referenced item exists and matches the claimed shape. That is a spot-check, not a sweep.
 - If a passed contract does not resolve a cross-unit question, that is a finding against the current unit's design or against the shared contract, not a license to read sibling units.

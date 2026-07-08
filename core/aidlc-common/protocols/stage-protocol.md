@@ -866,13 +866,13 @@ If the `run-stage` directive includes a `reviewer` field (non-null), the orchest
 
    Do NOT pass: `memory.md` (builder's diary) or any plan/reasoning files. The reviewer forms independent judgment.
 
-   **Reviewer read scope.** The reviewer's scope is the current unit's artifacts plus the passed contract paths. On a per-unit stage the reviewer MUST NOT read other units' `construction/<other-unit>/` directories except to spot-check an integration point the current unit's design explicitly names, and only the owning file, resolved via the shared contracts rather than by browsing the sibling's directory. Cross-unit contract verification runs against the shared inception artifacts passed above, not against a sweep of sibling units' design prose.
+   **Reviewer read scope.** The reviewer's scope is the current unit's artifacts plus the passed contract paths. On a per-unit stage the reviewer MUST NOT read other units' `construction/<other-unit>/` content through any tool - not by opening files, and not via grep, glob, or shell patterns that span sibling unit paths (a `construction/*/` glob is a sibling read, not a search) - except to spot-check an integration point the current unit's design explicitly names, and only the owning file, resolved via the shared contracts rather than by browsing or searching the sibling's directory. Cross-unit contract verification runs against the shared inception artifacts passed above, not against a sweep of sibling units' design prose.
 
 2. **Reviewer executes.** The reviewer sub-agent:
    - Reads the stage definition to understand what SHOULD have been produced
    - Reads the Q&A to understand context and constraints
    - Reads the artifact(s) to evaluate what WAS produced
-   - Verifies cross-unit contract claims against the passed shared inception contracts, not by sweeping sibling units' design directories; opens another unit's file only when the current unit's design explicitly names it as an integration point, and only that file
+   - Verifies cross-unit contract claims against the passed shared inception contracts, not by sweeping or searching sibling units' design directories (no cross-unit grep or glob patterns); opens another unit's file only when the current unit's design explicitly names it as an integration point, and only that file
    - Runs any validation tools listed (via shell) and includes results in findings
    - Appends a `## Review` section to the primary artifact file with verdict: READY or NOT-READY
 
