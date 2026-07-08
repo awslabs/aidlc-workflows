@@ -9,16 +9,24 @@
 // everything" sweep. This test pins the four surfaces that carry the
 // bound - protocol, persona, knowledge, orchestrator - so a well-meaning
 // prose sweep cannot silently drop it.
+// The persona file is the load-bearing surface on Claude Code and Codex (Kiro additionally auto-loads the knowledge file via its agent JSON resources); keep the bound in the persona, not knowledge-only.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AIDLC_SRC } from "../harness/fixtures.ts";
+import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
 
 const PROTOCOL = "aidlc-common/protocols/stage-protocol.md";
 const PERSONA = "agents/aidlc-architecture-reviewer-agent.md";
 const KNOWLEDGE = "knowledge/aidlc-architecture-reviewer-agent/reviewing.md";
 const SKILL = "skills/aidlc/SKILL.md";
+
+const HARNESS_SKILL_SOURCES = [
+  { name: "claude", path: join(REPO_ROOT, "harness", "claude", SKILL) },
+  { name: "kiro", path: join(REPO_ROOT, "harness", "kiro", SKILL) },
+  { name: "kiro-ide", path: join(REPO_ROOT, "harness", "kiro-ide", SKILL) },
+  { name: "codex", path: join(REPO_ROOT, "harness", "codex", SKILL) },
+];
 
 describe("t217 reviewer read-scope bound is stated on every surface", () => {
   test("stage-protocol §12a step 1 names directive.consumes as a per-unit pass-list entry", () => {
@@ -57,10 +65,13 @@ describe("t217 reviewer read-scope bound is stated on every surface", () => {
   });
 
   test("orchestrator SKILL.md reviewer bullet names directive.consumes and the read-scope bound", () => {
-    const body = readFileSync(join(AIDLC_SRC, SKILL), "utf-8");
-    // Reviewer step bullet exists and now carries both parts of the bound.
-    expect(body).toMatch(/Reviewer step \(§12a\)/);
-    expect(body).toMatch(/directive\.consumes/);
-    expect(body).toMatch(/must not read other units'? .*construction/i);
+    for (const harnessSkill of HARNESS_SKILL_SOURCES) {
+      const body = readFileSync(harnessSkill.path, "utf-8");
+      const labelledBody = `harness ${harnessSkill.name}: ${harnessSkill.path}\n${body}`;
+      // Reviewer step bullet exists and now carries both parts of the bound.
+      expect(labelledBody).toMatch(/Reviewer step \(§12a\)/);
+      expect(labelledBody).toMatch(/directive\.consumes/);
+      expect(labelledBody).toMatch(/must not read other units'? .*construction/i);
+    }
   });
 });

@@ -861,12 +861,12 @@ If the `run-stage` directive includes a `reviewer` field (non-null), the orchest
    - The stage definition file path (`directive.stage_file`)
    - The Q&A file path (e.g., `<record>/<phase>/<stage>/<stage>-questions.md`)
    - All artifact file paths produced by the stage (the `produces` artifacts)
-   - For a per-unit stage (`directive.unit` present), also the resolved paths in `directive.consumes` (the shared inception contracts - `components.md`, `component-methods.md`, `services.md`, `unit-of-work.md`, and any other upstream artifacts the stage declares - paths only, per the context-budget rule)
+   - For a per-unit stage (`directive.unit` present), also the resolved paths in `directive.consumes` (all upstream artifacts the stage declares, including the shared inception contracts that pin cross-unit boundaries - `components.md`, `component-methods.md`, `services.md`, `unit-of-work.md` - paths only, per the context-budget rule)
    - The validation tools list from the stage definition's frontmatter (if any)
 
    Do NOT pass: `memory.md` (builder's diary) or any plan/reasoning files. The reviewer forms independent judgment.
 
-   **Reviewer read scope.** The reviewer's scope is the current unit's artifacts plus the passed contract paths. On a per-unit stage the reviewer MUST NOT read other units' `construction/<other-unit>/` directories except to spot-check an integration point the current unit's design explicitly names, and only the specific file that names it. Cross-unit contract verification runs against the shared inception artifacts passed above, not against a sweep of sibling units' design prose.
+   **Reviewer read scope.** The reviewer's scope is the current unit's artifacts plus the passed contract paths. On a per-unit stage the reviewer MUST NOT read other units' `construction/<other-unit>/` directories except to spot-check an integration point the current unit's design explicitly names, and only the owning file, resolved via the shared contracts rather than by browsing the sibling's directory. Cross-unit contract verification runs against the shared inception artifacts passed above, not against a sweep of sibling units' design prose.
 
 2. **Reviewer executes.** The reviewer sub-agent:
    - Reads the stage definition to understand what SHOULD have been produced

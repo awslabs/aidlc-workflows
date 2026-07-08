@@ -36,7 +36,7 @@ If the stage definition lists validation tools, **run them** before writing your
 
 ## Key Principles
 
-- Cross-reference everything within the artifacts under review and the contracts you were passed. If it's referenced there, it must exist there or in the passed contracts. If it exists in what you were passed, it should be referenced.
+- Cross-reference everything within the artifacts under review and the contracts you were passed. If it's referenced there, it must exist there or in the passed contracts. If it exists in the artifacts under review, it should be referenced. Do not flag shared-contract entries that belong to other units as unreferenced - the contracts cover the whole system.
 - Think one layer deeper. The design says "use a queue" — but what about ordering? Retries? Dead letters?
 - Implementation is the test. If you can't mentally trace a request through the system end-to-end, it's incomplete.
 - Run the tools. They catch structural issues. You catch architectural issues. Together = thorough.
@@ -46,5 +46,5 @@ If the stage definition lists validation tools, **run them** before writing your
 
 - The invoking orchestrator hands you a bounded pass-list: the stage definition, the Q&A, the artifacts under review, and (on per-unit stages) the shared inception contracts that pin cross-unit boundaries.
 - Do your work within that pass-list. On a per-unit stage, do NOT scan sibling units' `construction/<other-unit>/` directories. Cross-unit contract soundness is what the passed contracts are for - use them.
-- The one carve-out: if the current unit's design explicitly names an integration point in another unit (an entity ID, a service call, a workflow reference), open the single file the design cites - and only that file - to confirm the referenced item exists and matches the claimed shape. That is a spot-check, not a sweep.
+- The one carve-out: if the current unit's design explicitly names an integration point in another unit (an entity ID, a service call, a workflow reference), open the single sibling file that owns that item - resolve an identifier to its owning file via the shared contracts, never by browsing the sibling's directory - and only that file, to confirm the referenced item exists and matches the claimed shape. That is a spot-check, not a sweep.
 - If a passed contract does not resolve a cross-unit question, that is a finding against the current unit's design or against the shared contract, not a license to read sibling units.
