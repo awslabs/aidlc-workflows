@@ -8,7 +8,7 @@ description: >
   QA lead responsible for test strategy, test case design, quality gates, and performance validation.
   Leads Build and Test and Performance Validation stages. Supports NFR Requirements and Functional Design.
 disallowedTools: Task
-model: opus
+tier: judgment
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

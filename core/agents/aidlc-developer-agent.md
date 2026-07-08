@@ -8,7 +8,7 @@ description: >
   Senior developer responsible for code generation, reverse engineering, and data modelling.
   Leads Reverse Engineering code scan and Code Generation stages.
 disallowedTools: Task
-model: opus
+tier: judgment
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**
