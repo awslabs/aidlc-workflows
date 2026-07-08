@@ -37,6 +37,7 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  lstatSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -845,6 +846,16 @@ if (argv[0] === "plugin" && argv[1] === "build") {
   // non-empty dir that is not itself a prior projection (its manifestDir marks
   // one) unless --force — `plugin build test-pro claude .` must not wipe cwd.
   const resolvedOut = isAbsolute(outDir) ? outDir : join(process.cwd(), outDir);
+  // A symlink path entry (including a BROKEN one, which existsSync reports as
+  // false because it follows the link) would slip past the existsSync guard and
+  // make mkdirSync throw a raw EEXIST stack. lstatSync sees the link itself —
+  // refuse any symlink outDir with a proper usage error (round-6).
+  let outLstat: ReturnType<typeof statSync> | null = null;
+  try { outLstat = lstatSync(resolvedOut); } catch { outLstat = null; }
+  if (outLstat?.isSymbolicLink()) {
+    console.error(`refusing to build into "${outDir}" — it is a symlink; point at a real directory path.`);
+    process.exit(1);
+  }
   if (existsSync(resolvedOut)) {
     // A FILE (not a directory) outDir would make readdirSync throw a raw ENOTDIR
     // stack — give a proper usage error instead (the round-3 guard's promise).

@@ -272,10 +272,14 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
     });
     expect(r.status).toBe(0); // compose is fail-open — never breaks the session
+    // Drops files are per-plugin (`plugin-compose-<key>.drops`) — aggregate any
+    // that exist under the health dir.
     let drops = "";
-    for (const d of ["aidlc/spaces/default/intents/.aidlc-hooks-health/plugin-compose.drops"]) {
-      const dp = join(proj, d);
-      if (existsSync(dp)) drops += readFileSync(dp, "utf-8");
+    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+    if (existsSync(hd)) {
+      for (const f of require("node:fs").readdirSync(hd) as string[]) {
+        if (f.startsWith("plugin-compose") && f.endsWith(".drops")) drops += readFileSync(join(hd, f), "utf-8");
+      }
     }
     return { drops, proj };
   }
@@ -428,13 +432,61 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   });
 
   test("compose self-clears its drops file on a clean run", () => {
-    // A prior run left a drops file; a clean compose (no drops) removes it.
+    // A clean compose (no drops) leaves no drops file for this plugin.
     const { proj } = composeSynthetic("syn-clean", {
       "contributions/construction/build-and-test.md":
         `---\ntarget: build-and-test\nbundle: syn-clean\nadds:\n  produces:\n    - syn-clean-artifact\n---\n`,
     });
-    const dropFile = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health", "plugin-compose.drops");
-    // A clean contribution produces no drops → the file must not exist (or be absent).
+    const dropFile = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health", "plugin-compose-syn-clean.drops");
     expect(existsSync(dropFile)).toBe(false);
+  });
+
+  // --- Round-6: per-plugin drops isolation + nested fence + bundle colon ---
+  test("a clean plugin's compose does NOT erase another plugin's drops (R6-B1)", () => {
+    // Two plugins on the same project: A degrades (missing target), B is clean.
+    // B's compose must not delete A's degraded drop (per-plugin drops files).
+    const proj = mkdtempSync(join(tmp, "syn-iso-"));
+    cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    const mkPlugin = (name: string, contrib: string) => {
+      const root = join(proj, `_pl-${name}`);
+      cpSync(join(pluginBuilt, ".claude-plugin"), join(root, ".claude-plugin"), { recursive: true });
+      cpSync(join(pluginBuilt, "hooks"), join(root, "hooks"), { recursive: true });
+      const mf = join(root, ".claude-plugin", "plugin.json");
+      const m = JSON.parse(readFileSync(mf, "utf-8")); m.name = name; writeFileSync(mf, JSON.stringify(m));
+      const p = join(root, "contributions", "construction", "c.md");
+      require("node:fs").mkdirSync(dirname(p), { recursive: true });
+      writeFileSync(p, contrib);
+      spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
+        cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+        env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+      });
+    };
+    mkPlugin("pl-degraded", `---\ntarget: no-such-stage-xyz\nbundle: pl-degraded\nadds:\n  produces: []\n---\n`);
+    mkPlugin("pl-clean", `---\ntarget: build-and-test\nbundle: pl-clean\nadds:\n  produces:\n    - pl-clean-artifact\n---\n`);
+    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+    expect(existsSync(join(hd, "plugin-compose-pl-degraded.drops"))).toBe(true); // survived B's clean run
+  });
+
+  test("a nested ```` fence does not mis-close on an inner ``` (R6-B2)", () => {
+    const nested = [
+      "---", "target: build-and-test", "bundle: syn-nest",
+      "adds:", "  produces: []",
+      "fragments:", "  - anchor: after-step:9", "    order: 100", "---", "",
+      "## fragment: after-step:9", "", "### Step 9-NEST (syn): docs", "",
+      "Real intro.", "", "````markdown", "Example:", "```", "## fragment: PHANTOM", "```", "````", "",
+      "NEST-TAIL-SURVIVES.", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-nest", { "contributions/construction/build-and-test.md": nested });
+    const body = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8");
+    expect(body).toContain("NEST-TAIL-SURVIVES");
+    expect(drops).not.toContain("PHANTOM");
+  });
+
+  test("a bundle containing ':' is refused with a log (R6-L4)", () => {
+    const { drops } = composeSynthetic("syn-colon", {
+      "contributions/construction/build-and-test.md":
+        `---\ntarget: build-and-test\nbundle: bad:bundle\nadds:\n  produces:\n    - syn-colon-artifact\n---\n`,
+    });
+    expect(drops).toContain("invalid bundle");
   });
 });

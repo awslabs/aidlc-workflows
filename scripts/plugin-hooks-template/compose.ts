@@ -39,6 +39,25 @@ const HARNESS_DIR = join(PROJECT_DIR, HARNESS_LEAF);
 const STAGES_DIR = join(HARNESS_DIR, "aidlc-common", "stages");
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"];
 
+// The plugin's stable IDENTITY, computed once up front so every per-plugin
+// artifact (the drops file, the retry marker) is keyed the same way — including
+// on the early-exit guards, which flush drops before the main body runs. NOT the
+// plugin-root basename: a projection root is `dist/plugins/<name>/<harness>`, so
+// its basename is the harness leaf (claude/kiro), shared by every plugin — keying
+// on it would let two plugins on one harness clobber each other's drops/retry
+// files. Prefer the manifest `name`; fall back to the parent-dir <name> segment.
+const PLUGIN_KEY = (() => {
+  if (!PLUGIN_ROOT) return "plugin";
+  for (const md of [".claude-plugin", ".codex-plugin", ".kiro-plugin"]) {
+    try {
+      const m = JSON.parse(readFileSync(join(PLUGIN_ROOT, md, "plugin.json"), "utf-8"));
+      if (typeof m?.name === "string" && m.name) return m.name.replace(/[^\w.-]/g, "_");
+    } catch { /* try next / fall through */ }
+  }
+  const parts = PLUGIN_ROOT.replace(/\\/g, "/").replace(/\/+$/, "").split("/");
+  return (parts[parts.length - 2] || parts[parts.length - 1] || "plugin").replace(/[^\w.-]/g, "_");
+})();
+
 // Resolve the hooks-health dir from the INSTALLED tree so compose drops land
 // exactly where core hooks write theirs (hooksHealthDir under docsRoot) and where
 // --doctor scans — not a bespoke flat path (round-2 major: the old path was read
@@ -74,10 +93,16 @@ function recordDrop(reason: string, severity: DropSeverity = "degraded"): void {
 // the latest compose — it self-clears when the cause is fixed and re-composed,
 // and can't grow unboundedly on a persistent collision (round-5). Doctor reading
 // it therefore sees a live signal, not accumulated history.
+// The drops file is PER-PLUGIN (`plugin-compose-<PLUGIN_KEY>.drops`), not a
+// single shared file: SessionStart runs one compose per installed plugin against
+// the same project, and an overwrite-per-run shared file let the LAST plugin win
+// — a clean plugin's compose (or an early-exit guard) deleted another plugin's
+// live degraded drop, so doctor went green (round-6). Per-plugin files isolate
+// each plugin's signal; doctor globs `*.drops` and aggregates them all.
 async function flushDrops(): Promise<void> {
   try {
     const healthDir = await resolveHealthDir();
-    const dropFile = join(healthDir, "plugin-compose.drops");
+    const dropFile = join(healthDir, `plugin-compose-${PLUGIN_KEY}.drops`);
     if (_drops.length === 0) {
       if (existsSync(dropFile)) rmSync(dropFile, { force: true });
     } else {
@@ -429,6 +454,10 @@ try {
       // below; a missing one was a silent bare continue).
       if (!target) { recordDrop(`contribution "${file}" has no parseable frontmatter target: — skipped (check for a BOM, a leading blank line, or a missing target: key)`); continue; }
       const bundle = fm.match(/^bundle:\s*(.+)$/m)?.[1].trim() ?? "";
+      // `:` is the fragment-sentinel delimiter (<!-- plugin:bundle:anchor:order -->),
+      // so a bundle containing `:` would break the peer-block scan's `[^:]+` and
+      // silently misorder splices. Reject it up front (round-6).
+      if (bundle.includes(":")) { recordDrop(`contribution "${file}" has an invalid bundle "${bundle}" (must not contain ':'); skipped`); continue; }
       const stageFile = findStageFile(target);
       if (!stageFile) { recordDrop(`contribution "${file}" targets missing stage "${target}"`); continue; }
 
@@ -485,8 +514,15 @@ try {
       const requiredSections = (() => {
         const s = addsBlock.match(/^  required_sections:\n((?:    - .*\n?)*)/m)?.[1];
         if (!s) return [];
-        return [...s.matchAll(/^    - (.+?)\s*$/gm)]
-          .map((x) => x[1].replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1"));
+        const out: string[] = [];
+        for (const x of s.matchAll(/^    - (.+?)\s*$/gm)) {
+          const v = x[1].replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1").trim();
+          // An empty (or quote-only) value would merge a useless `- ""` into the
+          // stage with no signal — drop-log it instead (round-6).
+          if (v === "") { recordDrop(`contribution to ${target}: empty required_sections value; dropped`); continue; }
+          out.push(v);
+        }
+        return out;
       })();
 
       // Normalize CRLF up front so a merge never inserts LF lines into a CRLF
@@ -523,14 +559,18 @@ try {
       const blocksByAnchor = new Map<string, string[]>();
       {
         let curAnchor: string | null = null; let curLines: string[] = [];
-        let inFence = false; let fenceTok = "";
+        let inFence = false; let fenceChar = ""; let fenceLen = 0;
         const flush = () => { if (curAnchor !== null) (blocksByAnchor.get(curAnchor) ?? blocksByAnchor.set(curAnchor, []).get(curAnchor)!).push(curLines.join("\n").trim()); };
         for (const line of body.split("\n")) {
-          const fence = line.match(/^(\s*)(`{3,}|~{3,})/);
+          // CommonMark fence rules: a closing fence is the SAME char, length >=
+          // the opener, and carries no info string. Tracking only the char (not
+          // the length) let an inner ``` close an outer ```` — so documenting the
+          // fragment format with a nested fence corrupted the block (round-6).
+          const fence = line.match(/^(\s*)(`{3,}|~{3,})(.*)$/);
           if (fence) {
-            const tok = fence[2][0];
-            if (!inFence) { inFence = true; fenceTok = tok; }
-            else if (tok === fenceTok) { inFence = false; fenceTok = ""; }
+            const ch = fence[2][0]; const len = fence[2].length; const info = fence[3].trim();
+            if (!inFence) { inFence = true; fenceChar = ch; fenceLen = len; }
+            else if (ch === fenceChar && len >= fenceLen && info === "") { inFence = false; fenceChar = ""; fenceLen = 0; }
           }
           const hdr = !inFence && line.match(/^## fragment:\s*(\S+)\s*$/);
           if (hdr) { flush(); curAnchor = hdr[1]; curLines = []; continue; }
@@ -602,23 +642,9 @@ try {
   // presence forces a retry next run — so a transient failure self-heals for
   // stage-carrying AND contributions-only plugins alike (round-3). The marker is
   // PROJECT-side (never in PLUGIN_ROOT, which may be read-only / under dist/), and
-  // keyed by the PLUGIN'S IDENTITY. NOT the plugin-root basename: a projection root
-  // is `dist/plugins/<name>/<harness>`, so its basename is the harness leaf
-  // (claude/kiro), shared by every plugin — two plugins on one harness would then
-  // share one marker and one's successful compose would erase another's pending
-  // retry. Prefer the manifest `name`; fall back to the parent-dir (the <name>
-  // segment) so the key is still plugin-specific even without a readable manifest.
-  const pluginKey = (() => {
-    for (const md of [".claude-plugin", ".codex-plugin", ".kiro-plugin"]) {
-      try {
-        const m = JSON.parse(readFileSync(join(PLUGIN_ROOT, md, "plugin.json"), "utf-8"));
-        if (typeof m?.name === "string" && m.name) return m.name.replace(/[^\w.-]/g, "_");
-      } catch { /* try next / fall through */ }
-    }
-    const parts = PLUGIN_ROOT.replace(/\\/g, "/").replace(/\/+$/, "").split("/");
-    return (parts[parts.length - 2] || parts[parts.length - 1] || "plugin").replace(/[^\w.-]/g, "_");
-  })();
-  const retryMarker = join(PROJECT_DIR, "aidlc", `.plugin-compose-retry-${pluginKey}`);
+  // keyed by the plugin's identity (PLUGIN_KEY, computed up front) so two plugins
+  // on one harness never share a marker.
+  const retryMarker = join(PROJECT_DIR, "aidlc", `.plugin-compose-retry-${PLUGIN_KEY}`);
   const retryPending = existsSync(retryMarker);
   if (changed || graphMissingPluginStage || retryPending) {
     const bun = process.execPath;
