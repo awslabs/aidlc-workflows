@@ -47,7 +47,7 @@ description: >
   Solutions architect responsible for application design, domain modelling,
   NFR patterns, and component decomposition.
 disallowedTools: Task
-modelOverride: opus
+model: opus
 ---
 ```
 
@@ -82,15 +82,15 @@ call when the engine's `run-stage` directive carries `mode: subagent`. Allowing
 the framework is built to prevent. Every shipped agent disallows `Task`, and so
 must yours.
 
-**`modelOverride` is opus or sonnet, and the default is opus.** Reach for
+**`model` is opus or sonnet; if omitted, the delegated subagent inherits the session model.** Reach for
 `opus` for any persona whose work is high-judgment, multi-constraint reasoning
-that cascades downstream — interpreting ambiguous intent and weighing
+that cascades downstream, interpreting ambiguous intent and weighing
 architectural trade-offs under dense context. Eight of the
-11 agents run on opus for exactly this reason. Use `sonnet` only when the
+11 domain agents run on opus for exactly this reason. Use `sonnet` only when the
 output is dominantly templated or pattern-following and the methodology is
-already encoded in the agent's knowledge files — the three sonnet agents
-(delivery, pipeline-deploy, operations) produce delivery plans, CI/CD YAML, and
-runbook scaffolding. When in doubt, opus.
+already encoded in the agent's knowledge files, as with delivery plans, CI/CD
+YAML, and runbook scaffolding. When in doubt, omit `model` to inherit the
+session model or set `opus` when the persona should pin high-judgment work.
 
 Two more fields drive presentation rather than behavior. `display_name` is the
 human-readable label the statusline renders (the architect shows as "Architect
@@ -141,7 +141,7 @@ Mirroring the reference recipe, here is the workflow end to end.
 
 1. **Create the agent file** — `core/agents/<slug>-agent.md` with the
    required frontmatter: `name`, `display_name`, `examples`, `description`,
-   `disallowedTools` (including `Task`), `modelOverride`. An optional `tools:`
+   `disallowedTools` (including `Task`), `model`. An optional `tools:`
    allowlist narrows the persona; omit it to inherit the full session toolset.
    Write the body to match the shipped files' structure (Core Responsibilities,
    Stages Owned, Collaboration, Knowledge Loading, Key Principles).

@@ -252,7 +252,7 @@ description: >
   Specialist data migration persona seeded by the Harness-Engineer fixture.
   Leads the custom schema-snapshot and migration-plan stages.
 disallowedTools: Task
-modelOverride: opus
+model: opus
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

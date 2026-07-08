@@ -134,7 +134,7 @@ examples:
 description: >
   Placeholder fixture agent for t61. Not a real persona.
 disallowedTools: Task
-modelOverride: opus
+model: opus
 ---
 
 Fixture agent body.
@@ -146,7 +146,7 @@ examples:
 description: >
   Broken fixture agent — missing display_name.
 disallowedTools: Task
-modelOverride: opus
+model: opus
 ---
 `;
   writeFileSync(file, body, "utf-8");

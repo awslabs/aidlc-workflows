@@ -201,7 +201,7 @@ Agent metadata (display name, example knowledge files) is read from each agent's
    description: >
      One-paragraph description of the agent's responsibilities and which stages it leads or supports.
    disallowedTools: Task
-   modelOverride: opus
+   model: opus
    ---
    ```
 

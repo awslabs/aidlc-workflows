@@ -269,7 +269,7 @@ export default function emit(ctx: EmitContext): EmitResult {
     const { fm, body } = parseAgentMd(raw);
     const name = fm.name ?? "";
     const description = (fm.description ?? "").replace(/\s+/g, " ").trim();
-    const model = D7_MODEL_MAP[fm.modelOverride ?? ""] ?? D7_MODEL_MAP.opus;
+    const model = D7_MODEL_MAP[fm.model ?? ""] ?? D7_MODEL_MAP.opus;
     const instructions = rewriteProse(body);
     return (
       `name = "${name}"\n` +

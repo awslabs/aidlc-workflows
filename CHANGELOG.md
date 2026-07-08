@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.15] - 2026-07-09
+
+Agent frontmatter now uses Claude Code's real `model:` key instead of the inert `modelOverride:` key, preserving the same Opus/Sonnet policy while keeping Codex and Kiro behavior stable. **Upgrade:** re-copy your dist/<harness>/ shell into the project.
+
+* Claude Code now honors the shipped `model: sonnet` pins for architecture-reviewer, product-lead, delivery, pipeline-deploy, and operations; those five delegated agents run on Sonnet instead of the session model.
+* Codex TOML emission is byte-identical; it now reads the renamed `model` key before applying the same Opus/Sonnet mapping.
+* Kiro CLI and Kiro IDE agent JSON configs are untouched and unaffected; they continue to use their hand-authored `"model"` fields.
+
+
 ## [2.2.14] - 2026-07-09
 
 Fixes a silent-data-loss failure in Construction: when the compiled runtime graph was missing its bolt_dag node (a stale or deleted runtime-graph.json, for example when the runtime-compile hook never fired), every per-unit Construction stage silently degraded to a single iteration, so a multi-unit project shipped only its first unit with no error and the workflow completed as if done. The engine now self-heals on the read side: when the cached bolt_dag is absent it recomputes the unit batch DAG directly from inception/units-generation/unit-of-work-dependency.md (the same pure parse the compiler uses), so per-unit iteration, the approve-side coverage guard, and the autonomous swarm all see the full unit list regardless of whether a hook refreshed the graph. Scopes that never run units-generation are unaffected. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

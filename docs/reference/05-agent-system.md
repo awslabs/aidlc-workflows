@@ -21,7 +21,7 @@ description: >                      # Brief role summary (shown in Claude Code a
   System architect responsible for application design,
   NFR design, and component decomposition.
 disallowedTools: Task               # Agents cannot spawn subagents
-modelOverride: opus                 # opus for high-judgment work; sonnet for templated output
+model: opus                         # opus for high-judgment work; sonnet for templated output
 ---
 ```
 
@@ -31,7 +31,7 @@ modelOverride: opus                 # opus for high-judgment work; sonnet for te
 | `description` | Yes | Brief role summary |
 | `tools` | No | Optional allowlist; omit to inherit the full session toolset. Listing it narrows the agent and drops inherited MCP tools unless `mcp__<server>__<tool>` ids are also listed |
 | `disallowedTools` | Yes | Must include `Task` -- only the conductor delegates |
-| `modelOverride` | No | `opus` (default for most agents) or `sonnet` (templated-output agents only) |
+| `model` | No | `opus` or `sonnet` for shipped agents; omitted = `inherit`, so the delegated subagent uses the session model. Claude Code also accepts other aliases, full model ids, and `inherit` |
 
 ### Markdown Body Sections
 
@@ -86,7 +86,7 @@ Every agent *can* reach Bash and WebSearch by inheritance; the table records whi
 | opus | aidlc-architect-agent, aidlc-product-agent, aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-aws-platform-agent |
 | sonnet | aidlc-delivery-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
 
-The default is opus. An agent uses sonnet only when its output is dominantly templated or pattern-following (delivery plans, CI/CD YAML, observability/runbook scaffolding) and the methodology is already encoded in knowledge files.
+Omitting `model:` uses Claude Code's `inherit` default, so a delegated subagent runs on the session model. The shipped agents declare explicit values; an agent uses sonnet only when its output is dominantly templated or pattern-following (delivery plans, CI/CD YAML, observability/runbook scaffolding) and the methodology is already encoded in knowledge files.
 
 Opus is used for any agent whose work involves high-judgment, multi-constraint reasoning that cascades downstream:
 
@@ -150,7 +150,7 @@ L = Lead, S = Support
 
 Agent display names and example knowledge files are authoritative in each agent's `.md` frontmatter via the `display_name` and `examples` fields — no TypeScript edits required. See [Contributing: Adding an Agent](11-contributing.md#adding-an-agent) for the full recipe (required frontmatter fields, verification steps, and what validates automatically vs. manually). Quick summary of the steps:
 
-1. Create `core/agents/{name}-agent.md` with the required frontmatter: `name`, `display_name`, `examples`, `description`, `disallowedTools` (including `Task`), `modelOverride`. An optional `tools:` allowlist narrows the inherited toolset; omit it to inherit the full session toolset. `loadAgents()` in `core/tools/aidlc-lib.ts` discovers the file on next invocation.
+1. Create `core/agents/{name}-agent.md` with the required frontmatter: `name`, `display_name`, `examples`, `description`, `disallowedTools` (including `Task`), `model`. An optional `tools:` allowlist narrows the inherited toolset; omit it to inherit the full session toolset. `loadAgents()` in `core/tools/aidlc-lib.ts` discovers the file on next invocation.
 2. Add knowledge files to `core/knowledge/{name}-agent/`
 3. Add the agent to the stage files (`core/aidlc-common/stages/`) where it participates — set `lead_agent` / `support_agents` in each stage's frontmatter. The compiled `tools/data/stage-graph.json` is GENERATED from that frontmatter by `bun scripts/package.ts`; never hand-edit it (the `package.ts --check` drift guard fails CI on a hand-edited dist).
 4. Regenerate the distributions: `bun scripts/package.ts` (then `--check` to confirm no drift)
@@ -161,7 +161,7 @@ Agent display names and example knowledge files are authoritative in each agent'
 ## How to Modify an Agent
 
 - **Change tools**: Add or edit a `tools:` allowlist in frontmatter to narrow the agent; omit it to inherit the full session toolset. A `tools:` list drops inherited MCP tools unless the `mcp__<server>__<tool>` ids are also listed.
-- **Change model**: Edit `modelOverride` to `opus` or `sonnet`.
+- **Change model**: Edit `model` to `opus` or `sonnet` (or another Claude Code alias / full id / `inherit`).
 - **Change behavior**: Edit the markdown body sections (responsibilities, principles).
 - **Change stage assignments**: Edit both the agent file (Stages Owned section) and the relevant stage files (`core/aidlc-common/stages/`), then regenerate with `bun scripts/package.ts` — the compiled stage graph is derived from stage frontmatter, never hand-edited.
 
