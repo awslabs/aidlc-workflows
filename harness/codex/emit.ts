@@ -21,6 +21,7 @@ import { dirname, join, relative } from "node:path";
 import type { EmitContext, EmitResult } from "../../scripts/manifest-types.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import onboardingFills from "./onboarding.fills.ts";
+import { projectTier, type Tier, TIERS } from "../../core/tools/aidlc-tiers.ts";
 
 // ---------------------------------------------------------------------------
 // Hook wiring (kiro-normative shape: register ONLY events with a real core-hook
@@ -202,10 +203,10 @@ function emitTrustSeed(): string {
 }
 
 // --- Agent transposition: 13 persona .md → .codex/agents/*.toml -------------
-const D7_MODEL_MAP: Record<string, string> = {
-  opus: "openai.gpt-5.5",
-  sonnet: "openai.gpt-5.4",
-};
+// The D7 model map is now DERIVED from the tier projection module. Codex reads
+// `tier:` from the core agent .md (authoritative source of truth) and looks up
+// {model, effort} via projectTier. Codex additionally writes
+// model_reasoning_effort per-agent (the config.toml default is a session floor).
 
 function parseAgentMd(raw: string): { fm: Record<string, string>; body: string } {
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
@@ -269,12 +270,24 @@ export default function emit(ctx: EmitContext): EmitResult {
     const { fm, body } = parseAgentMd(raw);
     const name = fm.name ?? "";
     const description = (fm.description ?? "").replace(/\s+/g, " ").trim();
-    const model = D7_MODEL_MAP[fm.model ?? ""] ?? D7_MODEL_MAP.opus;
+    // The authored source of truth is `tier:` on the core .md; the packager's
+    // frontmatter transform doesn't run against emit.ts (Codex reads directly
+    // from core), so project tier -> {model, effort} here.
+    const tier = fm.tier ?? "judgment";
+    if (!(TIERS as readonly string[]).includes(tier)) {
+      throw new Error(
+        `${mdPath}: tier: ${tier} is not a valid tier (expected one of ${TIERS.join(", ")}).`,
+      );
+    }
+    const proj = projectTier(tier as Tier, "codex");
+    const model = proj.model;
+    const effort = "effort" in proj && proj.effort ? proj.effort : "high";
     const instructions = rewriteProse(body);
     return (
       `name = "${name}"\n` +
       `description = "${description.replace(/"/g, '\\"')}"\n` +
       `model = "${model}"\n` +
+      `model_reasoning_effort = "${effort}"\n` +
       `developer_instructions = ${tomlMultiline(instructions.trim())}\n`
     );
   }

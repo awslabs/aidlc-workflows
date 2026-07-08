@@ -51,6 +51,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import type { HarnessManifest } from "./manifest-types.ts";
 import { renderOnboarding } from "./onboarding.ts";
+import { projectTier, type Tier, TIERS } from "../core/tools/aidlc-tiers.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CORE_ROOT = join(REPO_ROOT, "core");
@@ -90,15 +91,51 @@ function applyRulesRename(s: string, harnessDir: string, rulesRename: string | n
   return s.replaceAll(`${harnessDir}/rules/`, `${harnessDir}/${rulesRename}/`);
 }
 
+// Rewrite an agent .md's frontmatter `tier: <t>` line into the harness-native
+// keys (Claude: `model:` + `effort:`; Kiro: `model:`; Codex: handled by emit.ts).
+// Called AFTER the token substitution + rules-rename pass. No-op if the file
+// carries no `tier:` line (non-agent .md, or an agent whose author declined a
+// tier - which we treat as an authoring bug the packager should surface).
+function projectTierFrontmatter(
+  s: string,
+  srcPath: string,
+  harness: "claude" | "codex" | "kiro",
+): string {
+  // Only apply inside frontmatter of files under agents/. Guard on path
+  // because a stage .md legitimately talks about "tier:" in prose.
+  if (!srcPath.includes("/agents/") || !srcPath.endsWith("-agent.md")) return s;
+  const m = s.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+  if (!m) return s;
+  const fm = m[1];
+  const tierMatch = fm.match(/^tier:\s*(\S+)\s*$/m);
+  if (!tierMatch) return s;
+  const tier = tierMatch[1];
+  if (!(TIERS as readonly string[]).includes(tier)) {
+    throw new Error(
+      `${srcPath}: tier: ${tier} is not a valid tier (expected one of ${TIERS.join(", ")}).`,
+    );
+  }
+  const proj = projectTier(tier as Tier, harness);
+  // Kiro's per-agent JSON owns the model dial; Kiro's .md frontmatter is
+  // decorative on that harness. Still write the model line so a reader can
+  // see the tier's shape.
+  let replaced = `model: ${proj.model}`;
+  if ("effort" in proj) replaced += `\neffort: ${proj.effort}`;
+  const newFm = fm.replace(/^tier:\s*\S+\s*$/m, replaced);
+  return s.replace(m[0], `---\n${newFm}\n---\n`);
+}
+
 function transform(
   srcPath: string,
   content: Buffer,
   harnessDir: string,
   rulesRename: string | null,
+  harness?: "claude" | "codex" | "kiro",
 ): Buffer {
   if (srcPath.endsWith(".md")) {
     let s = substituteToken(content.toString("utf-8"), harnessDir);
     s = applyRulesRename(s, harnessDir, rulesRename);
+    if (harness) s = projectTierFrontmatter(s, srcPath, harness);
     return Buffer.from(s, "utf-8");
   }
   return content;
@@ -247,7 +284,12 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
 // checkHarness can byte-diff them (they live OUTSIDE <harnessDir>, like the
 // projectRoot harness files). Same source + destination for every harness — the
 // method is harness-neutral; the per-harness native include is what differs.
-function emitMemory(outRoot: string, harnessDir: string, rulesRename: string | null): string[] {
+function emitMemory(
+  outRoot: string,
+  harnessDir: string,
+  rulesRename: string | null,
+  harness: "claude" | "codex" | "kiro",
+): string[] {
   const srcDir = join(CORE_ROOT, MEMORY_SRC);
   const written: string[] = [];
   if (!existsSync(srcDir)) return written;
@@ -255,7 +297,7 @@ function emitMemory(outRoot: string, harnessDir: string, rulesRename: string | n
     const rel = relative(srcDir, file);
     const outPath = join(outRoot, MEMORY_DST, rel);
     mkdirSync(dirname(outPath), { recursive: true });
-    writeFileSync(outPath, transform(file, readFileSync(file), harnessDir, rulesRename));
+    writeFileSync(outPath, transform(file, readFileSync(file), harnessDir, rulesRename, harness));
     written.push(outPath);
   }
   return written;
@@ -268,14 +310,19 @@ function emitMemory(outRoot: string, harnessDir: string, rulesRename: string | n
 // (a no-op on the neutral method files) but writes into treeRoot (the harness
 // engine dir), so the normal in-harness walk + byte-diff covers it — no
 // outsideHarness bookkeeping needed. Same source as emitMemory, different dst.
-function emitMemorySeed(treeRoot: string, harnessDir: string, rulesRename: string | null): void {
+function emitMemorySeed(
+  treeRoot: string,
+  harnessDir: string,
+  rulesRename: string | null,
+  harness: "claude" | "codex" | "kiro",
+): void {
   const srcDir = join(CORE_ROOT, MEMORY_SRC);
   if (!existsSync(srcDir)) return;
   for (const file of walk(srcDir)) {
     const rel = relative(srcDir, file);
     const outPath = join(treeRoot, MEMORY_SEED_DST, rel);
     mkdirSync(dirname(outPath), { recursive: true });
-    writeFileSync(outPath, transform(file, readFileSync(file), harnessDir, rulesRename));
+    writeFileSync(outPath, transform(file, readFileSync(file), harnessDir, rulesRename, harness));
   }
 }
 
@@ -324,6 +371,10 @@ function seedCompiledData(treeRoot: string, seedFrom: string): void {
 function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): string[] {
   const harnessDir = m.harnessDir;
   const treeRoot = join(outRoot, harnessDir);
+  // Every harness projects onto ONE of the three flavors the tier module knows
+  // (Kiro CLI and Kiro IDE share the "kiro" flavor - identical model dial).
+  const harnessKind: "claude" | "codex" | "kiro" =
+    m.name === "codex" ? "codex" : m.name.startsWith("kiro") ? "kiro" : "claude";
   // Out-of-harness paths the build produced (memory tree + any emit output),
   // returned for checkHarness's byte-diff of files OUTSIDE <harnessDir>.
   const outsideHarness: string[] = [];
@@ -344,7 +395,7 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
       const rel = relative(srcDir, file);
       const outPath = join(treeRoot, finalDst, rel);
       mkdirSync(dirname(outPath), { recursive: true });
-      let out = transform(file, readFileSync(file), harnessDir, m.rulesRename);
+      let out = transform(file, readFileSync(file), harnessDir, m.rulesRename, harnessKind);
       // Manifest keys are POSIX; normalize the platform separator so the
       // lookup works on Windows too.
       const harnessRel = join(finalDst, rel).split(sep).join("/");
@@ -376,7 +427,7 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
     if (!existsSync(srcPath)) continue;
     const outPath = projectRoot ? join(outRoot, dst) : join(treeRoot, dst);
     mkdirSync(dirname(outPath), { recursive: true });
-    writeFileSync(outPath, transform(srcPath, readFileSync(srcPath), harnessDir, m.rulesRename));
+    writeFileSync(outPath, transform(srcPath, readFileSync(srcPath), harnessDir, m.rulesRename, harnessKind));
   }
 
   // 2b. Render the onboarding doc from the shared skeleton (scripts/onboarding.ts),
@@ -389,7 +440,7 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
     const rendered = renderOnboarding(readFileSync(ONBOARDING_SKELETON, "utf-8"), fills);
     const outPath = projectRoot ? join(outRoot, dst) : join(treeRoot, dst);
     mkdirSync(dirname(outPath), { recursive: true });
-    writeFileSync(outPath, transform(dst, Buffer.from(rendered, "utf-8"), harnessDir, m.rulesRename));
+    writeFileSync(outPath, transform(dst, Buffer.from(rendered, "utf-8"), harnessDir, m.rulesRename, harnessKind));
   }
 
   // 2c. Emit the relocated method ("memory") tree at the workspace root
@@ -397,7 +448,7 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   //     the compile step's loadRules resolves rules_in_context from this tree
   //     (AIDLC_RULES_DIR points there below), so it has to exist first.
   const memoryDir = join(outRoot, MEMORY_DST);
-  outsideHarness.push(...emitMemory(outRoot, harnessDir, m.rulesRename));
+  outsideHarness.push(...emitMemory(outRoot, harnessDir, m.rulesRename, harnessKind));
 
   // 2d. Emit the active-space cursor (aidlc/active-space -> "default") — part of
   //     the shipped shell so a fresh copy resolves the default space with no
@@ -409,7 +460,7 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   //     install (no sibling aidlc/ shell) can self-heal — the first /aidlc copies
   //     it out via ensureWorkspaceDirs. Inside <harnessDir>, so the in-harness
   //     walk byte-diffs it under --check (no outsideHarness entry).
-  emitMemorySeed(treeRoot, harnessDir, m.rulesRename);
+  emitMemorySeed(treeRoot, harnessDir, m.rulesRename, harnessKind);
 
   // 3. Compile the stage graph into the assembled tree (writes harness-correct
   //    stage-graph.json + scope-grid.json). compileStageGraph() bootstraps each
