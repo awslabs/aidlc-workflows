@@ -78,7 +78,7 @@ its `contributions/<phase>/<slug>.md` files are merged at compose time.
 | Stage | Phase | # | Activation | Produces |
 |---|---|---|---|---|
 | **`test-pro-integration`** (Cross-Unit Integration Testing) | construction | 3.85 | scopes: enterprise, feature, mvp, workshop; CONDITIONAL (runs once after build-and-test when the build spans >1 unit) | `test-pro-integration-test-plan`, `test-pro-integration-test-results`, `test-pro-cross-unit-contract-matrix` |
-| **`test-pro-full-suite`** (Full Test Suite Execution) | operation | 4.45 | scopes: enterprise; `when: {producer-in-plan: test-pro-regression-suite}` (runs post-deploy only if the regression suite is on the plan) | `test-pro-full-suite-results`, `test-pro-edge-api-report` |
+| **`test-pro-full-suite`** (Full Test Suite Execution) | operation | 4.45 | scopes: enterprise; declares `when: {producer-in-plan: test-pro-regression-suite}` (not evaluated yet — see Activation below; gates on scope today) | `test-pro-full-suite-results`, `test-pro-edge-api-report` |
 
 Both are led by `aidlc-quality-agent`, `mode: inline`.
 
@@ -137,10 +137,12 @@ These are sensor side-inputs, not `produces:` deliverables (which resolve to
 `.md`), so they are intentionally absent from the contribution's `produces:` list.
 
 ### Activation
-`test-pro-full-suite` carries `when: {producer-in-plan: test-pro-regression-suite}` —
-it is EXECUTE only if some stage producing the regression suite is on the resolved
-plan; otherwise SKIP. This ties the operation-phase full run to the construction
-regression suite actually being built.
+`test-pro-full-suite` **declares** `when: {producer-in-plan: test-pro-regression-suite}`,
+the intended activation predicate: run only if some stage producing the regression
+suite is on the resolved plan. **Note the predicate is not evaluated yet** — no
+engine consumer reads `when:` today (doc 18 §8 Status), so the stage runs under its
+declared `scopes:` (`enterprise`) unconditionally. Real gating keys on `scopes:`
+for now; the `when:` line is authored for forward-compatibility.
 
 ### Testing this plugin
 `tests/plugin.test.ts` validates test-pro's **own content** with the framework's

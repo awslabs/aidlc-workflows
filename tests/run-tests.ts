@@ -457,7 +457,16 @@ async function runSpawnCapture(
 
 async function runBunTestFile(file: string, parallelMode = false): Promise<void> {
   const base = basename(file);
-  const name = base.replace(/\.test\.ts$/, "");
+  // Result meta is keyed by `name`. For tests under tests/<level>/ the basename
+  // is unique, but plugin content tests live at plugins/<plugin>/tests/ and every
+  // plugin ships `plugin.test.ts` (the fixture header says "copy this shape"), so
+  // a bare-basename key would collide — last writer wins and a FAILING suite gets
+  // erased from the summary (the same result-masking class as the round-2 t188
+  // gap). Key a plugin test by its plugin dir so two `plugin.test.ts` never clash.
+  const pluginMatch = file.replace(/\\/g, "/").match(/\/plugins\/([^/]+)\/tests\//);
+  const name = pluginMatch
+    ? `plugin-${pluginMatch[1]}-${base.replace(/\.test\.ts$/, "")}`
+    : base.replace(/\.test\.ts$/, "");
 
   if (filterRegex && !filterRegex.test(base)) return;
 
@@ -584,8 +593,17 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
         .sort()
         .map((f) => join(dir, f))
     : [];
-  // Fold plugin content tests into the integration tier.
-  if (level === "integration") files.push(...pluginTestFiles().filter((f) => !excludeSet.has(basename(f))));
+  // Fold plugin content tests into the integration tier. Exclusion is keyed by
+  // the plugin-dir-qualified name (`plugin-<plugin>-<stem>`), NOT the bare
+  // basename — every plugin ships `plugin.test.ts`, so a basename exclude would
+  // drop all plugins' suites at once.
+  if (level === "integration") {
+    files.push(...pluginTestFiles().filter((f) => {
+      const m = f.replace(/\\/g, "/").match(/\/plugins\/([^/]+)\/tests\//);
+      const qualified = m ? `plugin-${m[1]}-${basename(f).replace(/\.test\.ts$/, "")}` : basename(f);
+      return !excludeSet.has(qualified);
+    }));
+  }
   return files;
 }
 

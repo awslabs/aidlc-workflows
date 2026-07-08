@@ -20,6 +20,9 @@ consumes:
     required: false
 requires_stage:
   - build-and-test
+sensors:
+  - required-sections
+  - upstream-coverage
 scopes:
   - enterprise
   - feature

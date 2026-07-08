@@ -119,7 +119,7 @@ adds:                         # STRUCTURAL — set-unioned into the stage node
   sensors:
     - coverage-threshold
   required_sections:
-    - "Branch Coverage"        # machine-checked H2
+    - "Branch Coverage"        # declared H2 (merged into the stage; not machine-enforced yet — see §8)
 fragments:                    # PROSE — spliced into the stage body
   - anchor: after-step:9
     order: 100
@@ -153,7 +153,7 @@ fragments:                    # PROSE — spliced into the stage body
 |--------|-----------|--------|
 | Stage asks new questions | `fragments` of question prose | ✅ implemented |
 | Stage produces an extra artifact | `adds.produces` + a `fragments` step that emits it | ✅ implemented |
-| Stage requires new sections | `adds.required_sections` | ✅ implemented |
+| Stage requires new sections | `adds.required_sections` | ✅ merged (⚠️ declarative — not machine-enforced yet, §8) |
 | Add a verification to a stage | `adds.sensors` (+ ship the manifest and `tools/` script) | ✅ implemented |
 | Add a consume edge | `adds.consumes` | ✅ implemented |
 | Add a `requires_stage` edge | `adds.requires_stage` | ⏳ deferred (declared → logged, not merged) |
@@ -185,7 +185,7 @@ Independent authors who never coordinate are kept safe by:
 
 ## 8. As-built: emission, install, and the worked example
 
-`bun scripts/package.ts` discovers `plugins/<name>/` (any dir with `.aidlc-plugin/plugin.json`) and emits a per-harness host plugin at `dist/plugins/<name>/<harness>/` — one more projection target alongside the four harness trees. Each projection carries the host-native manifest (`.claude-plugin/` / `.codex-plugin/` / `.kiro-plugin/`), a `marketplace.json`, the compose hook, and the plugin's content (stages with full `number`/`bundle`/`when` frontmatter — the schema accepts them natively). The compose hook is a single portable `compose.ts` (bun — no GNU-specific shell) that is **harness-agnostic**: plugin root resolves from `CLAUDE_PLUGIN_ROOT | PLUGIN_ROOT | AIDLC_PLUGIN_ROOT`, project dir from `CLAUDE_PROJECT_DIR | AIDLC_PROJECT_DIR | PWD` (Codex leaves the project-dir var unset — PWD is the fallback), and the harness leaf from `AIDLC_HARNESS_DIR`, which each host's hook command exports. It copies new stages without clobbering, merges the seam idempotently (sentinel-marked splices, compare-before-write), and records any contribution it has to drop (missing target, malformed anchor) to `aidlc/.aidlc-hooks-health/plugin-compose.drops` rather than failing the session.
+`bun scripts/package.ts` discovers `plugins/<name>/` (any dir with `.aidlc-plugin/plugin.json`) and emits a per-harness host plugin at `dist/plugins/<name>/<harness>/` — one more projection target alongside the four harness trees. Each projection carries the host-native manifest (`.claude-plugin/` / `.codex-plugin/` / `.kiro-plugin/`), a `marketplace.json`, the compose hook, and the plugin's content (stages with full `number`/`bundle`/`when` frontmatter — the schema accepts them natively). The compose hook is a single portable `compose.ts` (bun — no GNU-specific shell) that is **harness-agnostic**: plugin root resolves from `CLAUDE_PLUGIN_ROOT | PLUGIN_ROOT | AIDLC_PLUGIN_ROOT`, project dir from `CLAUDE_PROJECT_DIR | AIDLC_PROJECT_DIR | PWD` (Codex leaves the project-dir var unset — PWD is the fallback), and the harness leaf from `AIDLC_HARNESS_DIR`, which each host's hook command exports. It copies new stages without clobbering, merges the seam idempotently (content-hashed sentinel splices, compare-before-write), and records any contribution it has to drop (missing target, malformed anchor, a key the installed engine won't accept) to `<hooksHealthDir>/plugin-compose.drops` — the same per-space health dir core hooks write to and `/aidlc --doctor` scans — rather than failing the session.
 
 **Install, per host:**
 
@@ -198,10 +198,13 @@ Independent authors who never coordinate are kept safe by:
 codex plugin marketplace add <…>/dist/plugins/<name>/codex
 codex plugin add aidlc-<name>@aidlc-plugins       # approve the one-time hook trust
 
-# Kiro (no store — folder-drop, then run the composer explicitly)
-cp -r dist/plugins/<name>/kiro/. <project>/
-AIDLC_PLUGIN_ROOT="<project>/hooks-plugin-root" AIDLC_PROJECT_DIR="<project>" \
-  AIDLC_HARNESS_DIR=.kiro bun "<plugin-root>/hooks/compose.ts"
+# Kiro (no store — folder-drop, then run the composer explicitly).
+# PLUGIN_ROOT is the emitted projection dir (it carries hooks/compose.ts + the
+# plugin content); PROJECT_DIR is the install you dropped .kiro into.
+PLUGIN_ROOT="$(pwd)/dist/plugins/<name>/kiro"
+cp -r "$PLUGIN_ROOT"/. <project>/
+AIDLC_PLUGIN_ROOT="$PLUGIN_ROOT" AIDLC_PROJECT_DIR="<project>" \
+  AIDLC_HARNESS_DIR=.kiro bun "$PLUGIN_ROOT/hooks/compose.ts"
 # ^ the one working invocation today. A `.kiro.hook` auto-fire and an
 #   `aidlc plugin compose` wrapper CLI are designed but NOT yet wired (see Status).
 ```
@@ -210,7 +213,7 @@ Then `/aidlc --doctor` reflects the chosen set (e.g. a 34-stage graph for `core 
 
 **Worked example — test-pro across a mixed fleet.** A platform team publishes `test-pro` once (author against `core/`, `bun scripts/package.ts`, push a `<plugin>--v<version>` tag, drop a `marketplace.json`). Claude teams `/plugin install`; Codex teams `codex plugin add` (approve trust once); Kiro teams `git pull` + run the composer explicitly (above). In every case the composer merges test-pro's two new stages **and** its contributions to `build-and-test`/`nfr-requirements`/`nfr-design`/`performance-validation` — the same enriched, 34-stage, doctor-clean install. Validated across all four harness projections (Claude, Codex, Kiro CLI, Kiro IDE).
 
-**Status.** Implemented and validated: schema support for `number`/`name`/`bundle`/`when` (`aidlc-stage-schema.ts`); the packager emitter (all four harness projections); the harness-agnostic compose hook (`scripts/plugin-hooks-template/compose.ts`); the contribution seam for `produces` / `consumes` / `sensors` / `required_sections` + prose fragments (content-hashed, idempotent, order-deterministic). Guarded by `tests/integration/t188-plugin-compose.test.ts` (the compose mechanism) + each plugin's own `tests/` (content; wired into the integration tier). **Deferred / not yet wired:** the `.kiro.hook` auto-fire and an `aidlc plugin compose` wrapper CLI (Kiro composes via the explicit `bun compose.ts` invocation today); projection of a plugin's `agents/` / `scopes/` / `memory/` / `knowledge/` subtrees; `adds.scopes` / `adds.requires_stage` merge (declared → logged); `when:` predicate evaluation (parsed, no engine consumer); reading `aidlc.contributes` / any lockfile; and compile-side carry-through of authored `number`/`bundle` into the compiled node (stages route on re-seeded numbers today).
+**Status.** Implemented and validated: schema support for `number`/`name`/`bundle`/`when` (`aidlc-stage-schema.ts`); the packager emitter (all four harness projections); the harness-agnostic compose hook (`scripts/plugin-hooks-template/compose.ts`); the contribution seam for `produces` / `consumes` / `sensors` / `required_sections` + prose fragments (content-hashed, idempotent, order-deterministic). Guarded by `tests/integration/t188-plugin-compose.test.ts` (the compose mechanism) + each plugin's own `tests/` (content; wired into the integration tier). **Deferred / not yet wired:** the `.kiro.hook` auto-fire and an `aidlc plugin compose` wrapper CLI (Kiro composes via the explicit `bun compose.ts` invocation today); projection of a plugin's `agents/` / `scopes/` / `memory/` / `knowledge/` subtrees; `adds.scopes` / `adds.requires_stage` merge (declared → logged); `when:` predicate evaluation (parsed, no engine consumer); machine-enforcement of merged `required_sections` (the field merges + validates but does not reach the compiled node, and the shipped required-sections sensor derives its expectations from templates — nothing fails a stage for a missing declared section yet); the `after-questions` fragment anchor (`locateAnchor` has no case — it drop-logs "unknown anchor"; use `after-step:<n>`); reading `aidlc.contributes` / any lockfile / `dependencies`; and compile-side carry-through of authored `number`/`bundle` into the compiled node (stages route on re-seeded numbers today).
 
 ## 9. Invariants
 

@@ -17,7 +17,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -193,5 +193,29 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const body = stageBody(project, "construction", "build-and-test");
     const count = (body.match(/Step 9a \(test-pro\)/g) ?? []).length;
     expect(count).toBe(1);
+  });
+
+  // --- Compile self-heal (a prior compile that didn't land must retry) ---
+  test("compose recompiles when the graph lost the plugin's stages", () => {
+    // Simulate a transient compile failure: strip the plugin stages out of the
+    // committed graph (as a killed-mid-compile install would leave it). A rerun
+    // must detect the missing slug and recompile, restoring all 34 stages — even
+    // though no stage source changed (changed=false on the rerun).
+    const graphPath = join(project, ".claude", "tools", "data", "stage-graph.json");
+    const full = JSON.parse(readFileSync(graphPath, "utf-8"));
+    const stripped = full.filter((s: any) => !String(s.slug ?? "").startsWith("test-pro-"));
+    expect(stripped.length).toBeLessThan(full.length); // sanity: we removed some
+    writeFileSync(graphPath, JSON.stringify(stripped));
+
+    const heal = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
+      cwd: project,
+      encoding: "utf-8",
+      timeout: TIMEOUT_MS - 5_000,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: pluginBuilt, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(heal.status).toBe(0);
+    const slugs = graph(project).map((s) => s.slug);
+    expect(slugs).toContain("test-pro-integration");
+    expect(slugs).toContain("test-pro-full-suite");
   });
 });

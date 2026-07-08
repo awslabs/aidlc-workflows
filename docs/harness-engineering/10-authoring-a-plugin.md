@@ -150,38 +150,64 @@ fragments:                    # PROSE — spliced into the stage body
 …prose the agent will see, appended after the target stage's Step 6…
 ```
 
-What you can add (all additive — **no override or removal**, by design):
+What you can add (all additive — **no override or removal**, by design). "Status"
+marks what the compose hook merges today vs. designed-but-deferred (mirrors doc 18
+§5/§8 — implement or demote, never a silent no-op):
 
-- `adds.produces` / `adds.consumes` / `adds.sensors` / `adds.requires_stage` —
-  set-unioned into the target stage's compiled node.
-- `adds.required_sections` — named `##` H2 sections the required-sections sensor
-  will **machine-enforce** in that stage's output.
-- `adds.scopes` — union a scope name into the target stage's membership (this is
-  how a plugin puts an *existing core stage* under a plugin-defined scope without
-  editing it — see §4, Scopes).
-- `fragments` — prose blocks appended into the stage body. Each fragment's prose
+- `adds.produces` / `adds.consumes` / `adds.sensors` — ✅ set-unioned into the
+  target stage's source frontmatter.
+- `adds.required_sections` — ✅ merged into the stage's `required_sections`. Note
+  it is **not machine-enforced today**: the field is written and validates, but it
+  does not reach the compiled graph node, and the shipped `required-sections`
+  sensor derives its expectations from templates, so nothing yet fails a stage for
+  a missing section. Treat it as declarative intent for now.
+- `adds.requires_stage` / `adds.scopes` — ⏳ **deferred**: a contribution may
+  declare them, but compose records them to the drops log rather than merging
+  (they are not yet DAG/scope edges). Don't rely on them to gate behavior yet.
+- `fragments` — ✅ prose blocks spliced into the stage body. Each fragment's prose
   is the `## fragment: <anchor>` block in the contribution file.
 
 ### Fragment anchors
 
-| Anchor             | Inserts the fragment…                                              |
-| ------------------ | ------------------------------------------------------------------ |
-| `after-step:<n>`   | right after `### Step <n>` (before the next `###`/`##`)            |
-| `before-step:<n>`  | immediately before `### Step <n>`                                  |
-| `after-questions`  | after the questions-generating step                                |
-| `end-of-steps`     | at the end of the `## Steps` block                                 |
-| `in:<Compartment>` | at the end of the named `## <Compartment>` block (e.g. `in:Sensors`) |
+| Anchor             | Inserts the fragment…                                              | Status |
+| ------------------ | ------------------------------------------------------------------ | ------ |
+| `after-step:<n>`   | right after `### Step <n>` (before the next `###`/`##`)            | ✅ |
+| `before-step:<n>`  | immediately before `### Step <n>`                                  | ✅ |
+| `end-of-steps`     | at the end of the `## Steps` block                                 | ✅ |
+| `in:<Compartment>` | at the end of the named `## <Compartment>` block (e.g. `in:Sensors`) | ✅ |
+| `after-questions`  | after the questions-generating step                                | ⏳ not implemented — `locateAnchor` has no case; drops "unknown anchor". Use `after-step:<n>`. |
 
-Fragments are ordered deterministically by `(order, plugin, anchor)`. Two
-fragments with the same `(anchor, order, plugin)` is a build error. When two
+Fragments are ordered deterministically by `(order, bundle)`. A same
+`(bundle, anchor, order)` collision — within one file or across two contribution
+files this run — is **dropped-with-log** (not last-writer-wins). When two
 *different* plugins contribute to the same stage, their structural additions
-set-union and their fragments interleave by this same ordering — they are
-genuinely merged, never last-writer-wins.
+set-union and their fragments interleave by this same ordering — genuinely merged.
+
+Each spliced fragment is wrapped in a sentinel comment carrying a content hash
+(`<!-- plugin:<bundle>:<anchor>:<order>:<hash> --> … <!-- /plugin:… -->`), which
+is how re-composing stays idempotent and an upgraded fragment replaces its prior
+block. Two authoring rules follow from that:
+
+- **Don't write a sentinel-lookalike line in fragment prose.** A line matching
+  `<!-- /plugin:… -->` inside your prose will be mistaken for a block terminator
+  and corrupt the splice on upgrade.
+- **Upgrading from a pre-release build:** installs composed from a *review build*
+  of this branch (before the hash was added to the sentinel) carry the old
+  hashless marker; an upgrade won't recognize it and will splice a second copy.
+  Only PR-branch installs are affected — recompose from a clean base, or delete
+  the old block by hand, once.
 
 ## 4. Packaging the other primitives
 
+> **⏳ Status: designed, not yet wired.** Today the packager projects only a
+> plugin's `stages/`, `sensors/`, `tools/`, and `contributions/`. The `agents/`,
+> `scopes/`, `memory/`, and `knowledge/` subtrees below are the *intended* shape
+> but are **not yet emitted** into an install — authoring them has no effect until
+> the projection lands (doc 18 §8 Status). `test-pro` therefore ships only the
+> wired primitives.
+
 `test-pro` ships stages, contributions, and sensors. A richer plugin adds agents,
-scopes, method/rules, or knowledge — one rule each:
+scopes, method/rules, or knowledge — one rule each (all deferred per the note above):
 
 - **Agents.** Drop `agents/<slug>-agent.md` with `plugin:` set. It is discovered
   automatically and your plugin's stages may name it as `lead_agent`/
@@ -278,8 +304,10 @@ Trust is **host-native** — you don't build anything:
 - **Primitive names are unique.** Your scopes/agents/sensors may not
   collide with core or another plugin — a collision is a compose error with
   attribution. (Method files merge into the memory seed by file, additively.)
-- **Dependencies.** `dependencies` entries must resolve; a `name@^x.y.z`
-  constraint is checked against the dependency's `version`; cycles are rejected.
+- **Dependencies** *(⏳ deferred).* `dependencies` is designed to resolve a
+  `name@^x.y.z` constraint against the dependency's `version` with cycle
+  rejection, but **nothing reads the field yet** — declaring it has no effect
+  today (doc 18 §8 Status).
 - **Additive only.** Contributions add — they cannot override or remove a core
   stage's fields, agent, or prose. (A genuine need to _change_ upstream behavior
   is a framework design decision, not a plugin concern.)

@@ -23,6 +23,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -77,12 +78,47 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Does the INSTALLED engine accept a frontmatter key? Probes the installed
+// validator (not our own copy) so compose never writes a key an older shipped
+// engine would reject — which would permanently break that install's graph
+// compile with only a drops line as evidence (round-3 blocker). Run the installed
+// validateStageFrontmatter against a minimal-but-valid stage carrying the key; if
+// it rejects specifically because of that key, the merge is unsafe here. Fails
+// OPEN (returns true) if the lib can't be loaded — a partial install already
+// can't compile, so we don't add a second failure mode.
+async function installedSchemaAccepts(key: string, sampleValue: unknown): Promise<boolean> {
+  try {
+    const schema = await import(join(HARNESS_DIR, "tools", "aidlc-stage-schema.ts"));
+    const base: Record<string, unknown> = {
+      slug: "probe-stage", phase: "construction", execution: "ALWAYS", condition: "always",
+      lead_agent: "aidlc-quality-agent", support_agents: [], mode: "inline",
+      produces: [], consumes: [], requires_stage: [], inputs: "x", outputs: "y",
+    };
+    const withKey = { ...base, [key]: sampleValue };
+    const res = schema.validateStageFrontmatter(withKey);
+    if (res.valid) return true;
+    // Rejected — is it BECAUSE of our key? (An unknown/!array error naming it.)
+    const errs: string[] = res.errors ?? [];
+    return !errs.some((e) => e.includes(key));
+  } catch {
+    return true; // can't probe → don't block (see note above)
+  }
+}
+
 // Guard: only compose in an AIDLC project, with a resolvable plugin root.
 if (!existsSync(join(HARNESS_DIR, "tools", "aidlc-graph.ts"))) {
   process.exit(0); // not an AIDLC project — nothing to do (no drop: not our project)
 }
 if (!PLUGIN_ROOT) {
   recordDrop("plugin root env not set (CLAUDE_PLUGIN_ROOT/PLUGIN_ROOT/AIDLC_PLUGIN_ROOT)");
+  await flushDrops();
+  process.exit(0);
+}
+// A set-but-wrong PLUGIN_ROOT (e.g. a mistyped path from a hand-run command)
+// would otherwise pass the non-empty check and then find nothing to copy/merge —
+// a silent no-op. Record it so it surfaces in --doctor rather than looking clean.
+if (!existsSync(PLUGIN_ROOT)) {
+  recordDrop(`plugin root does not exist: "${PLUGIN_ROOT}" — check the AIDLC_PLUGIN_ROOT path`);
   await flushDrops();
   process.exit(0);
 }
@@ -319,7 +355,14 @@ try {
   changed = copyTreeNoClobber(join(PLUGIN_ROOT, "tools"), join(HARNESS_DIR, "tools")) || changed;
 
   // 2. Merge contributions into stage SOURCE (structural + prose fragments).
+  // Probe ONCE whether the installed engine accepts required_sections — writing
+  // it into a stage an older engine can't parse would break every later compile.
+  const requiredSectionsSafe = await installedSchemaAccepts("required_sections", ["Probe Section"]);
   const contribRoot = join(PLUGIN_ROOT, "contributions");
+  // Fragment keys seen across ALL contribution files this run, so a same
+  // (target, bundle, anchor, order) arriving from a SECOND file drops-with-log
+  // rather than silently last-writer-winning via the hash-upgrade path (round-3).
+  const seenFragKeys = new Set<string>();
   for (const phase of existsSync(contribRoot) ? readdirSync(contribRoot) : []) {
     const phaseDir = join(contribRoot, phase);
     let files: string[];
@@ -351,14 +394,21 @@ try {
         const block = addsBlock.match(/^  consumes:\n((?:    -? .*\n?)*)/m)?.[1];
         if (!block) return [];
         const out: Array<{ artifact: string; required: boolean; conditional_on?: string }> = [];
-        for (const chunk of block.split(/^(?=    - artifact:)/m)) {
-          const artifact = chunk.match(/- artifact:\s*([\w-]+)/)?.[1];
+        // Split on ANY-indent `- artifact:` (a YAML-legal 6-space list must still
+        // yield one chunk per entry; a fixed 4-space anchor silently merged them —
+        // round-3). Drop-log if entries outnumber chunks (a split that failed).
+        for (const chunk of block.split(/^(?=\s*- artifact:)/m)) {
+          const artifact = chunk.match(/-\s*artifact:\s*([\w-]+)/)?.[1];
           if (!artifact) continue;
           // `required` defaults to true ONLY when the key is genuinely absent;
           // an explicit `required: false` must survive.
           const reqRaw = chunk.match(/^\s*required:\s*(true|false)\b/m)?.[1];
           const conditional_on = chunk.match(/^\s*conditional_on:\s*(\w+)/m)?.[1];
           out.push({ artifact, required: reqRaw !== "false", ...(conditional_on ? { conditional_on } : {}) });
+        }
+        const declared = (block.match(/-\s*artifact:/g) ?? []).length;
+        if (declared > out.length) {
+          recordDrop(`contribution to ${target}: parsed ${out.length} of ${declared} consumes entries (check indentation); some dropped`);
         }
         return out;
       })();
@@ -388,7 +438,13 @@ try {
       stageContent = mergeListField(stageContent, "produces", listOf("produces"), target);
       stageContent = mergeListField(stageContent, "sensors", listOf("sensors"), target);
       stageContent = mergeConsumes(stageContent, consumes, target);
-      stageContent = mergeRequiredSections(stageContent, requiredSections, target);
+      // Only merge required_sections if the installed engine accepts the key —
+      // otherwise skip + drop-log rather than break the install's next compile.
+      if (requiredSections.length > 0 && !requiredSectionsSafe) {
+        recordDrop(`contribution to ${target}: installed engine does not accept 'required_sections' (older dist); skipped its merge — re-copy your dist/<harness> shell to enable it`);
+      } else {
+        stageContent = mergeRequiredSections(stageContent, requiredSections, target);
+      }
 
       // prose fragments — paired positionally with the frontmatter fragments list.
       const body = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)$/)?.[1] ?? "";
@@ -401,16 +457,17 @@ try {
         prose: (blocks[i] ?? "").replaceAll("{{HARNESS_DIR}}", HARNESS_LEAF),
       })).filter((f) => f.prose);
 
-      // Splice each fragment at its ordered (order, bundle) slot. Detect a
-      // same-(bundle, anchor, order) collision WITHIN this contribution — the
-      // author guide promises this is a build error, so drop-with-log the dup
-      // rather than silently keeping only one.
-      const seen = new Set<string>();
+      // Splice each fragment at its ordered (order, bundle) slot. A same
+      // (target, bundle, anchor, order) collision — whether within this file OR
+      // from an earlier contribution file this run — drops-with-log rather than
+      // silently overwriting (the hash-upgrade path would otherwise let a second
+      // file replace the first, winner decided by readdir order). Aligned with
+      // the "collision is an error" doc claim.
       const ordered = [...frags].sort((a, b) => a.order - b.order || a.bundle.localeCompare(b.bundle));
       for (const f of ordered) {
-        const key = `${f.bundle}:${f.anchor}:${f.order}`;
-        if (seen.has(key)) { recordDrop(`contribution to ${target}: duplicate fragment ${key} (same bundle/anchor/order); second dropped`); continue; }
-        seen.add(key);
+        const key = `${target}:${f.bundle}:${f.anchor}:${f.order}`;
+        if (seenFragKeys.has(key)) { recordDrop(`contribution to ${target}: duplicate fragment ${f.bundle}:${f.anchor}:${f.order} (same bundle/anchor/order, possibly across files); dropped`); continue; }
+        seenFragKeys.add(key);
         stageContent = spliceFragment(stageContent, f, target);
       }
 
@@ -442,12 +499,27 @@ try {
       return pluginSlugs.some((s) => !present.has(s));
     } catch { return true; } // unreadable/absent graph — compile
   })();
-  if (changed || graphMissingPluginStage) {
+  // A contributions-only plugin has no stage slug to detect a missing compile, so
+  // the graph-slug check can't see its failed recompile. A persisted retry marker
+  // covers that case: written on compile failure, deleted on success, and any
+  // presence forces a retry next run — so a transient failure self-heals for
+  // stage-carrying AND contributions-only plugins alike (round-3). The marker is
+  // PROJECT-side (never in PLUGIN_ROOT, which may be read-only / under dist/),
+  // keyed by the plugin root's basename so two plugins don't clobber each other.
+  const pluginKey = PLUGIN_ROOT.replace(/\\/g, "/").replace(/\/+$/, "").split("/").pop() || "plugin";
+  const retryMarker = join(PROJECT_DIR, "aidlc", `.plugin-compose-retry-${pluginKey}`);
+  const retryPending = existsSync(retryMarker);
+  if (changed || graphMissingPluginStage || retryPending) {
     const bun = process.execPath;
     const r = spawnSync(bun, [join(HARNESS_DIR, "tools", "aidlc-graph.ts"), "compile"], {
       cwd: PROJECT_DIR, encoding: "utf-8",
     });
-    if (r.status !== 0) recordDrop(`aidlc-graph compile failed: ${(r.stderr || "").slice(0, 400)}`);
+    if (r.status !== 0) {
+      recordDrop(`aidlc-graph compile failed: ${(r.stderr || "").slice(0, 400)}`);
+      try { mkdirSync(join(PROJECT_DIR, "aidlc"), { recursive: true }); writeFileSync(retryMarker, new Date().toISOString() + "\n"); } catch { /* best-effort */ }
+    } else if (retryPending) {
+      try { rmSync(retryMarker, { force: true }); } catch { /* best-effort */ }
+    }
   }
 } catch (e) {
   recordDrop(`compose threw: ${e instanceof Error ? e.message : String(e)}`);

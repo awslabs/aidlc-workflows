@@ -22,6 +22,9 @@ consumes:
 requires_stage:
   - deployment-execution
   - test-pro-integration
+sensors:
+  - required-sections
+  - upstream-coverage
 scopes:
   - enterprise
 when:

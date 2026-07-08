@@ -45,7 +45,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import type { HarnessManifest } from "./manifest-types.ts";
@@ -824,16 +824,38 @@ function checkPlugins(harnesses: string[], full: boolean): string[] {
 // trees — writeHarness/emitPlugins rmSync + rewrite dist, which a parallel test
 // tier must never do (it masks drift and races sibling tests). Pure builder call.
 if (argv[0] === "plugin" && argv[1] === "build") {
-  const [, , pluginName, harnessName, outDir] = argv;
+  const rest = argv.slice(2).filter((a) => a !== "--force");
+  const force = argv.includes("--force");
+  const [pluginName, harnessName, outDir] = rest;
   if (!pluginName || !harnessName || !outDir) {
-    console.error("usage: package.ts plugin build <plugin> <harness> <outDir>");
+    console.error("usage: package.ts plugin build <plugin> <harness> <outDir> [--force]");
     process.exit(1);
   }
-  if (!pluginTargetFor(harnessName)) {
+  // Proper usage errors, never a raw ENOENT/rmSync stack (round-3).
+  if (!discoverPluginNames().includes(pluginName)) {
+    console.error(`unknown plugin "${pluginName}" (have: ${discoverPluginNames().join(", ") || "none"})`);
+    process.exit(1);
+  }
+  const target = pluginTargetFor(harnessName);
+  if (!target) {
     console.error(`unknown plugin harness "${harnessName}" (have: ${discoverHarnessNames().join(", ")})`);
     process.exit(1);
   }
-  buildPluginProjection(pluginName, harnessName, outDir);
+  // outDir GUARD: buildPluginProjection rmSync's outDir first, so refuse a
+  // non-empty dir that is not itself a prior projection (its manifestDir marks
+  // one) unless --force — `plugin build test-pro claude .` must not wipe cwd.
+  const resolvedOut = isAbsolute(outDir) ? outDir : join(process.cwd(), outDir);
+  if (existsSync(resolvedOut) && readdirSync(resolvedOut).length > 0) {
+    const isPriorProjection = existsSync(join(resolvedOut, target.manifestDir));
+    if (!isPriorProjection && !force) {
+      console.error(
+        `refusing to build into non-empty "${outDir}" — it is not a prior plugin projection ` +
+        `(no ${target.manifestDir}/). Pass --force to overwrite, or point at a fresh/empty dir.`
+      );
+      process.exit(1);
+    }
+  }
+  buildPluginProjection(pluginName, harnessName, resolvedOut);
   process.exit(0);
 }
 
