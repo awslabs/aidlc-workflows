@@ -139,18 +139,30 @@ function walk(dir: string): string[] {
 // No-clobber copy of one tree into another, with {{HARNESS_DIR}} substitution on
 // .md prose. NEVER overwrites an existing dest (portable no-clobber — the point
 // of the former `cp -n`, done right). Returns true if anything was written.
-function copyTreeNoClobber(src: string, dst: string): boolean {
+// `kind` labels the tree (stages/sensors/tools) for the collision drop-log: a
+// dest that already exists with DIFFERENT content is a real collision (a plugin
+// trying to ship a file that shadows core or another plugin) and is dropped-with-
+// log — silently skipping it made a plugin "override" a no-op with no evidence
+// (round-4). An identical dest is a benign idempotent re-run (no log).
+function copyTreeNoClobber(src: string, dst: string, kind: string): boolean {
   if (!existsSync(src)) return false;
   let wrote = false;
   for (const file of walk(src)) {
     const rel = relative(src, file);
     const dest = join(dst, rel);
-    if (existsSync(dest)) continue; // no-clobber — never replace core/another plugin
-    mkdirSync(join(dest, ".."), { recursive: true });
     let buf = readFileSync(file);
     if (file.endsWith(".md")) {
       buf = Buffer.from(buf.toString("utf-8").replaceAll("{{HARNESS_DIR}}", HARNESS_LEAF));
     }
+    if (existsSync(dest)) {
+      // no-clobber — never replace core/another plugin. Log only a genuine
+      // content collision, not an identical idempotent re-copy.
+      if (!readFileSync(dest).equals(buf)) {
+        recordDrop(`${kind} "${rel}" collides with an existing file (core or another plugin); not overwritten — rename it to a plugin-namespaced path`);
+      }
+      continue;
+    }
+    mkdirSync(join(dest, ".."), { recursive: true });
     writeFileSync(dest, buf);
     wrote = true;
   }
@@ -243,26 +255,40 @@ function mergeRequiredSections(content: string, items: string[], target: string)
     if (toAdd.length === 0) return content;
     return content.replace(blockRe, m[1] + render(toAdd) + "\n");
   }
-  // Field absent — insert it just before the closing frontmatter `---`.
-  const fmClose = content.match(/^---\r?\n[\s\S]*?\n(---\r?\n)/);
+  // Field absent — insert it just before the closing frontmatter `---`. The
+  // closing fence may be followed by a newline OR sit at EOF (a stage file with
+  // no trailing newline is valid) — `(?:\n|$)` tolerates both; requiring `\r?\n`
+  // after `---` silently dropped the whole merge on a newline-less file (round-4).
+  const fmClose = content.match(/^---\r?\n[\s\S]*?\n(---)(?:\r?\n|$)/);
   if (!fmClose) {
     recordDrop(`contribution to ${target}: cannot add required_sections (no frontmatter block)`);
     return content;
   }
-  const insertAt = fmClose.index! + fmClose[0].length - fmClose[1].length;
+  const insertAt = fmClose.index! + fmClose[0].lastIndexOf("---");
   return content.slice(0, insertAt) + "required_sections:\n" + render(items) + "\n" + content.slice(insertAt);
 }
 
 // Resolve a fragment anchor to a char offset. Anchors are validated + escaped
-// (review #6) — a malformed anchor is skipped-with-log, never a thrown regex.
+// (review #6) — a malformed anchor is skipped-with-log, never a thrown regex. A
+// valid anchor whose target heading is ABSENT also returns -1 but logs a distinct
+// "not found" drop (round-4: the not-found case was silent, so a contribution's
+// frontmatter `adds` landed while its prose vanished — a half-applied merge).
 function locateAnchor(content: string, anchor: string, target: string): number {
   const stepAnchor = (kind: "after" | "before"): number => {
     const n = anchor.slice(anchor.indexOf(":") + 1);
-    if (!/^\w+$/.test(n)) { recordDrop(`contribution to ${target}: bad ${kind}-step anchor "${anchor}"`); return -1; }
-    const m = content.match(new RegExp(`^### Step ${escapeRegExp(n)}\\b.*$`, "m"));
-    if (!m) return -1;
-    if (kind === "before") return m.index!;
-    const from = m.index! + m[0].length;
+    if (!/^\d+$/.test(n)) { recordDrop(`contribution to ${target}: bad ${kind}-step anchor "${anchor}" (step must be an integer)`); return -1; }
+    const want = Number(n);
+    // Match a plain `### Step 7` OR a range heading `### Step 4-8:` that CONTAINS
+    // `want` — core ships combined headings (e.g. build-and-test's `### Step 4-8:`),
+    // and `^### Step 8\b` would never match "Step 4-8". Scan all step headings.
+    let hit: { index: number; length: number } | null = null;
+    for (const m of content.matchAll(/^### Step (\d+)(?:-(\d+))?\b.*$/gm)) {
+      const lo = Number(m[1]); const hi = m[2] ? Number(m[2]) : lo;
+      if (want >= lo && want <= hi) { hit = { index: m.index!, length: m[0].length }; break; }
+    }
+    if (!hit) { recordDrop(`contribution to ${target}: ${kind}-step anchor "${anchor}" — no "### Step ${n}" heading found (a range like "### Step 4-8" counts); prose dropped`); return -1; }
+    if (kind === "before") return hit.index;
+    const from = hit.index + hit.length;
     const next = content.slice(from).search(/^#{2,3} /m);
     return next === -1 ? content.length : from + next;
   };
@@ -270,7 +296,7 @@ function locateAnchor(content: string, anchor: string, target: string): number {
   if (anchor.startsWith("before-step:")) return stepAnchor("before");
   if (anchor === "end-of-steps") {
     const s = content.match(/^## Steps\b.*$/m);
-    if (!s) return -1;
+    if (!s) { recordDrop(`contribution to ${target}: anchor "end-of-steps" — no "## Steps" section found; prose dropped`); return -1; }
     const from = s.index! + s[0].length;
     const next = content.slice(from).search(/^## /m);
     return next === -1 ? content.length : from + next;
@@ -279,7 +305,7 @@ function locateAnchor(content: string, anchor: string, target: string): number {
     const comp = anchor.slice(3);
     if (!/^[\w -]+$/.test(comp)) { recordDrop(`contribution to ${target}: bad in: anchor "${anchor}"`); return -1; }
     const m = content.match(new RegExp(`^## ${escapeRegExp(comp)}\\b.*$`, "m"));
-    if (!m) return -1;
+    if (!m) { recordDrop(`contribution to ${target}: in: anchor "${anchor}" — no "## ${comp}" section found; prose dropped`); return -1; }
     const from = m.index! + m[0].length;
     const next = content.slice(from).search(/^## /m);
     return next === -1 ? content.length : from + next;
@@ -350,9 +376,9 @@ function spliceFragment(content: string, f: Fragment, target: string): string {
 let changed = false;
 try {
   // 1. Copy NEW primitives (no-clobber, token-substituted).
-  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "stages"), STAGES_DIR) || changed;
-  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "sensors"), join(HARNESS_DIR, "sensors")) || changed;
-  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "tools"), join(HARNESS_DIR, "tools")) || changed;
+  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "stages"), STAGES_DIR, "stage") || changed;
+  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "sensors"), join(HARNESS_DIR, "sensors"), "sensor") || changed;
+  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "tools"), join(HARNESS_DIR, "tools"), "tool") || changed;
 
   // 2. Merge contributions into stage SOURCE (structural + prose fragments).
   // Probe ONCE whether the installed engine accepts required_sections — writing
@@ -448,16 +474,28 @@ try {
         stageContent = mergeRequiredSections(stageContent, requiredSections, target);
       }
 
-      // prose fragments — paired positionally with the frontmatter fragments list.
+      // prose fragments — paired to their `## fragment: <anchor>` body block BY
+      // ANCHOR LABEL, not array index. Positional pairing silently mismatched
+      // prose to anchors when the body order differed from the frontmatter order
+      // (round-4). Multiple fragments may target the same anchor (test-pro has 3×
+      // after-step:9), so pair per-anchor FIFO: the i-th frontmatter entry for
+      // anchor A takes the i-th body block labelled A. A frontmatter entry with no
+      // matching body block (or vice versa) is dropped-with-log, not silently
+      // cross-paired to some other anchor's prose.
       const body = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)$/)?.[1] ?? "";
       const fragMeta = [...(fm.match(/^fragments:\n([\s\S]*?)(?=^\S|$(?![\s\S]))/m)?.[1] ?? "")
         .matchAll(/-\s*anchor:\s*(\S+)\s*\n\s*order:\s*(\d+)/g)].map((m) => ({ anchor: m[1], order: Number(m[2]) }));
-      const blocks = [...body.matchAll(/^## fragment:\s*(\S+)\s*\n([\s\S]*?)(?=^## fragment:|$(?![\s\S]))/gm)]
-        .map((m) => m[2].trim());
-      const frags: Fragment[] = fragMeta.map((meta, i) => ({
-        ...meta, bundle,
-        prose: (blocks[i] ?? "").replaceAll("{{HARNESS_DIR}}", HARNESS_LEAF),
-      })).filter((f) => f.prose);
+      const blocksByAnchor = new Map<string, string[]>();
+      for (const m of body.matchAll(/^## fragment:\s*(\S+)\s*\n([\s\S]*?)(?=^## fragment:|$(?![\s\S]))/gm)) {
+        (blocksByAnchor.get(m[1]) ?? blocksByAnchor.set(m[1], []).get(m[1])!).push(m[2].trim());
+      }
+      const frags: Fragment[] = [];
+      for (const meta of fragMeta) {
+        const queue = blocksByAnchor.get(meta.anchor);
+        const prose = (queue && queue.length > 0 ? queue.shift()! : "").replaceAll("{{HARNESS_DIR}}", HARNESS_LEAF);
+        if (!prose) { recordDrop(`contribution to ${target}: fragment anchor "${meta.anchor}" order ${meta.order} has no matching "## fragment: ${meta.anchor}" prose block; dropped`); continue; }
+        frags.push({ ...meta, bundle, prose });
+      }
 
       // Splice each fragment at its ordered (order, bundle) slot. A same
       // (target, bundle, anchor, order) collision — whether within this file OR

@@ -247,4 +247,68 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(join(markerDir, `.plugin-compose-retry-${expectedKey}`))
       .not.toBe(join(markerDir, ".plugin-compose-retry-claude"));
   });
+
+  // --- Silent-failure seams (round-4): each must DROP-LOG, never silently no-op ---
+  // Helper: compose a hand-built synthetic plugin into a fresh copy of the base
+  // install, returning { drops, projectDir } so a test can assert on the drops.
+  function composeSynthetic(name: string, files: Record<string, string>): { drops: string; proj: string } {
+    const proj = mkdtempSync(join(tmp, `syn-${name}-`));
+    cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    const root = join(proj, "_plugin");
+    // minimal projection: manifest + the one working compose hook + given files
+    cpSync(join(pluginBuilt, ".claude-plugin"), join(root, ".claude-plugin"), { recursive: true });
+    cpSync(join(pluginBuilt, "hooks"), join(root, "hooks"), { recursive: true });
+    // rewrite the manifest name so the synthetic plugin has its own identity
+    const mf = join(root, ".claude-plugin", "plugin.json");
+    const m = JSON.parse(readFileSync(mf, "utf-8")); m.name = name; writeFileSync(mf, JSON.stringify(m));
+    for (const [rel, body] of Object.entries(files)) {
+      const p = join(root, rel);
+      cpSync(join(pluginBuilt, "hooks", "compose.ts"), join(root, "hooks", "compose.ts")); // ensure hook present
+      require("node:fs").mkdirSync(dirname(p), { recursive: true });
+      writeFileSync(p, body);
+    }
+    const r = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
+      cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(r.status).toBe(0); // compose is fail-open — never breaks the session
+    let drops = "";
+    for (const d of ["aidlc/spaces/default/intents/.aidlc-hooks-health/plugin-compose.drops"]) {
+      const dp = join(proj, d);
+      if (existsSync(dp)) drops += readFileSync(dp, "utf-8");
+    }
+    return { drops, proj };
+  }
+
+  test("unresolvable fragment anchor is dropped-with-log, not silent (R4-2)", () => {
+    const { drops } = composeSynthetic("syn-anchor", {
+      "contributions/construction/build-and-test.md":
+        `---\ntarget: build-and-test\nbundle: syn-anchor\nadds:\n  produces: []\nfragments:\n  - anchor: after-step:999\n    order: 100\n---\n\n## fragment: after-step:999\n\n### Step 999x (syn): orphaned\n\nprose\n`,
+    });
+    expect(drops).toContain("after-step:999");
+    expect(drops.toLowerCase()).toContain("dropped");
+  });
+
+  test("range-heading anchor resolves (### Step 4-8 → after-step:6) (R4-3)", () => {
+    // build-and-test ships `### Step 4-8:`. A fragment at after-step:6 must splice
+    // (land in the body), NOT drop as 'not found'.
+    const { drops, proj } = composeSynthetic("syn-range", {
+      "contributions/construction/build-and-test.md":
+        `---\ntarget: build-and-test\nbundle: syn-range\nadds:\n  produces: []\nfragments:\n  - anchor: after-step:6\n    order: 100\n---\n\n## fragment: after-step:6\n\n### Step 6-SYN: lands in range\n\nsyn-range prose\n`,
+    });
+    const body = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8");
+    expect(body).toContain("syn-range prose");
+    expect(drops).not.toContain("after-step:6");
+  });
+
+  test("stage-slug collision is dropped-with-log, not a silent no-op (R4-4)", () => {
+    const { drops, proj } = composeSynthetic("syn-collide", {
+      "stages/construction/build-and-test.md":
+        `---\nslug: build-and-test\nbundle: syn-collide\nphase: construction\nexecution: ALWAYS\ncondition: always\nlead_agent: aidlc-quality-agent\nsupport_agents: []\nmode: inline\nproduces: []\nconsumes: []\nrequires_stage: []\ninputs: x\noutputs: y\n---\n# SYN-COLLIDE OVERRIDE\n`,
+    });
+    // the core stage must be untouched, AND the collision must be logged
+    const body = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8");
+    expect(body).not.toContain("SYN-COLLIDE OVERRIDE");
+    expect(drops).toContain("collides");
+  });
 });
