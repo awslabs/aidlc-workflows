@@ -23,7 +23,7 @@ fi;
 echo "GH_TOKEN=${GH_TOKEN:-ghp_notset}" > "./.env";
 ```
 
-1. Iterate
+2. Iterate
 
 - _Optionally edit the `buildspec-override` value in the `.github/workflows/codebuild.yml` GitHub workflow_
 - Update `./buildspec.yml` based on the workflow contents to a local file
