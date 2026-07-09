@@ -3,7 +3,7 @@
 // The unified packager copies core/ → dist/codex/.codex/ (rules → aidlc-rules)
 // and runs graph compile, then calls this emit() for everything that is CODE,
 // not declarative data: the Codex config, hook wiring, trust pre-seed, the
-// AGENTS.md merge, the 13 agent TOML transpositions, and the .agents/skills/
+// AGENTS.md merge, the per-agent TOML transpositions, and the .agents/skills/
 // tree (orchestrator + generated runners + session skills + openai.yaml guards).
 //
 // Ported faithfully from the proven scripts/package-codex.ts emission half
@@ -65,8 +65,10 @@ function emitConfigToml(): string {
   return `# dist/codex shipped config — copy into the project's .codex/config.toml
 # (trusted projects) or merge into ~/.codex/config.toml.
 #
-# Model: D-7 map (orchestrator opus-class -> gpt-5.5; agent sonnet-class ->
-# gpt-5.4). D-9: Amazon Bedrock is the shipped default provider (web_search is
+# Model: these session defaults are what judgment-tier agent roles inherit
+# (their TOMLs omit model/model_reasoning_effort by design - see the tier
+# projection); balanced/templated roles pin gpt-5.4 per the tier table.
+# D-9: Amazon Bedrock is the shipped default provider (web_search is
 # unavailable there; the market-research stage degrades gracefully). For
 # OpenAI-auth setups, comment out model_provider and the [model_providers]
 # block.
@@ -336,7 +338,7 @@ export default function emit(ctx: EmitContext): EmitResult {
   emissions.push({ path: join(DCODEX, "trust-seed.toml"), content: emitTrustSeed });
   emissions.push({ path: join(distRoot, "AGENTS.md"), content: emitAgentsMd });
 
-  // 13 agent TOMLs from core/agents/*.md
+  // agent TOMLs from core/agents/*.md (one per shipped persona)
   const agentsDir = join(coreRoot, "agents");
   for (const f of readdirSync(agentsDir).filter((x) => x.endsWith(".md")).sort()) {
     emissions.push({

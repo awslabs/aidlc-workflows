@@ -201,11 +201,11 @@ Agent metadata (display name, example knowledge files) is read from each agent's
    description: >
      One-paragraph description of the agent's responsibilities and which stages it leads or supports.
    disallowedTools: Task
-   model: opus
+   tier: judgment
    ---
    ```
 
-   The `name` field must match the filename stem exactly. `display_name` is the human-facing label used by the statusline. `examples` lists suggested knowledge filenames documented in the agent→examples table — they're suggestions for the user, not loaded at runtime and not written to disk.
+   The `name` field must match the filename stem exactly. `display_name` is the human-facing label used by the statusline. `examples` lists suggested knowledge filenames documented in the agent→examples table — they're suggestions for the user, not loaded at runtime and not written to disk. `tier` (`judgment` | `balanced` | `templated`) is the authored dial the packager projects into each harness's model/effort keys — never author raw `model:`/`effort:` in core frontmatter (see [Agent System](05-agent-system.md)).
 
 2. **Verify the agent is discovered** — `bun -e "import { loadAgents } from 'core/tools/aidlc-lib.ts'; console.log(loadAgents().find(a => a.slug === '<slug>-agent'));"` should print the new agent's metadata.
 

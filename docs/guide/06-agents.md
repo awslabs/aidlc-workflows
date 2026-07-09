@@ -123,7 +123,7 @@ The aidlc-delivery-agent acts as the engineering manager. It assesses team capac
 
 **Domain:** Application design, domain modelling, NFRs, component decomposition
 
-The aidlc-architect-agent is the central design authority. It has the broadest stage involvement (9 stages across 3 phases) and runs on the opus model — alongside seven other high-judgment agents (product, design, developer, quality, devsecops, compliance, aws-platform). Only delivery, pipeline-deploy, and operations run on sonnet, because their output is dominantly templated planning, CI/CD YAML, and runbook scaffolding.
+The aidlc-architect-agent is the central design authority. It has the broadest stage involvement (9 stages across 3 phases) and carries the `judgment` tier — alongside seven other high-judgment agents (product, design, developer, quality, devsecops, compliance, aws-platform). A judgment agent inherits your session's own model and effort, so it is never downgraded below what you chose. Only delivery, pipeline-deploy, and operations carry the `templated` tier (a mid-size model at reduced effort), because their output is dominantly templated planning, CI/CD YAML, and runbook scaffolding.
 
 - **Leads:** feasibility, application-design, units-generation, functional-design, nfr-requirements, nfr-design
 - **Supports:** intent-capture, reverse-engineering (synthesis), delivery-planning
@@ -222,7 +222,7 @@ This table shows which agents are active in which phases, and whether they serve
 
 ### Observations
 
-- The **aidlc-architect-agent** has the broadest involvement (9 stages across 3 phases). It runs on opus, as do seven other high-judgment agents; only **aidlc-delivery-agent**, **aidlc-pipeline-deploy-agent**, and **aidlc-operations-agent** run on sonnet
+- The **aidlc-architect-agent** has the broadest involvement (9 stages across 3 phases). It carries the `judgment` tier (inherits your session's model and effort), as do seven other high-judgment agents; only **aidlc-delivery-agent**, **aidlc-pipeline-deploy-agent**, and **aidlc-operations-agent** carry the `templated` tier
 - The **aidlc-developer-agent** spans 3 phases: Inception, Construction, and Operation
 - The **aidlc-compliance-agent** and **aidlc-devsecops-agent** operate purely in support roles, participating in stages led by others
 - The **aidlc-operations-agent** closes the lifecycle loop by feeding insights back to the aidlc-product-agent
@@ -256,10 +256,10 @@ Beyond the 11 domain-expert agents, AI-DLC ships **2 quality-gate reviewer
 agents**. They do not produce artifacts — they review what a builder produced and
 challenge it, representing the customer (or the review board) at the gate.
 
-| Reviewer | Reviews | Runs on |
-|----------|---------|---------|
-| `aidlc-product-lead-agent` | Requirements, user stories, and UX/mockup artifacts — completeness, business alignment, testability | sonnet |
-| `aidlc-architecture-reviewer-agent` | Technical design artifacts — soundness, implementability, broken cross-references, unachievable NFR targets | sonnet |
+| Reviewer | Reviews | Tier |
+|----------|---------|------|
+| `aidlc-product-lead-agent` | Requirements, user stories, and UX/mockup artifacts — completeness, business alignment, testability | balanced |
+| `aidlc-architecture-reviewer-agent` | Technical design artifacts — soundness, implementability, broken cross-references, unachievable NFR targets | balanced |
 
 ## The Composer Agent
 

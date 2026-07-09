@@ -5,7 +5,7 @@
 | Field | Value |
 |-------|-------|
 | Name | aidlc-aws-platform-agent |
-| Model Override | opus |
+| Tier | **judgment** |
 | Allowed Claude Code Tools | Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion |
 | Disallowed Claude Code Tools | Task |
 

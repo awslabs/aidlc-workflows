@@ -23,8 +23,8 @@ For design philosophy and rationale, see the
 | 9 | [aidlc-quality-agent](quality-agent.md) | Test strategy, test generation, performance validation |
 | 10 | [aidlc-pipeline-deploy-agent](pipeline-deploy-agent.md) | CI/CD pipelines, deployment strategy, release execution |
 | 11 | [aidlc-operations-agent](operations-agent.md) | Observability, incident response, feedback loops |
-| 12 | aidlc-product-lead-agent | Review-only: requirements / user-story / UX quality gate (sonnet) |
-| 13 | aidlc-architecture-reviewer-agent | Review-only: technical-design soundness / implementability gate (sonnet) |
+| 12 | aidlc-product-lead-agent | Review-only: requirements / user-story / UX quality gate (balanced tier) |
+| 13 | aidlc-architecture-reviewer-agent | Review-only: technical-design soundness / implementability gate (balanced tier) |
 
 ---
 
@@ -60,63 +60,73 @@ Every agent *can* reach Bash and WebSearch by inheritance; the table records whi
 | Bash | aidlc-aws-platform-agent, aidlc-devsecops-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
 | WebSearch | aidlc-product-agent, aidlc-design-agent, aidlc-compliance-agent |
 
-### Model Overrides
+### Agent Tiers
 
-| Model | Agents |
-|-------|--------|
-| opus | aidlc-architect-agent, aidlc-product-agent, aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-aws-platform-agent, aidlc-composer-agent |
-| sonnet | aidlc-architecture-reviewer-agent, aidlc-product-lead-agent, aidlc-delivery-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
+| Tier | Agents |
+|------|--------|
+| judgment | aidlc-architect-agent, aidlc-product-agent, aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-aws-platform-agent, aidlc-composer-agent |
+| balanced | aidlc-architecture-reviewer-agent, aidlc-product-lead-agent |
+| templated | aidlc-delivery-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
 
-Every shipped agent declares an explicit `model:`; omitting it would make the subagent inherit the session model on Claude Code. An agent uses sonnet only when its output is dominantly
-templated — delivery plans, CI/CD YAML, observability and runbook scaffolding —
-and the methodology is already encoded in the agent's knowledge files.
+Every shipped agent declares a `tier:` in its authored frontmatter; the
+packager projects it into each harness's native model/effort keys (on Claude
+Code: judgment -> `model: inherit` with no effort pin, balanced -> `model:
+sonnet` with no effort pin, templated -> `model: sonnet` + `effort: medium`).
+A judgment agent is therefore never downgraded below the session's own model
+and effort. An agent is templated only when its output is dominantly
+pattern-following — delivery plans, CI/CD YAML, observability and runbook
+scaffolding — and the methodology is already encoded in the agent's knowledge
+files.
 
-The nine opus agents share one property: their work requires high-judgment,
+The nine judgment agents share one property: their work requires
 multi-constraint reasoning whose decisions cascade downstream. Architectural
 boundaries, interpretation of ambiguous intent, UX trade-offs, code synthesis
 under dense context, risk-based test strategy, threat prioritisation,
 regulatory edge-cases, and cloud architecture trade-offs all fall in this
-category.
+category. The two balanced reviewers evaluate novel input against explicit
+criteria — the checklist encodes the method, so a mid-size model at session
+effort suffices. See the projection table and the `tier_cap` override in
+[Agent System](../05-agent-system.md).
 
 ---
 
 ## Agent Summary Table
 
-| Agent | Lead Stages | Support Stages | Model | Tools Expected to Exercise |
+| Agent | Lead Stages | Support Stages | Tier | Tools Expected to Exercise |
 |-------|-------------|----------------|-------|------------------------------|
-| [aidlc-product-agent](product-agent.md) | intent-capture, market-research, scope-definition, requirements-analysis, user-stories | rough-mockups, approval-handoff, refined-mockups | opus | WebSearch |
-| [aidlc-design-agent](design-agent.md) | rough-mockups, refined-mockups | user-stories, application-design | opus | WebSearch |
-| [aidlc-delivery-agent](delivery-agent.md) | team-formation, approval-handoff, delivery-planning | scope-definition, units-generation | sonnet | -- |
-| [aidlc-architect-agent](architect-agent.md) | feasibility, application-design, units-generation, functional-design, nfr-requirements, nfr-design | intent-capture, reverse-engineering (synthesis), delivery-planning | opus | -- |
-| [aidlc-aws-platform-agent](aws-platform-agent.md) | infrastructure-design, environment-provisioning | feasibility, application-design, nfr-design, feedback-optimization | opus | Bash |
-| [aidlc-compliance-agent](compliance-agent.md) | (none) | feasibility, nfr-requirements, infrastructure-design, environment-provisioning | opus | WebSearch |
-| [aidlc-devsecops-agent](devsecops-agent.md) | (none) | practices-discovery, nfr-requirements, infrastructure-design, build-and-test, environment-provisioning | opus | Bash |
-| [aidlc-developer-agent](developer-agent.md) | reverse-engineering (code scan), code-generation | practices-discovery, functional-design, deployment-execution | opus | Bash |
-| [aidlc-quality-agent](quality-agent.md) | build-and-test, performance-validation | practices-discovery, nfr-requirements | opus | Bash |
-| [aidlc-pipeline-deploy-agent](pipeline-deploy-agent.md) | practices-discovery, ci-pipeline, deployment-pipeline, deployment-execution | (none) | sonnet | Bash |
-| [aidlc-operations-agent](operations-agent.md) | observability-setup, incident-response, feedback-optimization | (none) | sonnet | Bash |
+| [aidlc-product-agent](product-agent.md) | intent-capture, market-research, scope-definition, requirements-analysis, user-stories | rough-mockups, approval-handoff, refined-mockups | judgment | WebSearch |
+| [aidlc-design-agent](design-agent.md) | rough-mockups, refined-mockups | user-stories, application-design | judgment | WebSearch |
+| [aidlc-delivery-agent](delivery-agent.md) | team-formation, approval-handoff, delivery-planning | scope-definition, units-generation | templated | -- |
+| [aidlc-architect-agent](architect-agent.md) | feasibility, application-design, units-generation, functional-design, nfr-requirements, nfr-design | intent-capture, reverse-engineering (synthesis), delivery-planning | judgment | -- |
+| [aidlc-aws-platform-agent](aws-platform-agent.md) | infrastructure-design, environment-provisioning | feasibility, application-design, nfr-design, feedback-optimization | judgment | Bash |
+| [aidlc-compliance-agent](compliance-agent.md) | (none) | feasibility, nfr-requirements, infrastructure-design, environment-provisioning | judgment | WebSearch |
+| [aidlc-devsecops-agent](devsecops-agent.md) | (none) | practices-discovery, nfr-requirements, infrastructure-design, build-and-test, environment-provisioning | judgment | Bash |
+| [aidlc-developer-agent](developer-agent.md) | reverse-engineering (code scan), code-generation | practices-discovery, functional-design, deployment-execution | judgment | Bash |
+| [aidlc-quality-agent](quality-agent.md) | build-and-test, performance-validation | practices-discovery, nfr-requirements | judgment | Bash |
+| [aidlc-pipeline-deploy-agent](pipeline-deploy-agent.md) | practices-discovery, ci-pipeline, deployment-pipeline, deployment-execution | (none) | templated | Bash |
+| [aidlc-operations-agent](operations-agent.md) | observability-setup, incident-response, feedback-optimization | (none) | templated | Bash |
 
 ---
 
 ## Agent Comparison Matrix
 
-| Agent | Bash | WebSearch | Opus Model | Lead Stages | Support Stages | Total Stage Involvement |
-|-------|------|-----------|------------|-------------|----------------|-------------------------|
-| aidlc-product-agent | No | Yes | Yes | 5 | 3 | 8 |
-| aidlc-design-agent | No | Yes | Yes | 2 | 2 | 4 |
-| aidlc-delivery-agent | No | No | No | 3 | 2 | 5 |
-| aidlc-architect-agent | No | No | Yes | 6 | 3 | 9 |
-| aidlc-aws-platform-agent | Yes | No | Yes | 2 | 4 | 6 |
-| aidlc-compliance-agent | No | Yes | Yes | 0 | 4 | 4 |
-| aidlc-devsecops-agent | Yes | No | Yes | 0 | 5 | 5 |
-| aidlc-developer-agent | Yes | No | Yes | 2 | 3 | 5 |
-| aidlc-quality-agent | Yes | No | Yes | 2 | 2 | 4 |
-| aidlc-pipeline-deploy-agent | Yes | No | No | 4 | 0 | 4 |
-| aidlc-operations-agent | Yes | No | No | 3 | 0 | 3 |
+| Agent | Bash | WebSearch | Tier | Lead Stages | Support Stages | Total Stage Involvement |
+|-------|------|-----------|------|-------------|----------------|-------------------------|
+| aidlc-product-agent | No | Yes | judgment | 5 | 3 | 8 |
+| aidlc-design-agent | No | Yes | judgment | 2 | 2 | 4 |
+| aidlc-delivery-agent | No | No | templated | 3 | 2 | 5 |
+| aidlc-architect-agent | No | No | judgment | 6 | 3 | 9 |
+| aidlc-aws-platform-agent | Yes | No | judgment | 2 | 4 | 6 |
+| aidlc-compliance-agent | No | Yes | judgment | 0 | 4 | 4 |
+| aidlc-devsecops-agent | Yes | No | judgment | 0 | 5 | 5 |
+| aidlc-developer-agent | Yes | No | judgment | 2 | 3 | 5 |
+| aidlc-quality-agent | Yes | No | judgment | 2 | 2 | 4 |
+| aidlc-pipeline-deploy-agent | Yes | No | templated | 4 | 0 | 4 |
+| aidlc-operations-agent | Yes | No | templated | 3 | 0 | 3 |
 
 **Observations:**
 - The aidlc-architect-agent has the broadest stage involvement (9 stages across 3 phases), reflecting its role as the central design authority.
-- Across the full 14-agent roster, nine run on opus and five on sonnet; the sonnet agents (architecture-reviewer, product-lead, delivery, pipeline-deploy, operations) produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
+- Across the full 14-agent roster, nine agents carry the `judgment` tier and five step down (the two `balanced` reviewers plus the three `templated` planners); the stepped-down agents produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
 - The aidlc-compliance-agent operates purely in an advisory capacity (4 support stages across Ideation, Construction, and Operation; no lead stages).
 - Six of 11 agents have Bash access, all in roles that need CLI interaction (infrastructure, security, development, testing, deployment, operations).
 - Three agents have WebSearch access for research tasks (product, design, compliance).

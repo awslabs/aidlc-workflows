@@ -90,7 +90,7 @@ SKILL.md references two companion file sets in `.claude/skills/aidlc/`:
 
 ### Agent File Format
 
-This implementation renders AI-DLC's agent roles as flat `.md` files in `.claude/agents/` — 13 files: the 11 domain-expert personas plus 2 review-only agents (product-lead, architecture-reviewer). Each uses YAML frontmatter followed by a markdown body. The frontmatter controls Claude Code's behavior when the agent is activated; the body provides persona, responsibilities, stage ownership, collaboration patterns, knowledge loading order, and key principles.
+This implementation renders AI-DLC's agent roles as flat `.md` files in `.claude/agents/` — 14 files: the 11 domain-expert personas, 2 review-only agents (product-lead, architecture-reviewer), and the adaptive-workflows composer. Each uses YAML frontmatter followed by a markdown body. The frontmatter controls Claude Code's behavior when the agent is activated; the body provides persona, responsibilities, stage ownership, collaboration patterns, knowledge loading order, and key principles.
 
 For full agent system documentation, see [Agent System](05-agent-system.md).
 
@@ -111,12 +111,17 @@ The conductor delegates to a separate Claude instance via the Claude Code Task t
 
 Workspace detection (0.2) used to be a subagent; it now runs deterministically inside `aidlc-utility init`.
 
-### Model Overrides
+### Agent Tiers (projected model + effort)
 
-| Model | Agents | Rationale |
-|-------|--------|-----------|
-| `opus` | architect, product, design, developer, quality, devsecops, compliance, aws-platform, composer (9) | High-judgment, multi-constraint reasoning whose decisions cascade downstream - architectural boundaries, intent interpretation, UX trade-offs, code synthesis, threat prioritisation, regulatory edge-cases, cloud architecture |
-| `sonnet` | architecture-reviewer, product-lead, delivery, pipeline-deploy, operations (5) | Output is dominantly templated planning tables, CI/CD YAML, or observability/runbook scaffolding, or review against an explicit checklist; methodology is encoded in the agent's knowledge files |
+The authored dial on every agent is `tier:`; the packager projects it into the `model:`/`effort:` frontmatter keys Claude Code reads. Previous behaviour (through v2.2.15) pinned `model: opus` on the nine judgment-shaped agents, which forcibly downgraded sessions running a bigger model.
+
+| Tier | Agents | Claude Code projection | Rationale |
+|------|--------|------------------------|-----------|
+| `judgment` | architect, product, design, developer, quality, devsecops, compliance, aws-platform, composer (9) | `model: inherit`, no `effort:` line - the session's model and effort win | Multi-constraint reasoning whose decisions cascade downstream - architectural boundaries, intent interpretation, UX trade-offs, code synthesis, threat prioritisation, regulatory edge-cases, cloud architecture |
+| `balanced` | architecture-reviewer, product-lead (2) | `model: sonnet`, no `effort:` line | Review against an explicit checklist; the criteria encode the method, so a mid-size model at session effort suffices |
+| `templated` | delivery, pipeline-deploy, operations (3) | `model: sonnet`, `effort: medium` | Output is dominantly templated planning tables, CI/CD YAML, or observability/runbook scaffolding; methodology is encoded in the agent's knowledge files |
+
+An omitted `effort:` key inherits the session effort, and a pinned one overrides the session in both directions (a pin is a cap, not a floor) - absence is deliberate for the first two tiers. The full per-harness projection table, the Kiro collapse rule, and the `tier_cap` override live in [Agent System](05-agent-system.md).
 
 ---
 
@@ -375,7 +380,7 @@ Steps 1-2a happen for every conversation, even non-AI-DLC ones — and because e
 
 - [Architecture](01-architecture.md) -- 5-layer model including all feature layers
 - [Orchestrator](03-orchestrator.md) -- SKILL.md deep-dive
-- [Agent System](05-agent-system.md) -- agent frontmatter, tool restrictions, model overrides
+- [Agent System](05-agent-system.md) -- agent frontmatter, tool restrictions, agent tiers
 - [Hooks and Tools](06-hooks-and-tools.md) -- hook system, audit taxonomy, CLI tools
 - [Knowledge System](10-knowledge-system.md) -- two-tier knowledge, loading order
 - [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md) -- how to add a column to the mapping above: the manifest, hook adapter, and `emit.ts` contract

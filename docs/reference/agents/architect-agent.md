@@ -5,15 +5,15 @@
 | Field | Value |
 |-------|-------|
 | Name | aidlc-architect-agent |
-| Model Override | **opus** |
+| Tier | **judgment** |
 | Allowed Claude Code Tools | Read, Edit, Write, Glob, Grep, AskUserQuestion |
 | Disallowed Claude Code Tools | Task |
 
 The aidlc-architect-agent is the central design authority, handling the most
 architecturally complex reasoning tasks across three phases of the lifecycle.
-It runs on opus alongside the other seven high-judgment agents — the three
-sonnet agents (delivery, pipeline-deploy, operations) produce dominantly
-templated planning, CI/CD, and runbook output.
+It carries the `judgment` tier alongside the other seven high-judgment
+agents — the three `templated` agents (delivery, pipeline-deploy, operations)
+produce dominantly templated planning, CI/CD, and runbook output.
 
 ---
 

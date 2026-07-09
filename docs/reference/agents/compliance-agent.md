@@ -5,7 +5,7 @@
 | Field | Value |
 |-------|-------|
 | Name | aidlc-compliance-agent |
-| Model Override | opus |
+| Tier | **judgment** |
 | Allowed Claude Code Tools | Read, Edit, Write, Glob, Grep, WebSearch, AskUserQuestion |
 | Disallowed Claude Code Tools | Task |
 

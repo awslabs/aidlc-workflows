@@ -43,12 +43,19 @@ so the AI-DLC conductor agent is active by default — `/aidlc` just works.
 have configured**; if you prefer your own default, remove that setting and use
 `kiro-cli chat --agent aidlc` instead.
 
-The same `cli.json` also ships an `xhigh` reasoning-effort default for the
-pinned orchestrator model (`claude-opus-4.8`) via `chat.modelDefaults`, so the
-conductor reasons at full depth out of the box. Override it per session with
-`/effort <level>` in chat or `kiro-cli chat --effort <level>`
-(low|medium|high|xhigh|max) — a session flag and your user-level
-`~/.kiro/settings/cli.json` both take precedence over the workspace default.
+The same `cli.json` also ships per-model reasoning-effort defaults via
+`chat.modelDefaults`: `xhigh` for the pinned orchestrator model
+(`claude-opus-4.8`) so the conductor reasons at full depth out of the box, and
+`high` for `claude-sonnet-4.5`, the model the balanced/templated agent tiers
+pin (Kiro has no per-agent effort surface, so effort rides on the model; two
+tiers sharing a model share its effort — the higher tier's value wins).
+Judgment-tier agents pin no model at all: they follow your `/model` default
+at that model's own default effort. This file is read by the Kiro CLI only —
+the Kiro IDE ignores `cli.json` and applies its extension's per-model
+defaults instead. Override per session with `/effort <level>` in chat or
+`kiro-cli chat --effort <level>` (low|medium|high|xhigh|max) — a session flag
+and your user-level `~/.kiro/settings/cli.json` both take precedence over the
+workspace default.
 
 ## Usage
 

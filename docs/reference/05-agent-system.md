@@ -21,7 +21,7 @@ description: >                      # Brief role summary (shown in Claude Code a
   System architect responsible for application design,
   NFR design, and component decomposition.
 disallowedTools: Task               # Agents cannot spawn subagents
-model: opus                         # opus for high-judgment work; sonnet for templated output
+tier: judgment                      # judgment | balanced | templated (see Agent Tiers)
 ---
 ```
 
@@ -31,7 +31,7 @@ model: opus                         # opus for high-judgment work; sonnet for te
 | `description` | Yes | Brief role summary |
 | `tools` | No | Optional allowlist; omit to inherit the full session toolset. Listing it narrows the agent and drops inherited MCP tools unless `mcp__<server>__<tool>` ids are also listed |
 | `disallowedTools` | Yes | Must include `Task` -- only the conductor delegates |
-| `model` | No | `opus` or `sonnet` for shipped agents; omitted = `inherit`, so the delegated subagent uses the session model. Claude Code also accepts other aliases, full model ids, and `inherit` |
+| `tier` | Yes | `judgment`, `balanced`, or `templated`. The AUTHORED dial: the packager projects it into each harness's native model/effort keys (see Agent Tiers below). Raw `model:`/`effort:` never appear in authored frontmatter -- they are projection OUTPUTS in `dist/<harness>/` |
 
 ### Markdown Body Sections
 
@@ -79,47 +79,60 @@ Every agent *can* reach Bash and WebSearch by inheritance; the table records whi
 | Bash | aidlc-aws-platform-agent, aidlc-devsecops-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
 | WebSearch | aidlc-product-agent, aidlc-design-agent, aidlc-compliance-agent |
 
-### Model Overrides
+### Agent Tiers
 
-| Model | Agents |
-|-------|--------|
-| opus | aidlc-architect-agent, aidlc-product-agent, aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-aws-platform-agent, aidlc-composer-agent |
-| sonnet | aidlc-architecture-reviewer-agent, aidlc-product-lead-agent, aidlc-delivery-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
+The authored dial on every agent is `tier:` -- it names the KIND of work the persona does, and the packager (`bun scripts/package.ts`) projects it into each harness's native model/effort form. Previous behaviour (through v2.2.15) pinned a raw `model: opus|sonnet` per agent, which forcibly downgraded sessions running a bigger model; the tier projection replaces that pin.
 
-Omitting `model:` uses Claude Code's `inherit` default, so a delegated subagent runs on the session model. The shipped agents declare explicit values; an agent uses sonnet only when its output is dominantly templated or pattern-following (delivery plans, CI/CD YAML, observability/runbook scaffolding) and the methodology is already encoded in knowledge files. The Claude Code and Codex harnesses read `model:` from the agent .md frontmatter; Kiro CLI and Kiro IDE read the per-agent `"model"` field in `harness/kiro*/agents/aidlc-*-agent.json` and ignore the .md value.
+| Tier | Agents | Meaning |
+|------|--------|---------|
+| `judgment` | architect, aws-platform, compliance, composer, design, developer, devsecops, product, quality | Multi-constraint reasoning under ambiguity; output cascades downstream. Never downgraded: inherits the session's model AND effort |
+| `balanced` | architecture-reviewer, product-lead | Reviewer-shaped work -- novel input against explicit criteria. Mid-size model, session effort |
+| `templated` | delivery, operations, pipeline-deploy | Dominantly pattern-following output; methodology already in knowledge (delivery plans, CI/CD YAML, runbooks). Mid-size model at reduced effort -- the one deliberate downgrade |
 
-Opus is used for any agent whose work involves high-judgment, multi-constraint reasoning that cascades downstream:
+The projection per harness (`core/tools/aidlc-tiers.ts` is the single source of truth):
 
-- **product** — interpreting ambiguous intent
-- **design** — UX trade-offs
-- **architect** — architectural decomposition
-- **developer** — code synthesis under dense context
-- **quality** — risk-based test strategy
-- **devsecops** — threat prioritisation
-- **compliance** — regulatory edge cases
-- **aws-platform** — cloud architecture trade-offs
+| Tier | Claude Code (.md frontmatter) | Codex CLI (.toml) | Kiro CLI/IDE (agent JSON `"model"`) | Kiro cli.json `chat.modelDefaults` |
+|------|-------------------------------|-------------------|--------------------------------------|-------------------------------------|
+| `judgment` | `model: inherit`, no `effort:` line | no `model`/`model_reasoning_effort` keys (config.toml session defaults apply) | field OMITTED (schema fallback: the user's default model) | no entry (default model's own default effort) |
+| `balanced` | `model: sonnet`, no `effort:` line | `model = "openai.gpt-5.4"`, no effort key | `claude-sonnet-4.5` | sonnet-4.5 -> `high` |
+| `templated` | `model: sonnet`, `effort: medium` | `model = "openai.gpt-5.4"`, `model_reasoning_effort = "medium"` | `claude-sonnet-4.5` (collapses with balanced) | (shares the sonnet-4.5 entry; balanced's `high` wins the collapse) |
+
+Key facts behind the table:
+
+- **Omission is the inherit mechanism.** On Claude Code an agent .md with no `effort:` key inherits the session effort, and a pinned `effort:` overrides the session in BOTH directions (a pin is a cap, not a floor) -- so absence is the contract for judgment and balanced. On Codex a role TOML without `model` spawns on the shipped `.codex/config.toml` session defaults (verified live on codex-cli 0.142.5). On Kiro the agent-v1 schema documents the absent-`"model"` fallback: "If not specified, uses the default model" (the `/model` persisted preference).
+- **Kiro has NO per-agent effort surface.** kiro-cli fail-closes on any effort-like key in agent JSON, so effort rides on the MODEL via `settings/cli.json` `chat.modelDefaults[<modelId>].output_config.effort` -- one entry per distinct pinned model. That file is CLI-only: the Kiro IDE ignores cli.json entirely and applies its extension-embedded per-model default (or the user's `/effort` session state).
+- **The Kiro collapse rule.** Two tiers sharing a Kiro model ID are indistinguishable there; the shared cli.json entry takes the HIGHER tier's effort (balanced's `high` beats templated's `medium` on sonnet-4.5). This collapse is deliberate and documented, not a bug.
+
+### Tier cap (cost override)
+
+A project can cap every projection at pack time, without editing any agent file:
+
+- **Persistent knob:** a `tier_cap:` key in the YAML frontmatter of the space memory layer files (`core/memory/org.md` -> `team.md` -> `project.md`, last writer wins -- a project may lower OR raise the org ceiling). Example: `tier_cap: balanced` collapses `judgment` to `balanced` in every harness's projection.
+- **Per-invocation override:** the `AIDLC_TIER_CAP` env var beats the memory layers for one packager run (`AIDLC_TIER_CAP=templated bun scripts/package.ts`).
+
+To opt a SINGLE agent out instead, edit the projected value in your installed `dist/<harness>/` copy (e.g. set `model: opus` on one Claude agent .md) -- the edit survives until you re-copy the dist shell.
 
 ---
 
 ## Agent Comparison Matrix
 
-| Agent | Bash | WebSearch | Opus Model | Lead Stages | Support Stages | Total |
-|-------|------|-----------|------------|-------------|----------------|-------|
-| aidlc-product-agent | No | Yes | Yes | 5 | 3 | 8 |
-| aidlc-design-agent | No | Yes | Yes | 2 | 2 | 4 |
-| aidlc-delivery-agent | No | No | No | 3 | 2 | 5 |
-| aidlc-architect-agent | No | No | Yes | 6 | 3 | 9 |
-| aidlc-aws-platform-agent | Yes | No | Yes | 2 | 4 | 6 |
-| aidlc-compliance-agent | No | Yes | Yes | 0 | 4 | 4 |
-| aidlc-devsecops-agent | Yes | No | Yes | 0 | 5 | 5 |
-| aidlc-developer-agent | Yes | No | Yes | 2 | 3 | 5 |
-| aidlc-quality-agent | Yes | No | Yes | 2 | 2 | 4 |
-| aidlc-pipeline-deploy-agent | Yes | No | No | 4 | 0 | 4 |
-| aidlc-operations-agent | Yes | No | No | 3 | 0 | 3 |
+| Agent | Bash | WebSearch | Tier | Lead Stages | Support Stages | Total |
+|-------|------|-----------|------|-------------|----------------|-------|
+| aidlc-product-agent | No | Yes | judgment | 5 | 3 | 8 |
+| aidlc-design-agent | No | Yes | judgment | 2 | 2 | 4 |
+| aidlc-delivery-agent | No | No | templated | 3 | 2 | 5 |
+| aidlc-architect-agent | No | No | judgment | 6 | 3 | 9 |
+| aidlc-aws-platform-agent | Yes | No | judgment | 2 | 4 | 6 |
+| aidlc-compliance-agent | No | Yes | judgment | 0 | 4 | 4 |
+| aidlc-devsecops-agent | Yes | No | judgment | 0 | 5 | 5 |
+| aidlc-developer-agent | Yes | No | judgment | 2 | 3 | 5 |
+| aidlc-quality-agent | Yes | No | judgment | 2 | 2 | 4 |
+| aidlc-pipeline-deploy-agent | Yes | No | templated | 4 | 0 | 4 |
+| aidlc-operations-agent | Yes | No | templated | 3 | 0 | 3 |
 
 **Observations:**
 - aidlc-architect-agent has the broadest stage involvement (9 stages across 3 phases).
-- Across the full 14-agent roster, nine run on opus and five on sonnet; the sonnet agents (architecture-reviewer, product-lead, delivery, pipeline-deploy, operations) produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
+- Across the full 14-agent roster, nine agents carry the `judgment` tier and five step down (the two `balanced` reviewers plus the three `templated` planners); the stepped-down agents produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
 - aidlc-compliance-agent operates purely in an advisory capacity (4 support stages, no lead stages).
 - Six of 11 agents have Bash access, all in roles that need CLI interaction.
 - Three agents have WebSearch access for research tasks.

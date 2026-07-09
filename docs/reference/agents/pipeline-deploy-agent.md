@@ -5,7 +5,7 @@
 | Field | Value |
 |-------|-------|
 | Name | aidlc-pipeline-deploy-agent |
-| Model Override | sonnet |
+| Tier | **templated** |
 | Allowed Claude Code Tools | Read, Edit, Write, Glob, Grep, Bash, AskUserQuestion |
 | Disallowed Claude Code Tools | Task |
 

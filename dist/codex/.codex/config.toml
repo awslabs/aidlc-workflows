@@ -1,8 +1,10 @@
 # dist/codex shipped config — copy into the project's .codex/config.toml
 # (trusted projects) or merge into ~/.codex/config.toml.
 #
-# Model: D-7 map (orchestrator opus-class -> gpt-5.5; agent sonnet-class ->
-# gpt-5.4). D-9: Amazon Bedrock is the shipped default provider (web_search is
+# Model: these session defaults are what judgment-tier agent roles inherit
+# (their TOMLs omit model/model_reasoning_effort by design - see the tier
+# projection); balanced/templated roles pin gpt-5.4 per the tier table.
+# D-9: Amazon Bedrock is the shipped default provider (web_search is
 # unavailable there; the market-research stage degrades gracefully). For
 # OpenAI-auth setups, comment out model_provider and the [model_providers]
 # block.

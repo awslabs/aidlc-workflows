@@ -1,7 +1,7 @@
 # Adding an Agent
 
 An agent is the *who* of the framework — a persona with a domain, a tool
-allowlist, and a model. The 11 shipped agents cover product, design, delivery,
+allowlist, and a tier. The 11 shipped agents cover product, design, delivery,
 architecture, AWS platform, compliance, DevSecOps, development, quality,
 pipeline-deploy, and operations. When your team needs a domain the framework
 doesn't cover (a data-governance reviewer or a mobile specialist, say), you
@@ -47,7 +47,7 @@ description: >
   Solutions architect responsible for application design, domain modelling,
   NFR patterns, and component decomposition.
 disallowedTools: Task
-model: opus
+tier: judgment
 ---
 ```
 
@@ -82,15 +82,22 @@ call when the engine's `run-stage` directive carries `mode: subagent`. Allowing
 the framework is built to prevent. Every shipped agent disallows `Task`, and so
 must yours.
 
-**`model` is opus or sonnet; if omitted, the delegated subagent inherits the session model.** Reach for
-`opus` for any persona whose work is high-judgment, multi-constraint reasoning
-that cascades downstream, interpreting ambiguous intent and weighing
-architectural trade-offs under dense context. Eight of the
-11 domain agents run on opus for exactly this reason. Use `sonnet` only when the
-output is dominantly templated or pattern-following and the methodology is
-already encoded in the agent's knowledge files, as with delivery plans, CI/CD
-YAML, and runbook scaffolding. When in doubt, omit `model` to inherit the
-session model or set `opus` when the persona should pin high-judgment work.
+**`tier` names the kind of work; the packager projects it into per-harness
+model/effort keys.** You never author raw `model:` or `effort:` in core agent
+frontmatter -- those are projection OUTPUTS in `dist/<harness>/`, derived from
+the tier table in `core/tools/aidlc-tiers.ts`. Pick `judgment` for any persona
+whose work is multi-constraint reasoning that cascades downstream --
+interpreting ambiguous intent, weighing architectural trade-offs under dense
+context; a judgment agent inherits the session's model AND effort, so it is
+never silently downgraded. Pick `balanced` for reviewer-shaped personas that
+judge novel input against explicit criteria. Pick `templated` only when the
+output is dominantly pattern-following and the methodology is already encoded
+in the agent's knowledge files, as with delivery plans, CI/CD YAML, and
+runbook scaffolding -- templated is the one tier that steps effort down. When
+in doubt, use `judgment`: the projection table (and a project's `tier_cap`)
+can always step cost down later, but a persona authored too low silently
+under-reasons. See [Agent System](../reference/05-agent-system.md) for the
+full projection table and the cap override.
 
 Two more fields drive presentation rather than behavior. `display_name` is the
 human-readable label the statusline renders (the architect shows as "Architect
@@ -141,7 +148,7 @@ Mirroring the reference recipe, here is the workflow end to end.
 
 1. **Create the agent file** — `core/agents/<slug>-agent.md` with the
    required frontmatter: `name`, `display_name`, `examples`, `description`,
-   `disallowedTools` (including `Task`), `model`. An optional `tools:`
+   `disallowedTools` (including `Task`), `tier`. An optional `tools:`
    allowlist narrows the persona; omit it to inherit the full session toolset.
    Write the body to match the shipped files' structure (Core Responsibilities,
    Stages Owned, Collaboration, Knowledge Loading, Key Principles).
@@ -164,7 +171,7 @@ Mirroring the reference recipe, here is the workflow end to end.
 
 The full recipe — with the discovery, intent-birth, and statusline verification
 commands — is in [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
-To change an existing agent's tools, model, or stage assignments rather than add
+To change an existing agent's tools, tier, or stage assignments rather than add
 one, see [Agent System: How to Modify an Agent](../reference/05-agent-system.md#how-to-modify-an-agent).
 
 ### What validates automatically

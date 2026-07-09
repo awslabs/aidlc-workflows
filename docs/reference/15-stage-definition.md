@@ -356,7 +356,7 @@ never silently ignored.
 
 Stages and agents follow the same YAML-first discipline. Agent frontmatter
 (see [Agent System](05-agent-system.md#frontmatter-contract)) declares
-*who* — the agent's name, allowed tools, model override. Stage frontmatter
+*who* — the agent's name, allowed tools, tier. Stage frontmatter
 declares *what* — which artifacts the stage produces and consumes, which
 agents it delegates to, how it executes.
 
