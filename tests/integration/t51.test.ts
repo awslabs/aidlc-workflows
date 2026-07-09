@@ -62,6 +62,7 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const UTIL = join(TOOLS, "aidlc-utility.ts");
 const STATE = join(TOOLS, "aidlc-state.ts");
+const LOG = join(TOOLS, "aidlc-log.ts");
 
 // P4: init births a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/);
 // state lands at <record>/aidlc-state.md and audit in per-clone shards under
@@ -122,6 +123,18 @@ function walkStage(proj: string, slug: string): void {
   });
   if ((gs.status ?? -1) !== 0) {
     throw new Error(`gate-start ${slug} failed (status ${gs.status}): ${gs.stdout ?? ""}${gs.stderr ?? ""}`);
+  }
+  // Reviewer-bearing stages need a terminal REVIEW_COMPLETED before approve
+  // commits (§12a gate precondition), recorded by the stage's DECLARED reviewer.
+  // Record one for the two reviewer-bearing stages this walk crosses; a
+  // no-reviewer stage ignores the extra row. This walk drives transitions to
+  // accumulate the audit trail, not to test the reviewer gate.
+  const reviewerFor: Record<string, string> = {
+    "requirements-analysis": "aidlc-product-lead-agent",
+    "code-generation": "aidlc-architecture-reviewer-agent",
+  };
+  if (reviewerFor[slug]) {
+    spawnSync(BUN, [LOG, "review", "--stage", slug, "--reviewer", reviewerFor[slug], "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { encoding: "utf-8" });
   }
   const ap = spawnSync(BUN, [STATE, "approve", slug, "--user-input", "approve", "--project-dir", proj], {
     encoding: "utf-8",

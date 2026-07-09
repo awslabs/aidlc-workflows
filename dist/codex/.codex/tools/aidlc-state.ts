@@ -7,6 +7,7 @@ import {
   activeIntent,
   appendSlug,
   appendUnderHeading,
+  auditBlockField,
   type CheckboxState,
   codekbDir,
   countCheckboxes,
@@ -1216,6 +1217,126 @@ function verifyStageArtifacts(
   }
 }
 
+// --- Reviewer precondition (§12a / RFC Track 1) -----------------------------
+//
+// A stage that declares a `reviewer` cannot be approved until the reviewer step
+// actually ran — proven by a terminal REVIEW_COMPLETED row (written by the tool
+// actor `aidlc-log.ts review --verdict`). Hard on the review HAVING HAPPENED,
+// soft on the verdict (a NOT-READY-after-cap still lets the human approve).
+//
+// This lives in handleApprove (not orchestrate's report) for the SAME reason as
+// the artifact and human-presence guards: report shells out to `state.ts
+// approve`, but agents call `state.ts approve` directly on recovery, so a
+// report-only guard is bypassable (issue #366). This is the single enforcement
+// seam every approve passes through.
+//
+// The audit read is FLOORED (mirrors swarmConvergedUnits / hasStageAuditEvent):
+// only REVIEW_COMPLETED rows recorded AFTER the stage's latest STAGE_STARTED and
+// after any later GATE_REJECTED count. Without the floor a stale review from a
+// prior stage-run (a redo-jump re-runs the stage) or from before a reject/revise
+// would clear the gate for an artifact nobody re-reviewed.
+//
+// The row must match BOTH Stage AND Reviewer (a row naming the wrong reviewer —
+// a typo, or the conductor self-certifying — must not satisfy it). On per-unit
+// stages (for_each: unit-of-work) one review per stage is not enough: the
+// reviewer fires once PER UNIT, so EVERY unit must carry its own terminal review.
+//
+// Carve-out: autonomous Construction (swarm / Bolt) is exempt — the same
+// carve-out the human-presence guard uses. There is no conductor recording a
+// review in an unattended swarm run; requiring one would halt it at the gate.
+function verifyReviewerPrecondition(
+  pd: string,
+  content: string,
+  stage: { slug: string; name: string; phase: string; for_each?: string; reviewer?: string }
+): void {
+  if (!stage.reviewer) return; // stage declares no reviewer — nothing to enforce
+  if (isAutonomousMode(content)) return; // swarm / Bolt: no human/conductor at the gate
+
+  const reviewer = stage.reviewer;
+  const audit = readAllAuditShards(pd);
+  if (audit.length === 0) {
+    reviewerPreconditionError(stage.slug, reviewer);
+  }
+
+  // Build ONE position-tiebroken event stream (the same interleave idiom
+  // unrecordedRevisionSinceGateOpen uses) — a timestamp-only floor is unsafe
+  // because isoTimestamp() is second-precision, so a review and the reject that
+  // should invalidate it can share a timestamp and a `<` compare would keep the
+  // stale review. Ordering by (timestamp, buffer position) breaks that tie.
+  const RELEVANT = new Set(["STAGE_STARTED", "GATE_REJECTED", "REVIEW_COMPLETED"]);
+  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const events: { pos: number; ts: string; event: string; block: string }[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const ev = auditBlockField(blocks[i], "Event");
+    if (!ev || !RELEVANT.has(ev)) continue;
+    events.push({ pos: i, ts: auditBlockField(blocks[i], "Timestamp") ?? "", event: ev, block: blocks[i] });
+  }
+  events.sort((a, b) => (a.ts !== b.ts ? (a.ts < b.ts ? -1 : 1) : a.pos - b.pos));
+
+  // Floor index: the latest STAGE_STARTED (excluding synthetic single-stage
+  // rows) or GATE_REJECTED for this slug. A REVIEW_COMPLETED at or after this
+  // index is fresh; anything before is a prior run's review or a pre-revision
+  // one and does not count.
+  let floorIdx = -1;
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
+    if (e.event === "STAGE_STARTED") {
+      if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
+      floorIdx = i;
+    } else if (e.event === "GATE_REJECTED") {
+      floorIdx = i;
+    }
+  }
+
+  // Collect the units with a fresh, matching terminal review (after the floor).
+  const reviewedUnits = new Set<string>();
+  let sawStageReview = false;
+  for (let i = floorIdx + 1; i < events.length; i++) {
+    const e = events[i];
+    if (e.event !== "REVIEW_COMPLETED") continue;
+    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
+    if (auditBlockField(e.block, "Reviewer") !== reviewer) continue;
+    sawStageReview = true;
+    const unit = auditBlockField(e.block, "Unit");
+    if (unit) reviewedUnits.add(unit);
+  }
+
+  const perUnit = stage.for_each === "unit-of-work";
+  if (!perUnit) {
+    if (!sawStageReview) reviewerPreconditionError(stage.slug, reviewer);
+    return;
+  }
+
+  // Per-unit: EVERY unit must carry its own fresh review. Fall back to the
+  // stage-level review only when the unit list is unavailable (never regress to
+  // "no enforcement").
+  const units = readBoltDagUnits(pd);
+  if (units === null || units.length === 0) {
+    if (!sawStageReview) reviewerPreconditionError(stage.slug, reviewer);
+    return;
+  }
+  const missing = units.filter((u) => !reviewedUnits.has(u));
+  if (missing.length > 0) {
+    error(
+      `Refusing to approve "${stage.slug}": it declares a reviewer (${reviewer}) but ` +
+        `${missing.length} of ${units.length} units have no recorded review since the ` +
+        `stage started (${missing.join(", ")}). The reviewer fires once per unit; record ` +
+        `each with \`aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ` +
+        `${reviewer} --verdict <READY|NOT-READY>\` before approving.`
+    );
+  }
+}
+
+function reviewerPreconditionError(slug: string, reviewer: string): never {
+  error(
+    `Refusing to approve "${slug}": it declares a reviewer (${reviewer}) but no ` +
+      `REVIEW_COMPLETED is recorded for it since the stage started. Invoke the reviewer ` +
+      `(stage-protocol §12a) and record the verdict with \`aidlc-log.ts review --stage ` +
+      `${slug} --reviewer ${reviewer} --verdict <READY|NOT-READY>\` before approving.`
+  );
+}
+
 function handleAdvance(args: string[]): void {
   // Keep only the positional <completed-slug> [<next-slug>]; any flags are
   // filtered out so they are not misread as the next slug.
@@ -1775,6 +1896,12 @@ function handleApprove(args: string[]): void {
   // Covers per-unit Construction stages (globs the record's
   // construction/<unit>/<slug>/) and code-producing stages (workspace_requires).
   verifyStageArtifacts(pd, stage);
+
+  // Reviewer precondition (§12a / RFC Track 1): a reviewer-bearing stage cannot
+  // be approved without a fresh terminal REVIEW_COMPLETED (per unit on per-unit
+  // stages). Runs BEFORE any mutation, same slot as the artifact guard. Exempt
+  // under autonomous Construction (handled inside). See verifyReviewerPrecondition.
+  verifyReviewerPrecondition(pd, content, stage);
 
   // Human-presence guard: a gate cannot be approved unless a real
   // human acted at THIS gate since the last gate resolution. Runs BEFORE any

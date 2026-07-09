@@ -92,6 +92,7 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const STATE = join(TOOLS, "aidlc-state.ts");
 const UTIL = join(TOOLS, "aidlc-utility.ts");
+const LOG = join(TOOLS, "aidlc-log.ts");
 
 // P4: init births a per-intent record (aidlc/spaces/<space>/intents/<slug>-<id8>/);
 // state lands at <record>/aidlc-state.md and audit in per-clone shards under
@@ -305,6 +306,10 @@ beforeAll(() => {
   // Step 3: revise [R] -> [?]
   expect(run(STATE, ["revise", "requirements-analysis"], proj).status).toBe(0);
   stateAfterRevise = readFileSync(sp, "utf-8");
+  // requirements-analysis declares a reviewer; record a fresh terminal review
+  // (after the revise) so the §12a gate precondition passes. This test targets
+  // the reject/revise transition trail, not the reviewer gate.
+  run(LOG, ["review", "--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1", "--verdict", "READY"], proj);
   // Step 4: approve [?] -> [x] (auto-advances to the next in-scope stage).
   approveAck = run(
     STATE,

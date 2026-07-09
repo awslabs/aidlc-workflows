@@ -42,6 +42,19 @@ resetAidlcEnv();
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+
+// functional-design declares a reviewer; the §12a gate precondition refuses an
+// approve without a terminal REVIEW_COMPLETED. These tests target the coverage
+// guard, not the reviewer gate, so record a READY review before approving.
+function logReviewReady(proj: string, stage: string, reviewer: string, unit?: string): void {
+  const args = [LOG, "review", "--stage", stage, "--reviewer", reviewer, "--iteration", "1", "--verdict", "READY"];
+  if (unit) args.push("--unit", unit);
+  args.push("--project-dir", proj);
+  const res = spawnSync(BUN, args, { encoding: "utf-8" });
+  // Keep a log-record failure local, not surfaced later as a confusing gate error.
+  expect(res.status).toBe(0);
+}
 
 // The record-relative prefix every resolved per-unit path is rooted at.
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
@@ -211,6 +224,10 @@ describe("t206 optional_produces exempt from per-unit coverage", () => {
     seedBoltDag(proj, ["alpha", "beta"]);
     coverUnit(proj, "alpha", "functional-design", FD_REQUIRED);
     coverUnit(proj, "beta", "functional-design", FD_REQUIRED);
+    // functional-design declares a reviewer and is per-unit; the §12a gate
+    // precondition requires one review PER UNIT (this test targets the coverage guard).
+    logReviewReady(proj, "functional-design", "aidlc-architecture-reviewer-agent", "alpha");
+    logReviewReady(proj, "functional-design", "aidlc-architecture-reviewer-agent", "beta");
     const d = runReport(proj, [
       "--stage",
       "functional-design",

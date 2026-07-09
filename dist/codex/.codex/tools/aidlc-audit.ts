@@ -54,6 +54,12 @@ const VALID_EVENT_TYPES = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
+  // Reviewer step (§12a) — REVIEW_REQUESTED on dispatch, REVIEW_COMPLETED when
+  // a verdict is read. Emitted by the tool actor `aidlc-log.ts review`. A
+  // reviewer-bearing stage cannot reach GATE_APPROVED without a terminal
+  // REVIEW_COMPLETED in its audit tail (enforced in aidlc-orchestrate report).
+  "REVIEW_REQUESTED",
+  "REVIEW_COMPLETED",
   // Artifact events (hook-emitted)
   "ARTIFACT_CREATED",
   "ARTIFACT_UPDATED",
@@ -156,6 +162,8 @@ const EVENT_HEADINGS: Record<string, string> = {
   GATE_APPROVED: "Gate Approved",
   GATE_REJECTED: "Gate Rejected",
   QUESTION_ANSWERED: "Question Answered",
+  REVIEW_REQUESTED: "Review Requested",
+  REVIEW_COMPLETED: "Review Completed",
   ARTIFACT_CREATED: "Artifact Created",
   ARTIFACT_UPDATED: "Artifact Updated",
   ARTIFACT_REUSED: "Artifact Reused",

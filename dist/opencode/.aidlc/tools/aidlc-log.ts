@@ -1,8 +1,9 @@
 // aidlc-log.ts — Interaction audit helper
 //
-// Records DECISION_RECORDED (before AskUserQuestion) and QUESTION_ANSWERED
-// (after the user answers). Orchestrator-callable; state tool doesn't own
-// these because they fire per-question, not per state transition.
+// Records DECISION_RECORDED (before AskUserQuestion), QUESTION_ANSWERED
+// (after the user answers), and REVIEW_REQUESTED / REVIEW_COMPLETED (the §12a
+// reviewer step). Orchestrator-callable; state tool doesn't own these because
+// they fire per-question / per-review, not per state transition.
 
 import { existsSync, readFileSync } from "node:fs";
 import { appendAuditEntry } from "./aidlc-audit.ts";
@@ -149,6 +150,56 @@ function handleAnswer(args: string[]): void {
   );
 }
 
+// --- Subcommand: review ---
+// Usage:
+//   aidlc-log review --stage <slug> --reviewer <agent> [--unit <u>] --iteration <n>
+//       → REVIEW_REQUESTED (fires when the conductor dispatches the reviewer)
+//   aidlc-log review --stage <slug> --reviewer <agent> [--unit <u>] --iteration <n> --verdict <READY|NOT-READY>
+//       → REVIEW_COMPLETED (fires when the conductor reads the reviewer's verdict)
+//
+// The §12a reviewer step is otherwise prose-driven; these tool-actor rows make
+// it observable and let the engine enforce that a reviewer-bearing stage cannot
+// be approved without a terminal REVIEW_COMPLETED (see verifyReviewerPrecondition
+// in aidlc-state.ts). On a per-unit Construction stage the reviewer fires once
+// PER UNIT, so pass --unit; the approve guard requires one review per unit.
+const VALID_VERDICTS = new Set(["READY", "NOT-READY"]);
+
+function handleReview(args: string[]): void {
+  const { flags } = parseFlags(args);
+  if (!flags.stage) error("Missing --stage <slug>");
+  if (!flags.reviewer) error("Missing --reviewer <agent>");
+
+  const pd = resolveActiveProjectDir(projectDir);
+  const fields: Record<string, string> = {
+    Stage: flags.stage,
+    Reviewer: flags.reviewer,
+  };
+  if (flags.unit) fields.Unit = flags.unit;
+  if (flags.iteration) fields.Iteration = flags.iteration;
+
+  let eventType: "REVIEW_REQUESTED" | "REVIEW_COMPLETED";
+  if (flags.verdict !== undefined) {
+    const verdict = flags.verdict.toUpperCase();
+    if (!VALID_VERDICTS.has(verdict)) {
+      error(
+        `Unknown --verdict "${flags.verdict}". Accepted: ${[...VALID_VERDICTS].join(", ")}.`
+      );
+    }
+    fields.Verdict = verdict;
+    eventType = "REVIEW_COMPLETED";
+  } else {
+    eventType = "REVIEW_REQUESTED";
+  }
+
+  try {
+    emitAudit(pd, eventType, fields);
+  } catch (e) {
+    error(`Audit emission failed: ${errorMessage(e)}`);
+  }
+
+  console.log(JSON.stringify({ emitted: eventType, stage: flags.stage }));
+}
+
 // --- CLI entry point ---
 
 let projectDir: string | undefined;
@@ -177,8 +228,11 @@ export function main(argv: string[]): void {
       case "answer":
         handleAnswer(filteredArgs.slice(1));
         break;
+      case "review":
+        handleReview(filteredArgs.slice(1));
+        break;
       default:
-        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer`);
+        error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, review`);
     }
   } catch (e) {
     error(errorMessage(e));

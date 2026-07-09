@@ -984,6 +984,17 @@ before reporting `revised` — the stale `## Review` verdict predates the
 revised content and must be replaced, with the same lead-alone loop and
 iteration budget as at first entry.
 
+> **Completion precondition (enforced by the engine).** Every completion path
+> (`approve`, `advance`, `finalize`, and `complete-workflow`) refuses a stage
+> that declares a reviewer until the audit ledger contains a fresh
+> `REVIEW_COMPLETED` from that reviewer. Per-unit stages require one receipt for
+> every applicable unit. A workflow restart, relevant jump, or gate rejection
+> invalidates older receipts. The precondition is hard on the review having
+> happened and soft on its verdict: a NOT-READY verdict after the iteration cap
+> still reaches the human gate. Autonomous Construction is not exempt; swarm
+> units are reviewed in their Bolt worktrees after convergence and before
+> finalization, so autonomy removes human interruptions rather than verification.
+
 ### What the reviewer does NOT do
 
 - Does not modify the artifact beyond appending `## Review`

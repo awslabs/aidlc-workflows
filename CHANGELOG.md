@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.5] - 2026-07-20
+
+Reviewer-bearing stages now have an engine-enforced, auditable verification boundary on every completion route. Interactive, per-unit, unit-major, and autonomous Construction runs record reviewer dispatch and verdict events, and stale or incomplete reviews refuse completion without adding another human checkpoint. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `aidlc-log.ts review` records `REVIEW_REQUESTED` before dispatch and `REVIEW_COMPLETED` after a `READY` or `NOT-READY` verdict; isolated stage runs are tagged separately from the main workflow.
+* `approve`, `advance`, `finalize`, and `complete-workflow` refuse reviewer-bearing stages without a fresh verdict from the declared reviewer; a rejection, revision, workflow restart, or relevant jump invalidates older receipts.
+* Per-unit enforcement requires one review for each applicable unit, self-heals a stale runtime graph from `unit-of-work-dependency.md`, and skips units whose kind has no artifacts in the stage.
+* Autonomous Code Generation keeps the #568 owner-collaborator-verifier contract: every converged swarm unit is reviewed in its Bolt worktree before finalization, without an additional human prompt.
+
 ## [2.5.2] - 2026-07-21
 
 `/aidlc --doctor` gains an `--export` flag that writes a small, redacted diagnostic report so a misbehaving workflow can be debugged without sharing the whole project directory. One fresh doctor analysis backs both the live `--doctor` render and the export; the workflow diagnosis is advisory (it never changes the exit code — only the existing environment/config checks do, preserving the behaviour CI scripts gate on), and the export merges the legacy environment findings so `report.md`/`report.json` carry the same findings the live report shows. It reconstructs the workflow timeline from the audit trail (stage durations, gates, revisions — scoped to the latest run, events timestamp-sorted, repeated attempts paired chronologically), runs deterministic condition→remedy rules (unresolved gates, state/audit drift, stale/missing runtime graph gated on a workflow existing, cold hooks), and exports only allowlisted, normalized fields — never artifact, contribution, question, or memory bodies. Every project/home path and every custom intent/stage/agent (including `lead_agent`) identifier is hashed or redacted before serialization; secrets are scrubbed in plain, JSON-quoted, JSON-escaped, and punctuation-bearing forms; inputs whose real path escapes the project root are refused (leaf or parent symlink), platform-separator aware for Windows; a malformed runtime graph degrades to a finding instead of crashing doctor; truncation keeps the JSON artifacts valid; per-file and total size are capped. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

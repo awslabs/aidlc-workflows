@@ -82,6 +82,7 @@ import {
   validateDirective,
 } from "./aidlc-directive.ts";
 import {
+  activeIntent,
   activeSpace,
   auditBlockField,
   type CheckboxLine,
@@ -1044,6 +1045,7 @@ type CodekbCtx = { projectDir: string; space: string; codekbRepo: string };
 function codekbCtxFor(pd: string): CodekbCtx {
   return { projectDir: pd, space: activeSpace(pd), codekbRepo: codekbRepoName(pd) };
 }
+
 
 // Resolve a single artifact vocabulary name to its canonical aidlc-docs/... path
 // UNDER THE STAGE THAT OWNS THE FILE. Non-per-unit stages map to
@@ -3945,6 +3947,12 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       // tell the engine-opened gate from an organic gate-start.
       sequence.push(["gate-start", slug, "--recovered"]);
     }
+    // Reviewer precondition (§12a / RFC Track 1) is NOT enforced here. Like the
+    // artifact, human-presence, and revision guards, it lives in
+    // aidlc-state.ts handleApprove — the ONE seam every approve passes through
+    // (report shells out to `state.ts approve`, but agents also call it directly
+    // on recovery, so a report-only guard is bypassable, issue #366). See
+    // verifyReviewerPrecondition in aidlc-state.ts.
     sequence.push(approveArgs(slug, flags));
   } else if (isFinal) {
     const completeArgs = ["complete-workflow", slug];
