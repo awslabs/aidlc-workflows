@@ -155,17 +155,26 @@ describe("t148 dist/kiro file structure", () => {
     expect(s["chat.defaultAgent"]).toBe("aidlc");
   });
 
-  test("workspace defaults opus-4.8 to xhigh effort via chat.modelDefaults", () => {
-    // The shipped cli.json raises reasoning effort to xhigh for the pinned
-    // orchestrator model (claude-opus-4.8 — exactly as agents/aidlc.json pins
-    // it). Kiro's per-model default sub-path is output_config.effort (per
-    // kiro.dev/docs/cli/chat/effort). Pin it so the default can't regress.
+  test("workspace pins per-model efforts via chat.modelDefaults (orchestrator + tier models)", () => {
+    // The shipped cli.json carries one entry per model AIDLC pins: the
+    // authored orchestrator entry (claude-opus-4.8 -> xhigh, exactly as
+    // agents/aidlc.json pins it) plus one tier-projected entry per distinct
+    // model the tier table names (claude-sonnet-4.5 -> high — balanced's
+    // effort wins the balanced/templated collapse; judgment pins no model so
+    // it has no entry). Kiro's per-model default sub-path is
+    // output_config.effort (per kiro.dev/docs/cli/chat/effort). Pin the whole
+    // map so neither the authored default nor the projection can regress.
     const s = readJson(join(K, "settings", "cli.json"));
     const defaults = s["chat.modelDefaults"] as Record<
       string,
       { output_config?: { effort?: string } }
     >;
     expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
+    expect(defaults?.["claude-sonnet-4.5"]?.output_config?.effort).toBe("high");
+    expect(Object.keys(defaults ?? {}).sort()).toEqual([
+      "claude-opus-4.8",
+      "claude-sonnet-4.5",
+    ]);
   });
 
   test("kiro skills carry the kiro tool prefix, never the claude one", () => {

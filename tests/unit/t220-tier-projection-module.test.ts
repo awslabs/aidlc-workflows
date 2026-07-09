@@ -1,0 +1,240 @@
+// covers: file:tools/aidlc-tiers.ts (tier projection + cap module)
+//
+// t220 - the tier projection module (core/tools/aidlc-tiers.ts): table-driven
+// projectTier coverage for every tier x every harness, cap collapse behavior,
+// the unknown-tier error path, the tier_cap precedence chain (env var beats
+// space memory; project.md beats team.md beats org.md), and the Kiro collapse
+// rule (tiers sharing a model -> the higher tier's effort wins the cli.json
+// chat.modelDefaults entry).
+//
+// Mechanism: none. Pure functions plus a temp-dir fixture for the memory-layer
+// reader. No process boundary, no LLM, zero tokens. The expected projection
+// values are HARD-CODED here independently of TIER_PROJECTIONS, so this test
+// pins the shipped policy (what each tier means on each harness) rather than
+// echoing the table; a deliberate retune must edit both, which is the point.
+
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  capTier,
+  isTier,
+  kiroModelDefaults,
+  KIRO_TIER_EFFORT,
+  projectTier,
+  readEnvCap,
+  readMemoryCap,
+  resolveTierCap,
+  type Tier,
+  TIER_PROJECTIONS,
+  TIERS,
+} from "../../core/tools/aidlc-tiers.ts";
+
+// ---------------------------------------------------------------------------
+// The policy pin: every tier x every harness, expected values hard-coded.
+// null = the harness-native key is OMITTED (the inherit-by-omission contract).
+// ---------------------------------------------------------------------------
+const EXPECTED: Record<
+  Tier,
+  {
+    claude: { model: string; effort: "medium" | null };
+    codex: { model: string | null; effort: "medium" | null };
+    kiro: { model: string | null };
+  }
+> = {
+  judgment: {
+    claude: { model: "inherit", effort: null },
+    codex: { model: null, effort: null },
+    kiro: { model: null },
+  },
+  balanced: {
+    claude: { model: "sonnet", effort: null },
+    codex: { model: "openai.gpt-5.4", effort: null },
+    kiro: { model: "claude-sonnet-4.5" },
+  },
+  templated: {
+    claude: { model: "sonnet", effort: "medium" },
+    codex: { model: "openai.gpt-5.4", effort: "medium" },
+    kiro: { model: "claude-sonnet-4.5" },
+  },
+};
+
+// A memory-layer fixture: a temp dir holding org/team/project files whose
+// frontmatter carries the given tier_cap: values (null = no frontmatter).
+function memoryFixture(caps: {
+  org?: string | null;
+  team?: string | null;
+  project?: string | null;
+}): string {
+  const dir = mkdtempSync(join(tmpdir(), "t220-memory-"));
+  const entries: Array<[string, string | null | undefined]> = [
+    ["org.md", caps.org],
+    ["team.md", caps.team],
+    ["project.md", caps.project],
+  ];
+  for (const [file, cap] of entries) {
+    if (cap === undefined) continue; // file absent entirely
+    const fm = cap === null ? "" : `---\ntier_cap: ${cap}\n---\n\n`;
+    writeFileSync(join(dir, file), `${fm}# ${file}\n\nBody prose.\n`);
+  }
+  return dir;
+}
+
+describe("t220 tier projection module", () => {
+  // --- the vocabulary itself -------------------------------------------------
+  test("TIERS is exactly the frozen vocabulary, ordered high to low", () => {
+    expect([...TIERS]).toEqual(["judgment", "balanced", "templated"]);
+  });
+
+  test("isTier accepts the vocabulary and rejects everything else", () => {
+    for (const t of TIERS) expect(isTier(t)).toBe(true);
+    for (const bad of ["opus", "sonnet", "high", "", "Judgment"]) {
+      expect(isTier(bad), `isTier(${JSON.stringify(bad)})`).toBe(false);
+    }
+  });
+
+  // --- projectTier: every tier x every harness -------------------------------
+  for (const tier of TIERS) {
+    for (const harness of ["claude", "codex", "kiro"] as const) {
+      test(`projectTier(${tier}, ${harness}) matches the pinned policy`, () => {
+        expect(projectTier(tier, harness)).toEqual(EXPECTED[tier][harness]);
+      });
+    }
+  }
+
+  test("projectTier throws loudly on an unknown tier", () => {
+    expect(() => projectTier("opus", "claude")).toThrow(/unknown tier "opus"/);
+    expect(() => projectTier("", "kiro")).toThrow(/unknown tier/);
+  });
+
+  // --- cap collapse ----------------------------------------------------------
+  test("capTier clamps down, never up", () => {
+    expect(capTier("judgment", "balanced")).toBe("balanced");
+    expect(capTier("judgment", "templated")).toBe("templated");
+    expect(capTier("balanced", "templated")).toBe("templated");
+    // A cap ABOVE the tier is a no-op (caps are ceilings, not floors).
+    expect(capTier("templated", "judgment")).toBe("templated");
+    expect(capTier("balanced", "judgment")).toBe("balanced");
+    // No cap = identity.
+    expect(capTier("judgment", null)).toBe("judgment");
+    expect(capTier("judgment", undefined)).toBe("judgment");
+  });
+
+  test("projectTier applies the cap before projecting", () => {
+    expect(projectTier("judgment", "claude", "balanced")).toEqual(EXPECTED.balanced.claude);
+    expect(projectTier("judgment", "codex", "templated")).toEqual(EXPECTED.templated.codex);
+    expect(projectTier("balanced", "kiro", "templated")).toEqual(EXPECTED.templated.kiro);
+  });
+
+  // --- env cap ---------------------------------------------------------------
+  test("readEnvCap: unset/empty -> null, valid -> tier, invalid -> loud error", () => {
+    expect(readEnvCap({} as NodeJS.ProcessEnv)).toBeNull();
+    expect(readEnvCap({ AIDLC_TIER_CAP: "" } as NodeJS.ProcessEnv)).toBeNull();
+    expect(readEnvCap({ AIDLC_TIER_CAP: "balanced" } as NodeJS.ProcessEnv)).toBe("balanced");
+    expect(() => readEnvCap({ AIDLC_TIER_CAP: "opus" } as NodeJS.ProcessEnv)).toThrow(
+      /not a valid tier/,
+    );
+  });
+
+  // --- memory cap: the layered last-writer-wins chain ------------------------
+  test("readMemoryCap: absent dir/files/frontmatter -> null", () => {
+    expect(readMemoryCap(join(tmpdir(), "t220-no-such-dir"))).toBeNull();
+    const dir = memoryFixture({ org: null, team: null, project: null });
+    try {
+      expect(readMemoryCap(dir)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("readMemoryCap: org.md alone sets the cap", () => {
+    const dir = memoryFixture({ org: "balanced" });
+    try {
+      expect(readMemoryCap(dir)).toBe("balanced");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("readMemoryCap: project.md overrides org.md - lower OR raise", () => {
+    // Lowering: org says balanced, project tightens to templated.
+    const lower = memoryFixture({ org: "balanced", project: "templated" });
+    // Raising: org says templated, project relaxes back to judgment.
+    const raise = memoryFixture({ org: "templated", project: "judgment" });
+    try {
+      expect(readMemoryCap(lower)).toBe("templated");
+      expect(readMemoryCap(raise)).toBe("judgment");
+    } finally {
+      rmSync(lower, { recursive: true, force: true });
+      rmSync(raise, { recursive: true, force: true });
+    }
+  });
+
+  test("readMemoryCap: team.md sits between org.md and project.md", () => {
+    const dir = memoryFixture({ org: "judgment", team: "templated", project: null });
+    try {
+      expect(readMemoryCap(dir)).toBe("templated");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("readMemoryCap: an invalid tier_cap value is a loud error naming the file", () => {
+    const dir = memoryFixture({ org: "opus" });
+    try {
+      expect(() => readMemoryCap(dir)).toThrow(/org\.md.*not a valid tier/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // --- full precedence: env beats memory --------------------------------------
+  test("resolveTierCap: the env var beats the memory layers", () => {
+    const dir = memoryFixture({ org: "balanced", project: "balanced" });
+    try {
+      expect(
+        resolveTierCap(dir, { AIDLC_TIER_CAP: "templated" } as NodeJS.ProcessEnv),
+      ).toBe("templated");
+      // No env var -> the memory cap applies.
+      expect(resolveTierCap(dir, {} as NodeJS.ProcessEnv)).toBe("balanced");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("resolveTierCap: nothing set anywhere -> null (authored tiers ship)", () => {
+    const dir = memoryFixture({});
+    try {
+      expect(resolveTierCap(dir, {} as NodeJS.ProcessEnv)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // --- the Kiro collapse rule -------------------------------------------------
+  test("kiroModelDefaults: one entry per distinct pinned model, higher tier's effort wins", () => {
+    // balanced and templated share claude-sonnet-4.5; balanced (higher) wins
+    // with "high". judgment pins no model, so it contributes no entry.
+    expect(kiroModelDefaults()).toEqual({ "claude-sonnet-4.5": "high" });
+  });
+
+  test("kiroModelDefaults: a templated cap collapses everything onto templated's effort", () => {
+    // Under a templated cap every tier projects as templated, so the single
+    // shared model entry carries templated's effort.
+    expect(kiroModelDefaults("templated")).toEqual({ "claude-sonnet-4.5": "medium" });
+  });
+
+  test("KIRO_TIER_EFFORT deliberately omits judgment (no pinned model to ride on)", () => {
+    expect(KIRO_TIER_EFFORT.judgment).toBeUndefined();
+    expect(KIRO_TIER_EFFORT.balanced).toBe("high");
+    expect(KIRO_TIER_EFFORT.templated).toBe("medium");
+  });
+
+  // --- structural invariant: the kiro slot can never carry an effort ----------
+  test("TIER_PROJECTIONS kiro slots are model-only (no effort key can leak to agent JSON)", () => {
+    for (const tier of TIERS) {
+      expect(Object.keys(TIER_PROJECTIONS[tier].kiro)).toEqual(["model"]);
+    }
+  });
+});
