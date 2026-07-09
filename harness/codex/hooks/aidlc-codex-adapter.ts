@@ -392,7 +392,18 @@ switch (target) {
     }
     if (tool === "apply_patch") {
       const command = (codex.tool_input?.command as string) ?? "";
-      for (const f of patchedFiles(command)) {
+      // Every file-path directive in the envelope is a mutation of that path:
+      // Add/Update (patchedFiles - shared with the audit fan-out), plus
+      // Delete File and Move to, which patchedFiles deliberately skips for
+      // the PostToolUse audit surface but ARE sibling writes for scope
+      // purposes (deleting or moving onto a sibling's file is out of a
+      // reviewer's contract exactly like editing it).
+      const targets: Array<{ path: string; tool: string }> = patchedFiles(command);
+      for (const m of command.matchAll(/^\*\*\* (?:Delete File|Move to): (.+)$/gm)) {
+        const rel = m[1].trim();
+        targets.push({ path: isAbsolute(rel) ? rel : join(projectDir, rel), tool: "Edit" });
+      }
+      for (const f of targets) {
         const fwd = JSON.stringify({
           hook_event_name: "PreToolUse",
           tool_name: f.tool,

@@ -171,6 +171,49 @@ describe("t220 (a) evaluateReviewerScope decision table", () => {
       input: { pattern: "construction/U01-infra", path: "construction/U03-scoring" },
       block: false,
     },
+    // -- traversal + bare-root shapes (adversarial-review findings) -------------
+    {
+      name: "dot-dot traversal out of the current unit blocked (path tool)",
+      tool: "Read",
+      input: { file_path: "construction/U03-scoring/../U01-infra/design.md" },
+      block: true,
+    },
+    {
+      name: "dot-dot traversal out of the current unit blocked (Bash)",
+      tool: "Bash",
+      input: { command: "cat construction/U03-scoring/../U05-api/design.md" },
+      block: true,
+    },
+    {
+      name: "bare construction search root blocked (grep with no trailing slash)",
+      tool: "Bash",
+      input: { command: "grep -rn TODO construction" },
+      block: true,
+    },
+    {
+      name: "bare construction search root blocked (find)",
+      tool: "Bash",
+      input: { command: "find construction -type f -name '*.md'" },
+      block: true,
+    },
+    {
+      name: "bare root via ./ blocked",
+      tool: "Bash",
+      input: { command: "ls ./construction" },
+      block: true,
+    },
+    {
+      name: "bare root as a path tail blocked",
+      tool: "Bash",
+      input: { command: "ls aidlc/spaces/x/construction" },
+      block: true,
+    },
+    {
+      name: "the bare word inside a quoted content regex is NOT a search root",
+      tool: "Bash",
+      input: { command: "grep -rn 'built in construction phase' inception/" },
+      block: false,
+    },
     // -- unknown tools pass -----------------------------------------------------
     {
       name: "unknown tool never blocked",

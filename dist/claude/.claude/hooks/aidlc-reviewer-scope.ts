@@ -131,13 +131,31 @@ function candidateStrings(
   return out;
 }
 
+// Split a path into components, dropping empty and "." segments and
+// COLLAPSING ".." against its parent. Without the collapse,
+// construction/U03/../U01/design.md would be judged on U03 (the first
+// segment after construction/) and allowed even though the filesystem
+// resolves it into sibling U01. A leading ".." with no parent to consume is
+// kept as-is (it climbs above the visible string; the sweep/wildcard rules
+// in judgeOccurrence apply to whatever remains).
+function normalizedComps(p: string): string[] {
+  const out: string[] = [];
+  for (const c of toPosix(p).split("/")) {
+    if (c.length === 0 || c === ".") continue;
+    if (c === ".." && out.length > 0 && out[out.length - 1] !== "..") {
+      out.pop();
+      continue;
+    }
+    out.push(c);
+  }
+  return out;
+}
+
 // The construction/-suffix of an exempt entry, component-normalized, or null
 // when the entry never enters construction/ (those entries are irrelevant to
 // the matcher - non-construction paths are always allowed).
 function exemptSuffixOf(entry: string): string | null {
-  const comps = toPosix(entry)
-    .split("/")
-    .filter((c) => c.length > 0 && c !== ".");
+  const comps = normalizedComps(entry);
   const i = comps.indexOf("construction");
   if (i === -1) return null;
   return comps.slice(i).join("/");
@@ -180,9 +198,7 @@ export function evaluateReviewerScope(
 
   for (const { text, kind } of candidateStrings(toolName, toolInput)) {
     if (kind === "path") {
-      const comps = toPosix(text)
-        .split("/")
-        .filter((c) => c.length > 0 && c !== ".");
+      const comps = normalizedComps(text);
       for (let i = 0; i < comps.length; i++) {
         if (comps[i] !== "construction") continue;
         if (judgeOccurrence(comps.slice(i), dispatch.unit, exemptSuffixes)) {
@@ -190,18 +206,30 @@ export function evaluateReviewerScope(
         }
       }
     } else {
-      // Command / pattern text: scan construction/<...> tokens. The token ends
-      // at whitespace, a quote, or a shell separator; glob characters stay in
-      // (they are what the wildcard rule inspects). A bare "construction" word
-      // with no slash is content, not a path - not scanned (a shell variable
-      // like construction/$UNIT is likewise invisible; the prose bound still
-      // governs what determinism cannot see).
+      // Command / pattern text, two token shapes:
+      //   1. `construction/<...>` anywhere (quoted or not) - the token ends
+      //      at whitespace, a quote, or a shell separator; glob characters
+      //      stay in (they are what the wildcard rule inspects).
+      //   2. A token ENDING in the bare `construction` component - `grep -rn
+      //      x construction`, `find construction`, `ls ./construction`,
+      //      `ls a/b/construction` - names the whole tree as a search root,
+      //      the same sweep as `construction/`. This rule runs on the text
+      //      with QUOTED SPANS REMOVED, so the word inside a content regex
+      //      (`grep 'construction phase' ...`) stays content, not a path.
+      // A shell variable like construction/$UNIT is invisible to a string
+      // matcher; the prose bound still governs what determinism cannot see.
       for (const m of text.matchAll(/construction\/[^\s"'`;|&()]*/g)) {
         const token = m[0].replace(/[.,:]+$/, "");
-        const suffixComps = token.split("/").filter((c) => c.length > 0);
+        const suffixComps = normalizedComps(token);
         if (judgeOccurrence(suffixComps, dispatch.unit, exemptSuffixes)) {
           return { block: true, target: token };
         }
+      }
+      const unquoted = text.replace(/'[^']*'|"[^"]*"/g, " ");
+      if (/(?:^|[\s;|&(=])(?:[^\s;|&()]*\/)?construction(?=[\s;|&)]|$)/.test(unquoted)) {
+        // A bare sweep root is always a block (judgeOccurrence's seg-missing
+        // rule); no exempt entry can whitelist reading every unit.
+        return { block: true, target: "construction" };
       }
     }
   }
