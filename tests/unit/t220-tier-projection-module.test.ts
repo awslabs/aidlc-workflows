@@ -368,4 +368,23 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
       expect(/^tier\s*=/m.test(raw), `codex/${f}: tier key leaked into TOML`).toBe(false);
     }
   });
+
+  test("AIDLC_TIER_CAP is IGNORED under --check (drift guard is env-independent)", () => {
+    // A stray env cap in a CI or test runner's environment must neither fail
+    // nor mask drift: --check compares what the committed dist was built
+    // from. The packager prints an ignore notice instead. (~10s: a real
+    // single-harness check run - the pin is the exit code, not the notice.)
+    const r = Bun.spawnSync(
+      ["bun", join(REPO_ROOT, "scripts", "package.ts"), "claude", "--check"],
+      {
+        cwd: REPO_ROOT,
+        env: { ...process.env, AIDLC_TIER_CAP: "templated" },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const stderr = r.stderr.toString();
+    expect(r.exitCode, `--check failed under env cap:\n${stderr}`).toBe(0);
+    expect(stderr).toContain("IGNORED under --check");
+  }, 60_000);
 });

@@ -65,14 +65,15 @@ const HARNESS_ROOT = join(REPO_ROOT, "harness");
 // The pack-time tier cap, resolved ONCE for the whole build: the
 // AIDLC_TIER_CAP env var (per-invocation) beats the persistent space-memory
 // `tier_cap:` frontmatter key (core/memory org.md -> team.md -> project.md,
-// last writer wins). Applied uniformly to every harness projection below,
-// in BOTH write and --check modes - so `--check` compares a capped build
-// against the committed dist. A committed dist must therefore be generated
-// with the same cap the checker sees: a persistent cap belongs in
-// core/memory (it travels with the repo); the env var is for one-shot
-// builds and makes --check environment-dependent. The diagnostic below
-// names the active cap so a cap-induced --check failure is explainable.
-const ENV_CAP = readEnvCap();
+// last writer wins). The env var applies to WRITE runs only - a one-shot
+// build knob. Under --check it is IGNORED: the drift guard must compare
+// what the committed dist was legitimately built from, and a stray
+// AIDLC_TIER_CAP in a CI or test runner's environment must not fail (or
+// mask) drift. The memory cap travels with the repo, so it applies in both
+// modes and keeps write and check consistent for a project that commits a
+// capped dist. The diagnostic below names the active cap and mode.
+const IS_CHECK_MODE = process.argv.includes("--check");
+const ENV_CAP = IS_CHECK_MODE ? null : readEnvCap();
 const MEMORY_CAP = readMemoryCap(join(CORE_ROOT, "memory"));
 const TIER_CAP = ENV_CAP ?? MEMORY_CAP;
 if (TIER_CAP) {
@@ -80,8 +81,12 @@ if (TIER_CAP) {
   // verbatim into a config.toml and must stay clean.
   console.error(
     `[tier] pack-time tier cap active: ${TIER_CAP} ` +
-      `(source: ${ENV_CAP ? "AIDLC_TIER_CAP env var" : "core/memory tier_cap:"})` +
-      ` - projections are capped in write AND --check modes`,
+      `(source: ${ENV_CAP ? "AIDLC_TIER_CAP env var" : "core/memory tier_cap:"})`,
+  );
+} else if (IS_CHECK_MODE && process.env.AIDLC_TIER_CAP) {
+  console.error(
+    "[tier] AIDLC_TIER_CAP is set but IGNORED under --check " +
+      "(the env cap is a one-shot write knob; persistent caps live in core/memory)",
   );
 }
 // The shared onboarding-doc skeleton, rendered per harness (scripts/onboarding.ts).
@@ -167,23 +172,25 @@ function projectTierFrontmatter(
   // sits - first, last, or mid-frontmatter.
   const newFm = fm
     .split(/\r?\n/)
-    .flatMap((line) => (/^tier:\s/.test(line) ? lines : [line]))
+    .flatMap((line) => (/^tier:/.test(line) ? lines : [line]))
     .join("\n");
   // Function replacement: a literal `$&`/`$'` in frontmatter must not be
   // interpreted as a replacement pattern.
   return s.replace(m[0], () => `---\n${newFm}\n---\n`);
 }
 
-// Rewrite the `"model"` field of an authored Kiro agent .json from the tier
+// Project the `"model"` field of an authored Kiro agent .json from the tier
 // table. The JSONs stay hand-written (tools, resources, sandbox settings) but
-// their model value is projection-owned: the tier comes from the same-name
-// core/agents/<slug>.md (single source of truth). A null projected model
-// DELETES the field - the agent-v1 schema documents the fallback ("If not
-// specified, uses the default model"), which is exactly the judgment-tier
-// inherit contract. Files with no core .md counterpart (the aidlc.json
-// orchestrator config) pass through untouched: the orchestrator is not a
-// tier-carrying persona. Never writes any effort-like key - kiro-cli
-// fail-closes on unknown agent-JSON fields.
+// the model dial is projection-owned: the authored files carry NO "model"
+// field at all (so nobody edits a value the build would overwrite), and the
+// tier comes from the same-name core/agents/<slug>.md (single source of
+// truth). A pinned tier ADDS the field; a null projected model leaves it
+// absent - the agent-v1 schema documents the fallback ("If not specified,
+// uses the default model"), which is exactly the judgment-tier inherit
+// contract. Files with no core .md counterpart (the aidlc.json orchestrator
+// config) pass through untouched: the orchestrator is not a tier-carrying
+// persona. Never writes any effort-like key - kiro-cli fail-closes on
+// unknown agent-JSON fields.
 function projectKiroAgentJson(srcPath: string, content: Buffer): Buffer {
   const name = srcPath.split(sep).join("/").split("/").pop() ?? "";
   if (!name.endsWith("-agent.json")) return content;

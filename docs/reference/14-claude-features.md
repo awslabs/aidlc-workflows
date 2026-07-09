@@ -113,7 +113,7 @@ Workspace detection (0.2) used to be a subagent; it now runs deterministically i
 
 ### Agent Tiers (projected model + effort)
 
-The authored dial on every agent is `tier:`; the packager projects it into the `model:`/`effort:` frontmatter keys Claude Code reads. Previous behaviour (through v2.2.15) pinned `model: opus` on the nine judgment-shaped agents, which forcibly downgraded sessions running a bigger model.
+The authored dial on every agent is `tier:`; the packager projects it into the `model:`/`effort:` frontmatter keys Claude Code reads. Previous behaviour (v2.2.15 through v2.2.19; before that the key was the inert `modelOverride:`) pinned `model: opus` on the nine judgment-shaped agents, which forcibly downgraded sessions running a bigger model.
 
 | Tier | Agents | Claude Code projection | Rationale |
 |------|--------|------------------------|-----------|

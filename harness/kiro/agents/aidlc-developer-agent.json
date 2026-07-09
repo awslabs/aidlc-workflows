@@ -27,6 +27,5 @@
     "file://.kiro/knowledge/aidlc-shared/*.md",
     "file://aidlc/spaces/default/memory/**/*.md"
   ],
-  "hooks": {},
-  "model": "claude-opus-4.8"
+  "hooks": {}
 }

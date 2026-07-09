@@ -282,7 +282,10 @@ export default function emit(ctx: EmitContext): EmitResult {
     // frontmatter transform doesn't run against emit.ts (Codex reads directly
     // from core), so project tier -> {model, effort} here. An agent .md
     // without a tier: line is an authoring bug - fail the build loudly.
-    const tier = fm.tier;
+    // parseAgentMd's value capture keeps trailing whitespace; trim so an
+    // invisible trailing space cannot fail the codex leg alone (the
+    // packager's own reader strips it for the other harnesses).
+    const tier = fm.tier?.trim();
     if (!tier) throw new Error(`${mdPath}: agent frontmatter has no tier: line.`);
     const proj = projectTier(tier, "codex", tierCap); // throws on unknown tier
     const instructions = rewriteProse(body);
