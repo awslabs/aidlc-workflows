@@ -169,7 +169,9 @@ function projectTierFrontmatter(
     .split(/\r?\n/)
     .flatMap((line) => (/^tier:\s/.test(line) ? lines : [line]))
     .join("\n");
-  return s.replace(m[0], `---\n${newFm}\n---\n`);
+  // Function replacement: a literal `$&`/`$'` in frontmatter must not be
+  // interpreted as a replacement pattern.
+  return s.replace(m[0], () => `---\n${newFm}\n---\n`);
 }
 
 // Rewrite the `"model"` field of an authored Kiro agent .json from the tier
