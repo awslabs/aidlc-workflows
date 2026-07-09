@@ -51,7 +51,12 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import type { HarnessManifest } from "./manifest-types.ts";
 import { renderOnboarding } from "./onboarding.ts";
-import { kiroModelDefaults, projectTier, resolveTierCap } from "../core/tools/aidlc-tiers.ts";
+import {
+  kiroModelDefaults,
+  projectTier,
+  readEnvCap,
+  readMemoryCap,
+} from "../core/tools/aidlc-tiers.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CORE_ROOT = join(REPO_ROOT, "core");
@@ -60,8 +65,25 @@ const HARNESS_ROOT = join(REPO_ROOT, "harness");
 // The pack-time tier cap, resolved ONCE for the whole build: the
 // AIDLC_TIER_CAP env var (per-invocation) beats the persistent space-memory
 // `tier_cap:` frontmatter key (core/memory org.md -> team.md -> project.md,
-// last writer wins). Applied uniformly to every harness projection below.
-const TIER_CAP = resolveTierCap(join(CORE_ROOT, "memory"));
+// last writer wins). Applied uniformly to every harness projection below,
+// in BOTH write and --check modes - so `--check` compares a capped build
+// against the committed dist. A committed dist must therefore be generated
+// with the same cap the checker sees: a persistent cap belongs in
+// core/memory (it travels with the repo); the env var is for one-shot
+// builds and makes --check environment-dependent. The diagnostic below
+// names the active cap so a cap-induced --check failure is explainable.
+const ENV_CAP = readEnvCap();
+const MEMORY_CAP = readMemoryCap(join(CORE_ROOT, "memory"));
+const TIER_CAP = ENV_CAP ?? MEMORY_CAP;
+if (TIER_CAP) {
+  // stderr, not stdout: the `codex trust` subcommand's stdout is pasted
+  // verbatim into a config.toml and must stay clean.
+  console.error(
+    `[tier] pack-time tier cap active: ${TIER_CAP} ` +
+      `(source: ${ENV_CAP ? "AIDLC_TIER_CAP env var" : "core/memory tier_cap:"})` +
+      ` - projections are capped in write AND --check modes`,
+  );
+}
 // The shared onboarding-doc skeleton, rendered per harness (scripts/onboarding.ts).
 const ONBOARDING_SKELETON = join(CORE_ROOT, "templates", "onboarding.md");
 const HARNESS_TOKEN = /\{\{HARNESS_DIR\}\}/g;
@@ -126,9 +148,11 @@ function projectTierFrontmatter(
   srcPath: string,
   harness: "claude" | "codex" | "kiro",
 ): string {
-  // Only apply to files under agents/. Guard on path because a stage .md
+  // Only apply to files under agents/. Guard on the POSIX-normalized path
+  // (srcPath carries the platform separator on Windows) because a stage .md
   // legitimately talks about "tier:" in prose.
-  if (!srcPath.includes("/agents/") || !srcPath.endsWith("-agent.md")) return s;
+  const posixPath = srcPath.split(sep).join("/");
+  if (!posixPath.includes("/agents/") || !posixPath.endsWith("-agent.md")) return s;
   const tier = agentTierFromMd(s, srcPath);
   const m = s.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
   if (!m) throw new Error(`${srcPath}: agent .md has no closed frontmatter block.`);
@@ -137,10 +161,14 @@ function projectTierFrontmatter(
   const lines: string[] = [];
   if (proj.model !== null) lines.push(`model: ${proj.model}`);
   if ("effort" in proj && proj.effort !== null) lines.push(`effort: ${proj.effort}`);
-  const newFm =
-    lines.length > 0
-      ? fm.replace(/^tier:\s*\S+\s*$/m, lines.join("\n"))
-      : fm.replace(/\r?\ntier:\s*\S+\s*$/m, "").replace(/^tier:\s*\S+\s*\r?\n/m, "");
+  // Rebuild the frontmatter line-wise: replace the tier line with the
+  // projected keys, or drop it entirely when every key is omitted. Line-wise
+  // filtering (not a regex splice) removes the tier line cleanly wherever it
+  // sits - first, last, or mid-frontmatter.
+  const newFm = fm
+    .split(/\r?\n/)
+    .flatMap((line) => (/^tier:\s/.test(line) ? lines : [line]))
+    .join("\n");
   return s.replace(m[0], `---\n${newFm}\n---\n`);
 }
 

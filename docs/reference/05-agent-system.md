@@ -110,6 +110,8 @@ A project can cap every projection at pack time, without editing any agent file:
 - **Persistent knob:** a `tier_cap:` key in the YAML frontmatter of the space memory layer files (`core/memory/org.md` -> `team.md` -> `project.md`, last writer wins -- a project may lower OR raise the org ceiling). Example: `tier_cap: balanced` collapses `judgment` to `balanced` in every harness's projection.
 - **Per-invocation override:** the `AIDLC_TIER_CAP` env var beats the memory layers for one packager run (`AIDLC_TIER_CAP=templated bun scripts/package.ts`).
 
+The cap applies in BOTH write and `--check` modes, and the packager prints the active cap and its source. That makes `--check` cap-aware: a dist committed WITHOUT a cap fails `--check` in an environment that sets `AIDLC_TIER_CAP` (and vice versa). A persistent cap therefore belongs in `core/memory` frontmatter, which travels with the repo and keeps write and check consistent; reserve the env var for one-shot local builds, and do not set it in CI.
+
 To opt a SINGLE agent out instead, edit the projected value in your installed `dist/<harness>/` copy (e.g. set `model: opus` on one Claude agent .md) -- the edit survives until you re-copy the dist shell.
 
 ---

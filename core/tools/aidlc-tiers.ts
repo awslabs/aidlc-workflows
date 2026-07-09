@@ -144,18 +144,28 @@ export function readEnvCap(env: NodeJS.ProcessEnv = process.env): Tier | null {
 const MEMORY_CAP_FILES = ["org.md", "team.md", "project.md"] as const;
 
 /** Extract a `tier_cap:` scalar from a method file's YAML frontmatter block.
- *  Returns null when the file has no frontmatter or no tier_cap: line; throws
- *  on an invalid value, naming the file. */
+ *  Returns null when the file has no frontmatter or no tier_cap: line. A
+ *  PRESENT key with an empty or invalid value throws, naming the file - a
+ *  user who wrote the key believes the cap is active, so silently ignoring a
+ *  malformed value would ship uncapped agents without any error. Tolerates
+ *  the common YAML scalar spellings: quoted values and trailing comments. */
 function tierCapFromFrontmatter(raw: string, file: string): Tier | null {
   const cleaned = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
   const m = cleaned.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) return null;
-  const kv = m[1].match(/^tier_cap:\s*(\S+)\s*$/m);
+  const kv = m[1].match(/^tier_cap:(.*)$/m);
   if (!kv) return null;
-  const v = kv[1];
+  // Strip a trailing comment, whitespace, and matching quotes.
+  let v = kv[1].replace(/\s#.*$/, "").trim();
+  if (
+    (v.startsWith('"') && v.endsWith('"') && v.length >= 2) ||
+    (v.startsWith("'") && v.endsWith("'") && v.length >= 2)
+  ) {
+    v = v.slice(1, -1).trim();
+  }
   if (isTier(v)) return v;
   throw new Error(
-    `${file}: tier_cap: ${v} is not a valid tier; use one of ${TIERS.join(", ")}`,
+    `${file}: tier_cap: ${JSON.stringify(v)} is not a valid tier; use one of ${TIERS.join(", ")}`,
   );
 }
 

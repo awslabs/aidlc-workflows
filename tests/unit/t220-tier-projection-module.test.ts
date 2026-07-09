@@ -14,7 +14,7 @@
 // echoing the table; a deliberate retune must edit both, which is the point.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
@@ -190,6 +190,22 @@ describe("t220 tier projection module", () => {
     }
   });
 
+  test("readMemoryCap: tolerates quoted values and trailing comments; empty value throws", () => {
+    // Common YAML scalar spellings a user will reasonably write.
+    const quoted = memoryFixture({ org: '"balanced"' });
+    const commented = memoryFixture({ org: "templated # workshop budget" });
+    // A PRESENT key with an empty value means the user believes a cap is
+    // active - silently ignoring it would ship uncapped without an error.
+    const empty = memoryFixture({ org: "" });
+    try {
+      expect(readMemoryCap(quoted)).toBe("balanced");
+      expect(readMemoryCap(commented)).toBe("templated");
+      expect(() => readMemoryCap(empty)).toThrow(/org\.md.*not a valid tier/);
+    } finally {
+      for (const d of [quoted, commented, empty]) rmSync(d, { recursive: true, force: true });
+    }
+  });
+
   // --- full precedence: env beats memory --------------------------------------
   test("resolveTierCap: the env var beats the memory layers", () => {
     const dir = memoryFixture({ org: "balanced", project: "balanced" });
@@ -318,5 +334,38 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     const defaults = s["chat.modelDefaults"];
     expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
     expect(defaults?.["claude-sonnet-4.5"]?.output_config?.effort).toBe("high");
+  });
+
+  // Full-roster completeness: raw `tier:` must never leak into ANY shipped
+  // agent surface on ANY harness. t216 pins this for dist/claude only; a
+  // tier-line-removal bug in the judgment path (where no replacement keys are
+  // written) would surface on the kiro/codex .md copies first - e.g. a future
+  // agent authored with tier: mid-frontmatter instead of last.
+  const MD_TREES: Array<[string, string[]]> = [
+    ["claude", ["claude", ".claude", "agents"]],
+    ["codex", ["codex", ".codex", "agents"]],
+    ["kiro", ["kiro", ".kiro", "agents"]],
+    ["kiro-ide", ["kiro-ide", ".kiro", "agents"]],
+  ];
+  for (const [name, segs] of MD_TREES) {
+    test(`${name}: no shipped agent .md carries a raw tier: line (all 14)`, () => {
+      const dir = dist(...segs);
+      const mds = readdirSync(dir).filter((f) => f.endsWith("-agent.md"));
+      expect(mds.length).toBe(14);
+      for (const f of mds) {
+        const raw = readFileSync(join(dir, f), "utf-8");
+        expect(/^tier:/m.test(raw), `${name}/${f}: raw tier: leaked into dist`).toBe(false);
+      }
+    });
+  }
+
+  test("codex: no shipped agent TOML carries a tier key (all 14)", () => {
+    const dir = dist("codex", ".codex", "agents");
+    const tomls = readdirSync(dir).filter((f) => f.endsWith(".toml"));
+    expect(tomls.length).toBe(14);
+    for (const f of tomls) {
+      const raw = readFileSync(join(dir, f), "utf-8");
+      expect(/^tier\s*=/m.test(raw), `codex/${f}: tier key leaked into TOML`).toBe(false);
+    }
   });
 });
