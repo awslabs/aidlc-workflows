@@ -24,9 +24,10 @@
 //                   `effort: medium`.
 //   - Codex CLI     agent role .toml: `model` and `model_reasoning_effort`.
 //                   Omitted keys fall back to the shipped .codex/config.toml
-//                   session defaults (live-verified on codex-cli 0.142.5: a
-//                   role TOML without `model` spawns on the config.toml
-//                   model + effort). `judgment` omits both keys.
+//                   session defaults (live-verified on codex-cli 0.139.0 - the
+//                   doctor floor - AND 0.142.5: a role TOML without `model`
+//                   spawns on the config.toml model + effort). `judgment`
+//                   omits both keys.
 //   - Kiro CLI/IDE  agent surfaces carry a `"model"` value ONLY - kiro-cli
 //                   fail-closes on any effort-like key in agent JSON, so no
 //                   Kiro agent surface may EVER carry an effort key. Effort

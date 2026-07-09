@@ -209,8 +209,9 @@ function emitTrustSeed(): string {
 // `tier:` from the core agent .md (authoritative source of truth) and looks up
 // {model, effort} via projectTier. A null projected value means the TOML key
 // is OMITTED: the spawned role then falls back to the shipped config.toml
-// session defaults (live-verified on codex-cli 0.142.5 - a role TOML without
-// `model` spawns on the config.toml model + effort). judgment omits both keys;
+// session defaults (live-verified on codex-cli 0.139.0 - the doctor floor -
+// AND 0.142.5: a role TOML without `model` spawns on the config.toml model +
+// effort). judgment omits both keys;
 // balanced pins a model but inherits effort; templated pins both.
 
 function parseAgentMd(raw: string): { fm: Record<string, string>; body: string } {
