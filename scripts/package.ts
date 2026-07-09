@@ -97,30 +97,43 @@ function applyRulesRename(s: string, harnessDir: string, rulesRename: string | n
   return s.replaceAll(`${harnessDir}/rules/`, `${harnessDir}/${rulesRename}/`);
 }
 
+// Read the authored `tier:` from an agent .md's YAML FRONTMATTER (scoped to
+// the block between the `---` fences - a `tier:` token in body prose never
+// matches). Fails loudly when the frontmatter or the key is missing: every
+// shipped agent must carry a tier, and a silent pass-through would ship an
+// unprojected agent (no model/effort keys at all) without failing the build.
+function agentTierFromMd(s: string, srcPath: string): string {
+  const m = s.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) throw new Error(`${srcPath}: agent .md has no YAML frontmatter block.`);
+  const tierMatch = m[1].match(/^tier:\s*(\S+)\s*$/m);
+  if (!tierMatch) {
+    throw new Error(`${srcPath}: agent frontmatter has no tier: line (the authored contract).`);
+  }
+  return tierMatch[1];
+}
+
 // Rewrite an agent .md's frontmatter `tier: <t>` line into the harness-native
 // keys (Claude: `model:` + optional `effort:`; Kiro: optional `model:`; Codex
 // .md copies mirror Claude's shape - the TOMLs emit.ts writes are the binding
 // surface there). Called AFTER the token substitution + rules-rename pass.
-// No-op if the file carries no `tier:` line (non-agent .md, or an agent whose
-// author declined a tier - treated as an authoring bug the packager should
-// surface). A null projected model/effort means the harness-native key is
-// OMITTED: the harness's own session/config default applies (the inherit
-// contract for judgment/balanced agents). When every key is omitted the
-// `tier:` line is dropped without a replacement.
+// A missing tier: on an agent file fails the build (agentTierFromMd). A null
+// projected model/effort means the harness-native key is OMITTED: the
+// harness's own session/config default applies (the inherit contract for
+// judgment/balanced agents). When every key is omitted the `tier:` line is
+// dropped without a replacement.
 function projectTierFrontmatter(
   s: string,
   srcPath: string,
   harness: "claude" | "codex" | "kiro",
 ): string {
-  // Only apply inside frontmatter of files under agents/. Guard on path
-  // because a stage .md legitimately talks about "tier:" in prose.
+  // Only apply to files under agents/. Guard on path because a stage .md
+  // legitimately talks about "tier:" in prose.
   if (!srcPath.includes("/agents/") || !srcPath.endsWith("-agent.md")) return s;
+  const tier = agentTierFromMd(s, srcPath);
   const m = s.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
-  if (!m) return s;
+  if (!m) throw new Error(`${srcPath}: agent .md has no closed frontmatter block.`);
   const fm = m[1];
-  const tierMatch = fm.match(/^tier:\s*(\S+)\s*$/m);
-  if (!tierMatch) return s;
-  const proj = projectTier(tierMatch[1], harness, TIER_CAP); // throws on unknown tier
+  const proj = projectTier(tier, harness, TIER_CAP); // throws on unknown tier
   const lines: string[] = [];
   if (proj.model !== null) lines.push(`model: ${proj.model}`);
   if ("effort" in proj && proj.effort !== null) lines.push(`effort: ${proj.effort}`);
@@ -146,11 +159,8 @@ function projectKiroAgentJson(srcPath: string, content: Buffer): Buffer {
   if (!name.endsWith("-agent.json")) return content;
   const coreMd = join(CORE_ROOT, "agents", name.replace(/\.json$/, ".md"));
   if (!existsSync(coreMd)) return content;
-  const tierMatch = readFileSync(coreMd, "utf-8").match(/^tier:\s*(\S+)\s*$/m);
-  if (!tierMatch) {
-    throw new Error(`${coreMd}: no tier: line, but ${name} expects a projected model.`);
-  }
-  const proj = projectTier(tierMatch[1], "kiro", TIER_CAP);
+  const tier = agentTierFromMd(readFileSync(coreMd, "utf-8"), coreMd);
+  const proj = projectTier(tier, "kiro", TIER_CAP);
   const parsed = JSON.parse(content.toString("utf-8")) as Record<string, unknown>;
   if (proj.model === null) delete parsed.model;
   else parsed.model = proj.model;

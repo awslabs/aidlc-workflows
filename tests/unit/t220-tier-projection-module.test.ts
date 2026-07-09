@@ -14,9 +14,10 @@
 // echoing the table; a deliberate retune must edit both, which is the point.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   capTier,
   isTier,
@@ -236,5 +237,86 @@ describe("t220 tier projection module", () => {
     for (const tier of TIERS) {
       expect(Object.keys(TIER_PROJECTIONS[tier].kiro)).toEqual(["model"]);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SHIPPED-BYTES pins for the non-Claude projection writers. t216 pins the
+// dist/claude .md output; package --check pins dist-vs-source parity but says
+// nothing about whether the projection itself is RIGHT. These read the
+// committed dist trees for one representative agent per tier and assert the
+// projected keys - so a writer bug (e.g. the Codex TOML emitting an effort
+// for a judgment agent) fails here even when the dist was faithfully
+// regenerated from the broken writer.
+// ---------------------------------------------------------------------------
+describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
+  const dist = (...p: string[]): string => join(REPO_ROOT, "dist", ...p);
+
+  test("codex TOMLs: judgment omits model+effort, balanced pins model only, templated pins both", () => {
+    const arch = readFileSync(dist("codex", ".codex", "agents", "aidlc-architect-agent.toml"), "utf-8");
+    expect(/^model\s*=/m.test(arch), "judgment TOML must omit model").toBe(false);
+    expect(/^model_reasoning_effort\s*=/m.test(arch), "judgment TOML must omit effort").toBe(false);
+    const lead = readFileSync(dist("codex", ".codex", "agents", "aidlc-product-lead-agent.toml"), "utf-8");
+    expect(lead).toContain('model = "openai.gpt-5.4"');
+    expect(/^model_reasoning_effort\s*=/m.test(lead), "balanced TOML must omit effort").toBe(false);
+    const delivery = readFileSync(dist("codex", ".codex", "agents", "aidlc-delivery-agent.toml"), "utf-8");
+    expect(delivery).toContain('model = "openai.gpt-5.4"');
+    expect(delivery).toContain('model_reasoning_effort = "medium"');
+  });
+
+  // The five delegation-target agents shipped as Kiro JSONs, per tier.
+  const KIRO_JSON: Array<{ file: string; model: string | null }> = [
+    { file: "aidlc-architect-agent.json", model: null }, // judgment
+    { file: "aidlc-composer-agent.json", model: null }, // judgment
+    { file: "aidlc-developer-agent.json", model: null }, // judgment
+    { file: "aidlc-product-lead-agent.json", model: "claude-sonnet-4.5" }, // balanced
+    { file: "aidlc-architecture-reviewer-agent.json", model: "claude-sonnet-4.5" }, // balanced
+  ];
+
+  for (const harness of ["kiro", "kiro-ide"] as const) {
+    test(`${harness} agent JSONs: judgment omits "model", balanced pins sonnet-4.5, NO effort-like keys anywhere`, () => {
+      for (const { file, model } of KIRO_JSON) {
+        const parsed = JSON.parse(
+          readFileSync(dist(harness, ".kiro", "agents", file), "utf-8"),
+        ) as Record<string, unknown>;
+        if (model === null) {
+          expect("model" in parsed, `${harness}/${file}: judgment must omit "model"`).toBe(false);
+        } else {
+          expect(parsed.model, `${harness}/${file}: model`).toBe(model);
+        }
+        // kiro-cli fail-closes on unknown agent-JSON fields: any effort-like
+        // key would break agent validation at install.
+        for (const key of Object.keys(parsed)) {
+          expect(
+            /effort|reasoning|thinking/i.test(key),
+            `${harness}/${file}: forbidden inference key "${key}"`,
+          ).toBe(false);
+        }
+      }
+    });
+  }
+
+  test("kiro agent .md frontmatter: judgment omits model, templated pins sonnet-4.5, never any effort key", () => {
+    const fmOf = (raw: string): string => {
+      const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      if (!m) throw new Error("no frontmatter");
+      return m[1];
+    };
+    const arch = fmOf(readFileSync(dist("kiro", ".kiro", "agents", "aidlc-architect-agent.md"), "utf-8"));
+    expect(/^model:/m.test(arch), "judgment kiro .md must omit model:").toBe(false);
+    const delivery = fmOf(readFileSync(dist("kiro", ".kiro", "agents", "aidlc-delivery-agent.md"), "utf-8"));
+    expect(delivery).toMatch(/^model: claude-sonnet-4\.5$/m);
+    for (const fm of [arch, delivery]) {
+      expect(/^effort:/m.test(fm), "kiro .md must never carry effort:").toBe(false);
+    }
+  });
+
+  test("kiro-ide cli.json carries the same tier-projected modelDefaults as kiro's (t148 pins kiro)", () => {
+    const s = JSON.parse(
+      readFileSync(dist("kiro-ide", ".kiro", "settings", "cli.json"), "utf-8"),
+    ) as Record<string, Record<string, { output_config?: { effort?: string } }>>;
+    const defaults = s["chat.modelDefaults"];
+    expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
+    expect(defaults?.["claude-sonnet-4.5"]?.output_config?.effort).toBe("high");
   });
 });
