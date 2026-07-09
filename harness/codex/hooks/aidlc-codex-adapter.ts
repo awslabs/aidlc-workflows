@@ -40,7 +40,7 @@
 //   bun .codex/hooks/aidlc-codex-adapter.ts <target>
 // where <target> ∈ session-start | audit-and-sensors | state-sync |
 //                  runtime-compile | validate-state | post-compact |
-//                  log-subagent | stop
+//                  log-subagent | stop | mint | reviewer-scope
 
 import { createHash } from "node:crypto";
 import {
@@ -125,14 +125,18 @@ function pruneStale(): void {
 
 function replayAndExit(): never {
   // Duplicate delivery: wait up to ~2s for the first runner's response, then
-  // answer identically. If it never lands, fail open silently.
+  // answer identically. If it never lands, fail open silently. stderr rides
+  // the cache too so a reviewer-scope BLOCK (stderr + exit 2) replays
+  // faithfully on the duplicate, not as a silent allow.
   for (let i = 0; i < 20; i++) {
     try {
       const cached = JSON.parse(readFileSync(responseFile, "utf-8")) as {
         stdout: string;
         code: number;
+        stderr?: string;
       };
       if (cached.stdout) process.stdout.write(cached.stdout);
+      if (cached.stderr) process.stderr.write(cached.stderr);
       process.exit(cached.code);
     } catch {
       Bun.sleepSync(100);
@@ -141,9 +145,9 @@ function replayAndExit(): never {
   process.exit(0);
 }
 
-function persistResponse(stdout: string, code: number): void {
+function persistResponse(stdout: string, code: number, stderr?: string): void {
   try {
-    writeFileSync(responseFile, JSON.stringify({ stdout, code }), "utf-8");
+    writeFileSync(responseFile, JSON.stringify({ stdout, code, ...(stderr ? { stderr } : {}) }), "utf-8");
   } catch {
     // best-effort — a duplicate will fail open instead of replaying
   }
@@ -169,6 +173,25 @@ function runCore(hookFile: string, input: string): { stdout: string; code: numbe
     cwd: projectDir,
   });
   return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
+}
+
+// Variant capturing stderr - the reviewer-scope block channel (exit 2 + the
+// reason on stderr) must survive the pipe, unlike the advisory hooks above.
+function runCoreWithStderr(
+  hookFile: string,
+  input: string,
+): { stdout: string; stderr: string; code: number } {
+  const r = Bun.spawnSync([process.execPath, join(HOOKS_DIR, hookFile)], {
+    stdin: Buffer.from(input, "utf-8"),
+    stdout: "pipe",
+    stderr: "pipe",
+    cwd: projectDir,
+  });
+  return {
+    stdout: r.stdout?.toString() ?? "",
+    stderr: r.stderr?.toString() ?? "",
+    code: r.exitCode ?? 0,
+  };
 }
 
 // Re-wrap the core context output ({"additionalContext": ...}) into the
@@ -344,6 +367,49 @@ switch (target) {
     persistResponse(r.stdout, r.code);
     if (r.stdout) process.stdout.write(r.stdout);
     process.exit(r.code);
+  }
+
+  case "reviewer-scope": {
+    // PreToolUse: the per-unit reviewer read-scope bound. Codex delivers the
+    // spawned agent's name as agent_type on subagent tool calls (verified on
+    // 0.142.5) and the shell tool as "Bash" with tool_input.command - the
+    // core hook's exact contract - so Bash pipes verbatim. apply_patch (the
+    // edit surface) fans out one Write per touched file, agent identity
+    // forwarded, and blocks when ANY file is out of scope. Everything else
+    // (spawn_agent, wait, plan, ...) allows instantly. The block contract is
+    // exit 2 + stderr (probe-verified: Codex refuses the call and relays the
+    // reason); the response cache carries stderr so the duplicate delivery
+    // replays the block faithfully. Fail-open on any spawn failure.
+    const tool = codex.tool_name ?? "";
+    if (tool === "Bash") {
+      const r = runCoreWithStderr("aidlc-reviewer-scope.ts", rawInput);
+      persistResponse(r.stdout, r.code, r.stderr);
+      if (r.code === 2) {
+        process.stderr.write(r.stderr);
+        process.exit(2);
+      }
+      process.exit(0);
+    }
+    if (tool === "apply_patch") {
+      const command = (codex.tool_input?.command as string) ?? "";
+      for (const f of patchedFiles(command)) {
+        const fwd = JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: f.tool,
+          tool_input: { file_path: f.path },
+          ...(codex.agent_type ? { agent_type: codex.agent_type } : {}),
+          ...(codex.agent_id ? { agent_id: codex.agent_id } : {}),
+        });
+        const r = runCoreWithStderr("aidlc-reviewer-scope.ts", fwd);
+        if (r.code === 2) {
+          persistResponse("", 2, r.stderr);
+          process.stderr.write(r.stderr);
+          process.exit(2);
+        }
+      }
+    }
+    persistResponse("", 0);
+    process.exit(0);
   }
 
   case "mint": {

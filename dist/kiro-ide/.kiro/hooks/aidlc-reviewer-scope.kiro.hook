@@ -1,0 +1,1 @@
+{"version":"1.0.0","enabled":true,"name":"aidlc-reviewer-scope","description":"Enforces the per-unit reviewer read-scope bound while a reviewer dispatch record is fresh (refuses sibling-unit access).","when":{"type":"preToolUse"},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-kiro-adapter.ts reviewer-scope"}}

@@ -1778,6 +1778,26 @@ export function stopHookDir(projectDir: string, intent?: string, space?: string)
   return join(docsRoot(projectDir, intent, space), ".aidlc-stop-hook");
 }
 
+// `<root>/.aidlc-reviewer-dispatch.json` — the per-unit reviewer dispatch
+// record. The conductor writes it at stage-protocol 12a step 1 (per-unit
+// stages only) before invoking the reviewer sub-agent, and deletes it at step
+// 3 the moment the verdict is read. The reviewer-scope PreToolUse hook reads
+// it back to learn WHICH unit is under review and which contract paths are
+// exempt — the two facts no harness payload carries. Lives under the intent's
+// record root (the same transient family as .aidlc-stop-hook/), already
+// covered by the shipped `aidlc/spaces/*/intents/*/.aidlc-*` gitignore rule.
+export function reviewerDispatchPath(projectDir: string, intent?: string, space?: string): string {
+  return join(docsRoot(projectDir, intent, space), ".aidlc-reviewer-dispatch.json");
+}
+
+// Freshness window for the reviewer dispatch record. The scope hook honours a
+// record only while its mtime is younger than this; an older record is an
+// orphan (a session that crashed between dispatch and verdict) and is ignored
+// plus best-effort cleaned up — the same staleness discipline as the compose
+// marker. 6h: the worst observed pre-fix review ran ~3h, so the window covers
+// the pathological case with margin while still bounding a crashed review.
+export const REVIEWER_DISPATCH_TTL_MS = 6 * 60 * 60 * 1000;
+
 // `<projectDir>/aidlc/.aidlc-compose-pending`: the in-flight compose gate
 // marker the conductor writes before presenting the approve/edit/reject gate
 // and deletes on resolve. It lives at the WORKSPACE level (not a per-intent

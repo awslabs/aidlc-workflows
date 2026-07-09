@@ -26,7 +26,7 @@
 //   bun .kiro/hooks/aidlc-kiro-adapter.ts <target>
 // where <target> ∈ session-start | audit-and-sensors | runtime-compile |
 //                  state-sync | log-subagent | stop | verb-intercept |
-//                  pretool-block
+//                  pretool-block | reviewer-scope
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -263,6 +263,58 @@ if (target === "pretool-block") {
     }
   } catch { /* fail open: advisory presence floor */ }
 
+  process.exit(0);
+}
+
+// --- reviewer-scope: the per-unit reviewer read-scope bound (preToolUse) ---
+//
+// Registered inside the REVIEWER agents' own JSON configs (not the
+// conductor's), so every call arriving through this registration is the
+// reviewer's - that scoping IS the agent identity on Kiro, whose hook
+// payloads carry no agent_type. The shim normalizes the alias payload
+// (shell -> Bash {command}; read -> Read {paths} from operations[];
+// write -> Write {path}), marks scoped_registration for the core hook's
+// identity check, and forwards the core hook's stderr + exit code verbatim -
+// exit 2 + stderr is Kiro's reject contract, the same channel pretool-block
+// uses. Fail-open: an unspawnable core hook allows the call.
+if (target === "reviewer-scope") {
+  const tool = kiro.tool_name ?? "";
+  const ti = kiro.tool_input ?? {};
+  let coreTool = "";
+  const coreInput: Record<string, unknown> = {};
+  if (tool === "shell" || tool === "execute_bash") {
+    coreTool = "Bash";
+    coreInput.command = (ti.command as string) ?? "";
+  } else if (tool === "read" || tool === "fs_read") {
+    coreTool = "Read";
+    const ops = (ti.operations as Array<{ path?: string; pattern?: string }>) ?? [];
+    coreInput.paths = ops.map((o) => o.path ?? "").filter((p) => p.length > 0);
+    coreInput.path = (ti.path as string) ?? "";
+  } else if (tool === "write" || tool === "fs_write") {
+    coreTool = "Write";
+    coreInput.file_path = (ti.path as string) ?? (ti.file_path as string) ?? "";
+  } else {
+    process.exit(0);
+  }
+  const r = Bun.spawnSync([process.execPath, join(HOOKS_DIR, "aidlc-reviewer-scope.ts")], {
+    stdin: Buffer.from(
+      JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: coreTool,
+        tool_input: coreInput,
+        scoped_registration: true,
+      }),
+      "utf-8",
+    ),
+    cwd: kiro.cwd ?? process.cwd(),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stderrText = r.stderr?.toString() ?? "";
+  if (r.exitCode === 2) {
+    process.stderr.write(stderrText);
+    process.exit(2); // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+  }
   process.exit(0);
 }
 

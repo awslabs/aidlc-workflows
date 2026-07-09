@@ -3,28 +3,14 @@
   "name": "aidlc-product-lead-agent",
   "description": "AI-DLC Product Lead Reviewer — delegation target for reviewing requirements, user stories, and mockups.",
   "prompt": "file://aidlc-product-lead-agent.md",
-  "tools": [
-    "fs_read",
-    "fs_write",
-    "execute_bash",
-    "thinking"
-  ],
-  "allowedTools": [
-    "fs_read",
-    "fs_write",
-    "thinking"
-  ],
+  "tools": ["fs_read", "fs_write", "execute_bash", "thinking"],
+  "allowedTools": ["fs_read", "fs_write", "thinking"],
   "toolsSettings": {
     "execute_bash": {
-      "allowedCommands": [
-        "bun \\.kiro/tools/.*",
-        "date -u .*"
-      ]
+      "allowedCommands": ["bun \\.kiro/tools/.*", "date -u .*"]
     },
     "fs_write": {
-      "allowedPaths": [
-        "aidlc/spaces/**"
-      ]
+      "allowedPaths": ["aidlc/spaces/**"]
     }
   },
   "resources": [
@@ -33,6 +19,24 @@
     "file://.kiro/knowledge/aidlc-shared/*.md",
     "file://aidlc/spaces/default/memory/**/*.md"
   ],
-  "hooks": {},
-  "model": "claude-sonnet-4.5"
+  "hooks": {
+    "preToolUse": [
+      {
+        "matcher": "fs_read",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts reviewer-scope",
+        "timeout_ms": 15000
+      },
+      {
+        "matcher": "fs_write",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts reviewer-scope",
+        "timeout_ms": 15000
+      },
+      {
+        "matcher": "execute_bash",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts reviewer-scope",
+        "timeout_ms": 15000
+      }
+    ]
+  },
+  "model": "claude-opus-4.8"
 }

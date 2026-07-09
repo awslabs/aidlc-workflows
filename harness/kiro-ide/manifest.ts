@@ -52,6 +52,7 @@ const manifest: HarnessManifest = {
     { src: "hooks/aidlc-mint.kiro.hook", dst: "hooks/aidlc-mint.kiro.hook" },
     { src: "hooks/aidlc-block.kiro.hook", dst: "hooks/aidlc-block.kiro.hook" },
     { src: "hooks/aidlc-log-subagent.kiro.hook", dst: "hooks/aidlc-log-subagent.kiro.hook" },
+    { src: "hooks/aidlc-reviewer-scope.kiro.hook", dst: "hooks/aidlc-reviewer-scope.kiro.hook" },
     { src: "hooks/aidlc-runtime-compile.kiro.hook", dst: "hooks/aidlc-runtime-compile.kiro.hook" },
     { src: "hooks/aidlc-session-end.kiro.hook", dst: "hooks/aidlc-session-end.kiro.hook" },
     { src: "hooks/aidlc-session-start.kiro.hook", dst: "hooks/aidlc-session-start.kiro.hook" },

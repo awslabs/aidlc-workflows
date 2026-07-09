@@ -59,6 +59,8 @@ const HOOKS = [
   "aidlc-stop.ts",
   // Records a HUMAN_TURN on UserPromptSubmit.
   "aidlc-mint-presence.ts",
+  // Enforces the per-unit reviewer read-scope bound on PreToolUse.
+  "aidlc-reviewer-scope.ts",
 ] as const;
 
 describe("t02 hook presence — shipped dist/claude/.claude/hooks (migrated from t02-hook-executability.sh, plan 10)", () => {

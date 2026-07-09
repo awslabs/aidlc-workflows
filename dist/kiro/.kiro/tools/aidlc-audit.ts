@@ -60,6 +60,9 @@ const VALID_EVENT_TYPES = new Set([
   "ARTIFACT_REUSED",
   // Subagent (hook-emitted)
   "SUBAGENT_COMPLETED",
+  // Reviewer read-scope enforcement (hook-emitted): a per-unit reviewer's
+  // tool call was refused for reaching into sibling units' construction/ paths.
+  "REVIEWER_SCOPE_BLOCKED",
   // Health/system
   "HEALTH_CHECKED",
   "SCOPE_DETECTED",
@@ -155,6 +158,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   ARTIFACT_UPDATED: "Artifact Updated",
   ARTIFACT_REUSED: "Artifact Reused",
   SUBAGENT_COMPLETED: "Subagent Completed",
+  REVIEWER_SCOPE_BLOCKED: "Reviewer Scope Blocked",
   HEALTH_CHECKED: "Health Check",
   SCOPE_DETECTED: "Scope Detection",
   SCOPE_CHANGED: "Scope Change",

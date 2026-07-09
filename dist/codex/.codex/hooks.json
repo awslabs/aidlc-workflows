@@ -20,6 +20,16 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .codex/hooks/aidlc-codex-adapter.ts reviewer-scope"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "hooks": [

@@ -111,7 +111,7 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
       hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
     };
     expect(Object.keys(wiring.hooks).sort()).toEqual(
-      ["PostCompact", "PostToolUse", "PreCompact", "SessionStart", "Stop", "SubagentStop", "UserPromptSubmit"].sort(),
+      ["PostCompact", "PostToolUse", "PreCompact", "PreToolUse", "SessionStart", "Stop", "SubagentStop", "UserPromptSubmit"].sort(),
     );
     // Matchers per the verified tool-name map.
     const postMatchers = wiring.hooks.PostToolUse.map((g) => g.matcher).sort();

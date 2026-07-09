@@ -14,6 +14,9 @@ trusted_hash = "sha256:ec7321a5902723dfe5d1b79fe13a48724fdf69a2029f83d4168ae28da
 [hooks.state."<PROJECT_DIR>/.codex/hooks.json:user_prompt_submit:0:0"]
 trusted_hash = "sha256:56119bd6649f4fbfc17f77283c43b4805c8d8bad5947980a20c602e6b3e0a875"
 
+[hooks.state."<PROJECT_DIR>/.codex/hooks.json:pre_tool_use:0:0"]
+trusted_hash = "sha256:903f38ed3a946a2d638389770306f298ac68ce14570a289d5b4da00b928c0fcc"
+
 [hooks.state."<PROJECT_DIR>/.codex/hooks.json:post_tool_use:0:0"]
 trusted_hash = "sha256:3fbffd723a990f1569dd1cf9746bf05167c78d4e1681f48c552afb20a9213cdf"
 
