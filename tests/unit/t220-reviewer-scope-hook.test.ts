@@ -405,14 +405,16 @@ describe("t220 (c) harness registration and protocol prose", () => {
     }
   });
 
-  test("Kiro IDE ships the aidlc-reviewer-scope.kiro.hook preToolUse registration", () => {
-    const hookFile = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks", "aidlc-reviewer-scope.kiro.hook");
-    const h = JSON.parse(readFileSync(hookFile, "utf-8")) as {
-      when?: { type?: string };
-      then?: { command?: string };
-    };
-    expect(h.when?.type).toBe("preToolUse");
-    expect(h.then?.command).toContain("aidlc-kiro-adapter.ts reviewer-scope");
+  test("Kiro IDE ships NO reviewer-scope registration (documented gap: toolArgs is always empty)", () => {
+    // The IDE delivers hook context via USER_PROMPT with toolArgs always {}
+    // (docs/reference/kiro-ide-hook-payload.md): a preToolUse hook there can
+    // never see the attempted path or command, so there is nothing to match
+    // on. Per the porting guide, an unenforceable seam ships NO registration
+    // rather than a dead hook - the 12a prose bound governs on that harness.
+    // This pins the deliberate absence so a future blanket-registration sweep
+    // does not wire an inert (or worse, blindly blocking) entry.
+    const ideHooks = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks");
+    expect(existsSync(join(ideHooks, "aidlc-reviewer-scope.kiro.hook"))).toBe(false);
   });
 
   test("Codex hooks.json wires the adapter's reviewer-scope target on PreToolUse", () => {

@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-reviewer-scope.ts"
+            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-reviewer-scope.ts\""
           }
         ]
       }

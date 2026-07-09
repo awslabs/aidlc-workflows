@@ -24,9 +24,11 @@
 // exempt[]} - the facts no harness payload delivers. Identity comes from the
 // harness: Claude Code and Codex put the active subagent's name in the
 // payload's agent_type (absent on main-session calls; probe-verified on
-// both), and the Kiro adapters assert scoped registration instead (the Kiro
-// CLI wires this hook inside the reviewer agents' own JSON configs, so every
-// call arriving through that registration IS the reviewer's).
+// both), and the Kiro CLI adapter asserts scoped registration instead (it
+// wires this hook inside the reviewer agents' own JSON configs, so every
+// call arriving through that registration IS the reviewer's). Kiro IDE
+// ships no registration: its hook payloads carry no tool inputs, so a
+// pre-tool matcher has nothing to inspect there.
 //
 // Fail-open everywhere: no record, a stale record (mtime beyond
 // REVIEWER_DISPATCH_TTL_MS - janitored like the compose marker), malformed
@@ -337,12 +339,12 @@ if (import.meta.main) {
 
   // Identity: enforce only for the dispatched reviewer. Claude Code and Codex
   // deliver the active subagent's name as agent_type (absent on main-session
-  // calls). The Kiro adapters instead assert scoped_registration - the Kiro
-  // CLI registers this hook inside the reviewer agents' own JSON configs, so
-  // every call arriving through that registration is the reviewer's (the Kiro
-  // IDE's registration is window-scoped best-effort; its adapter documents
-  // that trade). Anything else - the conductor's own calls, other subagents -
-  // passes through untouched.
+  // calls). The Kiro CLI adapter instead asserts scoped_registration - it
+  // registers this hook inside the reviewer agents' own JSON configs, so
+  // every call arriving through that registration is the reviewer's. (Kiro
+  // IDE ships no registration at all: its hook payloads carry no tool inputs,
+  // so there is nothing to match on there.) Anything else - the conductor's
+  // own calls, other subagents - passes through untouched.
   const agentType = parsed.agent_type ?? "";
   const scopedRegistration = parsed.scoped_registration === true;
   const isDispatchedReviewer =
