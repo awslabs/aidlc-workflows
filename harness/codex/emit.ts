@@ -18,6 +18,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { EmitContext, EmitResult } from "../../scripts/manifest-types.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import onboardingFills from "./onboarding.fills.ts";
@@ -27,7 +28,7 @@ import { projectTier, resolveTierCap } from "../../core/tools/aidlc-tiers.ts";
 // the space-memory tier_cap: key), resolved against the authored core memory
 // layer so both writers agree on the effective cap.
 const TIER_CAP = resolveTierCap(
-  join(dirname(new URL(import.meta.url).pathname), "..", "..", "core", "memory"),
+  join(dirname(fileURLToPath(import.meta.url)), "..", "..", "core", "memory"),
 );
 
 // ---------------------------------------------------------------------------
