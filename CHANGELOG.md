@@ -12,6 +12,140 @@ Adds the **AIDLC plugin mechanism**: an optional, owned set of new stages plus a
 * New tests: `tests/integration/t188-plugin-compose.test.ts` guards the compose mechanism (builds into a temp dir, never the committed trees); each plugin's own `tests/` is now discovered by the integration tier.
 * Design consolidated into the single chapter `docs/reference/18-plugin-mechanism.md` (+ authoring guide `docs/harness-engineering/10-authoring-a-plugin.md`), with an explicit Status list of deferred surfaces (plugin `agents/`/`scopes/`/`memory/`/`knowledge/` projection, `adds.scopes`/`adds.requires_stage` merge, `when:` evaluation, marketplace/managed-settings/lockfile, and the Kiro `.kiro.hook` auto-fire + `aidlc plugin compose` CLI).
 
+
+## [2.2.19] - 2026-07-09
+
+Hooks and the statusline no longer break when the project path contains spaces. Every `$CLAUDE_PROJECT_DIR` reference in the shipped Claude settings is now double-quoted, so the hook commands survive word-splitting shells (bash) as well as zsh. **Upgrade:** re-copy `dist/claude/.claude/settings.json` into your project (or re-copy the whole `dist/claude/` shell).
+
+* Fixed: all 11 hook commands, the statusline command, and the pre-approved bun-tools permission glob in the Claude `settings.json` quote `$CLAUDE_PROJECT_DIR` (`bun "$CLAUDE_PROJECT_DIR/.claude/hooks/<hook>.ts"`); previously a workspace path with a space made every hook fail with `Module not found` under bash-backed hook runners (#519).
+
+## [2.2.18] - 2026-07-09
+
+Unit kinds prune the per-unit construction design matrix. Tag each Unit of Work in units-generation's edge block with an optional `kind:` (service, spec, ui, packaging, or library) and the four construction design stages (functional-design, nfr-requirements, nfr-design, infrastructure-design) now emit and require only the artifacts that apply to that kind: a spec unit owes no scalability doc, a packaging unit no business-logic model. A unit with no kind, a stage with no per-kind map, or an artifact left unannotated all behave exactly as before (the full matrix), so existing workflows are unchanged. A unit whose required set prunes to empty is covered by definition (the stage does not apply to it). **Upgrade:** re-copy your `dist/<harness>/` shell into the project; an older engine run against a kind-tagged edge block fails the units-generation gate loudly (re-copy dist to fix) rather than pruning wrong.
+
+* NEW optional `kind:` key on each unit in units-generation's `unit-of-work-dependency.md` edge block: one of `service | spec | ui | packaging | library`. An invalid value fails the `required-sections` sensor at the units-generation gate (edge block reported malformed), the same fail-loud channel a dangling dependency uses; omit the key to keep a unit on the full design-artifact matrix.
+* NEW `produces_kinds:` stage frontmatter field (a map of artifact name to the unit kinds it applies to) on the four construction design stages. An artifact may live in `produces:` or `optional_produces:`; the schema validator rejects a map key that names no entry in either list, an unknown kind, or an empty kind list. An artifact not listed in the map applies to all kinds.
+* The engine prunes both the run-stage directive's `produces` paths (required and optional alike) and the per-unit coverage check to the current unit's kind, so the conductor is never pointed at, and the approve-path guard never demands, an artifact the unit does not owe. Kind pruning composes with `optional_produces:`: an optional artifact still resolves into the directive for the kinds it applies to and stays exempt from coverage.
+* A per-unit construction stage where every unit's required set prunes to empty now approves as a no-op (the stage does not apply to any unit) instead of deadlocking at the artifact guard.
+
+## [2.2.17] - 2026-07-09
+
+Fixes the Kiro IDE harness's hooks, which previously no-op'd for everything that
+needed to know what the agent just did. Kiro IDE delivers hook context through
+the `USER_PROMPT` environment variable (not stdin, which it opens but never
+writes), and it leaves the tool arguments empty — so the IDE adapter now reads
+`USER_PROMPT`, recovers the written file path from the tool result text, and
+drives the command/payload-free hooks off the audit trail instead. The audit
+logger, sensor firing, runtime-graph recompile, and statusline sync now work in
+Kiro IDE without the agent having to compile the graph by hand. Dropping the
+stdin read also removes the 2s stdin-race timeout the CLI adapter paid on every
+hook; the human-presence mint/block hooks now resolve the project dir from
+`process.cwd()`. The Kiro CLI harness is unaffected (it uses a separate adapter
+and a working stdin channel). Re-copy your `dist/kiro-ide/.kiro/` to pick up the
+fix.
+
+* **Kiro IDE hooks fire correctly** — `aidlc-audit-logger`, `aidlc-sensor-fire`,
+  `aidlc-runtime-compile`, and `aidlc-sync-statusline` now do real work on Kiro
+  IDE. Artifact writes are audited, sensors run, the runtime graph recompiles on
+  transitions, and `Current Stage` stays in sync.
+* **File paths are resolved relative to the workspace root.** Kiro IDE reports
+  the written path relative to the project root in the tool-result text; the
+  adapter resolves it to absolute so `audit-logger`'s record-root check passes.
+* **`aidlc-runtime-compile` and `aidlc-sync-statusline` are payload-free on the
+  IDE** — both gate on the audit tail (latest transition / latest
+  `STAGE_STARTED`) instead of the tool command or task payload the IDE does not
+  surface. `aidlc-sync-statusline` is wired to the `shell` tool event.
+* **The IDE audit-tail gating is forward-only and idempotent.**
+  `aidlc-sync-statusline` never rewinds `Current Stage`: it skips when the
+  workflow is not `Running`, when the pointer is `none`, or when the audit's
+  latest stage is already completed/skipped. `latestStartedStageSlug` ignores
+  synthetic `--single` stage-runner rows. `aidlc-runtime-compile`'s IDE path
+  adds an mtime idempotency guard so a lingering transition (e.g. after
+  `WORKFLOW_COMPLETED`) does not recompile on every subsequent shell command.
+* **The `str_replace`/`fs_append` path extraction is robust.** The adapter
+  tolerates trailing newlines, strips a `str_replace` ` (N occurrences)`
+  suffix, and records a visible hook-drop when a write-class tool yields no
+  extractable path (no silent no-op).
+* **The human-presence mint/block hooks survive the stdin removal.** The
+  `promptSubmit` mint (`HUMAN_TURN`) and the `preToolUse` block floor now
+  resolve the project dir from `process.cwd()` (the IDE gives no `cwd` payload),
+  so the Kiro IDE human-presence gate keeps working; dropping the stdin read
+  also removes the 2s stdin-race the block hook paid on every `preToolUse`.
+* **`log-subagent` records the delegate's identity.** The adapter no longer
+  hardcodes `agent_type: "unknown"`; it extracts the self-identifying first line
+  (`**Reviewer:** <name>` / `**Agent:** <name>`) from the subagent result and
+  forwards the result text, so `SUBAGENT_COMPLETED` carries the real agent. The
+  two reviewer agents (`aidlc-product-lead-agent`,
+  `aidlc-architecture-reviewer-agent`) now emit that identity marker as the
+  first line of their response (an Output Contract in their persona, reinforced
+  in stage-protocol §12a), so the audit trail names which reviewer ran instead
+  of recording `unknown`.
+* **Failed tool calls are not audited as writes.** `audit-and-sensors`
+  explicitly guards `toolSuccess === false`, so a failed op no longer relies on
+  its error prose failing to match the path regexes.
+* **Opt-in hook debug log.** Enable it to have every hook append its decision
+  path to `<record>/.aidlc-hooks-health/hook-debug.log` — either set
+  `AIDLC_HOOK_DEBUG=1`, or `touch aidlc/.aidlc-hook-debug` (the filesystem
+  marker takes effect on the next hook fire with no IDE restart). Off by
+  default (no log, no overhead); see the Kiro IDE harness guide.
+* **Behaviour for Kiro CLI, Claude Code, and Codex is unchanged.** The shared
+  core hooks are edited and re-shipped to all four dists, but the new branches
+  are gated behind the IDE-only `ide-audit-sync` marker (and the opt-in
+  `AIDLC_HOOK_DEBUG` env var), so the CLI/Claude/Codex payload paths behave
+  exactly as before.
+
+## [2.2.16] - 2026-07-09
+
+The architecture reviewer's read scope is now bounded to the artifacts under review plus the shared inception contracts the stage `consumes:`. On per-unit Construction stages (`functional-design`, `nfr-requirements`, `nfr-design`, `infrastructure-design`, `code-generation`) the reviewer previously had no read-scope constraint and its persona pushed a "cross-reference everything" sweep, so reviewing unit N read sibling units' `construction/<other-unit>/` directories and per-unit cost grew linearly with unit count. Stage-protocol §12a now extends the per-unit reviewer pass-list with `directive.consumes`, the persona and knowledge scope "cross-reference" to what was passed, and the four harness orchestrators (Claude Code, Kiro CLI, Kiro IDE, Codex CLI) append the same bound to their reviewer step. Cross-unit contract verification runs against the shared inception artifacts; sibling-unit files may be spot-checked only when the current unit's design explicitly names an integration point in them. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Per-unit reviewer invocations now receive the resolved paths in `directive.consumes` in addition to the `produces` paths, so cross-unit contract claims can be verified against the shared inception artifacts (`components.md`, `component-methods.md`, `services.md`, `unit-of-work.md`, plus any other upstream artifacts the stage declares) without opening sibling units' design directories.
+* The four harness orchestrator skills (`.claude/`, `.kiro/`, `.kiro-ide/`, `.codex/`) carry the same read-scope bound in their `Reviewer step (§12a)` bullet: read what was passed, spot-check only the file the current unit's design explicitly names as an integration point.
+* `aidlc-architecture-reviewer-agent` persona gains a `## Review Scope` section and the "Cross-reference everything" line is scoped to the artifacts under review and the passed contracts; the knowledge file's Functional Design checklist names the shared contracts as the verification source instead of "cross-unit contract boundaries respected?" in isolation.
+
+
+## [2.2.15] - 2026-07-09
+
+Agent frontmatter now uses Claude Code's real `model:` key instead of the inert `modelOverride:` key, preserving the same Opus/Sonnet policy while keeping Codex and Kiro behavior stable. **Upgrade:** re-copy your dist/<harness>/ shell into the project.
+
+* Claude Code now honors the shipped `model: sonnet` pins for architecture-reviewer, product-lead, delivery, pipeline-deploy, and operations; those five delegated agents run on Sonnet instead of the session model.
+* Codex TOML emission is byte-identical; it now reads the renamed `model` key before applying the same Opus/Sonnet mapping.
+* Kiro CLI and Kiro IDE agent JSON configs are untouched and unaffected; they continue to use their hand-authored `"model"` fields.
+
+
+## [2.2.14] - 2026-07-09
+
+Fixes a silent-data-loss failure in Construction: when the compiled runtime graph was missing its bolt_dag node (a stale or deleted runtime-graph.json, for example when the runtime-compile hook never fired), every per-unit Construction stage silently degraded to a single iteration, so a multi-unit project shipped only its first unit with no error and the workflow completed as if done. The engine now self-heals on the read side: when the cached bolt_dag is absent it recomputes the unit batch DAG directly from inception/units-generation/unit-of-work-dependency.md (the same pure parse the compiler uses), so per-unit iteration, the approve-side coverage guard, and the autonomous swarm all see the full unit list regardless of whether a hook refreshed the graph. Scopes that never run units-generation are unaffected. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Per-unit Construction stages (functional-design, nfr-requirements, nfr-design, infrastructure-design, code-generation) now iterate every unit even when runtime-graph.json is missing or lacks its bolt_dag node, recomputing batches from unit-of-work-dependency.md on the fly. A recompute writes a one-line stderr note naming the stale graph.
+* `report --result approved` on a per-unit stage now enforces the all-units coverage guard against the recomputed unit list too, so a stale graph can no longer let an early approve commit a partially built stage.
+* A unit-of-work-dependency.md whose fenced units block is missing, malformed, or cyclic (with no cached bolt_dag to fall back on) now surfaces as an error directive naming the artifact and the parse failure, instead of silently building one unit.
+* Workflows with no units-generation dependency artifact on disk keep the existing single-iteration behaviour, byte-identical.
+
+## [2.2.13] - 2026-07-09
+
+Opt-in unit-major iteration for the inline construction design stages. By default the engine still walks those stages stage-major (functional-design for every unit, then nfr-requirements for every unit, and so on). When you record `Construction Iteration: unit-major`, the engine instead authors one unit's four design documents (functional-design, nfr-requirements, nfr-design, infrastructure-design) consecutively before moving to the next unit, giving the approved bolt-plan its first executable effect on design order. The four per-stage approval gates are unchanged in count and machinery, but under unit-major they fire late, in a cascade at the end of the design block, one human approval per stage. code-generation and the autonomous swarm are untouched. This is zero-risk for existing users: with no field set, behaviour is byte-identical. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* NEW `aidlc-state.ts set-construction-iteration <unit-major|stage-major>` subcommand: records the `Construction Iteration` runtime-state field. Strict read - only the exact value `unit-major` activates the new walk; absent, `stage-major`, or any other value is stage-major (today's behaviour).
+* delivery-planning now classifies whether the approved plan calls for unit-first design execution and, if so, records `set-construction-iteration unit-major`; a human can set or unset it at any time with the same subcommand.
+* Under unit-major, a run-stage directive's `directive.stage` may name a later design stage than the state's Current Stage, and a stage's `STAGE_STARTED` audit event may land after that stage's per-unit artifacts were written; the audit trail stays complete and stage-keyed. Always act on the directive's own stage and unit.
+
+## [2.2.12] - 2026-07-09
+
+The scope confirmation now previews the cost before you commit to it. A cold-start confirm and the compose offer carry exact stage and approval-gate counts read from the compiled grid (never estimates), the birth print and `scope-change` output name the same counts, and the composer proposal leads with a validator-computed `N stages EXECUTE / M SKIP, G approval gates` line. So confirming a scope tells you what you are consenting to (a `feature` runs 32 stages and 29 gates; a `bugfix` runs 7 and 4) instead of only a name. No upgrade action needed beyond re-copying your `dist/<harness>/` shell to pick up the regenerated strings.
+
+* The keyword-hit confirm now reads `Starting a "<scope>" workflow for: "<intent>" - N of T stages, G approval gates. ...`, with a trailing clause naming per-unit fan-out when the scope's Construction stages repeat per Unit of Work. The compose offer's example scope list carries counts too (`bugfix = 7 of 32 stages, poc = 8, feature = all 32`).
+* Explicit-scope birth prints (`next bugfix`, `next --scope <name>`, new-intent births) name the stage/gate counts in the run-then-continue message.
+* `scope-change` stdout gains an `Approval gates: <n>` line alongside the existing `Stages in scope:` line, and the `SCOPE_CHANGED` audit event gains an `Approval Gates` field.
+* `validate-grid` JSON output gains a `summary` field (stage/gate/per-unit counts of the validated grid). This is additive - existing parsers that read only `valid`/`errors`/`advisories` are unaffected.
+
+## [2.2.11] - 2026-07-08
+
+Gate-revision backstop: the conductor sometimes revises a stage's artifact at an open approval gate but forgets to run the `reject` verb that records it, leaving `Revision Count: 0` and no `GATE_REJECTED`/`STAGE_REVISING` audit pair for a revision the user actually saw happen. The `approve` command now detects this deterministically and backfills the missing pair (tagged `Recovered: true`) before it commits, so the on-disk state and audit trail reflect the revision. It reconciles the record rather than refusing the approval you already gave, and it will not fire on the reviewer's pre-approval `## Review` append. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `Revision Count` now reflects a revision made at an open gate even when the conductor skipped the `reject` verb: `approve` backfills the count and the audit pair. Run `reject` yourself when you request changes so your feedback text is still recorded.
+* NEW `Recovered: true` variants of the `GATE_REJECTED` and `STAGE_REVISING` audit rows, emitted by the approve-time backstop when it backfills a skipped rejection.
+* NEW `AIDLC_SKIP_REVISION_BACKSTOP=1` off-switch disables the backstop (mirrors `AIDLC_SKIP_ARTIFACT_GUARD`); the test suite sets it globally so existing approve flows are unaffected.
+
 ## [2.2.10] - 2026-07-06
 
 Workspace detection now recognizes git submodules. A workspace whose code lives in uninitialized submodules (empty dirs plus a `.gitmodules` file) previously scanned as Greenfield, so reverse-engineering was auto-skipped and every design stage ran with zero code understanding. The scanner gains a sixth brownfield signal: a parseable `.gitmodules` with at least one submodule path entry classifies the workspace Brownfield. When submodule paths are uninitialized, the scan warns and names the remedy (`git submodule update --init --recursive`) at birth, in the doctor report, and on `detect`. Languages stay as scanned (Unknown is truthful until the submodules are fetched). **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
@@ -21,7 +155,6 @@ Workspace detection now recognizes git submodules. A workspace whose code lives 
 * Birth stdout prints a one-line warning when submodule paths are uninitialized, telling you to fetch them before proceeding so reverse-engineering can read the code.
 * `/aidlc --doctor` gains an advisory `Submodules:` row: no `.gitmodules`, all initialized, uninitialized (names the count, the paths, and the remedy), or present-but-unparseable. Advisory only - it never flips doctor's exit code.
 * The read-only `detect` utility gains a `submodules` key in its `--json` payload and a `Submodules:` line in its human output when submodules are present.
-
 ## [2.2.9] - 2026-07-06
 
 Per-unit Construction stages no longer demand CONDITIONAL artifacts before a unit counts as covered. A new optional stage-frontmatter key `optional_produces:` names artifacts a stage writes only when the unit needs them - `functional-design`'s `frontend-components` (only when the unit has a UI) and `infrastructure-design`'s `shared-infrastructure` (only when units share infrastructure). Those names moved out of `produces:` into `optional_produces:`, so a backend-only unit completes without an N/A stub file and the stage gate is reachable. The conductor still gets the artifact's write path in the run-stage directive when the unit does produce it, and the artifact name stays in the vocabulary registry. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
