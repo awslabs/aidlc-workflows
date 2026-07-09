@@ -226,6 +226,7 @@ Validate that all of this implementation's prerequisites, configuration, and sta
 | Submodules | If a `.gitmodules` is present, reports how many submodule paths are declared and how many are uninitialized, naming `git submodule update --init --recursive` when any are (advisory - never fails) |
 | Env scope | `AWS_AIDLC_DEFAULT_SCOPE` (if set) names a valid scope |
 | Hook heartbeats | `.aidlc-hooks-health/` contains recent timestamps from hook executions |
+| Hook drops | Surfaces any `.aidlc-hooks-health/<hook>.drops` telemetry - each records a failure a hook swallowed to avoid breaking your tool call - with the drop count and last timestamp per hook, and the remediation (inspect, then delete the file). Advisory - never fails |
 | State drift | the active intent's `aidlc-state.md` matches the last `WORKFLOW_COMPLETED` in the audit |
 | Cycle detection | `stage-graph.json` has no cycles |
 | Orphan stage files | Every slug in the graph has a matching `<phase>/<slug>.md` on disk |
@@ -253,6 +254,7 @@ Validate that all of this implementation's prerequisites, configuration, and sta
 ✓ workspace shell ready (.claude/ + aidlc/spaces/default/memory/)
 ✓ Submodules: no .gitmodules at workspace root
 ✓ Hook heartbeats: not yet fired (first workflow stage will populate)
+✓ Hook drops: none recorded
 ✓ State matches last audit event (no drift)
 ✓ Cycle detection: 0 cycles
 ✓ Orphan stage files: 32 graph entries all have files

@@ -4002,7 +4002,9 @@ export function isoTimestamp(): string {
 // Hooks swallow audit emission errors to avoid breaking the user's tool call,
 // but silent failure was the whole point of the state-machine refactor.
 // Record drops to a per-hook counter file so `--doctor` can surface them.
-// File format: one ISO timestamp per line, most recent drop last.
+// File format: one drop per line (ISO timestamp, TAB, one-line reason),
+// most recent drop last. Doctor's advisory probe reads the count and the
+// last line's timestamp.
 
 export function recordHookDrop(
   projectDir: string,

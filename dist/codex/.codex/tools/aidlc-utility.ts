@@ -726,47 +726,77 @@ function handleDoctor(projectDir: string): void {
     });
   }
 
-  // 6b. Hook drop records. A hook that hit a non-fatal failure appends a line to
-  // `<hook>.drops` in the health dir. Each line is severity-tagged (`[degraded]`
-  // vs `[advisory]`): a DEGRADED drop means something was silently half-applied
-  // (a dropped contribution, a failed recompile) and must FAIL doctor so a CI gate
-  // catches it; an ADVISORY drop is an expected/benign condition (a documented-
-  // deferred surface declared, a version-skew skip, a core sensor timeout) and is
-  // surfaced as a passing row — failing on it would red the gate on legal author
-  // behavior and contradict the "advisory rows never change the exit code"
-  // contract (round-5). An UNTAGGED line (legacy / core recordHookDrop) is treated
-  // as advisory. The compose hook rewrites its .drops each run, so a fixed +
-  // re-composed install self-clears; a stale degraded drop is not sticky.
+  // 6b. Hook drop records. A hook that hit a non-fatal failure appends a line
+  // to `<hook>.drops` in the health dir (recordHookDrop: ISO timestamp, TAB,
+  // reason). Severity-split: a `[degraded]` line means something was silently
+  // half-applied (a dropped plugin contribution, a failed recompile) and must
+  // FAIL doctor so a CI gate catches it; everything else ([advisory] or
+  // untagged, e.g. core recordHookDrop telemetry) is a PASSING advisory row -
+  // a drop is telemetry about a PAST swallowed failure, and a failing row
+  // would pin doctor's exit at 1 long after the cause was fixed. The compose
+  // hook rewrites its .drops each run, so a fixed + re-composed install
+  // self-clears a degraded drop. The advisory label carries count + last
+  // timestamp per hook (detail lives in the LABEL because the renderer prints
+  // `fix` only on a FAILED row); the newest line is the likeliest to be torn
+  // (recordHookDrop fires under disk-full/EACCES), so only a timestamp-shaped
+  // first token is shown, else a placeholder. Unlike the sibling probes this
+  // one does NOT absorb read errors into the clean row: EACCES is exactly the
+  // environment that produces drops, so an unreadable dir/file is named
+  // rather than reported "none recorded".
+  const advisoryEntries: string[] = [];
+  let dropsUnreadable = 0;
   if (heartbeatDirExists) {
     try {
       const dropFiles = readdirSync(healthDir).filter((f) => f.endsWith(".drops"));
       for (const f of dropFiles) {
         try {
-          const lines = readFileSync(join(healthDir, f), "utf-8").split("\n").filter((l) => l.trim() !== "");
+          const lines = readFileSync(join(healthDir, f), "utf-8")
+            .split("\n")
+            .filter((l) => l.trim().length > 0);
           if (lines.length === 0) continue;
           const hook = f.replace(".drops", "");
           const reasons = lines.map((l) => l.split("\t").slice(1).join(" "));
           const degraded = reasons.filter((r) => r.includes("[degraded]"));
-          const last = reasons[reasons.length - 1].slice(0, 160);
           if (degraded.length > 0) {
+            const last = reasons[reasons.length - 1].slice(0, 160);
             results.push({
               pass: false,
               label: `Hook drops (${hook}): ${degraded.length} degraded of ${lines.length}`,
-              fix: `${hook} degraded silently — read ${join(healthDir, f)} (latest: ${last}); fix the cause and re-compose (the file self-clears on a clean run)`,
+              fix: `${hook} degraded silently - read ${join(healthDir, f)} (latest: ${last}); fix the cause and re-compose (the file self-clears on a clean run)`,
             });
           } else {
-            results.push({
-              pass: true,
-              label: `Hook drops (${hook}, advisory): ${lines.length} recorded; latest: ${last}`,
-            });
+            const lastToken = lines[lines.length - 1].split("\t")[0].trim();
+            const lastTs = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z?$/.test(lastToken)
+              ? lastToken
+              : "unparseable line";
+            advisoryEntries.push(`${hook} x${lines.length} (last ${lastTs})`);
           }
         } catch {
-          // skip unreadable
+          dropsUnreadable++;
         }
       }
     } catch {
-      // skip unreadable dir
+      dropsUnreadable = -1; // whole dir unreadable
     }
+  }
+  if (dropsUnreadable !== 0) {
+    results.push({
+      pass: true,
+      label:
+        dropsUnreadable === -1
+          ? "Hook drops: health dir unreadable (advisory) - check permissions on .aidlc-hooks-health/"
+          : `Hook drops: ${dropsUnreadable} .drops file(s) unreadable (advisory)${advisoryEntries.length > 0 ? `; readable: ${advisoryEntries.join(", ")}` : ""} - check permissions on .aidlc-hooks-health/`,
+    });
+  } else if (advisoryEntries.length > 0) {
+    results.push({
+      pass: true,
+      label: `Hook drops recorded (advisory): ${advisoryEntries.join(", ")} - a hook swallowed a failure and fail-opened; inspect the named .drops file(s) under .aidlc-hooks-health/ for the reasons, then delete them once investigated`,
+    });
+  } else {
+    results.push({
+      pass: true,
+      label: "Hook drops: none recorded",
+    });
   }
 
   // State / audit drift check — if latest audit event implies the state file

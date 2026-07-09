@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.2] - 2026-07-10
+
+`/aidlc --doctor` now surfaces recorded hook drops. Hooks fail open by design - an audit-emission failure or a swallowed error must never break your tool call - and each such swallow is recorded to `aidlc/.../.aidlc-hooks-health/<hook>.drops`, written specifically for doctor to surface. Doctor never read those files, so the silent-failure telemetry was invisible. It now reports them as an advisory row. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `/aidlc --doctor` gains a `Hook drops` row: `none recorded` when clean, or an advisory naming each hook with a drop count and the last drop's timestamp plus the remediation (inspect the `.drops` file for the reasons, delete it once investigated). Advisory only - it never flips doctor's exit code, so a long-fixed historical drop cannot pin CI red.
 ## [2.3.1] - 2026-07-10
 
 Authored agents no longer carry raw model pins: the authored contract on every agent is now a work-shaped `tier:` (`judgment` | `balanced` | `templated`), which the build projects into each harness's native model/effort keys. On Claude Code the nine judgment agents stop pinning Opus; the balanced/templated agents still project to a Sonnet-class model. The nine judgment agents (architect, aws-platform, compliance, composer, design, developer, devsecops, product, quality) become `model: inherit` with no effort pin on Claude Code, so a session running Fable (or any other model, at any effort) keeps it in delegated work - the framework never silently downgrades your session choices. The two balanced reviewers and three templated planners keep a Sonnet-class model; only the templated tier steps effort down (`medium`). To restore the old always-Opus behavior for one agent, edit the projected value in your installed copy (e.g. set `model: opus` in that agent's `.claude/agents/*.md`); to cap every agent when building from source, set `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>`. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

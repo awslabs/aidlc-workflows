@@ -92,7 +92,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 // Pure lib/util exports the .sh's tests 18-23 reached via `bun -e` imports;
@@ -101,7 +101,9 @@ import { join } from "node:path";
 import {
   FORK_EMITTED_TAG_REGEX,
   findAllEvents,
+  hooksHealthDir,
   MERGE_SUCCEEDED_TAG_REGEX,
+  recordHookDrop,
   SLUG_TAG_REGEX,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -464,6 +466,62 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     const p = track(setupIntegrationProject());
     const r = doctor(p);
     expect(r.status).toBe(0);
+  });
+
+  // Hook-drop probe (issue: recordHookDrop wrote .drops telemetry for doctor,
+  // but doctor never read it). Advisory: pass row either way, exit unaffected.
+  test("18: no .drops files -> 'Hook drops: none recorded' pass row", () => {
+    const p = track(createTestProject());
+    const r = doctor(p);
+    expect(r.out).toContain("Hook drops: none recorded");
+  });
+
+  test("18b: recorded drops -> advisory row with count + last timestamp, exit unchanged", () => {
+    const p = track(createTestProject());
+    // Seed through the REAL writer, not a hand-built file: recordHookDrop and
+    // the doctor probe share both the path resolution (hooksHealthDir via the
+    // active-intent cursor) and the line format (ISO timestamp, TAB, reason);
+    // writing through recordHookDrop binds the reader to the writer's actual
+    // format so the two cannot drift with tests still green.
+    recordHookDrop(p, "audit-logger", "audit emission failed: EACCES");
+    recordHookDrop(p, "audit-logger", "audit emission failed: disk full");
+    const r = doctor(p);
+    expect(r.out).toContain("Hook drops recorded (advisory)");
+    // Count is exact; the timestamp is whatever isoTimestamp() minted, so pin
+    // the shape (the probe's own timestamp gate) rather than a literal value.
+    expect(r.out).toMatch(/audit-logger x2 \(last \d{4}-\d{2}-\d{2}T[\d:]+Z\)/);
+    // Advisory: the drops row itself must not flip doctor's exit code - compare
+    // against the same project WITHOUT the drop file rather than pinning an
+    // absolute status (the bare fixture may fail other probes either way).
+    const clean = track(createTestProject());
+    expect(r.status).toBe(doctor(clean).status);
+  });
+
+  test("18c: empty .drops file -> treated as none recorded", () => {
+    const p = track(createTestProject());
+    const healthDir = hooksHealthDir(p);
+    mkdirSync(healthDir, { recursive: true });
+    writeFileSync(join(healthDir, "stop.drops"), "", "utf-8");
+    const r = doctor(p);
+    expect(r.out).toContain("Hook drops: none recorded");
+  });
+
+  test("18d: torn last line (no TAB) -> placeholder, not the raw fragment", () => {
+    const p = track(createTestProject());
+    const healthDir = hooksHealthDir(p);
+    mkdirSync(healthDir, { recursive: true });
+    // A torn append (disk full mid-write) can leave a last line that never
+    // reached its TAB; the label must not splice the raw fragment where a
+    // timestamp is promised.
+    writeFileSync(
+      join(healthDir, "sensor-fire.drops"),
+      "2026-07-01T10:00:00Z\tsensor dispatch failed\n" +
+        "sensor dispatch failed: ENOSP",
+      "utf-8",
+    );
+    const r = doctor(p);
+    expect(r.out).toContain("sensor-fire x2 (last unparseable line)");
+    expect(r.out).not.toContain("(last sensor dispatch failed: ENOSP)");
   });
 });
 
