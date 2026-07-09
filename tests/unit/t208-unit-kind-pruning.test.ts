@@ -18,7 +18,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -267,5 +267,42 @@ describe("t208 engine unit-kind pruning", () => {
     for (const name of FD_PRODUCES) {
       expect(d.produces).toContain(`${RP}/construction/alpha/functional-design/${name}.md`);
     }
+  }, 30000);
+
+  // 8: composition with optional_produces. frontend-components lives in
+  // functional-design's optional_produces AND is kind-mapped [ui]: a ui unit's
+  // directive must carry its path (the kind filter runs over the produces +
+  // optional_produces union, not produces alone), a service unit's must not.
+  test("8: a ui unit's directive carries frontend-components; a service unit's omits it", () => {
+    const proj = seedProject("functional-design");
+    seedKindDag(proj, [{ name: "web", kind: "ui" }]);
+    const d = runNext(proj);
+    expect(d.unit).toBe("web");
+    expect(d.produces).toContain(`${RP}/construction/web/functional-design/frontend-components.md`);
+    // ui's REQUIRED set is business-logic-model only (business-rules and
+    // domain-entities are mapped [service, spec, library]).
+    expect(d.produces).toContain(`${RP}/construction/web/functional-design/business-logic-model.md`);
+    expect(d.produces?.some((p) => p.includes("/business-rules.md"))).toBe(false);
+
+    const proj2 = seedProject("functional-design");
+    seedKindDag(proj2, [{ name: "api", kind: "service" }]);
+    const d2 = runNext(proj2);
+    expect(d2.unit).toBe("api");
+    expect(d2.produces?.some((p) => p.includes("/frontend-components.md"))).toBe(false);
+    for (const name of ["business-logic-model", "business-rules", "domain-entities"]) {
+      expect(d2.produces).toContain(`${RP}/construction/api/functional-design/${name}.md`);
+    }
+  }, 30000);
+
+  // 8b: optional stays coverage-EXEMPT even for the kind it applies to. A ui
+  // unit that wrote only its required artifact (business-logic-model) is
+  // covered without frontend-components on disk - the per-unit iteration
+  // advances to the next unit.
+  test("8b: a ui unit is covered without its optional artifact on disk", () => {
+    const proj = seedProject("functional-design");
+    seedKindDag(proj, [{ name: "web", kind: "ui" }, { name: "svc" }]);
+    coverUnit(proj, "web", "functional-design", ["business-logic-model"]);
+    const d = runNext(proj);
+    expect(d.unit).toBe("svc");
   }, 30000);
 });

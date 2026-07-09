@@ -4538,6 +4538,13 @@ export function parseBoltDag(body: string): BoltDagParse {
 // kinds known", so the engine cheaply skips filtering and every unit stays on
 // the full matrix. Mirrors readBoltDagBatches' fail-safe posture: an absent or
 // unreadable graph is a legitimate branch, never a throw.
+//
+// Trust posture (also matching readBoltDagBatches): kind values are only
+// shape-checked here (string), not enum-checked - the UNIT_KINDS enum gate
+// lives at units-generation parse, before the graph is compiled. A unit
+// hand-tagged in the compiled graph with a valid-but-wrong kind therefore
+// over-prunes (or under-prunes) silently; the compiled graph is trusted as
+// already-validated input, same as its batches.
 export function readBoltDagUnitKinds(projectDir: string): Map<string, string> | null {
   const path = runtimeGraphPath(projectDir);
   if (!existsSync(path)) return null;

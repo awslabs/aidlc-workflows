@@ -153,9 +153,10 @@ with `AIDLC_SKIP_ARTIFACT_GUARD=1`.
 ### `produces_kinds`
 
 Optional map on a `for_each: unit-of-work` stage: each key is one of the stage's
-`produces` artifact names, each value the list of Unit **kinds** that artifact
-applies to. Kinds are declared per Unit in units-generation's edge block (see
-[Runtime graph](13-runtime-graph.md) `bolt_dag.units[].kind`) and are one of
+`produces` or `optional_produces` artifact names, each value the list of Unit
+**kinds** that artifact applies to. Kinds are declared per Unit in
+units-generation's edge block (see [Runtime graph](13-runtime-graph.md)
+`bolt_dag.units[].kind`) and are one of
 `service | spec | ui | packaging | library`.
 
 ```yaml
@@ -180,12 +181,23 @@ existing workflow.
 
 The pruning is symmetric: it filters both the run-stage directive's `produces`
 paths (what the conductor writes) and the per-unit coverage check (what the
-approve-path guard requires). A Unit whose required set prunes to **empty** is
+approve-path guard requires). It composes with `optional_produces`: the
+directive's paths are the kind-filtered union of both lists, while coverage
+stays keyed off the required `produces` only (an optional artifact is pruned
+from the directive for kinds it does not apply to, and remains coverage-exempt
+either way). A Unit whose required set prunes to **empty** is
 covered by definition - the stage does not apply to it - and a per-unit stage
 where *every* Unit prunes to empty approves as a no-op rather than deadlocking
 at the artifact guard. The default kind matrix for the four stages is stage
 frontmatter data, reviewable and revertible per entry; removing a wrong entry
 restores the full matrix for that artifact.
+
+One trust note: the `kind:` value is enum-checked at the units-generation gate
+(the `required-sections` sensor fails loud on a typo), but the compiled
+runtime graph is trusted afterwards - the engine only shape-checks the kind
+when reading `bolt_dag.units[].kind` (matching how it trusts the compiled
+batches). A unit hand-edited in the compiled graph to a valid-but-wrong kind
+prunes to that wrong kind's set silently.
 
 ### `consumes[].required`
 
@@ -256,7 +268,10 @@ unreachable until it did. Moving them to `optional_produces:` exempts them:
   `approve` from committing.
 - **Still resolved for the conductor.** The run-stage directive's `produces`
   paths union `produces` + `optional_produces`, so when the unit DOES write
-  the conditional artifact the conductor still knows where it lands.
+  the conditional artifact the conductor still knows where it lands. When the
+  stage also declares `produces_kinds`, that union is kind-filtered before it
+  resolves (see `produces_kinds` above), so a kind an optional artifact does
+  not apply to never sees its path.
 - **Still in the vocabulary.** `artifactsRegistry()` and `producersOf()` union
   both lists, so the artifact name and its producer stage stay registered.
 
