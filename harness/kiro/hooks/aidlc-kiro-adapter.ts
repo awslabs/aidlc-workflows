@@ -269,14 +269,19 @@ if (target === "pretool-block") {
 // --- reviewer-scope: the per-unit reviewer read-scope bound (preToolUse) ---
 //
 // Registered inside the REVIEWER agents' own JSON configs (not the
-// conductor's), so every call arriving through this registration is the
-// reviewer's - that scoping IS the agent identity on Kiro, whose hook
-// payloads carry no agent_type. The shim normalizes the alias payload
-// (shell -> Bash {command}; read -> Read {paths} from operations[];
-// write -> Write {path}), marks scoped_registration for the core hook's
-// identity check, and forwards the core hook's stderr + exit code verbatim -
-// exit 2 + stderr is Kiro's reject contract, the same channel pretool-block
-// uses. Fail-open: an unspawnable core hook allows the call.
+// conductor's), so every call arriving through this registration is that
+// reviewer's - the scoping IS the agent identity on Kiro, whose hook
+// payloads carry no agent_type. Each registration passes ITS OWN agent name
+// as argv[3] (`reviewer-scope <agent-name>`), which the shim forwards as
+// agent_type so the core hook still compares against the dispatch record's
+// reviewer field - a stale record naming a DIFFERENT reviewer then fails
+// open exactly like on Claude/Codex, instead of scoping the wrong agent.
+// The shim normalizes the alias payload (shell -> Bash {command}; read ->
+// Read {paths} from operations[]; write -> Write {path}) and forwards the
+// core hook's stderr + exit code verbatim - exit 2 + stderr is Kiro's
+// reject contract, the same channel pretool-block uses. Fail-open: a
+// missing name (scoped_registration fallback) or an unspawnable core hook
+// allows the call.
 if (target === "reviewer-scope") {
   const tool = kiro.tool_name ?? "";
   const ti = kiro.tool_input ?? {};
@@ -296,13 +301,16 @@ if (target === "reviewer-scope") {
   } else {
     process.exit(0);
   }
+  const registeredAgent = process.argv[3] ?? "";
   const r = Bun.spawnSync([process.execPath, join(HOOKS_DIR, "aidlc-reviewer-scope.ts")], {
     stdin: Buffer.from(
       JSON.stringify({
         hook_event_name: "PreToolUse",
         tool_name: coreTool,
         tool_input: coreInput,
-        scoped_registration: true,
+        ...(registeredAgent.length > 0
+          ? { agent_type: registeredAgent }
+          : { scoped_registration: true }),
       }),
       "utf-8",
     ),

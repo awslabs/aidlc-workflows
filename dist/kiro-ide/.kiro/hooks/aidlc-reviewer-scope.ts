@@ -215,9 +215,14 @@ export function evaluateReviewerScope(
       //      `ls a/b/construction` - names the whole tree as a search root,
       //      the same sweep as `construction/`. This rule runs on the text
       //      with QUOTED SPANS REMOVED, so the word inside a content regex
-      //      (`grep 'construction phase' ...`) stays content, not a path.
-      // A shell variable like construction/$UNIT is invisible to a string
-      // matcher; the prose bound still governs what determinism cannot see.
+      //      (`grep 'construction phase' ...`) stays content, not a path; an
+      //      UNQUOTED single-word pattern (`grep construction file.md`) still
+      //      blocks - a deliberate conservative trade, and the block reason
+      //      tells the reviewer to quote the word and retry.
+      // A shell variable in the unit segment (construction/$UNIT/...) blocks
+      // CONSERVATIVELY: the matcher cannot resolve it, so it is judged as an
+      // unexempted segment even when it would expand to the current unit -
+      // the block reason tells the reviewer to use the literal unit name.
       for (const m of text.matchAll(/construction\/[^\s"'`;|&()]*/g)) {
         const token = m[0].replace(/[.,:]+$/, "");
         const suffixComps = normalizedComps(token);
@@ -264,7 +269,9 @@ export function blockReason(target: string, dispatch: ReviewerDispatch): string 
     `contracts). Verify cross-unit claims against those passed contracts instead of reading ` +
     `sibling units. If this unit's design explicitly names an integration point in a sibling ` +
     `file, report that in your findings rather than opening it; only a file the conductor ` +
-    `put on the dispatch exempt list is readable here.`
+    `put on the dispatch exempt list is readable here. (If you meant to access the CURRENT ` +
+    `unit, write the literal unit name - shell variables in the path cannot be verified and ` +
+    `are refused; if you meant the WORD construction as search text, quote the pattern.)`
   );
 }
 

@@ -443,7 +443,10 @@ describe("t220 (c) harness registration and protocol prose", () => {
       const matchers = entries.map((e) => e.matcher).sort();
       expect(matchers).toEqual(["execute_bash", "fs_read", "fs_write"]);
       for (const e of entries) {
-        expect(e.command).toContain("aidlc-kiro-adapter.ts reviewer-scope");
+        // The registration passes its own agent name as argv[3] so the
+        // adapter forwards a real identity (compared against the dispatch
+        // record's reviewer field) instead of a bare scoped_registration.
+        expect(e.command).toContain(`aidlc-kiro-adapter.ts reviewer-scope ${agent}`);
       }
     }
   });

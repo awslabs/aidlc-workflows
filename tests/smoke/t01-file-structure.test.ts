@@ -276,7 +276,7 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
       at("CLAUDE.md"), // 67
     ];
     expect(paths.length).toBe(68);
-    // Every one of the 67 must exist — the .sh's full TAP plan, re-proven as a
+    // Every one of the 68 must exist — the .sh's full TAP plan, re-proven as a
     // single set so the count and the existence checks cannot drift apart.
     for (const p of paths) {
       expect(existsSync(p)).toBe(true);

@@ -383,7 +383,11 @@ switch (target) {
     const tool = codex.tool_name ?? "";
     if (tool === "Bash") {
       const r = runCoreWithStderr("aidlc-reviewer-scope.ts", rawInput);
-      persistResponse(r.stdout, r.code, r.stderr);
+      // Persist the ANSWERED code, not the raw one: anything that is not the
+      // block contract (2) is answered 0 below, and the duplicate must replay
+      // exactly what the original answered (a crashed core hook exiting 1
+      // must not replay as 1 when the original delivery allowed).
+      persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);
       if (r.code === 2) {
         process.stderr.write(r.stderr);
         process.exit(2);
