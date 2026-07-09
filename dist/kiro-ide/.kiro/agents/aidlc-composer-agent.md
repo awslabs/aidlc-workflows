@@ -8,7 +8,6 @@ description: >
   or proposes pending-stage suffix flips (in-flight). Dispatched by the
   /aidlc orchestrator; never invoked directly by a stage.
 disallowedTools: Task
-model: claude-opus-4.8
 tools: ["read", "write", "shell"]
 ---
 

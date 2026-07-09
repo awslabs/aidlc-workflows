@@ -9,7 +9,6 @@ description: >
   Support-only agent for Feasibility & Constraint Analysis and cross-cutting compliance validation.
 disallowedTools: Task
 model: inherit
-effort: high
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

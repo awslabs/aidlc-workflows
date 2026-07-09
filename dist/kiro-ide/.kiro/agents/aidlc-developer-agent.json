@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/aws/amazon-q-developer-cli/refs/heads/main/schemas/agent-v1.json",
   "name": "aidlc-developer-agent",
-  "description": "AI-DLC Developer Agent \u2014 delegation target for reverse-engineering (2.1), code-generation (3.5), and swarm units. Use for delegated implementation tasks.",
+  "description": "AI-DLC Developer Agent — delegation target for reverse-engineering (2.1), code-generation (3.5), and swarm units. Use for delegated implementation tasks.",
   "prompt": "file://aidlc-developer-agent.md",
   "tools": [
     "fs_read",
@@ -27,6 +27,5 @@
     "file://.kiro/knowledge/aidlc-shared/*.md",
     "file://aidlc/spaces/default/memory/**/*.md"
   ],
-  "hooks": {},
-  "model": "claude-opus-4.8"
+  "hooks": {}
 }

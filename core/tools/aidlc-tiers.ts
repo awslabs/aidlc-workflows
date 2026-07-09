@@ -1,143 +1,220 @@
-// core/tools/aidlc-tiers.ts - the tunable-tier projection (SPIKE).
+// core/tools/aidlc-tiers.ts - the tunable-tier projection module.
 //
-// A per-agent TIER expresses HOW MUCH JUDGMENT the persona brings. It replaces
-// the raw `model: opus|sonnet` pin in each agent's frontmatter as the authored
-// source of truth. The packager reads `tier:` from core/agents/*.md and
-// PROJECTS it into the per-harness delivery form:
+// A per-agent TIER names HOW MUCH JUDGMENT the persona's work demands, and the
+// packager projects that single authored fact into each harness's native model
+// and effort knobs. `judgment` marks multi-constraint reasoning under ambiguity
+// whose output cascades downstream (architect, developer, product, ...): it
+// inherits the session's own model and effort so the user's ceiling is never
+// silently capped. `balanced` marks reviewer-shaped work (novel input judged
+// against explicit criteria): a mid-size model, session effort. `templated`
+// marks dominantly pattern-following output whose methodology already lives in
+// knowledge (delivery plans, CI/CD config, runbooks): a mid-size model at a
+// deliberately reduced effort - the one place the framework steps DOWN on its
+// own. Tiers only ever step down, never up, and only for templated work; the
+// names describe the WORK, not the dial, so a reader can classify a new agent
+// without knowing today's model lineup.
 //
-//   - Claude Code   -> `model: <alias|inherit>` + `effort: <low|medium|high>`
-//                      in the agent's .md frontmatter (Claude Code reads both).
-//   - Codex CLI     -> `model = "..."` + `model_reasoning_effort = "..."` in
-//                      the agent's .codex/agents/*.toml.
-//   - Kiro CLI/IDE  -> the `"model"` field in harness/kiro*/agents/*.json;
-//                      no effort field is authored today (see NOTE below).
+// Projection targets (see TIER_PROJECTIONS):
+//   - Claude Code   agent .md frontmatter: `model:` and optional `effort:`.
+//                   An OMITTED key inherits the session value, and a pinned
+//                   `effort:` overrides the session in both directions - a pin
+//                   is a cap, not a floor. So `judgment` writes `model:
+//                   inherit` and NO effort line; `balanced` writes `model:
+//                   sonnet` and NO effort line; only `templated` pins
+//                   `effort: medium`.
+//   - Codex CLI     agent role .toml: `model` and `model_reasoning_effort`.
+//                   Omitted keys fall back to the shipped .codex/config.toml
+//                   session defaults (live-verified on codex-cli 0.142.5: a
+//                   role TOML without `model` spawns on the config.toml
+//                   model + effort). `judgment` omits both keys.
+//   - Kiro CLI/IDE  agent surfaces carry a `"model"` value ONLY - kiro-cli
+//                   fail-closes on any effort-like key in agent JSON, so no
+//                   Kiro agent surface may EVER carry an effort key. Effort
+//                   rides on the MODEL via cli.json chat.modelDefaults (see
+//                   KIRO_TIER_EFFORT + kiroModelDefaults below). `judgment`
+//                   omits `"model"`; the schema-documented fallback is the
+//                   user's default model at that model's default effort.
 //
-// The three tiers, and why THESE names:
-//   `judgment`   Multi-constraint reasoning under ambiguity, output cascades
-//                downstream (architect, developer, product, design, ...). This
-//                is the persona that must NOT be silently downgraded, but its
-//                model direction should not be PINNED to opus either: a Fable
-//                session running an architect agent should stay on Fable, not
-//                be dragged back to opus. Claude projection = MODEL INHERIT +
-//                effort high. That respects the session (the commenter's
-//                request) while still guaranteeing a reasoning budget.
-//   `balanced`   Reviewer-shaped work: novel input, explicit criteria, "find
-//                what's wrong" not "invent the answer" (architecture-reviewer,
-//                product-lead). Needs enough headroom to spot gaps but the
-//                methodology is largely encoded in the review checklist.
-//                Claude projection = sonnet + high effort.
-//   `templated`  Dominantly pattern-following output; methodology already in
-//                knowledge (delivery plans, CI/CD YAML, runbooks). Claude
-//                projection = sonnet + medium effort.
+// Kiro collapse rule: two tiers whose Kiro model IDs are equal are the same
+// tier on Kiro (there is no per-agent effort surface to tell them apart).
+// When tiers share a model, the cli.json chat.modelDefaults entry for that
+// model takes the HIGHER tier's effort - kiroModelDefaults() computes this.
+// Today `balanced` and `templated` both land on claude-sonnet-4.5, so the
+// shipped entry is sonnet-4.5 -> "high" (balanced wins the collapse).
 //
-// Why not `high|medium|low`?
-//   Those name the DIAL, not the work. A reader can't tell whether "low" is a
-//   cost dial or a quality one, and the name reads as "less important" for
-//   personas that are simply pattern-following. Naming the WORK makes the tier
-//   assignment a domain judgment (is this reasoning-heavy or template-heavy?)
-//   instead of a budgeting judgment.
-//
-// NOTE: Kiro-CLI-and-IDE per-agent effort capability is UNKNOWN today. The
-// projection here writes only the "model" field; the design tolerates that
-// harness having no effort surface (graceful degradation) and can grow to
-// write an effort key once Kiro exposes one.
-//
-// NOTE: the ONE override seam the spike ships is the AIDLC_TIER_CAP env var,
-// read at pack time. Setting AIDLC_TIER_CAP=balanced collapses `judgment` to
-// `balanced` in every projection (cost cap); AIDLC_TIER_CAP=templated collapses
-// both higher tiers. Per-agent overrides live in the .md frontmatter itself
-// (change one agent's `tier:` in your dist copy after install). A runtime
-// memory-layer knob (org.md / project.md) is the productionization path; see
-// tmp/effort-spike/tier/DESIGN.md for the alternatives.
+// Cost-cap override, resolved at PACK time (runtime composition is out of
+// scope): the space-memory `tier_cap:` frontmatter key on the layered method
+// files (org.md -> team.md -> project.md, last writer wins) is the persistent
+// project knob, and the AIDLC_TIER_CAP env var is the per-invocation override
+// that beats it. Setting the cap to `balanced` collapses `judgment` to
+// `balanced` in every projection; `templated` collapses both higher tiers.
+// See resolveTierCap().
 
-export type Tier = "judgment" | "balanced" | "templated";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
-export const TIERS: readonly Tier[] = ["judgment", "balanced", "templated"] as const;
+/** The tier vocabulary, ordered HIGH to LOW. The order is load-bearing:
+ *  capTier() clamps by index, so index 0 is the top rung. */
+export const TIERS = ["judgment", "balanced", "templated"] as const;
 
-// Claude Code effort keys, per the code.claude.com/docs/en/sub-agents contract.
+export type Tier = (typeof TIERS)[number];
+
+/** Claude Code agent-frontmatter effort values (sub-agent contract). */
 export type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max";
-// Codex effort keys (config.toml model_reasoning_effort).
+/** Codex model_reasoning_effort values (config.toml contract). */
 export type CodexEffort = "low" | "medium" | "high" | "xhigh";
+/** Kiro effort values (chat.modelDefaults / --effort contract). */
+export type KiroEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
-/** Per-harness projection of one tier. */
+/** Per-harness projection of one tier. A `null` model or effort means the
+ *  harness-native key is OMITTED so the harness's own session/config default
+ *  applies ("inherit" on Claude is an explicit frontmatter value, so it stays
+ *  a string there). The kiro slot is model-only BY DESIGN: kiro-cli rejects
+ *  effort-like keys in agent surfaces (fail-closed schema), so the type makes
+ *  an effort leak structurally impossible - Kiro effort lives in
+ *  KIRO_TIER_EFFORT and reaches users via cli.json, never the agent files. */
 export type TierProjection = {
-  claude: { model: string; effort: ClaudeEffort };
-  codex: { model: string; effort: CodexEffort };
-  // Kiro CLI/IDE: the value of the "model" JSON field. No effort key today
-  // (Kiro's per-agent effort surface is unknown / unshipped).
-  kiro: { model: string };
+  claude: { model: string; effort: ClaudeEffort | null };
+  codex: { model: string | null; effort: CodexEffort | null };
+  kiro: { model: string | null };
 };
 
-// The projection table. Tune here; every harness moves in lock-step.
+export type Harness = keyof TierProjection;
+
+/** The projection table. Tune here; every harness moves in lock-step. */
 export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
   judgment: {
-    // MODEL INHERIT lets a Fable-session user stay on Fable (the point of
-    // this whole spike). effort:high guarantees the reasoning budget the
-    // persona expects, regardless of which model the session pins.
-    claude: { model: "inherit", effort: "high" },
-    codex: { model: "openai.gpt-5.5", effort: "high" },
-    kiro: { model: "claude-opus-4.8" },
+    // The session's model AND effort win: `inherit` follows the session model
+    // (a Fable session keeps Fable), and the omitted effort key follows the
+    // session effort. The framework never silently downgrades judgment work.
+    claude: { model: "inherit", effort: null },
+    codex: { model: null, effort: null },
+    kiro: { model: null },
   },
   balanced: {
-    claude: { model: "sonnet", effort: "high" },
-    codex: { model: "openai.gpt-5.4", effort: "high" },
+    claude: { model: "sonnet", effort: null },
+    codex: { model: "openai.gpt-5.4", effort: null },
     kiro: { model: "claude-sonnet-4.5" },
   },
   templated: {
+    // The one deliberate downgrade: a smaller model at reduced effort for
+    // pattern-following output.
     claude: { model: "sonnet", effort: "medium" },
     codex: { model: "openai.gpt-5.4", effort: "medium" },
     kiro: { model: "claude-sonnet-4.5" },
   },
 };
 
-// Cost-cap collapse: return the tier `t` clamped to the ceiling `cap`.
-// TIERS is ordered high-to-low, so an index-max is the ceiling.
-export function capTier(t: Tier, cap: Tier | null): Tier {
-  if (!cap) return t;
-  const tI = TIERS.indexOf(t);
-  const cI = TIERS.indexOf(cap);
-  return TIERS[Math.max(tI, cI)];
+/** Kiro effort per tier - used ONLY to derive cli.json chat.modelDefaults
+ *  entries (effort rides on the model on Kiro, never on the agent). Kept out
+ *  of TierProjection so no agent-surface writer can reach it. `judgment` is
+ *  absent deliberately: it pins no Kiro model, so there is no model entry to
+ *  carry its effort - judgment agents run at the user's default model's own
+ *  default effort. */
+export const KIRO_TIER_EFFORT: Partial<Record<Tier, KiroEffort>> = {
+  balanced: "high",
+  templated: "medium",
+};
+
+export function isTier(v: string): v is Tier {
+  return (TIERS as readonly string[]).includes(v);
 }
 
-// Read the AIDLC_TIER_CAP env var; return null if unset or invalid. The
-// packager applies this cap uniformly across every harness at projection time.
+/** Clamp tier `t` to the ceiling `cap` (both-null-safe). TIERS is ordered
+ *  high to low, so the clamped tier is the one with the LARGER index. */
+export function capTier(t: Tier, cap: Tier | null | undefined): Tier {
+  if (!cap) return t;
+  return TIERS[Math.max(TIERS.indexOf(t), TIERS.indexOf(cap))];
+}
+
+/** Read the AIDLC_TIER_CAP env var. Unset/empty -> null; an unknown value is
+ *  a loud error (the packager must fail, not silently ship uncapped). */
 export function readEnvCap(env: NodeJS.ProcessEnv = process.env): Tier | null {
   const v = env.AIDLC_TIER_CAP;
   if (!v) return null;
-  if ((TIERS as readonly string[]).includes(v)) return v as Tier;
+  if (isTier(v)) return v;
   throw new Error(
-    `AIDLC_TIER_CAP=${JSON.stringify(v)} is not a valid tier; ` +
-      `use one of ${TIERS.join(", ")}`,
+    `AIDLC_TIER_CAP=${JSON.stringify(v)} is not a valid tier; use one of ${TIERS.join(", ")}`,
   );
 }
 
-// Project one tier to one harness, applying the env cap. This is the ONE seam
-// the packager calls; every harness gets an identically-derived projection.
-export function projectTier(
-  t: Tier,
-  harness: "claude" | "codex" | "kiro",
-  env: NodeJS.ProcessEnv = process.env,
-): TierProjection[keyof TierProjection] {
-  const effective = capTier(t, readEnvCap(env));
-  return TIER_PROJECTIONS[effective][harness];
+// The layered method files a tier_cap: may ride on, in precedence order
+// (later files override earlier ones - the same last-writer-wins order the
+// rule resolver applies to org -> team -> project).
+const MEMORY_CAP_FILES = ["org.md", "team.md", "project.md"] as const;
+
+/** Extract a `tier_cap:` scalar from a method file's YAML frontmatter block.
+ *  Returns null when the file has no frontmatter or no tier_cap: line; throws
+ *  on an invalid value, naming the file. */
+function tierCapFromFrontmatter(raw: string, file: string): Tier | null {
+  const cleaned = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+  const m = cleaned.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return null;
+  const kv = m[1].match(/^tier_cap:\s*(\S+)\s*$/m);
+  if (!kv) return null;
+  const v = kv[1];
+  if (isTier(v)) return v;
+  throw new Error(
+    `${file}: tier_cap: ${v} is not a valid tier; use one of ${TIERS.join(", ")}`,
+  );
 }
 
-// The authored default tier for each shipped agent slug. This is a placement
-// tool: it maps the current opus/sonnet split onto tiers so the frontmatter
-// re-authoring commit is mechanical, not judgemental.
-export const AUTHORED_TIER: Record<string, Tier> = {
-  "aidlc-architect-agent": "judgment",
-  "aidlc-architecture-reviewer-agent": "balanced",
-  "aidlc-aws-platform-agent": "judgment",
-  "aidlc-compliance-agent": "judgment",
-  "aidlc-composer-agent": "judgment",
-  "aidlc-delivery-agent": "templated",
-  "aidlc-design-agent": "judgment",
-  "aidlc-developer-agent": "judgment",
-  "aidlc-devsecops-agent": "judgment",
-  "aidlc-operations-agent": "templated",
-  "aidlc-pipeline-deploy-agent": "templated",
-  "aidlc-product-agent": "judgment",
-  "aidlc-product-lead-agent": "balanced",
-  "aidlc-quality-agent": "judgment",
-};
+/** Read the persistent tier cap from the space memory layer: org.md, team.md,
+ *  project.md under `memoryDir`, in that order, LAST writer wins (a project
+ *  may lower OR raise the org ceiling). Missing dir or files -> null. */
+export function readMemoryCap(memoryDir: string): Tier | null {
+  let cap: Tier | null = null;
+  for (const f of MEMORY_CAP_FILES) {
+    const p = join(memoryDir, f);
+    if (!existsSync(p)) continue;
+    const found = tierCapFromFrontmatter(readFileSync(p, "utf-8"), p);
+    if (found) cap = found;
+  }
+  return cap;
+}
+
+/** The effective pack-time cap: the AIDLC_TIER_CAP env var (per-invocation)
+ *  beats the space-memory `tier_cap:` key (persistent), which itself resolves
+ *  org -> team -> project, last writer wins. */
+export function resolveTierCap(
+  memoryDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Tier | null {
+  return readEnvCap(env) ?? readMemoryCap(memoryDir);
+}
+
+/** Project one tier onto one harness, applying the cap. This is the ONE seam
+ *  the packager and the codex emit call; every harness gets an identically
+ *  derived projection. Throws on an unknown tier string so a typo in agent
+ *  frontmatter fails the build loudly. */
+export function projectTier<H extends Harness>(
+  t: string,
+  harness: H,
+  cap: Tier | null = null,
+): TierProjection[H] {
+  if (!isTier(t)) {
+    throw new Error(`unknown tier ${JSON.stringify(t)}; use one of ${TIERS.join(", ")}`);
+  }
+  return TIER_PROJECTIONS[capTier(t, cap)][harness];
+}
+
+/** Derive the Kiro cli.json chat.modelDefaults entries the tier table needs:
+ *  one entry per DISTINCT pinned Kiro model, carrying the HIGHEST sharing
+ *  tier's effort (the Kiro collapse rule - when tiers share a model there is
+ *  no per-agent surface to tell them apart, so the more demanding tier's
+ *  effort wins). Tiers with no pinned Kiro model (judgment) contribute no
+ *  entry. NOTE: the orchestrator's own model entry (claude-opus-4.8 ->
+ *  xhigh) is authored in the per-harness kiro settings cli.json, outside
+ *  this table - the orchestrator agent is not a tier-carrying persona. */
+export function kiroModelDefaults(cap: Tier | null = null): Record<string, KiroEffort> {
+  const out: Record<string, KiroEffort> = {};
+  // TIERS is ordered high to low, so the first tier to claim a model wins -
+  // exactly the "higher tier's effort" collapse rule.
+  for (const tier of TIERS) {
+    const model = TIER_PROJECTIONS[capTier(tier, cap)].kiro.model;
+    const effort = KIRO_TIER_EFFORT[capTier(tier, cap)];
+    if (!model || !effort) continue;
+    if (!(model in out)) out[model] = effort;
+  }
+  return out;
+}

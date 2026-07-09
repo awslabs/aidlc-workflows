@@ -9,7 +9,6 @@ description: >
   and security pipeline integration. Supports NFR Requirements, Infrastructure Design, Build and Test, and Environment Provisioning.
 disallowedTools: Task
 model: inherit
-effort: high
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

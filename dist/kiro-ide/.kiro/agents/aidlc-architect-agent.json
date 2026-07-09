@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/aws/amazon-q-developer-cli/refs/heads/main/schemas/agent-v1.json",
   "name": "aidlc-architect-agent",
-  "description": "AI-DLC Architect Agent \u2014 delegation target for the reverse-engineering (2.1) synthesis step. Use for delegated architecture-analysis tasks.",
+  "description": "AI-DLC Architect Agent — delegation target for the reverse-engineering (2.1) synthesis step. Use for delegated architecture-analysis tasks.",
   "prompt": "file://aidlc-architect-agent.md",
   "tools": [
     "fs_read",
@@ -27,6 +27,5 @@
     "file://.kiro/knowledge/aidlc-shared/*.md",
     "file://aidlc/spaces/default/memory/**/*.md"
   ],
-  "hooks": {},
-  "model": "claude-opus-4.8"
+  "hooks": {}
 }

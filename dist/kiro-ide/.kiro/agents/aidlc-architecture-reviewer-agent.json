@@ -3,14 +3,28 @@
   "name": "aidlc-architecture-reviewer-agent",
   "description": "AI-DLC Architecture Reviewer — delegation target for reviewing design artifacts for soundness and implementability.",
   "prompt": "file://aidlc-architecture-reviewer-agent.md",
-  "tools": ["fs_read", "fs_write", "execute_bash", "thinking"],
-  "allowedTools": ["fs_read", "fs_write", "thinking"],
+  "tools": [
+    "fs_read",
+    "fs_write",
+    "execute_bash",
+    "thinking"
+  ],
+  "allowedTools": [
+    "fs_read",
+    "fs_write",
+    "thinking"
+  ],
   "toolsSettings": {
     "execute_bash": {
-      "allowedCommands": ["bun \\.kiro/tools/.*", "date -u .*"]
+      "allowedCommands": [
+        "bun \\.kiro/tools/.*",
+        "date -u .*"
+      ]
     },
     "fs_write": {
-      "allowedPaths": ["aidlc/spaces/**"]
+      "allowedPaths": [
+        "aidlc/spaces/**"
+      ]
     }
   },
   "resources": [
@@ -20,5 +34,5 @@
     "file://aidlc/spaces/default/memory/**/*.md"
   ],
   "hooks": {},
-  "model": "claude-opus-4.8"
+  "model": "claude-sonnet-4.5"
 }

@@ -8,8 +8,6 @@ description: >
   or proposes pending-stage suffix flips (in-flight). Dispatched by the
   /aidlc orchestrator; never invoked directly by a stage.
 disallowedTools: Task
-model: openai.gpt-5.5
-effort: high
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

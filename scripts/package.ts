@@ -51,11 +51,17 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import type { HarnessManifest } from "./manifest-types.ts";
 import { renderOnboarding } from "./onboarding.ts";
-import { projectTier, type Tier, TIERS } from "../core/tools/aidlc-tiers.ts";
+import { kiroModelDefaults, projectTier, resolveTierCap } from "../core/tools/aidlc-tiers.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CORE_ROOT = join(REPO_ROOT, "core");
 const HARNESS_ROOT = join(REPO_ROOT, "harness");
+
+// The pack-time tier cap, resolved ONCE for the whole build: the
+// AIDLC_TIER_CAP env var (per-invocation) beats the persistent space-memory
+// `tier_cap:` frontmatter key (core/memory org.md -> team.md -> project.md,
+// last writer wins). Applied uniformly to every harness projection below.
+const TIER_CAP = resolveTierCap(join(CORE_ROOT, "memory"));
 // The shared onboarding-doc skeleton, rendered per harness (scripts/onboarding.ts).
 const ONBOARDING_SKELETON = join(CORE_ROOT, "templates", "onboarding.md");
 const HARNESS_TOKEN = /\{\{HARNESS_DIR\}\}/g;
@@ -92,10 +98,15 @@ function applyRulesRename(s: string, harnessDir: string, rulesRename: string | n
 }
 
 // Rewrite an agent .md's frontmatter `tier: <t>` line into the harness-native
-// keys (Claude: `model:` + `effort:`; Kiro: `model:`; Codex: handled by emit.ts).
-// Called AFTER the token substitution + rules-rename pass. No-op if the file
-// carries no `tier:` line (non-agent .md, or an agent whose author declined a
-// tier - which we treat as an authoring bug the packager should surface).
+// keys (Claude: `model:` + optional `effort:`; Kiro: optional `model:`; Codex
+// .md copies mirror Claude's shape - the TOMLs emit.ts writes are the binding
+// surface there). Called AFTER the token substitution + rules-rename pass.
+// No-op if the file carries no `tier:` line (non-agent .md, or an agent whose
+// author declined a tier - treated as an authoring bug the packager should
+// surface). A null projected model/effort means the harness-native key is
+// OMITTED: the harness's own session/config default applies (the inherit
+// contract for judgment/balanced agents). When every key is omitted the
+// `tier:` line is dropped without a replacement.
 function projectTierFrontmatter(
   s: string,
   srcPath: string,
@@ -109,20 +120,58 @@ function projectTierFrontmatter(
   const fm = m[1];
   const tierMatch = fm.match(/^tier:\s*(\S+)\s*$/m);
   if (!tierMatch) return s;
-  const tier = tierMatch[1];
-  if (!(TIERS as readonly string[]).includes(tier)) {
-    throw new Error(
-      `${srcPath}: tier: ${tier} is not a valid tier (expected one of ${TIERS.join(", ")}).`,
-    );
-  }
-  const proj = projectTier(tier as Tier, harness);
-  // Kiro's per-agent JSON owns the model dial; Kiro's .md frontmatter is
-  // decorative on that harness. Still write the model line so a reader can
-  // see the tier's shape.
-  let replaced = `model: ${proj.model}`;
-  if ("effort" in proj) replaced += `\neffort: ${proj.effort}`;
-  const newFm = fm.replace(/^tier:\s*\S+\s*$/m, replaced);
+  const proj = projectTier(tierMatch[1], harness, TIER_CAP); // throws on unknown tier
+  const lines: string[] = [];
+  if (proj.model !== null) lines.push(`model: ${proj.model}`);
+  if ("effort" in proj && proj.effort !== null) lines.push(`effort: ${proj.effort}`);
+  const newFm =
+    lines.length > 0
+      ? fm.replace(/^tier:\s*\S+\s*$/m, lines.join("\n"))
+      : fm.replace(/\r?\ntier:\s*\S+\s*$/m, "").replace(/^tier:\s*\S+\s*\r?\n/m, "");
   return s.replace(m[0], `---\n${newFm}\n---\n`);
+}
+
+// Rewrite the `"model"` field of an authored Kiro agent .json from the tier
+// table. The JSONs stay hand-written (tools, resources, sandbox settings) but
+// their model value is projection-owned: the tier comes from the same-name
+// core/agents/<slug>.md (single source of truth). A null projected model
+// DELETES the field - the agent-v1 schema documents the fallback ("If not
+// specified, uses the default model"), which is exactly the judgment-tier
+// inherit contract. Files with no core .md counterpart (the aidlc.json
+// orchestrator config) pass through untouched: the orchestrator is not a
+// tier-carrying persona. Never writes any effort-like key - kiro-cli
+// fail-closes on unknown agent-JSON fields.
+function projectKiroAgentJson(srcPath: string, content: Buffer): Buffer {
+  const name = srcPath.split(sep).join("/").split("/").pop() ?? "";
+  if (!name.endsWith("-agent.json")) return content;
+  const coreMd = join(CORE_ROOT, "agents", name.replace(/\.json$/, ".md"));
+  if (!existsSync(coreMd)) return content;
+  const tierMatch = readFileSync(coreMd, "utf-8").match(/^tier:\s*(\S+)\s*$/m);
+  if (!tierMatch) {
+    throw new Error(`${coreMd}: no tier: line, but ${name} expects a projected model.`);
+  }
+  const proj = projectTier(tierMatch[1], "kiro", TIER_CAP);
+  const parsed = JSON.parse(content.toString("utf-8")) as Record<string, unknown>;
+  if (proj.model === null) delete parsed.model;
+  else parsed.model = proj.model;
+  // Match the authored files' formatting (2-space indent, trailing newline).
+  return Buffer.from(`${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
+}
+
+// Merge the tier-derived chat.modelDefaults entries into an authored Kiro
+// settings/cli.json: one entry per distinct pinned Kiro model, carrying the
+// highest sharing tier's effort (the collapse rule - kiroModelDefaults()).
+// Authored entries (the orchestrator's opus-4.8 -> xhigh) are preserved and
+// win on collision, so a hand-tuned override in harness/kiro*/settings/
+// cli.json survives regeneration. CLI-only: the Kiro IDE ignores cli.json.
+function projectKiroCliJson(content: Buffer): Buffer {
+  const parsed = JSON.parse(content.toString("utf-8")) as Record<string, unknown>;
+  const defaults = (parsed["chat.modelDefaults"] ?? {}) as Record<string, unknown>;
+  for (const [model, effort] of Object.entries(kiroModelDefaults(TIER_CAP))) {
+    if (!(model in defaults)) defaults[model] = { output_config: { effort } };
+  }
+  parsed["chat.modelDefaults"] = defaults;
+  return Buffer.from(`${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
 }
 
 function transform(
@@ -420,14 +469,25 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
 
   // 2. Copy authored harness surfaces (token substitution on .md). projectRoot
   //    files land beside the harness dir (e.g. dist/kiro/AGENTS.md), the rest
-  //    inside <harnessDir>/.
+  //    inside <harnessDir>/. On the kiro harnesses two authored JSON surfaces
+  //    are additionally tier-projected: the agent .json "model" fields and the
+  //    settings/cli.json chat.modelDefaults entries (effort rides on the model
+  //    on Kiro - see aidlc-tiers.ts).
   const harnessSrcRoot = join(HARNESS_ROOT, m.name);
   for (const { src, dst, projectRoot } of m.harnessFiles) {
     const srcPath = join(harnessSrcRoot, src);
     if (!existsSync(srcPath)) continue;
     const outPath = projectRoot ? join(outRoot, dst) : join(treeRoot, dst);
     mkdirSync(dirname(outPath), { recursive: true });
-    writeFileSync(outPath, transform(srcPath, readFileSync(srcPath), harnessDir, m.rulesRename, harnessKind));
+    let out = transform(srcPath, readFileSync(srcPath), harnessDir, m.rulesRename, harnessKind);
+    if (harnessKind === "kiro") {
+      if (src.startsWith("agents/") && src.endsWith(".json")) {
+        out = projectKiroAgentJson(srcPath, out);
+      } else if (src === "settings/cli.json") {
+        out = projectKiroCliJson(out);
+      }
+    }
+    writeFileSync(outPath, out);
   }
 
   // 2b. Render the onboarding doc from the shared skeleton (scripts/onboarding.ts),

@@ -9,7 +9,6 @@ description: >
   Leads Intent Capture, Market Research, Scope Definition, Requirements Analysis, and User Stories stages.
 disallowedTools: Task
 model: inherit
-effort: high
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

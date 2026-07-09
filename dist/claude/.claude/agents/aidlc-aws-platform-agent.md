@@ -10,7 +10,6 @@ description: >
   Supports Feasibility, Application Design, NFR Design, and Feedback & Optimization.
 disallowedTools: Task
 model: inherit
-effort: high
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

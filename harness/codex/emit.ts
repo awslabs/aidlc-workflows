@@ -21,7 +21,14 @@ import { dirname, join, relative } from "node:path";
 import type { EmitContext, EmitResult } from "../../scripts/manifest-types.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import onboardingFills from "./onboarding.fills.ts";
-import { projectTier, type Tier, TIERS } from "../../core/tools/aidlc-tiers.ts";
+import { projectTier, resolveTierCap } from "../../core/tools/aidlc-tiers.ts";
+
+// The pack-time tier cap - same resolution as the packager's (env var beats
+// the space-memory tier_cap: key), resolved against the authored core memory
+// layer so both writers agree on the effective cap.
+const TIER_CAP = resolveTierCap(
+  join(dirname(new URL(import.meta.url).pathname), "..", "..", "core", "memory"),
+);
 
 // ---------------------------------------------------------------------------
 // Hook wiring (kiro-normative shape: register ONLY events with a real core-hook
@@ -202,11 +209,14 @@ function emitTrustSeed(): string {
   );
 }
 
-// --- Agent transposition: 13 persona .md → .codex/agents/*.toml -------------
-// The D7 model map is now DERIVED from the tier projection module. Codex reads
+// --- Agent transposition: persona .md → .codex/agents/*.toml ----------------
+// The old D7 model map is DERIVED from the tier projection module. Codex reads
 // `tier:` from the core agent .md (authoritative source of truth) and looks up
-// {model, effort} via projectTier. Codex additionally writes
-// model_reasoning_effort per-agent (the config.toml default is a session floor).
+// {model, effort} via projectTier. A null projected value means the TOML key
+// is OMITTED: the spawned role then falls back to the shipped config.toml
+// session defaults (live-verified on codex-cli 0.142.5 - a role TOML without
+// `model` spawns on the config.toml model + effort). judgment omits both keys;
+// balanced pins a model but inherits effort; templated pins both.
 
 function parseAgentMd(raw: string): { fm: Record<string, string>; body: string } {
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
@@ -272,22 +282,19 @@ export default function emit(ctx: EmitContext): EmitResult {
     const description = (fm.description ?? "").replace(/\s+/g, " ").trim();
     // The authored source of truth is `tier:` on the core .md; the packager's
     // frontmatter transform doesn't run against emit.ts (Codex reads directly
-    // from core), so project tier -> {model, effort} here.
-    const tier = fm.tier ?? "judgment";
-    if (!(TIERS as readonly string[]).includes(tier)) {
-      throw new Error(
-        `${mdPath}: tier: ${tier} is not a valid tier (expected one of ${TIERS.join(", ")}).`,
-      );
-    }
-    const proj = projectTier(tier as Tier, "codex");
-    const model = proj.model;
-    const effort = "effort" in proj && proj.effort ? proj.effort : "high";
+    // from core), so project tier -> {model, effort} here. An agent .md
+    // without a tier: line is an authoring bug - fail the build loudly.
+    const tier = fm.tier;
+    if (!tier) throw new Error(`${mdPath}: agent frontmatter has no tier: line.`);
+    const proj = projectTier(tier, "codex", TIER_CAP); // throws on unknown tier
     const instructions = rewriteProse(body);
+    const modelLines =
+      (proj.model !== null ? `model = "${proj.model}"\n` : "") +
+      (proj.effort !== null ? `model_reasoning_effort = "${proj.effort}"\n` : "");
     return (
       `name = "${name}"\n` +
       `description = "${description.replace(/"/g, '\\"')}"\n` +
-      `model = "${model}"\n` +
-      `model_reasoning_effort = "${effort}"\n` +
+      modelLines +
       `developer_instructions = ${tomlMultiline(instructions.trim())}\n`
     );
   }

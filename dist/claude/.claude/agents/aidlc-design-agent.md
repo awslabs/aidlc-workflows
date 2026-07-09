@@ -9,7 +9,6 @@ description: >
   Leads Rough Mockups and Refined Mockups stages. Supports User Stories and Application Design.
 disallowedTools: Task
 model: inherit
-effort: high
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**
