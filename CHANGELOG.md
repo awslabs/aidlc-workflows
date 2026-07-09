@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.3] - 2026-07-10
+
+`scope-change` now refuses to run under autonomous Construction, closing the gap its sibling `recompose` closed in 2.2.8: both verbs re-shape the live plan's EXECUTE/SKIP stage inclusion, and an unattended autonomous run has no human at the gate to approve the new shape. Previously the "never re-shape the plan under autonomy" rule was engine-enforced for `recompose` but prose-only for `scope-change`. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `scope-change` (and `/aidlc --scope <name>` on a running workflow) exits non-zero with a clear error when `Construction Autonomy Mode` is `autonomous`, naming the remediation (`aidlc-bolt set-autonomy --mode gated`, or let the swarm finish). Gated and unset modes proceed exactly as before; starting a fresh workflow with `--scope` is unaffected.
 ## [2.3.2] - 2026-07-10
 
 `/aidlc --doctor` now surfaces recorded hook drops. Hooks fail open by design - an audit-emission failure or a swallowed error must never break your tool call - and each such swallow is recorded to `aidlc/.../.aidlc-hooks-health/<hook>.drops`, written specifically for doctor to surface. Doctor never read those files, so the silent-failure telemetry was invisible. It now reports them as an advisory row. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

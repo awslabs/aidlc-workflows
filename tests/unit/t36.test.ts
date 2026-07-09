@@ -85,7 +85,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -300,5 +300,45 @@ describe("t36 aidlc-utility scope-change — CLI contract (migrated from t36-uti
     expect(auditField(readAllAuditShards(p), "SCOPE_CHANGED", "Old Scope")).toBe("feature");
     // STRONGER addition: the .sh comment says the row records BOTH From and To.
     expect(auditField(readAllAuditShards(p), "SCOPE_CHANGED", "New Scope")).toBe("mvp");
+  });
+
+  // --- Autonomy guard (the recompose guard's twin) ---
+  test("8: autonomous Construction rejected - scope-change refuses with the remediation named", () => {
+    // scope-change flips stage EXECUTE/SKIP suffixes exactly like recompose;
+    // under an unattended autonomous run there is no human at the gate, so the
+    // verb must refuse (t194 pins the recompose side of the same rule). The
+    // fixture has no Construction Autonomy Mode field, so inject it as
+    // set-autonomy would.
+    const p = proj();
+    const sp = statePath(p);
+    const withAutonomy = readFileSync(sp, "utf-8").replace(
+      /- \*\*Status\*\*: Running/,
+      "- **Status**: Running\n- **Construction Autonomy Mode**: autonomous",
+    );
+    expect(withAutonomy).toContain("- **Construction Autonomy Mode**: autonomous");
+    writeFileSync(sp, withAutonomy, "utf-8");
+    const r = scopeChange(["--scope", "mvp"], p);
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain("Construction Autonomy Mode is autonomous");
+    expect(r.out).toContain("set-autonomy --mode gated");
+    // The refusal mutates nothing: state byte-identical, no SCOPE_CHANGED row.
+    expect(readFileSync(sp, "utf-8")).toBe(withAutonomy);
+    expect(scopeChangedCount(readAllAuditShards(p))).toBe(0);
+  });
+
+  test("8b: gated Construction proceeds - scope-change flips as today when autonomy is not autonomous", () => {
+    const p = proj();
+    const sp = statePath(p);
+    writeFileSync(
+      sp,
+      readFileSync(sp, "utf-8").replace(
+        /- \*\*Status\*\*: Running/,
+        "- **Status**: Running\n- **Construction Autonomy Mode**: gated",
+      ),
+      "utf-8",
+    );
+    const r = scopeChange(["--scope", "mvp"], p);
+    expect(r.status).toBe(0);
+    expect(stateField(sp, "Scope")).toBe("mvp");
   });
 });

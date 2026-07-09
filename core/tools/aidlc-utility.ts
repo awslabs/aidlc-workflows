@@ -44,6 +44,7 @@ import {
   getField,
   holdsAuditLock,
   hooksHealthDir,
+  isAutonomousMode,
   isoTimestamp,
   isPackageJson,
   codekbRepoName,
@@ -3275,6 +3276,24 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   if (!newScopeDef) die(`Unknown scope: ${newScope}. Valid scopes: ${Object.keys(scopeMapping).join(", ")}`);
 
   let content = readStateFile(projectDir, flags.intent, flags.space);
+  // AUTONOMY GUARD (the recompose guard's twin, same rationale): scope-change
+  // flips stage EXECUTE/SKIP suffixes exactly like recompose does, so an
+  // unattended autonomous Construction run must not have its plan re-shaped
+  // through this verb either - there is no human at the gate to approve the
+  // new shape. Guard placed before the same-scope early exit (fail-fast, the
+  // recompose posture): under autonomy even a no-op call is refused, so the
+  // conductor learns the rule on first contact rather than on the first
+  // differing scope. Uses the exported isAutonomousMode predicate per its
+  // contract (new gate sites use the helper; only pre-existing open-coded
+  // sites are grandfathered), so this site cannot drift from the others.
+  if (isAutonomousMode(content)) {
+    die(
+      "Cannot change scope: Construction Autonomy Mode is autonomous. Re-shaping the " +
+        "plan needs a human at the gate, and an unattended run has none. Switch to " +
+        "gated Construction first (aidlc-bolt set-autonomy --mode gated) or let the " +
+        "swarm finish, then change scope.",
+    );
+  }
   const oldScope = getField(content, "Scope");
   if (!oldScope) die("Cannot read current Scope from state file.");
 
