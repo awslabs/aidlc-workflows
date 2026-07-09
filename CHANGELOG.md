@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.4] - 2026-07-10
+
+The per-unit reviewer read-scope bound is now enforced deterministically, not just by prose. A new PreToolUse hook (`aidlc-reviewer-scope.ts`, the framework's 12th hook and second flow-altering one) refuses a dispatched reviewer's tool calls that reach into sibling units' `construction/` paths - file reads, writes, and grep/glob/shell patterns that span siblings - while a review is in flight, redirecting the reviewer to the contract paths it was passed. The conductor grants the enforcement window by writing `<record>/.aidlc-reviewer-dispatch.json` before invoking a per-unit reviewer (stage-protocol §12a step 1) and deleting it when the verdict is read (step 3); the record's `exempt` list is where the named-integration-point spot-check carve-out is granted. Hard-block on Claude Code, Kiro CLI, and Codex CLI; Kiro IDE registration is best-effort. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; Codex users also re-run the hook-trust pre-seed (`bun scripts/package.ts codex trust --project <abs-dir>`) - the new PreToolUse registration needs one new trust entry.
+
+* New hook `aidlc-reviewer-scope.ts` (PreToolUse): blocks with exit 2 + a self-explaining stderr reason; every refusal emits a `REVIEWER_SCOPE_BLOCKED` audit event (Tool, Target, Stage, Unit) so runs show when the bound bit.
+* Stage-protocol §12a: per-unit reviewer dispatches now write the dispatch record before step 1 and delete it at step 3; the four harness orchestrator skills carry the same instruction in their reviewer bullets.
+* Set `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` to disable enforcement (the escape hatch for false positives, e.g. a source tree with its own `construction/` directory); a stale dispatch record (older than 6h, a crashed review) is ignored and cleaned up automatically.
+* Registration per harness: Claude Code `settings.json` gains its first `PreToolUse` entry; Kiro CLI wires the adapter's `reviewer-scope` target inside the two reviewer agents' JSON configs; Kiro IDE ships `aidlc-reviewer-scope.kiro.hook`; Codex `hooks.json` gains a `PreToolUse` row (hence the new trust entry).
+* A reviewer-agent tool call touching `construction/` paths with no dispatch record is never blocked; it records an advisory drop surfaced by `/aidlc --doctor` (the conductor skipped the step-1 write).
 ## [2.3.3] - 2026-07-10
 
 `scope-change` now refuses to run under autonomous Construction, closing the gap its sibling `recompose` closed in 2.2.8: both verbs re-shape the live plan's EXECUTE/SKIP stage inclusion, and an unattended autonomous run has no human at the gate to approve the new shape. Previously the "never re-shape the plan under autonomy" rule was engine-enforced for `recompose` but prose-only for `scope-change`. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

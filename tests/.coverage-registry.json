@@ -20,13 +20,13 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 431,
+    "total": 435,
     "enumeratedByClass": {
-      "function": 215,
-      "audit": 70,
+      "function": 217,
+      "audit": 71,
       "scope": 9,
       "stage": 32,
-      "hook": 11,
+      "hook": 12,
       "subcommand": 87,
       "render-surface": 7
     },
@@ -35,7 +35,7 @@
       "audit": 30,
       "scope": 9,
       "stage": 8,
-      "hook": 10,
+      "hook": 11,
       "subcommand": 74,
       "render-surface": 7
     }
@@ -327,6 +327,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "REVIEWER_SCOPE_BLOCKED",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "audit",
@@ -2398,6 +2405,20 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:REVIEWER_DISPATCH_TTL_MS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:reviewerDispatchPath",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:rulesSubdir",
       "minMechanism": "none",
       "coveredBy": [
@@ -2934,6 +2955,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-reviewer-scope",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t220-reviewer-scope-hook.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "hook",

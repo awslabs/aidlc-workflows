@@ -253,17 +253,17 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
   // TAP-plan parity guard: the .sh declared `plan 63` and made 63
   // assert_file_exists calls. The roster later grew by two reviewer agent
   // personas (product-lead, architecture-reviewer) to 65, then by the
-  // human-turn mint hook to 66, then by the composer persona to 67. Re-derive
-  // the full path list from the same data the loops drove and pin its length,
-  // so the migrated suite cannot silently shrink the structural surface the
-  // .sh enforced.
-  test("asserts EXACTLY 67 shipped paths (TAP plan 63 + 2 reviewer agents + 1 presence hook + the composer) [.sh L9]", () => {
+  // human-turn mint hook to 66, then by the composer persona to 67, then by
+  // the reviewer-scope hook to 68. Re-derive the full path list from the same
+  // data the loops drove and pin its length, so the migrated suite cannot
+  // silently shrink the structural surface the .sh enforced.
+  test("asserts EXACTLY 68 shipped paths (TAP plan 63 + 2 reviewer agents + 2 hooks + the composer) [.sh L9]", () => {
     const paths: string[] = [
       at("skills", "aidlc", "SKILL.md"), // 1
       at("aidlc-common", "protocols", "stage-protocol.md"), // 2
       at("aidlc-common", "protocols", "stage-protocol-recovery.md"), // 3
       at("aidlc-common", "protocols", "stage-protocol-governance.md"), // 4
-      ...HOOKS.map((h) => at("hooks", h)), // 5-15 (11)
+      ...HOOKS.map((h) => at("hooks", h)), // 5-16 (12)
       ...AGENTS.map((a) => at("agents", `aidlc-${a}-agent.md`)), // 16-29 (14)
       ...Object.entries(STAGES).flatMap(([phase, stages]) =>
         stages.map((s) => at("aidlc-common", "stages", phase, `${s}.md`)),
@@ -275,7 +275,7 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
       mem("project.md"), // 66
       at("CLAUDE.md"), // 67
     ];
-    expect(paths.length).toBe(67);
+    expect(paths.length).toBe(68);
     // Every one of the 67 must exist — the .sh's full TAP plan, re-proven as a
     // single set so the count and the existence checks cannot drift apart.
     for (const p of paths) {
