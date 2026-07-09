@@ -3275,6 +3275,7 @@ export function parseStageFrontmatter(
   for (const key of topLevelKeys) {
     if (key === CONSUMES_KEY) continue;
     if (key === WHEN_KEY) continue;
+    if (key === "produces_kinds") continue; // parsed below; the scalar loop would stamp it ""
     if (ARRAY_KEYS.has(key)) continue;
     // optional_produces and required_sections are presence-gated array fields
     // parsed below; skip them here so the scalar loop does not stamp them with
@@ -3308,6 +3309,14 @@ export function parseStageFrontmatter(
   // `produces:` block and vice versa.
   if (topLevelKeys.has("optional_produces")) {
     obj.optional_produces = listField(fm, "optional_produces");
+  }
+
+  // produces_kinds is presence-gated: only assigned when the top-level key
+  // exists, so an unannotated stage compiles with the property ABSENT (not an
+  // empty object), preserving byte-identical emit for every stage that does
+  // not use the map.
+  if (topLevelKeys.has("produces_kinds")) {
+    obj.produces_kinds = mapOfListsField(fm, "produces_kinds");
   }
 
   // required_sections is an OPTIONAL array field (plugin contribution mechanism

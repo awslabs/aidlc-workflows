@@ -149,7 +149,7 @@ const REQUIRED_FIELDS = [
   "outputs",
 ] as const;
 
-const OPTIONAL_FIELDS = ["number", "name", "bundle", "for_each", "workspace_requires", "optional_produces", "sensors", "scopes", "reviewer", "reviewer_max_iterations", "when", "required_sections"] as const;
+const OPTIONAL_FIELDS = ["number", "name", "bundle", "for_each", "workspace_requires", "optional_produces", "produces_kinds", "sensors", "scopes", "reviewer", "reviewer_max_iterations", "when", "required_sections"] as const;
 
 const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 
