@@ -108,7 +108,7 @@ Key facts behind the table:
 A project can cap every projection at pack time, without editing any agent file:
 
 - **Persistent knob:** a `tier_cap:` key in the YAML frontmatter of the space memory layer files (`core/memory/org.md` -> `team.md` -> `project.md`, last writer wins -- a project may lower OR raise the org ceiling). Example: `tier_cap: balanced` collapses `judgment` to `balanced` in every harness's projection.
-- **Per-invocation override:** the `AIDLC_TIER_CAP` env var beats the memory layers for one packager run (`AIDLC_TIER_CAP=templated bun scripts/package.ts`).
+- **Per-invocation override:** the `AIDLC_TIER_CAP` env var beats the memory layers for one packager run (`AIDLC_TIER_CAP=templated bun scripts/package.ts`). To build UNCAPPED once while a memory cap is in force, set it to the top tier -- `AIDLC_TIER_CAP=judgment` -- which beats the memory layer and clamps nothing (an empty value means unset, not uncapped).
 
 The two knobs differ in scope: the memory cap travels with the repo, so it applies in BOTH write and `--check` modes (a project that commits a capped dist stays self-consistent). The env var is a one-shot WRITE knob and is IGNORED under `--check` - the drift guard compares what the committed dist was legitimately built from, and a stray `AIDLC_TIER_CAP` in a CI or test runner's environment must neither fail nor mask drift (the packager prints a notice when it ignores one). The packager also prints the active cap and its source on every capped run.
 

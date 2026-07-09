@@ -215,6 +215,8 @@ function emitTrustSeed(): string {
 // balanced pins a model but inherits effort; templated pins both.
 
 function parseAgentMd(raw: string): { fm: Record<string, string>; body: string } {
+  // BOM tolerance, matching the packager's agent reader and the rule parser.
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
   if (!m) return { fm: {}, body: raw };
   const fm: Record<string, string> = {};

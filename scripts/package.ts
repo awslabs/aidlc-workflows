@@ -72,9 +72,13 @@ const HARNESS_ROOT = join(REPO_ROOT, "harness");
 // mask) drift. The memory cap travels with the repo, so it applies in both
 // modes and keeps write and check consistent for a project that commits a
 // capped dist. The diagnostic below names the active cap and mode.
+// The `codex trust` subcommand performs NO projection (it prints trust
+// entries for the installer), so it skips cap resolution entirely - a
+// malformed cap must not break an installer command that never uses it.
 const IS_CHECK_MODE = process.argv.includes("--check");
-const ENV_CAP = IS_CHECK_MODE ? null : readEnvCap();
-const MEMORY_CAP = readMemoryCap(join(CORE_ROOT, "memory"));
+const IS_TRUST_MODE = process.argv[2] === "codex" && process.argv[3] === "trust";
+const ENV_CAP = IS_CHECK_MODE || IS_TRUST_MODE ? null : readEnvCap();
+const MEMORY_CAP = IS_TRUST_MODE ? null : readMemoryCap(join(CORE_ROOT, "memory"));
 const TIER_CAP = ENV_CAP ?? MEMORY_CAP;
 if (TIER_CAP) {
   // stderr, not stdout: the `codex trust` subcommand's stdout is pasted
@@ -130,6 +134,10 @@ function applyRulesRename(s: string, harnessDir: string, rulesRename: string | n
 // shipped agent must carry a tier, and a silent pass-through would ship an
 // unprojected agent (no model/effort keys at all) without failing the build.
 function agentTierFromMd(s: string, srcPath: string): string {
+  // Strip a UTF-8 BOM before anchoring - macOS/Windows editors occasionally
+  // save .md with one, and the ^--- anchor would otherwise miss (same
+  // tolerance as the rule-frontmatter parser).
+  if (s.charCodeAt(0) === 0xfeff) s = s.slice(1);
   const m = s.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) throw new Error(`${srcPath}: agent .md has no YAML frontmatter block.`);
   const tierMatch = m[1].match(/^tier:\s*(\S+)\s*$/m);
