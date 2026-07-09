@@ -20,6 +20,7 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "claude",
   harnessDir: ".claude",
+  tierFlavor: "claude",
 
   // core/<src> → <harnessDir>/<dst>. Claude keeps every core dir name as-is.
   // The method ("memory") is NO LONGER a core dir projected into the harness

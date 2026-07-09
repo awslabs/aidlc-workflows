@@ -192,7 +192,10 @@ function projectKiroAgentJson(srcPath: string, content: Buffer): Buffer {
   const parsed = JSON.parse(content.toString("utf-8")) as Record<string, unknown>;
   if (proj.model === null) delete parsed.model;
   else parsed.model = proj.model;
-  // Match the authored files' formatting (2-space indent, trailing newline).
+  // Canonical re-serialization (2-space indent, trailing newline). Key order
+  // is preserved, but authored inline arrays re-expand one-per-line and
+  // authored unicode escapes re-emit as raw UTF-8 - the dist form is the
+  // stringify form, byte-stable under --check, not the authored bytes.
   return Buffer.from(`${JSON.stringify(parsed, null, 2)}\n`, "utf-8");
 }
 
@@ -458,10 +461,10 @@ function seedCompiledData(treeRoot: string, seedFrom: string): void {
 function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): string[] {
   const harnessDir = m.harnessDir;
   const treeRoot = join(outRoot, harnessDir);
-  // Every harness projects onto ONE of the three flavors the tier module knows
-  // (Kiro CLI and Kiro IDE share the "kiro" flavor - identical model dial).
-  const harnessKind: "claude" | "codex" | "kiro" =
-    m.name === "codex" ? "codex" : m.name.startsWith("kiro") ? "kiro" : "claude";
+  // Every harness projects onto ONE of the three flavors the tier module
+  // knows (Kiro CLI and Kiro IDE share the "kiro" flavor - identical model
+  // dial). Declared per manifest, never inferred from the harness name.
+  const harnessKind = m.tierFlavor;
   // Out-of-harness paths the build produced (memory tree + any emit output),
   // returned for checkHarness's byte-diff of files OUTSIDE <harnessDir>.
   const outsideHarness: string[] = [];
@@ -612,6 +615,7 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
         distRoot: outRoot,
         harnessDir,
         substituteToken: (s: string) => substituteToken(s, harnessDir),
+        tierCap: TIER_CAP,
         check: false,
       }).written,
     );

@@ -18,18 +18,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { EmitContext, EmitResult } from "../../scripts/manifest-types.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import onboardingFills from "./onboarding.fills.ts";
-import { projectTier, resolveTierCap } from "../../core/tools/aidlc-tiers.ts";
-
-// The pack-time tier cap - same resolution as the packager's (env var beats
-// the space-memory tier_cap: key), resolved against the authored core memory
-// layer so both writers agree on the effective cap.
-const TIER_CAP = resolveTierCap(
-  join(dirname(fileURLToPath(import.meta.url)), "..", "..", "core", "memory"),
-);
+import { projectTier } from "../../core/tools/aidlc-tiers.ts";
 
 // ---------------------------------------------------------------------------
 // Hook wiring (kiro-normative shape: register ONLY events with a real core-hook
@@ -247,7 +239,10 @@ function tomlMultiline(s: string): string {
 // {path, content} list, then writes (or, under check, returns the diff).
 // ---------------------------------------------------------------------------
 export default function emit(ctx: EmitContext): EmitResult {
-  const { coreRoot, harnessRoot, distRoot, substituteToken } = ctx;
+  // tierCap is the packager's resolved pack-time cap, passed through so the
+  // emit-owned TOML projections use the SAME cap as every declarative
+  // projection - never re-resolved here.
+  const { coreRoot, harnessRoot, distRoot, substituteToken, tierCap } = ctx;
   const DCODEX = join(distRoot, ".codex"); // dist/codex/.codex
   const SKILLS_DST = join(distRoot, ".agents", "skills");
 
@@ -289,7 +284,7 @@ export default function emit(ctx: EmitContext): EmitResult {
     // without a tier: line is an authoring bug - fail the build loudly.
     const tier = fm.tier;
     if (!tier) throw new Error(`${mdPath}: agent frontmatter has no tier: line.`);
-    const proj = projectTier(tier, "codex", TIER_CAP); // throws on unknown tier
+    const proj = projectTier(tier, "codex", tierCap); // throws on unknown tier
     const instructions = rewriteProse(body);
     const modelLines =
       (proj.model !== null ? `model = "${proj.model}"\n` : "") +

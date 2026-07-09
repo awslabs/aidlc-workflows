@@ -20,6 +20,7 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "kiro-ide",
   harnessDir: ".kiro",
+  tierFlavor: "kiro",
 
   // Same core projection as kiro CLI.
   coreDirs: [

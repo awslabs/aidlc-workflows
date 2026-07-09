@@ -23,6 +23,7 @@ import onboardingFills from "./onboarding.fills.ts";
 const manifest: HarnessManifest = {
   name: "kiro",
   harnessDir: ".kiro",
+  tierFlavor: "kiro",
 
   // Same core projection as claude, EXCEPT: rules→steering, and the
   // orchestrator skill (skills/aidlc/) is authored, not core.

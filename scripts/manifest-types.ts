@@ -37,6 +37,13 @@ export type EmitContext = {
   harnessDir: string;
   /** Substitute {{HARNESS_DIR}} → this harness's dir in a prose string. */
   substituteToken: (s: string) => string;
+  /**
+   * The pack-time tier cap the packager resolved (AIDLC_TIER_CAP env var
+   * over the core/memory tier_cap: layers), passed through so emit-owned
+   * projections use the SAME cap as every declarative projection - the emit
+   * plugin must not re-resolve it.
+   */
+  tierCap: "judgment" | "balanced" | "templated" | null;
   /** True for a --check run (verify only, write nothing). */
   check: boolean;
 };
@@ -72,6 +79,13 @@ export type HarnessManifest = {
   name: string;
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex"). */
   harnessDir: string;
+  /**
+   * Which tier-projection flavor this harness's agent surfaces use
+   * (core/tools/aidlc-tiers.ts TIER_PROJECTIONS column). Declared here so a
+   * new harness picks its projection shape in its manifest - the packager
+   * never infers it from the harness name.
+   */
+  tierFlavor: "claude" | "codex" | "kiro";
   /** core/<src> → <harnessDir>/<dst> projections. */
   coreDirs: DirMap[];
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */
