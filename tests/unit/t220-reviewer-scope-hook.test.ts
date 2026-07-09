@@ -171,6 +171,12 @@ describe("t220 (a) evaluateReviewerScope decision table", () => {
       input: { pattern: "construction/U01-infra", path: "construction/U03-scoring" },
       block: false,
     },
+    {
+      name: "Grep with the bare construction dir as its search root blocked (sweep root)",
+      tool: "Grep",
+      input: { pattern: "endpoint", path: "construction" },
+      block: true,
+    },
     // -- traversal + bare-root shapes (adversarial-review findings) -------------
     {
       name: "dot-dot traversal out of the current unit blocked (path tool)",

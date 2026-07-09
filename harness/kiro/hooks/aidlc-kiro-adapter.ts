@@ -298,6 +298,12 @@ if (target === "reviewer-scope") {
   } else if (tool === "write" || tool === "fs_write") {
     coreTool = "Write";
     coreInput.file_path = (ti.path as string) ?? (ti.file_path as string) ?? "";
+    // Batch shape: mirror the read side - if the payload carries an
+    // operations[] collection, every per-operation path is inspected too
+    // (a batched write across siblings must not bypass on the top-level
+    // path being absent).
+    const wops = (ti.operations as Array<{ path?: string }>) ?? [];
+    coreInput.paths = wops.map((o) => o.path ?? "").filter((p) => p.length > 0);
   } else {
     process.exit(0);
   }

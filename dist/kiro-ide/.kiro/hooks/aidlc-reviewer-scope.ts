@@ -42,8 +42,9 @@
 
 import { existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { appendAuditEntry } from "../tools/aidlc-audit.ts";
+import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
+  acquireAuditLock,
   auditFilePath,
   type ClaudeCodeHookInput,
   errorMessage,
@@ -51,6 +52,7 @@ import {
   isClaudeCodeHookInput,
   isoTimestamp,
   recordHookDrop,
+  releaseAuditLock,
   resolveProjectDirFromHook,
   REVIEWER_DISPATCH_TTL_MS,
   reviewerDispatchPath,
@@ -322,7 +324,10 @@ if (import.meta.main) {
     // construction/ paths with no dispatch record suggests the conductor
     // skipped the 12a step-1 write - surfaced via the doctor's drop counters,
     // never a block (the record is the only source of unit + exempt, so there
-    // is nothing sound to enforce without it).
+    // is nothing sound to enforce without it). RATE-BOUNDED: a chatty reviewer
+    // under a conductor that never writes the record would otherwise append
+    // one drop line per tool call; a marker file in the health dir dedupes the
+    // advisory to one line per 10 minutes.
     try {
       const agent = parsed.agent_type ?? "";
       if (REVIEW_AGENT_RE.test(agent)) {
@@ -330,11 +335,16 @@ if (import.meta.main) {
           toPosix(c.text).includes("construction/"),
         );
         if (touchesConstruction) {
-          recordHookDrop(
-            projectDir,
-            HOOK_NAME,
-            `${agent} touched construction/ paths with no reviewer dispatch record; enforcement skipped (write the 12a step-1 dispatch record before invoking a per-unit reviewer)`,
-          );
+          const marker = join(hooksHealthDir(projectDir), `${HOOK_NAME}.missing-record.last`);
+          const fresh = existsSync(marker) && Date.now() - statSync(marker).mtimeMs < 10 * 60 * 1000;
+          if (!fresh) {
+            writeFileSync(marker, isoTimestamp(), "utf-8");
+            recordHookDrop(
+              projectDir,
+              HOOK_NAME,
+              `${agent} touched construction/ paths with no reviewer dispatch record; enforcement skipped (write the 12a step-1 dispatch record before invoking a per-unit reviewer)`,
+            );
+          }
         }
       }
     } catch {
@@ -396,19 +406,31 @@ if (import.meta.main) {
   if (!verdict.block) process.exit(0);
 
   // Audit the refusal so the run's record shows when the bound bit.
-  // Best-effort: an audit failure never changes the block decision.
+  // Best-effort: an audit failure never changes the block decision. The lock
+  // acquisition is TIME-BOUNDED well below the standard 5s budget (5 x 50ms):
+  // the block decision is already made, and a lock-starved Bolt fan-out must
+  // not stretch a fast refuse into a laggy one - a dropped advisory row is
+  // preferable to a slow block.
   try {
     if (existsSync(auditFilePath(projectDir))) {
-      appendAuditEntry(
-        "REVIEWER_SCOPE_BLOCKED",
-        {
-          Tool: toolName,
-          Target: verdict.target ?? "",
-          Stage: dispatch.stage,
-          Unit: dispatch.unit,
-        },
-        projectDir,
-      );
+      if (acquireAuditLock(projectDir, 5, 50)) {
+        try {
+          appendAuditEntryUnlocked(
+            "REVIEWER_SCOPE_BLOCKED",
+            {
+              Tool: toolName,
+              Target: verdict.target ?? "",
+              Stage: dispatch.stage,
+              Unit: dispatch.unit,
+            },
+            projectDir,
+          );
+        } finally {
+          releaseAuditLock(projectDir);
+        }
+      } else {
+        recordHookDrop(projectDir, HOOK_NAME, "audit lock contended; REVIEWER_SCOPE_BLOCKED row dropped (block still enforced)");
+      }
     }
   } catch {
     // Advisory emission only.
