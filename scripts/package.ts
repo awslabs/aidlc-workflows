@@ -843,9 +843,13 @@ if (argv[0] === "plugin" && argv[1] === "build") {
     process.exit(1);
   }
   // outDir GUARD: buildPluginProjection rmSync's outDir first, so refuse a
-  // non-empty dir that is not itself a prior projection (its manifestDir marks
-  // one) unless --force — `plugin build test-pro claude .` must not wipe cwd.
-  const resolvedOut = isAbsolute(outDir) ? outDir : join(process.cwd(), outDir);
+  // non-empty dir that is not itself a prior projection unless --force —
+  // `plugin build test-pro claude .` must not wipe cwd.
+  // Strip trailing separators BEFORE resolving: `lstatSync("<link>/")` resolves
+  // THROUGH a symlink (so a trailing-slash symlink outDir bypassed the symlink
+  // refusal below and wiped the target — merge-review ask #2).
+  const outArg = outDir.replace(/[/\\]+$/, "") || outDir;
+  const resolvedOut = isAbsolute(outArg) ? outArg : join(process.cwd(), outArg);
   // A symlink path entry (including a BROKEN one, which existsSync reports as
   // false because it follows the link) would slip past the existsSync guard and
   // make mkdirSync throw a raw EEXIST stack. lstatSync sees the link itself —
@@ -864,11 +868,24 @@ if (argv[0] === "plugin" && argv[1] === "build") {
       process.exit(1);
     }
     if (readdirSync(resolvedOut).length > 0) {
-      const isPriorProjection = existsSync(join(resolvedOut, target.manifestDir));
+      // A prior projection is overwritable; anything else needs --force. The
+      // marker is NOT just "a .claude-plugin/ dir exists" — every real Claude
+      // plugin has one, so that false-positive let `plugin build ... .` wipe a
+      // FOREIGN plugin checkout silently (merge-review ask #1). Require the
+      // marker's plugin.json to parse AND carry an `aidlc-`-prefixed name (what
+      // our own projections emit), so only a genuine AIDLC projection qualifies.
+      const isPriorProjection = (() => {
+        try {
+          const mf = join(resolvedOut, target.manifestDir, "plugin.json");
+          if (!existsSync(mf)) return false;
+          const m = JSON.parse(readFileSync(mf, "utf-8"));
+          return typeof m?.name === "string" && m.name.startsWith("aidlc-");
+        } catch { return false; }
+      })();
       if (!isPriorProjection && !force) {
         console.error(
-          `refusing to build into non-empty "${outDir}" — it is not a prior plugin projection ` +
-          `(no ${target.manifestDir}/). Pass --force to overwrite, or point at a fresh/empty dir.`
+          `refusing to build into non-empty "${outDir}" — it is not a prior AIDLC plugin projection ` +
+          `(no ${target.manifestDir}/plugin.json with an aidlc- name). Pass --force to overwrite, or point at a fresh/empty dir.`
         );
         process.exit(1);
       }

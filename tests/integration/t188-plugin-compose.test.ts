@@ -17,7 +17,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -488,5 +488,76 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         `---\ntarget: build-and-test\nbundle: bad:bundle\nadds:\n  produces:\n    - syn-colon-artifact\n---\n`,
     });
     expect(drops).toContain("invalid bundle");
+  });
+
+  // --- `plugin build` outDir guard (pre-merge review asks) ---
+  // Run the CLI directly; assert it REFUSES (exit 1) and leaves the target intact.
+  function pluginBuild(outDir: string, extra: string[] = []): { code: number; out: string } {
+    const r = spawnSync(BUN, [PACKAGE_TS, "plugin", "build", PLUGIN, "claude", outDir, ...extra], {
+      cwd: REPO_ROOT, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+    });
+    return { code: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? "") };
+  }
+
+  test("plugin build refuses a non-empty dir that is not a prior projection", () => {
+    const d = mkdtempSync(join(tmp, "gb-nonempty-"));
+    writeFileSync(join(d, "keep.txt"), "keepme");
+    const { code, out } = pluginBuild(d);
+    expect(code).toBe(1);
+    expect(out).toContain("refusing to build");
+    expect(existsSync(join(d, "keep.txt"))).toBe(true); // untouched
+  });
+
+  test("plugin build refuses a FOREIGN .claude-plugin checkout (non-aidlc name)", () => {
+    const d = mkdtempSync(join(tmp, "gb-foreign-"));
+    mkdirSync(join(d, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(d, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "someones-other-plugin" }));
+    mkdirSync(join(d, "src"), { recursive: true });
+    writeFileSync(join(d, "src", "important.txt"), "keepme");
+    const { code } = pluginBuild(d);
+    expect(code).toBe(1);
+    expect(existsSync(join(d, "src", "important.txt"))).toBe(true); // NOT wiped
+  });
+
+  test("plugin build refuses a file outDir with a usage error (no ENOTDIR stack)", () => {
+    const f = join(mkdtempSync(join(tmp, "gb-file-")), "afile");
+    writeFileSync(f, "x");
+    const { code, out } = pluginBuild(f);
+    expect(code).toBe(1);
+    expect(out).toContain("it is a file, not a directory");
+    expect(out).not.toContain("ENOTDIR");
+  });
+
+  test("plugin build refuses a symlink outDir — plain and trailing-slash", () => {
+    const realDir = mkdtempSync(join(tmp, "gb-real-"));
+    // seed the target with a genuine projection so a bypass would be destructive
+    pluginBuild(realDir); // builds into realDir (empty → allowed)
+    expect(existsSync(join(realDir, ".claude-plugin", "plugin.json"))).toBe(true);
+    const linkBase = mkdtempSync(join(tmp, "gb-link-"));
+    const link = join(linkBase, "lnk");
+    symlinkSync(realDir, link);
+    for (const arg of [link, link + "/"]) {
+      const { code, out } = pluginBuild(arg);
+      expect(code).toBe(1);
+      expect(out).toContain("symlink");
+    }
+    expect(existsSync(join(realDir, ".claude-plugin", "plugin.json"))).toBe(true); // target intact
+  });
+
+  test("plugin build refuses a broken symlink outDir (no raw EEXIST stack)", () => {
+    const linkBase = mkdtempSync(join(tmp, "gb-broken-"));
+    const link = join(linkBase, "dangling");
+    symlinkSync(join(linkBase, "nonexistent-target"), link);
+    const { code, out } = pluginBuild(link);
+    expect(code).toBe(1);
+    expect(out).toContain("symlink");
+    expect(out).not.toContain("EEXIST");
+  });
+
+  test("plugin build DOES overwrite a genuine prior AIDLC projection (no --force)", () => {
+    const d = mkdtempSync(join(tmp, "gb-prior-"));
+    expect(pluginBuild(d).code).toBe(0); // first build into empty dir
+    expect(existsSync(join(d, ".claude-plugin", "plugin.json"))).toBe(true);
+    expect(pluginBuild(d).code).toBe(0); // rebuild over the prior projection — allowed
   });
 });
