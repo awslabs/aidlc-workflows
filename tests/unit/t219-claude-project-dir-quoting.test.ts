@@ -1,6 +1,6 @@
 // covers: file:settings.json
 //
-// t199 - Claude settings must quote CLAUDE_PROJECT_DIR command paths.
+// t219 - Claude settings must quote CLAUDE_PROJECT_DIR command paths.
 //
 // Regression pin for issue 519: Claude Code expands the settings.json command
 // strings through a shell, so `bun $CLAUDE_PROJECT_DIR/...` splits when the
@@ -130,7 +130,7 @@ function unquotedProjectDirReferences(value: string): string[] {
     .map((match) => value.slice(Math.max(0, match.index - 8)));
 }
 
-describe("t199 Claude settings quote CLAUDE_PROJECT_DIR command paths", () => {
+describe("t219 Claude settings quote CLAUDE_PROJECT_DIR command paths", () => {
   for (const subject of SUBJECTS) {
     test(`${subject.label}: executable settings quote every CLAUDE_PROJECT_DIR reference`, () => {
       const settings = readSettings(subject.path);

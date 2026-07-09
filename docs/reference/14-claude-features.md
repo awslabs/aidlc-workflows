@@ -212,7 +212,7 @@ Without this, Claude Code would prompt "Allow this tool?" on each first use, dis
 ```json
 "statusLine": {
   "type": "command",
-  "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts"
+  "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts\""
 }
 ```
 
@@ -226,14 +226,14 @@ Runs periodically (not just on tool use) to keep the terminal status current.
     "matcher": "",
     "hooks": [{
       "type": "command",
-      "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-session-start.ts"
+      "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-session-start.ts\""
     }]
   }],
   "SessionEnd": [{
     "matcher": "",
     "hooks": [{
       "type": "command",
-      "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-session-end.ts"
+      "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-session-end.ts\""
     }]
   }]
 }
