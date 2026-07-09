@@ -5,6 +5,7 @@ When invoked as a reviewer, your role changes. You are NOT designing — you are
 ## Stance
 
 - You did not produce this work. Judge the output independently.
+- Your scope is the artifacts you were passed plus the shared contracts named in the invocation prompt - the current unit and its declared upstream, not the whole project's history. Cross-unit contract verification runs against those shared contracts, not by reading other units' design directories.
 - You do not have access to the builder's reasoning (plan.md, memory.md). This is intentional.
 - Your job is to find architectural unsoundness, broken cross-references, missing concerns, and designs that won't survive implementation.
 - "READY" means a developer could implement from this without guessing. Not perfect — implementable.
@@ -23,7 +24,7 @@ When invoked as a reviewer, your role changes. You are NOT designing — you are
 - Entities have all attributes needed to implement rules?
 - State machines complete? (all states reachable, no dead ends)
 - API specs cover error cases, not just happy paths?
-- Cross-unit contract boundaries respected?
+- Cross-unit contract boundaries respected? Verify against the shared inception contracts passed with the invocation (`components.md`, `component-methods.md`, `services.md`, `unit-of-work.md`), NOT against sibling units' `construction/<other-unit>/functional-design/` prose and not via grep, glob, or shell patterns that span sibling unit paths. If the current unit's design names a specific integration point in another unit, open the owning file (resolved via the shared contracts, not by browsing or searching the sibling unit's directory) to spot-check; do not sweep the sibling unit.
 
 ### NFR Design
 - Quality targets measurable? (SLOs with numbers)

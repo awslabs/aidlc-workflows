@@ -66,6 +66,20 @@ engine** during normal Bolt execution; a single Bolt-level (or
 batch-level) gate replaces it. The per-Unit gate remains for direct-
 invocation use (e.g., `/aidlc --stage code-generation`).
 
+**Design-stage iteration order (opt-in).** By default the engine iterates the
+four inline design stages (3.1 through 3.4) stage-major: it runs 3.1 for every Unit,
+then 3.2 for every Unit, and so on. When the state file records
+`Construction Iteration: unit-major` under `## Runtime State` (set at
+delivery-planning via `aidlc-state.ts set-construction-iteration unit-major`, or
+by a human), the engine walks unit-major instead: for each Unit in Bolt build
+order, it authors that Unit's four design documents (3.1 through 3.4)
+consecutively before the next Unit begins. The four per-stage approval gates are
+unchanged in count and machinery; under unit-major they fire late, in stage
+order, once the whole (stage by Unit) design grid is covered, one human approval
+per stage.
+`code-generation` (3.5, `mode: subagent`) is never part of this walk. Only the
+exact value `unit-major` activates it; absent or `stage-major` is the default.
+
 **Parallel batches.** When two or more Bolts share dependency-satisfaction
 and don't depend on each other, the conductor dispatches their Code
 Generation stages concurrently by issuing N `Task` calls in a single

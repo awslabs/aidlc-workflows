@@ -21,23 +21,27 @@
 // compile's own audit emits cannot re-trigger the compile.
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   activeIntent,
   activeSpace,
+  auditShards,
   type ClaudeCodeHookInput,
   errorMessage,
+  hookDebug,
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
   readAllAuditShards,
   recordHookDrop,
   resolveProjectDirFromHook,
+  runtimeGraphPath,
   harnessDir,
 } from "../tools/aidlc-lib.ts";
 
 const projectDir = resolveProjectDirFromHook(import.meta.url);
+hookDebug(projectDir, "runtime-compile", "invoked");
 
 // 1. TTY guard — exit cleanly when invoked outside a piped stdin context
 //    (interactive shell, test harness running under `bash -x`).
@@ -68,8 +72,20 @@ const command: string = parsed.tool_input?.command ?? "";
 const aidlcTransitionTool = /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-(state|jump|bolt|utility)\.ts\b/;
 const aidlcOrchestrateReport = /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-orchestrate\.ts\b.*\breport\b/;
 const aidlcRuntimeRef = /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-runtime\.ts\b/;
-if (aidlcRuntimeRef.test(command)) process.exit(0);
-if (!aidlcTransitionTool.test(command) && !aidlcOrchestrateReport.test(command)) process.exit(0);
+// IDE audit-tail mode: Kiro IDE does not surface the shell command, so the
+// command-based filter cannot run. The adapter sets source="ide-audit-sync" to
+// signal "skip the command filter and gate purely on the audit tail" (steps
+// 6-7). The audit-tail transition check is the real gate; the command filter is
+// only a cheap pre-filter that needs a command string to work.
+const ideAuditMode = (parsed.tool_input?.source ?? "") === "ide-audit-sync";
+hookDebug(projectDir, "runtime-compile", "command-gate", { ideAuditMode, command: command.slice(0, 120) });
+if (!ideAuditMode) {
+  if (aidlcRuntimeRef.test(command)) process.exit(0);
+  if (!aidlcTransitionTool.test(command) && !aidlcOrchestrateReport.test(command)) {
+    hookDebug(projectDir, "runtime-compile", "exit: command not a transition tool");
+    process.exit(0);
+  }
+}
 
 // 4. Audit read — across EVERY per-clone shard of the ACTIVE intent, NOT this
 //    hook process's own PID/clone shard. The state tool that wrote the
@@ -82,7 +98,10 @@ if (!aidlcTransitionTool.test(command) && !aidlcOrchestrateReport.test(command))
 const space = activeSpace(projectDir);
 const intent = activeIntent(projectDir, space) ?? undefined;
 const audit = readAllAuditShards(projectDir, intent, space).replace(/\r\n/g, "\n");
-if (audit.length === 0) process.exit(0);
+if (audit.length === 0) {
+  hookDebug(projectDir, "runtime-compile", "exit: audit empty");
+  process.exit(0);
+}
 
 // 5. Heartbeat — doctor reads this file's mtime to detect silent-hook failure.
 //    Kept at the bare (workspace-level) health dir to match where --doctor reads
@@ -111,7 +130,45 @@ const last3 = blocks.slice(-3);
 //    (before the orchestrator wrote any §13 entries).
 const transitionRegex = /^\*\*Event\*\*:\s*(GATE_APPROVED|STAGE_STARTED|STAGE_AWAITING_APPROVAL|AUDIT_MERGED|WORKFLOW_COMPLETED)\s*$/m;
 const hasTransition = last3.some((b) => transitionRegex.test(b));
-if (!hasTransition) process.exit(0);
+hookDebug(projectDir, "runtime-compile", "transition-gate", { hasTransition, last3count: last3.length });
+if (!hasTransition) {
+  hookDebug(projectDir, "runtime-compile", "exit: no transition in audit tail");
+  process.exit(0);
+}
+
+// 7b. Idempotency guard (IDE audit-tail mode only). On the CLI the command
+//     filter (step 3) already bounds compiles to the one Bash call that emitted
+//     the transition. In ide-audit-sync mode that filter is skipped, so the
+//     transition sits in the tail across EVERY subsequent shell command — and
+//     after WORKFLOW_COMPLETED the tail never changes again, which would make
+//     every future shell command pay a blocking recompile forever. Bound it by
+//     mtime: if runtime-graph.json is already at least as new as the newest
+//     audit shard, the tail hasn't changed since the last compile — skip. A real
+//     new transition bumps a shard's mtime past the graph and re-enables the
+//     compile. Cheap stat calls; no new marker file.
+if (ideAuditMode) {
+  try {
+    const graphMtime = statSync(runtimeGraphPath(projectDir, intent, space)).mtimeMs;
+    let newestShard = 0;
+    for (const shard of auditShards(projectDir, intent, space)) {
+      try {
+        const m = statSync(shard).mtimeMs;
+        if (m > newestShard) newestShard = m;
+      } catch {
+        // shard vanished mid-read — ignore
+      }
+    }
+    if (graphMtime >= newestShard) {
+      hookDebug(projectDir, "runtime-compile", "skip: graph newer than audit (idempotent)", {
+        graphMtime,
+        newestShard,
+      });
+      process.exit(0);
+    }
+  } catch {
+    // runtime-graph.json absent (never compiled) → fall through and compile.
+  }
+}
 
 // 8. Dispatch — sync subprocess. Hook waits for completion. On non-zero
 //    exit, record the drop for `--doctor` to surface; never block the

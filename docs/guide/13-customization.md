@@ -135,7 +135,7 @@ The statusline is configured in `.claude/settings.json`:
 ```json
 "statusLine": {
   "type": "command",
-  "command": "bun $CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts"
+  "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-statusline.ts\""
 }
 ```
 
@@ -157,13 +157,13 @@ The `permissions.allow` list in `.claude/settings.json` pre-approves Claude Code
 "permissions": {
   "allow": [
     "Read", "Edit", "Write",
-    "Bash(bun $CLAUDE_PROJECT_DIR/.claude/tools/*)",
+    "Bash(bun \"$CLAUDE_PROJECT_DIR/.claude/tools/\"*)",
     "Bash", "Glob", "Grep", "Task", "WebSearch"
   ]
 }
 ```
 
-The scoped `Bash(bun $CLAUDE_PROJECT_DIR/.claude/tools/*)` entry sits ahead of the bare `Bash` so the framework's own tool invocations always match the narrower rule first.
+The scoped `Bash(bun "$CLAUDE_PROJECT_DIR/.claude/tools/"*)` entry sits ahead of the bare `Bash` so the framework's own tool invocations always match the narrower rule first. `$CLAUDE_PROJECT_DIR` stays double-quoted (with the `*` outside the quotes) so the command survives word-splitting shells when the project path contains spaces while the permission matcher still globs.
 
 ### How permissions work
 

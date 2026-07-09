@@ -24,7 +24,7 @@
 //   - disallowedTools: must contain `Task` — subagents must not spawn subagents
 //                     (single-level constraint; the body also carries the
 //                     "Do NOT use the Task tool" banner).
-//   - modelOverride:  must equal the documented per-agent value
+//   - model:          must equal the documented per-agent value
 //                     (opus = high-judgment / high-blast-radius work;
 //                      sonnet = templated config/scaffolding;
 //                      docs/reference/05-agent-system.md, .sh L11-19).
@@ -34,7 +34,7 @@
 //
 // Test-design note (house style): assert the OBSERVABLE shipped contract the
 // .sh asserted — frontmatter field presence/absence and exact values — against
-// the real bytes on disk. The expected modelOverride table is hard-coded here
+// the real bytes on disk. The expected model table is hard-coded here
 // independently of the source (mirrors the .sh's `expected_model()` case), so
 // the test pins the policy rather than echoing whatever the file says.
 //
@@ -46,7 +46,7 @@
 //   .sh L34-38 (description: present)                  -> "description: is present and non-empty"            [11 expects]
 //   .sh L41-45 (allowedTools: absent)                  -> "allowedTools: is ABSENT (ignored field removed in v0.5.4)" [11 expects]
 //   .sh L48-52 (disallowedTools contains Task)         -> "disallowedTools: contains Task (no nested subagents)" [11 expects]
-//   .sh L54-61 (modelOverride matches expected)        -> "modelOverride: matches the documented opus/sonnet split" [11 expects]
+//   .sh L54-61 (model matches expected)                -> "model: matches the documented opus/sonnet split" [11 expects]
 //   .sh L21    plan 55                                  -> "covers EXACTLY 11 agents × 5 invariants = 55 frontmatter assertions (TAP plan parity)"
 
 import { describe, expect, test } from "bun:test";
@@ -73,7 +73,7 @@ const AGENTS = [
   "operations",
 ] as const;
 
-// Expected modelOverride per agent — hard-coded independently of the source,
+// Expected model per agent -- hard-coded independently of the source,
 // mirroring the .sh's expected_model() case (L13-19). opus = high-judgment /
 // high-blast-radius; sonnet = templated config/scaffolding.
 const EXPECTED_MODEL: Record<(typeof AGENTS)[number], "opus" | "sonnet"> = {
@@ -171,13 +171,13 @@ describe("t04 agent-persona frontmatter contract (migrated from t04-agent-frontm
     }
   });
 
-  // .sh L54-61: modelOverride matches expected_model().
-  test("modelOverride: matches the documented opus/sonnet split [.sh test 5 ×11]", () => {
+  // .sh L54-61: model matches expected_model().
+  test("model: matches the documented opus/sonnet split [.sh test 5 x11]", () => {
     for (const agent of AGENTS) {
       const fm = frontmatter(agent);
-      // The .sh used `awk -F': *' '/^modelOverride:/ {print $2; exit}'`.
-      const m = fm.match(/^modelOverride:\s*(\S+)/m);
-      expect(m, `aidlc-${agent}-agent.md: no modelOverride: line`).not.toBeNull();
+      // The .sh used `awk -F': *' '/^model:/ {print $2; exit}'`.
+      const m = fm.match(/^model:\s*(\S+)/m);
+      expect(m, `aidlc-${agent}-agent.md: no model: line`).not.toBeNull();
       expect(m?.[1]).toBe(EXPECTED_MODEL[agent]);
     }
   });

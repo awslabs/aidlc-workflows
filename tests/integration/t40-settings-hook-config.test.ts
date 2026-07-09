@@ -109,8 +109,10 @@ describe("t40 settings.json hook/statusline/permissions config (migrated from t4
     expect(allow.length).toBe(9);
     // STRONGER than the .sh's bare length check: the pre-approved bun-tools glob
     // the .sh's comment calls out ("including bun tools pattern") is present.
+    // Quoted form (issue 519): $CLAUDE_PROJECT_DIR stays inside double quotes with
+    // the * outside so the matcher still globs; t219 pins the quoting invariant.
     expect(
-      allow.some((a) => a.includes("bun $CLAUDE_PROJECT_DIR/.claude/tools/*")),
+      allow.some((a) => a.includes('bun "$CLAUDE_PROJECT_DIR/.claude/tools/"*')),
     ).toBe(true);
   });
 

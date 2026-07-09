@@ -16,6 +16,11 @@ produces:
   - scalability-design
   - reliability-design
   - logical-components
+produces_kinds:
+  performance-design: [service, ui]
+  scalability-design: [service]
+  reliability-design: [service]
+  logical-components: [service, ui, library]
 consumes:
   - artifact: performance-requirements
     required: true
@@ -44,7 +49,7 @@ scopes:
   - infra
   - workshop
 inputs: NFR requirements artifacts, functional design artifacts
-outputs: performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md (under this stage's per-unit record dir, engine-resolved)
+outputs: "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
 ---
 
 # NFR Design

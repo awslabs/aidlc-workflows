@@ -87,24 +87,32 @@ import {
   type CheckboxLine,
   codekbRepoName,
   errorMessage,
+  filterProducesByKind,
   findAllEvents,
   firstInScopeStageOfPhase,
   getField,
   intentRepos,
+  isPerUnitStage,
   listIntents,
+  loadScopeMapping,
   nextInScopeStage,
+  parseBoltDag,
   parseCheckboxes,
+  parseStateStageSuffixes,
   PHASE_NUMBERS,
   PHASES,
   READ_ONLY_FLAGS,
   readAllAuditShards,
+  readBoltDagUnitKinds,
   relativeCodekbDir,
   relativeRecordDir,
   relativeSpaceRecordPrefix,
   resolveProjectDir,
   runtimeGraphPath,
+  scopeCostSummary,
   type StageEntry,
   stateFilePath,
+  unitDependencyPath,
   validScopes,
   harnessDir,
   WORKSPACE_VERBS,
@@ -245,6 +253,20 @@ function errorDirective(message: string): ErrorDirective {
 // the conductor can end its turn at a clean inter-stage boundary.
 function parkedDirective(reason: string, stage: string): ParkedDirective {
   return { kind: "parked", reason, stage };
+}
+
+// The one-line ceremony preview for a scope, deterministic from the compiled
+// grid (scopeCostSummary in aidlc-lib.ts): "N of T stages, G approval gates"
+// plus a per-unit clause when Construction stages fan out per Unit of Work.
+// Returns "" for a scope that does not resolve (a fixture tree without it), so
+// callers can drop the whole clause rather than emit a broken preview.
+function costClause(scope: string): string {
+  const c = scopeCostSummary(scope);
+  if (!c) return "";
+  const perUnit = c.perUnitStages > 0
+    ? `, ${c.perUnitStages} ${c.perUnitStages === 1 ? "stage repeats" : "stages repeat"} per unit of work in Construction`
+    : "";
+  return `${c.execute} of ${c.total} stages, ${c.gates} approval gates${perUnit}`;
 }
 
 // --- Flag parsing ---
@@ -399,8 +421,13 @@ function birthPrintDirective(scope: string, flags: ParsedFlags, description?: st
   }
   if (flags.depth) cmd.push(`--depth ${flags.depth}`);
   if (flags.testStrategy) cmd.push(`--test-strategy ${flags.testStrategy}`);
+  // Disclose the ceremony on the print: an explicitly named scope births
+  // directly (no confirm ask by design), so the stage/gate counts ride here.
+  // Omit the parenthetical when the scope does not resolve (fixture trees).
+  const clause = costClause(scope);
+  const cost = clause ? ` (${clause})` : "";
   return printDirective(
-    `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\` to start the workflow, then re-run \`next\` to continue.${labelHint}`,
+    `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${cmd.join(" ")}\` to start the workflow${cost}, then re-run \`next\` to continue.${labelHint}`,
   );
 }
 
@@ -447,8 +474,8 @@ function composeDispatchDirective(
     }
   }
   parts.push(
-    `The composer runs \`bun ${hd}/tools/aidlc-utility.ts detect --json\` (read-only scan + scope-registry paths) and reads the scope definitions under ${hd}/scopes/, then returns a structured proposal (mode matched|custom, scopeName, the per-stage EXECUTE/SKIP grid, and a per-SKIP rationale).`,
-    "Render the proposal to the human and present the approve/edit/reject gate (see the composer block in SKILL.md). Do NOT write any file and do NOT advance any stage before an explicit approval.",
+    `The composer runs \`bun ${hd}/tools/aidlc-utility.ts detect --json\` (read-only scan + scope-registry paths) and reads the scope definitions under ${hd}/scopes/, then returns a structured proposal (mode matched|custom, scopeName, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, and a summary the validator computed).`,
+    "Render the proposal to the human and present the approve/edit/reject gate (see the composer block in SKILL.md), LEADING with the validator's summary line formatted \"<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates\" - use the validator's numbers verbatim, never recount by hand. Do NOT write any file and do NOT advance any stage before an explicit approval.",
   );
   return printDirective(parts.join(" "));
 }
@@ -683,6 +710,27 @@ function readAutonomyMode(stateContent: string | null): "autonomous" | null {
   return raw.trim() === "autonomous" ? "autonomous" : null;
 }
 
+// The state field recording how construction DESIGN stages iterate over units.
+// Runtime metadata set by the delivery-planning classify round-trip (or a human)
+// via `aidlc-state.ts set-construction-iteration`. ONLY the exact value
+// "unit-major" activates the unit-outer / stage-inner walk; unset / absent /
+// "stage-major" / any other value all read as stage-major (today's behaviour, the
+// safe default). Deliberately strict, mirroring readAutonomyMode: an empty or
+// unrecognised value never activates the new order.
+const CONSTRUCTION_ITERATION_FIELD = "Construction Iteration";
+
+// Read the recorded Construction iteration mode, or null when it is not exactly
+// "unit-major". Any other value (including "stage-major") is stage-major.
+function readConstructionIteration(
+  stateContent: string | null,
+): "unit-major" | null {
+  const raw = stateContent
+    ? getField(stateContent, CONSTRUCTION_ITERATION_FIELD)
+    : null;
+  if (!raw) return null;
+  return raw.trim() === "unit-major" ? "unit-major" : null;
+}
+
 // Read the compiled batch DAG (the Bolt/unit topological levels) off the
 // runtime graph that `aidlc-runtime compile` materialises. Returns the
 // `batches` array (each inner array is one parallel batch = one topological
@@ -749,6 +797,57 @@ function swarmConvergedUnits(projectDir: string, slug: string): Set<string> {
     if (unit) converged.add(unit);
   }
   return converged;
+}
+
+// The resolved unit batch DAG for the active intent, cache-first with a
+// self-heal: the compiled runtime graph's bolt_dag is authoritative when
+// present, but a graph that is missing, malformed, or lacking the node while
+// units-generation's dependency artifact exists on disk is a STALE CACHE, not
+// a zero-unit workflow. In that case the batches are recomputed directly from
+// unit-of-work-dependency.md via the same pure parse the runtime compiler
+// uses, so the per-unit loop, the approve-side coverage guard, and the swarm
+// fan-out never truncate a multi-unit plan because a hook failed to refresh
+// the graph. Three states:
+//   ok        - batches resolved (healed=true when recomputed; a heal writes
+//               one stderr note, since the compile hook should have run).
+//   none      - no dependency artifact: a genuine zero-unit scope; callers
+//               keep the single-iteration degrade byte-identical.
+//   malformed - the artifact exists but its fenced units block does not
+//               parse; the unit list is unknowable, callers surface an error
+//               instead of silently building one unit.
+// Pure in-memory: never writes the graph (next stays read-only); the
+// runtime-compile hook repairs the cache on the next transition.
+type BoltBatchesResolution =
+  | { state: "ok"; batches: string[][]; healed: boolean }
+  | { state: "none" }
+  | { state: "malformed"; reason: string; detail: string };
+
+function resolveBoltBatches(projectDir: string): BoltBatchesResolution {
+  // A cached DAG with zero units (a hand-corrupted graph; no shipped writer
+  // emits empty batches) is treated as a miss, not an "ok" empty plan: falling
+  // through to the heal guarantees callers see either real batches, "none", or
+  // a loud "malformed", never an empty unit list that would strand the settle
+  // branch on an undefined unit.
+  const cached = readBoltDagBatches(projectDir);
+  if (cached && cached.flat().length > 0) {
+    return { state: "ok", batches: cached, healed: false };
+  }
+  const depPath = unitDependencyPath(projectDir);
+  if (!existsSync(depPath)) return { state: "none" };
+  let body: string;
+  try {
+    body = readFileSync(depPath, "utf-8");
+  } catch (e) {
+    return { state: "malformed", reason: "unreadable", detail: errorMessage(e) };
+  }
+  const parsed = parseBoltDag(body);
+  if (!parsed.ok) {
+    return { state: "malformed", reason: parsed.reason, detail: parsed.detail };
+  }
+  process.stderr.write(
+    `aidlc-orchestrate: runtime-graph.json has no bolt_dag; recomputed ${parsed.batches.length} unit batch(es) from unit-of-work-dependency.md (stale runtime graph; check the runtime-compile hook)\n`,
+  );
+  return { state: "ok", batches: parsed.batches, healed: true };
 }
 
 // True when `node` is the SKELETON-GATE stage for `scope` — the FIRST
@@ -825,23 +924,6 @@ function resolveSkeletonGate(stance: SkeletonStance, scope: string): boolean {
 // whole thesis"). The mapping is documented at
 // docs/reference/16-artifact-vocabulary.md:144-167.
 
-// The per-unit marker carried by the five Construction stages that run once per
-// Unit of Work. It lives on the stage's `for_each` field (stage frontmatter,
-// compiled onto the GraphStage and into stage-graph.json) — NOT as a
-// `**Per-Unit:**` line (no such field exists) and NOT behind a later wave. The
-// canonical 5-stage set (nfr-requirements, nfr-design, functional-design,
-// infrastructure-design, code-generation) is the defensive cross-check; the
-// node's own `for_each` is the source of truth so a future per-unit stage is
-// picked up without editing this file.
-const PER_UNIT_FOR_EACH = "unit-of-work";
-const KNOWN_PER_UNIT_STAGES: ReadonlySet<string> = new Set([
-  "nfr-requirements",
-  "nfr-design",
-  "functional-design",
-  "infrastructure-design",
-  "code-generation",
-]);
-
 // The literal token used in the per-unit path shape when no concrete Unit of
 // Work is supplied at emit time. The unit value comes from active Bolt context
 // (a later engine increment threads it in); when absent, the faithful emission
@@ -849,12 +931,11 @@ const KNOWN_PER_UNIT_STAGES: ReadonlySet<string> = new Set([
 // 16-artifact-vocabulary.md:159.
 const UNIT_NAME_PLACEHOLDER = "{unit-name}";
 
-// True when the node runs once per Unit of Work. Reads the node's own
-// `for_each` marker (source of truth); the known-set membership is a defensive
-// cross-check so a typo'd marker on one of the five canonical stages still
-// resolves per-unit.
+// True when the node runs once per Unit of Work. The marker + known-set rule
+// lives in aidlc-lib.ts (isPerUnitStage) so the runtime resolver and the cost
+// summary (gridCostSummary) agree on the per-unit set.
 function isPerUnit(node: GraphStage): boolean {
-  return node.for_each === PER_UNIT_FOR_EACH || KNOWN_PER_UNIT_STAGES.has(node.slug);
+  return isPerUnitStage(node);
 }
 
 // The KNOWN SET of stages whose artifacts live in the durable, space-level
@@ -1061,15 +1142,22 @@ function splitConsumesByPresence(
 // every name resolves; optional_produces entries resolve too (the conductor
 // still needs the path when the unit DOES write the conditional artifact) but
 // are exempt from the per-unit coverage check in unitCovered.
+// `unitKind` prunes the COMBINED list to the artifacts that apply to that unit
+// kind (via the stage's produces_kinds map, which may point at either list);
+// null (an untagged unit, or a non-per-unit stage) keeps the full list: zero
+// behaviour change off the kind path.
 function resolveProduces(
   node: GraphStage,
   unit: string,
   recordPrefix: string | null,
   codekbCtx?: CodekbCtx,
+  unitKind: string | null = null,
 ): string[] {
-  return [...(node.produces ?? []), ...(node.optional_produces ?? [])].map(
-    (name) => resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx),
-  );
+  return filterProducesByKind(
+    node.produces_kinds,
+    [...(node.produces ?? []), ...(node.optional_produces ?? [])],
+    unitKind,
+  ).map((name) => resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx));
 }
 
 // Compute the `gate` value for a run-stage directive — the human-judgement
@@ -1089,6 +1177,11 @@ function resolveProduces(
 // models the 3 init stages as individual gate:false run-stages (masked on every
 // real path; only a synthetic mid-init fixture surfaces one — t118's gate-axis
 // anchor).
+//
+// gridCostSummary() in aidlc-lib.ts counts a scope's approval gates as the
+// closed form of this rule (EXECUTE stages whose phase is not initialization);
+// if a per-stage gate flag ever lands here, update that counter too so the
+// preview matches what the engine gates.
 function computeGate(
   node: GraphStage,
   scope: string,
@@ -1124,6 +1217,7 @@ function buildRunStageDirective(
   stateContent: string | null = null,
   recordPrefix: string | null = null,
   codekbCtx?: CodekbCtx,
+  unitKind: string | null = null,
 ): RunStageDirective {
   const resolvedConsumes = resolveConsumes(
     node.consumes ?? [], node, projectType, unit, recordPrefix, codekbCtx,
@@ -1143,7 +1237,7 @@ function buildRunStageDirective(
     gate: computeGate(node, scope, stateContent),
     memory_path: memoryPathFor(node.phase, node.slug, recordPrefix),
     consumes: present,
-    produces: resolveProduces(node, unit, recordPrefix, codekbCtx),
+    produces: resolveProduces(node, unit, recordPrefix, codekbCtx, unitKind),
     rules_in_context: (node.rules_in_context ?? []).map((r) => r.path),
     sensors_applicable: (node.sensors_applicable ?? []).map((s) => s.id),
     stage_file: stageFileFor(node.phase, node.slug),
@@ -1621,16 +1715,30 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   ) {
     const inferred = inferScopeFromText(flags.intent);
     if (inferred.source === "keyword") {
+      // Preview the ceremony the user is confirming: stage/gate counts from the
+      // compiled grid (never estimates). Drop the clause if the scope does not
+      // resolve (a fixture tree without it) rather than emit a broken preview.
+      const clause = costClause(inferred.scope);
+      const cost = clause ? ` - ${clause}` : "";
       emit(askDirective(
-        `Starting a "${inferred.scope}" workflow for: "${flags.intent}". ` +
+        `Starting a "${inferred.scope}" workflow for: "${flags.intent}"${cost}. ` +
           "Confirm to proceed, name a different scope, or say \"compose\" for a tailored plan.",
       ));
       return;
     }
+    // Anchor the compose offer with the counts for the three named scopes so the
+    // user calibrates the order-of-magnitude difference before deciding. Fall
+    // back to bare names if any scope does not resolve.
+    const bf = scopeCostSummary("bugfix");
+    const poc = scopeCostSummary("poc");
+    const feat = scopeCostSummary("feature");
+    const examples = bf && poc && feat
+      ? `bugfix = ${bf.execute} of ${bf.total} stages, poc = ${poc.execute}, feature = all ${feat.execute}`
+      : "bugfix, feature, poc";
     emit(askDirective(
       `No stock scope clearly fits: "${flags.intent}". ` +
         "I can compose a tailored plan for this task (recommended: reply \"compose\"), " +
-        "or you can name a scope directly (e.g. bugfix, feature, poc; see /aidlc --help for all).",
+        `or you can name a scope directly (e.g. ${examples}; see /aidlc --help for all).`,
     ));
     return;
   }
@@ -1808,8 +1916,9 @@ function tryEmitSwarm(
   // human-approved before any batch fans out (structural defense-in-depth).
   if (isSkeletonGateStage(node, scope)) return false;
   if (readAutonomyMode(stateContent) !== "autonomous") return false;
-  const batches = readBoltDagBatches(projectDir);
-  if (!batches || batches.length === 0) return false;
+  const r = resolveBoltBatches(projectDir);
+  if (r.state !== "ok" || r.batches.length === 0) return false;
+  const batches = r.batches;
 
   // Select the first topological batch with an unconverged unit; emit only that
   // batch's still-owed units. Ledger signal = SWARM_UNIT_CONVERGED (see above),
@@ -1913,35 +2022,43 @@ function emitRunStageForSlug(
 
 // The ordered Unit-of-Work list for the active intent: the compiled Bolt DAG's
 // batches flattened to topological order (each batch is already lexicographically
-// sorted by computeBatches). [] when there is no compiled DAG (degrade path).
+// sorted by computeBatches). [] when there is no dependency artifact or the
+// artifact is unparseable; a stale graph heals through the resolver.
 function orderedUnits(projectDir: string): string[] {
-  const batches = readBoltDagBatches(projectDir);
-  if (!batches) return [];
-  return batches.flat();
+  const r = resolveBoltBatches(projectDir);
+  if (r.state !== "ok") return [];
+  return r.batches.flat();
 }
 
-// True when `unit` is COVERED for `node`: every artifact in node.produces[]
-// (the REQUIRED set) exists on disk under the resolved per-unit path
-// (<recordPrefix>/construction/<unit>/<owner.slug>/<name>.md). node.optional_produces
-// entries are DELIBERATELY not checked here - they are artifacts the unit MAY
-// write (marked CONDITIONAL in the stage body, e.g. frontend-components for a
-// backend-only unit), so their absence never blocks coverage. The resolved path
+// True when `unit` is COVERED for `node`: every APPLICABLE artifact in
+// node.produces[] (the REQUIRED set) exists on disk under the resolved per-unit
+// path (<recordPrefix>/construction/<unit>/<owner.slug>/<name>.md).
+// node.optional_produces entries are DELIBERATELY not checked here - they are
+// artifacts the unit MAY write (marked CONDITIONAL in the stage body), so their
+// absence never blocks coverage. The resolved path
 // is workspace-RELATIVE with forward slashes, so we re-root it absolutely under
-// projectDir (splitting on "/" so the join is OS-correct). A stage with no
-// required produces can never be "covered" by artifacts, but all five per-unit
-// stages declare >=2 required produces (verified), so the empty case is
-// unreachable in practice; we treat empty-produces as NOT covered so the engine
-// never silently skips a unit it cannot prove it ran.
+// projectDir (splitting on "/" so the join is OS-correct).
+//
+// The empty-produces guard runs on the UNFILTERED required list: a stage that
+// declares no required produces at all can never be proven-covered, so the
+// engine never silently skips a unit it cannot prove it ran. But after that
+// guard the required set is filtered by the unit's kind (produces_kinds): a
+// kind to which NO required artifact applies filters to empty and is VACUOUSLY
+// covered (the stage does not apply to that unit). `unitKind` null (untagged
+// unit or no map) keeps the full list, so behaviour is unchanged off the kind
+// path.
 function unitCovered(
   projectDir: string,
   node: GraphStage,
   unit: string,
   recordPrefix: string | null,
   codekbCtx: CodekbCtx,
+  unitKind: string | null,
 ): boolean {
   const names = node.produces ?? [];
   if (names.length === 0) return false;
-  for (const name of names) {
+  const applicable = filterProducesByKind(node.produces_kinds, names, unitKind);
+  for (const name of applicable) {
     const rel = resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx);
     const abs = join(projectDir, ...rel.split("/"));
     if (!existsSync(abs)) return false;
@@ -1963,9 +2080,10 @@ function nextUncoveredUnit(
   units: string[],
   recordPrefix: string | null,
   codekbCtx: CodekbCtx,
+  kinds: Map<string, string> | null,
 ): { unit: string; uncovered: string[] } | null {
   const uncovered = units.filter(
-    (u) => !unitCovered(projectDir, node, u, recordPrefix, codekbCtx),
+    (u) => !unitCovered(projectDir, node, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null),
   );
   if (uncovered.length === 0) return null;
   return { unit: uncovered[0], uncovered };
@@ -1999,16 +2117,29 @@ function emitPerUnitRunStage(
     return;
   }
 
-  // No compiled unit DAG (a scope that SKIPs units-generation, refactor /
-  // security-patch / infra / bugfix / poc, or a pre-compile moment): degrade to
-  // today's single {unit-name} directive. Zero behaviour change off this path.
-  const units = orderedUnits(projectDir);
-  if (units.length === 0) {
-    emitRunStageForSlug(node.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
-    return;
+  const r = resolveBoltBatches(projectDir);
+  switch (r.state) {
+    case "none":
+      // No dependency artifact exists on disk: degrade to today's single
+      // {unit-name} directive for genuinely zero-unit scopes.
+      emitRunStageForSlug(node.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
+      return;
+    case "malformed":
+      emit({
+        kind: "error",
+        message:
+          `Cannot iterate units for stage "${node.slug}": runtime-graph.json has no bolt_dag and inception/units-generation/unit-of-work-dependency.md is ${r.reason} (${r.detail}). Fix the fenced units block in that artifact, then run next again.`,
+      });
+      return;
+    case "ok":
+      break;
   }
+  const units = r.batches.flat();
 
-  const pick = nextUncoveredUnit(projectDir, node, units, recordPrefix, codekbCtx);
+  // Read the per-unit kinds map ONCE (matches orderedUnits' single-read
+  // pattern). null = no kinds known = every unit on the full matrix.
+  const kinds = readBoltDagUnitKinds(projectDir);
+  const pick = nextUncoveredUnit(projectDir, node, units, recordPrefix, codekbCtx, kinds);
   if (pick === null) {
     // Every unit is already covered, but the checkbox is still in-flight: the
     // conductor wrote the LAST unit's artifacts and re-ran `next` to settle the
@@ -2022,6 +2153,7 @@ function emitPerUnitRunStage(
     const lastUnit = units[units.length - 1];
     const directive = buildRunStageDirective(
       node, projectType, lastUnit, scope, stateContent, recordPrefix, codekbCtx,
+      kinds?.get(lastUnit) ?? null,
     );
     directive.unit = lastUnit;
     emit(directive);
@@ -2030,6 +2162,7 @@ function emitPerUnitRunStage(
 
   const directive = buildRunStageDirective(
     node, projectType, pick.unit, scope, stateContent, recordPrefix, codekbCtx,
+    kinds?.get(pick.unit) ?? null,
   );
   // Suppress the gate on EVERY not-yet-covered unit. A per-unit directive with an
   // uncovered unit carries gate:false: the conductor completes the body, writes
@@ -2042,6 +2175,122 @@ function emitPerUnitRunStage(
   directive.gate = false;
   directive.unit = pick.unit;
   emit(directive);
+}
+
+// The in-scope, not-yet-settled INLINE per-unit Construction design stages, in
+// GRAPH order. This is the unit-major walk's inner list: functional-design,
+// nfr-requirements, nfr-design, infrastructure-design (each `for_each:
+// unit-of-work` + `mode: inline`), minus any this scope SKIPs or the state has
+// already completed/skipped. code-generation (`mode: subagent`) is excluded by
+// the mode filter, so the walk never touches the swarm path. Graph order is
+// preserved by filtering loadGraph() in place, and graph order respects
+// `requires_stage` by the compile-time edge-direction invariant
+// (aidlc-graph.ts), so a stage's per-unit dependency is honoured per unit by
+// construction. Effective action uses the same state-override-wins rule as
+// nextInScopeStage (state overrides beat scope-mapping); completed or skipped
+// checkboxes are dropped, the same fresh-clone carve-out the report guard makes.
+function constructionDesignBlock(
+  scope: string,
+  stateContent: string | null,
+): GraphStage[] {
+  const mapping = loadScopeMapping()[scope];
+  if (!mapping) return [];
+  const stateOverrides = stateContent
+    ? parseStateStageSuffixes(stateContent)
+    : null;
+  const checkboxStates = stateContent ? parseCheckboxes(stateContent) : [];
+  return loadGraph().filter((n) => {
+    if (n.phase !== "construction") return false;
+    if (!isPerUnit(n)) return false;
+    if (n.mode !== "inline") return false;
+    const cb = checkboxStates.find((c) => c.slug === n.slug);
+    if (cb && (cb.state === "completed" || cb.state === "skipped")) return false;
+    const effectiveAction = stateOverrides?.get(n.slug) ?? mapping.stages[n.slug];
+    return effectiveAction === "EXECUTE";
+  });
+}
+
+// Emit ONE iteration of the UNIT-MAJOR construction design walk (opt-in via the
+// `Construction Iteration: unit-major` state field). Where emitPerUnitRunStage
+// is stage-outer / unit-inner (all units of the current stage before the next
+// stage), this is unit-outer / stage-inner: it walks the ordered unit list
+// (Bolt DAG topo order) OUTER and the design block (graph order) INNER, emitting
+// the first uncovered (stage, unit) pair with the gate suppressed. So a unit's
+// four design documents are authored consecutively before the next unit begins.
+// The four per-stage gates are UNCHANGED: they fire late, in stage order, once
+// the whole (stage x unit) grid is covered: the fully-covered walk delegates to
+// emitPerUnitRunStage for the CURRENT slug, whose pick === null branch presents
+// that stage's real gate on the last unit. `handleApprove` then advances Current
+// Stage to the next design stage; its `next` re-enters here, finds the grid
+// still fully covered, and presents ITS gate, so the four gates cascade at the
+// block's end, one per human turn (the presence guard enforces one resolution
+// per turn). No gate/approve/audit machinery changes.
+function emitUnitMajorRunStage(
+  node: GraphStage,
+  projectType: "brownfield" | "greenfield" | null,
+  scope: string,
+  stateContent: string | null,
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+  projectDir: string,
+): void {
+  // Skeleton-gate precedence, exactly as emitPerUnitRunStage: never begin the
+  // walk before the walking-skeleton stance is resolved. functional-design is
+  // both the first block stage and the skeleton-gate stage for
+  // feature/enterprise/mvp (nfr-requirements for infra); emit the classify
+  // directive and return until the stance is recorded.
+  if (isSkeletonGateStage(node, scope) && readSkeletonStance(stateContent) === null) {
+    emitRunStageForSlug(node.slug, projectType, scope, stateContent, recordPrefix, codekbCtx);
+    return;
+  }
+
+  // No compiled unit DAG: degrade to the stage-major per-unit path, which itself
+  // degrades to today's single {unit-name} directive. Zero behaviour change off
+  // the DAG path.
+  const units = orderedUnits(projectDir);
+  if (units.length === 0) {
+    emitPerUnitRunStage(node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir);
+    return;
+  }
+
+  const block = constructionDesignBlock(scope, stateContent);
+  // Defensive: if the current node is not itself an active block stage (e.g. it
+  // was completed between the read and here, or a scope with no inline design
+  // block routed here), fall back to the stage-major path for this slug.
+  if (!block.some((n) => n.slug === node.slug)) {
+    emitPerUnitRunStage(node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir);
+    return;
+  }
+
+  // Walk units OUTER (Bolt DAG topo order: dependencies before dependents),
+  // block stages INNER (graph order, dependency-safe per unit by the compile
+  // invariant). Emit the first uncovered (stage, unit) pair with the gate
+  // suppressed, using the same post-build override pattern as
+  // emitPerUnitRunStage (the conductor acts on directive.stage + directive.unit,
+  // not on Current Stage, so an interleaved slug needs no protocol change).
+  // Kinds read ONCE (the single-read pattern): coverage must see the same
+  // kind-pruned artifact set the directive names, or a pruned unit never covers.
+  const kinds = readBoltDagUnitKinds(projectDir);
+  for (const u of units) {
+    for (const k of block) {
+      if (!unitCovered(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null)) {
+        const directive = buildRunStageDirective(
+          k, projectType, u, scope, stateContent, recordPrefix, codekbCtx,
+          kinds?.get(u) ?? null,
+        );
+        directive.gate = false;
+        directive.unit = u;
+        emit(directive);
+        return;
+      }
+    }
+  }
+
+  // The whole (stage x unit) grid is covered: delegate to the stage-major path
+  // for the CURRENT slug, whose pick === null branch presents that stage's real
+  // gate on the last unit. The per-stage gate cascade of the block then runs on
+  // stock machinery.
+  emitPerUnitRunStage(node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir);
 }
 
 // Route a slug to its emit path: a per-unit Construction stage drives the
@@ -2060,6 +2309,12 @@ function emitForSlug(
 ): void {
   const node = nodeForSlug(slug);
   if (node && isPerUnit(node)) {
+    // Unit-major iteration (opt-in) applies only to the INLINE design stages;
+    // mode:subagent (code-generation) is left to the swarm / stage-major path.
+    if (node.mode === "inline" && readConstructionIteration(stateContent) === "unit-major") {
+      emitUnitMajorRunStage(node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir);
+      return;
+    }
     emitPerUnitRunStage(node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir);
     return;
   }
@@ -2823,11 +3078,21 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   const isAutonomousSwarm =
     node.mode === SWARM_MODE && readAutonomyMode(stateContent) === "autonomous";
   if (isGated && isPerUnit(node) && stageCheckbox.state !== "completed" && !isAutonomousSwarm) {
+    const r = resolveBoltBatches(pd);
+    if (r.state === "malformed") {
+      emit({
+        kind: "error",
+        message:
+          `Stage "${slug}" is per-unit (for_each: unit-of-work) but the unit list cannot be resolved: inception/units-generation/unit-of-work-dependency.md is ${r.reason} (${r.detail}). Fix the fenced units block in that artifact before approving.`,
+      });
+      return;
+    }
     const recordPrefix = relativeRecordDir(pd);
     const codekbCtx = codekbCtxFor(pd);
-    const units = orderedUnits(pd);
-    if (units.length > 0) {
-      const pick = nextUncoveredUnit(pd, node, units, recordPrefix, codekbCtx);
+    if (r.state === "ok") {
+      const units = r.batches.flat();
+      const kinds = readBoltDagUnitKinds(pd);
+      const pick = nextUncoveredUnit(pd, node, units, recordPrefix, codekbCtx, kinds);
       if (pick !== null) {
         emit({
           kind: "error",

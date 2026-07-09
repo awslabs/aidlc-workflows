@@ -55,7 +55,8 @@ never route, advance, or gate a workflow yourself.
      "mode": "matched | custom",
      "scopeName": "<stock name, or the new scope's kebab name>",
      "grid": { "<stage-slug>": "EXECUTE | SKIP", "...": "..." },
-     "rationale": ["<per-SKIP reason a human can judge>", "..."]
+     "rationale": ["<per-SKIP reason a human can judge>", "..."],
+     "summary": { "...copied verbatim from the validate-grid `summary` field (step 4)..." }
    }
    ```
 
@@ -65,7 +66,10 @@ never route, advance, or gate a workflow yourself.
    (lenient mode for a front/report proposal; the recompose path runs it
    `--strict`). Exit 1 means the grid is rejected: fix the grid or withdraw
    the SKIP - never show an invalid grid at the gate. Surface any advisories
-   alongside the rationale so the human sees them.
+   alongside the rationale so the human sees them. Copy the validator's
+   `summary` field into the proposal's `summary` VERBATIM - never count stages,
+   gates, or per-unit fan-out yourself; those numbers are the ceremony preview
+   the gate leads with.
 5. **Gate.** The conductor renders your proposal and holds the
    approve/edit/reject gate. You never write anything before an explicit
    human approval, and you never treat silence or a prior turn's approval as

@@ -18,6 +18,11 @@ produces:
   - cicd-pipeline
 optional_produces:
   - shared-infrastructure
+produces_kinds:
+  deployment-architecture: [service, ui, packaging]
+  infrastructure-services: [service, packaging]
+  monitoring-design: [service, packaging]
+  cicd-pipeline: [service, ui, packaging, library]
 consumes:
   - artifact: performance-design
     required: true
@@ -50,7 +55,7 @@ scopes:
   - infra
   - workshop
 inputs: NFR design artifacts, application design, functional design
-outputs: "deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, CONDITIONAL: shared-infrastructure.md (under this stage's per-unit record dir, engine-resolved)"
+outputs: "deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, CONDITIONAL: shared-infrastructure.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
 ---
 
 # Infrastructure Design

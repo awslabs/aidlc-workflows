@@ -62,6 +62,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   activeSpace,
+  getField,
   listIntents,
   readIntentRegistry,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -133,6 +134,29 @@ function activeRecordDir(root: string): string | undefined {
   return listIntents(root, activeSpace(root)).find((i) => i.active)?.dirName ?? undefined;
 }
 
+/** The RE codekb beat has TWO valid outcomes, and both keep the multi-repo journey
+ *  intact. Brownfield: reverse-engineering EXECUTEs and writes a per-repo codekb
+ *  store, so the codekbFiles asserts below hold. Greenfield: the engine stamps
+ *  reverse-engineering SKIP at intent birth (aidlc-utility.ts records it in the
+ *  Stages to Skip row), so no codekb is written and the asserts must not run (the
+ *  skip is the correct behaviour, not a flake). This reads the born intent's
+ *  aidlc-state.md and returns true only for that greenfield RE-skip: Project Type is
+ *  Greenfield AND the Stages to Skip row names the reverse-engineering slug. We match
+ *  the bare slug, never the row's human annotation (the engine writes it with an
+ *  em-dash phrase we deliberately avoid touching). A genuine brownfield RE failure
+ *  still falls through to the asserts and reds, as it should. */
+function greenfieldReSkip(recordDir: string): boolean {
+  let content: string;
+  try {
+    content = readFileSync(join(recordDir, "aidlc-state.md"), "utf-8");
+  } catch {
+    return false;
+  }
+  const projectType = (getField(content, "Project Type") ?? "").toLowerCase();
+  const stagesToSkip = getField(content, "Stages to Skip") ?? "";
+  return projectType === "greenfield" && stagesToSkip.includes("reverse-engineering");
+}
+
 /** Drive the reverse-engineering `--single` codekb turn and cancel it the moment
  *  BOTH repos' per-repo codekb has landed on disk — a DISK-CONDITION stop, not a
  *  tool-title one. A title stop (`/codekb/repo-b/…/`) is unreliable here: the
@@ -147,21 +171,28 @@ function activeRecordDir(root: string): string | undefined {
  *  codekbFiles), and `session/cancel` once both are present. The driver's awaited
  *  session/prompt then resolves with stopReason=cancelled. Falls through on the
  *  drive's own timeout (the budget) if the stage never produces both stores — a
- *  real failure the assertions below catch. */
+ *  real failure the assertions below catch.
+ *
+ *  Second cancel arm: a LEGITIMATE greenfield RE-skip. When the intent is greenfield
+ *  the engine stamped reverse-engineering SKIP at birth, so this `--single` run never
+ *  writes codekb and would otherwise burn the whole codekb budget (~20 min of live
+ *  Kiro credits) waiting for stores that will never appear. So we also cancel the
+ *  moment greenfieldReSkip becomes true on disk; the assertions below then take the
+ *  greenfield branch and accept the skip. The two arms are independent: either a
+ *  real both-repos landing OR a recorded greenfield skip ends the turn fast. */
 async function driveCodekbUntilBothRepos(
   session: AcpSession,
   root: string,
+  recordDir: string,
   timeoutMs: number,
 ): Promise<void> {
-  let bothPresent = false;
+  let done = false;
   const poll = setInterval(() => {
-    if (
-      !bothPresent &&
-      session.sessionId &&
-      codekbFiles(root, "repo-a").length > 0 &&
-      codekbFiles(root, "repo-b").length > 0
-    ) {
-      bothPresent = true;
+    if (done || !session.sessionId) return;
+    const bothRepos =
+      codekbFiles(root, "repo-a").length > 0 && codekbFiles(root, "repo-b").length > 0;
+    if (bothRepos || greenfieldReSkip(recordDir)) {
+      done = true;
       session.notify("session/cancel", { sessionId: session.sessionId });
     }
   }, 2000);
@@ -254,10 +285,19 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         // The RE stage writes both repos' codekb. Drive it and cancel the moment
         // BOTH repos' stores are on disk (a disk-condition stop — see
         // driveCodekbUntilBothRepos for why a tool-title stop flakes here). The
-        // on-disk assertions below are the proof.
-        await driveCodekbUntilBothRepos(conductor, root, CODEKB_DRIVE_MS);
-        expect(codekbFiles(root, "repo-a").length).toBeGreaterThan(0);
-        expect(codekbFiles(root, "repo-b").length).toBeGreaterThan(0);
+        // poller also fast-cancels on a legitimate greenfield RE-skip so a skip does
+        // not burn the codekb budget. The on-disk assertions below are the proof.
+        await driveCodekbUntilBothRepos(conductor, root, recordADir, CODEKB_DRIVE_MS);
+        if (greenfieldReSkip(recordADir)) {
+          // Greenfield: reverse-engineering was stamped SKIP at birth, so no per-repo
+          // codekb is expected. The recorded skip is the correct outcome; accept it
+          // and do NOT run the codekb asserts (permissive by design).
+          expect(greenfieldReSkip(recordADir)).toBe(true);
+        } else {
+          // Brownfield: reverse-engineering ran, so both repos got a codekb store.
+          expect(codekbFiles(root, "repo-a").length).toBeGreaterThan(0);
+          expect(codekbFiles(root, "repo-b").length).toBeGreaterThan(0);
+        }
 
         // A's birth emitted exactly one WORKFLOW_STARTED; the RE pass added stage
         // work but no second birth bled into A's shard.

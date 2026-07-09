@@ -13,6 +13,7 @@ import {
   type ClaudeCodeHookInput,
   docsRoot,
   errorMessage,
+  hookDebug,
   hooksHealthDir,
   isClaudeCodeHookInput,
   isoTimestamp,
@@ -21,6 +22,7 @@ import {
 } from "../tools/aidlc-lib.ts";
 
 const projectDir = resolveProjectDirFromHook(import.meta.url);
+hookDebug(projectDir, "audit-logger", "invoked", { projectDir, cwd: process.cwd() });
 
 // Write health heartbeat
 const healthDir = hooksHealthDir(projectDir);
@@ -30,15 +32,22 @@ writeFileSync(join(healthDir, "audit-logger.last"), isoTimestamp(), "utf-8");
 // Read JSON from stdin. If stdin is a TTY (interactive shell, test harness
 // running under `bash -x`-inheriting pipeline), no JSON is coming — exit
 // cleanly instead of blocking on the terminal read.
-if (process.stdin.isTTY) process.exit(0);
+if (process.stdin.isTTY) {
+  hookDebug(projectDir, "audit-logger", "exit: stdin isTTY");
+  process.exit(0);
+}
 
 const input = await Bun.stdin.text();
 let parsed: ClaudeCodeHookInput;
 try {
   const raw: unknown = JSON.parse(input);
-  if (!isClaudeCodeHookInput(raw)) process.exit(0);
+  if (!isClaudeCodeHookInput(raw)) {
+    hookDebug(projectDir, "audit-logger", "exit: not ClaudeCodeHookInput", { input: input.slice(0, 200) });
+    process.exit(0);
+  }
   parsed = raw;
 } catch {
+  hookDebug(projectDir, "audit-logger", "exit: stdin parse failed", { input: input.slice(0, 200) });
   process.exit(0);
 }
 
@@ -54,7 +63,11 @@ const fileNorm = auditFileValue; // forward-slash form for all path matching bel
 // the bare space record root — the write is logged iff it lands under that root.
 const recordRoot = docsRoot(projectDir).replace(/\\/g, "/").replace(/\/$/, "");
 const underRecord = fileNorm === recordRoot || fileNorm.startsWith(`${recordRoot}/`);
-if (!underRecord) process.exit(0);
+hookDebug(projectDir, "audit-logger", "path-gate", { tool, file: fileNorm, recordRoot, underRecord });
+if (!underRecord) {
+  hookDebug(projectDir, "audit-logger", "exit: not under record root");
+  process.exit(0);
+}
 
 // Don't log writes to an audit shard itself (avoid recursion). The shard is
 // audit/<host>-<clone>.md under the record dir; the bare audit.md guard also
@@ -64,13 +77,17 @@ if (
   file.endsWith("\\audit.md") ||
   /[/\\]audit[/\\][^/\\]+\.md$/.test(file)
 ) {
+  hookDebug(projectDir, "audit-logger", "exit: write to audit shard (recursion guard)");
   process.exit(0);
 }
 
 const auditFile = auditFilePath(projectDir);
 
 // Don't auto-create the audit trail — the orchestrator creates it at workflow start.
-if (!existsSync(auditFile)) process.exit(0);
+if (!existsSync(auditFile)) {
+  hookDebug(projectDir, "audit-logger", "exit: audit file missing", { auditFile });
+  process.exit(0);
+}
 
 // Extract the context breadcrumb: the path relative to the record root (the
 // per-intent record dir on the new layout, or the flat `aidlc-docs/` root).
@@ -123,10 +140,12 @@ try {
     File: auditFileValue,
     Context: context,
   }, projectDir);
+  hookDebug(projectDir, "audit-logger", "emitted", { eventType, file: auditFileValue, context });
 } catch (e) {
   // Hook must be a no-op on any audit emission failure to avoid breaking the
   // user's tool call. Record the drop so `--doctor` can surface it, then
   // exit cleanly.
+  hookDebug(projectDir, "audit-logger", "exit: emit threw", { eventType, error: errorMessage(e) });
   recordHookDrop(projectDir, "audit-logger", errorMessage(e));
   process.exit(0);
 }

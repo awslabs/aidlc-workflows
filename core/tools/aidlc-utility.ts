@@ -49,6 +49,7 @@ import {
   codekbRepoName,
   relativeCodekbDir,
   RESERVED_RECORD_NAMES,
+  gridCostSummary,
   listIntents,
   listSpaces,
   loadAgents,
@@ -677,9 +678,19 @@ function handleDoctor(projectDir: string): void {
   const healthDir = hooksHealthDir(projectDir);
   const heartbeatEntries: string[] = [];
   const heartbeatDirExists = existsSync(healthDir);
+  // A health dir that exists but carries NO hook-fired content is equivalent to
+  // "not yet fired" (state a), not drift (state b). Besides the `.last`
+  // heartbeats, the dir may hold purely-diagnostic files that no hook firing
+  // produced: `hook-debug.log` (written by hookDebug under AIDLC_HOOK_DEBUG) and
+  // `.first-fired` (the sensor-fire banner marker). If ONLY those exist, treat
+  // it as fresh — otherwise enabling AIDLC_HOOK_DEBUG on a fresh install would
+  // flip this check from PASS to a false drift FAIL for exactly the user trying
+  // to diagnose hooks.
+  let hasHookFiredContent = false;
   if (heartbeatDirExists) {
     try {
       const files = readdirSync(healthDir).filter((f) => f.endsWith(".last"));
+      if (files.length > 0) hasHookFiredContent = true;
       for (const f of files) {
         try {
           const ts = readFileSync(join(healthDir, f), "utf-8").trim();
@@ -699,8 +710,9 @@ function handleDoctor(projectDir: string): void {
       pass: true,
       label: `Hooks last fired: ${heartbeatEntries.join(", ")}`,
     });
-  } else if (!heartbeatDirExists) {
-    // (a) fresh install — nothing to verify yet
+  } else if (!heartbeatDirExists || !hasHookFiredContent) {
+    // (a) fresh install (dir absent) OR a debug-only dir with no heartbeats yet
+    // — nothing to verify. Not drift.
     results.push({
       pass: true,
       label: "Hook heartbeats: not yet fired (first workflow stage will populate)",
@@ -3353,17 +3365,26 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   const stageDelta = executeStages.length - oldExecuteCount;
   const deltaStr = stageDelta >= 0 ? `+${stageDelta}` : String(stageDelta);
 
+  // Ceremony preview for the switch: gate count from the effective grid (the
+  // reverse-engineering greenfield adjustment already applied) so the same
+  // disclosure exists on a scope switch as on the cold-start confirm.
+  const gates = gridCostSummary(
+    adjustedMapping as Record<string, "EXECUTE" | "SKIP">,
+  ).gates;
+
   appendAuditEvent(projectDir, "SCOPE_CHANGED", {
     "Old Scope": oldScope,
     "New Scope": newScope,
     "Stage Count Delta": deltaStr,
     "Stages in Scope": String(executeStages.length),
+    "Approval Gates": String(gates),
     Depth: effectiveDepth,
   });
 
   process.stdout.write(
     `Scope changed: ${oldScope} → ${newScope}
 Stages in scope: ${executeStages.length} (${deltaStr})
+Approval gates: ${gates}
 Depth: ${effectiveDepth}
 Completed: ${completedCount}/${executeStages.length}
 `

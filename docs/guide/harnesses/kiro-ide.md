@@ -68,6 +68,13 @@ JSON). Each `.kiro.hook` runs a command that routes through the shared
 `aidlc-kiro-adapter.ts` shim, which normalizes the IDE's hook event into the
 shape the byte-shared core hooks expect.
 
+The IDE delivers hook context through the **`USER_PROMPT` environment variable**
+(not stdin — the IDE opens stdin but never writes to it). `USER_PROMPT` is a JSON
+string `{ toolName, toolArgs, toolResult, toolSuccess }`. The IDE leaves
+`toolArgs` empty, so the adapter recovers the written file path from the
+`toolResult` text and drives the payload-free hooks (`runtime-compile`,
+`sync-statusline`) off the audit trail instead of a tool payload.
+
 | Hook | IDE event | Purpose |
 |------|-----------|---------|
 | `aidlc-session-start` | `promptSubmit` | Injects workflow resume context |
@@ -75,12 +82,27 @@ shape the byte-shared core hooks expect.
 | `aidlc-session-end` | `agentStop` | Emits `SESSION_ENDED` (observability) |
 | `aidlc-stop` | `agentStop` | Forwarding-loop continuation |
 | `aidlc-block` | `preToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (human-presence floor) |
-| `aidlc-audit-logger` | `postToolUse` (write) | Logs artifact create/update |
-| `aidlc-sensor-fire` | `postToolUse` (write) | Fires applicable sensors |
-| `aidlc-runtime-compile` | `postToolUse` (shell) | Recompiles the runtime graph |
-| `aidlc-sync-statusline` | `postToolUse` (spec) | Syncs state on task transitions |
+| `aidlc-audit-logger` | `postToolUse` (write) | Logs artifact create/update (path from `toolResult`) |
+| `aidlc-sensor-fire` | `postToolUse` (write) | Fires applicable sensors (path from `toolResult`) |
+| `aidlc-runtime-compile` | `postToolUse` (shell) | Recompiles the runtime graph (gated on the audit tail) |
+| `aidlc-sync-statusline` | `postToolUse` (shell) | Forward-only sync of `Current Stage` from the latest `STAGE_STARTED` in the audit (the `spec` event never fires in the IDE) |
 
 You will see a "Run Command Hook" line in chat each time one fires.
+
+### Debugging hooks
+
+If a hook isn't behaving as expected, turn on debug logging and each hook
+appends its decision path (which gate it took, the resolved paths, why it
+exited) to `<record>/.aidlc-hooks-health/hook-debug.log`. It is **off by
+default** — no log is written and there is no overhead on a normal run. Two
+ways to enable it, either works:
+
+- **Filesystem marker (easiest on Kiro IDE):** `touch aidlc/.aidlc-hook-debug`
+  in your project. It takes effect on the very next hook fire — no IDE restart —
+  and `rm aidlc/.aidlc-hook-debug` turns it back off.
+- **Environment variable:** `export AIDLC_HOOK_DEBUG=1`. Because the IDE runs
+  hooks in non-interactive shells, set it where those shells read it — add the
+  export to `~/.zshenv` (zsh) or `~/.bashrc` (bash), then restart the IDE.
 
 ## What's different on Kiro IDE
 

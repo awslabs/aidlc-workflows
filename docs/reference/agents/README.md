@@ -64,14 +64,14 @@ Every agent *can* reach Bash and WebSearch by inheritance; the table records whi
 
 | Model | Agents |
 |-------|--------|
-| opus | aidlc-architect-agent, aidlc-product-agent, aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-aws-platform-agent |
-| sonnet | aidlc-delivery-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
+| opus | aidlc-architect-agent, aidlc-product-agent, aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-devsecops-agent, aidlc-compliance-agent, aidlc-aws-platform-agent, aidlc-composer-agent |
+| sonnet | aidlc-architecture-reviewer-agent, aidlc-product-lead-agent, aidlc-delivery-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
 
-Opus is the default. An agent uses sonnet only when its output is dominantly
+Every shipped agent declares an explicit `model:`; omitting it would make the subagent inherit the session model on Claude Code. An agent uses sonnet only when its output is dominantly
 templated — delivery plans, CI/CD YAML, observability and runbook scaffolding —
 and the methodology is already encoded in the agent's knowledge files.
 
-The eight opus agents share one property: their work requires high-judgment,
+The nine opus agents share one property: their work requires high-judgment,
 multi-constraint reasoning whose decisions cascade downstream. Architectural
 boundaries, interpretation of ambiguous intent, UX trade-offs, code synthesis
 under dense context, risk-based test strategy, threat prioritisation,
@@ -116,7 +116,7 @@ category.
 
 **Observations:**
 - The aidlc-architect-agent has the broadest stage involvement (9 stages across 3 phases), reflecting its role as the central design authority.
-- Eight of 11 agents run on opus; the three sonnet agents (delivery, pipeline-deploy, operations) produce dominantly templated planning, CI/CD, and runbook output where methodology is already encoded in knowledge files.
+- Across the full 14-agent roster, nine run on opus and five on sonnet; the sonnet agents (architecture-reviewer, product-lead, delivery, pipeline-deploy, operations) produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
 - The aidlc-compliance-agent operates purely in an advisory capacity (4 support stages across Ideation, Construction, and Operation; no lead stages).
 - Six of 11 agents have Bash access, all in roles that need CLI interaction (infrastructure, security, development, testing, deployment, operations).
 - Three agents have WebSearch access for research tasks (product, design, compliance).

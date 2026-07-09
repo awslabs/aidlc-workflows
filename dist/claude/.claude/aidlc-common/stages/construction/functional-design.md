@@ -16,6 +16,11 @@ produces:
   - domain-entities
 optional_produces:
   - frontend-components
+produces_kinds:
+  business-logic-model: [service, ui, library]
+  business-rules: [service, spec, library]
+  domain-entities: [service, spec, library]
+  frontend-components: [ui]
 consumes:
   - artifact: unit-of-work
     required: true
@@ -43,7 +48,7 @@ scopes:
   - refactor
   - workshop
 inputs: unit-of-work.md, unit-of-work-story-map.md, requirements.md, application design artifacts
-outputs: "business-logic-model.md, business-rules.md, domain-entities.md, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved)"
+outputs: "business-logic-model.md, business-rules.md, domain-entities.md, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)"
 ---
 
 # Functional Design

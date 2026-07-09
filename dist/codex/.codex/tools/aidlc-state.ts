@@ -13,6 +13,7 @@ import {
   emitError,
   errorMessage,
   extractMarkdownSection,
+  filterProducesByKind,
   findStageBySlug,
   findAllEvents,
   firstInScopeStageOfPhase,
@@ -30,6 +31,8 @@ import {
   parseRefsList,
   parseStateStageSuffixes,
   readAllAuditShards,
+  readBoltDagUnitKinds,
+  readBoltDagUnits,
   readStateFile,
   recordDir,
   relativeMemoryPath,
@@ -157,6 +160,177 @@ function hasStageAuditEvent(
   });
 }
 
+// True when a written File path (from an ARTIFACT_CREATED/ARTIFACT_UPDATED audit
+// row) is one of the stage's declared produces[] artifacts. Matches on the path
+// SUFFIX `/<slug>/<name>.md` rather than resolving one absolute dir, so it
+// covers BOTH the standard <record>/<phase>/<slug>/ layout AND the per-unit
+// construction/<unit>/<slug>/ layout without needing to know the {unit}
+// segment. The audit File field is stored forward-slash-normalised
+// (aidlc-audit-logger.ts), so the forward-slash suffix match is harness-neutral;
+// we still normalise defensively in case a caller passes a raw OS path.
+function producesArtifactFile(
+  stage: { slug: string; produces?: string[] },
+  file: string
+): boolean {
+  const produces = stage.produces ?? [];
+  if (produces.length === 0) return false;
+  const norm = file.replace(/\\/g, "/");
+  return produces.some((name) => norm.endsWith(`/${stage.slug}/${name}.md`));
+}
+
+// The gate-revision backstop predicate (the reconciliation half of the
+// forwarding-reliability gap). TRUE when the human demonstrably revised the
+// stage's artifact at an OPEN gate but no `reject` verb was ever recorded, so
+// `approve` should backfill the missing GATE_REJECTED + STAGE_REVISING pair
+// rather than silently under-record the revision (leaving Revision Count 0 and
+// no audit pair for a revision the user actually saw happen).
+//
+// Chronological interleave of six event types across every shard (Timestamp,
+// then buffer position as the tiebreak): the SAME sort idiom humanActedSinceGate
+// uses (aidlc-lib.ts). readAllAuditShards concatenates per-clone shards in
+// FILENAME order, which is NOT time order, so a raw-position scan could misrank
+// an older event living in a lexically-later shard. findAllEvents is NOT usable
+// here: it filters ONE event type per call, and this predicate needs one
+// interleaved ordering across all six to reason about "after the gate opened".
+//
+// The four conjuncts, all required:
+//   1. an anchor exists: the LAST ORGANIC (non-Recovered) STAGE_AWAITING_APPROVAL
+//      for this slug, or, when the stage was (re)started after it / it never
+//      happened, the LAST STAGE_STARTED for this slug (the current stage run's
+//      boundary). Recovered=true gate rows are NEVER the anchor: report
+//      synthesizes one right before approve when the conductor skipped
+//      gate-start, so its timestamp postdates the human turns and revision
+//      writes the predicate needs inside the window, AND
+//   2. no GATE_REJECTED for this slug after that anchor (a recorded reject means
+//      the verb already ran, nothing to backfill), AND
+//   3. at least one HUMAN_TURN after the anchor (the human responded at the
+//      gate), AND
+//   4. at least one ARTIFACT_CREATED/ARTIFACT_UPDATED to a declared produces file
+//      AFTER the FIRST post-anchor HUMAN_TURN.
+//
+// The HUMAN_TURN pivot in conjunct 4 is load-bearing: the reviewer appends its
+// `## Review` section to the primary artifact BEFORE the human responds at the
+// gate (stage-protocol.md §12a), firing an ARTIFACT_UPDATED on a produces file.
+// Anchoring the artifact window at the first post-anchor human turn (not the gate
+// open) excludes that legitimate pre-response append, so the reviewer's edit is
+// never mistaken for a human-driven revision.
+//
+// When the anchor is the STAGE_STARTED fallback (no organic gate row for this
+// run), one extra conjunct applies: a produces-file write must ALSO exist
+// BETWEEN the anchor and the first post-anchor HUMAN_TURN. Without a recorded
+// gate-open, "the artifact already existed when the human weighed in" is the
+// evidence separating a gate revision from ordinary production: mid-stage
+// coaching (human speaks BEFORE any write, conductor then produces) must not
+// bump Revision Count. An SAA anchor needs no such guard - production precedes
+// gate-open by construction there.
+//
+// Fail-open everywhere (empty ledger, no anchor, no post-anchor human turn ->
+// false): the backstop only ever ADDS a reject it can prove happened; when the
+// evidence is absent it does nothing and the normal approve proceeds. codekb
+// stages are excluded entirely: their produces live directly under <repo>/ with
+// no <slug> subdir, and that multi-repo drift is a separate mechanism.
+function unrecordedRevisionSinceGateOpen(
+  pd: string,
+  stage: { slug: string; produces?: string[] }
+): boolean {
+  if (KNOWN_CODEKB_STAGES.has(stage.slug)) return false;
+  const audit = readAllAuditShards(pd);
+  if (audit.length === 0) return false; // no ledger -> nothing to reconcile
+  const RELEVANT = new Set([
+    "STAGE_AWAITING_APPROVAL",
+    "STAGE_STARTED",
+    "GATE_REJECTED",
+    "HUMAN_TURN",
+    "ARTIFACT_CREATED",
+    "ARTIFACT_UPDATED",
+  ]);
+  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const events: {
+    ts: string;
+    pos: number;
+    event: string;
+    stage: string | null;
+    file: string | null;
+    recovered: boolean;
+  }[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const ev = auditField(blocks[i], "Event");
+    if (!ev || !RELEVANT.has(ev)) continue;
+    events.push({
+      ts: auditField(blocks[i], "Timestamp") ?? "",
+      pos: i,
+      event: ev,
+      stage: auditField(blocks[i], "Stage"),
+      file: auditField(blocks[i], "File"),
+      recovered: auditField(blocks[i], "Recovered") === "true",
+    });
+  }
+  events.sort((a, b) => {
+    if (a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
+    return a.pos - b.pos;
+  });
+  // 1. Anchor: the LAST ORGANIC gate-open for this slug, else the LAST
+  // STAGE_STARTED for it, whichever is later. A Recovered=true gate row is
+  // report's own approve-time backfill: it postdates the human turns and the
+  // revision this predicate is looking for, so anchoring on it empties the
+  // window and produces the false negative on the skip-everything flow (the
+  // common shape of the bug). The stage-start fallback bounds the window to
+  // the current run when the conductor never opened the gate at all.
+  let anchor = -1;
+  let anchorIsGateOpen = false;
+  for (let i = 0; i < events.length; i++) {
+    if (events[i].stage !== stage.slug) continue;
+    if (events[i].event === "STAGE_AWAITING_APPROVAL" && !events[i].recovered) {
+      anchor = i;
+      anchorIsGateOpen = true;
+    } else if (events[i].event === "STAGE_STARTED") {
+      anchor = i;
+      anchorIsGateOpen = false;
+    }
+  }
+  if (anchor === -1) return false;
+  // 2 + 3 in one pass after the anchor: any recorded reject for this slug means
+  // the verb ran (return false); otherwise capture the FIRST human turn as the
+  // artifact-window pivot. For the stage-start fallback anchor, also require a
+  // produces write BEFORE that pivot (see the function comment): without a
+  // recorded gate-open, an artifact that predates the human's response is the
+  // evidence the human was reacting to produced work rather than coaching a
+  // stage that had produced nothing yet.
+  let firstHuman = -1;
+  let wroteBeforeHuman = false;
+  for (let i = anchor + 1; i < events.length; i++) {
+    const e = events[i];
+    if (e.event === "GATE_REJECTED" && e.stage === stage.slug) {
+      return false;
+    }
+    if (firstHuman === -1) {
+      if (e.event === "HUMAN_TURN") {
+        firstHuman = i;
+      } else if (
+        (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") &&
+        e.file !== null &&
+        producesArtifactFile(stage, e.file)
+      ) {
+        wroteBeforeHuman = true;
+      }
+    }
+  }
+  if (firstHuman === -1) return false;
+  if (!anchorIsGateOpen && !wroteBeforeHuman) return false;
+  // 4. A produces-file artifact write after the first post-anchor human turn.
+  for (let i = firstHuman + 1; i < events.length; i++) {
+    const e = events[i];
+    if (
+      (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") &&
+      e.file !== null &&
+      producesArtifactFile(stage, e.file)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // --- Slug + small helpers (used by fork/merge handlers below; declared
 // before main() so they're initialised before dispatch fires) ---
 
@@ -232,6 +406,9 @@ function main(): void {
       case "set-skeleton-stance":
         handleSetSkeletonStance(args.slice(1));
         break;
+      case "set-construction-iteration":
+        handleSetConstructionIteration(args.slice(1));
+        break;
       case "checkbox":
         handleCheckbox(args.slice(1));
         break;
@@ -294,7 +471,7 @@ function main(): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, park, unpark`
+          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, park, unpark`
         );
     }
   } catch (e) {
@@ -396,6 +573,45 @@ function handleSetSkeletonStance(args: string[]): void {
   );
   writeStateFile(pd, updated);
   console.log(JSON.stringify({ updated: true, skeleton_stance: stance }));
+  });
+}
+
+// set-construction-iteration <unit-major|stage-major>: record how construction
+// design stages iterate over units. `Construction Iteration` is runtime metadata
+// (like Skeleton Stance): it is NOT in the base state template, so we use
+// setOrInsertField to update-if-present / insert-under-`## Runtime State`-if-absent.
+// No audit row: the field is metadata the next `aidlc-orchestrate next` reads to
+// pick the (stage, unit) walk order, not a state-machine transition; it rides no
+// event, exactly like `set` and `set-skeleton-stance`. The classify round-trip is
+// initiated by the delivery-planning stage prose (or set directly by a human); the
+// engine writes nothing itself.
+function handleSetConstructionIteration(args: string[]): void {
+  // Declared inside the handler for the same TDZ reason as skeleton stance:
+  // main() runs at module load before a module-level const would initialise.
+  const constructionIterationValues = ["unit-major", "stage-major"];
+  if (args.length < 1) {
+    error(
+      `Usage: aidlc-state.ts set-construction-iteration <${constructionIterationValues.join("|")}>`,
+    );
+  }
+  const value = args[0];
+  if (!constructionIterationValues.includes(value)) {
+    error(
+      `Invalid construction iteration "${value}". Valid: ${constructionIterationValues.join(", ")}.`,
+    );
+  }
+  const pd = resolveProjectDir(projectDir);
+  // Lost-update safety: read-then-write under one lock, as for the stance write.
+  withAuditLock(pd, () => {
+  const content = readStateFile(pd);
+  const updated = setOrInsertField(
+    content,
+    "## Runtime State",
+    "Construction Iteration",
+    value,
+  );
+  writeStateFile(pd, updated);
+  console.log(JSON.stringify({ updated: true, construction_iteration: value }));
   });
 }
 
@@ -556,6 +772,14 @@ function artifactGuardDisabled(): boolean {
   return process.env.AIDLC_SKIP_ARTIFACT_GUARD === "1";
 }
 
+// Deterministic off-switch for the approve-time gate-revision backstop (mirrors
+// artifactGuardDisabled above). The suite sets this globally so no existing
+// approve/reject test changes behaviour; the dedicated backstop test clears it
+// to exercise the real reconciliation.
+function revisionBackstopDisabled(): boolean {
+  return process.env.AIDLC_SKIP_REVISION_BACKSTOP === "1";
+}
+
 // Resolve the directories a stage's produces[] artifacts would live under,
 // mirroring aidlc-orchestrate.ts's resolveArtifactPath against the v2 per-intent
 // seams. Three placement classes:
@@ -608,12 +832,31 @@ function producesDirsForStage(
 
 // True when at least one declared produces[] artifact exists on disk under the
 // stage's resolved directory. A stage with empty produces[] vacuously passes.
+//
+// Unit-kind all-vacuous exemption: a per-unit stage carrying a produces_kinds
+// map can legitimately owe ZERO artifacts across ALL units (e.g. a workflow of
+// only packaging units on functional-design). No unit ever wrote a per-unit
+// dir, so the ANY-exists glob below is empty and would refuse the approval the
+// engine just presented. When a bolt_dag with unit kinds exists AND every unit
+// in the dag filters to an empty required set, return true (the stage does not
+// apply to any unit). Any unit owing any artifact leaves the ANY-exists check
+// exactly as strict as today.
 function producesArtifactsExist(
   pd: string,
-  stage: { slug: string; phase: string; for_each?: string; produces?: string[] }
+  stage: { slug: string; phase: string; for_each?: string; produces?: string[]; produces_kinds?: Record<string, string[]> }
 ): boolean {
   const produces = stage.produces ?? [];
   if (produces.length === 0) return true; // nothing declared -> nothing to verify
+  if (stage.for_each === "unit-of-work" && stage.produces_kinds !== undefined) {
+    const units = readBoltDagUnits(pd);
+    const kinds = readBoltDagUnitKinds(pd);
+    if (units !== null && kinds !== null) {
+      const allVacuous = units.every(
+        (u) => filterProducesByKind(stage.produces_kinds, produces, kinds.get(u) ?? null).length === 0,
+      );
+      if (allVacuous) return true;
+    }
+  }
   for (const dir of producesDirsForStage(pd, stage)) {
     for (const name of produces) {
       if (existsSync(join(dir, `${name}.md`))) return true;
@@ -764,7 +1007,7 @@ function workspaceHasWork(pd: string): boolean {
 // untouched. `stage` is the StageEntry being completed. No-op when bypass active.
 function verifyStageArtifacts(
   pd: string,
-  stage: { slug: string; name: string; phase: string; for_each?: string; produces?: string[]; workspace_requires?: boolean }
+  stage: { slug: string; name: string; phase: string; for_each?: string; produces?: string[]; produces_kinds?: Record<string, string[]>; workspace_requires?: boolean }
 ): void {
   if (artifactGuardDisabled()) return;
 
@@ -1334,6 +1577,54 @@ function handleApprove(args: string[]): void {
         `can commit. Acknowledge the gate as a human, then approve. (autonomous ` +
         `Construction is exempt)`
     );
+  }
+
+  // Gate-revision backstop: reconcile a revision the conductor performed at an
+  // open gate but never recorded (it skipped the `reject` verb). When the ledger
+  // proves the human revised this stage's artifact at the open gate with no
+  // recorded reject (unrecordedRevisionSinceGateOpen), backfill the missing
+  // GATE_REJECTED + STAGE_REVISING pair (tagged Recovered) and re-open the gate,
+  // then fall through to the normal approve below. RECONCILIATION, never refusal:
+  // a forced retroactive reject would consume the human-presence freshness
+  // boundary (the HUMAN_TURN this gate's approval depends on) and refuse the
+  // approval the human already gave, so we record the missing history and honour
+  // the approval, rather than blocking it. The intermediate [R]/[?] checkbox
+  // states never hit disk: the one writeStateFile below lands the final [x]
+  // (mirrors handleReject's gate-start backfill, which likewise never writes the
+  // intermediate [?]). Skipped under the off-switch and in autonomous Construction
+  // (no human at the gate, so no human-driven revision to reconcile).
+  if (
+    !revisionBackstopDisabled() &&
+    !isAutonomousMode(content) &&
+    unrecordedRevisionSinceGateOpen(pd, stage)
+  ) {
+    const priorCount = getField(content, "Revision Count");
+    const priorParsed = priorCount ? parseInt(priorCount, 10) : 0;
+    const revCount = (Number.isFinite(priorParsed) ? priorParsed : 0) + 1;
+    content = setField(content, "Revision Count", String(revCount));
+    // Audit-first: a failed emission aborts before any state write (matches the
+    // GATE_APPROVED/STAGE_COMPLETED try/catch below).
+    try {
+      emitAudit(pd, "GATE_REJECTED", {
+        Stage: slug,
+        Recovered: "true",
+        Details:
+          "Backfilled by the revision backstop: the artifact was revised at " +
+          "an open gate with no reject recorded",
+      });
+      emitAudit(pd, "STAGE_REVISING", {
+        Stage: slug,
+        "Revision count": String(revCount),
+        Recovered: "true",
+      });
+      emitAudit(pd, "STAGE_AWAITING_APPROVAL", {
+        Stage: slug,
+        Recovered: "true",
+        Details: "Re-entering gate after backfilled revision",
+      });
+    } catch (e) {
+      error(`Audit emission failed: ${errorMessage(e)}`);
+    }
   }
 
   const timestamp = isoTimestamp();

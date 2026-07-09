@@ -30,6 +30,11 @@ export interface StageEntry {
   // coverage check in aidlc-orchestrate.ts unitCovered. See GraphStage in
   // aidlc-graph.ts.
   optional_produces?: string[];
+  // Per-kind applicability map: artifact name to the unit kinds it applies to.
+  // An unlisted artifact applies to all kinds; a listed one is pruned out of a
+  // unit whose kind is not in its list (both directive paths and coverage).
+  // Absent map = full matrix (every produces entry applies to every unit).
+  produces_kinds?: Record<string, string[]>;
   consumes?: Array<{ artifact: string; required: boolean; conditional_on?: string }>;
   requires_stage?: string[];
   scopes?: string[];
@@ -42,6 +47,33 @@ export interface StageEntry {
   // approve/advance: a code-generation stage that wrote only its markdown
   // produces[] docs but no actual code must not pass (issue #366).
   workspace_requires?: boolean;
+}
+
+// The per-unit marker carried by the Construction stages that run once per
+// Unit of Work. It lives on the stage's `for_each` field (stage frontmatter,
+// compiled onto the GraphStage and into stage-graph.json). The canonical
+// 5-stage set (nfr-requirements, nfr-design, functional-design,
+// infrastructure-design, code-generation) is the defensive cross-check; the
+// node's own `for_each` is the source of truth so a future per-unit stage is
+// picked up without editing this file. Exported so both the runtime resolver
+// (isPerUnit in aidlc-orchestrate.ts) and the cost summary (gridCostSummary
+// below) resolve per-unit identically.
+export const PER_UNIT_FOR_EACH = "unit-of-work";
+export const KNOWN_PER_UNIT_STAGES: ReadonlySet<string> = new Set([
+  "nfr-requirements",
+  "nfr-design",
+  "functional-design",
+  "infrastructure-design",
+  "code-generation",
+]);
+
+// True when a stage runs once per Unit of Work. Reads the node's own
+// `for_each` marker (source of truth); the known-set membership is a defensive
+// cross-check so a typo'd marker on one of the five canonical stages still
+// resolves per-unit. Structural param so both a GraphStage and a bare
+// {slug, for_each} record satisfy it.
+export function isPerUnitStage(e: { slug: string; for_each?: string }): boolean {
+  return e.for_each === PER_UNIT_FOR_EACH || KNOWN_PER_UNIT_STAGES.has(e.slug);
 }
 
 export interface ScopeDefinition {
@@ -2842,6 +2874,29 @@ export function findAllEvents(
   return results.map(({ timestamp, block }) => ({ timestamp, block }));
 }
 
+// Latest STAGE_STARTED slug in an audit buffer, or null if none. findAllEvents
+// returns events in chronological order (timestamp, then buffer position), so
+// the last STAGE_STARTED block is the most recent transition. The slug lives in
+// the block's `**Stage**:` field (appendAuditEntry writes the fields verbatim).
+// Payload-free derivation of "what stage are we on" — used by the Kiro IDE
+// sync-statusline path, where the hook receives no task payload and must read
+// the current stage from the audit tail instead.
+//
+// EXCLUDES synthetic `--single` stage-runner rows (Workflow: single-stage:<slug>)
+// — those belong to no main workflow and must never rewrite the main pointer
+// (mirrors the filter in aidlc-state.ts hasStageAuditEvent). Without this a
+// single-stage run's STAGE_STARTED would become the "latest" and the IDE
+// sync would repoint the main Current Stage at it.
+export function latestStartedStageSlug(audit: string): string | null {
+  const started = findAllEvents(audit, "STAGE_STARTED").filter(
+    (ev) => !/^\*\*Workflow\*\*:\s*single-stage:/m.test(ev.block),
+  );
+  if (started.length === 0) return null;
+  const last = started[started.length - 1];
+  const m = last.block.match(/^\*\*Stage\*\*:\s*([a-z][a-z0-9-]*)\s*$/m);
+  return m ? m[1] : null;
+}
+
 // --- Data loaders ---
 
 const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), "data");
@@ -3541,6 +3596,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "workspace_requires",
     "produces",
     "optional_produces",
+    "produces_kinds",
     "consumes",
     "requires_stage",
     "sensors",
@@ -3555,7 +3611,19 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     const v: unknown = obj[key];
     if (v === undefined) continue;
 
-    if (key === "consumes") {
+    if (key === "produces_kinds") {
+      // A map of artifact-name to inline kind list. Emit in insertion order
+      // (the parse order the record preserves) so parse, emit, parse
+      // round-trips (t65's contract).
+      if (!isPlainObject(v)) continue;
+      const entries = Object.entries(v);
+      if (entries.length === 0) continue;
+      lines.push("produces_kinds:");
+      for (const [name, kinds] of entries) {
+        if (!Array.isArray(kinds)) continue;
+        lines.push(`  ${name}: [${(kinds as unknown[]).map((k) => String(k)).join(", ")}]`);
+      }
+    } else if (key === "consumes") {
       if (!Array.isArray(v)) continue;
       const consumes: unknown[] = v;
       if (consumes.length === 0) {
@@ -3604,6 +3672,46 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
 
   lines.push("---");
   return `${lines.join("\n")}\n`;
+}
+
+// Map-of-lists parser for the produces_kinds: frontmatter block. Matches an
+// indented block of `artifact-name: [kind, kind]` lines under the top-level
+// key, each value an INLINE list only (mirrors listField's strictness: a
+// block-list value is rejected, not silently mis-parsed):
+//
+//   produces_kinds:
+//     frontend-components: [ui]
+//     scalability-requirements: [service]
+//
+// Returns an insertion-ordered record (parse order), so emitStageFrontmatter
+// can round-trip it byte-identically. Each value is split with the same
+// bracket logic parseInlineDepsList uses for depends_on. An empty inline list
+// (`[]`) yields an empty array; the schema validator rejects that as a
+// non-empty-list violation. Throws on a non-inline value so a mistaken
+// block-list author error fails loud rather than dropping the entry.
+function mapOfListsField(fm: string, key: string): Record<string, string[]> {
+  const blockRe = new RegExp(
+    `^${key}:\\s*\\n((?:[ \\t]+[a-z][a-z0-9-]*\\s*:\\s*[^\\n]*(?:\\r?\\n|$))+)`,
+    "m"
+  );
+  const m = fm.match(blockRe);
+  if (!m) return {};
+  const out: Record<string, string[]> = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    if (line.trim() === "") continue;
+    const entry = line.match(/^\s+([a-z][a-z0-9-]*)\s*:\s*(.+?)\s*$/);
+    if (!entry) {
+      throw new Error(`Malformed ${key} entry in frontmatter: ${line.trim()}`);
+    }
+    const value = entry[2].trim();
+    if (!(value.startsWith("[") && value.endsWith("]"))) {
+      throw new Error(
+        `${key}.${entry[1]} must be an inline list (e.g. [service, ui]), got: ${value}`
+      );
+    }
+    out[entry[1]] = parseInlineDepsList(value);
+  }
+  return out;
 }
 
 // Nested-object list parser. Matches the specific shape stage-definition.md
@@ -3823,6 +3931,57 @@ export function stagesInScope(
   }));
 }
 
+// --- Scope cost summary ---
+//
+// One source of truth for the ceremony a scope (or an arbitrary composer grid)
+// carries: stage counts, approval-gate count, and per-unit fan-out. The routing
+// strings, the birth print, the scope-change output, and the composer validator
+// all read these numbers instead of recomputing them, so the confirm the user
+// sees agrees with the grid the engine runs.
+
+export interface ScopeCostSummary {
+  total: number;         // stages in the grid (32 today, never hardcoded)
+  execute: number;       // EXECUTE count
+  skip: number;          // total - execute
+  gates: number;         // EXECUTE stages outside initialization; mirrors
+                         // computeGate() in aidlc-orchestrate.ts - change together
+  perUnitStages: number; // EXECUTE stages that repeat per Unit of Work
+}
+
+// Cost of an arbitrary EXECUTE/SKIP grid (the composer-proposal shape). Indexes
+// the compiled graph by slug once, then walks the grid entries. The gate rule
+// (EXECUTE stage whose phase is not initialization) is the closed form of
+// computeGate() in aidlc-orchestrate.ts - if a per-stage gate flag ever lands,
+// change both. Grid slugs missing from the graph contribute to total/execute
+// but not gates/perUnit (defensive; validate-grid already rejects unknown slugs
+// for a real proposal, so this only matters for a stale composed scope).
+export function gridCostSummary(
+  stages: Record<string, "EXECUTE" | "SKIP">,
+): ScopeCostSummary {
+  const byslug = new Map<string, StageEntry>();
+  for (const s of loadStageGraph()) byslug.set(s.slug, s);
+  const total = Object.keys(stages).length;
+  let execute = 0;
+  let gates = 0;
+  let perUnitStages = 0;
+  for (const [slug, action] of Object.entries(stages)) {
+    if (action !== "EXECUTE") continue;
+    execute++;
+    const node = byslug.get(slug);
+    if (!node) continue;
+    if (node.phase !== "initialization") gates++;
+    if (isPerUnitStage(node)) perUnitStages++;
+  }
+  return { total, execute, skip: total - execute, gates, perUnitStages };
+}
+
+// Cost of a named scope's grid. Returns null for an unknown scope.
+export function scopeCostSummary(scope: string): ScopeCostSummary | null {
+  const def = loadScopeMapping()[scope];
+  if (!def) return null;
+  return gridCostSummary(def.stages);
+}
+
 // --- Timestamp ---
 
 export function isoTimestamp(): string {
@@ -3849,6 +4008,56 @@ export function recordHookDrop(
     appendFileSync(dropFile, line, "utf-8");
   } catch {
     // Drop-log failure is truly non-fatal — we're already in a failure path.
+  }
+}
+
+// --- Hook debug log ---
+//
+// Append a structured debug line to `<health>/hook-debug.log` so a hook's
+// decision path can be inspected after a run WITHOUT re-deriving it by
+// hypothesis. OPT-IN ONLY, off by default (zero log growth / zero write cost on
+// a normal run). Two independent switches, either enables it:
+//   1. Env var `AIDLC_HOOK_DEBUG` — best for the CLI/Claude/Codex:
+//      `AIDLC_HOOK_DEBUG=1 <command>` or export it.
+//   2. Filesystem marker `aidlc/.aidlc-hook-debug` — best for Kiro IDE, where
+//      the hook subprocesses are spawned by the IDE and an env var needs an IDE
+//      restart to take effect. `touch aidlc/.aidlc-hook-debug` turns logging on
+//      for the very next hook fire (no restart); `rm` it to turn off. When
+//      projectDir cannot be resolved (rare), only the env var is consulted.
+// Never throws; logging must never break a hook's advisory exit-0 contract.
+export function hookDebugEnabled(projectDir?: string): boolean {
+  if (process.env.AIDLC_HOOK_DEBUG) return true;
+  if (projectDir) {
+    try {
+      return existsSync(join(workspaceRoot(projectDir), ".aidlc-hook-debug"));
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+export function hookDebug(
+  projectDir: string,
+  hookName: string,
+  message: string,
+  fields?: Record<string, unknown>,
+): void {
+  if (!hookDebugEnabled(projectDir)) return;
+  try {
+    const healthDir = hooksHealthDir(projectDir);
+    mkdirSync(healthDir, { recursive: true });
+    const logFile = join(healthDir, "hook-debug.log");
+    const parts = [isoTimestamp(), hookName, message];
+    if (fields && Object.keys(fields).length > 0) {
+      const flat = Object.entries(fields)
+        .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+        .join(" ");
+      parts.push(flat);
+    }
+    appendFileSync(logFile, `${parts.join("\t").replace(/\r?\n/g, " ")}\n`, "utf-8");
+  } catch {
+    // Debug-log failure is non-fatal — observability is best-effort.
   }
 }
 
@@ -4097,9 +4306,21 @@ export function replaceSection(
 
 // --- Bolt/unit dependency DAG (units-generation 2.7 → runtime compile) ---
 
+// The unit-kind enum: what a Unit of Work IS, so the engine can prune the
+// per-unit construction design matrix to the artifacts that actually apply.
+// A spec unit owes no scalability doc, a packaging unit no business-logic
+// model. Authored once at the 2.7 gate on the units-generation edge block and
+// confirmed by the human; consumed by the stage-schema validator (which shares
+// this constant) and the engine's produces filter. Missing kind = full matrix
+// (conservative default, zero behaviour change for untagged units).
+export const UNIT_KINDS = ["service", "spec", "ui", "packaging", "library"] as const;
+export type UnitKind = (typeof UNIT_KINDS)[number];
+
 export interface UnitDependencyEdge {
   name: string;
   depends_on: string[];
+  // Optional per-unit kind (UNIT_KINDS). Absent = full design-artifact matrix.
+  kind?: UnitKind;
 }
 
 // Discriminated result so the two consumers — the required-sections sensor
@@ -4203,6 +4424,25 @@ function parseUnitsBlock(block: string): UnitDependencyEdge[] {
       continue;
     }
 
+    // Optional per-unit kind. Mirrors the depends_on guard: a kind: line
+    // before any - name: is malformed. The value must be one of UNIT_KINDS;
+    // a typo fails loud here (mapped to reason "malformed" by parseBoltDag)
+    // rather than silently falling back to the full matrix. Last-write-wins
+    // on a duplicate kind: line, matching depends_on:'s posture.
+    const kindMatch = line.match(/^\s*kind\s*:\s*(.+?)\s*$/);
+    if (kindMatch) {
+      if (!current) throw new Error("kind: before any - name: entry");
+      const value = unquoteScalar(kindMatch[1]);
+      if (!(UNIT_KINDS as readonly string[]).includes(value)) {
+        throw new Error(
+          `unit "${current.name}" has invalid kind "${value}" ` +
+            `(expected ${UNIT_KINDS.join("|")})`
+        );
+      }
+      current.kind = value as UnitKind;
+      continue;
+    }
+
     // Block-form dependency item (a bare `- dep` under `depends_on:`).
     const itemMatch = line.match(/^\s*-\s+(.+?)\s*$/);
     if (itemMatch && current) {
@@ -4256,10 +4496,14 @@ function computeBatches(edges: UnitDependencyEdge[]): string[][] | null {
 //   ```yaml
 //   units:
 //     - name: auth
+//       kind: service
 //       depends_on: []
 //     - name: api
 //       depends_on: [auth]
 //   ```
+//
+// The optional `kind:` line (UNIT_KINDS) drives the per-unit construction
+// design-artifact pruning; omitting it keeps a unit on the full matrix.
 //
 // Pure data — no model call, no NLP. A given body always parses to the same
 // result, so a hook-fired re-compile of runtime-graph.json stays
@@ -4312,4 +4556,99 @@ export function parseBoltDag(body: string): BoltDagParse {
     return { ok: false, reason: "cyclic", detail: "dependency cycle detected" };
   }
   return { ok: true, units: edges, batches };
+}
+
+// Read the per-unit kinds off the compiled runtime graph's bolt_dag.units[]
+// (name to kind). Returns null when there is no graph file, no bolt_dag node, a
+// malformed graph, OR when no unit carries a kind: every null path means "no
+// kinds known", so the engine cheaply skips filtering and every unit stays on
+// the full matrix. Mirrors readBoltDagBatches' fail-safe posture: an absent or
+// unreadable graph is a legitimate branch, never a throw.
+//
+// Trust posture (also matching readBoltDagBatches): kind values are only
+// shape-checked here (string), not enum-checked - the UNIT_KINDS enum gate
+// lives at units-generation parse, before the graph is compiled. A unit
+// hand-tagged in the compiled graph with a valid-but-wrong kind therefore
+// over-prunes (or under-prunes) silently; the compiled graph is trusted as
+// already-validated input, same as its batches.
+export function readBoltDagUnitKinds(projectDir: string): Map<string, string> | null {
+  const path = runtimeGraphPath(projectDir);
+  if (!existsSync(path)) return null;
+  try {
+    const graph: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (graph !== null && typeof graph === "object" && "bolt_dag" in graph) {
+      const boltDag = (graph as { bolt_dag?: { units?: unknown } }).bolt_dag;
+      const units = boltDag?.units;
+      if (Array.isArray(units)) {
+        const kinds = new Map<string, string>();
+        for (const u of units) {
+          if (
+            u !== null &&
+            typeof u === "object" &&
+            typeof (u as { name?: unknown }).name === "string" &&
+            typeof (u as { kind?: unknown }).kind === "string"
+          ) {
+            kinds.set((u as { name: string }).name, (u as { kind: string }).kind);
+          }
+        }
+        if (kinds.size > 0) return kinds;
+      }
+    }
+  } catch {
+    // Malformed runtime graph: fail safe to "no kinds" (full matrix).
+  }
+  return null;
+}
+
+// Read every unit name off the compiled runtime graph's bolt_dag.units[].
+// Returns null on a missing file/node, a malformed graph, or an empty units
+// list. Companion to readBoltDagUnitKinds: the kinds map only carries the
+// kind-tagged units, but the all-vacuous coverage check needs the COMPLETE
+// unit set so an untagged unit (which owes the full matrix) still blocks a
+// wrong "everything is vacuous" verdict.
+export function readBoltDagUnits(projectDir: string): string[] | null {
+  const path = runtimeGraphPath(projectDir);
+  if (!existsSync(path)) return null;
+  try {
+    const graph: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (graph !== null && typeof graph === "object" && "bolt_dag" in graph) {
+      const boltDag = (graph as { bolt_dag?: { units?: unknown } }).bolt_dag;
+      const units = boltDag?.units;
+      if (Array.isArray(units)) {
+        const names: string[] = [];
+        for (const u of units) {
+          if (
+            u !== null &&
+            typeof u === "object" &&
+            typeof (u as { name?: unknown }).name === "string"
+          ) {
+            names.push((u as { name: string }).name);
+          }
+        }
+        if (names.length > 0) return names;
+      }
+    }
+  } catch {
+    // Malformed runtime graph: fail safe to "no units known".
+  }
+  return null;
+}
+
+// Prune a produces name list to the artifacts that apply to `unitKind`. Returns
+// `names` unchanged when the stage has no produces_kinds map or `unitKind` is
+// null (an untagged unit stays on the full matrix). For a kind-tagged unit, an
+// artifact NOT in the map applies to all kinds (authors annotate only the
+// kind-specific entries); a mapped artifact is kept only when its kind list
+// includes `unitKind`. Takes the raw map (not a node) so both the orchestrator
+// GraphStage and the state-tool StageEntry callers share one implementation.
+export function filterProducesByKind(
+  producesKinds: Record<string, string[]> | undefined,
+  names: string[],
+  unitKind: string | null
+): string[] {
+  if (unitKind === null || producesKinds === undefined) return names;
+  return names.filter((name) => {
+    const kinds = producesKinds[name];
+    return kinds === undefined || kinds.includes(unitKind);
+  });
 }

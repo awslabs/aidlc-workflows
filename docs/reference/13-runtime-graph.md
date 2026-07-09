@@ -46,7 +46,7 @@ interface RuntimeGraph {
 }
 
 interface BoltDag {
-  units: { name: string; depends_on: string[] }[]; // verbatim from the authored edge block
+  units: { name: string; depends_on: string[]; kind?: string }[]; // verbatim from the authored edge block; kind (service|spec|ui|packaging|library) present only when the edge block tags the unit
   batches: string[][];            // topological levels; each level = units whose deps are all satisfied by prior levels; level entries sorted lexicographically (deterministic)
 }
 
@@ -109,10 +109,20 @@ the permission" for a swarm fan-out. Its source is the **fenced
 ```yaml
 units:
   - name: auth
+    kind: service
     depends_on: []
   - name: api
     depends_on: [auth]
 ```
+
+Each unit may carry an optional `kind` (`service | spec | ui | packaging |
+library`), what the unit IS. It rides verbatim into `bolt_dag.units[].kind`
+and drives the per-unit construction design pruning (see
+[Stage definition](15-stage-definition.md) `produces_kinds`): a stage's produces
+artifacts are filtered to the ones that apply to each unit's kind. An untagged
+unit carries no `kind` key and keeps the full design-artifact matrix. An invalid
+kind value makes the whole block `malformed` (see below), so a typo fails loud at
+the 2.7 gate rather than pruning wrong.
 
 `compile` parses *that structured block* — a pure-data parse, no model
 call — into `units` (verbatim edges) and `batches` (topological
@@ -131,7 +141,7 @@ upstream at the 2.7 gate by the `required-sections` sensor, which
 validates the same block and reports `edge_block: ok | absent |
 malformed | cyclic`. Authoring the edges as structured data (knowledge
 work, once, behind the 2.7 approval gate) is what keeps the hook-fired
-`compile` byte-identical on re-run: no model sits in the compile path.
+`compile` byte-identical on re-run: no model sits in the compile path. The orchestrate engine self-heals per-unit iteration on the read side, recomputing batches from unit-of-work-dependency.md when the node is absent; the graph file itself is only repaired by the next compile.
 
 ---
 

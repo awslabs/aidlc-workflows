@@ -8,7 +8,7 @@ description: >
   Senior developer responsible for code generation, reverse engineering, and data modelling.
   Leads Reverse Engineering code scan and Code Generation stages.
 disallowedTools: Task
-modelOverride: opus
+model: opus
 tools: ["read", "write", "shell"]
 ---
 

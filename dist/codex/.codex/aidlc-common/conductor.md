@@ -18,7 +18,7 @@ For an `inline` stage, load the lead agent's flat file (e.g.
 `agents/aidlc-architect-agent.md`) and adopt its voice for the stage body — you
 are speaking as that domain expert. Load knowledge per `stage-protocol.md` §5
 knowledge-loading order. For a `subagent` stage, the `Task` boundary loads the
-persona and enforces the agent's `disallowedTools`/`modelOverride` — pass
+persona and enforces the agent's `disallowedTools`/`model` - pass
 context in the prompt (subagents cannot see conversation history), never inject
 the persona text yourself.
 

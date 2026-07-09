@@ -9,7 +9,7 @@ description: >
   Leads Infrastructure Design and Environment Provisioning stages.
   Supports Feasibility, Application Design, NFR Design, and Feedback & Optimization.
 disallowedTools: Task
-modelOverride: opus
+model: opus
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

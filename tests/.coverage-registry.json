@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 418,
+    "total": 431,
     "enumeratedByClass": {
-      "function": 203,
+      "function": 215,
       "audit": 70,
       "scope": 9,
       "stage": 32,
       "hook": 11,
-      "subcommand": 86,
+      "subcommand": 87,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 88,
+      "function": 90,
       "audit": 30,
       "scope": 9,
       "stage": 8,
       "hook": 10,
-      "subcommand": 73,
+      "subcommand": 74,
       "render-surface": 7
     }
   },
@@ -1233,6 +1233,10 @@
           "mechanism": "none"
         },
         {
+          "file": "tests/unit/t207-unit-kind-schema.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t64.test.ts",
           "mechanism": "none"
         }
@@ -1287,6 +1291,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:filterProducesByKind",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -1385,6 +1396,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:gridCostSummary",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t213-scope-cost-summary.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:harnessDir",
       "minMechanism": "none",
       "coveredBy": [
@@ -1426,6 +1449,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hookDebug",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hookDebugEnabled",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -1552,6 +1589,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isPerUnitStage",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isPlainObject",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1582,6 +1626,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:KNOWN_PER_UNIT_STAGES",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:latestStartedStageSlug",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -1858,6 +1916,10 @@
         {
           "file": "tests/unit/t133-bolt-dag-compile.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t207-unit-kind-schema.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1962,6 +2024,10 @@
           "mechanism": "none"
         },
         {
+          "file": "tests/unit/t207-unit-kind-schema.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t64.test.ts",
           "mechanism": "none"
         }
@@ -1971,6 +2037,13 @@
     {
       "unitClass": "function",
       "unitId": "function:parseStateStageSuffixes",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:PER_UNIT_FOR_EACH",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -2035,6 +2108,20 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readBoltDagUnitKinds",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readBoltDagUnits",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -2342,6 +2429,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:scopeCostSummary",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t213-scope-cost-summary.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:scopeGridPath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2574,6 +2673,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:UNIT_KINDS",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:unitDependencyPath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2618,6 +2724,10 @@
         {
           "file": "tests/unit/t190-validate-grid.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t213-scope-cost-summary.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -4028,6 +4138,10 @@
         {
           "file": "tests/unit/t199-learnings-memory-path.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t207-unit-kind-schema.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4177,6 +4291,10 @@
         },
         {
           "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t205-gate-revision-backstop.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4397,6 +4515,18 @@
         },
         {
           "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state set-construction-iteration",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t209-unit-major-iteration.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4739,6 +4869,10 @@
       "unitId": "aidlc-utility scope-change",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/unit/t214-routing-cost-strings.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t27.test.ts",
           "mechanism": "cli"

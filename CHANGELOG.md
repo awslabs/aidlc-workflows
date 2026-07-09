@@ -90,10 +90,6 @@ Stops help requests from accidentally creating intents. `/aidlc intent help` was
 * The "Unknown intent" error from a failed `/aidlc intent <name>` switch no longer suggests describing new work; it points at the read-only `/aidlc intent` listing and explicitly says not to start a new workflow to recover. The "Unknown space" error likewise no longer instructs creating the missing space - creation stays a separate, deliberate move.
 * The orchestrator skill's second-intent CONFIRM step named the wrong binary (`aidlc-utility.ts next ...`, which dies with a usage error listing `intent-birth` - a guard-bypass temptation); it now names `aidlc-orchestrate.ts next` on all four harnesses.
 * The Codex orchestrator skill's forwarding loop now tells the conductor to drop the leading `$aidlc`/`/aidlc` invocation marker and forward the remaining text as separate arguments (observed live on Codex exec: the conductor echoed the whole slash line as one quoted token, which hid `intent help` from the router and dead-ended on a scope ask). The engine deliberately does NOT try to repair marker-prefixed input - a mangled echo lands in the scope-confirmation ask, a safe human gate.
-||||||| parent of ef64a3e (fix: detect nested projects in workspace detection (2.2.7))
-||||||| parent of 48f8b61 (fix: bound the compose-pending carve-out and guard recompose against autonomy (2.2.8))
-||||||| parent of 4fd686b (fix: exempt optional produces from per-unit coverage so conditional artifacts can be skipped (2.2.9))
-||||||| parent of 4ad1db9 (fix: detect git submodules as a brownfield signal in workspace detection (2.2.10))
 
 ## [2.2.0] - 2026-07-04
 
