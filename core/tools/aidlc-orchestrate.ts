@@ -2756,7 +2756,7 @@ function handleSkeletonStanceReport(
   const stateContent = loadStateFileIfPresent(pd);
   if (!stateContent) {
     emit(errorDirective(
-      "No workflow state found (aidlc-docs/aidlc-state.md is absent) — nothing to record a skeleton stance for.",
+      "No workflow state found (no active intent record contains aidlc-state.md) — nothing to record a skeleton stance for.",
     ));
     return;
   }
@@ -2993,7 +2993,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     emit({
       kind: "error",
       message:
-        "No workflow state found (aidlc-docs/aidlc-state.md is absent) — nothing to report a transition for.",
+        "No workflow state found (no active intent record contains aidlc-state.md) — nothing to report a transition for. Cold-start scope answers must be returned by re-running next with the original task plus compose or --scope <scope>.",
     });
     return;
   }

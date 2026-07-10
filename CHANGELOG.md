@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.4] - 2026-07-10
+
+Cold-start scope confirmation now routes the user's selection back through `next` with the original task, instead of attempting `report` before an intent and `aidlc-state.md` exist. The old instruction made every ambiguous first prompt fail immediately after the user selected `compose` or a named scope. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Harness orchestrator skills now distinguish cold-start asks from asks on an active workflow: cold-start selections re-enter `next` with `compose` or `--scope`, while active-workflow answers continue to use `report --user-input`.
+* The no-state `report` diagnostic names the active intent record layout instead of the removed flat `aidlc-docs/aidlc-state.md` path and gives the correct cold-start recovery command shape.
+
 ## [2.3.3] - 2026-07-10
 
 `scope-change` now refuses to run under autonomous Construction, closing the gap its sibling `recompose` closed in 2.2.8: both verbs re-shape the live plan's EXECUTE/SKIP stage inclusion, and an unattended autonomous run has no human at the gate to approve the new shape. Previously the "never re-shape the plan under autonomy" rule was engine-enforced for `recompose` but prose-only for `scope-change`. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

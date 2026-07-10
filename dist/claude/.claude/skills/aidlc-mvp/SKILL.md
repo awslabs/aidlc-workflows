@@ -19,8 +19,8 @@ engine owns all routing; the conductor persona arrives on the first directive's
 ## The loop
 
 1. `directive = bun .claude/tools/aidlc-orchestrate.ts next --scope mvp $ARGUMENTS`
-2. Act on `directive.kind` exactly as the orchestrator does (run-stage / ask / print / error / done) — see `aidlc-common/protocols/stage-protocol.md`.
-3. `bun .claude/tools/aidlc-orchestrate.ts report --stage <directive.stage> --result <outcome> [--user-input "<text>"]` when the directive names a stage; omit `--stage` only for non-stage report round-trips.
+2. Act on `directive.kind` exactly as the orchestrator does (run-stage / ask / print / error / done) — see `aidlc-common/protocols/stage-protocol.md`. A cold-start scope-confirm `ask` has no workflow transition to report: re-run `next` with the original task plus `compose` or `--scope <scope>` instead.
+3. `bun .claude/tools/aidlc-orchestrate.ts report --stage <directive.stage> --result <outcome> [--user-input "<text>"]` when the directive names a stage; omit `--stage` only for non-stage report round-trips that already have workflow state.
 4. Repeat from step 1 until `directive.kind == done`.
 
 Pass `$ARGUMENTS` through verbatim after `--scope mvp`; the engine parses

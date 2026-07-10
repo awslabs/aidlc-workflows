@@ -60,6 +60,14 @@ function runNext(proj: string, args: string[]): RunResult {
   return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
+function runReport(proj: string, args: string[]): RunResult {
+  const res = spawnSync(BUN, [ORCH, "report", ...args, "--project-dir", proj], {
+    encoding: "utf-8",
+    cwd: proj,
+  });
+  return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+}
+
 function runUtility(proj: string, args: string[]): RunResult {
   const res = spawnSync(BUN, [UTIL, ...args, "--project-dir", proj], {
     encoding: "utf-8",
@@ -198,6 +206,25 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(d.kind).toBe("ask");
     expect(String(d.question)).toContain("compose");
     expect(String(d.question)).not.toContain('"feature" workflow');
+  });
+
+  test("cold-start answers are routed through next, not report", () => {
+    proj = createTestProject();
+    removeWorkspaceRecord(proj);
+
+    const report = directiveOf(
+      runReport(proj, ["--result", "completed", "--user-input", "feature"]).out,
+    );
+    expect(report.kind).toBe("error");
+    expect(String(report.message)).toContain(
+      "Cold-start scope answers must be returned by re-running next",
+    );
+
+    const selected = directiveOf(
+      runNext(proj, ["--scope", "feature", "build a 3d football game"]).out,
+    );
+    expect(selected.kind).toBe("print");
+    expect(String(selected.message)).toContain("intent-birth --scope feature");
   });
 
   test("known-scope positional still births (Branch 7b untouched)", () => {
