@@ -2962,7 +2962,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t220-reviewer-scope-hook.test.ts",
+          "file": "tests/unit/t221-reviewer-scope-hook.test.ts",
           "mechanism": "cli"
         }
       ],

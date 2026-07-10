@@ -1,4 +1,4 @@
-// t220-reviewer-scope-hook: the deterministic PreToolUse enforcement of the
+// t221-reviewer-scope-hook: the deterministic PreToolUse enforcement of the
 // per-unit reviewer read-scope bound (stage-protocol 12a).
 //
 // covers: hook:aidlc-reviewer-scope, file:aidlc-common/protocols/stage-protocol.md §12a,
@@ -47,7 +47,7 @@ const DISPATCH: Pick<ReviewerDispatch, "unit" | "exempt"> = {
   ],
 };
 
-describe("t220 (a) evaluateReviewerScope decision table", () => {
+describe("t221 (a) evaluateReviewerScope decision table", () => {
   const CASES: Array<{
     name: string;
     tool: string;
@@ -266,7 +266,7 @@ describe("t220 (a) evaluateReviewerScope decision table", () => {
 // plus a bare workspace record root the dispatch record lands under (no
 // intent registry -> docsRoot resolves to aidlc/spaces/default/intents/).
 function scratchProject(): string {
-  const dir = mkdtempSync(join(tmpdir(), "t220-"));
+  const dir = mkdtempSync(join(tmpdir(), "t221-"));
   mkdirSync(join(dir, ".claude", "hooks"), { recursive: true });
   mkdirSync(join(dir, ".claude", "tools"), { recursive: true });
   cpSync(join(AIDLC_SRC, "hooks", "aidlc-reviewer-scope.ts"), join(dir, ".claude", "hooks", "aidlc-reviewer-scope.ts"));
@@ -315,7 +315,7 @@ const SIBLING_SWEEP = {
   agent_type: "aidlc-architecture-reviewer-agent",
 };
 
-describe("t220 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => {
+describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => {
   test("fresh record + dispatched reviewer + sibling sweep -> exit 2 with the redirecting reason", () => {
     const proj = scratchProject();
     seedRecord(proj);
@@ -404,14 +404,14 @@ describe("t220 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
     // idiom) so the seeded shard and the hook's resolved shard agree.
     const auditDir = join(proj, "aidlc", "spaces", "default", "intents", "audit");
     mkdirSync(auditDir, { recursive: true });
-    writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), "t220clone\n", "utf-8");
+    writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), "t221clone\n", "utf-8");
     const host =
       hostname()
         .toLowerCase()
         .replace(/[^a-z0-9-]+/g, "-")
         .replace(/^-+|-+$/g, "")
         .slice(0, 48) || "host";
-    const shardPath = join(auditDir, `${host}-t220clone.md`);
+    const shardPath = join(auditDir, `${host}-t221clone.md`);
     writeFileSync(shardPath, "# Audit\n", "utf-8");
     const r = runHook(proj, SIBLING_SWEEP);
     expect(r.code).toBe(2);
@@ -426,7 +426,7 @@ describe("t220 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
 // (c) Registration + protocol prose pins.
 // ---------------------------------------------------------------------------
 
-describe("t220 (c) harness registration and protocol prose", () => {
+describe("t221 (c) harness registration and protocol prose", () => {
   test("Claude settings.json wires the hook on PreToolUse with the six-tool matcher", () => {
     const s = JSON.parse(readFileSync(join(AIDLC_SRC, "settings.json"), "utf-8")) as {
       hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;

@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/aws/amazon-q-developer-cli/refs/heads/main/schemas/agent-v1.json",
   "name": "aidlc-architecture-reviewer-agent",
-  "description": "AI-DLC Architecture Reviewer \u2014 delegation target for reviewing design artifacts for soundness and implementability.",
+  "description": "AI-DLC Architecture Reviewer — delegation target for reviewing design artifacts for soundness and implementability.",
   "prompt": "file://aidlc-architecture-reviewer-agent.md",
   "tools": [
     "fs_read",
@@ -52,5 +52,5 @@
       }
     ]
   },
-  "model": "claude-opus-4.8"
+  "model": "claude-sonnet-4.5"
 }

@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/aws/amazon-q-developer-cli/refs/heads/main/schemas/agent-v1.json",
   "name": "aidlc-product-lead-agent",
-  "description": "AI-DLC Product Lead Reviewer \u2014 delegation target for reviewing requirements, user stories, and mockups.",
+  "description": "AI-DLC Product Lead Reviewer — delegation target for reviewing requirements, user stories, and mockups.",
   "prompt": "file://aidlc-product-lead-agent.md",
   "tools": [
     "fs_read",
@@ -52,5 +52,5 @@
       }
     ]
   },
-  "model": "claude-opus-4.8"
+  "model": "claude-sonnet-4.5"
 }
