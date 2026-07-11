@@ -3347,6 +3347,10 @@
         {
           "file": "tests/unit/t227-hook-run-exports.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t229-dispatcher-routes.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3418,6 +3422,10 @@
         },
         {
           "file": "tests/unit/t13-hook-input-robustness.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t229-dispatcher-routes.test.ts",
           "mechanism": "cli"
         }
       ],
