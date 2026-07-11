@@ -47,6 +47,20 @@ Reviewers are now verifiers: every declared review runs under an explicit **adve
 * The four harness orchestrator skills' reviewer steps carry a one-line restatement of the adversarial framing, following the read-scope precedent.
 * No behavior change to the review loop mechanics: verdict flow, `reviewer_max_iterations`, HITL escalation, dispatch records, and the read-scope hook are all as in 2.3.4.
 
+## [2.3.15] - 2026-07-14
+
+Workspace nouns gained real verbs (`list`, `switch`, `create`, and `birth`) while preserving bare-name switch sugar. Verb-shaped names are now reserved at intent and space creation, `/aidlc --doctor` flags pre-existing verb-named records as an advisory, and the Kiro CLI adapter preserves quoted multi-word workspace names. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `/aidlc space create teamB` now creates space `teamB`; previously it attempted to switch to a space named `create`. The legacy `/aidlc space-create teamB` spelling still works.
+* `/aidlc space list` now lists spaces, and `/aidlc space list --json` or `/aidlc space --json` emits the existing structured space listing.
+* `/aidlc space switch teamB` now explicitly switches to `teamB`; bare `/aidlc space teamB` still switches as before. `/aidlc space create` and `/aidlc space switch` now return usage errors instead of treating the verb as a name.
+* `/aidlc intent list` now lists intents, and `/aidlc intent list --json` or `/aidlc intent --json` emits the existing structured intent listing.
+* `/aidlc intent switch list` now explicitly switches to an existing intent whose slug is `list`; bare `/aidlc intent <name>` still switches as before. `/aidlc intent switch` now returns a usage error instead of switching to `switch`.
+* `/aidlc intent birth --scope poc --label x` now forwards the remaining flags to `intent-birth`; previously the terminal workspace branch collapsed the command to `intent birth` and lost the flags.
+* `/aidlc intent archive foo`, `/aidlc intent rename foo`, `/aidlc intent show foo`, and the matching `space` forms now return "reserved for a future workspace verb and is not implemented yet" with guidance to use explicit `switch` to reach an existing record with that name.
+* New intent labels and space names may not be `help`, current workspace verbs, or reserved future verbs; creation fails with a reserved-name message asking for a descriptive label or team name. Existing records with those names remain reachable via explicit `intent switch <name>` or `space switch <name>`, and doctor reports them as an advisory.
+* Kiro CLI `/aidlc` verb interception now keeps double-quoted names as one argv token, so `/aidlc space create "My Space"` reaches the utility as one name.
+
 ## [2.3.10] - 2026-07-14
 
 The linter sensor now pins the eslint version it runs (`eslint@10`) instead of resolving whatever `eslint` bunx finds first. A bare `bunx eslint` prefers a project-local node_modules copy, then any `eslint` on PATH, before fetching from the registry - and distro packages ship ancient versions (Ubuntu's apt eslint is 6.4.0, installed as a transitive dependency of `apt install npm`). Pre-flat-config eslint cannot read `eslint.config.js`, so on such a box every linter fire silently degraded to a `Note=tool-unavailable` PASS, masking real lint findings. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

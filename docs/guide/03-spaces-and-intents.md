@@ -176,9 +176,12 @@ Create, list, and switch spaces with verbs that mirror the intent verbs exactly:
 
 ```
 /aidlc space                      List all spaces
-/aidlc space-create payments-team Create a new space, seeded from the framework baseline
-/aidlc space payments-team        Switch the active space to "payments-team"
+/aidlc space create payments-team Create a new space, seeded from the framework baseline
+/aidlc space switch payments-team Switch the active space to "payments-team"
 ```
+
+The older `/aidlc space-create <name>` and bare `/aidlc space <name>` forms are
+still accepted.
 
 A newly created space starts with the framework's default method (`org.md`) and
 fresh, empty `team.md` / `project.md` practice files — a new team earns its own

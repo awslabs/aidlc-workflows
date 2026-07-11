@@ -408,9 +408,10 @@ export const DEFAULT_SPACE = "default";
 //   - read-only utility flags: matched ANYWHERE in the args (mirrors the engine's
 //     parseNextFlags, which sets `readOnly` on any matching token). Each maps to
 //     its subcommand by stripping the leading `--` (--status→status, …).
-//   - workspace navigation verbs: matched ONLY as the LEADING token (i === 0), so
-//     freeform prose merely containing "space"/"intent" stays intent text. The
-//     optional <name> arg is args[1] when present and not itself a --flag.
+//   - workspace commands: parsed ONLY when the LEADING token is a workspace
+//     noun/legacy verb, so freeform prose merely containing "space"/"intent"
+//     stays intent text. A leading workspace noun wins over later read-only
+//     flags because those tokens belong to that command's argv.
 export const READ_ONLY_FLAGS: ReadonlySet<string> = new Set([
   "--status",
   "--help",
@@ -422,12 +423,204 @@ export const WORKSPACE_VERBS: ReadonlySet<string> = new Set([
   "space-create",
   "intent",
 ]);
-// Slugs a record (intent or space) may never take. "help" is grammar: the
-// router treats `intent help` / `space help` as a help request, so a record
-// with that slug would be unswitchable by name. Refusing it at the creation
-// chokepoints (birthIntent, handleSpaceCreate) keeps the namespace and the
-// grammar from ever colliding.
-export const RESERVED_RECORD_NAMES: ReadonlySet<string> = new Set(["help"]);
+
+export type WorkspaceNoun = "intent" | "space";
+
+export const INTENT_VERBS: ReadonlySet<string> = new Set([
+  "list",
+  "switch",
+  "birth",
+]);
+
+export const SPACE_VERBS: ReadonlySet<string> = new Set([
+  "list",
+  "switch",
+  "create",
+]);
+
+export const RESERVED_FUTURE: ReadonlySet<string> = new Set([
+  "archive",
+  "rename",
+  "show",
+]);
+
+export type WorkspaceCommand =
+  | { kind: "list"; noun: WorkspaceNoun; json: boolean }
+  | { kind: "switch"; noun: WorkspaceNoun; name: string; explicit: boolean }
+  | { kind: "create"; noun: "space"; name: string }
+  | { kind: "birth"; noun: "intent"; rest: string[] }
+  | { kind: "help"; noun: WorkspaceNoun }
+  | {
+      kind: "error";
+      noun: WorkspaceNoun;
+      code: "missing-name";
+      verb: "switch" | "create" | "space-create";
+      message: string;
+    }
+  | {
+      kind: "error";
+      noun: WorkspaceNoun;
+      code: "reserved-future-verb";
+      verb: string;
+      message: string;
+    }
+  | { kind: "not-workspace" };
+
+function missingWorkspaceName(
+  noun: WorkspaceNoun,
+  verb: "switch" | "create" | "space-create",
+): WorkspaceCommand {
+  const usage =
+    verb === "space-create"
+      ? "space-create <name>"
+      : `${noun} ${verb} <name>`;
+  return {
+    kind: "error",
+    noun,
+    code: "missing-name",
+    verb,
+    message: `Usage: aidlc ${usage}`,
+  };
+}
+
+function reservedFutureWorkspaceVerb(noun: WorkspaceNoun, verb: string): WorkspaceCommand {
+  return {
+    kind: "error",
+    noun,
+    code: "reserved-future-verb",
+    verb,
+    message: `${noun} ${verb} is reserved for a future workspace verb and is not implemented yet. Use ${noun} switch ${verb} to select an existing record with that name.`,
+  };
+}
+
+function isWorkspaceNoun(token: string | undefined): token is WorkspaceNoun {
+  return token === "intent" || token === "space";
+}
+
+function isReservedFutureWorkspaceVerb(token: string | undefined): token is string {
+  return token !== undefined && RESERVED_FUTURE.has(token);
+}
+
+function explicitWorkspaceList(noun: WorkspaceNoun, tokens: string[]): WorkspaceCommand {
+  return { kind: "list", noun, json: tokens[2] === "--json" };
+}
+
+export function parseWorkspaceCommand(tokens: string[]): WorkspaceCommand {
+  const head = tokens[0];
+
+  if (head === "space-create") {
+    const name = tokens[1];
+    if (name === undefined) return missingWorkspaceName("space", "space-create");
+    return { kind: "create", noun: "space", name };
+  }
+
+  if (!isWorkspaceNoun(head)) return { kind: "not-workspace" };
+
+  const noun = head;
+  const verbOrName = tokens[1];
+
+  if (verbOrName === undefined) {
+    return { kind: "list", noun, json: false };
+  }
+
+  if (verbOrName === "--json") {
+    return { kind: "list", noun, json: true };
+  }
+
+  if (verbOrName === "help" || verbOrName === "-h") {
+    return { kind: "help", noun };
+  }
+
+  if (isReservedFutureWorkspaceVerb(verbOrName)) {
+    return reservedFutureWorkspaceVerb(noun, verbOrName);
+  }
+
+  if (noun === "intent") {
+    if (verbOrName === "list") return explicitWorkspaceList(noun, tokens);
+    if (verbOrName === "switch") {
+      const name = tokens[2];
+      if (name === undefined) return missingWorkspaceName(noun, "switch");
+      return { kind: "switch", noun, name, explicit: true };
+    }
+    if (verbOrName === "birth") {
+      return { kind: "birth", noun, rest: tokens.slice(2) };
+    }
+  }
+
+  if (noun === "space") {
+    if (verbOrName === "list") return explicitWorkspaceList(noun, tokens);
+    if (verbOrName === "switch") {
+      const name = tokens[2];
+      if (name === undefined) return missingWorkspaceName(noun, "switch");
+      return { kind: "switch", noun, name, explicit: true };
+    }
+    if (verbOrName === "create") {
+      const name = tokens[2];
+      if (name === undefined) return missingWorkspaceName(noun, "create");
+      return { kind: "create", noun, name };
+    }
+  }
+
+  return { kind: "switch", noun, name: verbOrName, explicit: false };
+}
+
+export function workspaceCommandUtilityArgv(command: WorkspaceCommand): string[] | null {
+  switch (command.kind) {
+    case "list":
+      return command.json ? [command.noun, "--json"] : [command.noun];
+    case "switch":
+      return [command.noun, command.name];
+    case "create":
+      return ["space-create", command.name];
+    case "birth":
+      return ["intent-birth", ...command.rest];
+    case "help":
+      return ["help"];
+    case "error":
+    case "not-workspace":
+      return null;
+  }
+}
+
+export function splitDoubleQuotedArgs(raw: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === "\\" && raw[i + 1] === "\"") {
+      current += "\"";
+      i++;
+      continue;
+    }
+    if (ch === "\"") {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (!inQuotes && /\s/.test(ch)) {
+      if (current.length > 0) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += ch;
+  }
+  if (current.length > 0) tokens.push(current);
+  return tokens;
+}
+
+export const RESERVED_RECORD_NAME_LIST = Object.freeze(
+  [...new Set(["help", ...INTENT_VERBS, ...SPACE_VERBS, ...RESERVED_FUTURE])],
+);
+
+// Slugs a record (intent or space) may never take. These names are grammar:
+// help, current workspace verbs, and reserved future verbs all change how the
+// router reads `intent <token>` / `space <token>`. Refusing them at the
+// creation chokepoints keeps new records reachable. Pre-existing records with
+// these names remain reachable via explicit `switch`; doctor flags them as an
+// advisory so humans can rename them deliberately.
+export const RESERVED_RECORD_NAMES: ReadonlySet<string> = new Set(RESERVED_RECORD_NAME_LIST);
 
 // A classified terminal command: the aidlc-utility.ts subcommand to run, plus an
 // optional positional arg (the <name> for a workspace verb). `source` records
@@ -435,7 +628,39 @@ export const RESERVED_RECORD_NAMES: ReadonlySet<string> = new Set(["help"]);
 export interface TerminalCommand {
   subcommand: string;
   arg?: string;
+  args?: string[];
+  error?: string;
+  display?: string;
   source: "read-only-flag" | "workspace-verb";
+}
+
+function terminalCommandFromWorkspaceCommand(
+  command: WorkspaceCommand,
+  originalArgs: string[],
+): TerminalCommand | null {
+  if (command.kind === "not-workspace") return null;
+  if (command.kind === "help") {
+    return { subcommand: "help", source: "read-only-flag" };
+  }
+  if (command.kind === "error") {
+    return {
+      subcommand: "error",
+      error: command.message,
+      display: originalArgs.join(" "),
+      source: "workspace-verb",
+    };
+  }
+  const argv = workspaceCommandUtilityArgv(command);
+  if (argv === null) return null;
+  const [subcommand, ...tail] = argv;
+  const terminal: TerminalCommand = { subcommand, source: "workspace-verb" };
+  if (tail.length === 1 && !tail[0].startsWith("--")) {
+    terminal.arg = tail[0];
+  }
+  if (tail.length > 1 || (tail.length === 1 && tail[0].startsWith("--"))) {
+    terminal.args = tail;
+  }
+  return terminal;
 }
 
 // Classify the post-`/aidlc` argument tokens. Returns the terminal command to run
@@ -453,27 +678,17 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) {
     return { subcommand: "help", source: "read-only-flag" };
   }
+  // Leading workspace nouns own the command. Any later read-only-looking token
+  // is part of that workspace command's argv, not a mode switch, because the
+  // public grammar promises leading-token semantics.
+  const workspaceCommand = parseWorkspaceCommand(args);
+  if (workspaceCommand.kind !== "not-workspace") {
+    return terminalCommandFromWorkspaceCommand(workspaceCommand, args);
+  }
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (READ_ONLY_FLAGS.has(a)) {
       return { subcommand: a.replace(/^--/, ""), source: "read-only-flag" };
-    }
-    if (i === 0 && WORKSPACE_VERBS.has(a)) {
-      const next = args[i + 1];
-      const arg = next !== undefined && !next.startsWith("--") ? next : undefined;
-      // `intent help`/`-h` / `space help`/`-h` is a help request, not a switch
-      // to a record named "help" (no per-verb help exists; the failed switch's
-      // error text steers the conductor into birthing an intent, and "help" is
-      // a reserved record name - see RESERVED_RECORD_NAMES). Mirrors
-      // parseNextFlags. space-create is excluded: its handler refuses a
-      // help-shaped name itself rather than silently printing help (the
-      // reserved-name guard alone would miss "-h", which slugifies to "h").
-      if ((a === "intent" || a === "space") && (arg === "help" || arg === "-h")) {
-        return { subcommand: "help", source: "read-only-flag" };
-      }
-      return arg !== undefined
-        ? { subcommand: a, arg, source: "workspace-verb" }
-        : { subcommand: a, source: "workspace-verb" };
     }
   }
   return null;

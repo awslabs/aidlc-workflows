@@ -37,6 +37,7 @@ import {
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
+  splitDoubleQuotedArgs,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
@@ -92,7 +93,7 @@ function extractNextArgs(expandedPrompt: string): string[] {
   // inside a markdown code span, so the args end at the backtick.
   const m = expandedPrompt.match(/aidlc-orchestrate\.ts next ([^`\n]*)`/);
   if (!m) return [];
-  return m[1].trim().split(/\s+/).filter((t) => t.length > 0);
+  return splitDoubleQuotedArgs(m[1].trim());
 }
 
 if (target === "verb-intercept") {
@@ -134,12 +135,17 @@ if (target === "verb-intercept") {
   if (cmd === null) return 0; // not a terminal command — conductor handles it
 
   const cwd = kiro.cwd ?? process.cwd();
-  const utilArgs = [join(".kiro", "tools", "aidlc-utility.ts"), cmd.subcommand];
-  if (cmd.arg !== undefined) utilArgs.push(cmd.arg);
-  // Reuse the exact bun binary running this adapter; the child must not depend on
-  // PATH containing bun (the hook environment often lacks the bun install dir).
-  const run = Bun.spawnSync([process.execPath, ...utilArgs], { cwd, stdout: "pipe", stderr: "pipe" });
-  const out = ((run.stdout?.toString() ?? "") + (run.stderr?.toString() ?? "")).trim();
+  const forwarded = cmd.args ?? (cmd.arg !== undefined ? [cmd.arg] : []);
+  let out: string;
+  if (cmd.error !== undefined) {
+    out = cmd.error;
+  } else {
+    const utilArgs = [join(".kiro", "tools", "aidlc-utility.ts"), cmd.subcommand, ...forwarded];
+    // Reuse the exact bun binary running this adapter; the child must not depend on
+    // PATH containing bun (the hook environment often lacks the bun install dir).
+    const run = Bun.spawnSync([process.execPath, ...utilArgs], { cwd, stdout: "pipe", stderr: "pipe" });
+    out = ((run.stdout?.toString() ?? "") + (run.stderr?.toString() ?? "")).trim();
+  }
 
   // Turn-scoped latch: a terminal command was handled OFF-BAND this turn (the
   // seam ran the tool; the conductor only relays). Stamp the latch with the
@@ -154,7 +160,7 @@ if (target === "verb-intercept") {
       mkdirSync(join(cwd, "aidlc"), { recursive: true });
       const flag = cmd.source === "read-only-flag"
         ? cmd.subcommand
-        : (cmd.arg ? cmd.subcommand + " " + cmd.arg : cmd.subcommand);
+        : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
       writeFileSync(
         join(cwd, "aidlc", ".aidlc-readonly-latch"),
         JSON.stringify({ turn, flag, source: cmd.source, ts: Date.now() }) + "\n",
@@ -166,7 +172,7 @@ if (target === "verb-intercept") {
   // short-circuit message is legible.
   const typed = cmd.source === "read-only-flag"
     ? `--${cmd.subcommand}`
-    : `${cmd.subcommand}${cmd.arg ? " " + cmd.arg : ""}`;
+    : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
   process.stdout.write(
     `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness — it is a read-only/navigation command that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n--- OUTPUT ---\n${out}\n--- END OUTPUT ---\n`,
   );
@@ -192,7 +198,7 @@ if (target === "pretool-block") {
   const cmdStr = String(kiro.tool_input?.command ?? "");
   const cwd = kiro.cwd ?? process.cwd();
   const m = cmdStr.match(/aidlc-orchestrate\.ts\s+next\b([^\n]*)/);
-  const nextArgs = m ? m[1].trim().split(/\s+/).filter((t) => t.length > 0) : [];
+  const nextArgs = m ? splitDoubleQuotedArgs(m[1].trim()) : [];
   // A next carrying ANY advancing/config flag is a DELIBERATE move — only a truly
   // bare next is the spurious roll-forward. Mirrors the engine done-guard's
   // exemptions (the engine doesn't parse --init/--force — retired P4 — so listing

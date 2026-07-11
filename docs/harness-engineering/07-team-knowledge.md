@@ -193,7 +193,7 @@ What this means for the knowledge and rules you author:
   `team.md` / `project.md` — so a new team starts from the framework's defaults
   and earns its own practices rather than inheriting another team's.
 - **You don't author spaces in `core/`.** A space is runtime team data, created
-  with `/aidlc space-create <name>` in an installed project — the same
+  with `/aidlc space create <name>` in an installed project - the same
   data-not-code line that separates team knowledge from framework source. There
   is nothing to add to `core/` or regenerate to support multiple teams; the
   capability ships in the engine.

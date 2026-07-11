@@ -869,6 +869,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t225-scope-name-decoupling.test.ts",
     "unit/t226-tool-entrypoint-exports.test.ts",
     "unit/t227-hook-run-exports.test.ts",
+    "unit/t228-workspace-parser.test.ts",
     "unit/t27.test.ts",
     "unit/t29.test.ts",
     "unit/t30-hook-session-end.test.ts",

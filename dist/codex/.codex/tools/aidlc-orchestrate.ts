@@ -102,6 +102,7 @@ import {
   parseStateStageSuffixes,
   PHASE_NUMBERS,
   PHASES,
+  parseWorkspaceCommand,
   READ_ONLY_FLAGS,
   readAllAuditShards,
   readBoltDagUnitKinds,
@@ -117,7 +118,8 @@ import {
   unitDependencyPath,
   validScopes,
   harnessDir,
-  WORKSPACE_VERBS,
+  type WorkspaceCommand,
+  workspaceCommandUtilityArgv,
 } from "./aidlc-lib.ts";
 import {
   type Consume,
@@ -147,11 +149,11 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 // orchestrator's freeform-fallback default (SKILL.md detect-scope fallback).
 const DEFAULT_SCOPE = "feature";
 
-// READ_ONLY_FLAGS (--status/--help/--doctor/--version) and WORKSPACE_VERBS
-// (space/space-create/intent) — the terminal-command sets — are the single
-// source of truth in aidlc-lib.ts (imported above), so the engine's `next`
-// routing and any pre-LLM harness seam (the Kiro userPromptSubmit dispatch)
-// classify the same tokens identically. See classifyTerminalCommand there.
+// READ_ONLY_FLAGS (--status/--help/--doctor/--version) and the shared workspace
+// parser (space/space-create/intent) are the terminal-command sources of truth
+// in aidlc-lib.ts, so the engine's `next` routing and any pre-LLM harness seam
+// (the Kiro userPromptSubmit dispatch) classify the same tokens identically.
+// See classifyTerminalCommand there.
 // Both dispatch before any state inspection (SKILL.md "Read-Only Utility
 // Commands" + workspace-vision §3): each maps to a TERMINAL print directive —
 // the engine answers "what move?", the conductor runs the tool and prints its
@@ -284,7 +286,7 @@ interface ParsedFlags {
   single?: boolean; // --single: run ONE stage under a synthetic workflow id, never touching the main pointer
   newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME birth directive (with the --label seam) the fresh-start path uses, instead of constructing intent-birth from SKILL.md prose
   intent?: string; // freeform request text (no leading --flag)
-  workspaceVerb?: { verb: string; arg?: string }; // leading workspace verb (space/space-create/intent) + optional <name> arg
+  workspaceCommand?: WorkspaceCommand; // leading workspace command (space/space-create/intent)
   compose?: boolean; // leading `compose` verb: force the composer (front or in-flight)
   newScope?: boolean; // --new-scope: force the composer to SYNTHESIZE a custom scope even when a stock scope matches
   report?: string; // --report <path>: compose from a scan report (the composer triages the file)
@@ -308,37 +310,20 @@ function parseNextFlags(args: string[]): ParsedFlags {
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) {
     return { readOnly: "--help" };
   }
+  // Leading workspace nouns own the command. Any later read-only-looking token
+  // is part of that workspace command's argv, not a mode switch, because the
+  // public grammar promises leading-token semantics.
+  const workspaceCommand = parseWorkspaceCommand(args);
+  if (workspaceCommand.kind !== "not-workspace") {
+    if (workspaceCommand.kind === "help") return { readOnly: "--help" };
+    return { workspaceCommand };
+  }
   const flags: ParsedFlags = {};
   const intentWords: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (READ_ONLY_FLAGS.has(a)) {
       flags.readOnly = a;
-      continue;
-    }
-    // A LEADING workspace verb (space/space-create/intent) is the explicit
-    // workspace navigation move (workspace-vision §3). Only the FIRST positional
-    // token counts (i === 0) so freeform prose containing "space"/"intent"
-    // mid-sentence stays intent text. The optional <name> arg is args[1] when it
-    // is present and not itself a --flag; consume it so it is not pushed as
-    // freeform. The engine maps this to a terminal print naming the handler.
-    if (i === 0 && WORKSPACE_VERBS.has(a)) {
-      const next = args[i + 1];
-      const arg = next !== undefined && !next.startsWith("--") ? next : undefined;
-      // `intent help`/`-h` / `space help`/`-h` is a help REQUEST, not a switch
-      // to a record named "help": no per-verb help exists, and the failed
-      // switch would die with an error whose recovery text steers the
-      // conductor into birthing an intent ("help" is also a reserved record
-      // name - RESERVED_RECORD_NAMES - so no real record is shadowed). Route
-      // it to the global help print. space-create is excluded: its handler
-      // refuses a help-shaped name itself with an actionable error (the
-      // reserved-name guard alone would miss "-h", which slugifies to "h").
-      // PARITY: classifyTerminalCommand (aidlc-lib.ts) mirrors this rule.
-      if ((a === "intent" || a === "space") && (arg === "help" || arg === "-h")) {
-        return { readOnly: "--help" };
-      }
-      flags.workspaceVerb = arg !== undefined ? { verb: a, arg } : { verb: a };
-      if (arg !== undefined) i++;
       continue;
     }
     // A LEADING `compose` verb forces the composer (front on a fresh workspace,
@@ -1292,7 +1277,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // swallowed. Inert on Claude/Codex: the latch files are never written there (no
   // seam) → fresh is always false → falls through. Advisory: any failure fails
   // open to the normal `next`.
-  if (!flags.readOnly && !flags.workspaceVerb && !flags.stage && !flags.phase &&
+  if (!flags.readOnly && !flags.workspaceCommand && !flags.stage && !flags.phase &&
       !flags.scope && !flags.intent && !flags.resume && !flags.depth && !flags.testStrategy &&
       !flags.single && !flags.compose && !flags.newScope && !flags.report) {
     try {
@@ -1346,24 +1331,31 @@ function handleNext(args: string[], projectDir: string | undefined): void {
     return;
   }
 
-  // Branch 1b — workspace navigation verbs (space/space-create/intent) dispatch
+  // Branch 1b — workspace commands (space/space-create/intent) dispatch
   // BEFORE any state inspection, mirroring Branch 1. This MUST precede
   // resolveProjectDir/loadState: a switch works whether or not a workflow is
   // active, and placing it later would let e.g. `space teamB` fall into the
-  // happy-path branch and advance the WRONG intent (the bug this fixes). All of
-  // space / space-create / intent map to the same TERMINAL print shape — switch
-  // is a cursor write that echoes the new world and stops, space-create mutates
-  // but advances no workflow, and a bare `space`/`intent` (no arg) is a
-  // read-only listing — so none of them leaves anything for `next` to continue
-  // into. The deterministic handler (aidlc-utility.ts) itself branches
-  // list-vs-switch on whether the <name> arg is present, so the engine just
-  // passes args[1] through when captured and omits it when absent — it does NOT
-  // replicate that decision here. The harness dir is resolved through
-  // harnessDir() so the directive names the right tree on every harness.
-  if (flags.workspaceVerb) {
-    const { verb, arg } = flags.workspaceVerb;
+  // happy-path branch and advance the WRONG intent. The shared parser decides
+  // list/switch/create/birth/error semantics, then this adapter renders the
+  // deterministic utility argv. Leading-token precedence is deliberate: a
+  // `--status` after a workspace noun is that command's token, not a mode
+  // switch. The harness dir is resolved through harnessDir() so the directive
+  // names the right tree on every harness.
+  if (flags.workspaceCommand) {
+    const command = flags.workspaceCommand;
+    if (command.kind === "error") {
+      emit(errorDirective(command.message));
+      return;
+    }
+    const argv = workspaceCommandUtilityArgv(command);
+    if (argv === null) {
+      emit(errorDirective("Invalid workspace command."));
+      return;
+    }
+    const [verb, ...tail] = argv;
+    const suffix = tail.length > 0 ? ` ${tail.join(" ")}` : "";
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}${arg ? " " + arg : ""}\`, print its output verbatim, then stop.`,
+      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}${suffix}\`, print its output verbatim, then stop.`,
     ));
     return;
   }
