@@ -231,7 +231,7 @@ beforeAll(() => {
     BUN,
     [
       UTIL_TS,
-      "init",
+      "intent-birth",
       "--scope",
       "bugfix",
       "--project-dir",

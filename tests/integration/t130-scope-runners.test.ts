@@ -137,7 +137,7 @@ function firstMoveDirective(scope: string): Directive {
     BUN,
     [
       tool(proj, "aidlc-utility.ts"),
-      "init",
+      "intent-birth",
       "--scope",
       scope,
       "--project-dir",

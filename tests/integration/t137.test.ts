@@ -202,7 +202,7 @@ interface CliResult {
 function init(p: string): CliResult {
   const res = spawnSync(
     BUN,
-    [UTIL, "init", "--scope", "bugfix", "--project-dir", p],
+    [UTIL, "intent-birth", "--scope", "bugfix", "--project-dir", p],
     { encoding: "utf-8", env: { ...process.env, AIDLC_WORKFLOW_INTENT: "chaos" } },
   );
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };

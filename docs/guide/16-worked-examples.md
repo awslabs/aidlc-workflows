@@ -42,7 +42,7 @@ You respond:
 
 ### Initialization (stages 0.1-0.3) — auto-proceed
 
-The 3 Initialization stages run as a single deterministic tool call (`aidlc-utility init`) in well under a second, without user interaction:
+The 3 Initialization stages run as a single deterministic tool call (`aidlc-utility intent-birth`) in well under a second, without user interaction:
 
 - **0.1 Workspace Scaffold** — Auto-births the first intent and creates its record dir at `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/` (written `<record>/` below) — `<YYMMDD>` is a compact UTC date prefix so records sort chronologically, and `<label>` is the conductor's short kebab-case essence of the request; the canonical id is a UUIDv7 carried in the `intents.json` registry row
 - **0.2 Workspace Detection** — Rule-based scan identifies Java 17, Spring Boot 3.2, Maven, brownfield project
@@ -187,7 +187,7 @@ This example builds a notification service for a task management application. Th
 
 ### Initialization (stages 0.1-0.3) — auto-proceed
 
-The 3 Initialization stages run automatically inside `aidlc-utility init`. Workspace Detection identifies: TypeScript, Node.js 20, Express, PostgreSQL, brownfield project with existing task and user services.
+The 3 Initialization stages run automatically inside `aidlc-utility intent-birth`. Workspace Detection identifies: TypeScript, Node.js 20, Express, PostgreSQL, brownfield project with existing task and user services.
 
 > Progress: 3/32 overall | Scope: feature, Depth: Standard
 

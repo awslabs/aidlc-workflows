@@ -131,7 +131,7 @@ interface InitResult {
 function runInit(scope: string, p: string): InitResult {
   const res = spawnSync(
     BUN,
-    [UTIL, "init", "--scope", scope, "--project-dir", p],
+    [UTIL, "intent-birth", "--scope", scope, "--project-dir", p],
     {
       encoding: "utf-8",
       env: { ...process.env, AIDLC_WORKFLOW_INTENT: "phase sequence test" },

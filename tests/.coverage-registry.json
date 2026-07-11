@@ -20,14 +20,14 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 463,
+    "total": 468,
     "enumeratedByClass": {
       "function": 242,
       "audit": 72,
       "scope": 9,
       "stage": 32,
       "hook": 12,
-      "subcommand": 89,
+      "subcommand": 94,
       "render-surface": 7
     },
     "coveredByClass": {
@@ -36,7 +36,7 @@
       "scope": 9,
       "stage": 8,
       "hook": 12,
-      "subcommand": 76,
+      "subcommand": 81,
       "render-surface": 7
     }
   },
@@ -4934,7 +4934,35 @@
           "mechanism": "sdk"
         },
         {
+          "file": "tests/unit/t230-handler-additions.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t27.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility config-get",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t230-handler-additions.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility config-list",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t230-handler-additions.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5094,6 +5122,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t230-handler-additions.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t27.test.ts",
           "mechanism": "cli"
         }
@@ -5171,6 +5203,30 @@
         },
         {
           "file": "tests/unit/t232-phase-progress-flip.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility plugin-list",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t230-handler-additions.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility plugin-sync",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t230-handler-additions.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5378,6 +5434,18 @@
         },
         {
           "file": "tests/unit/t38.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility upgrade",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t230-handler-additions.test.ts",
           "mechanism": "cli"
         }
       ],

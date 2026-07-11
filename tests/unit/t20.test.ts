@@ -107,7 +107,7 @@ interface CliResult {
 function init(p: string, ...extra: string[]): CliResult {
   const res = spawnSync(
     BUN,
-    [TOOL, "init", "--scope", "poc", "--project-dir", p, ...extra],
+    [TOOL, "intent-birth", "--scope", "poc", "--project-dir", p, ...extra],
     { encoding: "utf-8" },
   );
   const stdout = res.stdout ?? "";

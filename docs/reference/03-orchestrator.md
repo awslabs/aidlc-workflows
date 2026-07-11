@@ -39,7 +39,7 @@ An explicitly named scope on a fresh workspace (no intent yet — no `aidlc-stat
 1. Reads guardrails from `aidlc/spaces/<space>/memory/`.
 2. Asks the user "What would you like to build?"
 3. Determines stages to execute per the Scope-to-Stage Mapping.
-4. Executes the Initialization phase (workspace-scaffold, workspace-detection, state-init) as a single deterministic `aidlc-utility init` call. The welcome message is rendered at session start via `companyAnnouncements` in `settings.json`.
+4. Executes the Initialization phase (workspace-scaffold, workspace-detection, state-init) as a single deterministic `aidlc-utility intent-birth` call. The welcome message is rendered at session start via `companyAnnouncements` in `settings.json`.
 5. Creates stage-level tasks for all in-scope stages. The first stage is set to `in_progress`; the rest are `pending`. Stages not in scope get no task at all.
 6. Begins the first post-initialization stage.
 
@@ -368,7 +368,7 @@ Subagent stages delegate work to a separate Claude Code task via the Claude Code
 | 2.1 Reverse Engineering | `aidlc-developer-agent` then `aidlc-architect-agent` (two-step) | aidlc-developer-agent + aidlc-architect-agent | Deep code analysis produces large intermediate output |
 | 3.5 Code Generation | `aidlc-developer-agent` | aidlc-developer-agent | Code writing benefits from clean context focused on unit specification |
 
-Workspace detection (0.2) used to be a subagent. It is now a deterministic rule-based scanner inside `aidlc-utility init` — rules are documented in `aidlc-common/stages/initialization/workspace-detection.md`.
+Workspace detection (0.2) used to be a subagent. It is now a deterministic rule-based scanner inside `aidlc-utility intent-birth`; rules are documented in `aidlc-common/stages/initialization/workspace-detection.md`.
 
 The 6-step process:
 
@@ -522,7 +522,7 @@ Tasks are created at the stage level -- one task per stage in scope. Tasks exist
 
 Tasks are created in phase batches:
 
-- **INITIALIZATION**: All Initialization stage tasks (workspace-scaffold, workspace-detection, state-init) created before `aidlc-utility init` runs. The tool completes all three stages in one call; tasks flip to completed after the tool returns.
+- **INITIALIZATION**: All Initialization stage tasks (workspace-scaffold, workspace-detection, state-init) created before `aidlc-utility intent-birth` runs. The tool completes all three stages in one call; tasks flip to completed after the tool returns.
 - **IDEATION**: All Ideation stage tasks created before stage 1.1 begins.
 - **INCEPTION**: All Inception stage tasks created before stage 2.1 begins.
 - **CONSTRUCTION**: Tasks created based on the execution plan from Delivery Planning. Per-unit stage tasks are created for each unit, plus cross-cutting tasks.

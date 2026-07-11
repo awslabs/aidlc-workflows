@@ -173,7 +173,7 @@ beforeAll(() => {
   // Init the bugfix scope — fastest scope, smallest stage list (.sh:40-42).
   const init = run(
     UTIL,
-    ["init", "--scope", "bugfix", "--project-dir", proj],
+    ["intent-birth", "--scope", "bugfix", "--project-dir", proj],
     { AIDLC_WORKFLOW_INTENT: "runtime-graph e2e" },
   );
   initOk = init.status === 0;

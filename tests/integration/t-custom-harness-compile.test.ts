@@ -306,7 +306,7 @@ describe("t-custom-harness-compile (deterministic — harness-engineer edits res
   test("G5: a real init + runtime compile records the custom scope + routed stages in runtime-graph.json", () => {
     const proj = setupIntegrationProject({ customHarness: true });
     try {
-      const init = runTool(proj, "aidlc-utility.ts", ["init", "--scope", CUSTOM_SCOPE]);
+      const init = runTool(proj, "aidlc-utility.ts", ["intent-birth", "--scope", CUSTOM_SCOPE]);
       expect(init.status).toBe(0);
 
       // init routed to the custom head stage (the scope's stage map drove this,
@@ -576,7 +576,7 @@ outputs: none
 
       // 2. init to the custom stage (Current Stage = schema-snapshot) so the
       //    hook's active-stage lookup resolves the broken sensor.
-      expect(runTool(proj, "aidlc-utility.ts", ["init", "--scope", CUSTOM_SCOPE]).status).toBe(0);
+      expect(runTool(proj, "aidlc-utility.ts", ["intent-birth", "--scope", CUSTOM_SCOPE]).status).toBe(0);
 
       // 3. write the artefact (the trigger) and invoke the REAL sensor-fire hook
       //    with the PostToolUse payload Claude Code would send for that Write.

@@ -183,6 +183,8 @@ function writeMinimalState(projectDir: string): void {
       "- **Current Stage**: intent-capture",
       "- **Status**: Running",
       "- **Active Agent**: aidlc-product-agent",
+      "- **Depth**: Standard",
+      "- **Test Strategy**: Standard",
       "## Stage Progress",
       "- [ ] Intent Capture [intent-capture]",
       "",
@@ -295,6 +297,20 @@ describe("t229 dispatcher route parity", () => {
       toolArgs: ["resolve-env-scope"],
     },
     {
+      name: "config get maps to config-get",
+      routerArgs: ["config", "get", "depth"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-get", "depth"],
+      fixture: true,
+    },
+    {
+      name: "config list maps to config-list",
+      routerArgs: ["config", "list"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["config-list"],
+      fixture: true,
+    },
+    {
       name: "config depth maps to config-change",
       routerArgs: ["config", "set", "depth", "minimal"],
       tool: "aidlc-utility.ts",
@@ -313,6 +329,34 @@ describe("t229 dispatcher route parity", () => {
       routerArgs: ["plugin", "select"],
       tool: "aidlc-utility.ts",
       toolArgs: ["select-plugins"],
+      fixture: true,
+    },
+    {
+      name: "plugin list maps to plugin-list",
+      routerArgs: ["plugin", "list"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["plugin-list"],
+      fixture: true,
+    },
+    {
+      name: "plugin sync maps to plugin-sync",
+      routerArgs: ["plugin", "sync"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["plugin-sync"],
+      fixture: true,
+    },
+    {
+      name: "init maps to utility transition handler",
+      routerArgs: ["init"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["init"],
+      fixture: true,
+    },
+    {
+      name: "upgrade maps to utility transition handler",
+      routerArgs: ["upgrade"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["upgrade"],
       fixture: true,
     },
     {
@@ -517,32 +561,20 @@ describe("t229 dispatcher help and errors", () => {
     expect(res.stderr.toString("utf-8")).toBe("aidlc: unknown verb 'bogus' for noun 'state'; try 'aidlc help --all'\n");
   });
 
-  test("reserved and future-backed routes are explicit exit-3 stubs", () => {
-    const stubs = [
-      {
-        args: ["config", "get"],
-        stderr: "aidlc config get: not available yet: lands with the config handler work\n",
-      },
-      {
-        args: ["config", "list"],
-        stderr: "aidlc config list: not available yet: lands with the config handler work\n",
-      },
-      {
-        args: ["plugin", "sync"],
-        stderr: "aidlc plugin sync: not available yet: lands with the plugin handler work\n",
-      },
-      {
-        args: ["plugin", "list"],
-        stderr: "aidlc plugin list: not available yet: lands with the plugin handler work\n",
-      },
-      { args: ["init"], stderr: "reserved; not available in this install\n" },
-      { args: ["upgrade"], stderr: "reserved; not available in this install\n" },
+  test("formerly stubbed routes now reach utility handlers", () => {
+    const projectDir = makeProject();
+    writeMinimalState(projectDir);
+    const cases = [
+      ["config", "get", "depth"],
+      ["config", "list"],
+      ["plugin", "sync"],
+      ["plugin", "list"],
+      ["init"],
+      ["upgrade"],
     ];
-    for (const item of stubs) {
-      const res = viaDispatcher(item.args, REPO_ROOT);
-      expect(res.exitCode, item.args.join(" ")).toBe(3);
-      expect(res.stdout.toString("utf-8")).toBe("");
-      expect(res.stderr.toString("utf-8")).toBe(item.stderr);
+    for (const args of cases) {
+      const res = viaDispatcher(args, projectDir);
+      expect(res.exitCode, args.join(" ")).not.toBe(3);
     }
   });
 });

@@ -167,7 +167,7 @@ beforeAll(() => {
   // Init bugfix scope — leaves requirements-analysis in [-] ready to gate.
   const init = spawnSync(
     BUN,
-    [UTIL, "init", "--scope", "bugfix", "--project-dir", proj],
+    [UTIL, "intent-birth", "--scope", "bugfix", "--project-dir", proj],
     { encoding: "utf-8", env: { ...process.env, AIDLC_WORKFLOW_INTENT: "revision loop test" } },
   );
   expect(init.status, `init stderr=${init.stderr ?? ""}`).toBe(0);

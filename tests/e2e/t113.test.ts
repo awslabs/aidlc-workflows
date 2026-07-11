@@ -139,7 +139,7 @@ function driveBugfixToCompletion(): { proj: string } {
   const proj = createTestProject();
   const init = run(
     UTIL,
-    ["init", "--scope", "bugfix"],
+    ["intent-birth", "--scope", "bugfix"],
     proj,
     { AIDLC_WORKFLOW_INTENT: "t113 terminal-ordering test" },
   );

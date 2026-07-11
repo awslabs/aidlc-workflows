@@ -41,8 +41,8 @@ A workflow's `Running` state persists across Claude Code sessions. You start a w
 
 | Transition | Trigger | Emitter |
 |---|---|---|
-| `[*] → Running` | `aidlc-utility init` | `tools/aidlc-utility.ts` |
-| `Running → Completed` | `aidlc-state complete-workflow` | `tools/aidlc-state.ts` |
+| `[*] -> Running` | `aidlc-utility intent-birth` | `tools/aidlc-utility.ts` |
+| `Running -> Completed` | `aidlc-state complete-workflow` | `tools/aidlc-state.ts` |
 
 ---
 
@@ -227,8 +227,8 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `SCOPE_DETECTED` | `tools/aidlc-utility.ts` | `detect-scope` subcommand; `Source` field records provenance (freeform / keyword / env / cli) |
 | `SCOPE_CHANGED` | `tools/aidlc-utility.ts` | `scope-change` subcommand on active workflow |
 | `PLUGIN_SELECTION_CHANGED` | `tools/aidlc-utility.ts` | `select-plugins` set-mode; fields: `Previous Selection`, `New Selection` |
-| `DEPTH_CHANGED` | `tools/aidlc-utility.ts` | `config-change --depth` |
-| `TEST_STRATEGY_CHANGED` | `tools/aidlc-utility.ts` | `config-change --test-strategy` |
+| `DEPTH_CHANGED` | `tools/aidlc-utility.ts` | `config set depth <value>` / `config-change --depth` |
+| `TEST_STRATEGY_CHANGED` | `tools/aidlc-utility.ts` | `config set test-strategy <value>` / `config-change --test-strategy` |
 | `RECOMPOSED` | `tools/aidlc-utility.ts` | `recompose` subcommand - the adaptive composer's in-flight plan re-shape (pending-stage suffix flips under the audit lock) |
 
 ### Artifacts

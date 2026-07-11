@@ -9,6 +9,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
@@ -130,6 +131,14 @@ const VALID_TEST_STRATEGIES: Record<string, string> = {
   comprehensive: "Comprehensive",
 };
 
+const CONFIG_KEYS = ["depth", "test-strategy"] as const;
+const NO_STATE_FILE_MESSAGE =
+  "No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").";
+const INIT_TRANSITION_MESSAGE =
+  "init now lays down the project data tree and is not yet available in this release. To start work, describe what to build: /aidlc \"build the auth service\".";
+const UPGRADE_UNAVAILABLE_MESSAGE =
+  "upgrade is not available in this install; it arrives with the packaged binary distribution.";
+
 let errorArgs: string[] = [];
 let errorProjectDirArg: string | undefined;
 
@@ -194,6 +203,11 @@ Utilities:
   space list        List spaces (read-only; --json for structured output)
   space switch <name>  Switch the active space (bare space <name> still works)
   space create <name>  Create a new space (space-create <name> still works)
+  config get <key>  Show active workflow config (depth, test-strategy)
+  config set <key> <value>  Change active workflow config (depth, test-strategy)
+  config list       List active workflow config (--json for structured output)
+  plugin list       List installed plugins and enabled state (--json for structured output)
+  plugin sync       Compose installed plugins into the current install
   --doctor          Run health check on hooks, settings, and directory structure
   --stage <id>      Jump to a specific stage (by slug or number, e.g., code-generation or 3.5)
   --phase <name>    Jump to the first in-scope stage of a phase (e.g., construction or 3)
@@ -211,6 +225,8 @@ Examples:
   /aidlc feature                                Start a feature workflow
   /aidlc Fix the login timeout bug              Auto-detected as bugfix scope
   /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
+  /aidlc config list                         Show depth and test strategy
+  /aidlc plugin list                         Show installed plugin selection
   /aidlc                                        Resume or begin
   /aidlc --stage code-generation                Jump to code-generation stage
   /aidlc --phase construction --scope bugfix    Jump to construction with bugfix scope
@@ -711,6 +727,78 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
     }
     die(`select-plugins failed: ${original}.${recoveryMessage}`);
   }
+}
+
+function pluginListRows(): Array<{ name: string; enabled: boolean }> {
+  const selected = pluginsEnabled();
+  return knownPluginNames().map((name) => ({
+    name,
+    enabled: selected === null || selected.has(name),
+  }));
+}
+
+function handlePluginList(flags: Record<string, string>): void {
+  const selected = pluginsEnabled();
+  const rows = pluginListRows();
+  if (flags.json === "true") {
+    process.stdout.write(
+      `${JSON.stringify({
+        plugins: rows,
+        selectionActive: selected !== null,
+      })}\n`,
+    );
+    return;
+  }
+
+  process.stdout.write(
+    `Plugin selection: ${renderPluginSelection(selected)}\n` +
+      rows.map((row) => `${row.name} ${row.enabled ? "enabled" : "disabled"}`).join("\n") +
+      (rows.length > 0 ? "\n" : ""),
+  );
+}
+
+function pluginRootCandidatesFromEnv(): string[] {
+  const roots = [
+    process.env.CLAUDE_PLUGIN_ROOT,
+    process.env.PLUGIN_ROOT,
+    process.env.AIDLC_PLUGIN_ROOT,
+  ]
+    .map((value) => value?.trim() ?? "")
+    .filter((value) => value.length > 0);
+  return [...new Set(roots)];
+}
+
+function handlePluginSync(projectDir: string): void {
+  const roots = pluginRootCandidatesFromEnv();
+  const composePaths = roots
+    .map((root) => ({ root, compose: join(root, "hooks", "compose.ts") }))
+    .filter((item) => existsSync(item.compose));
+
+  if (composePaths.length === 0) {
+    process.stdout.write("no installed plugins; nothing to sync\n");
+    return;
+  }
+
+  for (const item of composePaths) {
+    const result = spawnSync(process.execPath, [item.compose], {
+      cwd: projectDir,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_HARNESS_DIR: harnessDir(),
+        AIDLC_PROJECT_DIR: projectDir,
+        AIDLC_PLUGIN_ROOT: item.root,
+        CLAUDE_PLUGIN_ROOT: item.root,
+        PLUGIN_ROOT: item.root,
+      },
+    });
+    if (result.status !== 0) {
+      const detail = (result.stderr || result.stdout || `exit ${result.status ?? 1}`).trim();
+      die(`plugin-sync failed for ${item.root}: ${detail}`);
+    }
+  }
+
+  process.stdout.write(`plugin sync complete: ${composePaths.length} plugin(s)\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -3632,13 +3720,21 @@ ${submoduleWarningLine}First post-init stage: ${firstPostInit} (${firstPostInitP
 }
 
 // ---------------------------------------------------------------------------
-// state-init / init — deprecated aliases, merged into intent-birth
+// state-init / init - transition aliases
 // ---------------------------------------------------------------------------
+
+function handleInitTransition(): void {
+  die(INIT_TRANSITION_MESSAGE);
+}
 
 function handleStateInit(_projectDir: string, _flags: Record<string, string>): void {
   die(
     "state-init is merged into intent-birth. A workflow starts by describing what to build (/aidlc \"build the auth service\"); the engine auto-births the intent."
   );
+}
+
+function handleUpgrade(): void {
+  die(UPGRADE_UNAVAILABLE_MESSAGE);
 }
 
 // ---------------------------------------------------------------------------
@@ -4449,8 +4545,38 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
 }
 
 // ---------------------------------------------------------------------------
-// config-change — update depth and/or test-strategy without changing scope
+// config get/list/set - read or update active workflow config
 // ---------------------------------------------------------------------------
+
+function configFieldForKey(key: string): "Depth" | "Test Strategy" | null {
+  if (key === "depth") return "Depth";
+  if (key === "test-strategy") return "Test Strategy";
+  return null;
+}
+
+function readConfigField(projectDir: string, flags: Record<string, string>, field: "Depth" | "Test Strategy"): string {
+  const sp = stateFilePath(projectDir, flags.intent, flags.space);
+  if (!existsSync(sp)) die(NO_STATE_FILE_MESSAGE);
+  const content = readStateFile(projectDir, flags.intent, flags.space);
+  return getField(content, field) || "";
+}
+
+function handleConfigGet(projectDir: string, positional: string[], flags: Record<string, string>): void {
+  const key = positional[1] ?? "";
+  const field = configFieldForKey(key);
+  if (!field) die(`Unknown config key: "${key}". Valid keys: ${CONFIG_KEYS.join(", ")}.`);
+  process.stdout.write(`${readConfigField(projectDir, flags, field)}\n`);
+}
+
+function handleConfigList(projectDir: string, flags: Record<string, string>): void {
+  const depth = readConfigField(projectDir, flags, "Depth");
+  const testStrategy = readConfigField(projectDir, flags, "Test Strategy");
+  if (flags.json === "true") {
+    process.stdout.write(`${JSON.stringify({ depth, "test-strategy": testStrategy })}\n`);
+    return;
+  }
+  process.stdout.write(`depth: ${depth}\ntest-strategy: ${testStrategy}\n`);
+}
 
 function handleConfigChange(projectDir: string, flags: Record<string, string>): void {
   const rawDepth = flags.depth;
@@ -4473,7 +4599,7 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
   }
 
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
-  if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
+  if (!existsSync(sp)) die(NO_STATE_FILE_MESSAGE);
 
   let content = readStateFile(projectDir, flags.intent, flags.space);
   const oldDepth = getField(content, "Depth");
@@ -5005,16 +5131,23 @@ export function main(argv: string[]): void {
     case "select-plugins":
       handleSelectPlugins(projectDir, positional);
       break;
-    // init / state-init — deprecated aliases kept for back-compat only (not in
-    // usage/help). The user-facing `/aidlc --init` is retired in P4: the
-    // workspace shell ships in dist/ (SEED) and the engine auto-births the
-    // intent. `init` now routes to the birth handler so any stale caller still
-    // works; `state-init` dies with migration guidance.
+    case "plugin-list":
+      handlePluginList(flags);
+      break;
+    case "plugin-sync":
+      handlePluginSync(projectDir);
+      break;
+    // init / state-init are transition-only and intentionally absent from help.
+    // Stale init callers get a loud error for this release; workflow start is
+    // still intent-birth through the orchestrator.
     case "init":
-      handleIntentBirth(projectDir, flags);
+      handleInitTransition();
       break;
     case "state-init":
       handleStateInit(projectDir, flags);
+      break;
+    case "upgrade":
+      handleUpgrade();
       break;
     case "scope-change":
       handleScopeChange(projectDir, flags);
@@ -5027,6 +5160,12 @@ export function main(argv: string[]): void {
       break;
     case "config-change":
       handleConfigChange(projectDir, flags);
+      break;
+    case "config-get":
+      handleConfigGet(projectDir, positional, flags);
+      break;
+    case "config-list":
+      handleConfigList(projectDir, flags);
       break;
     case "set-status":
       handleSetStatus(projectDir, flags);
@@ -5045,7 +5184,7 @@ export function main(argv: string[]): void {
       break;
     default:
       die(
-        `Usage: aidlc-utility <help|version|status|doctor|intent-birth|intent|space|space-create|codekb-path|detect|select-plugins|recompose|scope-change|config-change|set-status|detect-scope|resolve-env-scope|scope-table|stage-table> [--project-dir <path>] [--scope <scope>] [--json]`
+        `Usage: aidlc-utility <help|version|status|doctor|intent-birth|intent|space|space-create|codekb-path|detect|select-plugins|plugin-list|plugin-sync|recompose|scope-change|config-change|config-get|config-list|set-status|detect-scope|resolve-env-scope|scope-table|stage-table|upgrade> [--project-dir <path>] [--scope <scope>] [--json]`
       );
   }
 }

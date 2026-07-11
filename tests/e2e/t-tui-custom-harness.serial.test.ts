@@ -268,7 +268,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
       try {
         const init = spawnSync(
           "bun",
-          [join(proj, ".claude", "tools", "aidlc-utility.ts"), "init", "--scope", CUSTOM_SCOPE],
+          [join(proj, ".claude", "tools", "aidlc-utility.ts"), "intent-birth", "--scope", CUSTOM_SCOPE],
           { cwd: proj, encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
         );
         expect(init.status).toBe(0);
@@ -391,7 +391,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
       try {
         const init = spawnSync(
           "bun",
-          [join(sdkProj, ".claude", "tools", "aidlc-utility.ts"), "init", "--scope", CUSTOM_SCOPE],
+          [join(sdkProj, ".claude", "tools", "aidlc-utility.ts"), "intent-birth", "--scope", CUSTOM_SCOPE],
           { cwd: sdkProj, encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: sdkProj } },
         );
         expect(init.status).toBe(0);
@@ -445,7 +445,7 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
       try {
         const init = spawnSync(
           "bun",
-          [join(tuiProj, ".claude", "tools", "aidlc-utility.ts"), "init", "--scope", CUSTOM_SCOPE],
+          [join(tuiProj, ".claude", "tools", "aidlc-utility.ts"), "intent-birth", "--scope", CUSTOM_SCOPE],
           { cwd: tuiProj, encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: tuiProj } },
         );
         expect(init.status).toBe(0);

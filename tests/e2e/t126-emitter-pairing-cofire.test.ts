@@ -85,7 +85,7 @@ function seedPocState(proj: string): void {
   const utility = join(proj, ".claude", "tools", "aidlc-utility.ts");
   const res = spawnSync(
     process.execPath,
-    [utility, "init", "--scope", "poc", "--project-dir", proj],
+    [utility, "intent-birth", "--scope", "poc", "--project-dir", proj],
     { cwd: proj, encoding: "utf8" },
   );
   expect(res.status).toBe(0);

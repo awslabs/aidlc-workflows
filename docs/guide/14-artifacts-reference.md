@@ -135,7 +135,7 @@ flowchart LR
 
 | Stage | Artifacts | Notes |
 |-------|-----------|-------|
-| 0.1 Workspace Scaffold | `scaffold-report.md` | Deterministic (runs inside `aidlc-utility init`) |
+| 0.1 Workspace Scaffold | `scaffold-report.md` | Deterministic (runs inside `aidlc-utility intent-birth`) |
 | 0.2 Workspace Detection | `workspace-findings.md`, updates `aidlc-state.md` | Deterministic rule-based scanner |
 | 0.3 State Init | `state-init-summary.md` | Deterministic |
 

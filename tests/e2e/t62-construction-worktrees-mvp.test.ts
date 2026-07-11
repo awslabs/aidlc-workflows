@@ -136,7 +136,7 @@ function setupConstructionProject(): string {
   const proj = setupIntegrationProject({ withGreenfieldStub: true });
   tempDirs.push(proj);
   const r = run(UTILITY, [
-    "init",
+    "intent-birth",
     "--project-dir",
     proj,
     "--force",

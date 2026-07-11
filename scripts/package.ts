@@ -885,24 +885,26 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
     }, null, 2) + "\n"
   );
 
-  // 3. The one bun compose hook + per-harness wiring. The hook command's only
-  //    shell job is finding bun on a bare PATH (PATH, then ~/.bun/bin); all
-  //    compose logic is in compose.ts. Claude populates CLAUDE_PLUGIN_ROOT,
-  //    Codex PLUGIN_ROOT; AIDLC_HARNESS_DIR targets the right harness tree.
+  // 3. The compose hook + per-harness wiring. Prefer an installed aidlc binary
+  //    so the host hook can front the fold through `aidlc plugin sync`; fall back
+  //    to the direct bun compose.ts path for source/tree installs. Claude
+  //    populates CLAUDE_PLUGIN_ROOT, Codex PLUGIN_ROOT; AIDLC_HARNESS_DIR targets
+  //    the right harness tree.
   const hooksDir = join(outDir, "hooks");
   mkdirSync(hooksDir, { recursive: true });
   for (const f of readdirSync(templateHooks)) cpSync(join(templateHooks, f), join(hooksDir, f));
   // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell parameter expansions
   const rootExpr = harnessName === "claude" ? "${CLAUDE_PLUGIN_ROOT}" : "${PLUGIN_ROOT}";
-  // Resolve bun on a bare PATH (PATH, then ~/.bun/bin). If neither is executable,
-  // exit 0 with a note rather than running a non-existent binary — the pre-fold
-  // compose.sh skipped gracefully, and a hard 127 would fire on every SessionStart
-  // (including non-AIDLC projects that merely have the plugin installed). S1.
+  // Probe aidlc on PATH first, then bun on PATH / ~/.bun/bin. If neither is
+  // executable, exit 0 with a note rather than running a non-existent binary.
+  const aidlcExpr =
+    'AIDLC=$(command -v aidlc 2>/dev/null || true); ' +
+    `[ -n "$AIDLC" ] && { AIDLC_HARNESS_DIR=${harnessLeaf} "$AIDLC" plugin sync; exit $?; }; `;
   const bunExpr =
     'BUN=$(command -v bun 2>/dev/null || true); ' +
     '[ -z "$BUN" ] && [ -x "$HOME/.bun/bin/bun" ] && BUN="$HOME/.bun/bin/bun"; ' +
-    '[ -z "$BUN" ] && { echo "aidlc plugin compose: bun not found, skipping" >&2; exit 0; }';
-  const command = `sh -c '${bunExpr}; AIDLC_HARNESS_DIR=${harnessLeaf} "$BUN" "${rootExpr}/hooks/compose.ts"'`;
+    '[ -z "$BUN" ] && { echo "aidlc plugin compose: aidlc and bun not found, skipping" >&2; exit 0; }';
+  const command = `sh -c '${aidlcExpr}${bunExpr}; AIDLC_HARNESS_DIR=${harnessLeaf} "$BUN" "${rootExpr}/hooks/compose.ts"'`;
 
   if (kind === "kiro") {
     writeFileSync(

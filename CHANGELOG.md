@@ -47,6 +47,19 @@ Reviewers are now verifiers: every declared review runs under an explicit **adve
 * The four harness orchestrator skills' reviewer steps carry a one-line restatement of the adversarial framing, following the read-scope precedent.
 * No behavior change to the review loop mechanics: verdict flow, `reviewer_max_iterations`, HITL escalation, dispatch records, and the read-scope hook are all as in 2.3.4.
 
+## [2.3.16] - 2026-07-14
+
+New config get/list and plugin list/sync commands land in the dispatcher grammar, `init` changes meaning for a transition release by returning a loud error instead of silently creating an intent, and the future `init` will scaffold the project from the installed harness dist. The plugin hook now prefers an installed `aidlc` binary before falling back to direct bun compose.
+
+* New `/aidlc config get <key>` command for `depth` and `test-strategy`.
+* New `/aidlc config list` command, with `/aidlc config list --json` emitting `{"depth":...,"test-strategy":...}`.
+* Existing `/aidlc config set <key> <value>` now routes to the legacy `config-change` handler for `depth` and `test-strategy`; `config-change` remains accepted.
+* New `/aidlc plugin list` command, with `/aidlc plugin list --json` emitting installed plugin names, enabled state, and `selectionActive`.
+* New `/aidlc plugin sync` command composes installed plugin roots by running each plugin's `hooks/compose.ts`; with no installed plugin trees it exits 0 with `no installed plugins; nothing to sync`.
+* `/aidlc init` now errors with `init now lays down the project data tree and is not yet available in this release. To start work, describe what to build: /aidlc "build the auth service".`
+* Plugin SessionStart hooks now probe for `aidlc` on `PATH` first and run `aidlc plugin sync`, then fall back to the existing bun plus `hooks/compose.ts` command, and still skip cleanly when neither executable is available.
+* Migration note for stale `init` callers: describe what to build instead, for example `/aidlc "build the auth service"`.
+
 ## [2.3.15] - 2026-07-14
 
 Workspace nouns gained real verbs (`list`, `switch`, `create`, and `birth`) while preserving bare-name switch sugar. Verb-shaped names are now reserved at intent and space creation, `/aidlc --doctor` flags pre-existing verb-named records as an advisory, and the Kiro CLI adapter preserves quoted multi-word workspace names. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

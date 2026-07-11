@@ -129,16 +129,13 @@ export const ROUTES: readonly Route[] = [
     all: ["help [--all]"],
   },
   {
-    id: "top-future",
+    id: "top-transition",
     group: "top",
-    kind: "top-stub",
-    classification: "stub",
+    kind: "top-passthrough",
+    classification: "translation",
     verbs: ["init", "upgrade"],
-    human: [
-      { command: "init", summary: "reserved for a future project initializer" },
-      { command: "upgrade", summary: "reserved for a future upgrade handler" },
-    ],
-    all: ["init", "upgrade"],
+    tool: TOOLS.utility,
+    all: [],
   },
   {
     id: "state-passthrough",
@@ -327,9 +324,18 @@ export const ROUTES: readonly Route[] = [
     classification: "translation",
     verbs: ["set depth", "set test-strategy", "get", "list"],
     custom: "config",
-    targets: { "set depth": "config-change", "set test-strategy": "config-change" },
-    human: [{ command: "config set <key> <value>", summary: "change supported project configuration" }],
-    all: ["set depth <value>", "set test-strategy <value>", "get", "list"],
+    targets: {
+      "set depth": "config-change",
+      "set test-strategy": "config-change",
+      get: "config-get",
+      list: "config-list",
+    },
+    human: [
+      { command: "config get <key>", summary: "print supported project configuration" },
+      { command: "config set <key> <value>", summary: "change supported project configuration" },
+      { command: "config list", summary: "list supported project configuration" },
+    ],
+    all: ["set depth <value>", "set test-strategy <value>", "get <key>", "list"],
   },
   {
     id: "plugin",
@@ -338,8 +344,12 @@ export const ROUTES: readonly Route[] = [
     classification: "translation",
     verbs: ["select", "sync", "list"],
     custom: "plugin",
-    targets: { select: "select-plugins" },
-    human: [{ command: "plugin select [names]", summary: "route plugin selection to the utility handler" }],
+    targets: { select: "select-plugins", sync: "plugin-sync", list: "plugin-list" },
+    human: [
+      { command: "plugin select [names]", summary: "set enabled plugins" },
+      { command: "plugin list", summary: "list installed plugin enablement" },
+      { command: "plugin sync", summary: "compose installed plugins" },
+    ],
     all: ["select [names]", "sync", "list"],
   },
   {
@@ -485,22 +495,6 @@ function nounError(noun: string, verb: string | undefined): Action {
   };
 }
 
-function futureStub(): Action {
-  return {
-    type: "stub",
-    code: 3,
-    message: "reserved; not available in this install\n",
-  };
-}
-
-function notAvailableStub(noun: string, verb: string, work: "config" | "plugin"): Action {
-  return {
-    type: "stub",
-    code: 3,
-    message: `aidlc ${noun} ${verb}: not available yet: lands with the ${work} handler work\n`,
-  };
-}
-
 function requireValue(noun: string, verb: string, value: string | undefined): Action | undefined {
   if (value) return undefined;
   return nounError(noun, verb);
@@ -527,7 +521,6 @@ function handleConfig(route: Route, argv: string[]): Action {
   if (verb === "get" || verb === "list") {
     const target = route.targets?.[verb];
     if (target) return { type: "delegate", tool: TOOLS.utility, args: [target, ...argv.slice(2)] };
-    return notAvailableStub("config", verb, "config");
   }
   if (verb !== "set") return nounError("config", verb);
 
@@ -555,7 +548,6 @@ function handlePlugin(route: Route, argv: string[]): Action {
   if (verb === "sync" || verb === "list") {
     const target = route.targets?.[verb];
     if (target) return { type: "delegate", tool: TOOLS.utility, args: [target, ...argv.slice(2)] };
-    return notAvailableStub("plugin", verb, "plugin");
   }
   return nounError("plugin", verb);
 }
@@ -617,7 +609,7 @@ function resolveAlias(argv: string[]): Action | undefined {
   if (head === "--version") return { type: "version" };
   if (head === "--resume") return { type: "delegate", tool: TOOLS.orchestrate, args: ["next", "--resume", ...argv.slice(1)] };
   if (head === "--scope") return { type: "delegate", tool: TOOLS.orchestrate, args: ["next", "--scope", ...argv.slice(1)] };
-  if (head === "--upgrade") return futureStub();
+  if (head === "--upgrade") return { type: "delegate", tool: TOOLS.utility, args: ["upgrade", ...argv.slice(1)] };
   if (head === "config-change") {
     return { type: "delegate", tool: TOOLS.utility, args: ["config-change", ...argv.slice(1)] };
   }
@@ -636,7 +628,13 @@ function resolveTop(argv: string[]): Action | undefined {
     if (route.kind === "top-prefix" && route.tool && route.prefix) {
       return { type: "delegate", tool: route.tool, args: [...route.prefix, ...argv.slice(1)] };
     }
-    if (route.kind === "top-stub") return futureStub();
+    if (route.kind === "top-stub") {
+      return {
+        type: "stub",
+        code: 3,
+        message: "reserved; not available in this install\n",
+      };
+    }
     if (route.kind === "top-help") return { type: "help", all: argv[1] === "--all" };
     if (route.kind === "routing-only") return handleRouteOnly(route, argv);
   }

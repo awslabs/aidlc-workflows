@@ -31,7 +31,7 @@ while keeping you in control at every decision point.
 
 ## Initialization Phase (Automatic)
 
-The three initialization stages run deterministically inside `aidlc-utility init` — a single tool call that completes in well under a second. You do not interact with initialization; it auto-births the first intent into the active space and bootstraps its record dir for the workflow.
+The three initialization stages run deterministically inside `aidlc-utility intent-birth`, a single tool call that completes in well under a second. You do not interact with initialization; it auto-births the first intent into the active space and bootstraps its record dir for the workflow.
 
 ### Stage 0.1: Workspace Scaffold
 
@@ -210,7 +210,7 @@ sequenceDiagram
 
 ### Subagent Delegation
 
-Two stages (2.1 Reverse Engineering, 3.5 Code Generation) run as subagents. The conductor delegates to a background subprocess — you do not interact during execution. Workspace detection (0.2) now runs deterministically inside `aidlc-utility init` rather than as a subagent.
+Two stages (2.1 Reverse Engineering, 3.5 Code Generation) run as subagents. The conductor delegates to a background subprocess; you do not interact during execution. Workspace detection (0.2) now runs deterministically inside `aidlc-utility intent-birth` rather than as a subagent.
 
 ```mermaid
 sequenceDiagram

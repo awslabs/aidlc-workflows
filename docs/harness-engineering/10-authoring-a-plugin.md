@@ -273,17 +273,19 @@ composed in — no prose or skill file to edit.
 ```bash
 # git pull your plugin repo, copy the Kiro projection into the project:
 cp -r dist/plugins/<name>/kiro/. <project>/
-# run the composer explicitly (the one working invocation today):
+# preferred when aidlc is on PATH:
+AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
+  AIDLC_HARNESS_DIR=.kiro aidlc plugin sync
+
+# fallback: run the composer explicitly:
 AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
   AIDLC_HARNESS_DIR=.kiro bun "<plugin-root>/hooks/compose.ts"
 # open in Kiro IDE or kiro-cli chat → /aidlc
 ```
 
-> **Not yet wired.** A `.kiro.hook` that auto-fires the composer on first prompt,
-> and an `aidlc plugin compose` wrapper CLI, are designed but not implemented —
-> the emitted `.kiro.hook` is inert (Kiro CLI does not read `.kiro.hook`, and its
-> `${PLUGIN_ROOT}` is set by no Kiro host). Use the explicit `bun compose.ts`
-> invocation above until they land. See doc 18 §8 "Status" for the full deferral list.
+> **Kiro note.** The emitted `.kiro.hook` still depends on host support for
+> plugin-root env vars. Use `aidlc plugin sync` with `AIDLC_PLUGIN_ROOT` when the binary is available, or
+> the explicit `bun compose.ts` invocation above as the fallback.
 
 ### Trust
 

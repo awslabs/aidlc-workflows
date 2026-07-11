@@ -167,7 +167,7 @@ The aidlc-developer-agent spans three phases — from reverse engineering in Inc
 - **Leads:** reverse-engineering (code scan), code-generation
 - **Supports:** practices-discovery, functional-design, deployment-execution
 
-Workspace detection (workspace-detection) used to be a subagent of the aidlc-developer-agent; it now runs deterministically inside `aidlc-utility init` using rule-based file and manifest detection.
+Workspace detection (workspace-detection) used to be a subagent of the aidlc-developer-agent; it now runs deterministically inside `aidlc-utility intent-birth` using rule-based file and manifest detection.
 - **Special tools:** Bash (for build and run commands)
 
 ### [aidlc-quality-agent](agents/quality-agent.md)

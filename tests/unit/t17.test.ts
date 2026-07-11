@@ -100,7 +100,7 @@ function runStateBare(args: string[]): RunResult {
 // Run the utility init driver. Mirrors
 // `bun "$AIDLC_SRC/tools/aidlc-utility.ts" init --scope <s> --project-dir "$PROJ"`.
 function runInit(proj: string, scope: string): RunResult {
-  const res = spawnSync(BUN, [UTILITY, "init", "--scope", scope, "--project-dir", proj], {
+  const res = spawnSync(BUN, [UTILITY, "intent-birth", "--scope", scope, "--project-dir", proj], {
     encoding: "utf-8",
     cwd: proj,
   });

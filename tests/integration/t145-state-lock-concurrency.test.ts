@@ -147,7 +147,7 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
     // running INCEPTION workflow at requirements-analysis with code-generation
     // next — the shape the gate handlers expect).
     const init = Bun.spawnSync({
-      cmd: [BUN, UTIL_TOOL, "init", "--scope", "bugfix", "--project-dir", proj],
+      cmd: [BUN, UTIL_TOOL, "intent-birth", "--scope", "bugfix", "--project-dir", proj],
       stdout: "ignore",
       stderr: "ignore",
     });

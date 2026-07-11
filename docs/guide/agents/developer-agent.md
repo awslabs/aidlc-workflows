@@ -6,7 +6,7 @@ The aidlc-developer-agent is your senior software developer. It translates archi
 
 The aidlc-developer-agent leads two stages across Inception and Construction. One of its stages (Code Generation) runs as a subagent — an autonomous subprocess that operates without user interaction. It has Bash access for running build tools, package managers, and test commands.
 
-Workspace Detection (0.2) used to be led by the aidlc-developer-agent as a subagent; it now runs deterministically inside `aidlc-utility init` as a rule-based scanner. The aidlc-developer-agent is no longer involved in Initialization.
+Workspace Detection (0.2) used to be led by the aidlc-developer-agent as a subagent; it now runs deterministically inside `aidlc-utility intent-birth` as a rule-based scanner. The aidlc-developer-agent is no longer involved in Initialization.
 
 ## Stages Led
 

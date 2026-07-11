@@ -141,7 +141,7 @@ function seedBugfixState(proj: string): void {
   // at the first orchestrator directive, before any gate, so it needs no mode.
   const res = spawnSync(
     process.execPath,
-    [utility, "init", "--scope", "bugfix", "--project-dir", proj],
+    [utility, "intent-birth", "--scope", "bugfix", "--project-dir", proj],
     { cwd: proj, encoding: "utf8" },
   );
   expect(res.status).toBe(0);
