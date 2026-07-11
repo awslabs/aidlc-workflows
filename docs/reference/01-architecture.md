@@ -266,6 +266,8 @@ harness/<name>/        # per-CLI surface: manifest.ts + orchestrator skill +
 scripts/package.ts     # the build: copy core (token→.claude/.kiro/.codex) +
                        #   harness, compile the graph, generate runners, emit;
                        #   `--check` is the byte-parity drift guard
+scripts/build-binaries.ts # release-only binary compiler + smoke gate, writing
+                       #   ignored artifacts under build/binaries/
 dist/<harness>/        # GENERATED + committed: claude/.claude, kiro/.kiro,
                        #   kiro-ide/.kiro, codex/{.codex,.agents} — never hand-edited
 ```

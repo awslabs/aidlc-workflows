@@ -10,6 +10,7 @@ node_modules/
 dist/claude/aidlc-docs/
 dist/kiro/aidlc-docs/
 dist/codex/aidlc-docs/
+build/
 
 # Sample/test projects
 dist/claude/todo-app/

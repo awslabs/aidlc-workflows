@@ -740,6 +740,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t220-tier-projection-module.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
     "unit/t230-handler-additions.test.ts",
+    "unit/t231-build-binaries.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",

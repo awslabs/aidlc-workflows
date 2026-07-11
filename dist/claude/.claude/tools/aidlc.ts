@@ -695,7 +695,7 @@ function bunExecutable(): string {
 
 function runDelegateDev(tool: string, args: string[]): number {
   try {
-    const child = Bun.spawnSync([bunExecutable(), toolPath(tool), ...args], {
+    const child = Bun.spawnSync([bunExecutable(), toolPath(tool), ...args], { /* dev-mode bun spawn */
       cwd: process.cwd(),
       stdout: "inherit",
       stderr: "inherit",
