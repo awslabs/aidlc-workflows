@@ -716,8 +716,8 @@ function pruneScopeRunners(skillsDir: string, keep: ReadonlySet<string>): void {
 // DISPATCH
 // =========================================================================
 
-function main(): void {
-  const [, , subcommand, ...rest] = process.argv;
+export function main(argv: string[]): void {
+  const [subcommand, ...rest] = argv;
   switch (subcommand) {
     case "write": {
       const written = handleWrite();
@@ -743,7 +743,7 @@ function main(): void {
 
 if (import.meta.main) {
   try {
-    main();
+    main(process.argv.slice(2));
   } catch (e) {
     console.error(`aidlc-runner-gen: ${errorMessage(e)}`);
     process.exit(1);

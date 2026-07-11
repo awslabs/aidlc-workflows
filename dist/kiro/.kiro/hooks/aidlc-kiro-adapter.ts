@@ -42,7 +42,6 @@ import {
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
-const target = process.argv[2] ?? "";
 
 interface KiroHookInput {
   hook_event_name?: string;
@@ -55,13 +54,13 @@ interface KiroHookInput {
   assistant_response?: string;
 }
 
+export async function run(target: string, input: string): Promise<number> {
 let kiro: KiroHookInput = {};
 if (!process.stdin.isTTY) {
   try {
-    const text = await Bun.stdin.text();
-    if (text.length > 0) kiro = JSON.parse(text) as KiroHookInput;
+    if (input.length > 0) kiro = JSON.parse(input) as KiroHookInput;
   } catch {
-    process.exit(0); // malformed stdin — advisory hooks fail open
+    return 0; // malformed stdin — advisory hooks fail open
   }
 }
 
@@ -132,7 +131,7 @@ if (target === "verb-intercept") {
       appendAuditEntry("HUMAN_TURN", {}, cwd);
     }
   } catch { /* presence best-effort - mint never blocks the turn */ }
-  if (cmd === null) process.exit(0); // not a terminal command — conductor handles it
+  if (cmd === null) return 0; // not a terminal command — conductor handles it
 
   const cwd = kiro.cwd ?? process.cwd();
   const utilArgs = [join(".kiro", "tools", "aidlc-utility.ts"), cmd.subcommand];
@@ -171,7 +170,7 @@ if (target === "verb-intercept") {
   process.stdout.write(
     `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness — it is a read-only/navigation command that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n--- OUTPUT ---\n${out}\n--- END OUTPUT ---\n`,
   );
-  process.exit(0);
+  return 0;
 }
 
 // --- pretool-block: the preToolUse roll-forward backstop (matcher: execute_bash) ---
@@ -231,7 +230,7 @@ if (target === "pretool-block") {
     process.stderr.write(
       "read-only/navigation command already handled this turn by the deterministic harness — do not advance the workflow. The output was already relayed; end the turn.\n",
     );
-    process.exit(2); // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+    return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   }
 
   // --- human-presence floor (second exit-2 branch) ---
@@ -251,19 +250,19 @@ if (target === "pretool-block") {
     const content = existsSync(stateFilePath(cwd))
       ? readFileSync(stateFilePath(cwd), "utf-8")
       : null;
-    if (isAutonomousMode(content)) process.exit(0); // autonomous: never block
-    if (humanPresenceGuardDisabled()) process.exit(0); // deterministic off-switch
-    if (!hasOpenGate(content)) process.exit(0); // no gate awaits approval
+    if (isAutonomousMode(content)) return 0; // autonomous: never block
+    if (humanPresenceGuardDisabled()) return 0; // deterministic off-switch
+    if (!hasOpenGate(content)) return 0; // no gate awaits approval
 
     if (!humanActedSinceGate(cwd)) {
       process.stderr.write(
         "an approval gate is open and no human has acted since it opened: refusing the tool call. A real human must respond at the gate. End the turn.\n",
       );
-      process.exit(2); // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+      return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
     }
   } catch { /* fail open: advisory presence floor */ }
 
-  process.exit(0);
+  return 0;
 }
 
 // --- reviewer-scope: the per-unit reviewer read-scope bound (preToolUse) ---
@@ -456,8 +455,7 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
 
 const fwd = buildForward();
 if (fwd === null) {
-  process.exit(0);
-  throw new Error("unreachable"); // narrows fwd for TS below
+  return 0;
 }
 
 if (fwd.hook === "__audit_and_sensors__") {
@@ -465,7 +463,7 @@ if (fwd.hook === "__audit_and_sensors__") {
   // (mirrors the Claude settings.json registration). Both advisory: exit 0.
   runCore("aidlc-audit-logger.ts", fwd.input);
   runCore("aidlc-sensor-fire.ts", fwd.input);
-  process.exit(0);
+  return 0;
 }
 
 const result = runCore(fwd.hook, fwd.input);
@@ -481,10 +479,15 @@ if (target === "session-start") {
   } catch {
     if (result.stdout) process.stdout.write(result.stdout);
   }
-  process.exit(0);
+  return 0;
 }
 
 // stop (and any future passthrough target): forward stdout + exit code
 // verbatim — the {"decision":"block","reason"} contract is shared.
 if (result.stdout) process.stdout.write(result.stdout);
-process.exit(result.code);
+return result.code;
+}
+
+if (import.meta.main) {
+  process.exit(await run(process.argv[2] ?? "", await Bun.stdin.text()));
+}

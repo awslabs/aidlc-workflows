@@ -147,29 +147,18 @@ const INTERACTIVE_BLOCK_CAP = 2;
 // OPEN (allows the stop).
 const ENGINE_TIMEOUT_MS = 10_000;
 
-const projectDir = resolveProjectDirFromHook(import.meta.url);
-
-// Write a health heartbeat (mirrors the other hooks' .aidlc-hooks-health beat).
-try {
-  const healthDir = hooksHealthDir(projectDir);
-  mkdirSync(healthDir, { recursive: true });
-  writeFileSync(join(healthDir, "stop.last"), isoTimestamp(), "utf-8");
-} catch {
-  // Heartbeat failure is non-fatal — never let it affect the stop decision.
-}
-
 // Allow the stop: emit nothing, exit 0. This is the precedent non-blocking
 // pattern shared by every other framework hook. The conductor's turn ends.
-function allowStop(): never {
-  process.exit(0);
+function allowStop(): number {
+  return 0;
 }
 
 // Block the stop and inject the pending work back into the session. The reason
 // is an on-task continuation (the work still owed), NOT an override-shaped
 // instruction — that phrasing is the security property (see header).
-function blockStop(reason: string): never {
+function blockStop(reason: string): number {
   console.log(JSON.stringify({ decision: "block", reason }));
-  process.exit(0);
+  return 0;
 }
 
 // --- Recursion guard: a durable no-progress counter ---------------------------
@@ -192,7 +181,7 @@ interface GuardRecord {
   count: number; // consecutive no-progress blocks observed at this signature
 }
 
-function guardFilePath(): string {
+function guardFilePath(projectDir: string): string {
   return join(stopHookDir(projectDir), "block-count.json");
 }
 
@@ -209,7 +198,7 @@ function currentStageSlug(stateContent: string): string {
 // exactly when a report advances the workflow. We read the state file's
 // Current Stage line and the audit length without importing the heavier state
 // parser — a substring + line-count is enough and cannot throw on odd content.
-function progressSignature(stateContent: string): string {
+function progressSignature(projectDir: string, stateContent: string): string {
   const stage = currentStageSlug(stateContent);
   let auditLen = 0;
   try {
@@ -223,9 +212,9 @@ function progressSignature(stateContent: string): string {
   return `${stage}::${auditLen}`;
 }
 
-function readGuard(): GuardRecord | null {
+function readGuard(projectDir: string): GuardRecord | null {
   try {
-    const path = guardFilePath();
+    const path = guardFilePath(projectDir);
     if (!existsSync(path)) return null;
     const raw: unknown = JSON.parse(readFileSync(path, "utf-8"));
     if (
@@ -244,11 +233,11 @@ function readGuard(): GuardRecord | null {
   return null;
 }
 
-function writeGuard(record: GuardRecord): void {
+function writeGuard(projectDir: string, record: GuardRecord): void {
   try {
     const dir = stopHookDir(projectDir);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(guardFilePath(), JSON.stringify(record), "utf-8");
+    writeFileSync(guardFilePath(projectDir), JSON.stringify(record), "utf-8");
   } catch {
     // If we cannot persist the counter we still proceed; the stop_hook_active
     // flag remains a second, native bound (see decideBlock). Worst case the
@@ -275,10 +264,10 @@ function writeGuard(record: GuardRecord): void {
 // wins, so the counter can only climb on real no-progress and can therefore
 // only ever make us release SOONER under a true hang, never trap a live loop.
 // Once the streak reaches the cap we RELEASE: a stuck loop must always let go.
-function decideBlock(stateContent: string, stopHookActive: boolean): boolean {
+function decideBlock(projectDir: string, stateContent: string, stopHookActive: boolean): boolean {
   const cap = blockCap(stateContent);
-  const signature = progressSignature(stateContent);
-  const prior = readGuard();
+  const signature = progressSignature(projectDir, stateContent);
+  const prior = readGuard(projectDir);
 
   const sameSignature = prior !== null && prior.signature === signature;
 
@@ -298,7 +287,7 @@ function decideBlock(stateContent: string, stopHookActive: boolean): boolean {
   }
 
   // Persist the updated counter for the NEXT invocation in this sequence.
-  writeGuard({ signature, count: nextCount });
+  writeGuard(projectDir, { signature, count: nextCount });
 
   // RELEASE when the no-progress streak has reached the cap. This is the
   // hardest acceptance criterion: a stuck loop must always let go.
@@ -312,11 +301,11 @@ function decideBlock(stateContent: string, stopHookActive: boolean): boolean {
 // Reset the guard once the loop reaches `done` (or any allow path with state),
 // so the next stuck sequence starts its count from scratch rather than
 // inheriting a stale streak from an earlier, since-resolved hang.
-function resetGuard(): void {
+function resetGuard(projectDir: string): void {
   try {
     const dir = stopHookDir(projectDir);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(guardFilePath(), JSON.stringify({ signature: "", count: 0 }), "utf-8");
+    writeFileSync(guardFilePath(projectDir), JSON.stringify({ signature: "", count: 0 }), "utf-8");
   } catch {
     // Non-fatal — a stale streak only ever makes us release SOONER, never trap.
   }
@@ -400,7 +389,7 @@ function isHumanWaitStop(stateContent: string): boolean {
 // underscores"). Scans the stage dir for any *-questions.md (the canonical name
 // is `<slug>-questions.md`, but matching the suffix is robust to the per-unit
 // Construction `{unit}` path segment the engine does not yet resolve).
-function hasPendingQuestion(slug: string, phase: string): boolean {
+function hasPendingQuestion(projectDir: string, slug: string, phase: string): boolean {
   if (slug.length === 0 || phase.length === 0) return false;
   const stageDirPath = stageDir(projectDir, phase.toLowerCase(), slug);
   if (!existsSync(stageDirPath)) return false;
@@ -425,7 +414,7 @@ function hasPendingQuestion(slug: string, phase: string): boolean {
 
 // The tier-2 carve-out decision: the current stage is [-] in-progress, a
 // question is pending, and we are NOT in autonomous Construction.
-function isPendingQuestionStop(stateContent: string): boolean {
+function isPendingQuestionStop(projectDir: string, stateContent: string): boolean {
   try {
     if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
       return false; // autonomy guard — keep the loop alive
@@ -435,7 +424,7 @@ function isPendingQuestionStop(stateContent: string): boolean {
     const row = parseCheckboxes(stateContent).find((c) => c.slug === slug);
     if (row?.state !== "in-progress") return false; // positive [-] only
     const phase = getField(stateContent, "Lifecycle Phase") ?? "";
-    return hasPendingQuestion(slug, phase);
+    return hasPendingQuestion(projectDir, slug, phase);
   } catch {
     // Unparseable / odd content — fall through to decideBlock (never trap).
     return false;
@@ -470,7 +459,7 @@ function isPendingQuestionStop(stateContent: string): boolean {
 // AND best-effort deleted here (the janitor), so the next turn starts clean.
 // The delete is wrapped so a failure to unlink never changes the stop decision.
 // The path spelling and the TTL are shared with the doctor probe via aidlc-lib.
-function isPendingComposeStop(stateContent: string): boolean {
+function isPendingComposeStop(projectDir: string, stateContent: string): boolean {
   try {
     if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
       return false; // autonomy guard - keep the loop alive
@@ -733,7 +722,7 @@ function isConversationalStop(
 // because we will not trap a turn on the engine's behalf when we cannot read a
 // directive. We pass --project-dir explicitly so the engine resolves the same
 // workspace regardless of the spawned process's cwd.
-function runEngineNextKind(): string | null {
+function runEngineNextKind(projectDir: string): string | null {
   const enginePath = join(projectDir, harnessDir(), "tools", "aidlc-orchestrate.ts");
   if (!existsSync(enginePath)) return null;
   // The spawn MUST be time-bounded. Without a timeout a hung `next` (an engine
@@ -788,17 +777,27 @@ function continuationReason(kind: string, stage: string): string {
 
 // --- Main ---------------------------------------------------------------------
 
+export async function run(input: string): Promise<number> {
+const projectDir = resolveProjectDirFromHook(import.meta.url);
+
+// Write a health heartbeat (mirrors the other hooks' .aidlc-hooks-health beat).
+try {
+  const healthDir = hooksHealthDir(projectDir);
+  mkdirSync(healthDir, { recursive: true });
+  writeFileSync(join(healthDir, "stop.last"), isoTimestamp(), "utf-8");
+} catch {
+  // Heartbeat failure is non-fatal — never let it affect the stop decision.
+}
+
 // Mirror the SubagentStop hook's stdin idiom: a TTY means no Claude Code JSON
 // is coming (test/debug contexts) — allow the stop rather than block on a
 // terminal read.
-if (process.stdin.isTTY) allowStop();
-
-const input = await Bun.stdin.text();
+if (process.stdin.isTTY) return allowStop();
 
 // No-op outside AIDLC: if there is no workflow state file under the project dir,
 // there is nothing to enforce — allow the stop. Defends the frontmatter scoping.
 const statePath = stateFilePath(projectDir);
-if (!existsSync(statePath)) allowStop();
+if (!existsSync(statePath)) return allowStop();
 
 let stateContent: string;
 try {
@@ -806,7 +805,7 @@ try {
 } catch (e) {
   // Unreadable state — fail open (never trap) and record the drop.
   recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
-  allowStop();
+  return allowStop();
 }
 
 // Parse the Stop-hook input. Garbage / empty stdin must NOT crash and must NOT
@@ -841,17 +840,17 @@ try {
 
 // Consult the engine for the next move. A null kind (engine unavailable /
 // unparseable) fails open — allow the stop.
-const kind = runEngineNextKind();
+const kind = runEngineNextKind(projectDir);
 if (kind === null) {
   recordHookDrop(projectDir, HOOK_NAME, "engine next returned no parseable directive; allowing stop");
-  allowStop();
+  return allowStop();
 }
 
 // `done` → the workflow is complete; allow the turn to end and clear the guard
 // so a future stuck sequence starts fresh.
 if (kind === "done") {
-  resetGuard();
-  allowStop();
+  resetGuard(projectDir);
+  return allowStop();
 }
 
 // `parked` -> the workflow was intentionally parked mid-flow (issue #367); a
@@ -877,8 +876,8 @@ if (kind === "parked") {
       "parked directive seen under autonomous Construction; declining the parked allow (an unattended run must not self-park), falling through to the cap-bounded block",
     );
   } else {
-    resetGuard();
-    allowStop();
+    resetGuard(projectDir);
+    return allowStop();
   }
 }
 
@@ -886,7 +885,7 @@ if (kind === "parked") {
 // freeform scope confirmation; aidlc-orchestrate.ts:1040,1105). Allow the turn
 // to end so the user can respond, rather than re-feeding the loop.
 if (kind === "ask") {
-  allowStop();
+  return allowStop();
 }
 
 // Human-wait carve-out: the engine returns a pending directive, but the current
@@ -904,7 +903,7 @@ if (isHumanWaitStop(stateContent)) {
     HOOK_NAME,
     `current stage ${currentStageSlug(stateContent)} is awaiting approval or being revised; allowing the stop (human-wait carve-out)`,
   );
-  allowStop();
+  return allowStop();
 }
 
 // Pending-question carve-out (tier 2): the current [-] stage has an unanswered
@@ -915,13 +914,13 @@ if (isHumanWaitStop(stateContent)) {
 // question, an autonomous run, or a read error falls through to the cap-bounded
 // block below, so a genuine mid-stage quit (and every autonomous run) is
 // unaffected.
-if (isPendingQuestionStop(stateContent)) {
+if (isPendingQuestionStop(projectDir, stateContent)) {
   recordHookDrop(
     projectDir,
     HOOK_NAME,
     `current stage ${currentStageSlug(stateContent)} has an unanswered question; allowing the stop (pending-question carve-out)`,
   );
-  allowStop();
+  return allowStop();
 }
 
 // Pending-compose carve-out (tier 2b): an in-flight compose proposal is
@@ -930,13 +929,13 @@ if (isPendingQuestionStop(stateContent)) {
 // the human exactly like a stage gate, so allow the turn to end instead of
 // nudging it back into stage execution mid-compose. Positive-confirmation only
 // (the marker), autonomy-guarded, fail-open (see isPendingComposeStop).
-if (isPendingComposeStop(stateContent)) {
+if (isPendingComposeStop(projectDir, stateContent)) {
   recordHookDrop(
     projectDir,
     HOOK_NAME,
     "an in-flight compose proposal is pending human approval (aidlc/.aidlc-compose-pending present); allowing the stop (pending-compose carve-out)",
   );
-  allowStop();
+  return allowStop();
 }
 
 // Conversational carve-out (tier 3, issue #365 broader reading): the ending turn
@@ -956,22 +955,27 @@ if (isConversationalStop(stateContent, transcriptPath, transcriptFormat)) {
     HOOK_NAME,
     "the ending turn was conversational (human's last prompt answered with no workflow-engine call); allowing the stop (conversational carve-out)",
   );
-  allowStop();
+  return allowStop();
 }
 
 // A directive is PENDING (run-stage / dispatch-subagent / invoke-swarm /
 // present-gate / ask / print / error). Decide whether to block, honouring the
 // recursion bounds. When the bounds say release, LET GO — a stuck loop must
 // never trap the session.
-const shouldBlock = decideBlock(stateContent, stopHookActive);
+const shouldBlock = decideBlock(projectDir, stateContent, stopHookActive);
 if (!shouldBlock) {
   recordHookDrop(
     projectDir,
     HOOK_NAME,
     `recursion guard released the stop (no-progress block cap ${blockCap(stateContent)} reached; stop_hook_active=${stopHookActive})`,
   );
-  allowStop();
+  return allowStop();
 }
 
 // Within budget — block the stop and re-feed the pending work.
-blockStop(continuationReason(kind, currentStageSlug(stateContent)));
+return blockStop(continuationReason(kind, currentStageSlug(stateContent)));
+}
+
+if (import.meta.main) {
+  process.exit(await run(await Bun.stdin.text()));
+}

@@ -52,12 +52,6 @@ import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { existsSync, readFileSync } from "node:fs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
-const target = process.argv[2] ?? "";
-// LOAD-BEARING (not debug-only): this is the base dir for resolve(projectDir,
-// rawPath) that turns the IDE's workspace-relative write path into the absolute
-// path the core audit-logger's record-root check needs — the core fix of this
-// harness. It also feeds hookDebug/recordHookDrop. Do not remove it.
-const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 // The IDE hands hook context via the USER_PROMPT env var (NOT stdin). Shape:
 //   { toolName, toolArgs (always {}), toolResult, toolSuccess }
@@ -67,6 +61,14 @@ interface IdeHookContext {
   toolResult?: string;
   toolSuccess?: boolean;
 }
+
+export async function run(target: string, input: string): Promise<number> {
+void input;
+// LOAD-BEARING (not debug-only): this is the base dir for resolve(projectDir,
+// rawPath) that turns the IDE's workspace-relative write path into the absolute
+// path the core audit-logger's record-root check needs — the core fix of this
+// harness. It also feeds hookDebug/recordHookDrop. Do not remove it.
+const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 let ide: IdeHookContext = {};
 {
@@ -108,7 +110,7 @@ if (target === "mint") {
   } catch {
     /* advisory - mint never blocks the turn */
   }
-  process.exit(0);
+  return 0;
 }
 
 // --- block: the preToolUse human-presence floor ---
@@ -130,18 +132,18 @@ if (target === "block") {
     const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
     // Carve-outs first: autonomous Construction, the deterministic off-switch,
     // and no-open-gate (nothing awaits approval, so nothing to floor).
-    if (isAutonomousMode(content)) process.exit(0);
-    if (humanPresenceGuardDisabled()) process.exit(0);
-    if (!hasOpenGate(content)) process.exit(0);
-    if (humanActedSinceGate(pd)) process.exit(0); // a human acted at this gate
+    if (isAutonomousMode(content)) return 0;
+    if (humanPresenceGuardDisabled()) return 0;
+    if (!hasOpenGate(content)) return 0;
+    if (humanActedSinceGate(pd)) return 0; // a human acted at this gate
     process.stderr.write(
       "An approval gate is open and no human has acted since it opened. The gate " +
         "requires a typed human turn before any tool call proceeds. Acknowledge the " +
         "gate as a human, then continue.\n",
     );
-    process.exit(2); // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+    return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   } catch {
-    process.exit(0); // advisory - any read/parse failure fails open
+    return 0; // advisory - any read/parse failure fails open
   }
 }
 
@@ -334,8 +336,7 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
 const fwd = buildForward();
 if (fwd === null) {
   hookDebug(projectDir, "kiro-adapter", "forward: null (no-op)", { target });
-  process.exit(0);
-  throw new Error("unreachable"); // narrows fwd for TS below
+  return 0;
 }
 hookDebug(projectDir, "kiro-adapter", "forward", {
   target,
@@ -349,7 +350,7 @@ if (fwd.hook === "__audit_and_sensors__") {
   // (mirrors the Claude settings.json registration). Both advisory: exit 0.
   runCore("aidlc-audit-logger.ts", fwd.input);
   runCore("aidlc-sensor-fire.ts", fwd.input);
-  process.exit(0);
+  return 0;
 }
 
 const result = runCore(fwd.hook, fwd.input);
@@ -365,10 +366,16 @@ if (target === "session-start") {
   } catch {
     if (result.stdout) process.stdout.write(result.stdout);
   }
-  process.exit(0);
+  return 0;
 }
 
 // stop (and any future passthrough target): forward stdout + exit code
 // verbatim — the {"decision":"block","reason"} contract is shared.
 if (result.stdout) process.stdout.write(result.stdout);
-process.exit(result.code);
+return result.code;
+}
+
+if (import.meta.main) {
+  const input = (process.env.USER_PROMPT ?? "").length > 0 ? "" : await Bun.stdin.text();
+  process.exit(await run(process.argv[2] ?? "", input));
+}

@@ -806,8 +806,8 @@ function findLatestEvent(
 
 let projectDir: string | undefined;
 
-function main(): void {
-  const rawArgs = process.argv.slice(2);
+export function main(argv: string[]): void {
+  const rawArgs = argv;
 
   const filteredArgs: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
@@ -866,5 +866,5 @@ function error(msg: string): never {
 }
 
 if (import.meta.main) {
-  main();
+  main(process.argv.slice(2));
 }

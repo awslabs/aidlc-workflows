@@ -660,13 +660,12 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
-function main(): void {
+export function main(argv: string[]): void {
   // The subcommand is the first bare token that is NOT a flag NOR a flag's value.
   // Walk argv skipping `--flag value` / `--flag=value` pairs so
   // `--project-dir <path> check ...` and `check --project-dir <path> ...` both
   // resolve to `check`. The handlers re-read every flag from `rest`, and a
   // positional unit (e.g. `check <unit>`) survives in rest.
-  const argv = process.argv.slice(2);
   let subcommand: string | undefined;
   let subIndex = -1;
   for (let i = 0; i < argv.length; i++) {
@@ -702,4 +701,4 @@ function main(): void {
   }
 }
 
-main();
+if (import.meta.main) main(process.argv.slice(2));

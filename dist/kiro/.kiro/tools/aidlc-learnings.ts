@@ -756,8 +756,8 @@ function printHelp(): void {
   );
 }
 
-function main(): void {
-  const { projectDirArg, rest } = stripProjectDir(process.argv.slice(2));
+export function main(argv: string[]): void {
+  const { projectDirArg, rest } = stripProjectDir(argv);
   const [cmd, ...subargs] = rest;
 
   if (cmd === "--help" || cmd === "-h") {
@@ -782,4 +782,4 @@ function main(): void {
   }
 }
 
-if (import.meta.main) main();
+if (import.meta.main) main(process.argv.slice(2));

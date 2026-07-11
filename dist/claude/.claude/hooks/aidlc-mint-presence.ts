@@ -19,6 +19,7 @@ import { existsSync } from "node:fs";
 import { resolveProjectDirFromHook, stateFilePath } from "../tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 
+export async function run(_input: string): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   if (existsSync(stateFilePath(projectDir))) {
@@ -28,4 +29,9 @@ try {
   // Non-fatal — a mint failure must never block the human's turn.
 }
 
-process.exit(0);
+return 0;
+}
+
+if (import.meta.main) {
+  process.exit(await run(await Bun.stdin.text()));
+}

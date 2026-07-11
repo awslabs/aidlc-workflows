@@ -2115,8 +2115,8 @@ Common forms:
 See docs/reference/16-artifact-vocabulary.md for artifact rules.`);
 }
 
-async function main(): Promise<void> {
-  const [cmd, ...args] = process.argv.slice(2);
+export async function main(argv: string[]): Promise<void> {
+  const [cmd, ...args] = argv;
   if (cmd === "--help" || cmd === "-h") {
     printHelp();
     return;
@@ -2146,4 +2146,4 @@ async function main(): Promise<void> {
   }
 }
 
-if (import.meta.main) void main();
+if (import.meta.main) void main(process.argv.slice(2));

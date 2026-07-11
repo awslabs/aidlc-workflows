@@ -249,8 +249,8 @@ function filterToFilePath(
 
 // --- main -------------------------------------------------------------------
 
-function main(): void {
-	const args = parseArgs(process.argv.slice(2));
+export function main(argv: string[]): void {
+	const args = parseArgs(argv);
 
 	if (!existsSync(args.filePath)) {
 		process.stderr.write(`file-path not found: ${args.filePath}\n`);
@@ -317,4 +317,4 @@ function main(): void {
 	process.exit(0);
 }
 
-if (import.meta.main) main();
+if (import.meta.main) main(process.argv.slice(2));

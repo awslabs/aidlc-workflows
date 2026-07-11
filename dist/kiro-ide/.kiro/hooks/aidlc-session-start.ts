@@ -43,6 +43,7 @@ import {
   writeSessionIntentUuid,
 } from "../tools/aidlc-lib.ts";
 
+export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 // Idempotent ensure-step (P0.1 robustness): align the harness-native includes
@@ -60,7 +61,7 @@ try {
 const stateFile = stateFilePath(projectDir);
 
 // No workflow active — do nothing
-if (!existsSync(stateFile)) process.exit(0);
+if (!existsSync(stateFile)) return 0;
 
 // Write health heartbeat
 const healthDir = hooksHealthDir(projectDir);
@@ -85,7 +86,6 @@ let source = "startup";
 let sessionId = "";
 if (!process.stdin.isTTY) {
   try {
-    const input = await Bun.stdin.text();
     if (input.length > 0) {
       try {
         const raw: unknown = JSON.parse(input);
@@ -231,3 +231,9 @@ FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
 // Output additionalContext as JSON
 const output = JSON.stringify({ additionalContext: context });
 process.stdout.write(`${output}\n`);
+return 0;
+}
+
+if (import.meta.main) {
+  process.exit(await run(await Bun.stdin.text()));
+}

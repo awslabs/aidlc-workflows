@@ -217,11 +217,10 @@ function printLine(left: string, right: { plain: string; formatted: string }): v
   }
 }
 
-async function main(): Promise<void> {
+async function main(stdinText: string): Promise<void> {
   // Skip stdin read when stdin is a TTY — Claude Code always pipes JSON,
   // never runs the statusline with a terminal attached. Without this guard
   // a direct run / test / debug-mode pipeline would block on terminal input.
-  const stdinText = process.stdin.isTTY ? "" : await Bun.stdin.text();
   let input: Input = {};
   try {
     input = stdinText ? JSON.parse(stdinText) : {};
@@ -280,4 +279,11 @@ async function main(): Promise<void> {
   printLine(output, right);
 }
 
-await main();
+export async function run(input: string): Promise<number> {
+  await main(process.stdin.isTTY ? "" : input);
+  return 0;
+}
+
+if (import.meta.main) {
+  process.exit(await run(await Bun.stdin.text()));
+}

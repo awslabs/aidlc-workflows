@@ -17,6 +17,7 @@ import {
   resolveProjectDirFromHook,
 } from "../tools/aidlc-lib.ts";
 
+export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 // Write health heartbeat
@@ -26,16 +27,15 @@ writeFileSync(join(healthDir, "log-subagent.last"), isoTimestamp(), "utf-8");
 
 // Read JSON from stdin. Exit cleanly if stdin is a TTY (no Claude Code JSON
 // coming) — avoids blocking on terminal read in test / debug-mode contexts.
-if (process.stdin.isTTY) process.exit(0);
+if (process.stdin.isTTY) return 0;
 
-const input = await Bun.stdin.text();
 let parsed: ClaudeCodeHookInput;
 try {
   const raw: unknown = JSON.parse(input);
-  if (!isClaudeCodeHookInput(raw)) process.exit(0);
+  if (!isClaudeCodeHookInput(raw)) return 0;
   parsed = raw;
 } catch {
-  process.exit(0);
+  return 0;
 }
 
 const agentType = parsed.agent_type ?? "unknown";
@@ -43,7 +43,7 @@ const agentId: string = parsed.agent_id ?? "";
 const agentMessage: string = (parsed.last_assistant_message ?? "").slice(0, 200);
 
 const auditFile = auditFilePath(projectDir);
-if (!existsSync(auditFile)) process.exit(0);
+if (!existsSync(auditFile)) return 0;
 
 const fields: Record<string, string> = {
   "Agent Type": agentType,
@@ -55,5 +55,11 @@ try {
   appendAuditEntry("SUBAGENT_COMPLETED", fields, projectDir);
 } catch (e) {
   recordHookDrop(projectDir, "log-subagent", errorMessage(e));
-  process.exit(0);
+  return 0;
+}
+return 0;
+}
+
+if (import.meta.main) {
+  process.exit(await run(await Bun.stdin.text()));
 }

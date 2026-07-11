@@ -697,8 +697,8 @@ function handleAuditMerge(args: string[], projectDir: string): void {
 
 // --- CLI entry point ---
 
-function main(): void {
-  const rawArgs = process.argv.slice(2);
+export function main(argv: string[]): void {
+  const rawArgs = argv;
 
   // Extract --project-dir before general parsing
   let projectDirArg: string | undefined;
@@ -756,5 +756,5 @@ function main(): void {
 }
 
 if (import.meta.main) {
-  main();
+  main(process.argv.slice(2));
 }

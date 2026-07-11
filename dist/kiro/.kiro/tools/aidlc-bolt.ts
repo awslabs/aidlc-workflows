@@ -822,8 +822,8 @@ function handleSetAutonomy(args: string[]): void {
 
 let projectDir: string | undefined;
 
-function main(): void {
-  const rawArgs = process.argv.slice(2);
+export function main(argv: string[]): void {
+  const rawArgs = argv;
 
   const filteredArgs: string[] = [];
   for (let i = 0; i < rawArgs.length; i++) {
@@ -926,5 +926,5 @@ function failJson(
 }
 
 if (import.meta.main) {
-  main();
+  main(process.argv.slice(2));
 }

@@ -3264,8 +3264,8 @@ function handlePark(_args: string[], projectDir: string | undefined): void {
 
 // --- CLI entry point ---
 
-function main(): void {
-  const rawArgs = process.argv.slice(2);
+export function main(argv: string[]): void {
+  const rawArgs = argv;
 
   // Extract --project-dir (mirrors aidlc-jump.ts / aidlc-state.ts).
   let projectDir: string | undefined;
@@ -3304,7 +3304,7 @@ function main(): void {
 
 if (import.meta.main) {
   try {
-    main();
+    main(process.argv.slice(2));
   } catch (e) {
     // Any uncaught read error (missing graph, malformed state) surfaces as a
     // non-zero exit with the message on stderr — never a half-emitted

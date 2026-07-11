@@ -21,6 +21,7 @@ import {
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
 
+export async function run(_input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 const stateFile = stateFilePath(projectDir);
 
@@ -29,7 +30,7 @@ const healthDir = hooksHealthDir(projectDir);
 mkdirSync(healthDir, { recursive: true });
 writeFileSync(join(healthDir, "validate-state.last"), isoTimestamp(), "utf-8");
 
-if (!existsSync(stateFile)) process.exit(0);
+if (!existsSync(stateFile)) return 0;
 
 const content = readFileSync(stateFile, "utf-8");
 
@@ -72,4 +73,10 @@ if (existsSync(auditFile)) {
     recordHookDrop(projectDir, "validate-state", errorMessage(e));
     // Non-fatal — recovery breadcrumb is the primary signal.
   }
+}
+return 0;
+}
+
+if (import.meta.main) {
+  process.exit(await run(await Bun.stdin.text()));
 }

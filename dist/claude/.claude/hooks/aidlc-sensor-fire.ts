@@ -35,6 +35,7 @@ import {
   harnessDir,
 } from "../tools/aidlc-lib.ts";
 
+export async function run(input: string): Promise<number> {
 // Step 1 — Resolve project dir from import.meta.url. Mirrors
 // aidlc-audit-logger.ts and aidlc-runtime-compile.ts precedent.
 const projectDir = resolveProjectDirFromHook(import.meta.url);
@@ -53,20 +54,19 @@ const healthDir = hooksHealthDir(projectDir);
 // Step 2 — TTY guard. Hook invoked outside a piped-stdin context (e.g.
 // interactive shell, test harness running under `bash -x`) has no JSON
 // to parse; exit cleanly instead of blocking on a terminal read.
-if (process.stdin.isTTY) process.exit(0);
+if (process.stdin.isTTY) return 0;
 
 // Step 3 — Stdin parse. Malformed JSON exits 0 silently.
 // We use the central ClaudeCodeHookInput type guard from aidlc-lib.ts;
 // the SKILL.md frontmatter pins this hook to the Write|Edit matcher,
 // so we don't consult tool_name and only need tool_input.file_path.
-const input = await Bun.stdin.text();
 let parsed: ClaudeCodeHookInput;
 try {
   const raw: unknown = JSON.parse(input);
-  if (!isClaudeCodeHookInput(raw)) process.exit(0);
+  if (!isClaudeCodeHookInput(raw)) return 0;
   parsed = raw;
 } catch {
-  process.exit(0);
+  return 0;
 }
 
 // Step 4 — Extract path. PostToolUse for Write/Edit always carries
@@ -74,7 +74,7 @@ try {
 // of aidlc-audit-logger.ts:42 — the includes-filter works precisely
 // because Claude Code passes absolute paths).
 const filePath: string = parsed?.tool_input?.file_path ?? "";
-if (!filePath) process.exit(0);
+if (!filePath) return 0;
 
 // Step 5 — Recursion guard. Skip writes to the dispatcher's detail-file
 // directory. Post-workspace-move that dir re-roots per intent
@@ -92,12 +92,12 @@ if (
   filePath.includes("aidlc-docs/.aidlc-sensors/") ||
   filePath.includes("aidlc-docs\\.aidlc-sensors\\")
 ) {
-  process.exit(0);
+  return 0;
 }
 
 // Step 6 — Pre-init guard. No audit.md → no active workflow → no-op.
 // Mirrors aidlc-audit-logger.ts:48-50 + aidlc-runtime-compile.ts:62-64.
-if (!existsSync(auditFilePath(projectDir))) process.exit(0);
+if (!existsSync(auditFilePath(projectDir))) return 0;
 
 // Step 7 — State-file guard.
 //
@@ -105,13 +105,13 @@ if (!existsSync(auditFilePath(projectDir))) process.exit(0);
 // Pre-init or partially-deleted workspaces could have audit.md without
 // state.md (audit.md is write-direct; state.md is overwrite-rename).
 // G5 ("always exit 0") demands a guard before the read.
-if (!existsSync(stateFilePath(projectDir))) process.exit(0);
+if (!existsSync(stateFilePath(projectDir))) return 0;
 
 let stateContent: string;
 try {
   stateContent = readStateFile(projectDir);
 } catch {
-  process.exit(0);
+  return 0;
 }
 
 // Step 8 — Heartbeat (G3). The future hook-health doctor reads this
@@ -154,7 +154,7 @@ if (!existsSync(firstFiredMarker)) {
 // `sensors_applicable` list is keyed on the stage slug; we read it
 // from state. Missing or "none" → no active stage → no-op.
 const currentStage = getField(stateContent, "Current Stage") ?? "";
-if (!currentStage || currentStage === "none") process.exit(0);
+if (!currentStage || currentStage === "none") return 0;
 
 // Step 10 — Stage-graph read (C4). loadGraph() returns GraphStage[]
 // which carries `sensors_applicable: SensorResolution[]`; goes through
@@ -165,15 +165,15 @@ try {
   stageNode = loadGraph().find((s) => s.slug === currentStage);
 } catch {
   // pre-compile / missing graph / framework-not-installed
-  process.exit(0);
+  return 0;
 }
 // Stage missing from graph (stale state-graph mismatch) — same exit.
-if (!stageNode) process.exit(0);
+if (!stageNode) return 0;
 
 // No applicable sensors. Empty array is the workspace-scaffold case;
 // undefined is the unlikely missing-field case (compile guarantees it).
 const applicableSensors = stageNode.sensors_applicable ?? [];
-if (applicableSensors.length === 0) process.exit(0);
+if (applicableSensors.length === 0) return 0;
 
 // Step 11 — Per-entry dispatch (C5).
 //
@@ -266,4 +266,9 @@ for (const entry of applicableSensors) {
 }
 
 // Step 12 — exit 0 (advisory always per G5).
-process.exit(0);
+return 0;
+}
+
+if (import.meta.main) {
+  process.exit(await run(await Bun.stdin.text()));
+}

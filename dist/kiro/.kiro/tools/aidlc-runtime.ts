@@ -1407,8 +1407,8 @@ function stripProjectDir(args: string[]): { projectDirArg: string | undefined; r
   return { projectDirArg: undefined, rest: out };
 }
 
-function main(): void {
-  const { projectDirArg, rest: argsAfterStrip } = stripProjectDir(process.argv.slice(2));
+export function main(argv: string[]): void {
+  const { projectDirArg, rest: argsAfterStrip } = stripProjectDir(argv);
 
   const [cmd, ...subargs] = argsAfterStrip;
   if (cmd === "--help" || cmd === "-h") {
@@ -1431,4 +1431,4 @@ function main(): void {
   handler(subargs, resolveProjectDir(projectDirArg));
 }
 
-if (import.meta.main) main();
+if (import.meta.main) main(process.argv.slice(2));

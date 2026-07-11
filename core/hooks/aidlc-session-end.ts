@@ -17,10 +17,11 @@ import {
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
 
+export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 // No workflow active — do nothing (consistent with session-start.ts)
-if (!existsSync(stateFilePath(projectDir))) process.exit(0);
+if (!existsSync(stateFilePath(projectDir))) return 0;
 
 // Health heartbeat
 const healthDir = hooksHealthDir(projectDir);
@@ -33,7 +34,6 @@ writeFileSync(join(healthDir, "session-end.last"), isoTimestamp(), "utf-8");
 let reason = "unknown";
 if (!process.stdin.isTTY) {
   try {
-    const input = await Bun.stdin.text();
     if (input) {
       const raw: unknown = JSON.parse(input);
       if (isClaudeCodeHookInput(raw) && raw.reason) {
@@ -49,5 +49,11 @@ try {
   appendAuditEntry("SESSION_ENDED", { Reason: reason }, projectDir);
 } catch (e) {
   recordHookDrop(projectDir, "session-end", errorMessage(e));
-  process.exit(0);
+  return 0;
+}
+return 0;
+}
+
+if (import.meta.main) {
+  process.exit(await run(await Bun.stdin.text()));
 }

@@ -112,8 +112,8 @@ function fail(msg: string): never {
 	process.exit(1);
 }
 
-function main(): void {
-	const flags = parseFlags(process.argv.slice(2));
+export function main(argv: string[]): void {
+	const flags = parseFlags(argv);
 
 	if (!flags.outputPath) {
 		fail("--output-path is required");
@@ -226,4 +226,4 @@ function main(): void {
 	process.exit(0);
 }
 
-main();
+if (import.meta.main) main(process.argv.slice(2));

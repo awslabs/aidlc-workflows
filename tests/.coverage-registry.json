@@ -35,7 +35,7 @@
       "audit": 31,
       "scope": 9,
       "stage": 8,
-      "hook": 11,
+      "hook": 12,
       "subcommand": 76,
       "render-surface": 7
     }
@@ -1914,6 +1914,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:main",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:memoryDirFor",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3129,8 +3136,13 @@
       "unitClass": "hook",
       "unitId": "aidlc-mint-presence",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t227-hook-run-exports.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "hook",
@@ -3232,6 +3244,10 @@
         {
           "file": "tests/unit/t184-stage-graph-drift.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t227-hook-run-exports.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -3259,6 +3275,10 @@
         },
         {
           "file": "tests/unit/t168-statusline-orientation.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t227-hook-run-exports.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3292,6 +3312,10 @@
         {
           "file": "tests/unit/t225-detector-corpus.test.ts",
           "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t227-hook-run-exports.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"

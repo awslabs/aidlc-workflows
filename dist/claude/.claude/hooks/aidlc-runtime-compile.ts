@@ -41,22 +41,22 @@ import {
   harnessDir,
 } from "../tools/aidlc-lib.ts";
 
+export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 hookDebug(projectDir, "runtime-compile", "invoked");
 
 // 1. TTY guard — exit cleanly when invoked outside a piped stdin context
 //    (interactive shell, test harness running under `bash -x`).
-if (process.stdin.isTTY) process.exit(0);
+if (process.stdin.isTTY) return 0;
 
 // 2. Stdin parse — read JSON payload from Claude Code; exit on malformed.
-const input = await Bun.stdin.text();
 let parsed: ClaudeCodeHookInput;
 try {
   const raw: unknown = JSON.parse(input);
-  if (!isClaudeCodeHookInput(raw)) process.exit(0);
+  if (!isClaudeCodeHookInput(raw)) return 0;
   parsed = raw;
 } catch {
-  process.exit(0);
+  return 0;
 }
 const command: string = parsed.tool_input?.command ?? "";
 
@@ -81,10 +81,10 @@ const ideAuditMode = (parsed.tool_input?.source ?? "") === "ide-audit-sync";
 hookDebug(projectDir, "runtime-compile", "command-gate", { ideAuditMode, command: command.slice(0, 120) });
 if (!ideAuditMode) {
   const commandDecision = classifyRuntimeCompileCommand(command);
-  if (commandDecision === "reject") process.exit(0);
+  if (commandDecision === "reject") return 0;
   if (commandDecision === "pass") {
     hookDebug(projectDir, "runtime-compile", "exit: command not a transition tool");
-    process.exit(0);
+    return 0;
   }
 }
 
@@ -101,7 +101,7 @@ const intent = activeIntent(projectDir, space) ?? undefined;
 const audit = readAllAuditShards(projectDir, intent, space).replace(/\r\n/g, "\n");
 if (audit.length === 0) {
   hookDebug(projectDir, "runtime-compile", "exit: audit empty");
-  process.exit(0);
+  return 0;
 }
 
 // 5. Heartbeat — doctor reads this file's mtime to detect silent-hook failure.
@@ -134,7 +134,7 @@ const hasTransition = last3.some((b) => transitionRegex.test(b));
 hookDebug(projectDir, "runtime-compile", "transition-gate", { hasTransition, last3count: last3.length });
 if (!hasTransition) {
   hookDebug(projectDir, "runtime-compile", "exit: no transition in audit tail");
-  process.exit(0);
+  return 0;
 }
 
 // 7b. Idempotency guard (IDE audit-tail mode only). On the CLI the command
@@ -164,7 +164,7 @@ if (ideAuditMode) {
         graphMtime,
         newestShard,
       });
-      process.exit(0);
+      return 0;
     }
   } catch {
     // runtime-graph.json absent (never compiled) → fall through and compile.
@@ -191,4 +191,10 @@ try {
   }
 } catch (e) {
   recordHookDrop(projectDir, "runtime-compile", errorMessage(e));
+}
+return 0;
+}
+
+if (import.meta.main) {
+  process.exit(await run(await Bun.stdin.text()));
 }

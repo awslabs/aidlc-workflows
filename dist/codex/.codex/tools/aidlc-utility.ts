@@ -130,14 +130,15 @@ const VALID_TEST_STRATEGIES: Record<string, string> = {
   comprehensive: "Comprehensive",
 };
 
+let errorArgs: string[] = [];
+let errorProjectDirArg: string | undefined;
+
 function die(msg: string): never {
-  // Parse --project-dir from argv so ERROR_LOGGED lands in the correct workflow
-  // even on errors raised BEFORE main() completes flag parsing. Fall back to
-  // default resolution (env var / cwd) if absent.
-  const args = process.argv.slice(2);
-  const pdIdx = args.indexOf("--project-dir");
-  const explicitPd = pdIdx !== -1 && pdIdx + 1 < args.length ? args[pdIdx + 1] : undefined;
-  const pd = resolveProjectDir(explicitPd);
+  // main(argv) seeds this context before dispatch so ERROR_LOGGED lands in the
+  // same workflow the argv-selected command was targeting. Fall back to default
+  // resolution (env var / cwd) for direct in-process helper calls.
+  const args = errorArgs;
+  const pd = resolveProjectDir(errorProjectDirArg);
   const command = `aidlc-utility ${args.join(" ")}`.trim();
   emitError(pd, "aidlc-utility", command, msg);
 }
@@ -4913,10 +4914,12 @@ function handleResolveEnvScope(): void {
 // CLI entry point
 // ---------------------------------------------------------------------------
 
-function main(): void {
-  const rawArgs = process.argv.slice(2);
+export function main(argv: string[]): void {
+  const rawArgs = argv;
+  errorArgs = [...rawArgs];
   const { positional, flags } = parseArgs(rawArgs);
   const subcommand = positional[0];
+  errorProjectDirArg = flags["project-dir"];
   const projectDir = resolveProjectDir(flags["project-dir"]);
 
   switch (subcommand) {
@@ -5004,4 +5007,4 @@ function main(): void {
   }
 }
 
-if (import.meta.main) main();
+if (import.meta.main) main(process.argv.slice(2));

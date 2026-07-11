@@ -23,6 +23,7 @@ import {
   resolveProjectDirFromHook,
 } from "../tools/aidlc-lib.ts";
 
+export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 hookDebug(projectDir, "audit-logger", "invoked", { projectDir, cwd: process.cwd() });
 
@@ -36,21 +37,20 @@ writeFileSync(join(healthDir, "audit-logger.last"), isoTimestamp(), "utf-8");
 // cleanly instead of blocking on the terminal read.
 if (process.stdin.isTTY) {
   hookDebug(projectDir, "audit-logger", "exit: stdin isTTY");
-  process.exit(0);
+  return 0;
 }
 
-const input = await Bun.stdin.text();
 let parsed: ClaudeCodeHookInput;
 try {
   const raw: unknown = JSON.parse(input);
   if (!isClaudeCodeHookInput(raw)) {
     hookDebug(projectDir, "audit-logger", "exit: not ClaudeCodeHookInput", { input: input.slice(0, 200) });
-    process.exit(0);
+    return 0;
   }
   parsed = raw;
 } catch {
   hookDebug(projectDir, "audit-logger", "exit: stdin parse failed", { input: input.slice(0, 200) });
-  process.exit(0);
+  return 0;
 }
 
 const tool = parsed.tool_name ?? "";
@@ -88,7 +88,7 @@ hookDebug(projectDir, "audit-logger", "path-gate", {
 });
 if (!underRecord && !underCodekb) {
   hookDebug(projectDir, "audit-logger", "exit: not under record or codekb root");
-  process.exit(0);
+  return 0;
 }
 
 // Don't log writes to an audit shard itself (avoid recursion). The shard is
@@ -100,7 +100,7 @@ if (
   /[/\\]audit[/\\][^/\\]+\.md$/.test(file)
 ) {
   hookDebug(projectDir, "audit-logger", "exit: write to audit shard (recursion guard)");
-  process.exit(0);
+  return 0;
 }
 
 const auditFile = auditFilePath(projectDir);
@@ -108,7 +108,7 @@ const auditFile = auditFilePath(projectDir);
 // Don't auto-create the audit trail — the orchestrator creates it at workflow start.
 if (!existsSync(auditFile)) {
   hookDebug(projectDir, "audit-logger", "exit: audit file missing", { auditFile });
-  process.exit(0);
+  return 0;
 }
 
 // Extract the context breadcrumb: the path relative to the record root (the
@@ -172,5 +172,11 @@ try {
   // exit cleanly.
   hookDebug(projectDir, "audit-logger", "exit: emit threw", { eventType, error: errorMessage(e) });
   recordHookDrop(projectDir, "audit-logger", errorMessage(e));
-  process.exit(0);
+  return 0;
+}
+return 0;
+}
+
+if (import.meta.main) {
+  process.exit(await run(await Bun.stdin.text()));
 }

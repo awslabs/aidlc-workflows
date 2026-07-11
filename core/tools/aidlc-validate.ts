@@ -278,8 +278,8 @@ function jsonError(message: string): never {
 
 // --- CLI entry point ---
 
-function main(): void {
-  const args = process.argv.slice(2);
+export function main(argv: string[]): void {
+  const args = argv;
   const subcommand = args[0];
   const target = args[1];
 
@@ -302,4 +302,6 @@ function main(): void {
   }
 }
 
-main();
+if (import.meta.main) {
+  main(process.argv.slice(2));
+}
