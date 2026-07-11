@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 452,
+    "total": 455,
     "enumeratedByClass": {
-      "function": 231,
+      "function": 234,
       "audit": 72,
       "scope": 9,
       "stage": 32,
@@ -1082,6 +1082,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:classifyRuntimeCompileCommand",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:classifyTerminalCommand",
       "minMechanism": "none",
       "coveredBy": [
@@ -1635,6 +1642,20 @@
     {
       "unitClass": "function",
       "unitId": "function:isClaudeCodeHookInput",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isEngineEngagementSegment",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isEngineToolCall",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -3139,6 +3160,10 @@
         {
           "file": "tests/unit/t13-hook-input-robustness.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t225-detector-corpus.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -3263,6 +3288,10 @@
         {
           "file": "tests/integration/t195-stop-hook-compose-carveout.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t225-detector-corpus.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"

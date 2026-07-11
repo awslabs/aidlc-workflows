@@ -27,6 +27,7 @@ import {
   activeIntent,
   activeSpace,
   auditShards,
+  classifyRuntimeCompileCommand,
   type ClaudeCodeHookInput,
   errorMessage,
   hookDebug,
@@ -59,19 +60,18 @@ try {
 }
 const command: string = parsed.tool_input?.command ?? "";
 
-// 3. Command filter — only dispatch on the audit-emit-side seam.
-//    aidlc-runtime.ts is rejected explicitly (recursion guard at the
-//    command level — a positive-only allowlist would let composites like
-//    `bun aidlc-runtime.ts compile && bun aidlc-state.ts approve` through
-//    and loop). aidlc-log.ts emits only chatty in-stage events
+// 3. Command filter - only dispatch on the audit-emit-side seam for both
+//    legacy tool-file commands and the new `aidlc ...` grammar.
+//    aidlc-runtime.ts / aidlc runtime is rejected explicitly (recursion guard
+//    at the command level - a positive-only allowlist would let composites like
+//    `bun aidlc-runtime.ts compile && bun aidlc-state.ts approve` through and
+//    loop). aidlc-log.ts emits only chatty in-stage events
 //    (DECISION_RECORDED / QUESTION_ANSWERED / ERROR_LOGGED), none
 //    transition-class. aidlc-worktree.ts emits only WORKTREE_* events.
 //    `aidlc-orchestrate.ts report` is included because the conductor calls it
 //    as the public transition surface; the state-tool emit happens in its
-//    subprocess, which PostToolUse cannot see as a separate Bash command.
-const aidlcTransitionTool = /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-(state|jump|bolt|utility)\.ts\b/;
-const aidlcOrchestrateReport = /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-orchestrate\.ts\b.*\breport\b/;
-const aidlcRuntimeRef = /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-runtime\.ts\b/;
+//    subprocess, which PostToolUse cannot see as a separate Bash command. The
+//    new report allowlist keeps that same public-transition surface.
 // IDE audit-tail mode: Kiro IDE does not surface the shell command, so the
 // command-based filter cannot run. The adapter sets source="ide-audit-sync" to
 // signal "skip the command filter and gate purely on the audit tail" (steps
@@ -80,8 +80,9 @@ const aidlcRuntimeRef = /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-runtime\
 const ideAuditMode = (parsed.tool_input?.source ?? "") === "ide-audit-sync";
 hookDebug(projectDir, "runtime-compile", "command-gate", { ideAuditMode, command: command.slice(0, 120) });
 if (!ideAuditMode) {
-  if (aidlcRuntimeRef.test(command)) process.exit(0);
-  if (!aidlcTransitionTool.test(command) && !aidlcOrchestrateReport.test(command)) {
+  const commandDecision = classifyRuntimeCompileCommand(command);
+  if (commandDecision === "reject") process.exit(0);
+  if (commandDecision === "pass") {
     hookDebug(projectDir, "runtime-compile", "exit: command not a transition tool");
     process.exit(0);
   }

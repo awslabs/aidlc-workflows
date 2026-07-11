@@ -479,6 +479,161 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
   return null;
 }
 
+// --- Engine command detectors (hook classifier seam) ---
+//
+// These raw command-string classifiers are shared by hooks and tests. They do
+// not attempt shell parsing: English-prose mentions and quoted echoes of command
+// strings match, which is a pre-existing class shared with the old detectors.
+// That direction fails closed: over-detection nudges, never releases.
+
+// A workflow-engine tool call: a Bash invocation of legacy
+// aidlc-orchestrate/aidlc-state, a new-grammar `aidlc ...` engine command, or a
+// tool whose name itself references aidlc. These are the calls that mean "the
+// conductor engaged the workflow this turn"; their presence in the turn that
+// answered the human disqualifies the turn from the conversational carve-out (a
+// conductor that ran the engine and then quit mid-loop must still be nudged).
+export function isEngineToolCall(name: string, input: unknown): boolean {
+  const cmd =
+    input !== null && typeof input === "object"
+      ? String((input as Record<string, unknown>).command ?? "")
+      : "";
+  // The command text to inspect: a Bash/Shell command, or (for harnesses that
+  // surface the tool by name) the tool name itself.
+  const text = /^(bash|shell|execute_bash)$/i.test(name) ? cmd : name;
+  // Fast reject: no AIDLC engine/state/workspace tool named at all -> not a
+  // workflow engagement (a chat turn that ran git/cat/ls etc.).
+  if (
+    !/aidlc-(orchestrate|state|jump|bolt|swarm)\b/.test(text) &&
+    !/\baidlc\s+(?:next|report|park|orchestrate|state|jump|bolt|swarm)\b/.test(text)
+  ) {
+    return false;
+  }
+  // Split on shell separators so a CHAINED command is judged per sub-command,
+  // not as one blob. Otherwise a read-only flag anywhere in the line
+  // (`... --status && aidlc-orchestrate report ...`) would wrongly exempt a
+  // mutating call elsewhere in the same line. Each segment is judged on its own.
+  const segments = text.split(/&&|\|\||[;|\n]/);
+  for (const seg of segments) {
+    if (isEngineEngagementSegment(seg)) return true;
+  }
+  return false;
+}
+
+// Current legacy-shape engagement rules. Kept as a helper so the exported
+// classifier can preserve every old-shape result while adding the new grammar.
+function legacyEngineEngagementSegment(seg: string): boolean {
+  if (!/aidlc-(orchestrate|state|jump|bolt|swarm)\b/.test(seg)) return false;
+  // A PURE read-only query: a read-only flag present AND no mutating/advancing
+  // verb in the SAME segment. `next --status` is read-only; `report --status`
+  // (nonsensical, but) still has `report` so is engagement.
+  const hasReadOnlyFlag = /--status\b|--doctor\b|--help\b|--version\b/.test(seg);
+  if (/aidlc-orchestrate\b/.test(seg)) {
+    const advances = /\bnext\b|\breport\b/.test(seg);
+    if (!advances) return false; // e.g. an orchestrate invocation with only a read-only flag
+    // `next --status` is the read-only status query; a bare `next` (or any
+    // `report`) advances. So: advancing verb present -> engagement UNLESS the
+    // ONLY advancing token is `next` and it carries a read-only flag.
+    if (hasReadOnlyFlag && /\bnext\b/.test(seg) && !/\breport\b/.test(seg)) return false;
+    return true;
+  }
+  if (/aidlc-state\b/.test(seg)) {
+    // The mutating / completing subcommands. (Read-only aidlc-state reads like
+    // `get`/`show` are not here, so they fall through to non-engagement.)
+    return /\b(approve|advance|finalize|complete-workflow|gate-start|checkbox|park|unpark|set|skip|reject|revise|resume)\b/.test(seg);
+  }
+  // aidlc-jump / aidlc-bolt / aidlc-swarm: a read-only query (--help/--status)
+  // is not engagement; anything else mutates (jump moves the pointer, bolt forks/
+  // merges, swarm runs Construction) so counts as engagement.
+  if (hasReadOnlyFlag) return false;
+  return true;
+}
+
+// One shell sub-command. True when it ENGAGES the forwarding loop or MUTATES
+// workflow state, false for a read-only query. A human chatting may legitimately
+// ask "what stage am I on?" answered with `--status` / `next --status` /
+// `--doctor` / `--help` / `--version` or a read-only utility call: those must
+// NOT disqualify the conversational carve-out. Anything that advances the loop
+// (`next` fetching a directive, `report` committing a transition) or mutates
+// state (aidlc-state completing/transition verbs; a checkbox/jump/bolt/swarm
+// move) DOES count as engagement. Fail-toward-engagement: an aidlc-orchestrate/
+// state/jump/bolt/swarm verb we do not specifically recognise is treated as
+// engagement (BLOCK), so an unrecognised mutating verb can never leak through as
+// "chat" - the conservative direction for loop integrity.
+export function isEngineEngagementSegment(seg: string): boolean {
+  if (
+    /aidlc-(orchestrate|state|jump|bolt|swarm)\b/.test(seg) &&
+    legacyEngineEngagementSegment(seg)
+  ) {
+    return true;
+  }
+
+  if (!/\baidlc\s+(?:next|report|park|orchestrate|state|jump|bolt|swarm)\b/.test(seg)) {
+    return false;
+  }
+
+  const hasReadOnlyFlag = /--status\b|--doctor\b|--help\b|--version\b/.test(seg);
+  const hasTopNext = /\baidlc\s+next\b/.test(seg);
+  const hasTopReport = /\baidlc\s+report\b/.test(seg);
+  const hasTopPark = /\baidlc\s+park\b/.test(seg);
+  const hasNounNext = /\baidlc\s+orchestrate\s+next\b/.test(seg);
+  const hasNounReport = /\baidlc\s+orchestrate\s+report\b/.test(seg);
+  const hasNounPark = /\baidlc\s+orchestrate\s+park\b/.test(seg);
+  const hasOrchestrateNoun = /\baidlc\s+orchestrate\b/.test(seg);
+  const hasNext = hasTopNext || hasNounNext;
+  const hasReport = hasTopReport || hasNounReport;
+  const hasPark = hasTopPark || hasNounPark;
+
+  if (hasNext || hasReport || hasPark || hasOrchestrateNoun) {
+    // Deliberate grammar delta: new-shape `aidlc park` counts as engagement.
+    // The old orchestrate branch did not count `aidlc-orchestrate.ts park`
+    // because legacy orchestrate engagement recognized only next/report.
+    if (!hasNext && !hasReport && !hasPark) return false;
+    if (hasReadOnlyFlag && hasNext && !hasReport && !hasPark) return false;
+    return true;
+  }
+
+  if (/\baidlc\s+state\b/.test(seg)) {
+    return /\b(approve|advance|finalize|complete-workflow|gate-start|checkbox|park|unpark|set|set-status|skip|reject|revise|resume|init)\b/.test(seg);
+  }
+
+  if (/\baidlc\s+(?:jump|bolt|swarm)\b/.test(seg)) {
+    if (hasReadOnlyFlag) return false;
+    return true;
+  }
+
+  return false;
+}
+
+// Classify commands for the runtime-compile hook's cheap PostToolUse gate. This
+// is a raw detector, not a shell parser: prose and quoted command echoes can
+// match just as they did in the legacy regexes. For this hook that fails closed
+// by over-firing the audit-tail check; it never bypasses the transition event
+// gate below the command filter.
+export function classifyRuntimeCompileCommand(
+  command: string,
+): "reject" | "fire" | "pass" {
+  if (
+    /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-runtime\.ts\b/.test(command) ||
+    /\baidlc\s+runtime\b/.test(command)
+  ) {
+    return "reject";
+  }
+  if (
+    /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-(state|jump|bolt|utility)\.ts\b/.test(command) ||
+    /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-orchestrate\.ts\b.*\breport\b/.test(command) ||
+    /\baidlc\s+(?:state|jump|bolt)\b|\baidlc\s+(?:status|doctor|version|help)\b|\baidlc\s+scope\s+change\b|\baidlc\s+config\s+set\b/.test(command) ||
+    /\baidlc\s+report\b|\baidlc\s+orchestrate\s+report\b|\baidlc\s+next\b.*\breport\b/.test(command)
+  ) {
+    // Utility split rationale: the new grammar keeps D2 parity for the public
+    // one-shots (status/doctor/version/help fire, because the old regex catches
+    // ANY aidlc-utility.ts call), but deliberately does NOT fire for the new
+    // workspace/gen/sensor/intent/space nouns. Old-shape utility calls keep
+    // firing via the retained old regex.
+    return "fire";
+  }
+  return "pass";
+}
+
 // `aidlc/` — the harness-neutral workspace roof (memory · codekb · knowledge ·
 // intents live under spaces/<space>/ here; the engine stays in <harness>/).
 function workspaceRoot(projectDir: string): string {
