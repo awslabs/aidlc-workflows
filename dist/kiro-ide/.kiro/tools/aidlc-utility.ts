@@ -84,6 +84,7 @@ import {
   type StageEntry,
   setCheckbox,
   setField,
+  setPhaseProgress,
   setStageSuffix,
   scopeGridPath,
   scopesDir,
@@ -3473,12 +3474,17 @@ function handleIntentBirthStateBuild(
 
   const projectDesc = flags.arguments || "[Project description]";
 
-  // Phase Progress — per-phase status. Initialization is always Active at init
-  // time. Other phases are Skipped if the adjusted scope mapping has zero
-  // EXECUTE stages for that phase, otherwise Pending. Pending phases flip to
-  // Active on their phase-boundary advance and to Verified at phase completion.
+  // Phase Progress - per-phase status. Birth completes every initialization
+  // stage ([x]) and hands off to the first post-init stage ([-]), emitting the
+  // PHASE_COMPLETED/VERIFIED/STARTED trio for that boundary below - so the
+  // seed mirrors it: Initialization is Verified and the first post-init
+  // stage's phase is Active. Later phases are Skipped if the adjusted scope
+  // mapping has zero EXECUTE stages for them, otherwise Pending; advance /
+  // finalize / complete-workflow / jump flip the rows at each subsequent
+  // boundary (aidlc-state.ts, aidlc-jump.ts).
   const phaseStatus = (phase: string): string => {
-    if (phase === "initialization") return "Active";
+    if (phase === "initialization") return "Verified";
+    if (firstPostInitEntry && phase === firstPostInitEntry.phase) return "Active";
     const stagesInPhase = graph.filter((s) => s.phase === phase);
     const hasExecute = stagesInPhase.some(
       (s) => (adjustedMapping[s.slug] || scopeDef.stages[s.slug] || "SKIP") === "EXECUTE"
@@ -4097,6 +4103,21 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
   ).length;
   content = setField(content, "Completed", String(completedCount));
 
+  // Re-derive the not-yet-reached Phase Progress rows against the new plan:
+  // a phase the new scope leaves without EXECUTE stages reads Skipped, one it
+  // (re-)includes reads Pending. Verified/Active rows record history the
+  // scope change does not rewrite (checkbox states are preserved above for
+  // the same reason), so they are left untouched.
+  for (const phase of PHASES) {
+    const label = phase.charAt(0).toUpperCase() + phase.slice(1);
+    const row = getField(content, label);
+    if (row !== "Pending" && row !== "Skipped") continue;
+    const hasExecute = graph.some(
+      (s) => s.phase === phase && (adjustedMapping[s.slug] || "SKIP") === "EXECUTE"
+    );
+    content = setPhaseProgress(content, phase, hasExecute ? "Pending" : "Skipped");
+  }
+
   // Update Last Updated timestamp
   content = setField(content, "Last Updated", isoTimestamp());
 
@@ -4348,6 +4369,19 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
       (c) => c.state === "completed" && eff(c.slug) === "EXECUTE",
     ).length;
     content = setField(content, "Completed", String(completedCount));
+    // Re-derive not-yet-reached Phase Progress rows against the effective
+    // plan (scope-change's twin): a flip can empty a phase of EXECUTE stages
+    // (-> Skipped) or give a Skipped phase its first (-> Pending).
+    // Verified/Active rows are history and stay untouched.
+    for (const phase of PHASES) {
+      const phaseLabel = phase.charAt(0).toUpperCase() + phase.slice(1);
+      const row = getField(content, phaseLabel);
+      if (row !== "Pending" && row !== "Skipped") continue;
+      const hasExecute = graph.some(
+        (s) => s.phase === phase && eff(s.slug) === "EXECUTE",
+      );
+      content = setPhaseProgress(content, phase, hasExecute ? "Pending" : "Skipped");
+    }
     // The Next Stage projection over the recomposed plan (override-aware).
     if (currentSlug) {
       const next = nextInScopeStage(currentSlug, scope, content);

@@ -46,6 +46,7 @@ import {
   setField,
   setFieldStrict,
   setOrInsertField,
+  setPhaseProgress,
   stagesInScope,
   updateIntentStatus,
   validScopes,
@@ -1195,6 +1196,16 @@ function handleAdvance(args: string[]): void {
   const completedCount = countCheckboxes(content, "completed");
   content = setField(content, "Completed", String(completedCount));
 
+  // Phase Progress rows mirror the boundary events emitted below: the
+  // completed phase's row flips to Verified and the entered phase's to Active,
+  // in the same state write. Display-only (routing reads Lifecycle Phase and
+  // the checkboxes), but without the flip the section holds its birth values
+  // forever and contradicts the checkboxes underneath it.
+  if (crossesPhaseBoundary) {
+    content = setPhaseProgress(content, completedStage.phase, "Verified");
+    content = setPhaseProgress(content, nextStage.phase, "Active");
+  }
+
   // 4. Atomic audit emission — audit-first, then state write.
   // If audit fails, throw before touching state (writeStateFile below is skipped).
   try {
@@ -1307,11 +1318,20 @@ function handleFinalize(args: string[]): void {
     content = setField(content, "Next Stage", nextAfterNext ? nextAfterNext.slug : "none");
     content = setField(content, "Lifecycle Phase", nextStage.phase.toUpperCase());
     content = setField(content, "Active Agent", nextStage.lead_agent);
+    // Phase Progress boundary flip - mirrors handleAdvance's. finalize moves
+    // the cursor without emitting phase events, but the display rows must
+    // still track the phase the cursor now sits in.
+    if (completedStage.phase !== nextStage.phase) {
+      content = setPhaseProgress(content, completedStage.phase, "Verified");
+      content = setPhaseProgress(content, nextStage.phase, "Active");
+    }
   } else {
     content = setField(content, "Current Stage", "none");
     content = setField(content, "Next Stage", "none");
     content = setField(content, "Status", "Completed");
     content = setField(content, "In Progress", "none");
+    // No next stage: the workflow is done - the final phase is Verified.
+    content = setPhaseProgress(content, completedStage.phase, "Verified");
   }
   content = setField(content, "Last Completed Stage", completedSlug);
   content = setField(content, "Last Updated", timestamp);
@@ -1393,6 +1413,11 @@ function handleCompleteWorkflow(args: string[]): void {
   content = setField(content, "In Progress", "none");
   content = setField(content, "Next Stage", "none");
   content = setField(content, "Next Action", "Workflow complete");
+  // Phase Progress: workflow completion is the final phase's boundary - its
+  // row flips to Verified alongside the PHASE_COMPLETED/PHASE_VERIFIED pair
+  // emitted below (the advance-side flip only fires on stage->stage
+  // boundaries, so the last phase would otherwise stay Active forever).
+  content = setPhaseProgress(content, completedStage.phase, "Verified");
 
   // 4. Atomic audit emissions. Refuse silent fallback — matches handleAdvance.
   const scope = getField(content, "Scope");

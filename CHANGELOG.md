@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.6] - 2026-07-12
+
+The state file's `## Phase Progress` section now advances with the workflow. Previously it was seeded once at intent birth and never touched again, so a few stages in it still showed `Ideation: Pending` above a fully-checked Ideation checkbox block - a visible contradiction for anyone reading `aidlc-state.md` directly (routing was never affected; the engine reads `Lifecycle Phase` and the checkboxes, and `/aidlc --status` recomputes its own phase block). The section now tracks every transition the tools already audit. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; a run already mid-flow keeps its stale rows for boundaries it already passed, and corrects from its next boundary onward.
+
+* Intent birth seeds the section truthfully: `Initialization: Verified` (birth completes every init stage before handing off) and the first post-init phase `Active`; later phases stay `Pending`/`Skipped` by scope as before.
+* `advance` and `finalize` at a phase boundary flip the completed phase to `Verified` and the entered phase to `Active`; non-boundary transitions leave the section byte-identical. `complete-workflow` (and a final-stage `finalize`) flips the last phase to `Verified`.
+* Stage/phase jumps update the rows too: a forward jump marks the source phase `Verified`, wholly jumped-over phases `Skipped`, and the target phase `Active`; a backward jump returns reset phases to `Pending`.
+* `scope-change` and `recompose` re-derive only the not-yet-reached rows (`Pending`/`Skipped`) against the new plan; `Verified`/`Active` rows record history and are never rewritten.
+* A state file without the section (older installs) still transitions cleanly - the row update is a silent no-op, never an error.
+
 ## [2.3.5] - 2026-07-12
 
 Completes the plugin mechanism with **install-time plugin selection** and the full plugin content surface, proven at scale in a customer pilot. Plugins add, the install selects: a plugin can now ship scopes, agent personas, and knowledge alongside stages, every stage-enumerating surface is generated from the compiled graph, and a new `select-plugins` command lets an install choose which plugins' content its users see (core is the implicit `aidlc` plugin and can itself be deselected; a plugin-only install shows only that plugin's commands and scopes). The ownership frontmatter field is renamed from `bundle:` to `plugin:` (the old key is rejected with an error naming the fix). **Upgrade:** re-copy your `dist/<harness>/` shell and re-run any installed plugin's compose hook; a plugin tree still authoring `bundle:` must rename the key to `plugin:`. Existing installs without a selection are otherwise unaffected (an absent `plugins` key enables everything, and the shipped trees are byte-identical on core surfaces).

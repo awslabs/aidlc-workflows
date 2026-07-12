@@ -68,14 +68,16 @@ stateDiagram-v2
 
 **Status values:** `Pending`, `Active`, `Verified`, `Skipped`.
 
-Phase state is tracked in the `## Phase Progress` section of `aidlc-state.md`. Intent birth stamps `Pending` for every phase, emits `PHASE_SKIPPED` per phase the scope excludes (before any stage starts), then promotes the current phase to `Active`. Phase completion fires both `PHASE_COMPLETED` and `PHASE_VERIFIED` at the phase boundary, then `PHASE_STARTED` for the next one.
+Phase state is tracked in the `## Phase Progress` section of `aidlc-state.md`. Intent birth seeds the section: `Initialization` lands `Verified` (birth completes every init stage before handing off), the first post-init stage's phase lands `Active`, and each later phase lands `Skipped` when the scope leaves it without EXECUTE stages (one `PHASE_SKIPPED` audit row each) or `Pending` otherwise. Phase completion fires both `PHASE_COMPLETED` and `PHASE_VERIFIED` at the phase boundary, then `PHASE_STARTED` for the next one, and the rows flip in the same state write. The section is display-only: routing reads `Lifecycle Phase` and the Stage Progress checkboxes, and `/aidlc --status` recomputes its phase block live.
 
 | Transition | Trigger | Emitter |
 |---|---|---|
-| `Pending → Active` (first phase) | `aidlc-utility intent-birth` | `tools/aidlc-utility.ts` |
-| `Pending → Skipped` | `aidlc-utility intent-birth` (per scope exclusion) | `tools/aidlc-utility.ts` |
-| `Active → Verified` | `aidlc-state advance` or `complete-workflow` at phase boundary | `tools/aidlc-state.ts` |
-| `Pending → Active` (boundary) | `aidlc-state advance` at phase boundary, or `aidlc-jump execute` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` |
+| seed (`Verified`/`Active`/`Pending`/`Skipped`) | `aidlc-utility intent-birth` | `tools/aidlc-utility.ts` |
+| `Active -> Verified` | `aidlc-state advance`, `finalize`, or `complete-workflow` at phase boundary; forward `aidlc-jump execute` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` |
+| `Pending -> Active` (boundary) | `aidlc-state advance` or `finalize` at phase boundary, or `aidlc-jump execute` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` |
+| `Pending -> Skipped` (jumped over) | forward `aidlc-jump execute` past a whole phase | `tools/aidlc-jump.ts` |
+| `Verified/Active -> Pending` reset | backward `aidlc-jump execute` (reset phases with EXECUTE stages) | `tools/aidlc-jump.ts` |
+| `Pending <-> Skipped` re-derivation | `aidlc-utility scope-change` / `recompose` (not-yet-reached rows only) | `tools/aidlc-utility.ts` |
 
 At the init→post-init hand-off, `aidlc-utility intent-birth` itself emits `PHASE_COMPLETED + PHASE_VERIFIED + PHASE_STARTED + STAGE_STARTED` after the final init stage so the audit trail captures the transition instead of going silent between birth and the first `advance`.
 

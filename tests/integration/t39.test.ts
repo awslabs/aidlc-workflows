@@ -37,9 +37,9 @@
 //   - .sh assertion 3  every excluded phase recorded `- **<Phase>**: Skipped`
 //       in `## Phase Progress` -> here: phaseProgressStatus(state, phase) ===
 //       "Skipped" for each excluded phase (same observable, exact line match).
-//       STRONGER: we also assert Initialization === "Active" and every
-//       NON-excluded post-init phase is NOT "Skipped" (the .sh only checked
-//       the excluded set; this pins the complement too).
+//       STRONGER: we also assert Initialization === "Verified" (birth
+//       completes every init stage before handing off; the .sh only checked
+//       the excluded set).
 //
 // 9 scopes × 3 .sh asserts = 27 -> 27 expect()-bearing test() cases here
 // (one describe per scope, 3 test()s each).
@@ -271,8 +271,12 @@ describe("t39 aidlc-utility init — per-scope phase sequence (migrated from t39
         for (const phase of excluded) {
           expect(phaseProgressStatus(s, cap(phase))).toBe("Skipped");
         }
-        // STRONGER (the .sh never checked the Init row): Initialization is
-        // always Active at init time (aidlc-utility.ts:2029). We deliberately
+        // STRONGER (the .sh never checked the Init row): birth completes every
+        // initialization stage and hands off to the first post-init stage, so
+        // the seed reads Initialization=Verified with the first post-init
+        // stage's phase Active (phaseStatus in aidlc-utility.ts - before the
+        // issue-556 flip landed this seeded Active/Pending, which then never
+        // advanced). We deliberately
         // do NOT assert the non-excluded post-init phases are non-Skipped: the
         // PHASE_SKIPPED audit count (driven by stagesInScope) and the Phase
         // Progress status (driven by the depth-adjustedMapping, line 2032)
@@ -282,7 +286,7 @@ describe("t39 aidlc-utility init — per-scope phase sequence (migrated from t39
         // stage. That divergence is outside this .sh's contract (it only
         // asserts the excluded set appears as Skipped), so asserting the
         // complement would over-reach past the original observable.
-        expect(phaseProgressStatus(s, "Initialization")).toBe("Active");
+        expect(phaseProgressStatus(s, "Initialization")).toBe("Verified");
       });
     });
   }

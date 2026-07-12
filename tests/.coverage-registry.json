@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 451,
+    "total": 452,
     "enumeratedByClass": {
-      "function": 230,
+      "function": 231,
       "audit": 72,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 94,
+      "function": 95,
       "audit": 31,
       "scope": 9,
       "stage": 8,
@@ -2668,6 +2668,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:setPhaseProgress",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t232-phase-progress-flip.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:setStageSuffix",
       "minMechanism": "none",
       "coveredBy": [
@@ -4178,6 +4190,10 @@
         {
           "file": "tests/unit/t19.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t232-phase-progress-flip.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4436,6 +4452,10 @@
         {
           "file": "tests/unit/t17.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t232-phase-progress-flip.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4496,6 +4516,10 @@
         {
           "file": "tests/unit/t17.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t232-phase-progress-flip.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4519,6 +4543,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t232-phase-progress-flip.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5008,6 +5036,10 @@
         {
           "file": "tests/unit/t211-detect-submodules.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t232-phase-progress-flip.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -5027,6 +5059,10 @@
         },
         {
           "file": "tests/unit/t194-recompose.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t232-phase-progress-flip.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5051,6 +5087,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t214-routing-cost-strings.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t232-phase-progress-flip.test.ts",
           "mechanism": "cli"
         },
         {

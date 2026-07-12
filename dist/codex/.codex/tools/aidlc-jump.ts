@@ -21,6 +21,7 @@ import {
   type StageEntry,
   setCheckbox,
   setField,
+  setPhaseProgress,
   stageIndex,
   writeStateFile,
 } from "./aidlc-lib.js";
@@ -365,6 +366,40 @@ function handleExecute(args: string[]): void {
   // Count [x] checkboxes for Completed field
   const completedCount = countCheckboxes(content, "completed");
   content = setField(content, "Completed", String(completedCount));
+
+  // Phase Progress rows track the boundary crossing the audit trio below
+  // records. Forward: the source phase's remaining work was force-[S]'d and
+  // PHASE_VERIFIED is emitted, so its row reads Verified; any phase jumped
+  // over entirely reads Skipped. Backward (or a caller-mis-specified redo
+  // that crosses a boundary): every phase after the target just had its
+  // EXECUTE stages reset to pending above, so those rows return to Pending,
+  // leaving zero-EXECUTE phases at their birth Skipped. Either way the
+  // target's phase is now the active one.
+  if (crossesPhaseBoundary && currentStageForPhase) {
+    const phaseIdx = (p: string): number =>
+      (PHASES as readonly string[]).indexOf(p);
+    if (direction === "forward") {
+      content = setPhaseProgress(content, currentStageForPhase.phase, "Verified");
+      for (
+        let i = phaseIdx(currentStageForPhase.phase) + 1;
+        i < phaseIdx(targetStage.phase);
+        i++
+      ) {
+        content = setPhaseProgress(content, PHASES[i], "Skipped");
+      }
+    } else {
+      for (let i = phaseIdx(targetStage.phase) + 1; i < PHASES.length; i++) {
+        const p = PHASES[i];
+        const hasExecute = graph.some(
+          (s) =>
+            s.phase === p &&
+            effectiveAction(suffixes, scopeMapping, s.slug) === "EXECUTE"
+        );
+        if (hasExecute) content = setPhaseProgress(content, p, "Pending");
+      }
+    }
+    content = setPhaseProgress(content, targetStage.phase, "Active");
+  }
 
   // Find last completed stage before target
   const allCheckboxes = parseCheckboxes(content);

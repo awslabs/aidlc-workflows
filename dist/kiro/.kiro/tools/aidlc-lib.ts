@@ -2240,6 +2240,22 @@ export function setFieldStrict(content: string, field: string, value: string): s
   return content.replace(regex, `$1 ${value}`);
 }
 
+// setPhaseProgress: flip one `- **<Phase>**: <status>` row in the state
+// file's `## Phase Progress` section. The row label is the capitalized phase
+// slug ("ideation" -> "Ideation"), and each label appears exactly once in the
+// state template (only inside that section), so the plain setField match
+// cannot collide with another field. A no-op when the row is absent (an older
+// or hand-edited state file): the section is display-only, so a missing row
+// must never fail a transition.
+export function setPhaseProgress(
+  content: string,
+  phase: string,
+  status: "Pending" | "Active" | "Verified" | "Skipped",
+): string {
+  const label = phase.charAt(0).toUpperCase() + phase.slice(1);
+  return setField(content, label, status);
+}
+
 // setOrInsertField: update field if present; otherwise insert a new
 // `- **Field**: value` bullet at the end of the named `## Heading` section.
 // Intended for optional fields that don't ship in the current state-template
