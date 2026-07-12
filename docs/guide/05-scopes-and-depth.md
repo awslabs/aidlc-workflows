@@ -162,7 +162,7 @@ The composer agent reads your task and the workspace scan (brownfield/greenfield
 
 **In-flight recompose:** mid-workflow, `/aidlc compose` proposes re-shaping the PENDING stages of the running workflow - skip what you no longer need, add back a pending stage you realize you need. Flips apply only to pending, ahead-of-cursor stages (completed and in-progress stages are frozen), are validated so no remaining stage is starved of a required input, and land through the deterministic `recompose` verb under the audit lock with a `RECOMPOSED` audit event. The first EXECUTE stage of Construction (the walking-skeleton gate anchor) cannot be flipped.
 
-You do not need the literal verb: plain chat like "can we skip market research? we already know this market" is recognized mid-workflow as a reshape request and routed through the same gate and the same `recompose` verb. When you name the stages yourself ("drop market-research and team-formation"), the conductor may present the gate directly without dispatching the composer agent - the approval gate and the validation are identical either way. On Kiro and Codex the literal `/aidlc compose "<request>"` verb remains the documented reliable path.
+You do not need the literal verb: plain chat like "can we skip market research? we already know this market" is recognized mid-workflow as a reshape request and routed through the same gate and the same `recompose` verb. When you name the stages yourself ("drop market-research and team-formation"), the conductor may present the gate directly without dispatching the composer agent - the approval gate and the validation are identical either way. On the non-Claude harnesses the literal `/aidlc compose "<request>"` verb remains the documented reliable path.
 
 ---
 

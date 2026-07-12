@@ -1,0 +1,54 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# AI-DLC — the committed-vs-ignored split (workspace layout, re-rooted under aidlc/).
+# Rule of thumb (vision §5.1): per-user session CURSORS and machine-local
+# runtime/derived state are ignored; everything that is the shared work —
+# method, registry, state, AUDIT (per-clone shards), artifacts — is committed.
+#
+# Per-user session cursors — ignored (two teammates legitimately point at
+# different spaces/intents at once; committing them would dirty the tree on
+# every /aidlc and have teammates fight over the cursor on each switch).
+aidlc/active-space
+aidlc/spaces/*/intents/active-intent
+#
+# Machine-local runtime / derived — ignored (regenerated per machine).
+# The clone-id token names this clone's audit shard; it MUST stay machine-local
+# (gitignored) or every clone from a commit would share a shard and git-conflict.
+aidlc/.aidlc-clone-id
+# Per-conversation session→intent map (resume rebind, P8): per-user runtime
+# state keyed by Claude Code session_id, never shared truth.
+aidlc/.aidlc-sessions/
+aidlc/spaces/*/intents/*/runtime-graph.json
+aidlc/spaces/*/intents/*/.aidlc-*
+#
+# COMMITTED (NOT ignored, listed here for the record — do NOT add ignore rules
+# for these): aidlc/spaces/*/memory/** · aidlc/spaces/*/codekb/** ·
+# aidlc/spaces/*/intents/intents.json · aidlc/spaces/*/intents/*/aidlc-state.md ·
+# aidlc/spaces/*/intents/*/audit/*.md (the audit trail, committed as PER-CLONE
+# SHARDS: each machine appends to audit/<host>-<clone>.md so git never merges
+# concurrent appends — there is intentionally NO .gitattributes merge=union,
+# which was proven to corrupt the multi-line audit blocks) ·
+# aidlc/spaces/*/intents/*/<phase>/<stage>/*.md (artifacts + diary).

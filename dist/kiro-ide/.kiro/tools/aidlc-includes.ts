@@ -7,6 +7,7 @@
 //   • Claude — an @-import stub at <harness>/rules/aidlc.md naming each method file.
 //   • Kiro / Kiro-IDE — a `resources` glob in each agents/*.json.
 //   • Codex — the AIDLC_RULES_DIR env var in config.toml.
+//   • opencode — the `instructions` glob in the project-root opencode.json.
 //
 // These surfaces stay COMMITTED (each carries load-bearing engine wiring beyond
 // the include — Kiro's agent JSON holds the conductor prompt + hook block,
@@ -105,6 +106,28 @@ function repointCodexConfig(raw: string, space: string): string | null {
   return next === raw ? null : next;
 }
 
+/** Rewrite the method glob in an opencode.json `instructions` array to the
+ *  given space, preserving every other entry and field. Parse→edit→re-serialize
+ *  (structural round-trip, like the Kiro rewriter). Returns null when there is
+ *  no method glob or it already matches. */
+function repointOpencodeInstructions(raw: string, space: string): string | null {
+  const json = JSON.parse(raw) as { instructions?: unknown };
+  if (!Array.isArray(json.instructions)) return null;
+  const target = `${spaceMemoryRel(space)}/**/*.md`;
+  let changed = false;
+  const rewritten = json.instructions.map((r) => {
+    if (typeof r === "string" && /^aidlc\/spaces\/[^/]+\/memory\/\*\*\/\*\.md$/.test(r)) {
+      if (r !== target) changed = true;
+      return target;
+    }
+    return r;
+  });
+  if (!changed) return null;
+  json.instructions = rewritten;
+  // Two-space indent + trailing newline matches the authored opencode.json shape.
+  return `${JSON.stringify(json, null, 2)}\n`;
+}
+
 /** Surgically repoint a single committed include file to `space` using `rewrite`,
  *  writing atomically only when the content changes. Records the workspace-
  *  relative path in `written`. Absent / unreadable / malformed → skipped (the
@@ -176,6 +199,19 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
       const raw = readSafe(configPath);
       if (raw !== null) {
         repointFile(configPath, join(harness, "config.toml"), raw, sp, repointCodexConfig, written);
+      }
+    }
+    return written;
+  }
+
+  if (harness === ".aidlc") {
+    // opencode (engine dir .aidlc): opencode reads the project-root
+    // opencode.json, whose `instructions` glob is the method include.
+    const configPath = join(projectDir, "opencode.json");
+    if (existsSync(configPath)) {
+      const raw = readSafe(configPath);
+      if (raw !== null) {
+        repointFile(configPath, "opencode.json", raw, sp, repointOpencodeInstructions, written);
       }
     }
     return written;

@@ -638,7 +638,8 @@ function isFrameworkDistributionPath(path: string): boolean {
   return (
     path.includes(join("dist", "claude", ".claude", "sensors")) ||
     path.includes(join("dist", "kiro", ".kiro", "sensors")) ||
-    path.includes(join("dist", "codex", ".codex", "sensors"))
+    path.includes(join("dist", "codex", ".codex", "sensors")) ||
+    path.includes(join("dist", "opencode", ".aidlc", "sensors"))
   );
 }
 

@@ -155,7 +155,7 @@ export const PHASE_NUMBERS: Record<string, Phase> = {
 // dev-repo CWD rung, where more than one harness dir can coexist and the Claude
 // tree is canonical (".claude" must win). A real single-harness install never
 // reaches the probe; it resolves by script path.
-const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex"] as const;
+const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc"] as const;
 
 // True for a plausible harness dir name: a dot-prefixed segment, e.g. ".claude"
 // / ".kiro" / ".gemini". Guards the script-path derivation so an unexpected
@@ -214,6 +214,9 @@ const KNOWN_RULES_SUBDIR: Record<string, string> = {
   ".claude": "rules",
   ".kiro": "steering",
   ".codex": "aidlc-rules",
+  // opencode: the ENGINE dir is .aidlc (opencode auto-imports .opencode/tools/
+  // *.ts as custom tools, so the engine cannot live there); no rename needed.
+  ".aidlc": "rules",
 };
 
 interface ShippedHarnessData {

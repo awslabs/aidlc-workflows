@@ -256,3 +256,51 @@ describe("t-active-space-includes: Codex config.toml AIDLC_RULES_DIR", () => {
     expect(readFileSync(join(root, ".codex", "config.toml"), "utf-8")).toBe(before);
   });
 });
+
+
+describe("t-active-space-includes: opencode opencode.json instructions glob", () => {
+  beforeEach(() => {
+    process.env.AIDLC_HARNESS_DIR = ".aidlc";
+  });
+
+  function setup(): string {
+    const root = freshRoot();
+    seedSpaces(root);
+    // The include lives at the PROJECT ROOT (opencode.json), not inside the
+    // engine dir - opencode reads it from the workspace root.
+    cpSync(distSurface("opencode", "opencode.json"), join(root, "opencode.json"));
+    return root;
+  }
+
+  test("re-points the instructions glob to the requested space; preserves skills.paths + permissions", () => {
+    const root = setup();
+    const written = repointHarnessIncludes(root, "teamB");
+    expect(written).toEqual(["opencode.json"]);
+    const cfg = JSON.parse(readFileSync(join(root, "opencode.json"), "utf-8")) as {
+      instructions: string[];
+      skills: { paths: string[] };
+      permission: { bash: Record<string, string> };
+    };
+    expect(cfg.instructions).toContain("aidlc/spaces/teamB/memory/**/*.md");
+    expect(cfg.instructions).not.toContain("aidlc/spaces/default/memory/**/*.md");
+    // The load-bearing wiring beyond the pointer survives the rewrite.
+    expect(cfg.skills.paths).toContain(".aidlc/skills");
+    expect(cfg.permission.bash["bun .aidlc/tools/*"]).toBe("allow");
+  });
+
+  test("re-pointing to default (already shipped) is a byte-identical NO-OP", () => {
+    const root = setup();
+    const before = readFileSync(join(root, "opencode.json"), "utf-8");
+    const written = repointHarnessIncludes(root, "default");
+    expect(written).toEqual([]);
+    expect(readFileSync(join(root, "opencode.json"), "utf-8")).toBe(before);
+  });
+
+  test("a malformed opencode.json is skipped, never corrupted", () => {
+    const root = setup();
+    writeFileSync(join(root, "opencode.json"), "{ not json");
+    const written = repointHarnessIncludes(root, "teamB");
+    expect(written).toEqual([]);
+    expect(readFileSync(join(root, "opencode.json"), "utf-8")).toBe("{ not json");
+  });
+});

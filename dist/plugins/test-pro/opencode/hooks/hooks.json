@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'AIDLC=$(command -v aidlc 2>/dev/null || true); [ -n \"$AIDLC\" ] && { AIDLC_HARNESS_DIR=.aidlc \"$AIDLC\" plugin sync && exit 0; }; BUN=$(command -v bun 2>/dev/null || true); [ -z \"$BUN\" ] && [ -x \"$HOME/.bun/bin/bun\" ] && BUN=\"$HOME/.bun/bin/bun\"; [ -z \"$BUN\" ] && { echo \"aidlc plugin compose: aidlc and bun not found, skipping\" >&2; exit 0; }; AIDLC_HARNESS_DIR=.aidlc \"$BUN\" \"${PLUGIN_ROOT}/hooks/compose.ts\"'",
+            "statusMessage": "AIDLC test-pro: composing plugin"
+          }
+        ]
+      }
+    ]
+  }
+}

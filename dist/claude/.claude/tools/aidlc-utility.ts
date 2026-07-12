@@ -1220,6 +1220,16 @@ function handleDoctor(projectDir: string): void {
         fix: `verify file exists in ${harness}/hooks/`,
       });
     }
+    if (harness === ".aidlc") {
+      // opencode's adapter is a plugin (its hook seam) in the .opencode shell,
+      // not a hooks/ shim inside the engine dir.
+      const adapterPath = join(projectDir, ".opencode", "plugin", "aidlc-opencode-adapter.ts");
+      results.push({
+        pass: existsSync(adapterPath),
+        label: "plugin/aidlc-opencode-adapter.ts present (hook wiring)",
+        fix: "copy from `dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts`",
+      });
+    }
   }
 
   // 4. Harness wiring config present. Claude Code: settings.json (hooks +
@@ -1284,6 +1294,20 @@ function handleDoctor(projectDir: string): void {
       label:
         "hook trust: ensure [hooks.state] entries are pre-seeded in $CODEX_HOME/config.toml (`bun scripts/package.ts codex trust --project <dir>`) or run one TUI trust pass",
     });
+  } else if (harness === ".aidlc") {
+    // opencode: the wiring config is the project-root opencode.json
+    // (permissions + the method-include instructions glob) plus the /aidlc
+    // command entry; the plugin adapter is checked with the hook roster above.
+    results.push({
+      pass: existsSync(join(projectDir, "opencode.json")),
+      label: "opencode.json present (permissions + method instructions glob)",
+      fix: "copy from `dist/opencode/opencode.json` (project root, beside .opencode/)",
+    });
+    results.push({
+      pass: existsSync(join(projectDir, ".opencode", "command", "aidlc.md")),
+      label: ".opencode/command/aidlc.md present (/aidlc entry point)",
+      fix: "copy from `dist/opencode/.opencode/command/aidlc.md`",
+    });
   } else {
     const settingsPath = join(projectDir, harness, "settings.json");
     results.push({
@@ -1296,7 +1320,7 @@ function handleDoctor(projectDir: string): void {
   // 4b. Dual-harness coexistence (D-11): another harness tree installed AND a
   // workflow active is supported-but-untested — warn (advisory pass with a
   // visible label), never block.
-  const otherTrees = [".claude", ".kiro", ".codex"].filter(
+  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc"].filter(
     (h) => h !== harness && existsSync(join(projectDir, h, "tools", "aidlc-lib.ts")),
   );
   if (
@@ -2854,6 +2878,8 @@ const SCAN_EXCLUDE = new Set([
   ".claude",
   ".kiro",
   ".codex",
+  ".opencode",
+  ".aidlc",
   "aidlc-docs",
   "node_modules",
   ".git",

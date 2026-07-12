@@ -1,10 +1,10 @@
 {
-  "_comment": "Docs legacy-ref allowlist gate (t174). The gate scans docs/**/*.md + core/templates/*.md + each harness/<h>/skills/aidlc/SKILL.md (derived FROM DISK) and FAILS unless every surviving retired-token line is pinned here by exact file + line text, with the pinned count <= ceiling. FOUR retired-token lanes: (1) `aidlc-docs` — the flat record layout relocated to aidlc/spaces/<space>/intents/<slug>-<id8>/; (2) bare `--init` — the retired aidlc command; (3) dotted rules dirs `.claude/rules/` | `.kiro/steering/` | `.codex/aidlc-rules/` — the method/rules layer relocated to aidlc/spaces/<space>/memory/ (graph.ts MEMORY_SEGMENTS), so these survive ONLY in native-include prose (the `.claude/rules/aidlc.md` @-import stub, the Kiro `.kiro/steering/` resources glob, the packager rename narrative); (4) `*-learnings.md` filename — learnings collapsed into practices in memory/{team,project}.md (aidlc-learnings.ts), so there are ZERO legitimate survivors. EXCLUDES dist/** (generated; package.ts --check proves parity) and core/aidlc-common/** (the engine-parsed stage tree's aidlc-docs reroot is a separate deferred sweep). Adding an entry requires a visible diff here; blanket-allowlisting trips the ceiling. See docs/reference/07-sensor-system.md, docs/reference/14-claude-features.md, docs/harness-engineering/06-sensors.md.",
+  "_comment": "Docs legacy-ref allowlist gate (t174). The gate scans docs/**/*.md + core/templates/*.md + each harness/<h>/skills/aidlc/SKILL.md (derived FROM DISK) and FAILS unless every surviving retired-token line is pinned here by exact file + line text, with the pinned count <= ceiling. FOUR retired-token lanes: (1) `aidlc-docs` \u2014 the flat record layout relocated to aidlc/spaces/<space>/intents/<slug>-<id8>/; (2) bare `--init` \u2014 the retired aidlc command; (3) dotted rules dirs `.claude/rules/` | `.kiro/steering/` | `.codex/aidlc-rules/` \u2014 the method/rules layer relocated to aidlc/spaces/<space>/memory/ (graph.ts MEMORY_SEGMENTS), so these survive ONLY in native-include prose (the `.claude/rules/aidlc.md` @-import stub, the Kiro `.kiro/steering/` resources glob, the packager rename narrative); (4) `*-learnings.md` filename \u2014 learnings collapsed into practices in memory/{team,project}.md (aidlc-learnings.ts), so there are ZERO legitimate survivors. EXCLUDES dist/** (generated; package.ts --check proves parity) and core/aidlc-common/** (the engine-parsed stage tree's aidlc-docs reroot is a separate deferred sweep). Adding an entry requires a visible diff here; blanket-allowlisting trips the ceiling. See docs/reference/07-sensor-system.md, docs/reference/14-claude-features.md, docs/harness-engineering/06-sensors.md.",
   "ceiling": 14,
   "allowed": [
     {
       "file": "docs/reference/14-claude-features.md",
-      "text": "| **Standing rules** (the layer chain) | `aidlc/spaces/<space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via `AIDLC_RULES_DIR`) |",
+      "text": "| **Standing rules** (the layer chain) | `aidlc/spaces/<space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<space>/memory/` (via `instructions` glob) |",
       "why": "native-include mapping: names the .claude/rules/aidlc.md @-import stub that pulls the relocated memory tree (correct, not stale)"
     },
     {
@@ -29,7 +29,7 @@
     },
     {
       "file": "docs/harness-engineering/06-sensors.md",
-      "text": "`**/{aidlc-docs,intents}/**` — the per-intent record tree, with the legacy",
+      "text": "`**/{aidlc-docs,intents}/**` \u2014 the per-intent record tree, with the legacy",
       "why": "sensor matches-glob value (the shipped framework glob, post-P9)"
     },
     {

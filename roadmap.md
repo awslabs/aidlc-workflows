@@ -51,7 +51,7 @@ The seven functional goals of the AI-DLC Workflows 2.0 North Star, verbatim in i
 | 2.3.5 - 2.3.6 | Single-command CLI dispatcher (dark launch) | #560 | Draft, stacked on #550; rebase + retarget after #550 merges |
 | 2.3.7 | Phase Progress rows advance at phase boundaries | #562 | Open |
 | 2.3.8 | upstream-coverage matches real citation forms | #563 | Open |
-| (claims 2.3.4, needs re-bump) | opencode harness (5th harness) | none yet | Branch pushed, PR gated |
+| 2.3.17 | opencode harness (5th harness) | #571 | Open, rebased onto v2, merge gated |
 
 Version slots are multi-claimed; whoever merges second rebases and re-bumps (t68 catches misses).
 

@@ -4,7 +4,7 @@
 development (defined by AWS). **This repository is its native, multi-harness
 implementation:** the methodology rendered as skills, agents, hooks, and tools
 from one harness-neutral `core/`, so it runs natively in the CLI harness you use
-— today Claude Code, Kiro CLI, Kiro IDE, or Codex CLI, and any capable CLI you port it to.
+— today Claude Code, Kiro CLI, Kiro IDE, Codex CLI, or opencode, and any capable CLI you port it to.
 The methodology is the *what*; each harness distribution is the *how* for one
 runtime, and every distribution is generated from the same source.
 

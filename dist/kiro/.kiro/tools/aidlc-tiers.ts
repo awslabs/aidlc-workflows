@@ -66,6 +66,9 @@ export type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type CodexEffort = "low" | "medium" | "high" | "xhigh";
 /** Kiro effort values (chat.modelDefaults / --effort contract). */
 export type KiroEffort = "low" | "medium" | "high" | "xhigh" | "max";
+/** opencode agent-frontmatter `variant` values (provider-specific reasoning
+ *  effort; the Anthropic-on-Bedrock provider accepts these). */
+export type OpencodeVariant = "low" | "medium" | "high" | "max";
 
 /** Per-harness projection of one tier. A `null` model or effort means the
  *  harness-native key is OMITTED so the harness's own session/config default
@@ -78,6 +81,11 @@ export type TierProjection = {
   claude: { model: string; effort: ClaudeEffort | null };
   codex: { model: string | null; effort: CodexEffort | null };
   kiro: { model: string | null };
+  /** opencode agent .md frontmatter: `model:` ("provider/model-id") and
+   *  optional `variant:` (reasoning effort). Omitted keys inherit the
+   *  session's opencode.json defaults — same inherit-by-omission contract
+   *  as codex. */
+  opencode: { model: string | null; variant: OpencodeVariant | null };
 };
 
 export type Harness = keyof TierProjection;
@@ -91,11 +99,13 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     claude: { model: "inherit", effort: null },
     codex: { model: null, effort: null },
     kiro: { model: null },
+    opencode: { model: null, variant: null },
   },
   balanced: {
     claude: { model: "sonnet", effort: null },
     codex: { model: "openai.gpt-5.4", effort: null },
     kiro: { model: "claude-sonnet-4.5" },
+    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: null },
   },
   templated: {
     // The one deliberate downgrade: a smaller model at reduced effort for
@@ -103,6 +113,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     claude: { model: "sonnet", effort: "medium" },
     codex: { model: "openai.gpt-5.4", effort: "medium" },
     kiro: { model: "claude-sonnet-4.5" },
+    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
   },
 };
 

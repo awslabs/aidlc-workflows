@@ -43,22 +43,26 @@ const EXPECTED: Record<
     claude: { model: string; effort: "medium" | null };
     codex: { model: string | null; effort: "medium" | null };
     kiro: { model: string | null };
+    opencode: { model: string | null; variant: "medium" | null };
   }
 > = {
   judgment: {
     claude: { model: "inherit", effort: null },
     codex: { model: null, effort: null },
     kiro: { model: null },
+    opencode: { model: null, variant: null },
   },
   balanced: {
     claude: { model: "sonnet", effort: null },
     codex: { model: "openai.gpt-5.4", effort: null },
     kiro: { model: "claude-sonnet-4.5" },
+    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: null },
   },
   templated: {
     claude: { model: "sonnet", effort: "medium" },
     codex: { model: "openai.gpt-5.4", effort: "medium" },
     kiro: { model: "claude-sonnet-4.5" },
+    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
   },
 };
 
@@ -98,7 +102,7 @@ describe("t220 tier projection module", () => {
 
   // --- projectTier: every tier x every projection flavor ---------------------
   for (const tier of TIERS) {
-    for (const flavor of ["claude", "codex", "kiro"] as const) {
+    for (const flavor of ["claude", "codex", "kiro", "opencode"] as const) {
       test(`projectTier(${tier}, ${flavor}) matches the pinned policy`, () => {
         expect(projectTier(tier, flavor)).toEqual(EXPECTED[tier][flavor]);
       });
@@ -370,6 +374,16 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
       }
     });
   }
+
+  test("opencode-shell: the emitted .opencode/agents subagent twins carry the projection too", () => {
+    const dir = dist("opencode", ".opencode", "agents");
+    const mds = readdirSync(dir).filter((f) => f.endsWith("-agent.md"));
+    expect(mds.length).toBe(14);
+    for (const f of mds) {
+      const raw = readFileSync(join(dir, f), "utf-8");
+      expect(/^tier:/m.test(raw), `opencode-shell/${f}: raw tier: leaked into dist`).toBe(false);
+    }
+  });
 
   test("codex: no shipped agent TOML carries a tier key (all 14)", () => {
     const dir = dist("codex", ".codex", "agents");

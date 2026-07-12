@@ -3,7 +3,7 @@
 AI-DLC provides three ways to interact with agents during stages, plus approval gates that keep you in control at every decision point.
 
 > **Harness note.** Gates and questions render differently per harness: Claude Code
-> uses the `AskUserQuestion` widget; Kiro and Codex render numbered-prose options
+> uses the `AskUserQuestion` widget; the other harnesses render numbered-prose options
 > (answer with a number or free text), with the questions file the source of truth.
 > The *semantics* — when a gate fires, what it asks, that you stay in control — are
 > identical, since they live in the engine. See [Running on other harnesses](harnesses/README.md).

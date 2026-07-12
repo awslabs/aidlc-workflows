@@ -1,0 +1,122 @@
+// t240-opencode-packaging: dist/opencode parity + drift guard + shell shape.
+//
+// covers: file:tools/aidlc-lib.ts
+//
+// WHAT. Four contracts land here:
+//   (1) The committed dist/opencode tree is byte-identical to what
+//       `bun scripts/package.ts opencode` regenerates (drift guard, same UX
+//       as codex's t150 test 1).
+//   (2) Core parity: every .ts under dist/opencode/.aidlc/{tools,hooks}/ is
+//       BYTE-IDENTICAL to its dist/claude source (the architecture-B
+//       invariant: the packager may transform prose/data paths, never code).
+//   (3) The .opencode/ shell carries ONLY natively-consumed emissions
+//       (agents/command/plugin) and NO .ts under tools-like paths — opencode
+//       auto-imports .opencode/tool(s)/*.ts as custom tool definitions, and a
+//       CLI-style engine script there CRASHES the session (live-reproduced on
+//       1.17.18). The engine must stay in .aidlc/.
+//   (4) The emitted subagent twins carry `mode: subagent` (none may register
+//       as a primary agent) and the tier projection's opencode-native keys.
+//
+// WHY SUBPROCESS for (1). Same idiom as t141/t150: the packager is a CLI; we
+// pin its observable behavior, not its internals.
+
+import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { REPO_ROOT } from "../harness/fixtures.ts";
+
+const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
+const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
+const OPENCODE_ROOT = join(REPO_ROOT, "dist", "opencode");
+const ENGINE = join(OPENCODE_ROOT, ".aidlc");
+const SHELL = join(OPENCODE_ROOT, ".opencode");
+
+function* walk(dir: string): Generator<string> {
+  for (const entry of readdirSync(dir).sort()) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) yield* walk(full);
+    else yield full;
+  }
+}
+
+describe("t240 dist/opencode packaging parity + shell shape", () => {
+  test("1: committed dist/opencode matches the packaging script (drift guard)", () => {
+    const r = spawnSync("bun", [PACKAGE_SCRIPT, "opencode", "--check"], {
+      encoding: "utf-8",
+      cwd: REPO_ROOT,
+    });
+    if (r.status !== 0) {
+      // Surface the script's own stale-file list — it names the fix.
+      console.error(r.stderr);
+    }
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("in sync");
+  });
+
+  test("2: every packaged .ts file is byte-identical to its dist/claude source (code is never transformed)", () => {
+    const divergent: string[] = [];
+    for (const sub of ["tools", "hooks"]) {
+      const dstDir = join(ENGINE, sub);
+      for (const file of walk(dstDir)) {
+        if (!file.endsWith(".ts")) continue;
+        const rel = file.slice(dstDir.length + 1);
+        const src = join(CLAUDE_SRC, sub, rel);
+        if (!readFileSync(file).equals(readFileSync(src))) divergent.push(`${sub}/${rel}`);
+      }
+    }
+    expect(divergent).toEqual([]);
+  });
+
+  test("3: the .opencode shell holds ONLY the native emissions — no engine .ts opencode would auto-import", () => {
+    // Top-level shape: exactly the three natively-consumed dirs.
+    expect(readdirSync(SHELL).sort()).toEqual(["agents", "command", "plugin"]);
+    // The tool-scan trap: opencode imports .opencode/tool/*.ts and
+    // .opencode/tools/*.ts as custom tools. Neither dir may ever appear.
+    expect(existsSync(join(SHELL, "tools"))).toBe(false);
+    expect(existsSync(join(SHELL, "tool"))).toBe(false);
+    // The one .ts in the shell is the adapter plugin (opencode loads plugins
+    // in-process as modules, so a plugin-shaped file is safe there).
+    const tsFiles = [...walk(SHELL)].filter((f) => f.endsWith(".ts"));
+    expect(tsFiles).toEqual([join(SHELL, "plugin", "aidlc-opencode-adapter.ts")]);
+  });
+
+  test("4: every emitted subagent twin is mode: subagent with the projected tier keys", () => {
+    const agents = readdirSync(join(SHELL, "agents")).filter((f) => f.endsWith("-agent.md"));
+    expect(agents.length).toBe(14);
+    for (const f of agents) {
+      const raw = readFileSync(join(SHELL, "agents", f), "utf-8");
+      const fm = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
+      expect(fm, `${f}: registers as a subagent`).toMatch(/^mode: subagent$/m);
+      expect(fm, `${f}: no raw tier: leak`).not.toMatch(/^tier:/m);
+      // Balanced/templated pin the Bedrock sonnet id; judgment omits model
+      // (inherit-by-omission). Either way a bare non-provider-prefixed model
+      // value would be an authoring bug on this harness.
+      const model = fm.match(/^model: (.*)$/m)?.[1];
+      if (model !== undefined) {
+        expect(model, `${f}: opencode model carries a provider prefix`).toMatch(/^amazon-bedrock\//);
+      }
+    }
+  });
+
+  test("5: shipped opencode prose names no other harness's engine dir", () => {
+    const r = spawnSync(
+      "grep",
+      ["-rn", "bun .claude/tools/", OPENCODE_ROOT],
+      { encoding: "utf-8" },
+    );
+    // grep exits 1 on no matches — exactly what we want.
+    expect(r.status).toBe(1);
+  });
+
+  test("6: the shipped opencode.json wires skills, method instructions, and the bun allowlist", () => {
+    const cfg = JSON.parse(readFileSync(join(OPENCODE_ROOT, "opencode.json"), "utf-8")) as {
+      skills?: { paths?: string[] };
+      instructions?: string[];
+      permission?: { bash?: Record<string, string> };
+    };
+    expect(cfg.skills?.paths).toContain(".aidlc/skills");
+    expect(cfg.instructions).toContain("aidlc/spaces/default/memory/**/*.md");
+    expect(cfg.permission?.bash?.["bun .aidlc/tools/*"]).toBe("allow");
+  });
+});

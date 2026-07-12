@@ -40,7 +40,7 @@ MANDATORY: Follow stage-protocol.md for state tracking and audit logging.
 
 ### Step 2: Scan Workspace
 
-The scanner walks the project directory one level deep plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`), excluding the harness directories (`.claude/`, `.kiro/`, `.codex/`), `aidlc/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`.
+The scanner walks the project directory one level deep plus known source directories (`src/`, `app/`, `lib/`, `pages/`, `components/`, `tests/`), excluding the harness directories (`.claude/`, `.kiro/`, `.codex/`, `.opencode/`), `aidlc/`, `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `target/`, `vendor/`.
 
 Nested-project fallback: when NO top-level signal fires (the layout that would otherwise classify greenfield), the scanner then descends one level into each arbitrarily-named top-level subdirectory (skipping the excluded directories above, hidden dirs, and symlinks) and re-applies the same signal set rooted at that subdirectory. If any subdirectory looks brownfield, the workspace is classified brownfield and that subdirectory's languages/frameworks/build system are merged into the result. This catches a project whose source lives one container down (e.g. `wordbook/`, `backend/`) instead of at the root. The fallback is depth-1 only and never runs when the root already has a source signal.
 
@@ -55,7 +55,7 @@ Scan signals:
 - Documentation (README, docs/, wiki/)
 
 **Exclude from analysis** (framework scaffolding, not application code):
-- The harness directory (`.claude/`, `.kiro/`, or `.codex/`) — AI-DLC framework files (skills, agents, hooks, tools, knowledge)
+- The harness directory (`.claude/`, `.kiro/`, `.codex/`, or `.opencode/`) — AI-DLC framework files (skills, agents, hooks, tools, knowledge)
 - `aidlc/` — AI-DLC workspace root (the space tree at `aidlc/spaces/<space>/...`)
 - `node_modules/`, `.git/`
 
@@ -78,7 +78,7 @@ Signals are evaluated at the root first; if none fires, the nested-project fallb
 - No package manifest, OR manifest with only scaffolding/dev tooling
 - No application source directories
 
-Does NOT make a project brownfield: README, .gitignore, LICENSE, editor configs, empty directories, CI/CD boilerplate without application code, the harness directory (`.claude/`, `.kiro/`, or `.codex/`, AI-DLC framework), `aidlc/` directory (AI-DLC workspace artifacts).
+Does NOT make a project brownfield: README, .gitignore, LICENSE, editor configs, empty directories, CI/CD boilerplate without application code, the harness directory (`.claude/`, `.kiro/`, `.codex/`, or `.opencode/`, AI-DLC framework), `aidlc/` directory (AI-DLC workspace artifacts).
 
 ### Step 4: Verify Classification
 

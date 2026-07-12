@@ -5,7 +5,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 > **Harness note.** Symptoms and fixes below are written for **Claude Code** (hook
 > filenames, `settings.json` blocks, compaction behaviour). The deterministic core
 > — state, audit, the engine — behaves identically on every harness, but the
-> shell-level surfaces differ: Kiro and Codex wire hooks and config their own way
+> shell-level surfaces differ: the other harnesses wire hooks and config their own way
 > (see [Running on other harnesses](harnesses/README.md)). Where a fix names a
 > `.claude/` path or a Claude mechanic, the equivalent lives in your harness's
 > config dir.

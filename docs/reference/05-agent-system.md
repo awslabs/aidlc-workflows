@@ -91,11 +91,11 @@ The authored dial on every agent is `tier:` -- it names the KIND of work the per
 
 The projection per harness (`core/tools/aidlc-tiers.ts` is the single source of truth):
 
-| Tier | Claude Code (.md frontmatter) | Codex CLI (.toml) | Kiro CLI/IDE (agent JSON `"model"`) | Kiro cli.json `chat.modelDefaults` |
-|------|-------------------------------|-------------------|--------------------------------------|-------------------------------------|
-| `judgment` | `model: inherit`, no `effort:` line | no `model`/`model_reasoning_effort` keys (config.toml session defaults apply) | field OMITTED (schema fallback: the user's default model) | no entry (default model's own default effort) |
-| `balanced` | `model: sonnet`, no `effort:` line | `model = "openai.gpt-5.4"`, no effort key | `claude-sonnet-4.5` | sonnet-4.5 -> `high` |
-| `templated` | `model: sonnet`, `effort: medium` | `model = "openai.gpt-5.4"`, `model_reasoning_effort = "medium"` | `claude-sonnet-4.5` (collapses with balanced) | (shares the sonnet-4.5 entry; balanced's `high` wins the collapse) |
+| Tier | Claude Code (.md frontmatter) | Codex CLI (.toml) | Kiro CLI/IDE (agent JSON `"model"`) | Kiro cli.json `chat.modelDefaults` | opencode (.md frontmatter) |
+|------|-------------------------------|-------------------|--------------------------------------|-------------------------------------|-----------------------------|
+| `judgment` | `model: inherit`, no `effort:` line | no `model`/`model_reasoning_effort` keys (config.toml session defaults apply) | field OMITTED (schema fallback: the user's default model) | no entry (default model's own default effort) | no `model:`/`variant:` keys (opencode.json session defaults apply) |
+| `balanced` | `model: sonnet`, no `effort:` line | `model = "openai.gpt-5.4"`, no effort key | `claude-sonnet-4.5` | sonnet-4.5 -> `high` | `model: amazon-bedrock/global.anthropic.claude-sonnet-4-6`, no variant key |
+| `templated` | `model: sonnet`, `effort: medium` | `model = "openai.gpt-5.4"`, `model_reasoning_effort = "medium"` | `claude-sonnet-4.5` (collapses with balanced) | (shares the sonnet-4.5 entry; balanced's `high` wins the collapse) | same model, `variant: medium` |
 
 Key facts behind the table:
 

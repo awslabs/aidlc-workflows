@@ -1,0 +1,2792 @@
+[
+  {
+    "slug": "workspace-scaffold",
+    "number": "0.1",
+    "name": "Workspace Scaffold",
+    "phase": "initialization",
+    "execution": "ALWAYS",
+    "condition": "Ensure-exists the per-intent record and artifact dirs — idempotent (creates on demand, skips existing)",
+    "lead_agent": "orchestrator",
+    "support_agents": [],
+    "mode": "inline",
+    "produces": [],
+    "consumes": [],
+    "requires_stage": [],
+    "sensors": [],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "poc",
+      "bugfix",
+      "refactor",
+      "infra",
+      "security-patch",
+      "workshop"
+    ],
+    "inputs": "none (first stage after session start)",
+    "outputs": "the per-intent record tree (stage artifact dirs + verification dir) and the space-level knowledge/ dir",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      }
+    ],
+    "sensors_applicable": []
+  },
+  {
+    "slug": "workspace-detection",
+    "number": "0.2",
+    "name": "Workspace Detection",
+    "phase": "initialization",
+    "execution": "ALWAYS",
+    "condition": "Scans and classifies workspace — auto-proceeds (no approval gate)",
+    "lead_agent": "orchestrator",
+    "support_agents": [],
+    "mode": "inline",
+    "produces": [],
+    "consumes": [],
+    "requires_stage": [
+      "workspace-scaffold"
+    ],
+    "sensors": [],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "poc",
+      "bugfix",
+      "refactor",
+      "infra",
+      "security-patch",
+      "workshop"
+    ],
+    "inputs": "none (scans filesystem)",
+    "outputs": "workspace classification (greenfield/brownfield), technology stack detection",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      }
+    ],
+    "sensors_applicable": []
+  },
+  {
+    "slug": "state-init",
+    "number": "0.3",
+    "name": "State Initialization",
+    "phase": "initialization",
+    "execution": "ALWAYS",
+    "condition": "Creates full populated state file and determines routing — auto-proceeds",
+    "lead_agent": "orchestrator",
+    "support_agents": [],
+    "mode": "inline",
+    "produces": [],
+    "consumes": [],
+    "requires_stage": [
+      "workspace-detection"
+    ],
+    "sensors": [],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "poc",
+      "bugfix",
+      "refactor",
+      "infra",
+      "security-patch",
+      "workshop"
+    ],
+    "inputs": "workspace classification from workspace-detection, scope from orchestrator",
+    "outputs": "<record>/aidlc-state.md (full populated version, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      }
+    ],
+    "sensors_applicable": []
+  },
+  {
+    "slug": "intent-capture",
+    "number": "1.1",
+    "name": "Intent Capture & Framing",
+    "phase": "ideation",
+    "execution": "ALWAYS",
+    "condition": "First stage of every workflow — establishes the initiative's foundation",
+    "lead_agent": "aidlc-product-agent",
+    "support_agents": [
+      "aidlc-architect-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "intent-statement",
+      "stakeholder-map",
+      "intent-capture-questions"
+    ],
+    "consumes": [],
+    "requires_stage": [],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "poc"
+    ],
+    "inputs": "User's project description ($ARGUMENTS), scope selection",
+    "outputs": "intent-statement.md, stakeholder-map.md, intent-capture-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/ideation.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "market-research",
+    "number": "1.2",
+    "name": "Market Research",
+    "phase": "ideation",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when initiative has external market positioning or build-vs-buy considerations. Skip for internal tools, bug fixes, or refactors.",
+    "lead_agent": "aidlc-product-agent",
+    "support_agents": [],
+    "mode": "inline",
+    "produces": [
+      "competitive-analysis",
+      "market-trends",
+      "build-vs-buy",
+      "market-research-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "intent-statement",
+        "required": true
+      }
+    ],
+    "requires_stage": [
+      "intent-capture"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature"
+    ],
+    "inputs": "Intent statement from intent-capture stage",
+    "outputs": "competitive-analysis.md, market-trends.md, build-vs-buy.md, market-research-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/ideation.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "feasibility",
+    "number": "1.3",
+    "name": "Feasibility & Constraints",
+    "phase": "ideation",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when there are integration constraints, regulatory requirements, or significant technical uncertainty. Skip for trivial changes with no technical risk.",
+    "lead_agent": "aidlc-architect-agent",
+    "support_agents": [
+      "aidlc-aws-platform-agent",
+      "aidlc-compliance-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "feasibility-assessment",
+      "constraint-register",
+      "raid-log",
+      "feasibility-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "intent-statement",
+        "required": true
+      },
+      {
+        "artifact": "competitive-analysis",
+        "required": false
+      },
+      {
+        "artifact": "market-trends",
+        "required": false
+      },
+      {
+        "artifact": "build-vs-buy",
+        "required": false
+      }
+    ],
+    "requires_stage": [
+      "intent-capture",
+      "market-research"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp"
+    ],
+    "inputs": "Intent statement from intent-capture stage, market research from market-research stage (if executed)",
+    "outputs": "feasibility-assessment.md, constraint-register.md, raid-log.md, feasibility-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/ideation.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "scope-definition",
+    "number": "1.4",
+    "name": "Scope Definition",
+    "phase": "ideation",
+    "execution": "ALWAYS",
+    "condition": "Always executes — defines the scope boundary and prioritized backlog",
+    "lead_agent": "aidlc-product-agent",
+    "support_agents": [
+      "aidlc-delivery-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "scope-document",
+      "intent-backlog",
+      "scope-definition-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "intent-statement",
+        "required": true
+      },
+      {
+        "artifact": "feasibility-assessment",
+        "required": false
+      },
+      {
+        "artifact": "constraint-register",
+        "required": false
+      }
+    ],
+    "requires_stage": [
+      "intent-capture",
+      "feasibility"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp"
+    ],
+    "inputs": "Intent statement, feasibility assessment, constraint register",
+    "outputs": "scope-document.md, intent-backlog.md, scope-definition-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/ideation.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "team-formation",
+    "number": "1.5",
+    "name": "Team Formation",
+    "phase": "ideation",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when team composition, capacity, or mob planning is relevant. Skip for solo developer or small team projects.",
+    "lead_agent": "aidlc-delivery-agent",
+    "support_agents": [],
+    "mode": "inline",
+    "produces": [
+      "team-assessment",
+      "skill-matrix",
+      "mob-composition",
+      "team-formation-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "scope-document",
+        "required": true
+      },
+      {
+        "artifact": "intent-backlog",
+        "required": true
+      },
+      {
+        "artifact": "feasibility-assessment",
+        "required": false
+      }
+    ],
+    "requires_stage": [
+      "scope-definition"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature"
+    ],
+    "inputs": "Scope definition, intent backlog, feasibility assessment",
+    "outputs": "team-assessment.md, skill-matrix.md, mob-composition.md, team-formation-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/ideation.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "rough-mockups",
+    "number": "1.6",
+    "name": "Rough Mockups",
+    "phase": "ideation",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when user-facing UI is part of the initiative; for API/backend, produce system interaction diagrams. Skip for non-UI, API-only, or infrastructure-only initiatives.",
+    "lead_agent": "aidlc-design-agent",
+    "support_agents": [
+      "aidlc-product-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "wireframes",
+      "user-flow",
+      "rough-mockups-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "intent-statement",
+        "required": true
+      },
+      {
+        "artifact": "scope-document",
+        "required": true
+      },
+      {
+        "artifact": "intent-backlog",
+        "required": true
+      }
+    ],
+    "requires_stage": [
+      "scope-definition",
+      "team-formation"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp"
+    ],
+    "reviewer": "aidlc-product-lead-agent",
+    "reviewer_max_iterations": 2,
+    "inputs": "Intent statement, scope definition, intent backlog",
+    "outputs": "wireframes.md, user-flow.md, rough-mockups-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/ideation.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "approval-handoff",
+    "number": "1.7",
+    "name": "Approval & Handoff",
+    "phase": "ideation",
+    "execution": "ALWAYS",
+    "condition": "Always executes — compiles all Ideation artifacts into initiative brief for approval",
+    "lead_agent": "aidlc-delivery-agent",
+    "support_agents": [
+      "aidlc-product-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "initiative-brief",
+      "decision-log",
+      "approval-handoff-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "intent-statement",
+        "required": true
+      },
+      {
+        "artifact": "scope-document",
+        "required": true
+      },
+      {
+        "artifact": "intent-backlog",
+        "required": true
+      },
+      {
+        "artifact": "competitive-analysis",
+        "required": false
+      },
+      {
+        "artifact": "feasibility-assessment",
+        "required": false
+      },
+      {
+        "artifact": "constraint-register",
+        "required": false
+      },
+      {
+        "artifact": "team-assessment",
+        "required": false
+      },
+      {
+        "artifact": "wireframes",
+        "required": false
+      }
+    ],
+    "requires_stage": [
+      "intent-capture",
+      "feasibility",
+      "scope-definition",
+      "team-formation",
+      "rough-mockups"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature"
+    ],
+    "inputs": "All Ideation phase artifacts (intent, market research, feasibility, scope, team, mockups)",
+    "outputs": "initiative-brief.md, decision-log.md, approval-handoff-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/ideation.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "reverse-engineering",
+    "number": "2.1",
+    "name": "Reverse Engineering",
+    "phase": "inception",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when project is brownfield. Always rerun for freshness. Skip for greenfield projects.",
+    "lead_agent": "aidlc-developer-agent",
+    "support_agents": [
+      "aidlc-architect-agent"
+    ],
+    "mode": "subagent",
+    "produces": [
+      "business-overview",
+      "architecture",
+      "code-structure",
+      "api-documentation",
+      "component-inventory",
+      "technology-stack",
+      "dependencies",
+      "code-quality-assessment",
+      "reverse-engineering-timestamp"
+    ],
+    "consumes": [],
+    "requires_stage": [
+      "state-init"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "poc",
+      "bugfix",
+      "refactor",
+      "security-patch",
+      "workshop"
+    ],
+    "inputs": "<record>/aidlc-state.md",
+    "outputs": "aidlc/spaces/<active-space>/codekb/<repo>/ (9 artifacts: business-overview.md, architecture.md, code-structure.md, api-documentation.md, component-inventory.md, technology-stack.md, dependencies.md, code-quality-assessment.md, reverse-engineering-timestamp.md)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/inception.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "practices-discovery",
+    "number": "2.2",
+    "name": "Practices Discovery",
+    "phase": "inception",
+    "execution": "CONDITIONAL",
+    "condition": "Always rerun for freshness. Brownfield discovers from evidence + reverse-engineering artifacts. Greenfield prompts user via structured questions using org.md defaults.",
+    "lead_agent": "aidlc-pipeline-deploy-agent",
+    "support_agents": [
+      "aidlc-quality-agent",
+      "aidlc-developer-agent",
+      "aidlc-devsecops-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "team-practices",
+      "discovered-rules",
+      "evidence",
+      "practices-discovery-timestamp"
+    ],
+    "consumes": [
+      {
+        "artifact": "code-structure",
+        "required": false,
+        "conditional_on": "brownfield"
+      },
+      {
+        "artifact": "technology-stack",
+        "required": false,
+        "conditional_on": "brownfield"
+      },
+      {
+        "artifact": "dependencies",
+        "required": false,
+        "conditional_on": "brownfield"
+      },
+      {
+        "artifact": "code-quality-assessment",
+        "required": false,
+        "conditional_on": "brownfield"
+      },
+      {
+        "artifact": "architecture",
+        "required": false,
+        "conditional_on": "brownfield"
+      },
+      {
+        "artifact": "business-overview",
+        "required": false,
+        "conditional_on": "brownfield"
+      }
+    ],
+    "requires_stage": [
+      "state-init",
+      "reverse-engineering"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "infra",
+      "workshop"
+    ],
+    "inputs": "<record>/aidlc-state.md + (brownfield) reverse-engineering's 8 artifacts",
+    "outputs": "team-practices.md, discovered-rules.md, evidence.md, practices-discovery-timestamp.md (4 artifacts under this stage's record dir, engine-resolved). On affirmation, content is promoted to the harness rule layer's aidlc-team.md and aidlc-project.md.",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/inception.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "requirements-analysis",
+    "number": "2.3",
+    "name": "Requirements Analysis",
+    "phase": "inception",
+    "execution": "ALWAYS",
+    "condition": "Always executes — depth scales with project complexity",
+    "lead_agent": "aidlc-product-agent",
+    "support_agents": [],
+    "mode": "inline",
+    "produces": [
+      "requirements",
+      "requirements-analysis-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "intent-statement",
+        "required": false
+      },
+      {
+        "artifact": "scope-document",
+        "required": false
+      },
+      {
+        "artifact": "business-overview",
+        "required": false,
+        "conditional_on": "brownfield"
+      },
+      {
+        "artifact": "architecture",
+        "required": false,
+        "conditional_on": "brownfield"
+      },
+      {
+        "artifact": "code-structure",
+        "required": false,
+        "conditional_on": "brownfield"
+      },
+      {
+        "artifact": "team-practices",
+        "required": false
+      }
+    ],
+    "requires_stage": [
+      "approval-handoff",
+      "reverse-engineering"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "poc",
+      "bugfix",
+      "refactor",
+      "infra",
+      "security-patch",
+      "workshop"
+    ],
+    "reviewer": "aidlc-product-lead-agent",
+    "reviewer_max_iterations": 2,
+    "inputs": "RE artifacts (if brownfield), user's project description (from <record>/audit/<host>-<clone>.md)",
+    "outputs": "requirements.md, requirements-analysis-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/inception.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "user-stories",
+    "number": "2.4",
+    "name": "User Stories",
+    "phase": "inception",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when user-facing features, multiple personas, complex business logic, or cross-team work is involved. Skip for pure refactoring, isolated bug fixes, infrastructure-only changes, or developer tooling.",
+    "lead_agent": "aidlc-product-agent",
+    "support_agents": [
+      "aidlc-design-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "stories",
+      "personas",
+      "user-stories-assessment"
+    ],
+    "consumes": [
+      {
+        "artifact": "requirements",
+        "required": true
+      },
+      {
+        "artifact": "business-overview",
+        "required": false,
+        "conditional_on": "brownfield"
+      },
+      {
+        "artifact": "component-inventory",
+        "required": false,
+        "conditional_on": "brownfield"
+      },
+      {
+        "artifact": "team-practices",
+        "required": false
+      }
+    ],
+    "requires_stage": [
+      "requirements-analysis"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "workshop"
+    ],
+    "reviewer": "aidlc-product-lead-agent",
+    "reviewer_max_iterations": 2,
+    "inputs": "<record>/inception/requirements-analysis/requirements.md, RE artifacts (if brownfield)",
+    "outputs": "stories.md, personas.md, user-stories-assessment.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/inception.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "refined-mockups",
+    "number": "2.5",
+    "name": "Refined Mockups",
+    "phase": "inception",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when user-facing UI exists and rough mockups were produced in Ideation; for APIs, refine interaction diagrams",
+    "lead_agent": "aidlc-design-agent",
+    "support_agents": [
+      "aidlc-product-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "mockups",
+      "interaction-spec",
+      "design-system-mapping",
+      "accessibility-checklist",
+      "refined-mockups-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "wireframes",
+        "required": true
+      },
+      {
+        "artifact": "user-flow",
+        "required": true
+      },
+      {
+        "artifact": "stories",
+        "required": false
+      },
+      {
+        "artifact": "requirements",
+        "required": true
+      },
+      {
+        "artifact": "team-practices",
+        "required": false
+      }
+    ],
+    "requires_stage": [
+      "user-stories"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "workshop"
+    ],
+    "reviewer": "aidlc-product-lead-agent",
+    "reviewer_max_iterations": 2,
+    "inputs": "Rough mockups from rough-mockups stage, user stories from user-stories stage, requirements from requirements-analysis stage",
+    "outputs": "mockups.md, interaction-spec.md, design-system-mapping.md, accessibility-checklist.md, refined-mockups-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/inception.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "application-design",
+    "number": "2.6",
+    "name": "Application Design",
+    "phase": "inception",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when new components or services are needed, or service layer design is required. Skip when changes are modifications to existing components only.",
+    "lead_agent": "aidlc-architect-agent",
+    "support_agents": [
+      "aidlc-aws-platform-agent",
+      "aidlc-design-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "components",
+      "component-methods",
+      "services",
+      "component-dependency",
+      "decisions"
+    ],
+    "consumes": [
+      {
+        "artifact": "requirements",
+        "required": true
+      },
+      {
+        "artifact": "stories",
+        "required": false
+      },
+      {
+        "artifact": "architecture",
+        "required": false,
+        "conditional_on": "brownfield"
+      },
+      {
+        "artifact": "component-inventory",
+        "required": false,
+        "conditional_on": "brownfield"
+      },
+      {
+        "artifact": "team-practices",
+        "required": false
+      }
+    ],
+    "requires_stage": [
+      "requirements-analysis",
+      "refined-mockups"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "workshop"
+    ],
+    "reviewer": "aidlc-architecture-reviewer-agent",
+    "reviewer_max_iterations": 2,
+    "inputs": "<record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced), RE artifacts (if brownfield)",
+    "outputs": "components.md, component-methods.md, services.md, component-dependency.md, decisions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/inception.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "units-generation",
+    "number": "2.7",
+    "name": "Units Generation",
+    "phase": "inception",
+    "execution": "ALWAYS",
+    "condition": "Always executes when in scope. Produces the dependency DAG that Stage 2.8 Delivery Planning consumes for Bolt sequencing. In the compiled scope grid, 2.7 and 2.8 travel together — both EXECUTE or both SKIP per scope.",
+    "lead_agent": "aidlc-architect-agent",
+    "support_agents": [
+      "aidlc-delivery-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "unit-of-work",
+      "unit-of-work-dependency",
+      "unit-of-work-story-map"
+    ],
+    "consumes": [
+      {
+        "artifact": "components",
+        "required": true
+      },
+      {
+        "artifact": "component-methods",
+        "required": true
+      },
+      {
+        "artifact": "services",
+        "required": true
+      },
+      {
+        "artifact": "component-dependency",
+        "required": true
+      },
+      {
+        "artifact": "decisions",
+        "required": true
+      },
+      {
+        "artifact": "requirements",
+        "required": true
+      },
+      {
+        "artifact": "stories",
+        "required": false
+      }
+    ],
+    "requires_stage": [
+      "application-design"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "workshop"
+    ],
+    "reviewer": "aidlc-architecture-reviewer-agent",
+    "reviewer_max_iterations": 2,
+    "inputs": "<record>/inception/application-design/ (all design artifacts), <record>/inception/requirements-analysis/requirements.md, <record>/inception/user-stories/stories.md (if produced)",
+    "outputs": "unit-of-work.md, unit-of-work-dependency.md, unit-of-work-story-map.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/inception.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "delivery-planning",
+    "number": "2.8",
+    "name": "Delivery Planning",
+    "phase": "inception",
+    "execution": "ALWAYS",
+    "condition": "Always executes — capstone Inception stage, produces the detailed execution plan for Construction and Operation",
+    "lead_agent": "aidlc-delivery-agent",
+    "support_agents": [
+      "aidlc-architect-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "bolt-plan",
+      "team-allocation",
+      "risk-and-sequencing-rationale",
+      "external-dependency-map",
+      "delivery-planning-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "requirements",
+        "required": true
+      },
+      {
+        "artifact": "stories",
+        "required": false
+      },
+      {
+        "artifact": "mockups",
+        "required": false
+      },
+      {
+        "artifact": "components",
+        "required": true
+      },
+      {
+        "artifact": "unit-of-work",
+        "required": true
+      },
+      {
+        "artifact": "unit-of-work-dependency",
+        "required": true
+      },
+      {
+        "artifact": "unit-of-work-story-map",
+        "required": false
+      },
+      {
+        "artifact": "team-practices",
+        "required": false
+      }
+    ],
+    "requires_stage": [
+      "units-generation"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "workshop"
+    ],
+    "inputs": "All Inception artifacts (requirements, stories, mockups, architecture, units)",
+    "outputs": "bolt-plan.md, team-allocation.md, risk-and-sequencing-rationale.md, external-dependency-map.md, delivery-planning-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/inception.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "functional-design",
+    "number": "3.1",
+    "name": "Functional Design",
+    "phase": "construction",
+    "execution": "CONDITIONAL",
+    "condition": "New data models, complex business logic, or business rules need design. Skip if simple logic changes with no new business logic.",
+    "lead_agent": "aidlc-architect-agent",
+    "support_agents": [
+      "aidlc-developer-agent"
+    ],
+    "mode": "inline",
+    "for_each": "unit-of-work",
+    "produces": [
+      "business-logic-model",
+      "business-rules",
+      "domain-entities"
+    ],
+    "optional_produces": [
+      "frontend-components"
+    ],
+    "produces_kinds": {
+      "business-logic-model": [
+        "service",
+        "ui",
+        "library"
+      ],
+      "business-rules": [
+        "service",
+        "spec",
+        "library"
+      ],
+      "domain-entities": [
+        "service",
+        "spec",
+        "library"
+      ],
+      "frontend-components": [
+        "ui"
+      ]
+    },
+    "consumes": [
+      {
+        "artifact": "unit-of-work",
+        "required": true
+      },
+      {
+        "artifact": "unit-of-work-story-map",
+        "required": false
+      },
+      {
+        "artifact": "requirements",
+        "required": true
+      },
+      {
+        "artifact": "components",
+        "required": true
+      },
+      {
+        "artifact": "component-methods",
+        "required": true
+      },
+      {
+        "artifact": "services",
+        "required": true
+      }
+    ],
+    "requires_stage": [
+      "units-generation"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage",
+      "linter",
+      "type-check"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "refactor",
+      "workshop"
+    ],
+    "reviewer": "aidlc-architecture-reviewer-agent",
+    "reviewer_max_iterations": 2,
+    "inputs": "unit-of-work.md, unit-of-work-story-map.md, requirements.md, application design artifacts",
+    "outputs": "business-logic-model.md, business-rules.md, domain-entities.md, CONDITIONAL: frontend-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/construction.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "linter",
+        "path": ".aidlc/sensors/aidlc-linter.md",
+        "matches": "**/*.{ts,js}"
+      },
+      {
+        "id": "type-check",
+        "path": ".aidlc/sensors/aidlc-type-check.md",
+        "matches": "**/*.{ts,tsx}"
+      }
+    ]
+  },
+  {
+    "slug": "nfr-requirements",
+    "number": "3.2",
+    "name": "NFR Requirements",
+    "phase": "construction",
+    "execution": "CONDITIONAL",
+    "condition": "Performance requirements, security considerations, scalability concerns, or tech stack selection needed. Skip if no NFR requirements and tech stack already determined.",
+    "lead_agent": "aidlc-architect-agent",
+    "support_agents": [
+      "aidlc-devsecops-agent",
+      "aidlc-compliance-agent",
+      "aidlc-quality-agent"
+    ],
+    "mode": "inline",
+    "for_each": "unit-of-work",
+    "produces": [
+      "performance-requirements",
+      "security-requirements",
+      "scalability-requirements",
+      "reliability-requirements",
+      "tech-stack-decisions"
+    ],
+    "produces_kinds": {
+      "performance-requirements": [
+        "service",
+        "ui"
+      ],
+      "scalability-requirements": [
+        "service"
+      ],
+      "reliability-requirements": [
+        "service"
+      ]
+    },
+    "consumes": [
+      {
+        "artifact": "business-logic-model",
+        "required": true
+      },
+      {
+        "artifact": "business-rules",
+        "required": true
+      },
+      {
+        "artifact": "requirements",
+        "required": true
+      },
+      {
+        "artifact": "technology-stack",
+        "required": false,
+        "conditional_on": "brownfield"
+      }
+    ],
+    "requires_stage": [
+      "units-generation",
+      "functional-design"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage",
+      "linter",
+      "type-check"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "infra",
+      "security-patch",
+      "workshop"
+    ],
+    "reviewer": "aidlc-architecture-reviewer-agent",
+    "reviewer_max_iterations": 2,
+    "inputs": "functional design artifacts, requirements.md, RE artifacts",
+    "outputs": "performance-requirements.md, security-requirements.md, scalability-requirements.md, reliability-requirements.md, tech-stack-decisions.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/construction.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "linter",
+        "path": ".aidlc/sensors/aidlc-linter.md",
+        "matches": "**/*.{ts,js}"
+      },
+      {
+        "id": "type-check",
+        "path": ".aidlc/sensors/aidlc-type-check.md",
+        "matches": "**/*.{ts,tsx}"
+      }
+    ]
+  },
+  {
+    "slug": "nfr-design",
+    "number": "3.3",
+    "name": "NFR Design",
+    "phase": "construction",
+    "execution": "CONDITIONAL",
+    "condition": "NFR Requirements was executed and NFR patterns need design. Skip if NFR Requirements was skipped.",
+    "lead_agent": "aidlc-architect-agent",
+    "support_agents": [
+      "aidlc-aws-platform-agent"
+    ],
+    "mode": "inline",
+    "for_each": "unit-of-work",
+    "produces": [
+      "performance-design",
+      "security-design",
+      "scalability-design",
+      "reliability-design",
+      "logical-components"
+    ],
+    "produces_kinds": {
+      "performance-design": [
+        "service",
+        "ui"
+      ],
+      "scalability-design": [
+        "service"
+      ],
+      "reliability-design": [
+        "service"
+      ],
+      "logical-components": [
+        "service",
+        "ui",
+        "library"
+      ]
+    },
+    "consumes": [
+      {
+        "artifact": "performance-requirements",
+        "required": true
+      },
+      {
+        "artifact": "security-requirements",
+        "required": true
+      },
+      {
+        "artifact": "scalability-requirements",
+        "required": true
+      },
+      {
+        "artifact": "reliability-requirements",
+        "required": true
+      },
+      {
+        "artifact": "tech-stack-decisions",
+        "required": true
+      },
+      {
+        "artifact": "business-logic-model",
+        "required": true
+      }
+    ],
+    "requires_stage": [
+      "units-generation",
+      "nfr-requirements"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage",
+      "linter",
+      "type-check"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "infra",
+      "workshop"
+    ],
+    "reviewer": "aidlc-architecture-reviewer-agent",
+    "reviewer_max_iterations": 2,
+    "inputs": "NFR requirements artifacts, functional design artifacts",
+    "outputs": "performance-design.md, security-design.md, scalability-design.md, reliability-design.md, logical-components.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/construction.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "linter",
+        "path": ".aidlc/sensors/aidlc-linter.md",
+        "matches": "**/*.{ts,js}"
+      },
+      {
+        "id": "type-check",
+        "path": ".aidlc/sensors/aidlc-type-check.md",
+        "matches": "**/*.{ts,tsx}"
+      }
+    ]
+  },
+  {
+    "slug": "infrastructure-design",
+    "number": "3.4",
+    "name": "Infrastructure Design",
+    "phase": "construction",
+    "execution": "CONDITIONAL",
+    "condition": "Infrastructure services need mapping, deployment architecture required, or cloud resources needed. Skip if no infrastructure changes and infrastructure already defined.",
+    "lead_agent": "aidlc-aws-platform-agent",
+    "support_agents": [
+      "aidlc-devsecops-agent",
+      "aidlc-compliance-agent"
+    ],
+    "mode": "inline",
+    "for_each": "unit-of-work",
+    "produces": [
+      "deployment-architecture",
+      "infrastructure-services",
+      "monitoring-design",
+      "cicd-pipeline"
+    ],
+    "optional_produces": [
+      "shared-infrastructure"
+    ],
+    "produces_kinds": {
+      "deployment-architecture": [
+        "service",
+        "ui",
+        "packaging"
+      ],
+      "infrastructure-services": [
+        "service",
+        "packaging"
+      ],
+      "monitoring-design": [
+        "service",
+        "packaging"
+      ],
+      "cicd-pipeline": [
+        "service",
+        "ui",
+        "packaging",
+        "library"
+      ]
+    },
+    "consumes": [
+      {
+        "artifact": "performance-design",
+        "required": true
+      },
+      {
+        "artifact": "security-design",
+        "required": true
+      },
+      {
+        "artifact": "scalability-design",
+        "required": true
+      },
+      {
+        "artifact": "reliability-design",
+        "required": true
+      },
+      {
+        "artifact": "logical-components",
+        "required": true
+      },
+      {
+        "artifact": "components",
+        "required": true
+      },
+      {
+        "artifact": "services",
+        "required": true
+      },
+      {
+        "artifact": "business-logic-model",
+        "required": true
+      }
+    ],
+    "requires_stage": [
+      "units-generation",
+      "nfr-design"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage",
+      "linter",
+      "type-check"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "infra",
+      "workshop"
+    ],
+    "reviewer": "aidlc-architecture-reviewer-agent",
+    "reviewer_max_iterations": 2,
+    "inputs": "NFR design artifacts, application design, functional design",
+    "outputs": "deployment-architecture.md, infrastructure-services.md, monitoring-design.md, cicd-pipeline.md, CONDITIONAL: shared-infrastructure.md (under this stage's per-unit record dir, engine-resolved); per-kind applicability via produces_kinds (untagged unit: all)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/construction.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "linter",
+        "path": ".aidlc/sensors/aidlc-linter.md",
+        "matches": "**/*.{ts,js}"
+      },
+      {
+        "id": "type-check",
+        "path": ".aidlc/sensors/aidlc-type-check.md",
+        "matches": "**/*.{ts,tsx}"
+      }
+    ]
+  },
+  {
+    "slug": "code-generation",
+    "number": "3.5",
+    "name": "Code Generation",
+    "phase": "construction",
+    "execution": "ALWAYS",
+    "condition": "Always executes for every unit in the execution plan.",
+    "lead_agent": "aidlc-developer-agent",
+    "support_agents": [],
+    "mode": "subagent",
+    "for_each": "unit-of-work",
+    "workspace_requires": true,
+    "produces": [
+      "code-generation-plan",
+      "code-summary"
+    ],
+    "consumes": [
+      {
+        "artifact": "business-logic-model",
+        "required": false
+      },
+      {
+        "artifact": "business-rules",
+        "required": false
+      },
+      {
+        "artifact": "domain-entities",
+        "required": false
+      },
+      {
+        "artifact": "performance-design",
+        "required": false
+      },
+      {
+        "artifact": "security-design",
+        "required": false
+      },
+      {
+        "artifact": "deployment-architecture",
+        "required": false
+      },
+      {
+        "artifact": "unit-of-work",
+        "required": true
+      },
+      {
+        "artifact": "requirements",
+        "required": true
+      }
+    ],
+    "requires_stage": [
+      "units-generation",
+      "functional-design",
+      "nfr-requirements",
+      "nfr-design",
+      "infrastructure-design"
+    ],
+    "sensors": [
+      "linter",
+      "type-check"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "poc",
+      "bugfix",
+      "refactor",
+      "security-patch",
+      "workshop"
+    ],
+    "reviewer": "aidlc-architecture-reviewer-agent",
+    "reviewer_max_iterations": 2,
+    "inputs": "ALL prior design artifacts for this unit",
+    "outputs": "application code + code-generation-plan.md, code-summary.md (under this stage's per-unit record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/construction.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "linter",
+        "path": ".aidlc/sensors/aidlc-linter.md",
+        "matches": "**/*.{ts,js}"
+      },
+      {
+        "id": "type-check",
+        "path": ".aidlc/sensors/aidlc-type-check.md",
+        "matches": "**/*.{ts,tsx}"
+      }
+    ]
+  },
+  {
+    "slug": "build-and-test",
+    "number": "3.6",
+    "name": "Build and Test",
+    "phase": "construction",
+    "execution": "ALWAYS",
+    "condition": "Always executes once after all per-unit stages are finished.",
+    "lead_agent": "aidlc-quality-agent",
+    "support_agents": [
+      "aidlc-devsecops-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "build-instructions",
+      "unit-test-instructions",
+      "integration-test-instructions",
+      "performance-test-instructions",
+      "security-test-instructions",
+      "build-and-test-summary",
+      "build-test-results"
+    ],
+    "consumes": [
+      {
+        "artifact": "code-generation-plan",
+        "required": true
+      },
+      {
+        "artifact": "code-summary",
+        "required": true
+      }
+    ],
+    "requires_stage": [
+      "code-generation"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage",
+      "type-check"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "poc",
+      "bugfix",
+      "refactor",
+      "security-patch",
+      "workshop"
+    ],
+    "inputs": "ALL code generation outputs across all units",
+    "outputs": "build-instructions.md, unit-test-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/construction.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "type-check",
+        "path": ".aidlc/sensors/aidlc-type-check.md",
+        "matches": "**/*.{ts,tsx}"
+      }
+    ]
+  },
+  {
+    "slug": "ci-pipeline",
+    "number": "3.7",
+    "name": "CI Pipeline",
+    "phase": "construction",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when CI pipeline needs creation or significant modification. Skip if CI already exists and is adequate.",
+    "lead_agent": "aidlc-pipeline-deploy-agent",
+    "support_agents": [],
+    "mode": "inline",
+    "produces": [
+      "ci-config",
+      "quality-gates",
+      "ci-pipeline-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "code-summary",
+        "required": true
+      },
+      {
+        "artifact": "build-and-test-summary",
+        "required": true
+      },
+      {
+        "artifact": "build-test-results",
+        "required": true
+      }
+    ],
+    "requires_stage": [
+      "build-and-test"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage",
+      "linter",
+      "type-check"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "mvp",
+      "infra",
+      "workshop"
+    ],
+    "inputs": "Code generation output from code-generation stage, build/test results from build-and-test stage",
+    "outputs": "ci-config.md, quality-gates.md, ci-pipeline-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/construction.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "linter",
+        "path": ".aidlc/sensors/aidlc-linter.md",
+        "matches": "**/*.{ts,js}"
+      },
+      {
+        "id": "type-check",
+        "path": ".aidlc/sensors/aidlc-type-check.md",
+        "matches": "**/*.{ts,tsx}"
+      }
+    ]
+  },
+  {
+    "slug": "deployment-pipeline",
+    "number": "4.1",
+    "name": "Deployment Pipeline",
+    "phase": "operation",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when CD pipeline needs creation or significant modification",
+    "lead_agent": "aidlc-pipeline-deploy-agent",
+    "support_agents": [],
+    "mode": "inline",
+    "produces": [
+      "cd-config",
+      "deployment-strategy",
+      "rollback-runbook",
+      "deployment-pipeline-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "ci-config",
+        "required": true
+      },
+      {
+        "artifact": "quality-gates",
+        "required": true
+      },
+      {
+        "artifact": "deployment-architecture",
+        "required": true
+      },
+      {
+        "artifact": "cicd-pipeline",
+        "required": true
+      }
+    ],
+    "requires_stage": [
+      "ci-pipeline",
+      "infrastructure-design"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "infra",
+      "security-patch",
+      "workshop"
+    ],
+    "inputs": "CI pipeline config from ci-pipeline stage, infrastructure design from infrastructure-design stage",
+    "outputs": "cd-config.md, deployment-strategy.md, rollback-runbook.md, deployment-pipeline-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/operation.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "environment-provisioning",
+    "number": "4.2",
+    "name": "Environment Provisioning",
+    "phase": "operation",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when AWS environments need provisioning or validation",
+    "lead_agent": "aidlc-aws-platform-agent",
+    "support_agents": [
+      "aidlc-devsecops-agent",
+      "aidlc-compliance-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "environment-inventory",
+      "validation-report",
+      "environment-provisioning-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "deployment-architecture",
+        "required": true
+      },
+      {
+        "artifact": "infrastructure-services",
+        "required": true
+      },
+      {
+        "artifact": "cd-config",
+        "required": true
+      }
+    ],
+    "requires_stage": [
+      "infrastructure-design",
+      "deployment-pipeline"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "infra",
+      "workshop"
+    ],
+    "inputs": "Infrastructure design from infrastructure-design stage, CD pipeline config from deployment-pipeline stage",
+    "outputs": "environment-inventory.md, validation-report.md, environment-provisioning-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/operation.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "deployment-execution",
+    "number": "4.3",
+    "name": "Deployment Execution",
+    "phase": "operation",
+    "execution": "CONDITIONAL",
+    "condition": "Execute after deployment pipeline and environment are ready",
+    "lead_agent": "aidlc-pipeline-deploy-agent",
+    "support_agents": [
+      "aidlc-developer-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "deployment-log",
+      "smoke-test-results",
+      "health-check-report",
+      "deployment-execution-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "cd-config",
+        "required": true
+      },
+      {
+        "artifact": "deployment-strategy",
+        "required": true
+      },
+      {
+        "artifact": "environment-inventory",
+        "required": true
+      },
+      {
+        "artifact": "build-test-results",
+        "required": true
+      }
+    ],
+    "requires_stage": [
+      "deployment-pipeline",
+      "environment-provisioning"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "infra",
+      "security-patch",
+      "workshop"
+    ],
+    "inputs": "CD pipeline config from deployment-pipeline stage, provisioned environments from environment-provisioning stage, built artifacts from Construction",
+    "outputs": "deployment-log.md, smoke-test-results.md, health-check-report.md, deployment-execution-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/operation.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "observability-setup",
+    "number": "4.4",
+    "name": "Observability Setup",
+    "phase": "operation",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when monitoring, dashboards, alarms, or tracing need configuration",
+    "lead_agent": "aidlc-operations-agent",
+    "support_agents": [],
+    "mode": "inline",
+    "produces": [
+      "dashboards",
+      "alarms",
+      "slo-config",
+      "log-queries",
+      "tracing-config",
+      "anomaly-config",
+      "observability-setup-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "performance-design",
+        "required": true
+      },
+      {
+        "artifact": "security-design",
+        "required": true
+      },
+      {
+        "artifact": "reliability-design",
+        "required": true
+      },
+      {
+        "artifact": "monitoring-design",
+        "required": true
+      },
+      {
+        "artifact": "infrastructure-services",
+        "required": true
+      }
+    ],
+    "requires_stage": [
+      "nfr-design",
+      "infrastructure-design",
+      "deployment-execution"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "infra",
+      "workshop"
+    ],
+    "inputs": "NFR design from nfr-design stage, infrastructure design from infrastructure-design stage, deployed application",
+    "outputs": "dashboards.md, alarms.md, slo-config.md, log-queries.md, tracing-config.md, anomaly-config.md, observability-setup-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/operation.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "incident-response",
+    "number": "4.5",
+    "name": "Incident Response",
+    "phase": "operation",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when operational runbooks and incident response procedures are needed",
+    "lead_agent": "aidlc-operations-agent",
+    "support_agents": [],
+    "mode": "inline",
+    "produces": [
+      "runbooks",
+      "incident-plan",
+      "escalation-matrix",
+      "incident-response-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "dashboards",
+        "required": true
+      },
+      {
+        "artifact": "alarms",
+        "required": true
+      },
+      {
+        "artifact": "reliability-design",
+        "required": true
+      },
+      {
+        "artifact": "security-design",
+        "required": true
+      },
+      {
+        "artifact": "deployment-architecture",
+        "required": true
+      }
+    ],
+    "requires_stage": [
+      "observability-setup"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "workshop"
+    ],
+    "inputs": "Observability setup from observability-setup stage, NFR design from nfr-design stage, infrastructure design from infrastructure-design stage",
+    "outputs": "runbooks.md, incident-plan.md, escalation-matrix.md, incident-response-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/operation.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "performance-validation",
+    "number": "4.6",
+    "name": "Performance Validation",
+    "phase": "operation",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when NFR performance targets need validation under load",
+    "lead_agent": "aidlc-quality-agent",
+    "support_agents": [],
+    "mode": "inline",
+    "produces": [
+      "load-test-plan",
+      "load-test-results",
+      "nfr-validation-matrix",
+      "performance-validation-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "performance-requirements",
+        "required": true
+      },
+      {
+        "artifact": "scalability-requirements",
+        "required": true
+      },
+      {
+        "artifact": "performance-design",
+        "required": true
+      },
+      {
+        "artifact": "scalability-design",
+        "required": true
+      },
+      {
+        "artifact": "dashboards",
+        "required": true
+      }
+    ],
+    "requires_stage": [
+      "nfr-requirements",
+      "nfr-design",
+      "observability-setup"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "workshop"
+    ],
+    "inputs": "NFR requirements from nfr-requirements stage, NFR design from nfr-design stage, deployed application, observability data from observability-setup stage",
+    "outputs": "load-test-plan.md, test-results.md, nfr-validation-matrix.md, performance-validation-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/operation.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  },
+  {
+    "slug": "feedback-optimization",
+    "number": "4.7",
+    "name": "Feedback & Optimization",
+    "phase": "operation",
+    "execution": "CONDITIONAL",
+    "condition": "Execute when ongoing operational monitoring and optimization are needed",
+    "lead_agent": "aidlc-operations-agent",
+    "support_agents": [
+      "aidlc-aws-platform-agent"
+    ],
+    "mode": "inline",
+    "produces": [
+      "slo-report",
+      "cost-analysis",
+      "drift-report",
+      "feedback-loop",
+      "feedback-optimization-questions"
+    ],
+    "consumes": [
+      {
+        "artifact": "dashboards",
+        "required": true
+      },
+      {
+        "artifact": "alarms",
+        "required": true
+      },
+      {
+        "artifact": "slo-config",
+        "required": true
+      },
+      {
+        "artifact": "deployment-log",
+        "required": true
+      },
+      {
+        "artifact": "load-test-results",
+        "required": false
+      },
+      {
+        "artifact": "incident-plan",
+        "required": false
+      }
+    ],
+    "requires_stage": [
+      "observability-setup",
+      "deployment-execution",
+      "incident-response",
+      "performance-validation"
+    ],
+    "sensors": [
+      "required-sections",
+      "upstream-coverage"
+    ],
+    "scopes": [
+      "enterprise",
+      "feature",
+      "workshop"
+    ],
+    "inputs": "All Operation phase artifacts, production monitoring data",
+    "outputs": "slo-report.md, cost-analysis.md, drift-report.md, feedback-loop.md, feedback-optimization-questions.md (under this stage's record dir, engine-resolved)",
+    "rules_in_context": [
+      {
+        "path": "aidlc/spaces/default/memory/org.md",
+        "scope": "org"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/team.md",
+        "scope": "team"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/project.md",
+        "scope": "project"
+      },
+      {
+        "path": "aidlc/spaces/default/memory/phases/operation.md",
+        "scope": "phase"
+      }
+    ],
+    "sensors_applicable": [
+      {
+        "id": "required-sections",
+        "path": ".aidlc/sensors/aidlc-required-sections.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      },
+      {
+        "id": "upstream-coverage",
+        "path": ".aidlc/sensors/aidlc-upstream-coverage.md",
+        "matches": "**/{aidlc-docs,intents}/**"
+      }
+    ]
+  }
+]

@@ -132,9 +132,19 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         expect(agent.resources, harness.name).toContain(
           "file://aidlc/spaces/default/memory/**/*.md",
         );
-      } else {
+      } else if (harness.capabilities.memoryInclude === "codex-env") {
         const config = readFileSync(join(harness.engineRoot, "config.toml"), "utf-8");
         expect(config).toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
+        expect(existsSync(harness.onboardingDist)).toBe(true);
+      } else {
+        // opencode: the instructions glob in the project-root opencode.json is
+        // the native include surface; AGENTS.md is the auto-read rules file.
+        const config = JSON.parse(
+          readFileSync(join(harness.distRoot, "opencode.json"), "utf-8"),
+        ) as { instructions: string[] };
+        expect(config.instructions, harness.name).toContain(
+          "aidlc/spaces/default/memory/**/*.md",
+        );
         expect(existsSync(harness.onboardingDist)).toBe(true);
       }
     }

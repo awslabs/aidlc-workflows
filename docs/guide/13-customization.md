@@ -7,10 +7,12 @@ AI-DLC is designed to adapt to your team's needs. This chapter covers settings o
 > mechanism-level config in this chapter (`settings.json` / `settings.local.json`,
 > the statusline command, `$CLAUDE_PROJECT_DIR`, tool-permission blocks) is
 > **Claude Code-specific**. Kiro configures the equivalents in
-> `.kiro/settings/cli.json` + its agent config, and Codex in `.codex/config.toml`
-> + Starlark rules — see [Running on Kiro CLI](harnesses/kiro-cli.md),
-> [Running on Kiro IDE](harnesses/kiro-ide.md), and
-> [Running on Codex CLI](harnesses/codex-cli.md) for each harness's surfaces.
+> `.kiro/settings/cli.json` + its agent config, Codex in `.codex/config.toml`
+> + Starlark rules, and opencode in the project-root `opencode.json` — see
+> [Running on Kiro CLI](harnesses/kiro-cli.md),
+> [Running on Kiro IDE](harnesses/kiro-ide.md),
+> [Running on Codex CLI](harnesses/codex-cli.md), and
+> [AI-DLC on opencode](harnesses/opencode.md) for each harness's surfaces.
 
 ---
 
@@ -129,7 +131,7 @@ You can override depth at any approval gate by requesting a different level.
 
 ## Statusline (Claude Code only)
 
-On **Claude Code**, this implementation displays a statusline in the terminal status bar showing workflow progress. Kiro and Codex have no statusline — they surface workflow position through `/aidlc --status` (Kiro) and the `update_plan` task-progress item plus `$aidlc --status` (Codex):
+On **Claude Code**, this implementation displays a statusline in the terminal status bar showing workflow progress. The other harnesses have no statusline — they surface workflow position through `/aidlc --status` (Kiro, opencode) and the `update_plan` task-progress item plus `$aidlc --status` (Codex):
 
 ```
 [AIDLC] IDEATION [▓▓▓▓▓░░░░░] 4/7 > Intent Capture -- Product Agent

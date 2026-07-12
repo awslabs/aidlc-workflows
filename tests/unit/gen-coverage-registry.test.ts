@@ -741,6 +741,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t233-upstream-coverage-matching.test.ts",
     "unit/t231-handler-additions.test.ts",
     "unit/t238-build-binaries.test.ts",
+    "unit/t240-opencode-packaging.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",

@@ -67,7 +67,7 @@ export type OnboardingSpec = {
 export type HarnessManifest = {
   /** Harness name; matches the dist/<name>/ and harness/<name>/ dir. */
   name: string;
-  /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex"). */
+  /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc"). */
   harnessDir: string;
   /**
    * Which tier-projection flavor this harness's agent surfaces use
@@ -75,7 +75,7 @@ export type HarnessManifest = {
    * new harness picks its projection shape in its manifest - the packager
    * never infers it from the harness name.
    */
-  tierFlavor: "claude" | "codex" | "kiro";
+  tierFlavor: "claude" | "codex" | "kiro" | "opencode";
   /** core/<src> → <harnessDir>/<dst> projections. */
   coreDirs: DirMap[];
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */

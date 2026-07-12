@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.6] - 2026-07-17
+
+Adds a fifth harness distribution: **opencode** (opencode.ai, verified live on 1.17.18). `dist/opencode/` ships the same deterministic core as every other harness, projected for opencode's native surfaces: skills, subagents, a `/aidlc` command, and a hook-adapter plugin. One layout note: the engine tree ships at `.aidlc/`, not `.opencode/`, because opencode auto-imports `.opencode/tools/*.ts` as custom tool definitions and the engine's CLI scripts would crash the session; the shipped `opencode.json` points opencode's skill discovery at `.aidlc/skills` and carries the method-tree `instructions` glob plus the `bun .aidlc/tools/*` permission allowlist. **Upgrade:** existing installs on other harnesses are unaffected; to run on opencode copy `dist/opencode/` into your project per the README's opencode Quick Start.
+
+* New `dist/opencode/` distribution: `.aidlc/` (engine: tools, hooks, skills incl. generated stage/scope runners, agents, knowledge, scopes, sensors), `.opencode/` (native shell: 14 persona subagents with `mode: subagent`, `command/aidlc.md`, `plugin/aidlc-opencode-adapter.ts`), the `aidlc/` workspace shell, a project-root `opencode.json`, `AGENTS.md`, and `.gitignore`.
+* The adapter plugin maps opencode hook moments onto the shared core hook bodies: audit + sensor dispatch on write/edit, runtime-graph compile on bash, statusline sync on todowrite, subagent logging on task, human-presence minting per chat turn, state validation on `experimental.session.compacting`, and forwarding-loop enforcement on `session.idle` (advisory: a `block` verdict re-engages the loop by injecting a sentinel-marked nudge prompt that never mints presence).
+* Tier projection gains an `opencode` flavor: judgment agents omit `model`/`variant` (session defaults win); balanced pins `amazon-bedrock/global.anthropic.claude-sonnet-4-6`; templated adds `variant: medium`.
+* `/aidlc --doctor` on opencode checks the adapter plugin, the project-root `opencode.json`, and `.opencode/command/aidlc.md`; `/aidlc space <name>` re-points the `instructions` glob in `opencode.json` (the opencode native include).
+* `SESSION_ENDED` is not emitted on opencode (no session-end hook moment); the swarm runs as task-tool fan-out only (`AIDLC_USE_SWARM=1` is a loud no-op). Full differences: `docs/guide/harnesses/opencode.md`.
+
 ## [2.4.5] - 2026-07-17
 
 AI-DLC now ships a native dispatcher and release binaries, adds explicit workspace, config, and plugin command families, and makes the packaged runtime self-contained without allowing mutations beside an executable. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; binary users should replace the executable and its packaged runtime together.

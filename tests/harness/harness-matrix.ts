@@ -10,6 +10,7 @@ type ReviewerScopeRegistration =
   | "claude-settings"
   | "codex-hooks"
   | "kiro-agent-json"
+  | "opencode-plugin"
   | "unsupported";
 
 type HarnessCapabilities = {
@@ -26,7 +27,7 @@ type HarnessCapabilities = {
     manifestDir: string;
     wiringFile: string;
   };
-  memoryInclude: "claude-import" | "codex-env" | "kiro-resources";
+  memoryInclude: "claude-import" | "codex-env" | "kiro-resources" | "opencode-instructions";
   kiroAgentJson: boolean;
   ideAgentTools: boolean;
   reviewerScopeRegistration: ReviewerScopeRegistration;
@@ -111,6 +112,25 @@ const HARNESS_CAPABILITIES = {
     kiroAgentJson: true,
     ideAgentTools: false,
     reviewerScopeRegistration: "kiro-agent-json",
+  },
+  opencode: {
+    harnessDir: ".aidlc",
+    onboarding: {
+      mode: "manifest",
+      fills: "onboarding.fills.ts",
+      dist: "AGENTS.md",
+    },
+    rootFiles: [".gitignore", "AGENTS.md", "opencode.json"],
+    skillsRoot: ".aidlc/skills",
+    plugin: {
+      kind: "store",
+      manifestDir: ".opencode-plugin",
+      wiringFile: "hooks/hooks.json",
+    },
+    memoryInclude: "opencode-instructions",
+    kiroAgentJson: false,
+    ideAgentTools: false,
+    reviewerScopeRegistration: "opencode-plugin",
   },
 } as const satisfies Record<string, HarnessCapabilities>;
 
@@ -201,7 +221,9 @@ function validateManifest(
     (capabilities.memoryInclude === "claude-import") !==
       manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md") ||
     (capabilities.memoryInclude === "codex-env") !==
-      (capabilities.onboarding.mode === "emit")
+      (capabilities.onboarding.mode === "emit") ||
+    (capabilities.memoryInclude === "opencode-instructions") !==
+      manifest.harnessFiles.some((file) => file.dst === "opencode.json")
   ) {
     fail(name, "memoryInclude does not agree with manifest-owned include surfaces");
   }
