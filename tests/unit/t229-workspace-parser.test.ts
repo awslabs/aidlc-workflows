@@ -34,7 +34,7 @@ const TOOL_ENV = {
 };
 
 function scratchProject(): string {
-  return mkdtempSync(join(tmpdir(), "t228-"));
+  return mkdtempSync(join(tmpdir(), "t229-"));
 }
 
 function cleanup(dir: string): void {

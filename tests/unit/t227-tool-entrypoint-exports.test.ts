@@ -51,7 +51,7 @@ const TOOL_FILES = [
 ] as const;
 
 function makeProject(): string {
-  return mkdtempSync(join(tmpdir(), "aidlc-t226-"));
+  return mkdtempSync(join(tmpdir(), "aidlc-t227-"));
 }
 
 function toolPath(file: string): string {
@@ -116,7 +116,7 @@ function runTool(file: string, args: string[], projectDir: string) {
   });
 }
 
-describe("t226 tool entrypoint exports", () => {
+describe("t227 tool entrypoint exports", () => {
   for (const file of TOOL_FILES) {
     test(`${file} exports main(argv) and has no import side effects`, () => {
       const projectDir = makeProject();

@@ -92,7 +92,7 @@ function stampedVersion(stdout: string): string {
   return prefixed?.[1] ?? trimmed;
 }
 
-describe("t231 build-binaries release builder", () => {
+describe("t238 build-binaries release builder", () => {
   test("native build compiles, gates, records results, and reruns version from /tmp", () => {
     const result = runBuild();
     expect(result.error).toBeUndefined();
@@ -127,7 +127,7 @@ describe("t231 build-binaries release builder", () => {
   }, 300_000);
 
   test("fake entry with wrong version proves the mandatory version gate can fail", () => {
-    const root = mkdtempSync(join(tmpdir(), "aidlc-t231-"));
+    const root = mkdtempSync(join(tmpdir(), "aidlc-t238-"));
     try {
       const entry = join(root, "fake-aidlc.ts");
       const outDir = join(root, "out");

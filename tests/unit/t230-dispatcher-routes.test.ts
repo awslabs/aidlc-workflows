@@ -124,7 +124,7 @@ function entriesUnder(root: string): string[] {
 
 function materializedCompiledDispatcher(): string {
   if (compiledDispatcher) return compiledDispatcher;
-  compiledRoot = mkdtempSync(join(tmpdir(), "aidlc-t229-"));
+  compiledRoot = mkdtempSync(join(tmpdir(), "aidlc-t230-"));
   const targetTools = join(compiledRoot, "$bunfs", "tools");
   mkdirSync(dirname(targetTools), { recursive: true });
   cpSync(CORE_TOOLS_DIR, targetTools, { recursive: true });
@@ -193,7 +193,7 @@ function writeMinimalState(projectDir: string): void {
   );
 }
 
-describe("t229 dispatcher route parity", () => {
+describe("t230 dispatcher route parity", () => {
   const cases: Array<{
     name: string;
     routerArgs: string[];
@@ -439,7 +439,7 @@ describe("t229 dispatcher route parity", () => {
   });
 });
 
-describe("t229 dispatcher dev and compiled in-process modes", () => {
+describe("t230 dispatcher dev and compiled in-process modes", () => {
   const cases = [
     { name: "version", args: ["version"] },
     { name: "graph artifacts", args: ["graph", "artifacts", "--help"] },
@@ -457,7 +457,7 @@ describe("t229 dispatcher dev and compiled in-process modes", () => {
   }
 });
 
-describe("t229 dispatcher route completeness", () => {
+describe("t230 dispatcher route completeness", () => {
   test("help --all is generated from the route table", () => {
     const groups = parseAllHelp();
     for (const route of ROUTES) {
@@ -509,7 +509,7 @@ describe("t229 dispatcher route completeness", () => {
   });
 });
 
-describe("t229 dispatcher help and errors", () => {
+describe("t230 dispatcher help and errors", () => {
   test("human help stays short and hides plumbing nouns", () => {
     const text = renderHumanHelp();
     expect(text.trimEnd().split("\n").length).toBeLessThanOrEqual(20);
@@ -579,7 +579,7 @@ describe("t229 dispatcher help and errors", () => {
   });
 });
 
-describe("t229 dispatcher hook routing", () => {
+describe("t230 dispatcher hook routing", () => {
   test("hook validate-state dispatches to run(input) and writes heartbeat", () => {
     const projectDir = makeProject();
     const res = viaDispatcher(["hook", "validate-state"], projectDir, {}, "{}");

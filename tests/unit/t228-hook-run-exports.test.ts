@@ -42,7 +42,7 @@ let materializedAdapterRoot: string | null = null;
 
 function materializedAdapterPath(harnessName: "kiro" | "kiro-ide" | "codex", fileName: string): string {
   if (materializedAdapterRoot === null) {
-    materializedAdapterRoot = mkdtempSync(join(tmpdir(), "aidlc-t227-adapters-"));
+    materializedAdapterRoot = mkdtempSync(join(tmpdir(), "aidlc-t228-adapters-"));
   }
   const root = join(materializedAdapterRoot, harnessName);
   const hooksDir = join(root, "hooks");

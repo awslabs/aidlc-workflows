@@ -57,7 +57,7 @@ function stateProject(): string {
 }
 
 function emptyProject(): string {
-  return tempDir("aidlc-t230-empty-");
+  return tempDir("aidlc-t231-empty-");
 }
 
 function run(cmd: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): RunResult {
@@ -96,7 +96,7 @@ function stateField(project: string, field: string): string {
 }
 
 function copiedToolsTree(harnessJson: Record<string, unknown>): string {
-  const root = tempDir("aidlc-t230-tools-");
+  const root = tempDir("aidlc-t231-tools-");
   const toolsDir = join(root, ".claude", "tools");
   cpSync(CORE_TOOLS_DIR, toolsDir, { recursive: true });
   mkdirSync(join(toolsDir, "data"), { recursive: true });
@@ -138,7 +138,7 @@ function stderrError(result: RunResult): string {
   }
 }
 
-describe("t230 config get/list/set handlers", () => {
+describe("t231 config get/list/set handlers", () => {
   test("config get prints depth and test-strategy from the active state", () => {
     const project = stateProject();
 
@@ -187,7 +187,7 @@ describe("t230 config get/list/set handlers", () => {
   });
 });
 
-describe("t230 plugin list and sync handlers", () => {
+describe("t231 plugin list and sync handlers", () => {
   test("plugin list reports all enabled when harness selection is absent", () => {
     const project = emptyProject();
     const toolsDir = copiedToolsTree({ harnessDir: ".claude", rulesSubdir: "rules" });
@@ -230,7 +230,7 @@ describe("t230 plugin list and sync handlers", () => {
 
   test("plugin sync runs a discovered compose.ts with AIDLC_HARNESS_DIR", () => {
     const project = emptyProject();
-    const pluginRoot = tempDir("aidlc-t230-plugin-");
+    const pluginRoot = tempDir("aidlc-t231-plugin-");
     mkdirSync(join(pluginRoot, "hooks"), { recursive: true });
     writeFileSync(
       join(pluginRoot, "hooks", "compose.ts"),
@@ -251,7 +251,7 @@ describe("t230 plugin list and sync handlers", () => {
   });
 });
 
-describe("t230 init and upgrade transition handlers", () => {
+describe("t231 init and upgrade transition handlers", () => {
   test("init errors loudly and does not create an intent record", () => {
     const project = emptyProject();
     const result = utility(["init"], project);
@@ -284,9 +284,9 @@ describe("t230 init and upgrade transition handlers", () => {
   });
 });
 
-describe("t230 emitted plugin hook command", () => {
+describe("t231 emitted plugin hook command", () => {
   test("packaged hook probes aidlc first, bun second, and keeps graceful skip", () => {
-    const outDir = join(tempDir("aidlc-t230-package-"), "plugin");
+    const outDir = join(tempDir("aidlc-t231-package-"), "plugin");
     const build = run([BUN, PACKAGE_TS, "plugin", "build", "test-pro", "claude", outDir], REPO_ROOT);
     expect(build.status).toBe(0);
 

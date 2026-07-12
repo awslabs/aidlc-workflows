@@ -1101,7 +1101,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t228-workspace-parser.test.ts",
+          "file": "tests/unit/t229-workspace-parser.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2193,7 +2193,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t228-workspace-parser.test.ts",
+          "file": "tests/unit/t229-workspace-parser.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2490,7 +2490,7 @@
           "mechanism": "none"
         },
         {
-          "file": "tests/unit/t228-workspace-parser.test.ts",
+          "file": "tests/unit/t229-workspace-parser.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -2802,7 +2802,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t228-workspace-parser.test.ts",
+          "file": "tests/unit/t229-workspace-parser.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3205,7 +3205,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t227-hook-run-exports.test.ts",
+          "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3241,7 +3241,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t225-detector-corpus.test.ts",
+          "file": "tests/unit/t226-detector-corpus.test.ts",
           "mechanism": "none"
         }
       ],
@@ -3313,7 +3313,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t227-hook-run-exports.test.ts",
+          "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3345,11 +3345,11 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t227-hook-run-exports.test.ts",
+          "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t229-dispatcher-routes.test.ts",
+          "file": "tests/unit/t230-dispatcher-routes.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3381,11 +3381,11 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t225-detector-corpus.test.ts",
+          "file": "tests/unit/t226-detector-corpus.test.ts",
           "mechanism": "none"
         },
         {
-          "file": "tests/unit/t227-hook-run-exports.test.ts",
+          "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3425,7 +3425,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t229-dispatcher-routes.test.ts",
+          "file": "tests/unit/t230-dispatcher-routes.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4934,7 +4934,7 @@
           "mechanism": "sdk"
         },
         {
-          "file": "tests/unit/t230-handler-additions.test.ts",
+          "file": "tests/unit/t231-handler-additions.test.ts",
           "mechanism": "cli"
         },
         {
@@ -4950,7 +4950,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/unit/t230-handler-additions.test.ts",
+          "file": "tests/unit/t231-handler-additions.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4962,7 +4962,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/unit/t230-handler-additions.test.ts",
+          "file": "tests/unit/t231-handler-additions.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5122,7 +5122,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t230-handler-additions.test.ts",
+          "file": "tests/unit/t231-handler-additions.test.ts",
           "mechanism": "cli"
         },
         {
@@ -5146,7 +5146,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t228-workspace-parser.test.ts",
+          "file": "tests/unit/t229-workspace-parser.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5214,7 +5214,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/unit/t230-handler-additions.test.ts",
+          "file": "tests/unit/t231-handler-additions.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5226,7 +5226,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/unit/t230-handler-additions.test.ts",
+          "file": "tests/unit/t231-handler-additions.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5358,7 +5358,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t228-workspace-parser.test.ts",
+          "file": "tests/unit/t229-workspace-parser.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5390,7 +5390,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t228-workspace-parser.test.ts",
+          "file": "tests/unit/t229-workspace-parser.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5445,7 +5445,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/unit/t230-handler-additions.test.ts",
+          "file": "tests/unit/t231-handler-additions.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -5457,7 +5457,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/unit/t231-build-binaries.test.ts",
+          "file": "tests/unit/t238-build-binaries.test.ts",
           "mechanism": "cli"
         },
         {
