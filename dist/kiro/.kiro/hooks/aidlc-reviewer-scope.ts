@@ -41,7 +41,7 @@
 // bound bit; audit failures never change the decision.
 
 import { existsSync, mkdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   acquireAuditLock,
@@ -89,6 +89,14 @@ export interface ScopeVerdict {
   target?: string;
 }
 
+/** Optional path context for the pure matcher. The live hook supplies both:
+ *  recordRoot is the directory beside `.aidlc-reviewer-dispatch.json`, and cwd
+ *  is the harness tool cwd. Tests can omit it to exercise the lexical fallback. */
+export interface ScopeContext {
+  recordRoot?: string;
+  cwd?: string;
+}
+
 // Glob metacharacters. A sibling segment carrying any of these spans units
 // (a `construction/*/` glob is a sibling read, not a search).
 const WILDCARD_RE = /[*?[\]{}]/;
@@ -102,10 +110,10 @@ const WILDCARD_RE = /[*?[\]{}]/;
 function candidateStrings(
   toolName: string,
   toolInput: Record<string, unknown> | undefined,
-): Array<{ text: string; kind: "path" | "command" }> {
+): Array<{ text: string; kind: "path" | "command" | "glob" | "search-root" }> {
   const ti = toolInput ?? {};
-  const out: Array<{ text: string; kind: "path" | "command" }> = [];
-  const push = (v: unknown, kind: "path" | "command") => {
+  const out: Array<{ text: string; kind: "path" | "command" | "glob" | "search-root" }> = [];
+  const push = (v: unknown, kind: "path" | "command" | "glob" | "search-root") => {
     if (typeof v === "string" && v.length > 0) out.push({ text: v, kind });
   };
   switch (toolName) {
@@ -113,19 +121,26 @@ function candidateStrings(
       push(ti.command, "command");
       break;
     case "Read":
+    case "NotebookRead":
     case "Edit":
+    case "MultiEdit":
     case "Write":
+    case "NotebookEdit":
       push(ti.file_path, "path");
+      push(ti.notebook_path, "path");
       push(ti.path, "path");
       if (Array.isArray(ti.paths)) for (const p of ti.paths) push(p, "path");
       break;
+    case "LS":
+      push(ti.path, "search-root");
+      break;
     case "Glob":
-      push(ti.pattern, "command");
-      push(ti.path, "path");
+      push(ti.pattern, "glob");
+      push(ti.path, "search-root");
       break;
     case "Grep":
-      push(ti.glob, "command");
-      push(ti.path, "path");
+      push(ti.glob, "glob");
+      push(ti.path, "search-root");
       break;
     default:
       break;
@@ -153,14 +168,48 @@ function normalizedComps(p: string): string[] {
   return out;
 }
 
+function fold(s: string): string {
+  return s.toLowerCase();
+}
+
+function normalizedCompsFolded(p: string): string[] {
+  return normalizedComps(p).map(fold);
+}
+
+function globComponentMatchesConstruction(component: string): boolean {
+  const c = fold(component);
+  if (c === "construction") return true;
+  if (!WILDCARD_RE.test(c)) return false;
+  if (c.replace(/[*?[\]{}!,]/g, "").length === 0) return false;
+  let re = "^";
+  for (let i = 0; i < c.length; i++) {
+    const ch = c[i];
+    if (ch === "*") re += ".*";
+    else if (ch === "?") re += ".";
+    else re += ch.replace(/[\\^$+?.()|[\]{}]/g, "\\$&");
+  }
+  re += "$";
+  return new RegExp(re).test("construction");
+}
+
+function constructionIndex(comps: string[], allowGlob = false): number {
+  return comps.findIndex((c) =>
+    fold(c) === "construction" || (allowGlob && globComponentMatchesConstruction(c))
+  );
+}
+
+function canonicalSuffix(comps: string[]): string {
+  return comps.map(fold).join("/");
+}
+
 // The construction/-suffix of an exempt entry, component-normalized, or null
 // when the entry never enters construction/ (those entries are irrelevant to
 // the matcher - non-construction paths are always allowed).
 function exemptSuffixOf(entry: string): string | null {
   const comps = normalizedComps(entry);
-  const i = comps.indexOf("construction");
+  const i = constructionIndex(comps);
   if (i === -1) return null;
-  return comps.slice(i).join("/");
+  return canonicalSuffix(comps.slice(i));
 }
 
 // Judge one construction/ occurrence: the first path segment after the
@@ -174,11 +223,395 @@ function judgeOccurrence(
   unit: string,
   exemptSuffixes: ReadonlySet<string>,
 ): boolean {
+  const unitFolded = fold(unit);
   const seg = suffixComps[1];
   if (seg === undefined || seg.length === 0) return true; // bare construction/ sweep root
-  if (seg === unit) return false; // the dispatched unit
   if (WILDCARD_RE.test(seg)) return true; // a pattern spanning siblings
-  return !exemptSuffixes.has(suffixComps.join("/"));
+  if (fold(seg) === unitFolded) return false; // the dispatched unit
+  return !exemptSuffixes.has(canonicalSuffix(suffixComps));
+}
+
+interface PreparedScope {
+  unitFolded: string;
+  exemptSuffixes: ReadonlySet<string>;
+  exemptPaths: ReadonlySet<string>;
+  recordRoot?: string;
+  constructionRoot?: string;
+  unitRoot?: string;
+  bases: string[];
+}
+
+function normalizeForCompare(p: string): string {
+  const posix = toPosix(p);
+  const absolute = posix.startsWith("/");
+  const body = normalizedCompsFolded(posix).join("/");
+  return absolute ? `/${body}` : body;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter((v) => v.length > 0)));
+}
+
+function resolvePathStrings(text: string, bases: readonly string[]): string[] {
+  if (isAbsolute(text)) return [resolve(text)];
+  return bases.map((b) => resolve(b, text));
+}
+
+function normalizeResolved(text: string, bases: readonly string[]): string[] {
+  return uniqueStrings(resolvePathStrings(text, bases).map(normalizeForCompare));
+}
+
+function containsPath(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(`${root}/`);
+}
+
+function isExactExempt(path: string, suffixComps: string[], scope: PreparedScope): boolean {
+  return scope.exemptPaths.has(path) || scope.exemptSuffixes.has(canonicalSuffix(suffixComps));
+}
+
+function prepareScope(
+  dispatch: Pick<ReviewerDispatch, "unit" | "exempt">,
+  context: ScopeContext | undefined,
+): PreparedScope {
+  const exemptSuffixes = new Set<string>();
+  const exemptPaths = new Set<string>();
+
+  const recordRoot = context?.recordRoot ? resolve(context.recordRoot) : undefined;
+  const constructionRoot = recordRoot ? resolve(recordRoot, "construction") : undefined;
+  const unitRoot = constructionRoot ? resolve(constructionRoot, dispatch.unit) : undefined;
+  const cwd = context?.cwd ? resolve(context.cwd) : undefined;
+  const bases = uniqueStrings([cwd ?? "", recordRoot ?? "", unitRoot ?? ""]);
+
+  for (const e of dispatch.exempt) {
+    const s = exemptSuffixOf(e);
+    if (s !== null) exemptSuffixes.add(s);
+    for (const p of normalizeResolved(e, bases)) exemptPaths.add(p);
+  }
+
+  return {
+    unitFolded: fold(dispatch.unit),
+    exemptSuffixes,
+    exemptPaths,
+    recordRoot: recordRoot ? normalizeForCompare(recordRoot) : undefined,
+    constructionRoot: constructionRoot ? normalizeForCompare(constructionRoot) : undefined,
+    unitRoot: unitRoot ? normalizeForCompare(unitRoot) : undefined,
+    bases,
+  };
+}
+
+function verdict(target: string): ScopeVerdict {
+  return { block: true, target };
+}
+
+function judgeLexicalPath(text: string, scope: PreparedScope): ScopeVerdict | null {
+  const comps = normalizedComps(text);
+  for (let i = 0; i < comps.length; i++) {
+    if (constructionIndex([comps[i]], true) !== 0) continue;
+    if (judgeOccurrence(comps.slice(i), scope.unitFolded, scope.exemptSuffixes)) {
+      return verdict(text);
+    }
+  }
+  return null;
+}
+
+function judgeResolvedPath(
+  text: string,
+  mode: "target" | "search-root",
+  scope: PreparedScope,
+  bases: readonly string[] = scope.bases,
+): ScopeVerdict | null {
+  if (scope.constructionRoot === undefined) return null;
+
+  for (const path of normalizeResolved(text, bases)) {
+    if (containsPath(scope.constructionRoot, path)) {
+      const rest = path === scope.constructionRoot
+        ? []
+        : path.slice(scope.constructionRoot.length + 1).split("/");
+      const suffixComps = ["construction", ...rest];
+      if (isExactExempt(path, suffixComps, scope)) continue;
+      if (judgeOccurrence(suffixComps, scope.unitFolded, scope.exemptSuffixes)) {
+        return verdict(text);
+      }
+    }
+
+    // Recursive/search roots above construction/ sweep every sibling unit even
+    // when the command never spells `construction` (for example `rg X .`).
+    if (mode === "search-root" && containsPath(path, scope.constructionRoot)) {
+      return verdict(text);
+    }
+  }
+  return null;
+}
+
+function judgePathAccess(
+  text: string,
+  mode: "target" | "search-root",
+  scope: PreparedScope,
+  bases: readonly string[] = scope.bases,
+): ScopeVerdict | null {
+  return judgeLexicalPath(text, scope) ?? judgeResolvedPath(text, mode, scope, bases);
+}
+
+function patternLimitsToCurrentUnit(text: string, scope: PreparedScope): boolean {
+  const comps = normalizedComps(text);
+  let sawConstruction = false;
+  for (let i = 0; i < comps.length; i++) {
+    if (constructionIndex([comps[i]], true) !== 0) continue;
+    sawConstruction = true;
+    const suffix = comps.slice(i);
+    const seg = suffix[1];
+    if (seg === undefined || WILDCARD_RE.test(seg)) return false;
+    if (fold(seg) !== scope.unitFolded && !scope.exemptSuffixes.has(canonicalSuffix(suffix))) {
+      return false;
+    }
+  }
+  return sawConstruction;
+}
+
+interface ShellWord {
+  text: string;
+  quoted: boolean;
+}
+
+type ShellToken = ShellWord | { sep: true };
+
+function shellTokens(command: string): ShellToken[] {
+  const tokens: ShellToken[] = [];
+  let text = "";
+  let quoted = false;
+  const pushWord = () => {
+    if (text.length > 0) tokens.push({ text, quoted });
+    text = "";
+    quoted = false;
+  };
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (/\s/.test(ch)) {
+      pushWord();
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quoted = true;
+      const quote = ch;
+      i++;
+      while (i < command.length && command[i] !== quote) {
+        if (quote === '"' && command[i] === "\\" && i + 1 < command.length) i++;
+        text += command[i];
+        i++;
+      }
+      continue;
+    }
+    if (ch === "\\") {
+      if (i + 1 < command.length) {
+        i++;
+        text += command[i];
+      }
+      continue;
+    }
+    if (";|&()".includes(ch)) {
+      pushWord();
+      if ((ch === "|" || ch === "&") && command[i + 1] === ch) i++;
+      tokens.push({ sep: true });
+      continue;
+    }
+    text += ch;
+  }
+  pushWord();
+  return tokens;
+}
+
+function shellSegments(command: string): ShellWord[][] {
+  const segments: ShellWord[][] = [];
+  let current: ShellWord[] = [];
+  for (const token of shellTokens(command)) {
+    if ("sep" in token) {
+      if (current.length > 0) segments.push(current);
+      current = [];
+    } else {
+      current.push(token);
+    }
+  }
+  if (current.length > 0) segments.push(current);
+  return segments;
+}
+
+function commandBasename(command: string): string {
+  const comps = normalizedComps(command);
+  return fold(comps[comps.length - 1] ?? command);
+}
+
+function isOption(word: string): boolean {
+  return word.length > 1 && word.startsWith("-");
+}
+
+function firstOperand(words: ShellWord[]): number {
+  for (let i = 1; i < words.length; i++) {
+    if (!isOption(words[i].text)) return i;
+  }
+  return -1;
+}
+
+function judgeGrepLike(
+  words: ShellWord[],
+  scope: PreparedScope,
+  bases: readonly string[],
+): ScopeVerdict | null {
+  let patternSeen = false;
+  let rootSeen = false;
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i].text;
+    if (w === "-e" || w === "--regexp") {
+      i++; // content pattern
+      patternSeen = true;
+      continue;
+    }
+    if (w === "-f" || w === "--file") {
+      i++; // pattern file, not a searched construction artifact
+      continue;
+    }
+    if (isOption(w)) continue;
+    if (!patternSeen) {
+      patternSeen = true;
+      continue;
+    }
+    rootSeen = true;
+    const v = judgePathAccess(w, "search-root", scope, bases);
+    if (v !== null) return v;
+  }
+  if (!rootSeen) return judgePathAccess(".", "search-root", scope, bases);
+  return null;
+}
+
+function judgeRipgrep(
+  words: ShellWord[],
+  scope: PreparedScope,
+  bases: readonly string[],
+): ScopeVerdict | null {
+  let patternSeen = false;
+  let rootSeen = false;
+  let constrainedToCurrent = false;
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i].text;
+    if (w === "-g" || w === "--glob") {
+      const glob = words[++i]?.text ?? "";
+      if (glob.length > 0) {
+        const v = judgePathAccess(glob, "target", scope, bases);
+        if (v !== null) return v;
+        constrainedToCurrent ||= patternLimitsToCurrentUnit(glob, scope);
+      }
+      continue;
+    }
+    if (w.startsWith("--glob=")) {
+      const glob = w.slice("--glob=".length);
+      const v = judgePathAccess(glob, "target", scope, bases);
+      if (v !== null) return v;
+      constrainedToCurrent ||= patternLimitsToCurrentUnit(glob, scope);
+      continue;
+    }
+    if (isOption(w)) continue;
+    if (!patternSeen) {
+      patternSeen = true;
+      continue;
+    }
+    rootSeen = true;
+    const v = judgePathAccess(w, "search-root", scope, bases);
+    if (v !== null) return v;
+  }
+  if (!rootSeen && !constrainedToCurrent) return judgePathAccess(".", "search-root", scope, bases);
+  return null;
+}
+
+function judgeFind(
+  words: ShellWord[],
+  scope: PreparedScope,
+  bases: readonly string[],
+): ScopeVerdict | null {
+  let rootSeen = false;
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i].text;
+    if (isOption(w) || w === "!" || w === "(" || w === ")") break;
+    rootSeen = true;
+    const v = judgePathAccess(w, "search-root", scope, bases);
+    if (v !== null) return v;
+  }
+  if (!rootSeen) return judgePathAccess(".", "search-root", scope, bases);
+  return null;
+}
+
+function isPathish(word: string): boolean {
+  return (
+    word === "." ||
+    word === ".." ||
+    word.includes("/") ||
+    WILDCARD_RE.test(word) ||
+    fold(word) === "construction" ||
+    globComponentMatchesConstruction(word)
+  );
+}
+
+function judgeSimpleFileCommand(
+  words: ShellWord[],
+  mode: "target" | "search-root",
+  scope: PreparedScope,
+  bases: readonly string[],
+): ScopeVerdict | null {
+  let sawOperand = false;
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i].text;
+    if (isOption(w)) continue;
+    sawOperand = true;
+    const v = judgePathAccess(w, mode, scope, bases);
+    if (v !== null) return v;
+  }
+  if (!sawOperand && mode === "search-root") return judgePathAccess(".", "search-root", scope, bases);
+  return null;
+}
+
+function judgeGenericCommand(
+  words: ShellWord[],
+  scope: PreparedScope,
+  bases: readonly string[],
+): ScopeVerdict | null {
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i].text;
+    if (isOption(w) || !isPathish(w)) continue;
+    const v = judgePathAccess(w, "target", scope, bases);
+    if (v !== null) return v;
+  }
+  return null;
+}
+
+function judgeCommandText(text: string, scope: PreparedScope): ScopeVerdict | null {
+  let bases = scope.bases;
+  for (const segment of shellSegments(text)) {
+    if (segment.length === 0) continue;
+    const cmd = commandBasename(segment[0].text);
+    if (cmd === "cd") {
+      const idx = firstOperand(segment);
+      if (idx === -1 || segment[idx].text === "-") continue;
+      const next = segment[idx].text;
+      const v = judgePathAccess(next, "search-root", scope, bases);
+      if (v !== null) return v;
+      bases = uniqueStrings(resolvePathStrings(next, bases));
+      continue;
+    }
+
+    const v =
+      cmd === "grep" || cmd === "egrep" || cmd === "fgrep"
+        ? judgeGrepLike(segment, scope, bases)
+        : cmd === "rg" || cmd === "ripgrep"
+          ? judgeRipgrep(segment, scope, bases)
+          : cmd === "find"
+            ? judgeFind(segment, scope, bases)
+            : cmd === "ls"
+              ? judgeSimpleFileCommand(segment, "search-root", scope, bases)
+              : cmd === "cat" || cmd === "less" || cmd === "more" || cmd === "head" || cmd === "tail"
+                ? judgeSimpleFileCommand(segment, "target", scope, bases)
+                : judgeGenericCommand(segment, scope, bases);
+    if (v !== null) return v;
+  }
+  return null;
 }
 
 /**
@@ -191,54 +624,41 @@ export function evaluateReviewerScope(
   toolName: string,
   toolInput: Record<string, unknown> | undefined,
   dispatch: Pick<ReviewerDispatch, "unit" | "exempt">,
+  context?: ScopeContext,
 ): ScopeVerdict {
-  const exemptSuffixes = new Set<string>();
-  for (const e of dispatch.exempt) {
-    const s = exemptSuffixOf(e);
-    if (s !== null) exemptSuffixes.add(s);
-  }
+  const scope = prepareScope(dispatch, context);
+  let globConstrainedToCurrent = false;
+  let sawGlob = false;
+  let sawSearchRoot = false;
 
   for (const { text, kind } of candidateStrings(toolName, toolInput)) {
     if (kind === "path") {
-      const comps = normalizedComps(text);
-      for (let i = 0; i < comps.length; i++) {
-        if (comps[i] !== "construction") continue;
-        if (judgeOccurrence(comps.slice(i), dispatch.unit, exemptSuffixes)) {
-          return { block: true, target: text };
-        }
-      }
+      const v = judgePathAccess(text, "target", scope);
+      if (v !== null) return v;
+    } else if (kind === "search-root") {
+      sawSearchRoot = true;
+      const v = judgePathAccess(text, "search-root", scope);
+      if (v !== null) return v;
+    } else if (kind === "glob") {
+      sawGlob = true;
+      const v = judgePathAccess(text, "target", scope);
+      if (v !== null) return v;
+      globConstrainedToCurrent ||= patternLimitsToCurrentUnit(text, scope);
     } else {
-      // Command / pattern text, two token shapes:
-      //   1. `construction/<...>` anywhere (quoted or not) - the token ends
-      //      at whitespace, a quote, or a shell separator; glob characters
-      //      stay in (they are what the wildcard rule inspects).
-      //   2. A token ENDING in the bare `construction` component - `grep -rn
-      //      x construction`, `find construction`, `ls ./construction`,
-      //      `ls a/b/construction` - names the whole tree as a search root,
-      //      the same sweep as `construction/`. This rule runs on the text
-      //      with QUOTED SPANS REMOVED, so the word inside a content regex
-      //      (`grep 'construction phase' ...`) stays content, not a path; an
-      //      UNQUOTED single-word pattern (`grep construction file.md`) still
-      //      blocks - a deliberate conservative trade, and the block reason
-      //      tells the reviewer to quote the word and retry.
-      // A shell variable in the unit segment (construction/$UNIT/...) blocks
-      // CONSERVATIVELY: the matcher cannot resolve it, so it is judged as an
-      // unexempted segment even when it would expand to the current unit -
-      // the block reason tells the reviewer to use the literal unit name.
-      for (const m of text.matchAll(/construction\/[^\s"'`;|&()]*/g)) {
-        const token = m[0].replace(/[.,:]+$/, "");
-        const suffixComps = normalizedComps(token);
-        if (judgeOccurrence(suffixComps, dispatch.unit, exemptSuffixes)) {
-          return { block: true, target: token };
-        }
-      }
-      const unquoted = text.replace(/'[^']*'|"[^"]*"/g, " ");
-      if (/(?:^|[\s;|&(=])(?:[^\s;|&()]*\/)?construction(?=[\s;|&)]|$)/.test(unquoted)) {
-        // A bare sweep root is always a block (judgeOccurrence's seg-missing
-        // rule); no exempt entry can whitelist reading every unit.
-        return { block: true, target: "construction" };
-      }
+      const v = judgeCommandText(text, scope);
+      if (v !== null) return v;
     }
+  }
+
+  // Pathless Grep recurses from cwd. Pathless Glob does too unless the pattern
+  // itself explicitly constrains the search to the current unit/exempt file.
+  if (toolName === "Grep" && !sawSearchRoot && !globConstrainedToCurrent) {
+    const v = judgePathAccess(".", "search-root", scope);
+    if (v !== null) return v;
+  }
+  if (toolName === "Glob" && !sawSearchRoot && sawGlob && !globConstrainedToCurrent) {
+    const v = judgePathAccess(".", "search-root", scope);
+    if (v !== null) return v;
   }
   return { block: false };
 }
@@ -273,7 +693,7 @@ export function blockReason(target: string, dispatch: ReviewerDispatch): string 
     `file, report that in your findings rather than opening it; only a file the conductor ` +
     `put on the dispatch exempt list is readable here. (If you meant to access the CURRENT ` +
     `unit, write the literal unit name - shell variables in the path cannot be verified and ` +
-    `are refused; if you meant the WORD construction as search text, quote the pattern.)`
+    `are refused; search commands must be scoped to the current unit path.)`
   );
 }
 
@@ -314,7 +734,7 @@ if (import.meta.main) {
 
   const toolName = parsed.tool_name ?? "";
   const toolInput = parsed.tool_input;
-  if (!["Read", "Edit", "Write", "Glob", "Grep", "Bash"].includes(toolName)) {
+  if (!["Read", "NotebookRead", "Edit", "MultiEdit", "Write", "NotebookEdit", "LS", "Glob", "Grep", "Bash"].includes(toolName)) {
     process.exit(0);
   }
 
@@ -398,7 +818,11 @@ if (import.meta.main) {
 
   let verdict: ScopeVerdict;
   try {
-    verdict = evaluateReviewerScope(toolName, toolInput, dispatch);
+    const cwdField = (parsed as { cwd?: unknown }).cwd;
+    verdict = evaluateReviewerScope(toolName, toolInput, dispatch, {
+      recordRoot: dirname(recordPath),
+      cwd: typeof cwdField === "string" && cwdField.length > 0 ? cwdField : projectDir,
+    });
   } catch (e) {
     recordHookDrop(projectDir, HOOK_NAME, errorMessage(e));
     process.exit(0); // matcher failure - fail open

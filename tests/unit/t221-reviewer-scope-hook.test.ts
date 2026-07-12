@@ -28,12 +28,22 @@ import {
   blockReason,
   evaluateReviewerScope,
   parseDispatchRecord,
+  type ScopeContext,
   type ReviewerDispatch,
 } from "../../dist/claude/.claude/hooks/aidlc-reviewer-scope.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 const BUN = process.execPath;
+const RECORD_ROOT = join(REPO_ROOT, "aidlc", "spaces", "default", "intents", "x");
+const SCOPE_CONTEXT: ScopeContext = {
+  recordRoot: RECORD_ROOT,
+  cwd: REPO_ROOT,
+};
+const CURRENT_UNIT_CONTEXT: ScopeContext = {
+  recordRoot: RECORD_ROOT,
+  cwd: join(RECORD_ROOT, "construction", "U03-scoring"),
+};
 
 // ---------------------------------------------------------------------------
 // (a) The pure matcher - table-driven decision cases.
@@ -53,6 +63,8 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     tool: string;
     input: Record<string, unknown>;
     block: boolean;
+    context?: ScopeContext;
+    dispatch?: Pick<ReviewerDispatch, "unit" | "exempt">;
   }> = [
     // -- file-path tools ------------------------------------------------------
     {
@@ -90,6 +102,24 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
       tool: "Write",
       input: { file_path: "construction/U03-scoring/nfr-requirements/nfr.md" },
       block: false,
+    },
+    {
+      name: "sibling NotebookRead blocked",
+      tool: "NotebookRead",
+      input: { notebook_path: "construction/U05-api/analysis.ipynb" },
+      block: true,
+    },
+    {
+      name: "sibling MultiEdit blocked",
+      tool: "MultiEdit",
+      input: { file_path: "construction/U05-api/functional-design/design.md" },
+      block: true,
+    },
+    {
+      name: "sibling LS blocked",
+      tool: "LS",
+      input: { path: "construction/U05-api" },
+      block: true,
     },
     {
       name: "source-tree read outside construction/ allowed",
@@ -146,6 +176,42 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
       input: { command: "grep -rn 'construction phase' aidlc/spaces/default/intents/x/inception/" },
       block: false,
     },
+    {
+      name: "ancestor-root recursive grep blocked even without a construction token",
+      tool: "Bash",
+      input: { command: "grep -rn X ." },
+      block: true,
+    },
+    {
+      name: "ancestor-root rg blocked even without a construction token",
+      tool: "Bash",
+      input: { command: "rg Contract aidlc/spaces/default/intents" },
+      block: true,
+    },
+    {
+      name: "ancestor-root find blocked even without a construction token",
+      tool: "Bash",
+      input: { command: "find aidlc/spaces/default/intents -name design.md -exec cat {} +" },
+      block: true,
+    },
+    {
+      name: "wildcard inside the construction component blocked",
+      tool: "Bash",
+      input: { command: "cat construction*/U01-infra/functional-design/design.md" },
+      block: true,
+    },
+    {
+      name: "quote-split construction component blocked",
+      tool: "Bash",
+      input: { command: 'cat "construction"/U01-infra/functional-design/design2.md' },
+      block: true,
+    },
+    {
+      name: "cd into current unit then relative sibling cat blocked",
+      tool: "Bash",
+      input: { command: "cd construction/U03-scoring && cat ../U01-infra/functional-design/design2.md" },
+      block: true,
+    },
     // -- Glob / Grep tools -------------------------------------------------------
     {
       name: "Glob pattern spanning siblings blocked",
@@ -155,6 +221,18 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
     },
     {
       name: "Glob scoped to the current unit allowed",
+      tool: "Glob",
+      input: { pattern: "construction/U03-scoring/**/*.md" },
+      block: false,
+    },
+    {
+      name: "pathless Glob rooted at cwd blocked when it spans the record tree",
+      tool: "Glob",
+      input: { pattern: "**/*.md" },
+      block: true,
+    },
+    {
+      name: "pathless Glob explicitly constrained to the current unit allowed",
       tool: "Glob",
       input: { pattern: "construction/U03-scoring/**/*.md" },
       block: false,
@@ -175,6 +253,12 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
       name: "Grep with the bare construction dir as its search root blocked (sweep root)",
       tool: "Grep",
       input: { pattern: "endpoint", path: "construction" },
+      block: true,
+    },
+    {
+      name: "pathless Grep rooted at cwd blocked",
+      tool: "Grep",
+      input: { pattern: "PaymentGateway" },
       block: true,
     },
     // -- traversal + bare-root shapes (adversarial-review findings) -------------
@@ -215,6 +299,26 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
       block: true,
     },
     {
+      name: "case variant of construction and sibling unit blocked",
+      tool: "Read",
+      input: { file_path: "Construction/U02-api/design.md" },
+      block: true,
+    },
+    {
+      name: "case variant of current unit allowed",
+      tool: "Read",
+      input: { file_path: "construction/u01-infra/design.md" },
+      block: false,
+      dispatch: { unit: "U01-infra", exempt: [] },
+    },
+    {
+      name: "bare relative sibling path blocked from the current-unit cwd",
+      tool: "Read",
+      input: { file_path: "../U01-infra/design.md" },
+      block: true,
+      context: CURRENT_UNIT_CONTEXT,
+    },
+    {
       name: "the bare word inside a quoted content regex is NOT a search root",
       tool: "Bash",
       input: { command: "grep -rn 'built in construction phase' inception/" },
@@ -231,7 +335,7 @@ describe("t221 (a) evaluateReviewerScope decision table", () => {
 
   for (const c of CASES) {
     test(c.name, () => {
-      const verdict = evaluateReviewerScope(c.tool, c.input, DISPATCH);
+      const verdict = evaluateReviewerScope(c.tool, c.input, c.dispatch ?? DISPATCH, c.context ?? SCOPE_CONTEXT);
       expect(verdict.block).toBe(c.block);
       if (c.block) expect(verdict.target ?? "").not.toBe("");
     });
@@ -427,7 +531,7 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
 // ---------------------------------------------------------------------------
 
 describe("t221 (c) harness registration and protocol prose", () => {
-  test("Claude settings.json wires the hook on PreToolUse with the six-tool matcher", () => {
+  test("Claude settings.json wires the hook on PreToolUse with the file/search/shell matcher", () => {
     const s = JSON.parse(readFileSync(join(AIDLC_SRC, "settings.json"), "utf-8")) as {
       hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
     };
@@ -436,7 +540,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
       (g.hooks ?? []).some((h) => (h.command ?? "").includes("aidlc-reviewer-scope.ts")),
     );
     expect(group).toBeDefined();
-    expect(group?.matcher).toBe("Read|Edit|Write|Glob|Grep|Bash");
+    expect(group?.matcher).toBe("Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash");
   });
 
   test("Kiro CLI wires the adapter's reviewer-scope target inside BOTH reviewer agent JSONs", () => {

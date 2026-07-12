@@ -15,7 +15,7 @@ Ten of the twelve are **non-blocking** — they observe and exit 0, never alteri
 ```
 .claude/hooks/
 +-- mint-presence.ts     # UserPromptSubmit + PostToolUse AskUserQuestion (project-wide, settings.json, TypeScript)
-+-- reviewer-scope.ts    # PreToolUse Read|Edit|Write|Glob|Grep|Bash (project-wide, settings.json, TypeScript, flow-altering)
++-- reviewer-scope.ts    # PreToolUse file/search/shell tools (project-wide, settings.json, TypeScript, flow-altering)
 +-- audit-logger.ts      # PostToolUse Write|Edit (project-wide, settings.json, TypeScript)
 +-- sensor-fire.ts       # PostToolUse Write|Edit (project-wide, settings.json, TypeScript)
 +-- sync-statusline.ts   # PostToolUse TaskUpdate (project-wide, settings.json, TypeScript)
@@ -254,7 +254,7 @@ This is the framework's **first flow-altering hook** (the PreToolUse reviewer-sc
 ### PreToolUse: aidlc-reviewer-scope.ts
 
 **Source:** `.claude/hooks/aidlc-reviewer-scope.ts`
-**Trigger:** Before every `Read`, `Edit`, `Write`, `Glob`, `Grep`, or `Bash` tool call (matcher: `"Read|Edit|Write|Glob|Grep|Bash"`)
+**Trigger:** Before file/search/shell tool calls (`Read`, `NotebookRead`, `Edit`, `MultiEdit`, `Write`, `NotebookEdit`, `LS`, `Glob`, `Grep`, or `Bash`; matcher: `"Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash"`)
 **Purpose:** Enforce the per-unit reviewer read-scope bound (stage-protocol §12a) deterministically
 
 This is the framework's **second flow-altering hook** and its first `PreToolUse` registration. The §12a prose bound says a reviewer dispatched for one unit must not read sibling units' `construction/<other-unit>/` content through any tool — field transcripts showed a diligent reviewer bypassing the prose with recursive greps carrying cross-unit globs (`construction/*/*/*.md`), growing per-unit review cost superlinearly with unit count. Per the framework's layering (determinism belongs in tools and hooks), this hook makes the bound self-enforcing.

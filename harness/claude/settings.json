@@ -33,7 +33,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|Edit|Write|Glob|Grep|Bash",
+        "matcher": "Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash",
         "hooks": [
           {
             "type": "command",
