@@ -1126,7 +1126,14 @@ describe("t92 Group M: upstream-coverage --consumes resolution", () => {
     expect(argv).toContain('"--stage"');
     expect(argv).toContain('"market-research"');
     expect(argv).toContain('"--consumes"');
-    expect(argv).toContain('"intent-statement"');
+    // Consume entries carry the producing stage (artifact:producer) so a
+    // producing-directory citation can count as coverage.
+    expect(argv).toContain('"intent-statement:intent-capture"');
+    // The stage's deliverable union (produces minus `*-questions`/
+    // `*-timestamp` scaffolding), threaded so coverage is evaluated over
+    // sibling deliverables, not the single fired file.
+    expect(argv).toContain('"--deliverables"');
+    expect(argv).toContain('"competitive-analysis,market-trends,build-vs-buy"');
     expect(argv).toContain('"--output-path"');
   });
 });

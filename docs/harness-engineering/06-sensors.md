@@ -59,7 +59,7 @@ Four manifests ship under `.claude/sensors/`, each prefixed `aidlc-`:
 | Manifest | Fires on | Checks |
 |----------|----------|--------|
 | `aidlc-required-sections.md` | record-dir markdown output | The output carries the required H2 headings — a generic content-shape check |
-| `aidlc-upstream-coverage.md` | record-dir markdown output | The prose references each upstream artifact the stage declares it consumes |
+| `aidlc-upstream-coverage.md` | record-dir markdown output | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
 | `aidlc-linter.md` | `.ts` / `.js` code output | Wraps your configured linter (ESLint by default) |
 | `aidlc-type-check.md` | `.ts` / `.tsx` code output | Wraps your configured type-checker (`tsc` by default) |
 

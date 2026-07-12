@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.7] - 2026-07-14
+
+The `upstream-coverage` sensor now matches the citation forms the framework's artifacts actually use, clearing the hundreds of false `SENSOR_FAILED` audit rows a Construction run accumulated. It previously demanded each consumed artifact's bare slug in every single written file; artifacts instead cite upstream by producing-stage directory path in their provenance header, and multi-artifact stages legitimately split citations across sibling deliverables. Real coverage gaps still fail. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* A citation of the producing stage's directory (e.g. `nfr-requirements/` in a basis/trace header) now covers every artifact that stage produces; the producer slug must appear as a whole path segment, so a longer sibling slug never satisfies it.
+* Coverage is evaluated over the union of the stage's declared deliverables in the output directory, not the single fired file, so a citation in a sibling artifact counts. Scaffolding (`memory.md`, `*-questions.md`, `*-timestamp.md`) is excluded from both sides: a fire on it is judged against the deliverables, and a slug appearing only there never counts.
+* A scaffolding write that fires before any deliverable exists now passes vacuously with `reason: "no deliverables on disk yet"` instead of failing every consume against an empty body.
+* False-positive fix: a consume slug no longer matches inside a longer kebab token (`requirements` inside `nfr-requirements` previously counted as a reference).
+* Sensor JSON output gains `scanned_files`; the dispatcher threads `--consumes` as `artifact:producer` pairs plus a new `--deliverables` flag. Direct invocations with the old bare-slug `--consumes` and no `--deliverables` keep the previous per-file behavior.
+
 ## [2.3.6] - 2026-07-12
 
 The state file's `## Phase Progress` section now advances with the workflow. Previously it was seeded once at intent birth and never touched again, so a few stages in it still showed `Ideation: Pending` above a fully-checked Ideation checkbox block - a visible contradiction for anyone reading `aidlc-state.md` directly (routing was never affected; the engine reads `Lifecycle Phase` and the checkboxes, and `/aidlc --status` recomputes its own phase block). The section now tracks every transition the tools already audit. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; a run already mid-flow keeps its stale rows for boundaries it already passed, and corrects from its next boundary onward.

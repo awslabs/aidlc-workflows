@@ -273,6 +273,16 @@ function presentConsumes(pd: string, slugs: string[]): string[] {
 	});
 }
 
+// upstream-coverage consume entries carry the producing stage as
+// `artifact:producer-stage` so the sensor can count a citation of the
+// producer's directory (the framework's provenance-header convention)
+// as coverage of every artifact under it. An orphan consume (no
+// producer in the graph - doctor surfaces those) stays a bare slug.
+function consumeWithProducer(slug: string): string {
+	const producer = producersOf(slug)[0];
+	return producer ? `${slug}:${producer.slug}` : slug;
+}
+
 // --- Subcommand: fire ---
 //
 // Step 1 — validate + resolve all inputs + generate Fire id (no lock).
@@ -351,13 +361,15 @@ function handleFire(args: string[]): void {
 
 	// --- 2. Compute extra args for the per-sensor script ---
 	// Markdown sensors take --output-path; code sensors take --file-path.
-	// upstream-coverage additionally takes --consumes "art1,art2,..." sourced
-	// from the GraphStage.consumes[].artifact field, filtered to artifacts
-	// that exist on disk: a consume whose producing stage was skipped by the
-	// scope (or runtime-skipped, e.g. reverse-engineering on greenfield)
-	// never produced its file, and demanding the output prose reference it
-	// would be a guaranteed false SENSOR_FAILED on every run of that stage
-	// in that scope.
+	// upstream-coverage additionally takes --consumes
+	// "art1:producer1,art2:producer2,..." sourced from the
+	// GraphStage.consumes[].artifact field (producer resolved via
+	// producersOf so a producing-directory citation can count as
+	// coverage), filtered to artifacts that exist on disk: a consume
+	// whose producing stage was skipped by the scope (or runtime-skipped,
+	// e.g. reverse-engineering on greenfield) never produced its file,
+	// and demanding the output prose reference it would be a guaranteed
+	// false SENSOR_FAILED on every run of that stage in that scope.
 	const isCodeSensor = id === "linter" || id === "type-check";
 	const scriptArgs: string[] = ["--stage", stageSlug];
 	if (isCodeSensor) {
@@ -371,7 +383,22 @@ function handleFire(args: string[]): void {
 			.filter((a) => typeof a === "string" && a.length > 0);
 		scriptArgs.push(
 			"--consumes",
-			presentConsumes(projectDir, consumeSlugs).join(","),
+			presentConsumes(projectDir, consumeSlugs)
+				.map(consumeWithProducer)
+				.join(","),
+		);
+		// Coverage is evaluated over the stage's whole deliverable set (the
+		// sensor unions the sibling files named here), not the single fired
+		// file - a multi-artifact stage splits its upstream citations across
+		// siblings. Same eligibility filter as required-sections: the
+		// `*-questions`/`*-timestamp` scaffolding is excluded so a citation
+		// that appears only in the Q&A file never counts as coverage.
+		scriptArgs.push(
+			"--deliverables",
+			templateEligibleArtifacts([
+				...(stageNode.produces ?? []),
+				...(stageNode.optional_produces ?? []),
+			]).join(","),
 		);
 	}
 

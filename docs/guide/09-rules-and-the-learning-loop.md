@@ -150,7 +150,7 @@ Four sensors ship with the framework:
 | Sensor | Fires on | Checks |
 |--------|----------|--------|
 | `required-sections` | Any record-dir markdown output | The output contains the required H2 headings (a generic content-shape check) |
-| `upstream-coverage` | Any record-dir markdown output | The output prose references each upstream artifact the stage declares it consumes |
+| `upstream-coverage` | Any record-dir markdown output | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
 | `linter` | `.ts` / `.js` code outputs | Wraps your configured linter (ESLint by default) |
 | `type-check` | `.ts` / `.tsx` code outputs | Wraps your configured type-checker (`tsc` by default) |
 
