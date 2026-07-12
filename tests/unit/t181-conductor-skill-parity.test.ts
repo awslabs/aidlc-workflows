@@ -63,13 +63,14 @@ const REQUIRED_TOKENS = [
 describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () => {
   const skills = harnessSkills();
 
-  test("the disk-derived harness-SKILL set covers all four shipped trees (no vacuous pass)", () => {
+  test("the disk-derived harness-SKILL set covers all five shipped trees (no vacuous pass)", () => {
     // Floor guard (mirrors t156 §7): if the dir-detection silently matched zero
     // trees the positive/negative scans below would vacuously pass. Pin the
-    // known four so a regression that hides a tree (or empties harness/) trips.
+    // known five so a regression that hides a tree (or empties harness/) trips.
     expect(skills).toEqual([
       "harness/claude/skills/aidlc/SKILL.md",
       "harness/codex/skills/aidlc/SKILL.md",
+      "harness/cursor/skills/aidlc/SKILL.md",
       "harness/kiro-ide/skills/aidlc/SKILL.md",
       "harness/kiro/skills/aidlc/SKILL.md",
     ]);

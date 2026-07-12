@@ -3,7 +3,7 @@
 > Part of the [AI-DLC documentation](../README.md) · [User Guide](../guide/00-introduction.md) · **Harness Engineer Guide** · [Developer Reference](../reference/00-overview.md)
 
 AI-DLC is a methodology, and this implementation ships it working out of the box
-on the harness you use — Claude Code, Kiro CLI, Kiro IDE, or Codex CLI: 11 agents, 32
+on the harness you use — Claude Code, Kiro CLI, Kiro IDE, Codex CLI, or Cursor: 11 agents, 32
 stages, 9 scopes, a set of rules and sensors. This guide is for the person who
 wants to **reshape** that methodology — change which stages run, add an agent for
 a domain the framework doesn't cover, tighten a scope, teach the framework a
@@ -104,7 +104,7 @@ Everything a harness engineer authors lives in **`core/`** — the hand-authored
 harness-neutral source of truth (stages under `core/aidlc-common/stages/`,
 agents under `core/agents/`, scopes, rules, sensors, knowledge, tools, hooks).
 The per-harness `dist/<harness>/` trees you actually run (`dist/claude/.claude/`,
-`dist/kiro/.kiro/`, `dist/codex/`) are **generated** from `core/` plus a thin
+`dist/kiro/.kiro/`, `dist/codex/`, `dist/cursor/.cursor/`) are **generated** from `core/` plus a thin
 `harness/<name>/` surface, and they are **drift-guarded** — a hand-edit there is
 rejected by CI. The loop is always:
 
@@ -122,7 +122,7 @@ bun scripts/package.ts --check
 Commit the `core/` edit and the regenerated `dist/` together. When a recipe in
 the chapters below says to run `bun .claude/tools/aidlc-graph.ts compile` (or
 another tool), that command runs against an *installed* tree — your project's
-`.claude/` (or `.kiro/` / `.codex/`) — to recompile the graph at runtime; it is
+`.claude/` (or `.kiro/` / `.codex/` / `.cursor/`) — to recompile the graph at runtime; it is
 not where you author. **You author in `core/`; the tools run in the harness
 directory.** That split — authored source vs. generated runtime — is the one to
 keep straight throughout this guide. For the full build contract see

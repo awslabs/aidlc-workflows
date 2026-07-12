@@ -69,9 +69,15 @@ const command: string = parsed.tool_input?.command ?? "";
 //    `aidlc-orchestrate.ts report` is included because the conductor calls it
 //    as the public transition surface; the state-tool emit happens in its
 //    subprocess, which PostToolUse cannot see as a separate Bash command.
-const aidlcTransitionTool = /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-(state|jump|bolt|utility)\.ts\b/;
-const aidlcOrchestrateReport = /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-orchestrate\.ts\b.*\breport\b/;
-const aidlcRuntimeRef = /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-runtime\.ts\b/;
+// OPEN-SET: the patterns are built from harnessDir() (the same seam the
+// dispatch path below uses), not a hardcoded harness-name alternation — an
+// install has exactly ONE harness dir, so this is both more precise than an
+// alternation and zero-edit for the next port. harnessDir() resolves from
+// this hook's own <project>/<harness>/hooks/ location.
+const HD = harnessDir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const aidlcTransitionTool = new RegExp(String.raw`\bbun\b.*${HD}\/tools\/aidlc-(state|jump|bolt|utility)\.ts\b`);
+const aidlcOrchestrateReport = new RegExp(String.raw`\bbun\b.*${HD}\/tools\/aidlc-orchestrate\.ts\b.*\breport\b`);
+const aidlcRuntimeRef = new RegExp(String.raw`\bbun\b.*${HD}\/tools\/aidlc-runtime\.ts\b`);
 // IDE audit-tail mode: Kiro IDE does not surface the shell command, so the
 // command-based filter cannot run. The adapter sets source="ide-audit-sync" to
 // signal "skip the command filter and gate purely on the audit tail" (steps

@@ -42,22 +42,26 @@ const EXPECTED: Record<
     claude: { model: string; effort: "medium" | null };
     codex: { model: string | null; effort: "medium" | null };
     kiro: { model: string | null };
+    cursor: { model: string | null };
   }
 > = {
   judgment: {
     claude: { model: "inherit", effort: null },
     codex: { model: null, effort: null },
     kiro: { model: null },
+    cursor: { model: null },
   },
   balanced: {
     claude: { model: "sonnet", effort: null },
     codex: { model: "openai.gpt-5.4", effort: null },
     kiro: { model: "claude-sonnet-4.5" },
+    cursor: { model: "claude-sonnet-4-5" },
   },
   templated: {
     claude: { model: "sonnet", effort: "medium" },
     codex: { model: "openai.gpt-5.4", effort: "medium" },
     kiro: { model: "claude-sonnet-4.5" },
+    cursor: { model: "claude-sonnet-4-5[effort=medium]" },
   },
 };
 
@@ -97,7 +101,7 @@ describe("t220 tier projection module", () => {
 
   // --- projectTier: every tier x every harness -------------------------------
   for (const tier of TIERS) {
-    for (const harness of ["claude", "codex", "kiro"] as const) {
+    for (const harness of ["claude", "codex", "kiro", "cursor"] as const) {
       test(`projectTier(${tier}, ${harness}) matches the pinned policy`, () => {
         expect(projectTier(tier, harness)).toEqual(EXPECTED[tier][harness]);
       });
@@ -346,6 +350,7 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     ["codex", ["codex", ".codex", "agents"]],
     ["kiro", ["kiro", ".kiro", "agents"]],
     ["kiro-ide", ["kiro-ide", ".kiro", "agents"]],
+    ["cursor", ["cursor", ".cursor", "agents"]],
   ];
   for (const [name, segs] of MD_TREES) {
     test(`${name}: no shipped agent .md carries a raw tier: line (all 14)`, () => {

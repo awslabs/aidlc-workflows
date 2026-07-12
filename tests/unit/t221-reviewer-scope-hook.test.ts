@@ -583,6 +583,24 @@ describe("t221 (c) harness registration and protocol prose", () => {
     ).toBe(true);
   });
 
+  test("Cursor ships NO reviewer-scope registration (documented gap: no subagent identity)", () => {
+    // Cursor's preToolUse payloads carry no subagent identity and hooks
+    // cannot be registered per-subagent, so there is no seam to attribute a
+    // tool call to a dispatched reviewer. Per the porting guide, an
+    // unenforceable seam ships NO registration rather than a dead hook - the
+    // 12a prose bound governs on that harness (the Kiro IDE precedent). This
+    // pins the deliberate absence so a future blanket-registration sweep does
+    // not wire an inert (or worse, blindly blocking) entry.
+    // Scan the WHOLE serialized wiring, not per-entry `command` fields: a
+    // future sweep could register the hook under any event name and any entry
+    // shape (flat or Claude-style nested), and a shape-blind substring scan
+    // catches every variant.
+    const raw = readFileSync(join(REPO_ROOT, "dist", "cursor", ".cursor", "hooks.json"), "utf-8");
+    expect(raw).not.toContain("reviewer-scope");
+    const wiring = JSON.parse(raw) as { hooks: Record<string, unknown> };
+    expect("preToolUse" in wiring.hooks).toBe(false);
+  });
+
   test("stage-protocol 12a carries the dispatch-record write (step 1) and delete (step 3)", () => {
     const body = readFileSync(
       join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol.md"),
@@ -596,8 +614,8 @@ describe("t221 (c) harness registration and protocol prose", () => {
     expect(body).toMatch(/Read verdict.*delete `<record>\/\.aidlc-reviewer-dispatch\.json`/s);
   });
 
-  test("all four harness SKILL.md reviewer bullets carry the dispatch-record instruction", () => {
-    for (const h of ["claude", "kiro", "kiro-ide", "codex"]) {
+  test("all five harness SKILL.md reviewer bullets carry the dispatch-record instruction", () => {
+    for (const h of ["claude", "kiro", "kiro-ide", "codex", "cursor"]) {
       const body = readFileSync(join(REPO_ROOT, "harness", h, "skills", "aidlc", "SKILL.md"), "utf-8");
       const labelled = `harness ${h}: ${body}`;
       expect(labelled).toContain(".aidlc-reviewer-dispatch.json");

@@ -8,8 +8,8 @@ For the scope's depth/test-strategy/skip-list, see [Scopes and Depth § workshop
 
 > **Harness note.** This recipe is harness-neutral: it drives the `aidlc-worktree`
 > and `aidlc-bolt` tools (shared across every harness) plus ordinary git. The
-> command examples invoke the orchestrator as `/aidlc` (Claude Code / Kiro); on
-> Codex use `$aidlc`. The claim-and-merge git contract is identical everywhere.
+> command examples invoke the orchestrator as `/aidlc` (Claude Code / Kiro / Cursor);
+> on Codex use `$aidlc`. The claim-and-merge git contract is identical everywhere.
 
 ---
 

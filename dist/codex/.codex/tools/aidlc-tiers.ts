@@ -35,6 +35,13 @@
 //                   KIRO_TIER_EFFORT + kiroModelDefaults below). `judgment`
 //                   omits `"model"`; the schema-documented fallback is the
 //                   user's default model at that model's default effort.
+//   - Cursor        subagent .md frontmatter carries a `model:` value ONLY -
+//                   Cursor has no separate effort frontmatter key; effort
+//                   rides ON the model ID as a bracket param
+//                   (`claude-sonnet-4-5[effort=medium]`), so the templated
+//                   tier pins it inside the model string. An omitted `model:`
+//                   is Cursor's documented `inherit` default, which is the
+//                   judgment-tier contract.
 //
 // Kiro collapse rule: two tiers whose Kiro model IDs are equal are the same
 // tier on Kiro (there is no per-agent effort surface to tell them apart).
@@ -78,6 +85,10 @@ export type TierProjection = {
   claude: { model: string; effort: ClaudeEffort | null };
   codex: { model: string | null; effort: CodexEffort | null };
   kiro: { model: string | null };
+  // Model-only BY DESIGN, like kiro — but for the opposite reason: Cursor's
+  // subagent frontmatter has no effort key at all; a reduced effort is
+  // expressed inside the model string itself (bracket params).
+  cursor: { model: string | null };
 };
 
 export type Harness = keyof TierProjection;
@@ -91,11 +102,13 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     claude: { model: "inherit", effort: null },
     codex: { model: null, effort: null },
     kiro: { model: null },
+    cursor: { model: null },
   },
   balanced: {
     claude: { model: "sonnet", effort: null },
     codex: { model: "openai.gpt-5.4", effort: null },
     kiro: { model: "claude-sonnet-4.5" },
+    cursor: { model: "claude-sonnet-4-5" },
   },
   templated: {
     // The one deliberate downgrade: a smaller model at reduced effort for
@@ -103,6 +116,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     claude: { model: "sonnet", effort: "medium" },
     codex: { model: "openai.gpt-5.4", effort: "medium" },
     kiro: { model: "claude-sonnet-4.5" },
+    cursor: { model: "claude-sonnet-4-5[effort=medium]" },
   },
 };
 

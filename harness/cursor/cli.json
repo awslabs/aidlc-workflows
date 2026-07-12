@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(bun:.cursor/tools/*)",
+      "Shell(bun:.cursor/hooks/*)",
+      "Shell(bun .cursor/tools/)",
+      "Shell(bun .cursor/hooks/)",
+      "Shell(date)"
+    ]
+  }
+}

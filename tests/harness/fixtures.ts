@@ -548,8 +548,9 @@ export function setupIntegrationProject(
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude");
 const KIRO_DIST = join(REPO_ROOT, "dist", "kiro");
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
+const CURSOR_DIST = join(REPO_ROOT, "dist", "cursor");
 
-export type JourneyHarness = "claude" | "kiro" | "codex";
+export type JourneyHarness = "claude" | "kiro" | "codex" | "cursor";
 
 export interface WorkspaceJourney {
   /** The tmp workspace root (canonical realpath) — the project dir every driver
@@ -612,6 +613,10 @@ export function setupWorkspaceJourney(harness: JourneyHarness = "claude"): Works
     cpSync(join(CODEX_DIST, ".agents"), join(root, ".agents"), { recursive: true });
     cpSync(join(CODEX_DIST, "AGENTS.md"), join(root, "AGENTS.md"));
     cpSync(join(CODEX_DIST, "aidlc"), join(root, "aidlc"), { recursive: true });
+  } else if (harness === "cursor") {
+    cpSync(join(CURSOR_DIST, ".cursor"), join(root, ".cursor"), { recursive: true });
+    cpSync(join(CURSOR_DIST, "AGENTS.md"), join(root, "AGENTS.md"));
+    cpSync(join(CURSOR_DIST, "aidlc"), join(root, "aidlc"), { recursive: true });
   } else {
     cpSync(join(CLAUDE_DIST, ".claude"), join(root, ".claude"), { recursive: true });
     cpSync(join(CLAUDE_DIST, "aidlc"), join(root, "aidlc"), { recursive: true });

@@ -104,6 +104,7 @@ describe("t151 onboarding skeleton — a new harness gets a complete doc for fre
       ["claude", ".claude"],
       ["kiro", ".kiro"],
       ["codex", ".codex"],
+      ["cursor", ".cursor"],
     ];
     for (const [name, dir] of harnesses) {
       const fills = (

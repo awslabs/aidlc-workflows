@@ -28,7 +28,7 @@ the way each host installs plugins (the hybrid model — see
 
 **Author / build** (from the repo):
 ```bash
-bun scripts/package.ts          # emits dist/plugins/test-pro/{claude,codex,kiro,kiro-ide}/
+bun scripts/package.ts          # emits dist/plugins/test-pro/{claude,codex,cursor,kiro,kiro-ide}/
 ```
 
 **Claude Code** (host store):

@@ -144,12 +144,23 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
   const harnessRoot = join(projectDir, harness);
   const written: string[] = [];
 
-  if (harness === ".claude") {
-    const stubPath = join(harnessRoot, "rules", "aidlc.md");
+  // Claude and Cursor share the @-line rules-stub grammar; only the stub
+  // filename differs (Cursor loads ONLY .mdc from .cursor/rules/, so its stub
+  // carries that extension; the @-lines are project-root-relative there and
+  // the regex tolerates a zero-length ../ prefix, so the ONE rewriter serves
+  // both). A per-harness filename fact as a data map, not a copied branch —
+  // the KNOWN_RULES_SUBDIR pattern.
+  const RULES_STUB_BY_HARNESS: Record<string, string> = {
+    ".claude": "aidlc.md",
+    ".cursor": "aidlc.mdc",
+  };
+  const stubName = RULES_STUB_BY_HARNESS[harness];
+  if (stubName !== undefined) {
+    const stubPath = join(harnessRoot, "rules", stubName);
     if (existsSync(stubPath)) {
       const raw = readSafe(stubPath);
       if (raw !== null) {
-        repointFile(stubPath, join(harness, "rules", "aidlc.md"), raw, sp, repointClaudeStub, written);
+        repointFile(stubPath, join(harness, "rules", stubName), raw, sp, repointClaudeStub, written);
       }
     }
     return written;

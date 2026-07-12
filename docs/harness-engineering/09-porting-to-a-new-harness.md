@@ -1,7 +1,7 @@
 # Porting AI-DLC to a New Harness
 
 AI-DLC ships from **one core, many harnesses** — today Claude Code, Kiro CLI, Kiro IDE,
-and Codex CLI, and the set is open. The hand-authored source is a
+Codex CLI, and Cursor, and the set is open. The hand-authored source is a
 harness-neutral `core/` plus a thin `harness/<name>/` surface per CLI; the
 packager (`scripts/package.ts`) regenerates each committed `dist/<harness>/`
 tree. Adding another harness is **one directory and one manifest row** — the
@@ -22,6 +22,7 @@ harness/
   claude/  manifest.ts · skills/aidlc/ · CLAUDE.md · settings.json
   kiro/    manifest.ts · skills/aidlc/ · agents/*.json · hooks/aidlc-kiro-adapter.ts · settings/cli.json · AGENTS.md
   codex/   manifest.ts · emit.ts · skills/aidlc/ · hooks/aidlc-codex-adapter.ts
+  cursor/  manifest.ts · skills/aidlc/ · hooks/aidlc-cursor-adapter.ts · hooks.json · rules-aidlc.mdc · cli.json
 scripts/
   package.ts               # bun scripts/package.ts [<name>] [--check]
   manifest-types.ts        # the HarnessManifest contract every manifest implements
@@ -30,7 +31,7 @@ dist/<name>/               # GENERATED, committed, drift-guarded
 
 `core/` prose names the harness directory with the `{{HARNESS_DIR}}` token; the
 packager substitutes whatever `harnessDir` the manifest declares (`.claude` /
-`.kiro` / `.codex` / your `.foo`). `.ts` is byte-copied untransformed — the
+`.kiro` / `.codex` / `.cursor` / your `.foo`). `.ts` is byte-copied untransformed — the
 runtime `harnessDir()` seam in `core/tools/aidlc-lib.ts` derives the directory
 from the shipped layout at execution time (open-set: it reads the dir name from
 the tool's own path, not a hardcoded list), so the same tool sources run in
@@ -51,7 +52,7 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `coreDirs: DirMap[]` — which `core/<src>` dirs project into `<harnessDir>/<dst>`.
   Rename or drop dirs here (Kiro `rules → steering`; Codex `rules → aidlc-rules`
   and drops `skills/` — see emit). The 3 session skills are core dirs for
-  in-tree harnesses (claude, kiro); codex emits them instead.
+  in-tree harnesses (claude, kiro, cursor); codex emits them instead.
 - `harnessFiles: FileMap[]` — authored surfaces copied verbatim from
   `harness/<name>/<src>` into the dist (`.md` get token substitution).
   `projectRoot: true` lands a file beside the harness dir (e.g. `AGENTS.md`).
@@ -78,7 +79,10 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `emit` — the optional plugin (Step 3), `null` for harnesses that need none.
 
 Claude's manifest is the minimal reference (no rename, no emit); Kiro's adds a
-rename + `harnessFiles` (agent JSONs, adapter, the project-root AGENTS.md).
+rename + `harnessFiles` (agent JSONs, adapter, the project-root AGENTS.md);
+Cursor's matches Claude's shape (no rename, no emit — `.cursor/rules/` is
+Cursor's native rules dir) plus `harnessFiles` for the adapter, `hooks.json`,
+the `rules/aidlc.mdc` stub, and `cli.json`.
 
 ## Step 2 — the hook adapter (the per-harness shim)
 
@@ -91,8 +95,8 @@ across all harnesses (the `--check` proves it: every `.ts` in a dist is
 byte-identical to its `core/` source).
 
 Wire the adapter to the harness's events the harness's own way: Kiro registers
-targets in `agents/aidlc.json`; Codex emits `hooks.json`. Register only events
-with a real core-hook consumer.
+targets in `agents/aidlc.json`; Codex emits `hooks.json`; Cursor ships an
+authored `hooks.json`. Register only events with a real core-hook consumer.
 
 Two hooks are flow-altering and need their block channels forwarded, not just
 piped: the Stop hook answers with `{"decision":"block"}` on stdout, and the
@@ -104,7 +108,13 @@ hook - the prose bound in stage-protocol §12a still governs there. When the
 harness's payloads carry no subagent identity, scope the registration to the
 reviewer agents themselves where the harness supports per-agent hooks (the
 Kiro CLI pattern: the adapter then asserts `scoped_registration` instead of
-matching `agent_type`).
+matching `agent_type`). Cursor hits both cases: its `preToolUse` payloads carry
+no subagent identity and hooks cannot be scoped per-subagent, so its
+reviewer-scope hook ships unwired (the Kiro IDE precedent), and its stop seam
+cannot hard-block — the adapter translates the core
+`{"decision":"block","reason"}` into Cursor's `{"followup_message": reason}`,
+which the harness auto-submits as the next user message (same forwarding
+discipline, different mechanics).
 
 > **The one sanctioned `core/` edit: the doctor arm.** `/aidlc --doctor`
 > (`core/tools/aidlc-utility.ts`) health-checks an installed tree, and a new
@@ -127,7 +137,7 @@ the manifest references that the packager calls with an `EmitContext`
 agent-TOML transpositions, and the `.agents/skills/` tree (composed from
 `core/tools/aidlc-runner-gen.ts`'s exported render functions under
 `AIDLC_HARNESS_DIR`, never reimplemented). Harnesses whose surfaces are all
-authored files (Claude, Kiro) set `emit: null`.
+authored files (Claude, Kiro, Cursor) set `emit: null`.
 
 `emit` honors `ctx.check`: under `--check` it diffs its outputs and returns
 problems instead of writing, so the drift guard covers emit-owned files that

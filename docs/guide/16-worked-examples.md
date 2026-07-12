@@ -6,7 +6,8 @@ Two complete walkthroughs showing AI-DLC in action: a bugfix and a feature. Each
 > its surfaces — `/aidlc`, and subagent stages dispatched via `Task` calls. The
 > stage flow, gates, and artifacts are identical on every harness; only the
 > dispatch mechanic differs (Kiro uses its `subagent` tool, Codex uses `codex exec`
-> workers). See [Running on other harnesses](harnesses/README.md).
+> workers, Cursor dispatches its native custom subagents by name). See
+> [Running on other harnesses](harnesses/README.md).
 
 ---
 

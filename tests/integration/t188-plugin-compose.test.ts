@@ -100,8 +100,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(existsSync(join(PLUGIN_CLAUDE_COMMITTED, "hooks", "hooks.json"))).toBe(true);
   });
 
-  test("all four harness projections emit", () => {
-    for (const h of ["claude", "codex", "kiro", "kiro-ide"]) {
+  test("all five harness projections emit", () => {
+    for (const h of ["claude", "codex", "kiro", "kiro-ide", "cursor"]) {
       expect(existsSync(join(REPO_ROOT, "dist", "plugins", PLUGIN, h))).toBe(true);
     }
   });

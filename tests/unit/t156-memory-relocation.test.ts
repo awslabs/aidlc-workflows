@@ -144,9 +144,9 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     join(REPO_ROOT, "dist", harness, "aidlc", "spaces", "default", "memory");
 
   test("5: every harness ships the relocated method tree at the workspace root", () => {
-    // All four shipped harnesses, kiro-ide included — it ships the workspace shell
+    // All five shipped harnesses, kiro-ide included — it ships the workspace shell
     // like the others, so it must carry the relocated method tree too.
-    for (const h of ["claude", "kiro", "codex", "kiro-ide"]) {
+    for (const h of ["claude", "kiro", "codex", "kiro-ide", "cursor"]) {
       const top = readdirSync(MEM(h)).sort();
       // org/team/project + phases/ are P5's relocated method; templates/ is the
       // SEED-shipped TPL override floor (empty-but-present via a .gitkeep) — it

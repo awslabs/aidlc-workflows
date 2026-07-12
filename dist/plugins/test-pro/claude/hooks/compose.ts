@@ -48,7 +48,7 @@ const PHASES = ["initialization", "ideation", "inception", "construction", "oper
 // files. Prefer the manifest `name`; fall back to the parent-dir <name> segment.
 const PLUGIN_KEY = (() => {
   if (!PLUGIN_ROOT) return "plugin";
-  for (const md of [".claude-plugin", ".codex-plugin", ".kiro-plugin"]) {
+  for (const md of [".claude-plugin", ".codex-plugin", ".kiro-plugin", ".cursor-plugin"]) {
     try {
       const m = JSON.parse(readFileSync(join(PLUGIN_ROOT, md, "plugin.json"), "utf-8"));
       if (typeof m?.name === "string" && m.name) return m.name.replace(/[^\w.-]/g, "_");

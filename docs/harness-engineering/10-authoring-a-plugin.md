@@ -244,11 +244,11 @@ scopes, method/rules, or knowledge — one rule each (all deferred per the note 
 ## 5. Distribution + install
 
 The packager emits your plugin as **a real host plugin** (one projection target
-per harness: `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, plus a
+per harness: `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, `.cursor-plugin/plugin.json`, plus a
 Kiro folder projection). You publish the output to a git repo with semver tags
 and a `marketplace.json`, and teams install through the host's native commands.
 
-### Claude / Codex (host store)
+### Claude / Codex / Cursor (host store)
 
 ```bash
 # teams run these in their host CLI:

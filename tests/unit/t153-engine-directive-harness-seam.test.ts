@@ -43,8 +43,24 @@ const SCAN_DIRS = [join(CORE, "tools"), join(CORE, "hooks")];
 // hooks variants. Does NOT match `bun ${harnessDir()}/tools/` (the seam) nor
 // `bun dist/claude/.claude/tools/` (an install-instruction path, which names the
 // distributable, not a runtime directive the conductor executes).
-const HARDCODED_DIRECTIVE_RE =
-  /bun\s+\.(claude|kiro|codex)\/(tools|hooks)\//;
+// The dir set is derived FROM DISK (each harness/<h>/manifest.ts declares its
+// harnessDir), so the guard cannot under-detect a newly-ported dir.
+function harnessDirNames(): string[] {
+  const names = new Set<string>();
+  for (const h of readdirSync(join(REPO_ROOT, "harness")).sort()) {
+    try {
+      const mf = readFileSync(join(REPO_ROOT, "harness", h, "manifest.ts"), "utf-8");
+      const m = mf.match(/harnessDir:\s*"\.([A-Za-z0-9-]+)"/);
+      if (m) names.add(m[1]);
+    } catch {
+      /* not a harness dir */
+    }
+  }
+  return [...names];
+}
+const HARDCODED_DIRECTIVE_RE = new RegExp(
+  `bun\\s+\\.(${harnessDirNames().join("|")})\\/(tools|hooks)\\/`,
+);
 
 function* walkTs(dir: string): Generator<string> {
   for (const entry of readdirSync(dir).sort()) {

@@ -1,0 +1,67 @@
+{
+  "__provenance__": "DOCS-DERIVED payload shapes for the Cursor hooks system (cursor.com/docs hooks reference + changelog, read 2026-07-13; Cursor 2.4+ wire protocol: JSON on stdin, camelCase hook_event_name, base fields conversation_id/generation_id/workspace_roots/transcript_path, per-event fields at the TOP LEVEL). NOT yet live-captured - the adapter is written defensively (top-level fields with tool_input fallbacks) and this corpus should be replaced with a tee-everything live capture when a Cursor validation spike runs, like the kiro (2.6.1) and codex (0.137.0) corpora were. <PROJECT_DIR> is substituted by the test with the scratch project's absolute path.",
+  "session-start": {
+    "hook_event_name": "sessionStart",
+    "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+    "generation_id": "gen-000001",
+    "workspace_roots": ["<PROJECT_DIR>"],
+    "cursor_version": "2.4.0"
+  },
+  "session-end": {
+    "hook_event_name": "sessionEnd",
+    "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+    "workspace_roots": ["<PROJECT_DIR>"]
+  },
+  "mint": {
+    "hook_event_name": "beforeSubmitPrompt",
+    "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+    "workspace_roots": ["<PROJECT_DIR>"],
+    "prompt": "continue the workflow",
+    "attachments": []
+  },
+  "audit-and-sensors": {
+    "hook_event_name": "afterFileEdit",
+    "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+    "workspace_roots": ["<PROJECT_DIR>"],
+    "file_path": "<PROJECT_DIR>/aidlc/spaces/default/intents/251201-brownfield-feature-0a1b2c/ideation/intent-capture/requirements.md",
+    "edits": [{ "old_string": "", "new_string": "# Requirements\n" }]
+  },
+  "runtime-compile": {
+    "hook_event_name": "afterShellExecution",
+    "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+    "workspace_roots": ["<PROJECT_DIR>"],
+    "command": "bun .cursor/tools/aidlc-orchestrate.ts report --stage intent-capture --result approved"
+  },
+  "state-sync": {
+    "hook_event_name": "afterShellExecution",
+    "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+    "workspace_roots": ["<PROJECT_DIR>"],
+    "command": "bun .cursor/tools/aidlc-orchestrate.ts report --stage intent-capture --result approved"
+  },
+  "log-subagent": {
+    "hook_event_name": "subagentStop",
+    "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+    "workspace_roots": ["<PROJECT_DIR>"],
+    "subagent_type": "aidlc-architecture-reviewer-agent",
+    "output": "READY - reviewed the functional design for unit-a; no blocking findings."
+  },
+  "validate-state": {
+    "hook_event_name": "preCompact",
+    "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+    "workspace_roots": ["<PROJECT_DIR>"]
+  },
+  "stop": {
+    "hook_event_name": "stop",
+    "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+    "workspace_roots": ["<PROJECT_DIR>"],
+    "status": "completed",
+    "loop_count": 0
+  },
+  "stop-aborted": {
+    "hook_event_name": "stop",
+    "conversation_id": "c0ffee00-0000-4000-8000-000000000001",
+    "workspace_roots": ["<PROJECT_DIR>"],
+    "status": "aborted",
+    "loop_count": 0
+  }
+}

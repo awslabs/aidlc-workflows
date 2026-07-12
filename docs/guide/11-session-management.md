@@ -6,7 +6,9 @@ A workflow may span multiple harness sessions. AI-DLC persists all progress to d
 > the intent's record dir, not the harness). Session *lifecycle events* differ: Claude Code
 > emits `SESSION_STARTED/RESUMED/ENDED` and `SESSION_COMPACTED`; Kiro emits only
 > `SESSION_STARTED`; Codex infers `SESSION_ENDED` and adds a post-compaction
-> mission re-inject. See [Running on other harnesses](harnesses/README.md).
+> mission re-inject; Cursor emits `SESSION_STARTED` and `SESSION_ENDED` but never
+> `SESSION_RESUMED` — every session records as a fresh startup. See
+> [Running on other harnesses](harnesses/README.md).
 
 ---
 

@@ -47,6 +47,7 @@ import {
   isAutonomousMode,
   isoTimestamp,
   isPackageJson,
+  KNOWN_HARNESS_DIRS,
   codekbRepoName,
   relativeCodekbDir,
   RESERVED_RECORD_NAMES,
@@ -493,6 +494,7 @@ function handleDoctor(projectDir: string): void {
     ];
     if (harness === ".kiro") tsHooks.push("aidlc-kiro-adapter");
     if (harness === ".codex") tsHooks.push("aidlc-codex-adapter");
+    if (harness === ".cursor") tsHooks.push("aidlc-cursor-adapter");
     for (const h of tsHooks) {
       const hookPath = join(projectDir, harness, "hooks", `${h}.ts`);
       results.push({
@@ -565,6 +567,18 @@ function handleDoctor(projectDir: string): void {
       label:
         "hook trust: ensure [hooks.state] entries are pre-seeded in $CODEX_HOME/config.toml (`bun scripts/package.ts codex trust --project <dir>`) or run one TUI trust pass",
     });
+  } else if (harness === ".cursor") {
+    for (const [file, what, from] of [
+      ["hooks.json", "hook wiring", "dist/cursor/.cursor/hooks.json"],
+      ["rules/aidlc.mdc", "always-apply method stub", "dist/cursor/.cursor/rules/aidlc.mdc"],
+      ["cli.json", "CLI permission allowlist", "dist/cursor/.cursor/cli.json"],
+    ] as const) {
+      results.push({
+        pass: existsSync(join(projectDir, harness, file)),
+        label: `${file} present (${what})`,
+        fix: `copy from \`${from}\``,
+      });
+    }
   } else {
     const settingsPath = join(projectDir, harness, "settings.json");
     results.push({
@@ -577,7 +591,7 @@ function handleDoctor(projectDir: string): void {
   // 4b. Dual-harness coexistence (D-11): another harness tree installed AND a
   // workflow active is supported-but-untested — warn (advisory pass with a
   // visible label), never block.
-  const otherTrees = [".claude", ".kiro", ".codex"].filter(
+  const otherTrees = [...KNOWN_HARNESS_DIRS].filter(
     (h) => h !== harness && existsSync(join(projectDir, h, "tools", "aidlc-lib.ts")),
   );
   if (
@@ -1943,9 +1957,7 @@ const SCAN_SOURCE_DIRS = ["src", "app", "lib", "pages", "components", "tests"];
 // is the SOLE counter for these dirs, so the file sweep must never enter them.
 const SCAN_SOURCE_DIR_SET: ReadonlySet<string> = new Set(SCAN_SOURCE_DIRS);
 const SCAN_EXCLUDE = new Set([
-  ".claude",
-  ".kiro",
-  ".codex",
+  ...KNOWN_HARNESS_DIRS,
   "aidlc-docs",
   "node_modules",
   ".git",

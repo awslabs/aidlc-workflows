@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      { "type": "command", "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts session-start", "timeout": 30 }
+    ],
+    "sessionEnd": [
+      { "type": "command", "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts session-end", "timeout": 30 }
+    ],
+    "beforeSubmitPrompt": [
+      { "type": "command", "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts mint", "timeout": 15 }
+    ],
+    "afterFileEdit": [
+      { "type": "command", "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts audit-and-sensors", "timeout": 120 }
+    ],
+    "afterShellExecution": [
+      { "type": "command", "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts shell-sync", "timeout": 60 }
+    ],
+    "subagentStop": [
+      { "type": "command", "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts log-subagent", "timeout": 30 }
+    ],
+    "preCompact": [
+      { "type": "command", "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts validate-state", "timeout": 30 }
+    ],
+    "stop": [
+      { "type": "command", "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts stop", "timeout": 30, "loop_limit": 12 }
+    ]
+  }
+}

@@ -91,17 +91,18 @@ The authored dial on every agent is `tier:` -- it names the KIND of work the per
 
 The projection per harness (`core/tools/aidlc-tiers.ts` is the single source of truth):
 
-| Tier | Claude Code (.md frontmatter) | Codex CLI (.toml) | Kiro CLI/IDE (agent JSON `"model"`) | Kiro cli.json `chat.modelDefaults` |
-|------|-------------------------------|-------------------|--------------------------------------|-------------------------------------|
-| `judgment` | `model: inherit`, no `effort:` line | no `model`/`model_reasoning_effort` keys (config.toml session defaults apply) | field OMITTED (schema fallback: the user's default model) | no entry (default model's own default effort) |
-| `balanced` | `model: sonnet`, no `effort:` line | `model = "openai.gpt-5.4"`, no effort key | `claude-sonnet-4.5` | sonnet-4.5 -> `high` |
-| `templated` | `model: sonnet`, `effort: medium` | `model = "openai.gpt-5.4"`, `model_reasoning_effort = "medium"` | `claude-sonnet-4.5` (collapses with balanced) | (shares the sonnet-4.5 entry; balanced's `high` wins the collapse) |
+| Tier | Claude Code (.md frontmatter) | Codex CLI (.toml) | Kiro CLI/IDE (agent JSON `"model"`) | Kiro cli.json `chat.modelDefaults` | Cursor (.md frontmatter `model`) |
+|------|-------------------------------|-------------------|--------------------------------------|-------------------------------------|----------------------------------|
+| `judgment` | `model: inherit`, no `effort:` line | no `model`/`model_reasoning_effort` keys (config.toml session defaults apply) | field OMITTED (schema fallback: the user's default model) | no entry (default model's own default effort) | key OMITTED (inherits the session model) |
+| `balanced` | `model: sonnet`, no `effort:` line | `model = "openai.gpt-5.4"`, no effort key | `claude-sonnet-4.5` | sonnet-4.5 -> `high` | `model: claude-sonnet-4-5` |
+| `templated` | `model: sonnet`, `effort: medium` | `model = "openai.gpt-5.4"`, `model_reasoning_effort = "medium"` | `claude-sonnet-4.5` (collapses with balanced) | (shares the sonnet-4.5 entry; balanced's `high` wins the collapse) | `model: claude-sonnet-4-5[effort=medium]` |
 
 Key facts behind the table:
 
 - **Omission is the inherit mechanism.** On Claude Code an agent .md with no `effort:` key inherits the session effort, and a pinned `effort:` overrides the session in BOTH directions (a pin is a cap, not a floor) -- so absence is the contract for judgment and balanced. On Codex a role TOML without `model` spawns on the shipped `.codex/config.toml` session defaults (verified live on codex-cli 0.139.0, the doctor-enforced minimum, and 0.142.5). On Kiro the agent-v1 schema documents the absent-`"model"` fallback: "If not specified, uses the default model" (the `/model` persisted preference).
 - **Kiro has NO per-agent effort surface.** kiro-cli fail-closes on any effort-like key in agent JSON, so effort rides on the MODEL via `settings/cli.json` `chat.modelDefaults[<modelId>].output_config.effort` -- one entry per distinct pinned model. That file is CLI-only: the Kiro IDE ignores cli.json entirely and applies its extension-embedded per-model default (or the user's `/effort` session state).
 - **The Kiro collapse rule.** Two tiers sharing a Kiro model ID are indistinguishable there; the shared cli.json entry takes the HIGHER tier's effort (balanced's `high` beats templated's `medium` on sonnet-4.5). This collapse is deliberate and documented, not a bug.
+- **Cursor is model-only.** Cursor has no effort frontmatter key; effort rides on the model ID as a bracket parameter, so templated pins `claude-sonnet-4-5[effort=medium]` in the one `model:` key while balanced pins the bare `claude-sonnet-4-5` -- no collapse. Judgment omits the key entirely (inherit).
 
 ### Tier cap (cost override)
 

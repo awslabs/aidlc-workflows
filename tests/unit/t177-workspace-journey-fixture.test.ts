@@ -44,10 +44,11 @@ const HARNESS_ENGINE_DIR: Record<JourneyHarness, string> = {
   claude: ".claude",
   kiro: ".kiro",
   codex: ".codex",
+  cursor: ".cursor",
 };
 
 describe("t177 workspace-journey fixture (deterministic, no LLM)", () => {
-  for (const harness of ["claude", "kiro", "codex"] as JourneyHarness[]) {
+  for (const harness of ["claude", "kiro", "codex", "cursor"] as JourneyHarness[]) {
     test(`${harness}: seeds the shell + two sibling repos, no pre-born intent`, () => {
       const journey = setupWorkspaceJourney(harness);
       try {

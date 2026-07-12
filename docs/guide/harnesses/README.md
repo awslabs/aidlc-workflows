@@ -17,6 +17,7 @@ Pick your harness:
 | **Kiro IDE** | `/aidlc` | [Running AI-DLC on Kiro IDE](kiro-ide.md) — prerequisites (Opus 4.8), install, hooks, what's different on Kiro. |
 | **Kiro CLI** (≥ 2.6) | `/aidlc` | [Running AI-DLC on Kiro CLI](kiro-cli.md) — prerequisites, install, what's different on Kiro. |
 | **Codex CLI** (≥ 0.139.0) | `$aidlc` | [AI-DLC on Codex CLI](codex-cli.md) — prerequisites, trust pre-seed, Bedrock config, the git-repo requirement. |
+| **Cursor** (≥ 2.4) | `/aidlc` | [Running AI-DLC on Cursor](cursor.md) — prerequisites, install, hooks, what's different on Cursor (editor and `agent` CLI). |
 
 AI-DLC on Kiro (IDE or CLI) works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**.
 

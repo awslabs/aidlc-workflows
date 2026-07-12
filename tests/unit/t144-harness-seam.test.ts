@@ -85,7 +85,7 @@ describe("t144 codex harness seam — harnessDir + resolveProjectDir ladder ×3 
     expect(evalLib(CLAUDE_LIB, "harnessDir()")).toBe(".claude");
     const tmp = realpathSync(mkdtempSync(join(tmpdir(), "t144-")));
     try {
-      for (const h of [".kiro", ".codex"]) {
+      for (const h of [".kiro", ".codex", ".cursor"]) {
         const lib = libInHarnessTree(join(tmp, h.slice(1)), h);
         expect(evalLib(lib, "harnessDir()")).toBe(h);
       }
@@ -95,7 +95,7 @@ describe("t144 codex harness seam — harnessDir + resolveProjectDir ladder ×3 
   });
 
   test("2: AIDLC_HARNESS_DIR env seam overrides derivation for every dir", () => {
-    for (const h of [".claude", ".kiro", ".codex"]) {
+    for (const h of [".claude", ".kiro", ".codex", ".cursor"]) {
       expect(evalLib(CLAUDE_LIB, "harnessDir()", { env: { AIDLC_HARNESS_DIR: h } })).toBe(h);
     }
   });
@@ -122,7 +122,7 @@ describe("t144 codex harness seam — harnessDir + resolveProjectDir ladder ×3 
   test("4: resolveProjectDir strips <harness>/tools for every harness dir", () => {
     const tmp = realpathSync(mkdtempSync(join(tmpdir(), "t144-")));
     try {
-      for (const h of [".claude", ".kiro", ".codex"]) {
+      for (const h of [".claude", ".kiro", ".codex", ".cursor"]) {
         const root = join(tmp, h.slice(1));
         const lib = libInHarnessTree(root, h);
         expect(evalLib(lib, "resolveProjectDir()", { cwd: tmp })).toBe(root);
@@ -170,8 +170,12 @@ describe("t144 codex harness seam — harnessDir + resolveProjectDir ladder ×3 
     expect(evalLib(CLAUDE_LIB, "rulesSubdir()")).toBe("rules");
     const tmp = realpathSync(mkdtempSync(join(tmpdir(), "t144-")));
     try {
-      const expected: Record<string, string> = { ".kiro": "steering", ".codex": "aidlc-rules" };
-      for (const h of [".kiro", ".codex"]) {
+      const expected: Record<string, string> = {
+        ".kiro": "steering",
+        ".codex": "aidlc-rules",
+        ".cursor": "rules",
+      };
+      for (const h of [".kiro", ".codex", ".cursor"]) {
         const lib = libInHarnessTree(join(tmp, h.slice(1)), h, expected[h]);
         expect(evalLib(lib, "rulesSubdir()")).toBe(expected[h]);
       }

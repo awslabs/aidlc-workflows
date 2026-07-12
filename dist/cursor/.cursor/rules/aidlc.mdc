@@ -1,0 +1,38 @@
+---
+description: AI-DLC method — the layered practice files, always in context
+alwaysApply: true
+---
+
+<!--
+  .cursor/rules/aidlc.mdc — the AIDLC method reference stub (NOT a copy).
+
+  The AIDLC method (the layered practice files: org/team/project + phase rules)
+  is authored ONCE at the workspace root under aidlc/spaces/default/memory/ —
+  the single hand-editable source of truth, identical on every harness. This
+  file is a REFERENCE, not a copy: it is an always-apply Cursor rule that pulls
+  that method into the agent's ambient context so casual chat (outside an
+  AIDLC stage) sees the standing practices. AIDLC's own stage resolver reads
+  the same tree directly (it never needs this stub).
+
+  The .mdc extension is load-bearing: Cursor loads ONLY .mdc files from
+  .cursor/rules/ (a plain .md here is silently ignored). The @-lines below are
+  Cursor rule file references, resolved from the project root; they ship
+  pointed at the always-present `default` space, and `/aidlc space <name>`
+  re-points them IN PLACE so the next turn's ambient context follows the
+  active space. At `default` the re-point is a byte-identical no-op.
+
+  Edit the METHOD at aidlc/spaces/default/memory/*, never here. If a new
+  method file is added there, add a matching @-line below.
+-->
+
+The AI-DLC method for this workspace lives in the layered practice files
+below (org → team → project, later layers override earlier ones, plus the
+per-phase rules). Treat them as standing practices in every conversation.
+
+@aidlc/spaces/default/memory/org.md
+@aidlc/spaces/default/memory/team.md
+@aidlc/spaces/default/memory/project.md
+@aidlc/spaces/default/memory/phases/ideation.md
+@aidlc/spaces/default/memory/phases/inception.md
+@aidlc/spaces/default/memory/phases/construction.md
+@aidlc/spaces/default/memory/phases/operation.md

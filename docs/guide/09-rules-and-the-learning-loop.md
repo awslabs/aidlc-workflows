@@ -8,7 +8,7 @@ This chapter is the user-facing tour. It covers where rules live, how the five l
 
 ## Rules at a glance
 
-Rules live as Markdown files in the space memory layer at `aidlc/spaces/<space>/memory/` — a single hand-editable set at the workspace root, read by every harness via its native include (Claude `@`-import stub, Kiro resources glob, Codex `AIDLC_RULES_DIR`). Each file is named for its scope:
+Rules live as Markdown files in the space memory layer at `aidlc/spaces/<space>/memory/` — a single hand-editable set at the workspace root, read by every harness via its native include (Claude `@`-import stub, Kiro resources glob, Codex `AIDLC_RULES_DIR`, Cursor `.cursor/rules/aidlc.mdc` always-apply stub). Each file is named for its scope:
 
 ```
 aidlc/spaces/<space>/memory/

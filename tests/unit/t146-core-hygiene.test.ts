@@ -61,11 +61,27 @@ function* walkMd(dir: string): Generator<string> {
   }
 }
 
-// Raw harness-dir path literals: `.claude/`, `.kiro/`, `.codex/` followed by a
-// known core subdir name (the form the token replaces). Bare `.claude/` (e.g.
-// inside a `(.claude/, .kiro/, .codex/)` enumeration) is matched too, then
-// filtered by the carve-out predicate.
-const HARNESS_PATH_RE = /\.(claude|kiro|codex)\//;
+// Raw harness-dir path literals: `.claude/`, `.kiro/`, `.codex/`, ... followed
+// by a known core subdir name (the form the token replaces). Bare `.claude/`
+// (e.g. inside a `(.claude/, .kiro/, .codex/)` enumeration) is matched too,
+// then filtered by the carve-out predicate. The dir set is derived FROM DISK
+// (each harness/<h>/manifest.ts declares its harnessDir), so the guard cannot
+// under-detect a newly-ported dir by being absent from a static alternation.
+function harnessDirNames(): string[] {
+  const names = new Set<string>();
+  for (const h of readdirSync(join(REPO_ROOT, "harness")).sort()) {
+    try {
+      const mf = readFileSync(join(REPO_ROOT, "harness", h, "manifest.ts"), "utf-8");
+      const m = mf.match(/harnessDir:\s*"\.([A-Za-z0-9-]+)"/);
+      if (m) names.add(m[1]);
+    } catch {
+      /* not a harness dir */
+    }
+  }
+  return [...names];
+}
+const HARNESS_DIR_NAMES = harnessDirNames();
+const HARNESS_PATH_RE = new RegExp(`\\.(${HARNESS_DIR_NAMES.join("|")})\\/`);
 
 describe("t146 core hygiene — no stray harness-dir path literals in core/ prose", () => {
   test("every harness-dir path literal in core/*.md is the {{HARNESS_DIR}} token or a named carve-out", () => {

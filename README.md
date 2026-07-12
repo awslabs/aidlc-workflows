@@ -4,16 +4,17 @@
 > **GA Preview — under active development.** AI-DLC Workflows 2.0 is a GA Preview release. Interfaces, stage definitions, the agent roster, and the install model are still evolving, and breaking changes can land between releases. Expect rough edges, pin a known-good version for anything you depend on, and review all generated output before you act on it. See the [roadmap](https://awslabs.github.io/aidlc-workflows/roadmap.html) for what's shipped, in flight, and planned.
 > **For production use, stay on the stable [`main`](https://github.com/awslabs/aidlc-workflows/tree/main) branch.**
 
-A native implementation of the **AI-DLC methodology** (AI-Driven Development Life Cycle) that runs on **many harnesses from one source of truth** — today Claude Code, Kiro IDE, Kiro CLI, and Codex CLI, and any capable harness you port it to. Run a full software-development lifecycle — 11 domain-expert agents working through a 32-stage workflow, and you approve every gate — in whichever harness you use.
+A native implementation of the **AI-DLC methodology** (AI-Driven Development Life Cycle) that runs on **many harnesses from one source of truth** — today Claude Code, Kiro IDE, Kiro CLI, Codex CLI, and Cursor, and any capable harness you port it to. Run a full software-development lifecycle — 11 domain-expert agents working through a 32-stage workflow, and you approve every gate — in whichever harness you use.
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.3.4-blue)
+![version](https://img.shields.io/badge/version-2.3.5-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
 ![Claude Code](https://img.shields.io/badge/harness-Claude%20Code-orange)
 ![Codex CLI](https://img.shields.io/badge/harness-Codex%20CLI-orange)
+![Cursor](https://img.shields.io/badge/harness-Cursor-orange)
 
 > [!NOTE]
 > This implementation realizes the autonomous software development vision, the core principles, and the architecture specified in the [AI-DLC Workflows 2.0 Specification](https://github.com/awslabs/aidlc-workflows/blob/v2/assets/AI-DLC-Workflows-2.0-Specification.pdf) whitepaper, rendered natively across multiple CLI harnesses from one source. It is under active development (pre-1.0) — the layout, skill set, and install model are still evolving, so expect breaking changes between releases.
@@ -43,7 +44,7 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 
 ## Methodology and implementation
 
-**AI-DLC is a methodology** — a structured, gated approach to AI-driven software development, defined by AWS (see the [blog post](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/) and [method paper](https://prod.d13rzhkk8cj2z0.amplifyapp.com/) under [References](#references)). **This repository is its native, multi-harness implementation** — the methodology rendered as skills, agents, hooks, and tools from one harness-neutral `core/`, so it runs natively inside Claude Code, Kiro IDE, Kiro CLI, Codex CLI, or any capable harness you port it to. The methodology is the *what*; each harness distribution is the *how* for one runtime, and every distribution is generated from the same source.
+**AI-DLC is a methodology** — a structured, gated approach to AI-driven software development, defined by AWS (see the [blog post](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/) and [method paper](https://prod.d13rzhkk8cj2z0.amplifyapp.com/) under [References](#references)). **This repository is its native, multi-harness implementation** — the methodology rendered as skills, agents, hooks, and tools from one harness-neutral `core/`, so it runs natively inside Claude Code, Kiro IDE, Kiro CLI, Codex CLI, Cursor, or any capable harness you port it to. The methodology is the *what*; each harness distribution is the *how* for one runtime, and every distribution is generated from the same source.
 
 ## Pick your harness
 
@@ -53,6 +54,7 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 | **Kiro CLI** (≥ 2.6) | `dist/kiro/.kiro/` + `dist/kiro/aidlc/` → `<project>/` (+ `dist/kiro/AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [Running AI-DLC on Kiro CLI](docs/guide/harnesses/kiro-cli.md). |
 | **Claude Code** | `dist/claude/.claude/` + `dist/claude/aidlc/` → `<project>/` | `/aidlc` | [Quick Start](#quick-start) below + [Getting Started](docs/guide/01-getting-started.md). |
 | **Codex CLI** (≥ 0.139.0) | `dist/codex/` → `<project>/` (`.codex/` + `.agents/` + `aidlc/` + `AGENTS.md`) | `$aidlc` (or `/skills` → aidlc) | [Quick Start](#quick-start) below + [AI-DLC on Codex CLI](docs/guide/harnesses/codex-cli.md). |
+| **Cursor** (≥ 2.4) | `dist/cursor/` → `<project>/` (`.cursor/` + `aidlc/` + `AGENTS.md` + `.gitignore`) | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on Cursor](docs/guide/harnesses/cursor.md). |
 
 The deterministic engine — state machine, audit log, and the referee that coordinates parallel agents — is byte-identical across every harness; only the shell differs. Each section in the [Quick Start](#quick-start) installs one harness end to end, and its guide above goes deeper on prerequisites and differences.
 
@@ -221,6 +223,26 @@ Invoke the orchestrator with `$aidlc` (or `/skills` → aidlc) followed by a sco
 
 </details>
 
+<details>
+<summary><b>Cursor</b></summary>
+
+**1. Install Cursor** (≥ 2.4 — earlier releases lack Agent Skills, custom subagents, and the current hooks system) from [cursor.com](https://cursor.com). The same install works in the editor and the `agent` CLI.
+
+**2. Set up your project**
+
+```bash
+cp -r dist/cursor/.cursor/  your-project/.cursor/
+cp -r dist/cursor/aidlc/    your-project/aidlc/      # the workspace shell — a sibling of .cursor/, not inside it
+cp dist/cursor/AGENTS.md    your-project/AGENTS.md   # or merge into yours
+cp dist/cursor/.gitignore   your-project/.gitignore  # or merge into yours
+```
+
+The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it.
+
+Open `your-project/` in Cursor (or run `agent` inside it for the CLI). Then run `/aidlc --doctor` to verify, then `/aidlc <description>` to start. The [Cursor guide](docs/guide/harnesses/cursor.md) covers the hook adapter, the always-apply rules stub, the permissions allowlist, and harness differences in full.
+
+</details>
+
 ## Documentation
 
 Three guides, one per reader — pick by what you're trying to change:
@@ -251,7 +273,8 @@ aidlc-claude/
 │   ├── claude/                 #   manifest.ts · orchestrator skill · settings.json · onboarding fills
 │   ├── kiro-ide/               #   manifest.ts · orchestrator · agent JSONs · .kiro.hook files · settings · onboarding fills
 │   ├── kiro/                   #   manifest.ts · orchestrator · agent JSONs · settings · onboarding fills (CLI — agent-JSON hooks)
-│   └── codex/                  #   manifest.ts · emit.ts (Codex-only emissions) · orchestrator · hooks adapter
+│   ├── codex/                  #   manifest.ts · emit.ts (Codex-only emissions) · orchestrator · hooks adapter
+│   └── cursor/                 #   manifest.ts · orchestrator · hooks adapter · rules stub · cli.json allowlist
 │
 ├── plugins/                    # optional, owned AIDLC plugins — new stages + the additive contribution seam
 │   └── test-pro/               #   reference fixture: .aidlc-plugin/plugin.json · stages/ · contributions/ · sensors/ · tools/ · tests/
@@ -267,7 +290,8 @@ aidlc-claude/
 │   ├── kiro-ide/{AGENTS.md, .kiro/}          # what Kiro IDE users copy
 │   ├── kiro/{AGENTS.md, .kiro/}              # what Kiro CLI users copy
 │   ├── codex/{AGENTS.md, .agents/, .codex/}  # what Codex CLI users copy
-│   └── plugins/<name>/{claude,codex,kiro,kiro-ide}/  # one real host plugin per harness — install alongside dist/<harness>/
+│   ├── cursor/{AGENTS.md, .cursor/}          # what Cursor users copy
+│   └── plugins/<name>/{claude,codex,cursor,kiro,kiro-ide}/  # one real host plugin per harness — install alongside dist/<harness>/
 │
 │  ─────────── SUPPORTING ───────────
 ├── tests/                      # all-TypeScript suite (t*.test.ts) — resolves dist via AIDLC_SRC
@@ -284,7 +308,7 @@ hand-edit `dist/`**, the drift guard fails CI.
 
 ```bash
 bun scripts/package.ts            # regenerate every dist/<harness>/ from core/ + harness/
-bun scripts/package.ts <name>     # regenerate one harness (e.g. claude, kiro-ide, codex)
+bun scripts/package.ts <name>     # regenerate one harness (e.g. claude, kiro-ide, codex, cursor)
 bun scripts/package.ts --check    # byte-parity drift guard (run in CI)
 ```
 

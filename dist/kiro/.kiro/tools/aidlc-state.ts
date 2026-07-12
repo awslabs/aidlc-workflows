@@ -9,6 +9,7 @@ import {
   appendUnderHeading,
   type CheckboxState,
   codekbDir,
+  KNOWN_HARNESS_DIRS,
   countCheckboxes,
   emitError,
   errorMessage,
@@ -80,13 +81,7 @@ function isCheckboxState(s: string): s is CheckboxState {
 // Declared at module top (not beside verifyStageArtifacts) because the command
 // dispatch runs at top level: a const declared lower in the file would be in
 // its temporal dead zone when an approve/advance dispatch calls the guard.
-const HARNESS_DOC_DIRS = new Set([
-  "aidlc",
-  ".claude",
-  ".kiro",
-  ".codex",
-  ".git",
-]);
+const HARNESS_DOC_DIRS = new Set(["aidlc", ...KNOWN_HARNESS_DIRS, ".git"]);
 
 // The codekb stages - their produces live in the space-level codekb dir, keyed
 // by repo, NOT under a per-intent record dir. Mirrors KNOWN_CODEKB_STAGES in

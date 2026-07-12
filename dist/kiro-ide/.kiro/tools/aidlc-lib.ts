@@ -144,7 +144,11 @@ export const PHASE_NUMBERS: Record<string, Phase> = {
 // dev-repo CWD rung, where more than one harness dir can coexist and the Claude
 // tree is canonical (".claude" must win). A real single-harness install never
 // reaches the probe; it resolves by script path.
-const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex"] as const;
+// Exported as the ONE authored copy of the shipped-harness-dir set: the
+// CWD-probe order hint here, plus the consumers that need "the framework's
+// own dirs" as data (aidlc-state's artifact guard, aidlc-utility's workspace
+// scan + dual-install probe) — so the next port edits this list once.
+export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".cursor"] as const;
 
 // True for a plausible harness dir name: a dot-prefixed segment, e.g. ".claude"
 // / ".kiro" / ".gemini". Guards the script-path derivation so an unexpected
@@ -203,6 +207,7 @@ const KNOWN_RULES_SUBDIR: Record<string, string> = {
   ".claude": "rules",
   ".kiro": "steering",
   ".codex": "aidlc-rules",
+  ".cursor": "rules",
 };
 
 function shippedRulesSubdir(): string | null {

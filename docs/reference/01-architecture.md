@@ -252,7 +252,7 @@ sequenceDiagram
 ## Source vs distribution (one core, many harnesses)
 
 The framework is **authored once and generated per harness** — today Claude
-Code, Kiro CLI, and Codex CLI, and any capable CLI you port it to. The
+Code, Kiro CLI, Codex CLI, and Cursor, and any capable CLI you port it to. The
 hand-authored source is a harness-neutral `core/` plus a thin `harness/<name>/`
 surface per CLI; `bun scripts/package.ts` regenerates the committed,
 drift-guarded `dist/<harness>/` trees:
@@ -263,11 +263,11 @@ core/                  # hand-authored, harness-neutral (tools, aidlc-common,
                        #   3 session skills); prose uses the {{HARNESS_DIR}} token
 harness/<name>/        # per-CLI surface: manifest.ts + orchestrator skill +
                        #   harness files (+ emit.ts for codex)
-scripts/package.ts     # the build: copy core (token→.claude/.kiro/.codex) +
+scripts/package.ts     # the build: copy core (token→.claude/.kiro/.codex/.cursor) +
                        #   harness, compile the graph, generate runners, emit;
                        #   `--check` is the byte-parity drift guard
 dist/<harness>/        # GENERATED + committed: claude/.claude, kiro/.kiro,
-                       #   codex/{.codex,.agents} — never hand-edited
+                       #   codex/{.codex,.agents}, cursor/.cursor — never hand-edited
 ```
 
 `core/` `.ts` is byte-copied untransformed; the runtime `harnessDir()` seam
@@ -275,7 +275,10 @@ dist/<harness>/        # GENERATED + committed: claude/.claude, kiro/.kiro,
 execution time — open-set, from the tool's own path rather than a hardcoded
 list, so a new harness needs no edit here — and its rules-dir rename ships
 per-tree in a generated `tools/data/harness.json` the `rulesSubdir()` seam
-reads. One set of tool sources runs in every harness. See
+reads. One set of tool sources runs in every harness. The cursor tree
+(`dist/cursor/.cursor/`) is the most declarative projection after Claude
+itself: no rules-dir rename (`.cursor/rules/` is Cursor's native rules dir)
+and no `emit.ts` — its runners come from the standard runner-gen step. See
 [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md).
 
 ## Directory Structure
@@ -430,7 +433,8 @@ and `memoryDirFor` (`aidlc-graph.ts:234`) — all default their space argument t
 `activeSpace(projectDir)`, so AI-DLC's own resolvers follow the cursor; switching
 spaces with `/aidlc space <name>` also
 re-points each harness-native rule include (the Claude `@`-import stub described
-above, Kiro's resources glob, Codex's rules dir) at the switched space's
+above, Kiro's resources glob, Codex's rules dir, Cursor's
+`.cursor/rules/aidlc.mdc` always-apply stub) at the switched space's
 `memory/`. At `default` the re-point is a byte-identical no-op, so a single-team
 committed tree never churns.
 

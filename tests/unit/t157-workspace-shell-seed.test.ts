@@ -56,7 +56,7 @@ import { join } from "node:path";
 import { __resetGraphCache, loadRules } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
-const HARNESSES = ["claude", "kiro", "codex"] as const;
+const HARNESSES = ["claude", "kiro", "codex", "cursor"] as const;
 
 // The shipped method tree for a harness: dist/<h>/aidlc/spaces/default/memory/.
 const mem = (h: string, ...parts: string[]): string =>

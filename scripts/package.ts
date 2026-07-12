@@ -56,6 +56,7 @@ import {
   projectTier,
   readEnvCap,
   readMemoryCap,
+  type Harness,
 } from "../core/tools/aidlc-tiers.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -159,7 +160,7 @@ function agentTierFromMd(s: string, srcPath: string): string {
 function projectTierFrontmatter(
   s: string,
   srcPath: string,
-  harness: "claude" | "codex" | "kiro",
+  harness: Harness,
 ): string {
   // Only apply to files under agents/. Guard on the POSIX-normalized path
   // (srcPath carries the platform separator on Windows) because a stage .md
@@ -237,7 +238,7 @@ function transform(
   content: Buffer,
   harnessDir: string,
   rulesRename: string | null,
-  harness?: "claude" | "codex" | "kiro",
+  harness?: Harness,
 ): Buffer {
   if (srcPath.endsWith(".md")) {
     let s = substituteToken(content.toString("utf-8"), harnessDir);
@@ -395,7 +396,7 @@ function emitMemory(
   outRoot: string,
   harnessDir: string,
   rulesRename: string | null,
-  harness: "claude" | "codex" | "kiro",
+  harness: Harness,
 ): string[] {
   const srcDir = join(CORE_ROOT, MEMORY_SRC);
   const written: string[] = [];
@@ -421,7 +422,7 @@ function emitMemorySeed(
   treeRoot: string,
   harnessDir: string,
   rulesRename: string | null,
-  harness: "claude" | "codex" | "kiro",
+  harness: Harness,
 ): void {
   const srcDir = join(CORE_ROOT, MEMORY_SRC);
   if (!existsSync(srcDir)) return;
@@ -559,6 +560,11 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
     const outPath = projectRoot ? join(outRoot, dst) : join(treeRoot, dst);
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, transform(dst, Buffer.from(rendered, "utf-8"), harnessDir, m.rulesRename, harnessKind));
+    // A projectRoot onboarding doc (kiro/kiro-ide/cursor AGENTS.md) lives
+    // OUTSIDE <harnessDir>, so the in-harness tree walk never diffs it —
+    // register it for checkHarness's outside-harness byte-diff or a
+    // hand-edited/stale dist AGENTS.md would pass --check silently.
+    if (projectRoot) outsideHarness.push(outPath);
   }
 
   // 2c. Emit the relocated method ("memory") tree at the workspace root
@@ -598,7 +604,7 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   // override the robust choice. The renameRulesInCompiledData backstop still
   // runs for renamed-rules harnesses to normalize any residual <dir>/rules/
   // prose-path that a future code path might emit (guarded no-op today).
-  runTool(treeRoot, ["tools/aidlc-graph.ts", "compile"], memoryDir);
+  runTool(treeRoot, ["tools/aidlc-graph.ts", "compile"], memoryDir, harnessDir);
   if (m.rulesRename) renameRulesInCompiledData(treeRoot, harnessDir, m.rulesRename);
 
   // 3b. Emit tools/data/harness.json — the runtime's open-set source of truth
@@ -616,8 +622,8 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   //    Codex skips this — it ships no <harnessDir>/skills/; emit() composes the
   //    whole skill set into .agents/skills/ instead.
   if (!m.skipRunnerGen) {
-    runTool(treeRoot, ["tools/aidlc-runner-gen.ts", "write"]);
-    runTool(treeRoot, ["tools/aidlc-runner-gen.ts", "scopes"]);
+    runTool(treeRoot, ["tools/aidlc-runner-gen.ts", "write"], null, harnessDir);
+    runTool(treeRoot, ["tools/aidlc-runner-gen.ts", "scopes"], null, harnessDir);
   }
 
   // 5. Per-shell emissions (codex only today). Returns the absolute paths it
@@ -646,14 +652,14 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
 // (dist/<name>/aidlc/spaces/default/memory/) so rules_in_context is populated at
 // compile time — every harness needs it now that the method lives at the
 // workspace root, not inside <harnessDir>.
-function runTool(treeRoot: string, args: string[], rulesDirAbs?: string | null): void {
+function runTool(
+  treeRoot: string,
+  args: string[],
+  rulesDirAbs: string | null,
+  harnessDir: string,
+): void {
   const toolPath = join(treeRoot, args[0]);
   const rest = args.slice(1);
-  const harnessDir = treeRoot.endsWith(".kiro")
-    ? ".kiro"
-    : treeRoot.endsWith(".codex")
-      ? ".codex"
-      : ".claude";
   const env: Record<string, string> = {
     ...process.env,
     AIDLC_SRC: treeRoot,

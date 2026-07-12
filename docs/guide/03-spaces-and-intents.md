@@ -25,7 +25,7 @@ working on*, not by which harness you happen to run. You browse `aidlc/`; you
 never need to open the engine directory.
 
 Here is a complete workspace with two teams and a few intents in flight (the
-engine directory is shown as `.claude/` — read it as `.kiro/` or `.codex/` on
+engine directory is shown as `.claude/` — read it as `.kiro/`, `.codex/`, or `.cursor/` on
 those harnesses). Read it top to bottom — it is the mental model the rest of
 this chapter builds on:
 
@@ -33,7 +33,7 @@ this chapter builds on:
 my-project/
 │
 ├── .claude/                      THE ENGINE — tools, hooks, skills, agents.
-│                                 (or .kiro/ / .codex/ — the one harness-specific dir)
+│                                 (or .kiro/ / .codex/ / .cursor/ — the one harness-specific dir)
 │                                 You never browse this; it just runs /aidlc.
 │
 ├── aidlc/                        EVERYTHING AI-DLC — neutral, browsable, committed to git
