@@ -1195,6 +1195,20 @@ function handleAdvance(args: string[]): void {
   const completedCount = countCheckboxes(content, "completed");
   content = setField(content, "Completed", String(completedCount));
 
+  // 3b. Phase Progress flip on a boundary crossing. The `## Phase Progress`
+  // section is seeded once at init (all EXECUTE phases Pending); nothing else
+  // advanced it, so it drifted stale against the Stage Progress checkboxes.
+  // Honour the field's own doc contract ("Pending phases flip to Active on
+  // their phase-boundary advance and to Verified at phase completion"): flip
+  // the completed phase → Verified and the entered phase → Active. Labels are
+  // Title Case single words (Ideation, Inception, …); setField is a no-op when
+  // the label is absent, so a boundary into a `done`-only tail is harmless.
+  if (crossesPhaseBoundary) {
+    const label = (p: string): string => p.charAt(0).toUpperCase() + p.slice(1);
+    content = setField(content, label(completedStage.phase), "Verified");
+    content = setField(content, label(nextStage.phase), "Active");
+  }
+
   // 4. Atomic audit emission — audit-first, then state write.
   // If audit fails, throw before touching state (writeStateFile below is skipped).
   try {
@@ -1384,6 +1398,19 @@ function handleCompleteWorkflow(args: string[]): void {
   // 2. Sync Completed counter
   const completedCount = countCheckboxes(content, "completed");
   content = setField(content, "Completed", String(completedCount));
+
+  // 2b. Phase Progress flip on final completion. This is a phase-completing
+  // transition (it emits PHASE_COMPLETED + PHASE_VERIFIED below), so honour the
+  // `## Phase Progress` doc contract the same way handleAdvance's boundary path
+  // does: flip the completed phase → Verified. There is no entered phase (the
+  // workflow ends here), so unlike the advance path there is no Active flip.
+  // setField is a no-op when the label is absent, so this is harmless on a
+  // state file without the section.
+  content = setField(
+    content,
+    completedStage.phase.charAt(0).toUpperCase() + completedStage.phase.slice(1),
+    "Verified",
+  );
 
   // 3. Update all fields atomically for workflow completion
   const timestamp = isoTimestamp();
