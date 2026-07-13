@@ -20,7 +20,7 @@
 // Tests 44-45 (Groups N + O) are additions beyond the original .sh's
 // plan-43, guarding the type-check status gate: test 44 covers the
 // config-load failure (tsc non-zero + zero parseable diagnostics ->
-// script-error: exit-2, not a false PASS); test 45 covers the cross-file
+// script-error: exit-<n>, not a false PASS); test 45 covers the cross-file
 // edge (tsc non-zero with diagnostics for OTHER files but none for the
 // target -> per-file clean PASS, gate keys on allErrors not the filtered
 // errors).
@@ -1141,24 +1141,29 @@ describe("t92 Group M: upstream-coverage --consumes resolution", () => {
 // ============================================================
 // Group N — type-check status gate (1): tsc exited non-zero but
 // parseTscOutput found ZERO diagnostics (a config-load failure), so the
-// sensor must route to script-error: exit-2 rather than a false clean
+// sensor must route to script-error: exit-<n> rather than a false clean
 // PASS. Regression guard for aidlc-sensor-type-check.ts's status gate
 // (v0.5.16). Inputs are built inline (no committed fixture): a tsconfig
-// whose `include` points at a non-existent file makes tsc exit 2 with a
-// TS18003 "No inputs were found" line that carries NO (line,col)
+// whose `include` points at a non-existent file makes tsc exit non-zero
+// with a TS18003 "No inputs were found" line that carries NO (line,col)
 // coordinate, so PRIMARY_RE matches nothing and allErrors is empty —
 // the exact case the gate fires on. Uses the SHIPPED type-check manifest
 // (AIDLC_SENSORS_DIR unset), exercising the real dispatcher end-to-end.
+// The exact exit code is tsc's, not ours, and it varies across TypeScript
+// majors (tsc 6.x exits 2 for TS18003 under --incremental; tsc 7.x exits
+// 1). The contract under guard is "script-error: exit-<n>, never a bare
+// clean PASS, never FAILED" - so the Note assertion matches the shape,
+// not a pinned digit.
 // ============================================================
 
 describe("t92 Group N: type-check status gate (config-load failure)", () => {
-  test("44: tsc non-zero + zero parseable diagnostics -> Note=script-error: exit-2 (not false PASS)", () => {
+  test("44: tsc non-zero + zero parseable diagnostics -> Note=script-error: exit-<n> (not false PASS)", () => {
     const proj = makeProj();
     const sub = "config-error-type-check";
     mkdirSync(join(proj, sub), { recursive: true });
     // Valid TS — proves the gate fires on CONFIG failure, not a type error.
     writeFileSync(join(proj, sub, "sample.ts"), "export const v: number = 1;\n", "utf-8");
-    // include a glob that matches nothing -> tsc exits 2 with TS18003 (no line:col).
+    // include a glob that matches nothing -> tsc exits non-zero with TS18003 (no line:col).
     writeFileSync(
       join(proj, sub, "tsconfig.json"),
       `${JSON.stringify({ compilerOptions: { noEmit: true, strict: true }, include: ["no-such-file-xyz-*.ts"] }, null, 2)}\n`,
@@ -1173,10 +1178,12 @@ describe("t92 Group N: type-check status gate (config-load failure)", () => {
       CLAUDE_PROJECT_DIR: proj,
     });
     const f = proj;
-    // Gate routes to PASSED Note=script-error: exit-2 — NOT a bare clean PASS, NOT FAILED.
+    // Gate routes to PASSED Note=script-error: exit-<n> - NOT a bare clean PASS,
+    // NOT FAILED. The digit is tsc's own exit code and shifts across TypeScript
+    // majors (6.x: 2, 7.x: 1), so match the shape rather than pin it.
     expect(auditEventCount(f, "SENSOR_PASSED")).toBe(1);
     expect(auditEventCount(f, "SENSOR_FAILED")).toBe(0);
-    expect(auditField(f, "SENSOR_PASSED", "Note")).toBe("script-error: exit-2");
+    expect(auditField(f, "SENSOR_PASSED", "Note")).toMatch(/^script-error: exit-[1-9]\d*$/);
   }, 30000);
 });
 

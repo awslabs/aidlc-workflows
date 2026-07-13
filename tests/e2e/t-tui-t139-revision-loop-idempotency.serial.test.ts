@@ -83,11 +83,20 @@ const DRIVE_PREFIX = IS_WIN ? ["--experimental-strip-types", DRIVER] : [DRIVER];
 
 // Two full run-throughs back-to-back. The bun:test cap is the hard ceiling; each
 // run's pass condition is its on-disk Completed milestone, not the clock.
-const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "2400", 10);
-const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 2400) * 1000;
-// Each run gets ~half the overall ceiling as its answer-gate hang-backstop; they
-// run sequentially so neither alone needs the full budget.
-const PER_RUN_OVERALL_MS = Math.max(120_000, Math.floor(TEST_TIMEOUT_MS / 2) - 30_000);
+// 3600s, not 2400s: the REVISED run is structurally longer than the clean one
+// (reject re-runs the full rejected stage plus its review iterations before the
+// re-presented gate), so a 50/50 split of 2400s starved it - a healthy revised
+// run blew the 1170s backstop mid-revision (observed 2026-07-13, trace
+// answer_gate_menu_timeout with the workflow still actively progressing).
+const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? "3600", 10);
+const TEST_TIMEOUT_MS = (Number.isFinite(TIMEOUT_S) ? TIMEOUT_S : 3600) * 1000;
+// The CLEAN run gets a fixed ~40% backstop; the REVISED run then gets whatever
+// actually remains of the ceiling (they run sequentially, so a fast clean run
+// hands its unused budget to the longer revised run instead of wasting it).
+const CLEAN_RUN_OVERALL_MS = Math.max(120_000, Math.floor(TEST_TIMEOUT_MS * 0.4));
+// Slack reserved for the non-answer-gate work between the deadline and bun's
+// cap (launch/paint waits, kills, state reads).
+const REVISED_SLACK_MS = 60_000;
 
 // The post-init Completed milestone both runs terminate on (the t50 terminator):
 // init 3 + >= 2 Inception (reverse-engineering + requirements-analysis) >= 5.
@@ -151,6 +160,7 @@ function runAnswerGateToMilestone(
   session: string,
   sandbox: string,
   rejectFirstGate: boolean,
+  overallMs: number,
 ): Promise<number> {
   return new Promise<number>((resolve) => {
     const child = spawn(
@@ -165,7 +175,7 @@ function runAnswerGateToMilestone(
         "--until-state-field",
         UNTIL_COMPLETED,
         "--overall-timeout-ms",
-        String(PER_RUN_OVERALL_MS),
+        String(overallMs),
         ...(rejectFirstGate ? ["--reject-first-gate"] : []),
       ],
       { stdio: "inherit" },
@@ -274,8 +284,14 @@ describe("t-tui-t139 revision-loop idempotency (reject->approve == clean approve
       let revisedSession = "";
       let revisedSandbox = "";
       try {
+        const testStartMs = Date.now();
         launchBugfix(cleanSession, cleanSandbox);
-        const cleanRc = await runAnswerGateToMilestone(cleanSession, cleanSandbox, false);
+        const cleanRc = await runAnswerGateToMilestone(
+          cleanSession,
+          cleanSandbox,
+          false,
+          CLEAN_RUN_OVERALL_MS,
+        );
         expect(cleanRc).toBe(0);
         const clean = readTerminal(cleanSandbox);
         drive(["kill", "--session", cleanSession]);
@@ -314,10 +330,19 @@ describe("t-tui-t139 revision-loop idempotency (reject->approve == clean approve
             const grid = drive(["capture", "--session", revisedSession]).stdout;
             if (gridHasMenu(grid)) sawMenu = true;
           }, 1000);
+          // The revised run's backstop is everything left of the ceiling: a
+          // fast clean run hands its unused budget to this structurally longer
+          // reject->revise->approve run. Floor keeps a degenerate remainder
+          // from starving it outright.
+          const revisedOverallMs = Math.max(
+            300_000,
+            TEST_TIMEOUT_MS - (Date.now() - testStartMs) - REVISED_SLACK_MS,
+          );
           const revisedRc = await runAnswerGateToMilestone(
             revisedSession,
             revisedSandbox,
             true, // reject the first approval gate once
+            revisedOverallMs,
           );
           if (pollTimer) clearInterval(pollTimer);
           pollTimer = undefined;
