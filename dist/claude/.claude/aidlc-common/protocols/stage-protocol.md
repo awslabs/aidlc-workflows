@@ -880,7 +880,12 @@ If the `run-stage` directive includes a `reviewer` field (non-null), the orchest
 
    When the current unit's design explicitly names an integration point in a sibling unit's file, resolve that single owning file via the shared contracts and append its path to `exempt` - the record is where the spot-check carve-out is granted. The `stage` field appears verbatim in any `REVIEWER_SCOPE_BLOCKED` audit row; use the current stage slug. The reviewer-scope PreToolUse hook reads this record to enforce the read-scope bound deterministically while the review is in flight; on a NOT-READY re-invoke (step 3 back to step 1), write a fresh record. Single-stage reviews (no `directive.unit`) write no record.
 
-2. **Reviewer executes.** The reviewer sub-agent:
+2. **Reviewer executes.** The review runs under the **adversarial review contract**:
+
+   - **Refute, don't confirm.** The reviewer's job is to refute the artifact, not to confirm it. It assumes defects exist and hunts for them; READY is the verdict it fails to reach after trying to break the artifact, not the default it starts from.
+   - **Ground findings in machine-checkable evidence where it exists.** The reviewer runs the validation tools the invocation lists (via shell) and checks the artifact against its acceptance criteria, its stage definition, and the consumed upstream contracts. A finding backed only by opinion is a suggestion, not grounds for NOT-READY.
+
+   The reviewer sub-agent:
    - Reads the stage definition to understand what SHOULD have been produced
    - Reads the Q&A to understand context and constraints
    - Reads the artifact(s) to evaluate what WAS produced

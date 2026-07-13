@@ -1,14 +1,14 @@
 # AI-DLC — one core, many harnesses
 
 > [!WARNING]
-> **GA Preview — under active development.** AI-DLC Workflows 2.0 is a GA Preview release. Interfaces, stage definitions, the agent roster, and the install model are still evolving, and breaking changes can land between releases. Expect rough edges, pin a known-good version for anything you depend on, and review all generated output before you act on it. See the [roadmap](roadmap.md) for what's shipped, in flight, and planned.
+> **GA Preview — under active development.** AI-DLC Workflows 2.0 is a GA Preview release. Interfaces, stage definitions, the agent roster, and the install model are still evolving, and breaking changes can land between releases. Expect rough edges, pin a known-good version for anything you depend on, and review all generated output before you act on it. See the [roadmap](https://awslabs.github.io/aidlc-workflows/roadmap.html) for what's shipped, in flight, and planned.
 > **For production use, stay on the stable [`main`](https://github.com/awslabs/aidlc-workflows/tree/main) branch.**
 
 A native implementation of the **AI-DLC methodology** (AI-Driven Development Life Cycle) that runs on **many harnesses from one source of truth** — today Claude Code, Kiro IDE, Kiro CLI, and Codex CLI, and any capable harness you port it to. Run a full software-development lifecycle — 11 domain-expert agents working through a 32-stage workflow, and you approve every gate — in whichever harness you use.
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.3.10-blue)
+![version](https://img.shields.io/badge/version-2.4.0-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)

@@ -883,9 +883,12 @@ learnings → gate.
    stage definition path, the Q&A file, the produced artifact paths, and any
    validation tools from frontmatter — never the builder's `memory.md` or plan, so
    the reviewer forms independent judgment.
-2. **Review.** The reviewer reads the definition, Q&A, and artifacts, runs any
-   listed validation tools, and appends a `## Review` section to the primary
-   artifact with a **READY** or **NOT-READY** verdict.
+2. **Review.** The review runs under the adversarial review contract: the
+   reviewer tries to refute the artifact rather than confirm it, grounding
+   findings in machine-checkable evidence where it exists (READY is the verdict
+   it fails to reach, not the default). The reviewer reads the definition, Q&A,
+   and artifacts, runs any listed validation tools, and appends a `## Review`
+   section to the primary artifact with a **READY** or **NOT-READY** verdict.
 3. **Verdict.** READY → proceed to the learnings ritual then the gate. NOT-READY
    with iterations remaining below `reviewer_max_iterations` (default 2) → the lead
    agent re-runs to address the findings and the reviewer re-checks. NOT-READY with
