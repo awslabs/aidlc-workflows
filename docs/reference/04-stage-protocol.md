@@ -551,17 +551,27 @@ dynamic per workflow position.
 2. Pass relevant prior artifacts as context
 3. Specify `subagent_type` from stage metadata
 
-### Multi-Agent Stages
+### Multi-Agent Stages (Ensemble Topologies)
 
-The conductor brings in the lead agent first, then each support agent with the lead's
-output as context. *How* it brings them in follows `directive.mode`: on an inline stage
-(every multi-agent stage in the shipped graph) the support agents are personas the
-conductor loads into its own context — not `Task` dispatches. `Task` is reserved for
-`mode: subagent` stages. Either way the conductor performs every delegation; agents
-never spawn subagents.
+*How* the conductor brings support agents in follows `directive.mode` — the stage's
+communication topology: on an `inline` stage the support agents are personas the
+conductor loads into its own context (voices, not dispatches); on `subagent`
+(hub-and-spoke), `pipeline` (chain), and `mob` (mesh as bounded rounds) each support
+agent is a real, independently dispatched collaborator. Everyone writes their own
+work: on subagent/mob each collaborator writes a contribution file (Contribution +
+Positions, §11) that the lead integrates — the lead alone edits the `produces[]`
+artifacts, and the contribution files are the engine-checked completion evidence;
+on pipeline the chain links advance the artifacts directly and the final link leaves
+them complete. Who sees what differs per topology — spokes are mutually blind, chain
+links see all upstream work, mob objectors get one confirm-or-maintain round while
+judgment-call objections surface to the human mid-stage — but on every topology the
+conductor performs every delegation; agents never spawn subagents. See
+stage-protocol.md §5 "Multi-agent stages" for the full contract.
 
 Example: Feasibility uses `aidlc-architect-agent` (lead) + `aidlc-aws-platform-agent` +
-`aidlc-compliance-agent`, all inline.
+`aidlc-compliance-agent`, all inline. The mob showcase is `user-stories`:
+`aidlc-product-agent` (lead) + design, developer, and quality collaborators, with
+`aidlc-product-lead-agent` reviewing.
 
 ### The 11 Domain Agents
 

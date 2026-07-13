@@ -289,39 +289,42 @@ describe("protocol documents the [S] skipped-via-jump notation", () => {
   });
 });
 
-describe("protocol §5 + conductor forbid Task() for inline support agents", () => {
-  // .sh: MULTI_AGENT_SECTION = sed -n '/^### Multi-agent stages:/,/^### /p';
-  // assert_contains two literals in the protocol; assert_grep two literals in
-  // the conductor.
+describe("protocol §5 + conductor forbid dispatching inline support agents", () => {
+  // Originally pinned the pre-2.5.0 "Task is reserved for mode: subagent"
+  // literals. Under the ensemble topologies (2.5.0) dispatch is legal on
+  // subagent/pipeline/mob stages, so the invariant narrows to: INLINE
+  // support agents are voices, never dispatches — and the conductor remains
+  // the only delegator on every topology.
   const multiAgent = section(
     read(PROTOCOL),
-    /^### Multi-agent stages:/,
+    /^### Multi-agent stages/,
     /^### /,
   );
   const conductor = read(CONDUCTOR);
 
-  test("protocol §5 forbids Task for inline support agents [.sh multi-agent 1]", () => {
+  test("protocol §5 forbids dispatching a support agent on an inline stage [.sh multi-agent 1]", () => {
     expect(
       multiAgent.includes(
-        "Do NOT call `Task` for a support agent on an inline stage",
+        "Do NOT dispatch a support agent on an inline stage",
       ),
     ).toBe(true);
   });
-  test("protocol §5 reserves Task for mode:subagent stages [.sh multi-agent 2]", () => {
-    expect(multiAgent.includes("`Task` is reserved for `mode: subagent`")).toBe(
-      true,
-    );
+  test("protocol §5 keeps the conductor the only delegator [.sh multi-agent 2]", () => {
+    expect(
+      multiAgent.includes("only the orchestrator delegates"),
+    ).toBe(true);
   });
-  test("conductor forbids Task for inline support agents [.sh conductor 1]", () => {
+  test("conductor forbids dispatching a support agent on an inline stage [.sh conductor 1]", () => {
     expect(
       conductor.includes(
-        "Do **not** call `Task` for a support agent on an inline stage",
+        "Do **not** dispatch a support agent on an inline stage",
       ),
     ).toBe(true);
   });
-  test('conductor reserves Task for directive.mode == "subagent" [.sh conductor 2]', () => {
+  test("conductor keeps agents from invoking each other [.sh conductor 2]", () => {
     expect(
-      conductor.includes('`Task` is reserved for `directive.mode == "subagent"`'),
+      conductor.includes("Agents never invoke each\nother — only you, the conductor, delegate") ||
+        conductor.includes("Agents never invoke each other"),
     ).toBe(true);
   });
 });

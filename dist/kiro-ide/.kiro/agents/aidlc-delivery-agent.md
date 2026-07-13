@@ -10,6 +10,7 @@ description: >
   Supports Scope Definition and Units Generation.
 disallowedTools: Task
 model: claude-sonnet-4.5
+tools: ["read", "write", "shell"]
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

@@ -160,11 +160,11 @@ If any of the three is false, default to per-workflow-only.
 
 **Inline stages** -- The conductor reads the lead agent's flat file (e.g., `agents/aidlc-architect-agent.md`) and knowledge from `knowledge/[agent]/` for persona framing, then executes the stage directly in conversation. This allows real-time user interaction: asking questions, resolving ambiguity, and iterating on artifacts before approval.
 
-Most stages use inline execution, including all three Initialization stages (Workspace Scaffold, Workspace Detection, State Init; all run deterministically inside `aidlc-utility intent-birth`), all Ideation stages (Intent Capture, Market Research, Feasibility, Scope Definition, Team Formation, Rough Mockups, Approval & Handoff), most Inception stages (Practices Discovery, Requirements Analysis, User Stories, Refined Mockups, Application Design, Units Generation, Delivery Planning), most Construction stages (Functional Design, NFR Requirements, NFR Design, Infrastructure Design, Build and Test, CI Pipeline), and all Operation stages. Note: Build and Test (3.6) runs once after all units are complete, not per-unit.
+Most stages use inline execution, including all three Initialization stages (Workspace Scaffold, Workspace Detection, State Init; all run deterministically inside `aidlc-utility intent-birth`), all Ideation stages (Intent Capture, Market Research, Feasibility, Scope Definition, Team Formation, Rough Mockups, Approval & Handoff), most Inception stages (Practices Discovery, Requirements Analysis, Refined Mockups, Application Design, Units Generation, Delivery Planning), most Construction stages (Functional Design, NFR Requirements, NFR Design, Infrastructure Design, Build and Test, CI Pipeline), and all Operation stages. Note: Build and Test (3.6) runs once after all units are complete, not per-unit.
 
 **Subagent stages** -- The conductor prepares context (prior artifacts, project description, workspace findings) and delegates to a Claude Code Task tool subagent. The subagent executes autonomously and returns a structured summary. This is used for stages that benefit from focused, independent work without user interaction during execution. If a subagent call fails, the conductor retries once with a reduced-context prompt, then offers the user inline execution or skip-and-revisit as fallback options.
 
-Stages using subagent execution: Reverse Engineering (2.1, two-step delegation by aidlc-developer-agent for the code scan then aidlc-architect-agent for the synthesis) and Code Generation (3.5, aidlc-developer-agent subagent). Workspace Detection (0.2) runs deterministically inline inside `aidlc-utility intent-birth`, not as a subagent.
+Stages using dispatched execution: Reverse Engineering (2.1, `mode: pipeline` — a 2-link chain, aidlc-developer-agent for the code scan then aidlc-architect-agent for the synthesis and write), User Stories (2.4, `mode: mob` — the lead drafts inline, then the design/developer/quality agents contribute in parallel via contribution files), and Code Generation (3.5, aidlc-developer-agent subagent). Workspace Detection (0.2) runs deterministically inline inside `aidlc-utility intent-birth`, not as a subagent.
 
 ```mermaid
 flowchart LR
@@ -189,7 +189,7 @@ flowchart LR
         SA1 --> SA2 --> SA3 --> SA4 --> SA5 --> SA6
     end
 
-    subgraph TWOSTEP["Mode 3: Subagent (two-step RE)"]
+    subgraph TWOSTEP["Mode 3: Pipeline (2-link RE chain)"]
         direction TB
         TS1["Conductor reads\nRE stage file"]
         TS2["Task: aidlc-developer-agent\ncode scan"]
@@ -450,11 +450,11 @@ appends — there is intentionally no `merge=union` attribute.
 
 ## Key Design Decisions
 
-1. **Hybrid execution model (inline + subagent)** -- Stages requiring user interaction (questions, clarifications, approval iteration) run inline where the conductor has direct conversation access. Stages performing focused, autonomous work (code scanning, code generation) delegate to subagents. A pure-subagent model would prevent mid-stage user interaction; a pure-inline model would not benefit from focused agent specialization.
+1. **Hybrid execution model (inline + dispatched topologies)** -- Stages requiring user interaction (questions, clarifications, approval iteration) run inline where the conductor has direct conversation access. Stages performing focused, autonomous work (code scanning, code generation) or genuine multi-agent collaboration (the mob) dispatch to subagents per the stage's `mode` topology. A pure-subagent model would prevent mid-stage user interaction; a pure-inline model would not benefit from focused agent specialization or independent perspectives.
 
 2. **Agent personas for inline stages** -- For inline stages, the conductor loads the agent's flat file as context to frame its perspective, rather than delegating to a subagent. This gives the benefits of domain-expert framing (the conductor thinks like an architect during Application Design) without the costs of subagent context transfer and loss of user interaction.
 
-3. **Two-step Reverse Engineering** -- Reverse Engineering uses a developer subagent for code scanning, then an architect subagent for synthesis. This is necessary because subagents cannot spawn subagents in Claude Code. The conductor acts as the bridge, passing the developer's code scan results to the architect for synthesis into a coherent architectural model.
+3. **Two-link Reverse Engineering pipeline** -- Reverse Engineering (`mode: pipeline`) uses a developer subagent for code scanning, then an architect subagent for synthesis and the artifact writes. The conductor acts as the bus (subagents cannot spawn subagents in Claude Code), passing the developer's code scan results to the architect - the chain topology working as designed.
 
 4. **State tracking via aidlc-state.md** -- A single markdown state file tracks stage completion, current status, workspace context, scope configuration, execution plan, and runtime state (revision counts). The stage protocol defines the update pattern once; each stage updates it as its final step. A PostToolUse hook validates the state file structure after each write. Stage-level task IDs are resolved at runtime via `TaskList` (matching by subject like "Inception - Requirements Analysis") rather than stored in the state file -- this is more robust after context compaction since it reflects actual task system state.
 

@@ -47,6 +47,17 @@ const manifest: HarnessManifest = {
     { src: "agents/aidlc-product-lead-agent.json", dst: "agents/aidlc-product-lead-agent.json" },
     { src: "agents/aidlc-architecture-reviewer-agent.json", dst: "agents/aidlc-architecture-reviewer-agent.json" },
     { src: "agents/aidlc-composer-agent.json", dst: "agents/aidlc-composer-agent.json" },
+    // Ensemble collaborator configs (2.5.0 roster closure): lean read+shell
+    // delegation targets so any stage can flip to an ensemble topology here.
+    { src: "agents/aidlc-product-agent.json", dst: "agents/aidlc-product-agent.json" },
+    { src: "agents/aidlc-design-agent.json", dst: "agents/aidlc-design-agent.json" },
+    { src: "agents/aidlc-delivery-agent.json", dst: "agents/aidlc-delivery-agent.json" },
+    { src: "agents/aidlc-aws-platform-agent.json", dst: "agents/aidlc-aws-platform-agent.json" },
+    { src: "agents/aidlc-compliance-agent.json", dst: "agents/aidlc-compliance-agent.json" },
+    { src: "agents/aidlc-devsecops-agent.json", dst: "agents/aidlc-devsecops-agent.json" },
+    { src: "agents/aidlc-quality-agent.json", dst: "agents/aidlc-quality-agent.json" },
+    { src: "agents/aidlc-pipeline-deploy-agent.json", dst: "agents/aidlc-pipeline-deploy-agent.json" },
+    { src: "agents/aidlc-operations-agent.json", dst: "agents/aidlc-operations-agent.json" },
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
     { src: "hooks/aidlc-audit-logger.kiro.hook", dst: "hooks/aidlc-audit-logger.kiro.hook" },
     { src: "hooks/aidlc-mint.kiro.hook", dst: "hooks/aidlc-mint.kiro.hook" },
@@ -70,23 +81,35 @@ const manifest: HarnessManifest = {
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
-  // IDE-native tool grants for the five delegation targets (the agents the
-  // conductor dispatches via the `subagent` tool: composer, the two
-  // subagent-mode stage workers, and the two reviewers). The IDE reads these
+  // IDE-native tool grants for the delegation targets (the agents the
+  // conductor dispatches via the `subagent` tool). The IDE reads these
   // from the .md frontmatter; the agent-v1 JSONs above are CLI-only. Kiro IDE
   // frontmatter tool names: "read" / "write" / "shell". NOTE the IDE grant is
   // UNSCOPED (no allowedCommands/allowedPaths equivalent) - wider than the
   // CLI JSON sandbox; the persona Boundaries prose and the conductor's gates
   // remain the behavioral constraint. Reviewers need "write" too: the stage
   // protocol has them append a `## Review` section to the primary artifact
-  // (the same grant their CLI JSONs carry). Never grant a delegation tool
-  // here - delegates must not nest.
+  // (the same grant their CLI JSONs carry). The nine ensemble collaborators
+  // (2.5.0 roster closure) also get write: the everyone-writes model has each
+  // collaborator author its own contribution file (stage-protocol §11); the
+  // contributions-dir-only bound is prose + the engine's ensemble evidence
+  // check, since IDE grants cannot express per-stage paths. Never grant a
+  // delegation tool here - delegates must not nest.
   frontmatterAdditions: [
     { file: "agents/aidlc-composer-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
     { file: "agents/aidlc-developer-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
     { file: "agents/aidlc-architect-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
     { file: "agents/aidlc-product-lead-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
     { file: "agents/aidlc-architecture-reviewer-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
+    { file: "agents/aidlc-product-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
+    { file: "agents/aidlc-design-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
+    { file: "agents/aidlc-delivery-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
+    { file: "agents/aidlc-aws-platform-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
+    { file: "agents/aidlc-compliance-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
+    { file: "agents/aidlc-devsecops-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
+    { file: "agents/aidlc-quality-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
+    { file: "agents/aidlc-pipeline-deploy-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
+    { file: "agents/aidlc-operations-agent.md", lines: [`tools: ["read", "write", "shell"]`] },
   ],
 
   onboarding: { dst: "AGENTS.md", projectRoot: true, fills: onboardingFills },

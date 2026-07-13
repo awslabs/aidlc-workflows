@@ -52,7 +52,7 @@ copies this table verbatim.
 | `condition` | string | yes | free-form; describe always-on rationale for `ALWAYS`, branching condition for `CONDITIONAL` |
 | `lead_agent` | string | yes | agent slug; validated dynamically against `.kiro/agents/*.md` via `loadAgents()` — no hardcoded enum |
 | `support_agents` | string[] | yes | empty list allowed; each entry a valid agent slug. Renamed from prose `Supporting Agents:` (format-only rename) |
-| `mode` | string | yes | `inline` \| `subagent` \| `agent-team`. `inline` and `subagent` are active; **`agent-team` is reserved** — no stage declares it until a consumer ships. Orchestrator code reading `mode` MUST handle `agent-team` explicitly (at minimum throw "not yet implemented") — do not fall through to a default path |
+| `mode` | string | yes | `inline` \| `subagent` \| `pipeline` \| `mob` \| `agent-team`. The stage's **communication topology** — who talks to whom while the body runs. `inline` (conductor adopts every voice, zero dispatches), `subagent` (hub-and-spoke: the conductor dispatches the lead for the draft, then each `support_agents[]` entry as a real, mutually-blind spoke, then the lead to integrate), `pipeline` (chain: the links collectively author the artifacts, each link seeing all upstream work and advancing the work product directly; the final link leaves the artifacts complete), and `mob` (mesh: one room, cross-talk, dissent recorded; judgment-call objections surface to the human mid-stage) are active; `pipeline`/`mob` require non-empty `support_agents`. Writing model: each dispatched support agent writes its own contribution file (`contributions/<agent-slug>.md`, stage-protocol §11); the lead alone edits the stage's `produces[]` artifacts; on `mob`/`subagent`-with-supports stages the engine refuses approval while a declared collaborator's contribution file is missing (the ensemble completion evidence). **`agent-team` is reserved** — the future native-bus transport for mesh collaboration (`mob` is the portable mode); no stage declares it until a consumer ships. Orchestrator code reading `mode` MUST handle `agent-team` explicitly (at minimum throw "not yet implemented") — do not fall through to a default path. The review loop is NOT a mode: `reviewer` + `reviewer_max_iterations` deliver the two-party critique topology on every mode (stage-protocol.md §12a) |
 | `for_each` | string | optional | artifact slug; stage runs once per instance of that artifact. Omit for once-per-workflow stages. Doctor validates the artifact is produced by an upstream stage |
 | `workspace_requires` | boolean | optional | Default `false`. `true` marks a stage that must write source code to the workspace root, not just planning docs under the per-intent record dir. The stage-completion artifact guard (`aidlc-state.ts` approve/advance/finalize/complete-workflow) then requires a file outside the `aidlc/` workspace tree and the harness dir before the stage can complete: a stage that wrote only its `produces[]` markdown but no code is refused. Today only `code-generation` declares it |
 | `produces` | string[] | yes | empty allowed; lowercase-kebab artifact names — see [Artifact Vocabulary](../../../../docs/reference/16-artifact-vocabulary.md) for rules and the live registry tool |
@@ -207,6 +207,12 @@ Precedent for the reserved-namespace pattern:
 must handle `agent-team` explicitly. At minimum, throw "mode agent-team not
 yet implemented". Do not fall through to a default execution path — silent
 fallthrough on enum extension is a known foot-gun flagged by review.
+
+**Swarm-trigger coupling:** the autonomous Construction swarm fires on a
+field match (`for_each: unit-of-work` + `mode: subagent`). Re-moding the
+per-unit build stage to any other topology silently takes it off the swarm
+path (units build serially). `aidlc-graph compile` emits an advisory on
+stderr when it sees that shape.
 
 ---
 

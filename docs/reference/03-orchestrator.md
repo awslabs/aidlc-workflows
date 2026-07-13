@@ -300,7 +300,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files plus each
 
 ## Stage Execution Engine
 
-Every stage follows one of two execution patterns: inline or subagent. The compiled stage graph (`tools/data/stage-graph.json`) carries each stage's mode; the engine reads it and delivers it on the `run-stage` directive as `directive.mode`. The Stage Graph table in SKILL.md is a human-readable mirror, not the dispatch source.
+Every stage follows one of the four active execution patterns: inline, subagent, pipeline, or mob (29 / 1 / 1 / 1 in the shipped graph). The compiled stage graph (`tools/data/stage-graph.json`) carries each stage's mode; the engine reads it and delivers it on the `run-stage` directive as `directive.mode`. The Stage Graph table in SKILL.md is a human-readable mirror, not the dispatch source.
 
 ### Full Stage Lifecycle
 
@@ -326,13 +326,13 @@ sequenceDiagram
     O->>S: 4. Mark stage [-] in progress
     O->>AU: Log STAGE_STARTED
 
-    alt Inline Stage (30 of 32)
+    alt Inline Stage (29 of 32)
         O->>U: Execute stage work in conversation
         U-->>O: Answer questions, provide feedback
         O->>U: Present 5-part completion message
         O->>U: AskUserQuestion: Approval Gate
         U-->>O: Approve / Request Changes
-    else Subagent Stage (2 of 32)
+    else Dispatched Stage (3 of 32: subagent, pipeline, or mob)
         O->>O: Bundle context into Task prompt
         O->>O: Call Task tool (subagent_type set to the named agent)
         O-->>O: Receive structured summary
@@ -348,7 +348,7 @@ sequenceDiagram
 
 ### Inline Execution
 
-Inline stages run directly in the orchestrator conversation. The user can interact with the stage in real time. Most stages (30 of 32) are inline.
+Inline stages run directly in the orchestrator conversation. The user can interact with the stage in real time. Most stages (29 of 32) are inline; the other three are dispatched (code-generation subagent, reverse-engineering pipeline, user-stories mob).
 
 The 6-step process:
 
@@ -361,12 +361,13 @@ The 6-step process:
 
 ### Subagent Execution
 
-Subagent stages delegate work to a separate Claude Code task via the Claude Code Task tool. Two stages use this pattern:
+Dispatched stages delegate work to separate Claude Code tasks via the Task tool. Three stages use dispatched modes:
 
-| Stage | Claude Code Subagent Type | Agent | Reason |
-|-------|---------------------------|-------|--------|
-| 2.1 Reverse Engineering | `aidlc-developer-agent` then `aidlc-architect-agent` (two-step) | aidlc-developer-agent + aidlc-architect-agent | Deep code analysis produces large intermediate output |
-| 3.5 Code Generation | `aidlc-developer-agent` | aidlc-developer-agent | Code writing benefits from clean context focused on unit specification |
+| Stage | Mode | Claude Code Subagent Type | Agent | Reason |
+|-------|------|---------------------------|-------|--------|
+| 2.1 Reverse Engineering | pipeline | `aidlc-developer-agent` then `aidlc-architect-agent` (2-link chain) | aidlc-developer-agent + aidlc-architect-agent | Deep code analysis produces large intermediate output; the final link writes the artifacts |
+| 2.4 User Stories | mob | lead inline; `aidlc-design-agent` + `aidlc-developer-agent` + `aidlc-quality-agent` in parallel | 4 participants | The mob-elaboration ritual; collaborators write contribution files, the lead integrates |
+| 3.5 Code Generation | subagent | `aidlc-developer-agent` | aidlc-developer-agent | Code writing benefits from clean context focused on unit specification |
 
 Workspace detection (0.2) used to be a subagent. It is now a deterministic rule-based scanner inside `aidlc-utility intent-birth`; rules are documented in `aidlc-common/stages/initialization/workspace-detection.md`.
 
@@ -381,19 +382,20 @@ The 6-step process:
 
 ### Multi-Agent Coordination
 
-Some stages involve multiple agents: a lead agent and one or more support agents. The coordination pattern is strictly sequential and orchestrator-mediated:
+Some stages involve multiple agents: a lead agent and one or more support agents. The coordination pattern follows `directive.mode` — the stage's communication topology — and is always orchestrator-mediated:
 
 1. Execute the lead agent's work first, producing primary artifacts.
-2. Bring in each support agent with the lead's output as context. On an inline stage (every multi-agent stage in the shipped graph) the orchestrator loads the support agent as a persona in its own context rather than dispatching a `Task`; `Task` is reserved for `mode: subagent` stages.
-3. Synthesize all agent outputs into the final stage artifacts.
+2. Bring in each support agent per the topology. On an `inline` stage the orchestrator loads the support agent as a persona in its own context rather than dispatching it. On `subagent` (hub-and-spoke), `pipeline` (chain), and `mob` (mesh) stages, each support agent is a real dispatch: mutually-blind spokes on subagent, ordered enrichment hops on pipeline, parallel blind contributions plus a bounded objection round on mob (stage-protocol.md §5).
+3. Synthesize all agent outputs into the final stage artifacts — dispatched support agents write contribution files (Contribution + Positions, stage-protocol §11) that the lead integrates; the lead alone edits the `produces[]` artifacts (pipeline links advance them directly); unresolved mob judgment calls surface to the human mid-stage, and maintained dissent is quoted verbatim at the gate.
 4. Agents do NOT invoke each other -- only the orchestrator delegates. Enforced by `disallowedTools: Task` on all agent files.
 
-### Two-Step Reverse Engineering Pattern
+### Two-Link Reverse Engineering Pipeline
 
-Stage 2.1 uses a unique two-step delegation:
+Stage 2.1 is the shipped `mode: pipeline` example -- a two-link chain in which
+each link advances the work product directly:
 
-1. **Developer subagent (code scan):** Scans the codebase, analyzes code structure, identifies components, maps dependencies, produces raw analysis.
-2. **Architect subagent (synthesis):** Receives the developer's raw analysis and synthesizes it into architectural documentation.
+1. **Developer (link 1, the lead):** Scans the codebase, analyzes code structure, identifies components, maps dependencies, returns raw analysis.
+2. **Architect (link 2, the final link):** Receives the developer's raw analysis and synthesizes it into the 9 codekb artifacts -- the final link leaves the `produces[]` artifacts complete, per the pipeline contract.
 
 Reverse Engineering has an **always-rerun policy**: it is always re-executed for brownfield projects even when prior artifacts exist, ensuring the analysis reflects the current codebase state.
 
@@ -650,10 +652,10 @@ Complete reference of all 32 stages with execution metadata. The welcome message
 | 1.5 | Team Formation | Ideation | CONDITIONAL | aidlc-delivery-agent | -- | inline |
 | 1.6 | Rough Mockups | Ideation | CONDITIONAL | aidlc-design-agent | aidlc-product-agent | inline |
 | 1.7 | Approval & Handoff | Ideation | ALWAYS | aidlc-delivery-agent | aidlc-product-agent | inline |
-| 2.1 | Reverse Engineering | Inception | CONDITIONAL | aidlc-developer-agent | aidlc-architect-agent | subagent (aidlc-developer-agent → aidlc-architect-agent) |
+| 2.1 | Reverse Engineering | Inception | CONDITIONAL | aidlc-developer-agent | aidlc-architect-agent | pipeline (aidlc-developer-agent → aidlc-architect-agent) |
 | 2.2 | Practices Discovery | Inception | CONDITIONAL | aidlc-pipeline-deploy-agent | aidlc-quality-agent, aidlc-developer-agent, aidlc-devsecops-agent | inline |
 | 2.3 | Requirements Analysis | Inception | ALWAYS | aidlc-product-agent | -- | inline |
-| 2.4 | User Stories | Inception | CONDITIONAL | aidlc-product-agent | aidlc-design-agent | inline |
+| 2.4 | User Stories | Inception | CONDITIONAL | aidlc-product-agent | aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent | mob |
 | 2.5 | Refined Mockups | Inception | CONDITIONAL | aidlc-design-agent | aidlc-product-agent | inline |
 | 2.6 | Application Design | Inception | CONDITIONAL | aidlc-architect-agent | aidlc-aws-platform-agent, aidlc-design-agent | inline |
 | 2.7 | Units Generation | Inception | ALWAYS | aidlc-architect-agent | aidlc-delivery-agent | inline |

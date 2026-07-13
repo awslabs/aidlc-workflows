@@ -1,0 +1,36 @@
+{
+  "$schema": "https://raw.githubusercontent.com/aws/amazon-q-developer-cli/refs/heads/main/schemas/agent-v1.json",
+  "name": "aidlc-quality-agent",
+  "description": "AI-DLC Quality Agent - delegation target for ensemble stages (test strategy, testability, quality-gate perspective).",
+  "prompt": "file://aidlc-quality-agent.md",
+  "tools": [
+    "fs_read",
+    "fs_write",
+    "execute_bash",
+    "thinking"
+  ],
+  "allowedTools": [
+    "fs_read",
+    "thinking"
+  ],
+  "toolsSettings": {
+    "execute_bash": {
+      "allowedCommands": [
+        "bun \\.kiro/tools/.*",
+        "date -u .*"
+      ]
+    },
+    "fs_write": {
+      "allowedPaths": [
+        "aidlc/spaces/**"
+      ]
+    }
+  },
+  "resources": [
+    "file://.kiro/agents/aidlc-quality-agent.md",
+    "file://.kiro/knowledge/aidlc-quality-agent/*.md",
+    "file://.kiro/knowledge/aidlc-shared/*.md",
+    "file://aidlc/spaces/default/memory/**/*.md"
+  ],
+  "hooks": {}
+}

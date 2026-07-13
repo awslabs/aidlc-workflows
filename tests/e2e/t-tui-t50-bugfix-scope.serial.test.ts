@@ -287,7 +287,7 @@ describe("t-tui-t50-bugfix-scope (answering gates advances bugfix lifecycle on d
         // (Completed>=5); the gate loop returns the instant that lands. We do NOT
         // assert "a menu must appear within N seconds" — that is a budget masquerading
         // as a backstop, and it false-fired here: bugfix's first Inception stage is
-        // reverse-engineering (a `mode: subagent` stage) that legitimately runs
+        // reverse-engineering (a `mode: pipeline` stage) that legitimately runs
         // minutes with no menu, and runs SLOWER on the Windows box, so a fixed
         // per-gate value (200s, then 360s) killed a WORKING run mid-RE (`answered 0`).
         // Omitting it lets per-gate default to the overall deadline (one hang-backstop

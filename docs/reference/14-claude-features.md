@@ -98,17 +98,17 @@ For full agent system documentation, see [Agent System](05-agent-system.md).
 
 ### Inline vs Subagent Loading
 
-The conductor uses two modes of agent activation:
+The conductor uses two modes of agent activation - persona adoption and Task dispatch - across the four stage topologies:
 
-**Inline execution (30 of 32 stages):**
+**Inline execution (29 of 32 stages):**
 The conductor reads the agent's `.md` file and adopts the persona directly within the main conversation. The user interacts with the agent in real time.
 
-**Subagent execution (2 stages: 2.1, 3.5):**
-The conductor delegates to a separate Claude instance via the Claude Code Task tool. The subagent runs in isolation, receives context via the prompt, and returns a structured summary.
+**Dispatched execution (3 stages: 2.1 pipeline, 2.4 mob, 3.5 subagent):**
+The conductor delegates to separate Claude instances via the Claude Code Task tool. Each dispatched agent runs in isolation, receives context via the prompt, and returns a structured summary; ensemble collaborators additionally write contribution files the lead integrates.
 
 | Stage | Claude Code Subagent Type | Agent | Reason |
 |-------|---------------------------|-------|--------|
-| 2.1 Reverse Engineering | `aidlc-developer-agent` then `aidlc-architect-agent` (two-step) | aidlc-developer-agent + aidlc-architect-agent | Deep code analysis produces large intermediate output |
+| 2.1 Reverse Engineering | `aidlc-developer-agent` then `aidlc-architect-agent` (pipeline, 2-link chain) | aidlc-developer-agent + aidlc-architect-agent | Deep code analysis produces large intermediate output |
 | 3.5 Code Generation | `aidlc-developer-agent` | aidlc-developer-agent | Code writing benefits from clean context focused on the unit specification |
 
 Workspace detection (0.2) used to be a subagent; it now runs deterministically inside `aidlc-utility intent-birth`.
@@ -310,7 +310,7 @@ The access model is provisioning followed by inheritance, with no grant step bet
 
 1. **Declare once.** Servers are listed in `.mcp.json` at the project root.
 2. **Provision to the session.** Claude Code starts the declared servers and exposes their tools to the session as `mcp__<server>__<tool>` ids.
-3. **Inherit everywhere.** Subagents inherit all session MCP tools by default. Every AI-DLC agent — whether running inline or as a delegated subagent (stages 2.1, 3.5) — reaches every declared server.
+3. **Inherit everywhere.** Subagents inherit all session MCP tools by default. Every AI-DLC agent — whether running inline or as a delegated subagent (the dispatched stages 2.1, 2.4, 3.5 and ensemble collaborators) — reaches every declared server.
 
 There is no per-agent grant step, and none is needed: inheritance is the default and it is additive across all agents. A new agent file gains MCP access by existing, not by listing servers in its frontmatter.
 
@@ -345,8 +345,8 @@ An MCP server appearing in the session is a function of `.mcp.json` plus availab
 | Rules | `aidlc/spaces/<space>/memory/*.md` (via `.claude/rules/aidlc.md` @-stub) | Every conversation | Minimal guardrails; self-learning corrections |
 | Skill | `.claude/skills/aidlc/SKILL.md` | On `/aidlc` invocation | Orchestrator: session, scope, stage graph, delegation |
 | Workflow-spine hooks | `.claude/settings.json` | Always on; self-gate when no workflow | PostToolUse, PreCompact, SubagentStop, Stop |
-| Agents (inline) | `.claude/agents/*.md` | Persona activation | 30 of 32 stages: conductor adopts agent persona |
-| Agents (subagent) | `.claude/agents/*.md` | Task tool delegation | 2 stages (2.1, 3.5): isolated execution |
+| Agents (inline) | `.claude/agents/*.md` | Persona activation | 29 of 32 stages: conductor adopts agent persona |
+| Agents (dispatched) | `.claude/agents/*.md` | Task tool delegation | 3 stages (2.1 pipeline, 2.4 mob, 3.5 subagent): isolated execution |
 | Knowledge (Tier 1) | `.claude/knowledge/` | Persona activation (steps 2-3) | 56 methodology reference files |
 | Knowledge (Tier 2) | space-level `aidlc/knowledge/` (sibling of `intents/`) | Persona activation (steps 4-5) | Team-managed customization |
 | Stage protocol | `stage-protocol.md` | Every stage execution | Mandatory behavioral contract |

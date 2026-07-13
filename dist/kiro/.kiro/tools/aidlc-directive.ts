@@ -61,7 +61,7 @@ export interface RunStageDirective {
   phase: string;
   lead_agent: string;
   support_agents: string[];
-  mode: "inline" | "subagent" | "agent-team";
+  mode: "inline" | "subagent" | "pipeline" | "mob" | "agent-team";
   // gate is a boolean for every deterministic case; the string sentinel
   // GATE_UNRESOLVED ("unresolved") appears ONLY for the first Construction Bolt's
   // walking-skeleton gate, which the conductor resolves via report (the
@@ -134,7 +134,7 @@ export interface DispatchSubagentDirective {
   phase: string;
   lead_agent: string;
   support_agents: string[];
-  mode: "inline" | "subagent" | "agent-team";
+  mode: "inline" | "subagent" | "pipeline" | "mob" | "agent-team";
   gate: GateValue;
   memory_path: string;
   consumes: string[];
@@ -256,7 +256,7 @@ export const VALID_KINDS = [
 // The mode enum carried by run-stage / dispatch-subagent. Mirrors
 // aidlc-stage-schema.ts VALID_MODES (the directive's mode is read straight off
 // the stage node, so the value set is identical).
-export const VALID_MODES = ["inline", "subagent", "agent-team"] as const;
+export const VALID_MODES = ["inline", "subagent", "pipeline", "mob", "agent-team"] as const;
 
 // Per-kind allowed-key sets. A field outside its kind's set is rejected as an
 // unknown key (mirrors aidlc-stage-schema.ts KNOWN_FIELDS). `kind` is always

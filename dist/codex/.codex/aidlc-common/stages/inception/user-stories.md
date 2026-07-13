@@ -6,7 +6,9 @@ condition: Execute when user-facing features, multiple personas, complex busines
 lead_agent: aidlc-product-agent
 support_agents:
   - aidlc-design-agent
-mode: inline
+  - aidlc-developer-agent
+  - aidlc-quality-agent
+mode: mob
 reviewer: aidlc-product-lead-agent
 reviewer_max_iterations: 2
 produces:
@@ -44,10 +46,11 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
+### Step 1: Load the Lead Persona (mob stage)
 
-Load aidlc-product-agent persona from `agents/aidlc-product-agent.md` and knowledge from `.codex/knowledge/aidlc-product-agent/`.
-Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledge from `.codex/knowledge/aidlc-design-agent/` for supporting perspective on user experience.
+Load aidlc-product-agent persona from `agents/aidlc-product-agent.md` and knowledge from `.codex/knowledge/aidlc-product-agent/` — the product manager owns this stage.
+
+This stage runs `mode: mob` (stage-protocol.md §5 "Multi-agent stages"): the support agents (aidlc-design-agent for user experience, aidlc-developer-agent for implementability, aidlc-quality-agent for testability) are NOT voices to adopt — they are dispatched as independent participants during PART 2. Do not load their personas into your own context.
 
 ### Step 2: Validate User Stories Are Needed
 
@@ -102,11 +105,15 @@ If the user interjects with feedback before generation completes, treat it as a 
 
 ---
 
-## PART 2: Generation
+## PART 2: Generation (mob elaboration)
 
-### Step 8: Execute Plan — Generate Stories and Personas
+### Step 8: Execute Plan — Generate Stories and Personas via the Mob
 
-Based on the approved plan, generate:
+This is the mob-elaboration ritual: the Product Manager (lead) owns the
+draft, Developers and QA (and Design) collaborate as independent
+participants, and the Product Leader reviews afterwards (§12a).
+
+**Round 0 — lead drafts.** As the lead, based on the approved plan, draft:
 
 **`<record>/inception/user-stories/personas.md`:**
 - User persona definitions (name, role, goals, pain points, context)
@@ -118,6 +125,25 @@ Based on the approved plan, generate:
 - Story priority (Must Have / Should Have / Could Have / Won't Have)
 - Story dependencies and relationships
 - INVEST compliance notes
+
+**Round 1 — dispatch the mob.** Per stage-protocol.md §5 `mode: mob`,
+dispatch all three support agents in parallel against the draft (paths-only
+briefs: the two draft artifacts, the Q&A file, requirements.md), mutually
+blind. Each WRITES its contribution file at
+`<record>/inception/user-stories/contributions/<agent-slug>.md` (§11 format:
+identity-marker first line, Contribution, Positions): design on UX and
+persona fidelity, developer on implementability and story sizing, quality on
+testability of the acceptance criteria.
+
+**Integrate and triage.** As the lead, fold the contributions into the two
+artifacts, then triage unresolved objections per §5: a judgment call (both
+positions legitimate) goes to the user NOW as a structured question (add it
+to the questions file first, blank `[Answer]:` tag); a knowledge dispute
+goes to **round 2** — re-dispatch only the objecting agent(s) with the
+revised draft and the other participants' positions (they update their own
+contribution files). Maintained dissent is quoted verbatim in the Step 10
+completion summary. The three contribution files are this stage's ensemble
+evidence — the engine refuses approval while any is missing.
 
 ### Step 9: Update State
 

@@ -29,7 +29,16 @@ export interface StageFrontmatter {
   condition: string;
   lead_agent: string;
   support_agents: string[];
-  mode: "inline" | "subagent" | "agent-team";
+  // mode — the stage's communication topology: who talks to whom while the
+  // body runs. `inline` (conductor adopts every voice), `subagent`
+  // (hub-and-spoke: the conductor dispatches the lead for the draft, then
+  // each support agent as a mutually-blind spoke, then the lead to
+  // integrate), `pipeline` (chain: each support agent enriches in declared
+  // order, each link seeing all upstream work), `mob` (mesh: one room,
+  // cross-talk, dissent recorded). `agent-team` stays reserved for a future
+  // native-bus transport of mesh collaboration; `mob` is the portable mode.
+  // `pipeline`/`mob` require non-empty support_agents (validated below).
+  mode: "inline" | "subagent" | "pipeline" | "mob" | "agent-team";
   for_each?: string;
   // workspace_requires - true for stages that must write source code to the
   // workspace root (not just planning docs under the per-intent record dir).
@@ -106,7 +115,13 @@ export const VALID_PHASES = [
 
 export const VALID_EXECUTIONS = ["ALWAYS", "CONDITIONAL"] as const;
 
-export const VALID_MODES = ["inline", "subagent", "agent-team"] as const;
+export const VALID_MODES = ["inline", "subagent", "pipeline", "mob", "agent-team"] as const;
+
+// The two ensemble topologies whose semantics are meaningless without
+// collaborators: a chain with no links and a room with one occupant are both
+// authoring errors, rejected in the validator (mirrors the
+// reviewer_max_iterations-requires-reviewer coupling).
+export const ENSEMBLE_MODES = ["pipeline", "mob"] as const;
 
 export const VALID_CONDITIONAL_ON = ["brownfield", "greenfield"] as const;
 
@@ -244,6 +259,22 @@ export function validateStageFrontmatter(
 
   checkString(o, "mode", errors);
   checkEnum(o, "mode", VALID_MODES, errors);
+
+  // Coupling — the ensemble topologies (pipeline, mob) collaborate by
+  // construction: a chain with no links or a room with only the lead is an
+  // authoring error, not a degenerate ensemble. Reject at the schema so the
+  // mistake fails the compile, not the conductor. (agent-team stays reserved
+  // and is NOT coupled — no stage may declare it at all until a consumer
+  // ships; the t65 census guards that separately.)
+  if (
+    typeof o.mode === "string" &&
+    (ENSEMBLE_MODES as readonly string[]).includes(o.mode)
+  ) {
+    const sa = o.support_agents;
+    if (!Array.isArray(sa) || sa.length === 0) {
+      errors.push(`mode "${o.mode}" requires a non-empty support_agents`);
+    }
+  }
 
   // for_each — optional. Absent → valid. Present → must be string.
   // Explicit `null` falls through the typeof check and is rejected as

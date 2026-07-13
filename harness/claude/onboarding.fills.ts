@@ -29,7 +29,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
     prereq_bullets_tail: `- **Settings**: \`.claude/settings.json\` pre-approves tools (Read, Edit, Write, Bash, Glob, Grep, Task, WebSearch) so workflows run without per-call permission prompts.
 - **Personal overrides**: Copy \`.claude/settings.local.json.example\` to \`.claude/settings.local.json\` (gitignored) to override the model or set environment variables without affecting shared settings.`,
 
-    agents_note: `Each is a flat \`.md\` file prefixed \`aidlc-<role>-agent.md\`; the conductor adopts domain personas inline where the stage mode calls for it and delegates the two subagent stages, reviewer passes, and composer requests via the \`Task\` tool.`,
+    agents_note: `Each is a flat \`.md\` file prefixed \`aidlc-<role>-agent.md\`; the conductor adopts domain personas inline where the stage mode calls for it and delegates dispatched stage workers (2.1 pipeline, 2.4 mob collaborators, 3.5 subagent), reviewer passes, and composer requests via the \`Task\` tool.`,
 
     structure_extra: "",
 

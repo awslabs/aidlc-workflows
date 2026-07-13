@@ -26,18 +26,18 @@ off to Construction.
 > (Projects created before the per-intent layout used a flat tree; the engine
 > migrates them on first run.)
 
-The phase contains a mix of inline and subagent
-execution modes, including a two-step subagent delegation at Stage 2.1
+The phase contains a mix of execution modes, including a two-link pipeline
+at Stage 2.1 and the mob-elaboration showcase at Stage 2.4
 (aidlc-developer-agent for the code scan, then aidlc-architect-agent for the synthesis)
 and a parallel multi-agent dispatch at Stage 2.2 (Practices Discovery).
 
 **Key characteristics of the Inception phase:**
 
 - The phase begins with a technical discovery stage (2.1 Reverse Engineering)
-  that uses subagent delegation, followed by a methodology-discovery stage
+  that uses a two-link pipeline, followed by a methodology-discovery stage
   (2.2 Practices Discovery) that uses parallel multi-agent dispatch, then six
   inline analysis and design stages.
-- Stage 2.1 uses a two-step subagent pattern: aidlc-developer-agent scans the code,
+- Stage 2.1 uses a two-link pipeline: aidlc-developer-agent scans the code,
   then aidlc-architect-agent synthesizes the scan into 9 structured artifacts. It
   has an always-rerun policy for brownfield projects.
 - Stage 2.2 dispatches four agents in parallel (pipeline-deploy, quality,
@@ -75,10 +75,10 @@ and a parallel multi-agent dispatch at Stage 2.2 (Practices Discovery).
 
 | Stage | Name                   | Condition   | Lead Agent             | Support Agents                                       | Mode                             |
 |-------|------------------------|-------------|------------------------|------------------------------------------------------|----------------------------------|
-| 2.1   | Reverse Engineering    | CONDITIONAL | aidlc-developer-agent        | aidlc-architect-agent                                      | subagent (aidlc-developer-agent → aidlc-architect-agent, 2-step) |
+| 2.1   | Reverse Engineering    | CONDITIONAL | aidlc-developer-agent        | aidlc-architect-agent                                      | pipeline (aidlc-developer-agent → aidlc-architect-agent, 2-link chain) |
 | 2.2   | Practices Discovery    | CONDITIONAL | aidlc-pipeline-deploy-agent  | aidlc-quality-agent, aidlc-developer-agent, aidlc-devsecops-agent      | inline (parallel multi-Task on brownfield) |
 | 2.3   | Requirements Analysis  | ALWAYS      | aidlc-product-agent          | --                                                   | inline                           |
-| 2.4   | User Stories           | CONDITIONAL | aidlc-product-agent          | aidlc-design-agent                                         | inline                           |
+| 2.4   | User Stories           | CONDITIONAL | aidlc-product-agent          | aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent | mob                              |
 | 2.5   | Refined Mockups        | CONDITIONAL | aidlc-design-agent           | aidlc-product-agent                                        | inline                           |
 | 2.6   | Application Design     | CONDITIONAL | aidlc-architect-agent        | aidlc-aws-platform-agent, aidlc-design-agent               | inline                           |
 | 2.7   | Units Generation       | ALWAYS      | aidlc-architect-agent        | aidlc-delivery-agent                                       | inline                           |
@@ -97,15 +97,15 @@ and a parallel multi-agent dispatch at Stage 2.2 (Practices Discovery).
 | Condition        | CONDITIONAL -- brownfield detected; always rerun for freshness         |
 | Lead Agent       | aidlc-developer-agent                                                        |
 | Support Agents   | aidlc-architect-agent                                                        |
-| Mode             | subagent (two-step: aidlc-developer-agent then aidlc-architect-agent)              |
+| Mode             | pipeline (2-link chain: aidlc-developer-agent scans, aidlc-architect-agent synthesizes and writes) |
 | Completion Emoji | (uses stage-protocol.md completion template)                           |
 
 ### Purpose
 
 Reverse Engineering performs a comprehensive analysis of the existing codebase
-for brownfield projects. It uses a two-step subagent delegation pattern:
+for brownfield projects. It runs as a two-link pipeline (`mode: pipeline`):
 first, the aidlc-developer-agent scans the entire codebase; then, the aidlc-architect-agent
-synthesizes the scan results into 9 structured artifacts. These artifacts
+synthesizes the scan results into 9 structured artifacts and writes them. These artifacts
 provide the technical foundation that all subsequent Inception and Construction
 stages build upon.
 
@@ -185,9 +185,9 @@ Standard 2-option gate: **Approve** (continue to Requirements Analysis) /
   projects even when prior artifacts exist. This is a deliberate deviation from
   the upstream reference, documented in SKILL.md's "Deliberate Deviations"
   section.
-- **Two-step subagent pattern:** The aidlc-developer-agent performs the raw code
-  scan, then the aidlc-architect-agent synthesizes the scan into structured
-  artifacts. This separation ensures the scan is thorough (developer
+- **Two-link pipeline:** The aidlc-developer-agent performs the raw code
+  scan (link 1, the lead), then the aidlc-architect-agent synthesizes the scan
+  into structured artifacts and writes them (link 2, the final link). This separation ensures the scan is thorough (developer
   perspective) and the synthesis is architecturally informed (architect
   perspective).
 - For bugfix and refactor scopes, this stage always executes (even for what
@@ -457,8 +457,8 @@ Conditional gate format:
 | Stage #          | 2.4                                                                    |
 | Condition        | CONDITIONAL -- execute for user-facing features, multiple personas, complex business logic, or cross-team work |
 | Lead Agent       | aidlc-product-agent                                                          |
-| Support Agents   | aidlc-design-agent                                                           |
-| Mode             | inline                                                                 |
+| Support Agents   | aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent               |
+| Mode             | mob (the 2.5.0 mob-elaboration showcase)                               |
 | Completion Emoji | :books:                                                                |
 
 ### Purpose
@@ -469,9 +469,13 @@ structure: PART 1 creates a story plan with clarifying questions, and PART 2
 generates the actual stories and personas. The plan and stories are presented
 together at the completion gate for combined review.
 
-The aidlc-design-agent provides supporting perspective on user experience. This is a
-deliberate addition not in the upstream reference, documented in SKILL.md's
-"Deliberate Deviations" section.
+This stage is the mob-elaboration showcase (mode: mob): the Product Manager
+leads, and the design, developer, and quality agents are dispatched as
+independent collaborators against the lead's draft - blind round, integrate,
+one bounded objection round - with the Product Leader reviewing afterwards.
+The aidlc-design-agent's user-experience perspective is a deliberate addition
+not in the upstream reference, documented in SKILL.md's "Deliberate
+Deviations" section.
 
 ### Inputs
 
@@ -481,12 +485,11 @@ deliberate addition not in the upstream reference, documented in SKILL.md's
 
 ### Steps
 
-1. **Load Agent Personas** -- Load aidlc-product-agent persona from
+1. **Load the Lead Persona** -- Load aidlc-product-agent persona from
    `agents/aidlc-product-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-product-agent/`. Load aidlc-design-agent persona from
-   `agents/aidlc-design-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-design-agent/` for supporting perspective on user
-   experience.
+   `.claude/knowledge/aidlc-product-agent/`. The support agents (design,
+   developer, quality) are NOT loaded inline - this is a mob stage; they are
+   dispatched as independent collaborators during generation.
 
 2. **Validate User Stories Are Needed** -- Assess whether user stories add
    value for this project:

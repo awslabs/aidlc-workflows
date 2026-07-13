@@ -1,0 +1,36 @@
+{
+  "$schema": "https://raw.githubusercontent.com/aws/amazon-q-developer-cli/refs/heads/main/schemas/agent-v1.json",
+  "name": "aidlc-aws-platform-agent",
+  "description": "AI-DLC AWS Platform Agent - delegation target for ensemble stages (AWS service selection, infrastructure, platform perspective).",
+  "prompt": "file://aidlc-aws-platform-agent.md",
+  "tools": [
+    "fs_read",
+    "fs_write",
+    "execute_bash",
+    "thinking"
+  ],
+  "allowedTools": [
+    "fs_read",
+    "thinking"
+  ],
+  "toolsSettings": {
+    "execute_bash": {
+      "allowedCommands": [
+        "bun \\.kiro/tools/.*",
+        "date -u .*"
+      ]
+    },
+    "fs_write": {
+      "allowedPaths": [
+        "aidlc/spaces/**"
+      ]
+    }
+  },
+  "resources": [
+    "file://.kiro/agents/aidlc-aws-platform-agent.md",
+    "file://.kiro/knowledge/aidlc-aws-platform-agent/*.md",
+    "file://.kiro/knowledge/aidlc-shared/*.md",
+    "file://aidlc/spaces/default/memory/**/*.md"
+  ],
+  "hooks": {}
+}

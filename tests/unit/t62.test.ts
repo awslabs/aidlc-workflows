@@ -211,10 +211,13 @@ describe("t62 stage-schema — validateStageFrontmatter (migrated from t62-stage
   });
 
   // ============================================================
-  // Enum positive — all 3 modes accepted (3 assertions)
+  // Enum positive — all 5 modes accepted (5 assertions)
+  // (the fixture carries one support agent, so the pipeline/mob
+  //  non-empty-support coupling is satisfied here; the coupling's
+  //  rejection cases live in t235)
   // ============================================================
 
-  for (const m of ["inline", "subagent", "agent-team"] as const) {
+  for (const m of ["inline", "subagent", "pipeline", "mob", "agent-team"] as const) {
     test(`mode=${m} accepted`, () => {
       expect(errs({ ...fixture(), mode: m })).toBe("VALID");
     });

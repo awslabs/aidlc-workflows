@@ -603,8 +603,29 @@ Each stage specifies its lead and supporting agents. To load a persona:
 2. Pass relevant prior artifacts as context
 3. Specify subagent_type from the stage metadata
 
-### Multi-agent stages:
-Some stages use multiple agents (e.g., Feasibility uses aidlc-architect-agent + aidlc-aws-platform-agent + aidlc-compliance-agent). Every multi-agent stage in the shipped graph is `mode: inline`, so the support agents are perspectives the orchestrator adopts in its own context — load each support agent's file + knowledge the same way you loaded the lead (see "For inline stages" above), produce the lead's output first, then layer in each support perspective, then synthesise. Do NOT call `Task` for a support agent on an inline stage; `Task` is reserved for `mode: subagent` stages. Agents do NOT invoke each other — only the orchestrator delegates.
+### Multi-agent stages (ensemble topologies):
+
+Some stages use multiple agents (e.g., Feasibility uses aidlc-architect-agent + aidlc-aws-platform-agent + aidlc-compliance-agent). How the support agents participate is governed by the directive's `mode` — the stage's communication topology — never by the mere presence of `support_agents`. The roles are constant across topologies: the **lead agent** owns the stage's `produces[]` artifacts, **support agents** collaborate as real participants who write their own work, and the `reviewer` (§12a, when declared) verifies from outside afterwards. The orchestrator is the bus on every topology: every exchange between participants is a dispatch it makes and a return it carries. Agents do NOT invoke each other — only the orchestrator delegates.
+
+**Who writes what (mirrors a real working session — everyone writes; the owner collates and edits):**
+
+- Each dispatched support agent WRITES its own **contribution file** at `<record>/<phase>/<stage>/contributions/<agent-slug>.md` (per-unit stages: under the unit's stage dir). Separate files per agent, so parallel dispatch never conflicts. The file's FIRST line is the identity marker verbatim: `**Collaborator:** <agent-slug>`, followed by `## Contribution` (the substantive content, written to be integrable) and `## Positions` (`AGREE:` / `OBJECT:` bullets with one-line rationales; `None` = full agreement).
+- The LEAD integrates contributions into the stage's `produces[]` artifacts and owns their final state. Contribution files are part of the stage's permanent record — dissent stays on disk, not in ephemeral return text.
+- On `pipeline`, the chain collectively authors the artifacts directly (serialized, so no conflict) — see the topology bullet.
+
+- **`mode: inline`** — the support agents are perspectives the orchestrator adopts in its own context: load each support agent's file + knowledge the same way you loaded the lead (see "For inline stages" above), produce the lead's output first, then layer in each support perspective, then synthesise. Do NOT dispatch a support agent on an inline stage; dispatch is reserved for the other modes. No contribution files.
+- **`mode: subagent`** — hub-and-spoke. Dispatch the lead for the draft. If the stage declares `support_agents`, dispatch each one against the returned draft (paths-only briefs per §11's context budget; spokes are mutually blind — no support agent's brief contains another's contribution); each spoke writes its contribution file; then dispatch the lead once more to integrate the contributions into the artifacts.
+- **`mode: pipeline`** — chain. The chain collectively authors the artifacts: dispatch the lead first, then each support agent one at a time in declared order, each link seeing everything upstream and advancing the work product directly — a link may edit the evolving artifacts in place (serialized, no conflict) or hand results down as context for the next link to build on, per the stage body. The FINAL link leaves the `produces[]` artifacts complete. Order is the point. No contribution files required — the chain's edits ARE the collaboration record.
+- **`mode: mob`** — mesh, run as bounded rounds. Round 1: dispatch all support agents in parallel against the lead's draft, mutually blind; each writes its contribution file. The lead integrates. Then TRIAGE unresolved objections by kind:
+  - **Judgment calls** (both positions legitimate — scope, risk appetite, priority tradeoffs): surface to the HUMAN mid-stage as a structured question per §3 (write it to the stage's questions file with a blank `[Answer]:` tag BEFORE presenting, as §3 requires), then continue integration with the human's ruling. The human is a mob participant, not a post-hoc approver. Skipped under autonomous Construction — there the objection is recorded and surfaces at the final-batch gate.
+  - **Knowledge disputes** (an expert can settle it): round 2 — re-dispatch each objecting agent with the revised draft and the other participants' recorded positions, to confirm or maintain (the agent updates its contribution file's Positions). Two rounds maximum.
+  - Maintained dissent after triage is quoted verbatim in the completion summary at the gate; under autonomous Construction it is recorded in the artifact and audit and surfaces at the final-batch gate instead of halting.
+
+On a harness that cannot dispatch in parallel, `subagent` spokes and `mob` round-1 dispatches run sequentially with UNCHANGED briefs — each participant still sees only what the topology grants it, never a sibling's contribution. The topology's who-sees-what contract is the invariant; concurrency is not.
+
+On every topology, a reviewer NOT-READY (§12a step 3) re-invokes the LEAD alone with the findings — the ensemble convenes once; the repair loop is lead-reviewer ping-pong.
+
+**Completion evidence (deterministic).** On a `mob` or `subagent`-with-supports stage, the contribution files ARE the proof the ensemble convened: the engine refuses `report --result approved` while any declared support agent's contribution file is missing or lacks its identity-marker first line (escape hatch: `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`, for recovering a legitimately-run stage whose files were lost). `pipeline` stages carry no contribution-file requirement.
 
 ### 11 Agents (v2):
 aidlc-product-agent, aidlc-design-agent, aidlc-delivery-agent, aidlc-architect-agent, aidlc-aws-platform-agent, aidlc-compliance-agent, aidlc-devsecops-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent
@@ -833,6 +854,36 @@ When a subagent completes its work, it MUST return a structured summary to the o
 - If the "Issues / Concerns" section is non-empty, the orchestrator MUST present them to the user before continuing
 - If the "Produced" section lists fewer files than expected for the stage, the orchestrator MUST investigate before marking the stage complete
 
+### Collaborator contribution files (ensemble topologies)
+
+A support agent dispatched on a `subagent` or `mob` stage (§5 "Multi-agent
+stages") WRITES its work as a contribution file at
+`<record>/<phase>/<stage>/contributions/<agent-slug>.md` (per-unit stages:
+under the unit's stage dir) and returns the standard summary above with the
+file listed under "Produced". The file's shape:
+
+```markdown
+**Collaborator:** [agent-slug]
+
+## Contribution
+[The substantive content: findings, additions, corrections — written so the
+lead can integrate it into the artifacts directly]
+
+## Positions
+- AGREE: [aspect of the draft endorsed] — [one-line rationale]
+- OBJECT: [aspect disputed or missing] — [one-line rationale]
+```
+
+The identity-marker first line is verbatim and mandatory — the completion
+evidence check (§5) verifies it. Positions are the raw material for the mob's
+objection triage (§5): judgment calls go to the human mid-stage, knowledge
+disputes to round 2 (the objecting agent updates its own file), and
+maintained dissent is quoted verbatim at the gate. `None` under Positions
+means full agreement. Contribution files never write outside
+`contributions/`; the lead alone edits the stage's `produces[]` artifacts.
+On `pipeline` stages there are no contribution files — chain links advance
+the artifacts directly per the stage body.
+
 ### Context budget for subagent prompts
 To prevent context overflow in subagent calls:
 - **Current-unit only**: Pass only the design artifacts for the unit being implemented, not all units
@@ -900,7 +951,7 @@ If the `run-stage` directive includes a `reviewer` field (non-null), the orchest
    - **READY** → proceed to §13 learnings ritual then the approval gate
    - **NOT-READY** and `reviewIterations < reviewer_max_iterations` (default 2):
      - Increment review iteration counter
-     - Re-invoke the stage's lead agent (inline or subagent per `directive.mode`) with the artifact + review findings. The builder addresses the findings and updates the artifact.
+     - Re-invoke the stage's lead agent ALONE, dispatched per `directive.mode` (inline in your context, or as a subagent on the dispatched modes). On an ensemble stage (pipeline/mob) the room or chain is NOT re-convened - review findings are artifact defects and the lead owns the artifacts; the repair loop is lead-reviewer ping-pong (§5). The builder addresses the findings and updates the artifact.
      - Return to step 1 (re-invoke reviewer)
    - **NOT-READY** and iterations exhausted:
      - Proceed to approval gate with unresolved findings noted:

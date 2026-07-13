@@ -35,7 +35,7 @@ You respond:
 | 0.1 | Workspace Scaffold | Initialization | orchestrator | inline (auto-proceed) |
 | 0.2 | Workspace Detection | Initialization | orchestrator | inline (auto-proceed) |
 | 0.3 | State Init | Initialization | orchestrator | inline (auto-proceed) |
-| 2.1 | Reverse Engineering | Inception | aidlc-developer-agent + aidlc-architect-agent | subagent |
+| 2.1 | Reverse Engineering | Inception | aidlc-developer-agent + aidlc-architect-agent | pipeline |
 | 2.3 | Requirements Analysis | Inception | aidlc-product-agent | inline |
 | 3.5 | Code Generation | Construction | aidlc-developer-agent | subagent |
 | 3.6 | Build and Test | Construction | aidlc-quality-agent | inline |
@@ -52,7 +52,7 @@ The 3 Initialization stages run as a single deterministic tool call (`aidlc-util
 
 ### Stage 2.1 — Reverse Engineering
 
-A two-step subagent scans the codebase: first a aidlc-developer-agent code scan, then an aidlc-architect-agent synthesis. Produces 9 artifacts in `<record>/inception/reverse-engineering/`:
+A two-link pipeline scans the codebase: first an aidlc-developer-agent code scan, then an aidlc-architect-agent synthesis that writes the artifacts. Produces 9 artifacts in `<record>/inception/reverse-engineering/`:
 
 | Artifact | Contents |
 |----------|----------|
@@ -220,9 +220,9 @@ Compiles the initiative brief aggregating all Ideation outputs. Phase boundary v
 
 ### Inception Phase (stages 2.1-2.8)
 
-**Stage 2.1 — Reverse Engineering** (subagent)
+**Stage 2.1 — Reverse Engineering** (pipeline)
 
-Two-step scan of the existing codebase. Identifies the existing service structure, database schema, and API patterns that the notification service must integrate with.
+Two-link scan of the existing codebase. Identifies the existing service structure, database schema, and API patterns that the notification service must integrate with.
 
 **Stage 2.2 — Practices Discovery** (aidlc-pipeline-deploy-agent)
 

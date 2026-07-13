@@ -131,10 +131,10 @@ Some stages are **conditional** — they may be skipped based on your scope. Whe
 
 ## Inception Phase
 
-Inception elaborates requirements and designs the solution. Stage 2.1 (Reverse Engineering) is notable because it runs as a **subagent** — the conductor delegates to the aidlc-developer-agent for a code scan, then the aidlc-architect-agent for synthesis. This stage runs only for **brownfield** projects (existing codebases).
+Inception elaborates requirements and designs the solution. Stage 2.1 (Reverse Engineering) is notable because it runs as a **pipeline** (a 2-link chain) — the conductor delegates to the aidlc-developer-agent for a code scan, then the aidlc-architect-agent for synthesis and the artifact writes. This stage runs only for **brownfield** projects (existing codebases).
 
 ```
-─── Stage 2.1: Reverse Engineering (subagent) ──────────────────────────────
+─── Stage 2.1: Reverse Engineering (pipeline) ─────────────────────────────
 Delegating to aidlc-developer-agent for code scan...
 [Running in background — no interaction needed]
 ...
@@ -210,7 +210,7 @@ sequenceDiagram
 
 ### Subagent Delegation
 
-Two stages (2.1 Reverse Engineering, 3.5 Code Generation) run as subagents. The conductor delegates to a background subprocess; you do not interact during execution. Workspace detection (0.2) now runs deterministically inside `aidlc-utility intent-birth` rather than as a subagent.
+Three stages dispatch to background subagents — 2.1 Reverse Engineering (pipeline: developer scan, then architect synthesis-and-write), 2.4 User Stories (mob: collaborators contribute in parallel, and judgment-call disagreements may surface to you mid-stage), and 3.5 Code Generation (subagent). Apart from the mob's mid-stage questions, you do not interact during dispatched execution. Workspace detection (0.2) now runs deterministically inside `aidlc-utility intent-birth` rather than as a subagent.
 
 ```mermaid
 sequenceDiagram

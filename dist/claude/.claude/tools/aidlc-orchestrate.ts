@@ -1233,10 +1233,10 @@ function buildRunStageDirective(
     phase: node.phase,
     lead_agent: node.lead_agent,
     support_agents: node.support_agents ?? [],
-    // The graph constrains mode to inline|subagent today; the directive's
-    // mode enum is inline|subagent|agent-team. The node value is always one
-    // of the first two, so it satisfies the contract; the validator is the
-    // backstop if a future graph adds agent-team.
+    // The graph constrains mode to the active topologies
+    // (inline|subagent|pipeline|mob); the directive's enum adds the reserved
+    // agent-team. The node value always satisfies the contract; the validator
+    // is the backstop if a future graph activates agent-team.
     mode: node.mode as RunStageDirective["mode"],
     gate: computeGate(node, scope, stateContent),
     memory_path: memoryPathFor(node.phase, node.slug, recordPrefix),
@@ -3146,6 +3146,70 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         });
         return;
       }
+    }
+  }
+
+  // Ensemble evidence gate, DETERMINISTIC enforcement on the approve path.
+  // On a mob stage — or a hub-and-spoke subagent stage with declared
+  // support_agents — the collaborators' contribution files ARE the proof the
+  // ensemble convened (stage-protocol.md §5 "Completion evidence"): one file
+  // per declared support agent at <record>/<phase>/<slug>/contributions/
+  // <agent-slug>.md, whose FIRST line is the identity marker verbatim
+  // (`**Collaborator:** <agent-slug>`). A conductor that ran the stage as
+  // inline voices produces no files, so the approve is refused with the
+  // remediation named. pipeline stages carry no contribution-file
+  // requirement (the chain's direct edits are the collaboration record), and
+  // inline stages have no dispatched collaborators by definition. Scoped
+  // like the per-unit guard above: gated, not-yet-completed stages only (an
+  // already-[x] stage is an idempotent recovery replay whose files may
+  // legitimately be gone), and the autonomous swarm is excluded for the same
+  // reason the per-unit coverage guard excludes it - swarm workers write
+  // inside Bolt worktrees, so a main-tree disk check would refuse the settle
+  // report even after a genuinely converged run (inert today: no per-unit
+  // build stage declares support_agents, but the two adjacent guards must
+  // treat the swarm symmetrically). Per-unit ensemble stages (none shipped)
+  // would keep contributions under the unit's stage dir; this guard checks
+  // the stage-level dir, matching every shipped ensemble stage. Escape
+  // hatch: AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 (recovering a legitimately-run
+  // stage whose contribution files were lost).
+  const needsEnsembleEvidence =
+    node.mode === "mob" ||
+    (node.mode === "subagent" && (node.support_agents ?? []).length > 0);
+  if (
+    isGated &&
+    needsEnsembleEvidence &&
+    !isAutonomousSwarm &&
+    stageCheckbox.state !== "completed" &&
+    process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE !== "1"
+  ) {
+    const recordPrefix = relativeRecordDir(pd);
+    const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
+    const contribDir = join(pd, prefix, node.phase, slug, "contributions");
+    const missing: string[] = [];
+    for (const agent of node.support_agents ?? []) {
+      const f = join(contribDir, `${agent}.md`);
+      let firstLine = "";
+      try {
+        firstLine = readFileSync(f, "utf-8").split("\n", 1)[0].trim();
+      } catch {
+        missing.push(`${agent} (no contribution file)`);
+        continue;
+      }
+      if (firstLine !== `**Collaborator:** ${agent}`) {
+        missing.push(`${agent} (missing identity-marker first line)`);
+      }
+    }
+    if (missing.length > 0) {
+      emit({
+        kind: "error",
+        message:
+          `Stage "${slug}" is mode: ${node.mode} — its ensemble must convene before approval, and the ` +
+          `contribution files are the evidence. Missing or malformed: ${missing.join("; ")}. ` +
+          `Dispatch each support agent to write ${prefix}/${node.phase}/${slug}/contributions/<agent-slug>.md ` +
+          `(first line: **Collaborator:** <agent-slug>) per stage-protocol.md §5, then re-report. ` +
+          `Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run stage whose files were lost.`,
+      });
+      return;
     }
   }
 

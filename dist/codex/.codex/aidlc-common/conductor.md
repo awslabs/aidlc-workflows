@@ -23,24 +23,61 @@ context in the prompt (subagents cannot see conversation history), never inject
 the persona text yourself.
 
 For a multi-agent stage (a stage with `support_agents`), how you bring each
-support agent in is governed by `directive.mode`, never by the presence of
-`support_agents`:
+support agent in is governed by `directive.mode` — the stage's communication
+topology (who talks to whom) — never by the presence of `support_agents`.
+You are the bus on every topology: every message between participants is a
+dispatch you make and a return you carry. Agents never invoke each other —
+only you, the conductor, delegate. The writing model mirrors a real working
+session: **everyone writes their own work; the owner collates and edits.**
+Dispatched support agents write contribution files
+(`<record>/<phase>/<stage>/contributions/<agent-slug>.md`, identity-marker
+first line, per `stage-protocol.md` §11); the lead alone edits the stage's
+`produces[]` artifacts.
 
-- **`mode: inline`** (every multi-agent stage in the shipped graph) — load each
-  support agent's flat file and knowledge into *your own* context, exactly as
-  you loaded the lead, and write its perspective inline. Produce the lead's
-  primary artifacts first, then layer in each support perspective, then
-  synthesise. Do **not** call `Task` for a support agent on an inline stage —
+- **`mode: inline`** (most multi-agent stages in the shipped graph) — load
+  each support agent's flat file and knowledge into *your own* context,
+  exactly as you loaded the lead, and write its perspective inline. Produce
+  the lead's primary artifacts first, then layer in each support perspective,
+  then synthesise. Do **not** dispatch a support agent on an inline stage —
   the support agent is a voice you adopt, not a subagent you dispatch. (A
-  missing Task subagent-type registration is expected here and is not an error
-  to route around.)
-- **`mode: subagent`** — the lead runs behind a `Task` boundary that loads the
-  persona for you. In the shipped graph the two subagent stages
-  (reverse-engineering, code-generation) carry no `support_agents`, so a
-  `Task`-dispatched support agent never arises.
+  missing subagent-type registration is expected here and is not an error to
+  route around.) No contribution files.
+- **`mode: subagent`** — hub-and-spoke. The lead runs behind a dispatch
+  boundary that loads the persona for you. When the stage also declares
+  `support_agents`, each support agent is a real spoke: after the lead's
+  draft returns, dispatch every support agent against the draft (paths-only
+  brief; they are mutually blind — no spoke's brief contains another's
+  contribution); each spoke writes its contribution file; then dispatch the
+  lead once more to integrate the contributions into the artifacts.
+- **`mode: pipeline`** — chain. The chain collectively authors the
+  artifacts: dispatch the lead first, then each support agent one at a time
+  in declared `support_agents` order, each link seeing everything upstream
+  and advancing the work product directly — editing the evolving artifacts
+  in place (serialized, so no conflict) or handing results down for the next
+  link to build on, as the stage body directs. The FINAL link leaves the
+  `produces[]` artifacts complete. Order is the point.
+- **`mode: mob`** — mesh, run as bounded rounds with the human in the room.
+  Round 1: the lead drafts; dispatch ALL support agents in parallel against
+  the draft (mutually blind); each writes its contribution file
+  (Contribution + Positions). Integrate as the lead, then TRIAGE unresolved
+  objections: a **judgment call** (both positions legitimate — scope, risk,
+  priority) goes to the HUMAN mid-stage as a structured question per §3
+  (write it to the stage's questions file first, blank `[Answer]:` tag);
+  a **knowledge dispute** goes to round 2 — re-dispatch each objecting agent
+  with the revised draft AND the other participants' recorded positions, to
+  confirm or maintain in its own file. Two rounds maximum. Maintained
+  dissent goes verbatim into the completion summary at the gate — never
+  silently averaged away.
 
-`Task` is reserved for `directive.mode == "subagent"`. Agents never invoke each
-other — only you, the conductor, delegate.
+On every topology the reviewer (§12a) runs after the body, from outside the
+room, unchanged — and on a NOT-READY the fix cycle re-invokes the LEAD alone
+(the room or chain convenes once; repair is lead-reviewer ping-pong). Under
+autonomous Construction the mid-stage human turn is skipped: unresolved
+dissent is recorded in the artifact and audit and surfaces at the
+final-batch gate; it never halts the run (halt-and-ask stays reserved for
+failure). The contribution files are the ensemble's completion evidence —
+the engine refuses the stage's approval while a declared collaborator's
+file is missing (stage-protocol.md §5).
 
 ## Asking good questions
 

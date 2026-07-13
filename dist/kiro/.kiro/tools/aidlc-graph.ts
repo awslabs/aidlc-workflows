@@ -1750,6 +1750,30 @@ export function compileStageGraph(): {
     }
   }
 
+  // Swarm-trigger guard (advisory): the autonomous Construction swarm fires
+  // on a field match — for_each: unit-of-work + mode: subagent (see
+  // SWARM_FOR_EACH / SWARM_MODE in aidlc-orchestrate.ts). A per-unit
+  // Construction stage carrying any OTHER mode silently falls off the swarm
+  // path and builds its units serially, which is legal (the topology is the
+  // author's call) but easy to do by accident when retuning modes. Warn on
+  // stderr; never fail — warnings do not affect the emitted JSON, so
+  // compile --check parity is untouched.
+  for (const stage of stages) {
+    if (
+      stage.phase === "construction" &&
+      stage.for_each === "unit-of-work" &&
+      stage.workspace_requires === true &&
+      stage.mode !== "subagent"
+    ) {
+      console.error(
+        `[advisory] stage "${stage.slug}" is the per-unit build stage ` +
+          `(for_each: unit-of-work + workspace_requires) but mode is ` +
+          `"${stage.mode}", not "subagent" — the autonomous Construction ` +
+          `swarm will NOT fire for it; units build serially.`
+      );
+    }
+  }
+
   // The grid transpose covers only frontmatter-declared (stock) scopes;
   // composed scopes live solely as appended grid entries, so fold the
   // on-disk grid's composed entries back in before emitting — a recompile

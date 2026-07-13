@@ -126,18 +126,26 @@ describe("t148 dist/kiro file structure", () => {
     // The delegation-target roster IS the set of hand-authored agent JSONs
     // (minus the conductor aidlc.json) - derive it from disk so a future
     // delegate added without a grant reds here instead of shipping toolless
-    // (the original field bug). Every delegate gets read+write+shell:
-    // builders author artifacts and reviewers append a `## Review` section
-    // to the primary artifact (stage protocol 12a - the same fs_write their
-    // CLI JSONs grant). Every NON-delegate kiro-ide agent must have NO grant
-    // (catches the injection landing on the wrong file).
+    // (the original field bug). Every delegate carries fs_write in its CLI
+    // JSON (builders author artifacts; reviewers append `## Review` per 12a;
+    // ensemble collaborators (2.5.0) write their own contribution files per
+    // stage-protocol §11 - everyone writes, the lead owns the produces[]
+    // artifacts), so every delegate's IDE grant is read+write+shell. The
+    // grant is still DERIVED from the CLI JSON rather than hardcoded, so a
+    // future read-only delegate stays expressible. Every NON-delegate
+    // kiro-ide agent must have NO grant (catches the injection landing on
+    // the wrong file).
     const delegates = readdirSync(IDE_AGENTS)
       .filter((n) => n.endsWith("-agent.json"))
       .map((n) => n.replace(/\.json$/, ".md"));
-    expect(delegates.length).toBeGreaterThanOrEqual(5);
+    expect(delegates.length).toBeGreaterThanOrEqual(14);
     for (const f of readdirSync(IDE_AGENTS).filter((n) => n.endsWith(".md"))) {
       if (delegates.includes(f)) {
-        expect(fmToolsOf(join(IDE_AGENTS, f))).toBe(`["read", "write", "shell"]`);
+        const cliJson = readJson(join(IDE_AGENTS, f.replace(/\.md$/, ".json")));
+        const writes = ((cliJson.tools as string[]) ?? []).includes("fs_write");
+        expect(fmToolsOf(join(IDE_AGENTS, f))).toBe(
+          writes ? `["read", "write", "shell"]` : `["read", "shell"]`,
+        );
       } else {
         expect(fmToolsOf(join(IDE_AGENTS, f))).toBeUndefined();
       }

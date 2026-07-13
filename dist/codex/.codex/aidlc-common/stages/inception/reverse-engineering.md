@@ -6,7 +6,7 @@ condition: Execute when project is brownfield. Always rerun for freshness. Skip 
 lead_agent: aidlc-developer-agent
 support_agents:
   - aidlc-architect-agent
-mode: subagent
+mode: pipeline
 produces:
   - business-overview
   - architecture
@@ -39,6 +39,13 @@ outputs: "aidlc/spaces/<active-space>/codekb/<repo>/ (9 artifacts: business-over
 # Reverse Engineering
 
 MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
+
+This stage runs `mode: pipeline` (stage-protocol.md §5): a two-link chain in
+which each link advances the work product directly. The developer lead (link
+1) scans and returns structured results; the architect (link 2, the final
+link) synthesizes those results and writes the 9 artifacts. The final link
+leaving the `produces[]` artifacts complete is the pipeline contract working
+as designed — no contribution files on pipeline stages.
 
 ## Steps
 

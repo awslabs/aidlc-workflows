@@ -82,7 +82,7 @@ fields that carry the structural weight:
 | `produces` | The artifacts this stage writes (its forward edges) |
 | `lead_agent` | The persona that owns the stage |
 | `support_agents` | Optional perspectives the conductor loads after the lead |
-| `mode` | `inline`, `subagent`, or the reserved `agent-team` |
+| `mode` | `inline`, `subagent`, `pipeline`, `mob`, or the reserved `agent-team` |
 | `for_each` | Optional — names an artifact whose instances drive iteration |
 
 The body opens with `## Steps` — the imperative prose the lead agent follows.

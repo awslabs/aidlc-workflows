@@ -206,9 +206,10 @@ See [Runtime Graph](13-runtime-graph.md) for the compile lifecycle and the locke
 5. **Entry assembly:** Emits canonical `SUBAGENT_COMPLETED` event via `appendAuditEntry`. Fields: Timestamp, Event, Agent Type, and optionally Agent ID and truncated Message.
 6. **Atomic locking:** Same `mkdir`-based pattern as audit-logger.ts (unified in `lib.ts`) but with a separate lock name to avoid contention.
 
-**Fires for the two subagent stages:**
-- Stage 2.1 (Reverse Engineering) -- two-step delegation (fires twice: `aidlc-developer-agent` code scan, then `aidlc-architect-agent` synthesis)
-- Stage 3.5 (Code Generation) -- `aidlc-developer-agent` subagent (fires once per unit of work)
+**Fires for every dispatched agent:**
+- Stage 2.1 (Reverse Engineering, `mode: pipeline`) -- fires twice per repo: `aidlc-developer-agent` code scan, then `aidlc-architect-agent` synthesis
+- Stage 3.5 (Code Generation, `mode: subagent`) -- `aidlc-developer-agent` (fires once per unit of work)
+- Ensemble stages (`mode: mob`, or `subagent` with support agents) -- fires once per dispatched collaborator and per lead dispatch (e.g. user-stories fires for each of its three collaborators)
 
 Workspace detection (0.2) used to be a subagent; it now runs deterministically inside `aidlc-utility intent-birth`, so this hook no longer fires during initialization.
 

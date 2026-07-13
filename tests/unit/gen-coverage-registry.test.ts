@@ -874,6 +874,8 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t228-hook-run-exports.test.ts",
     "unit/t229-workspace-parser.test.ts",
     "unit/t230-dispatcher-routes.test.ts",
+    "unit/t235-ensemble-modes.test.ts",
+    "unit/t236-ensemble-evidence-gate.test.ts",
     "unit/t27.test.ts",
     "unit/t29.test.ts",
     "unit/t30-hook-session-end.test.ts",
