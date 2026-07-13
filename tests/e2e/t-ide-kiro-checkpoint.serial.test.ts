@@ -313,4 +313,3 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
     TEST_TIMEOUT_MS,
   );
 });
-

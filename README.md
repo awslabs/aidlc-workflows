@@ -66,7 +66,7 @@ The deterministic engine — state machine, audit log, and the referee that coor
 
 ## Recommended Model
 
-This release works better with `Claude Opus 4.8`. We are sharpening it for previous model versions. 
+This release works better with `Claude Opus 4.8`. We are sharpening it for previous model versions.
 
 ## Quick Start
 
