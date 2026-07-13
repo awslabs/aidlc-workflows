@@ -140,13 +140,28 @@ function findProjectRoot(filePath: string): string | null {
 
 // --- eslint subprocess wrappers ---------------------------------------------
 
+// Pinned eslint spec for every bunx invocation. A BARE `bunx eslint`
+// prefers a project-local node_modules eslint, then ANY `eslint` on PATH
+// before fetching from the registry - and distro packages ship ancient
+// versions (Ubuntu 24.04's apt eslint is 6.4.0, a transitive dependency
+// of `apt install npm`). Pre-flat-config eslint cannot see
+// eslint.config.js, reports "couldn't find a configuration file", and
+// the sensor quietly degrades every fire to a tool-unavailable PASS -
+// masking real lint findings. Pinning the major makes resolution
+// deterministic: bunx fetches/caches this spec and ignores PATH
+// shadowing. Intentionally NOT applied to a project-local eslint - bunx
+// with a version spec bypasses node_modules too, which is the price of
+// determinism; projects needing their exact local eslint can override
+// the sensor manifest's command.
+const ESLINT_SPEC = "eslint@10";
+
 // Probe `bunx eslint --version` at startup. `bunx <tool>` returns non-127
 // codes for several failure modes (network-fetch failure, package-
 // resolution failure, registry timeout). The dispatcher's branch b
 // (status === 127) won't catch those — so we propagate by exiting 127
 // ourselves on any non-zero exit from this probe.
 function probeEslintAvailable(cwd: string): void {
-	const result = spawnSync("bunx", ["eslint", "--version"], {
+	const result = spawnSync("bunx", [ESLINT_SPEC, "--version"], {
 		encoding: "utf-8",
 		timeout: 30_000,
 		cwd,
@@ -172,7 +187,7 @@ function probeEslintAvailable(cwd: string): void {
 // branch e then emits SENSOR_PASSED with Note=script-error: exit-2,
 // keeping the audit pair closed while flagging the breakage in stderr.
 function probeEslintConfig(filePath: string, cwd: string): void {
-	const result = spawnSync("bunx", ["eslint", "--print-config", filePath], {
+	const result = spawnSync("bunx", [ESLINT_SPEC, "--print-config", filePath], {
 		encoding: "utf-8",
 		timeout: 30_000,
 		cwd,
@@ -270,7 +285,7 @@ function runEslint(
 	// eslint as a numeric value.
 	const result = spawnSync(
 		"bunx",
-		["eslint", "--format", "json", "--max-warnings=-1", filePath],
+		[ESLINT_SPEC, "--format", "json", "--max-warnings=-1", filePath],
 		{ encoding: "utf-8", timeout: 30_000, cwd },
 	);
 	return { stdout: result.stdout ?? "", status: result.status };

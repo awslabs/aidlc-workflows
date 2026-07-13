@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.10] - 2026-07-14
+
+The linter sensor now pins the eslint version it runs (`eslint@10`) instead of resolving whatever `eslint` bunx finds first. A bare `bunx eslint` prefers a project-local node_modules copy, then any `eslint` on PATH, before fetching from the registry - and distro packages ship ancient versions (Ubuntu's apt eslint is 6.4.0, installed as a transitive dependency of `apt install npm`). Pre-flat-config eslint cannot read `eslint.config.js`, so on such a box every linter fire silently degraded to a `Note=tool-unavailable` PASS, masking real lint findings. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `aidlc-sensor-linter.ts` invokes `bunx eslint@10` for the availability probe, the `--print-config` probe, and the lint run itself; PATH-shadowed or node_modules eslint no longer changes the verdict.
+* Projects that need a different eslint can still override the sensor's `command:` in the linter sensor manifest.
+
 ## [2.3.7] - 2026-07-14
 
 The `upstream-coverage` sensor now matches the citation forms the framework's artifacts actually use, clearing the hundreds of false `SENSOR_FAILED` audit rows a Construction run accumulated. It previously demanded each consumed artifact's bare slug in every single written file; artifacts instead cite upstream by producing-stage directory path in their provenance header, and multi-artifact stages legitimately split citations across sibling deliverables. Real coverage gaps still fail. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
