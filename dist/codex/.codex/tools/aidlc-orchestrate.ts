@@ -3220,7 +3220,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // and its artifacts may legitimately be absent (a fresh clone, moved files), so
   // the guard must not turn a harmless replay into an error.
   //
-  // Scoped to the INLINE per-unit loop, NOT a settled autonomous
+  // Scoped to the INLINE per-unit loop, NOT an eligible autonomous
   // code-generation swarm.
   // The swarm climbs the Bolt DAG one BATCH per `next` (tryEmitSwarm emits the
   // first batch with an unconverged unit, then presents the stage's single gate
@@ -3229,13 +3229,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // `complete --merge` consolidates only the AIDLC metadata back to the main
   // checkout (a converged unit's produced artifacts stay in its Bolt worktree),
   // so this disk-coverage check would find EVERY swarm unit uncovered and refuse
-  // the approve outright even after the whole stage has built. We exclude only a
-  // fully converged swarm that satisfies the same eligibility predicate as
-  // tryEmitSwarm. The guard remains for every inline per-unit stage (the four
+  // the approve outright even after the whole stage has built. We exclude any
+  // eligible autonomous swarm, including one that is mid-run with later batches
+  // unconverged, using the same eligibility predicate as tryEmitSwarm. The guard
+  // remains for every inline per-unit stage (the four
   // design stages, and code-generation when it falls back to the inline path off
   // the swarm).
   const isAutonomousSwarm =
-    isSettledAutonomousSwarm(node, scope, stateContent, pd);
+    eligibleAutonomousSwarmBatches(node, scope, stateContent, pd) !== null;
   if (isGated && isPerUnit(node) && stageCheckbox.state !== "completed" && !isAutonomousSwarm) {
     const r = resolveBoltBatches(pd);
     if (r.state === "malformed") {
