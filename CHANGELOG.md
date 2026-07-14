@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file.
 Revision counting now works for the Reverse Engineering gate. Rejecting the RE approval gate ("Request Changes") previously left `Revision Count` at 0 with no `GATE_REJECTED` row when the orchestrator honored the revision conversationally without running the reject verb: codekb artifact writes were invisible to the audit trail, so the approve-time backstop that backfills unrecorded rejects had nothing to see and excluded codekb stages outright. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
 
 * Codekb writes (Reverse Engineering's artifacts under `aidlc/spaces/<space>/codekb/`) now emit `ARTIFACT_CREATED`/`ARTIFACT_UPDATED` audit events like record-tree writes, with a `codekb > <repo> > <name>` context breadcrumb.
-* The approve-time gate-revision backstop covers codekb stages: revising an RE artifact at an open gate then approving backfills the missing `GATE_REJECTED` + `STAGE_REVISING` pair and increments `Revision Count`, as it already did for record-tree stages.
+* The approve-time gate-revision backstop covers codekb stages: revising an RE artifact for a repo recorded by the active intent at an open gate, then approving, backfills the missing `GATE_REJECTED` + `STAGE_REVISING` pair and increments `Revision Count`, as it already did for record-tree stages. Intents with no recorded repo set retain the legacy any-repo fallback.
 
 ## [2.4.0] - 2026-07-14
 

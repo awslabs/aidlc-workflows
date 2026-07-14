@@ -21,6 +21,7 @@ import {
   holdsAuditLock,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
+  intentRepos,
   isAutonomousMode,
   isoTimestamp,
   loadScopeMapping,
@@ -170,13 +171,16 @@ function hasStageAuditEvent(
 // a per-repo dir beneath the space codekb root (codekb/<repo>/<name>.md) with
 // no <slug> segment anywhere, so the suffix idiom matches the codekb marker +
 // one repo segment instead - the matcher analog of the placement split
-// producesDirsForStage handles for the artifact guard. The audit File field is
-// stored forward-slash-normalised (aidlc-audit-logger.ts), so the
+// producesDirsForStage handles for the artifact guard. When the active intent
+// records repos, that segment must belong to the recorded set so a write to one
+// repo's durable codekb cannot revise an unrelated intent. The audit File field
+// is stored forward-slash-normalised (aidlc-audit-logger.ts), so the
 // forward-slash matching is harness-neutral; we still normalise defensively in
 // case a caller passes a raw OS path.
 function producesArtifactFile(
   stage: { slug: string; produces?: string[] },
-  file: string
+  file: string,
+  recordedRepos: ReadonlySet<string>
 ): boolean {
   const produces = stage.produces ?? [];
   if (produces.length === 0) return false;
@@ -188,7 +192,14 @@ function producesArtifactFile(
       // Exactly one <repo> segment between /codekb/ and /<name>.md.
       const head = norm.slice(0, idx);
       const repoSlash = head.lastIndexOf("/");
-      return repoSlash !== -1 && head.slice(0, repoSlash).endsWith("/codekb");
+      if (repoSlash === -1 || !head.slice(0, repoSlash).endsWith("/codekb")) return false;
+      const repo = head.slice(repoSlash + 1);
+      if (repo.length === 0) return false;
+      // An empty registry is the legacy projectDir-is-the-repo case. Keep the
+      // historical any-repo match: codekbRepoName's basename is a write-path
+      // default, not ownership evidence for durable files that may predate repo
+      // recording or have been written with an explicit repo target.
+      return recordedRepos.size === 0 || recordedRepos.has(repo);
     });
   }
   return produces.some((name) => norm.endsWith(`/${stage.slug}/${name}.md`));
@@ -245,15 +256,18 @@ function producesArtifactFile(
 // evidence is absent it does nothing and the normal approve proceeds. Codekb
 // stages are covered via producesArtifactFile's codekb arm (their produces live
 // under codekb/<repo>/ with no <slug> subdir; the audit-logger hook logs those
-// writes). They were previously excluded outright, which - combined with the
-// hook not logging codekb paths at all - left a revised-then-approved
-// reverse-engineering gate with Revision Count 0 and no GATE_REJECTED row.
+// writes). A non-empty intent repo set scopes that evidence to its own repos; an
+// empty legacy set retains the any-repo fallback described at the matcher. They
+// were previously excluded outright, which - combined with the hook not logging
+// codekb paths at all - left a revised-then-approved reverse-engineering gate
+// with Revision Count 0 and no GATE_REJECTED row.
 function unrecordedRevisionSinceGateOpen(
   pd: string,
   stage: { slug: string; produces?: string[] }
 ): boolean {
   const audit = readAllAuditShards(pd);
   if (audit.length === 0) return false; // no ledger -> nothing to reconcile
+  const recordedRepos = new Set(intentRepos(pd));
   const RELEVANT = new Set([
     "STAGE_AWAITING_APPROVAL",
     "STAGE_STARTED",
@@ -327,7 +341,7 @@ function unrecordedRevisionSinceGateOpen(
       } else if (
         (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") &&
         e.file !== null &&
-        producesArtifactFile(stage, e.file)
+        producesArtifactFile(stage, e.file, recordedRepos)
       ) {
         wroteBeforeHuman = true;
       }
@@ -341,7 +355,7 @@ function unrecordedRevisionSinceGateOpen(
     if (
       (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") &&
       e.file !== null &&
-      producesArtifactFile(stage, e.file)
+      producesArtifactFile(stage, e.file, recordedRepos)
     ) {
       return true;
     }

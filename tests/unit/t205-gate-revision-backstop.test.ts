@@ -26,21 +26,22 @@
 // With the STAGE_STARTED fallback anchor, a produces write must ALSO precede the
 // first post-anchor HUMAN_TURN (mid-stage coaching before any production is not
 // a revision - scenario 10). Fail-open everywhere; codekb stages covered via
-// producesArtifactFile's codekb arm (scenario 12 - they were previously
-// excluded outright, which left a revised reverse-engineering gate with
-// Revision Count 0); off-switch AIDLC_SKIP_REVISION_BACKSTOP=1.
+// producesArtifactFile's repo-scoped codekb arm (scenarios 12 and 13 - they
+// were previously excluded outright, which left a revised reverse-engineering
+// gate with Revision Count 0); off-switch AIDLC_SKIP_REVISION_BACKSTOP=1.
 //
-// This is a PROCESS-boundary test: it spawns the real dist tools (state, audit)
-// and drives the real audit-logger hook over stdin, so the audit File shape and
-// event ordering match production. Env posture (mirrors t188): the artifact +
-// human-presence guards stay bypassed (separate chokepoints these bare fixtures
-// do not satisfy), and AIDLC_SKIP_REVISION_BACKSTOP is DELETED so the backstop
-// itself is exercised (the suite sets it globally). Scenario 7 keeps it set to
-// prove the off-switch.
+// This is a PROCESS-boundary test: it spawns the real dist tools (state, audit,
+// orchestrate) and drives the real audit-logger hook over stdin, so the audit
+// File shape, report dispatch, and event ordering match production. Env posture
+// (mirrors t188): the artifact + human-presence guards stay bypassed (separate
+// chokepoints these bare fixtures do not satisfy), and
+// AIDLC_SKIP_REVISION_BACKSTOP is DELETED so the backstop itself is exercised
+// (the suite sets it globally). Scenario 7 keeps it set to prove the off-switch.
 //
 // Source under test (dist/claude/.claude/):
 //   tools/aidlc-state.ts handleApprove (backstop block), unrecordedRevisionSinceGateOpen,
 //     producesArtifactFile;
+//   tools/aidlc-orchestrate.ts handleReport (production approval dispatcher);
 //   hooks/aidlc-audit-logger.ts (emits ARTIFACT_UPDATED with the production File shape);
 //   tools/aidlc-audit.ts append (records the HUMAN_TURN event).
 
@@ -52,6 +53,7 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
+  DEFAULT_SPACE,
   resetAidlcEnv,
   seededAuditDir,
   seededAuditShard,
@@ -63,6 +65,7 @@ import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts
 
 const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-audit-logger.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility ([-])
@@ -78,6 +81,20 @@ function guarded(proj: string, args: string[]): { rc: number; out: string } {
   env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
   delete env.AIDLC_SKIP_REVISION_BACKSTOP;
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
+    encoding: "utf-8",
+    env,
+  });
+  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
+// Drive the production report dispatcher with the same guard posture as
+// guarded(). report resolves the current gated stage and shells out to approve.
+function guardedReport(proj: string, args: string[]): { rc: number; out: string } {
+  const env = { ...process.env };
+  env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
+  env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
+  delete env.AIDLC_SKIP_REVISION_BACKSTOP;
+  const r = spawnSync(BUN, [ORCHESTRATE, "report", ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
   });
@@ -137,6 +154,17 @@ function fireArtifact(proj: string, absFile: string): void {
 // <record>/ideation/feasibility/<name>.md.
 function feasibilityArtifact(proj: string, name: string): string {
   return join(seededRecordDir(proj), "ideation", "feasibility", `${name}.md`);
+}
+
+// The unit fixture already seeds the production registry and active-intent
+// cursor around the requested brownfield state. Rewriting its lone repos field,
+// as t182 does, keeps this process-boundary test focused on report and approve;
+// intent-birth would replace the fixture state and test an unrelated transaction.
+function rewriteIntentRepos(proj: string, repos: string[]): void {
+  const regPath = join(proj, "aidlc", "spaces", DEFAULT_SPACE, "intents", "intents.json");
+  const rows = JSON.parse(readFileSync(regPath, "utf-8")) as Array<Record<string, unknown>>;
+  rows[0].repos = repos;
+  writeFileSync(regPath, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
 }
 
 function field(proj: string, name: string): string {
@@ -467,21 +495,24 @@ describe("t205: approve-time gate-revision backstop", () => {
     ).toBe(1);
   });
 
-  // --- Scenario 12: the codekb stage (reverse-engineering) - the live t139
-  // finding. RE's produces live under the SPACE codekb root
+  // --- Scenario 12: the codekb stage (reverse-engineering). RE's produces live
+  // under the SPACE codekb root
   // (aidlc/spaces/<space>/codekb/<repo>/<name>.md, no <slug> segment), which
   // previously (a) the audit-logger hook did not log at all and (b) the
   // backstop excluded outright - so a revised-then-approved RE gate left
   // Revision Count 0 with no GATE_REJECTED row. Bug flow on the RE gate:
   // gate-start; HUMAN_TURN (request changes); codekb ARTIFACT_UPDATED (the
-  // conversational revision); HUMAN_TURN (approve); approve -> backfill fires.
-  test("12: codekb stage (reverse-engineering) revision at the gate backfills too", () => {
+  // conversational revision); HUMAN_TURN (approve); report -> approve ->
+  // backfill. The repo-b write proves that any member of a multi-repo intent's
+  // recorded set can supply the revision evidence.
+  test("12: codekb revision in a multi-repo intent backfills through report", () => {
     // Re-seed with the brownfield fixture whose Current Stage is
     // reverse-engineering (the default seed's mid-ideation fixture has RE
     // outside its plan).
     cleanupTestProject(proj);
     proj = createTestProject();
     seedStateFile(proj, "state-brownfield-init-done.md");
+    rewriteIntentRepos(proj, ["repo-a", "repo-b"]);
     const slug = field(proj, "Current Stage");
     expect(slug).toBe("reverse-engineering");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
@@ -491,11 +522,17 @@ describe("t205: approve-time gate-revision backstop", () => {
     // shape: <proj>/aidlc/spaces/default/codekb/<repo>/architecture.md.
     fireArtifact(
       proj,
-      join(proj, "aidlc", "spaces", "default", "codekb", "my-repo", "architecture.md"),
+      join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", "repo-b", "architecture.md"),
     );
     recordHumanTurn(proj); // human approves
-    const r = guarded(proj, ["approve", slug, "--user-input", "looks good now"]);
+    const r = guardedReport(proj, [
+      "--result",
+      "approved",
+      "--user-input",
+      "looks good now",
+    ]);
     expect(r.rc).toBe(0);
+    expect(r.out).toContain('"kind":"done"');
 
     expect(field(proj, "Revision Count")).toBe("1");
     const rejected = auditBlocks(proj).filter(
@@ -505,6 +542,42 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(rejected[0].recovered).toBe(true);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     // The hook actually logged the codekb write (the other half of the fix).
+    expect(eventCount(proj, "ARTIFACT_UPDATED")).toBeGreaterThanOrEqual(1);
+  });
+
+  // --- Scenario 13: codekb remains space-level and fully audited, but revision
+  // recovery belongs only to the active intent's recorded repos. A repo-b write
+  // cannot revise an intent scoped only to repo-a. Approval still proceeds
+  // because the backstop adds only evidence it can prove.
+  test("13: codekb revision outside the intent repo set is logged but not backfilled", () => {
+    cleanupTestProject(proj);
+    proj = createTestProject();
+    seedStateFile(proj, "state-brownfield-init-done.md");
+    rewriteIntentRepos(proj, ["repo-a"]);
+    const slug = field(proj, "Current Stage");
+    expect(slug).toBe("reverse-engineering");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordHumanTurn(proj);
+    const revisionCountBefore = field(proj, "Revision Count");
+    fireArtifact(
+      proj,
+      join(proj, "aidlc", "spaces", DEFAULT_SPACE, "codekb", "repo-b", "architecture.md"),
+    );
+    recordHumanTurn(proj);
+    const r = guardedReport(proj, [
+      "--result",
+      "approved",
+      "--user-input",
+      "looks good now",
+    ]);
+    expect(r.rc).toBe(0);
+    expect(r.out).toContain('"kind":"done"');
+
+    expect(field(proj, "Revision Count")).toBe(revisionCountBefore);
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+    expect(eventCount(proj, "STAGE_REVISING")).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     expect(eventCount(proj, "ARTIFACT_UPDATED")).toBeGreaterThanOrEqual(1);
   });
 });

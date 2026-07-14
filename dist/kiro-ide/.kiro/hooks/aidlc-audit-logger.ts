@@ -1,6 +1,7 @@
 // PostToolUse hook: Emit ARTIFACT_CREATED / ARTIFACT_UPDATED when files under
-// aidlc-docs/ are written or edited. Distinguishes CREATE vs UPDATE by checking
-// whether the target file existed before the Write/Edit.
+// the active intent record or active space codekb tree are written or edited.
+// Distinguishes CREATE vs UPDATE by checking whether the target file existed
+// before the Write/Edit.
 //
 // Receives JSON on stdin from Claude Code. No-op if no audit.md exists (no
 // active workflow in this cwd) to preserve the existing "only log when

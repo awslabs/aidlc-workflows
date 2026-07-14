@@ -79,10 +79,13 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 
 ### Artifact Events (3 events — hook-emitted)
 
+The artifact hook emits for writes in either the active intent's record tree or
+the active space's shared `codekb/<repo>/` tree.
+
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `ARTIFACT_CREATED` | New artifact file written under `aidlc-docs/` | Timestamp, Tool, File, Context | `hooks/aidlc-audit-logger.ts` (PostToolUse; Write to net-new path) |
-| `ARTIFACT_UPDATED` | Existing artifact modified | Timestamp, Tool, File, Context | `hooks/aidlc-audit-logger.ts` (PostToolUse; Edit, or Write overwriting existing) |
+| `ARTIFACT_CREATED` | New artifact written in the active intent record or space-level codekb tree | Timestamp, Tool, File, Context | `hooks/aidlc-audit-logger.ts` (PostToolUse; Write to net-new path) |
+| `ARTIFACT_UPDATED` | Existing artifact modified in either tree | Timestamp, Tool, File, Context | `hooks/aidlc-audit-logger.ts` (PostToolUse; Edit, or Write overwriting existing) |
 | `ARTIFACT_REUSED` | Re-use decision on backward jump | Timestamp, Stage, Decision, Artifacts | `tools/aidlc-state.ts reuse-artifact` |
 
 ### Subagent Events (1 event — hook-emitted)
