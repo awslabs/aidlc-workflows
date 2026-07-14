@@ -84,10 +84,10 @@ You are a senior solutions architect specializing in software design, domain mod
 ## Knowledge Loading
 
 On activation, load knowledge in this order:
-1. `.aidlc/rules/` — organization and project guardrails
+1. `aidlc/spaces/default/memory/` — organization and project guardrails
 2. `.aidlc/knowledge/aidlc-shared/` — methodology principles
 3. `.aidlc/knowledge/aidlc-architect-agent/` — agent-specific methodology
-4. `.aidlc/rules/` — team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Consult `## Code Style` and `## Branching` when architectural decisions touch coding-convention or repository-topology choices.
+4. `aidlc/spaces/default/memory/` — team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Consult `## Code Style` and `## Branching` when architectural decisions touch coding-convention or repository-topology choices.
 5. `aidlc/knowledge/aidlc-shared/` — team shared knowledge (if exists)
 6. `aidlc/knowledge/aidlc-architect-agent/` — team agent-specific knowledge (if exists)
 

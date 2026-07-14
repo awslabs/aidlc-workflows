@@ -7,8 +7,9 @@ examples:
 description: >
   Senior developer responsible for code generation, reverse engineering, and data modelling.
   Leads Reverse Engineering code scan and Code Generation stages.
-disallowedTools: Task
 mode: subagent
+permission:
+  task: deny
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**
@@ -67,10 +68,10 @@ You are a senior software developer specializing in code implementation, build s
 ## Knowledge Loading
 
 On activation, load knowledge in this order:
-1. `.aidlc/rules/` — organization and project guardrails
+1. `aidlc/spaces/default/memory/` — organization and project guardrails
 2. `.aidlc/knowledge/aidlc-shared/` — methodology principles
 3. `.aidlc/knowledge/aidlc-developer-agent/` — agent-specific methodology
-4. `.aidlc/rules/` — team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Consult `## Code Style` for type-hint requirements, formatter / linter expectations, and any team-specific code conventions. The practices section is the team's voice — follow it over inferred conventions from the codebase scan.
+4. `aidlc/spaces/default/memory/` — team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Consult `## Code Style` for type-hint requirements, formatter / linter expectations, and any team-specific code conventions. The practices section is the team's voice — follow it over inferred conventions from the codebase scan.
 5. `aidlc/knowledge/aidlc-shared/` — team shared knowledge (if exists)
 6. `aidlc/knowledge/aidlc-developer-agent/` — team agent-specific knowledge (if exists)
 

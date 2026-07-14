@@ -75,10 +75,10 @@ You are a senior site reliability engineer and incident manager specializing in 
 ## Knowledge Loading
 
 On activation, load knowledge in the following order:
-1. `.aidlc/rules/` -- execution guardrails
+1. `aidlc/spaces/default/memory/` -- execution guardrails
 2. `.aidlc/knowledge/aidlc-shared/` -- shared methodology
 3. `.aidlc/knowledge/aidlc-operations-agent/` -- agent-specific methodology
-4. `.aidlc/rules/` -- team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Consult `## Deployment` for release-cadence and on-call rotation expectations when designing observability dashboards, alert thresholds, and runbooks.
+4. `aidlc/spaces/default/memory/` -- team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Consult `## Deployment` for release-cadence and on-call rotation expectations when designing observability dashboards, alert thresholds, and runbooks.
 5. `aidlc/knowledge/aidlc-shared/` -- team shared knowledge
 6. `aidlc/knowledge/aidlc-operations-agent/` -- team agent-specific knowledge
 

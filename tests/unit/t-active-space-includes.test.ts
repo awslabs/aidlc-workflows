@@ -296,6 +296,63 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
     expect(readFileSync(join(root, "opencode.json"), "utf-8")).toBe(before);
   });
 
+  test("falls back to opencode.jsonc and preserves comments plus trailing commas", () => {
+    const root = setup();
+    rmSync(join(root, "opencode.json"));
+    const before = `{
+  // Keep this project note.
+  "instructions": [
+    "docs/project.md",
+    "aidlc/spaces/default/memory/**/*.md",
+  ],
+  /* Keep this block comment too. */
+  "permission": {
+    "bash": {
+      "*": "ask",
+    },
+  },
+}
+`;
+    writeFileSync(join(root, "opencode.jsonc"), before, "utf-8");
+
+    const written = repointHarnessIncludes(root, "teamB");
+    expect(written).toEqual(["opencode.jsonc"]);
+    const after = readFileSync(join(root, "opencode.jsonc"), "utf-8");
+    expect(after).toBe(
+      before.replace(
+        "aidlc/spaces/default/memory/**/*.md",
+        "aidlc/spaces/teamB/memory/**/*.md",
+      ),
+    );
+  });
+
+  test("re-points explicit inline and native agent memory references with the config", () => {
+    const root = setup();
+    const agents: string[] = [];
+    for (const base of [".aidlc", ".opencode"]) {
+      const dir = join(root, base, "agents");
+      mkdirSync(dir, { recursive: true });
+      const agent = join(dir, "aidlc-architect-agent.md");
+      cpSync(
+        distSurface("opencode", base, "agents", "aidlc-architect-agent.md"),
+        agent,
+      );
+      agents.push(agent);
+    }
+
+    const written = repointHarnessIncludes(root, "teamB");
+    expect(written).toEqual([
+      "opencode.json",
+      ".aidlc/agents/aidlc-architect-agent.md",
+      ".opencode/agents/aidlc-architect-agent.md",
+    ]);
+    for (const agent of agents) {
+      const body = readFileSync(agent, "utf-8");
+      expect(body).toContain("aidlc/spaces/teamB/memory/");
+      expect(body).not.toContain("aidlc/spaces/default/memory/");
+    }
+  });
+
   test("a malformed opencode.json is skipped, never corrupted", () => {
     const root = setup();
     writeFileSync(join(root, "opencode.json"), "{ not json");

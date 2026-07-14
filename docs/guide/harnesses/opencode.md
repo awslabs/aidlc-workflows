@@ -26,7 +26,7 @@ script (top-level dispatch, `process.exit`) crashes the session
 ## Prerequisites
 
 - **opencode ≥ 1.17** — the plugin hook surface this install relies on
-  (`tool.execute.after`, `chat.message`, `session.idle`,
+  (`tool.execute.before`, `tool.execute.after`, `chat.message`, `session.idle`,
   `experimental.session.compacting`) and project-local skill/agent discovery.
   Check with `opencode --version`.
 - **bun** — same requirement as every harness; every tool and hook runs via
@@ -52,7 +52,9 @@ script (top-level dispatch, `process.exit`) crashes the session
    discovery from `.aidlc/skills`), `instructions` (the method-tree include —
    `/aidlc space <name>` re-points it), and the bash permission allowlist for
    `bun .aidlc/tools/*` / `bun .aidlc/hooks/*`. If you merge into an existing
-   `opencode.json`, keep all three.
+   `opencode.json` or `opencode.jsonc`, keep all three. The adapter enforces
+   the permission boundary: an allowed AIDLC bun prefix must remain one direct
+   command, with no chaining, redirection, or command substitution.
 
 2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
    Integration" before starting a workflow (per-clone audit shards are
@@ -69,9 +71,10 @@ script (top-level dispatch, `process.exit`) crashes the session
 - **Hooks ride the adapter plugin.** opencode has no hooks.json/settings hook
   registry; `.opencode/plugin/aidlc-opencode-adapter.ts` maps opencode's
   plugin hook moments onto the core hook bodies in `.aidlc/hooks/` (run as bun
-  subprocesses): audit + sensors on write/edit, runtime-compile on bash,
-  statusline sync on todowrite, subagent logging on task, presence minting on
-  each human turn, state validation before compaction.
+  subprocesses): reviewer read-scope and the AIDLC bash boundary before tool
+  execution; audit + sensors on write/edit/apply_patch; runtime-compile on
+  bash; statusline sync on todowrite; subagent logging on task; presence
+  minting on each human turn; state validation before compaction.
 - **Forwarding-loop enforcement is advisory.** The Stop seam is the
   `session.idle` event — reactive, not blocking. When the core stop hook
   answers `block`, the plugin re-engages the loop by injecting a nudge prompt
@@ -79,7 +82,11 @@ script (top-level dispatch, `process.exit`) crashes the session
   pausing human is released by the hook's interactive cap.
 - **Personas are native subagents** (`mode: subagent`); the conductor adopts
   them inline for most stages and delegates via the `task` tool for the two
-  subagent stages (2.1 reverse-engineering, 3.5 code-generation).
+  subagent stages (2.1 reverse-engineering, 3.5 code-generation). Their native
+  permission map denies `task`, so delegated agents cannot delegate again.
+- **Space switches preserve JSONC.** `/aidlc space <name>` updates the method
+  glob in either `opencode.json` or `opencode.jsonc` without stripping comments
+  or trailing commas, and keeps explicit persona memory paths aligned.
 - **Construction swarm runs as task-tool fan-out only** (`AIDLC_USE_SWARM=1`
   is a loud no-op — no Workflow tool exists).
 - **No session-end moment** — `SESSION_ENDED` audit events are not emitted.

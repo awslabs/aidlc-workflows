@@ -155,7 +155,7 @@ export const PHASE_NUMBERS: Record<string, Phase> = {
 // dev-repo CWD rung, where more than one harness dir can coexist and the Claude
 // tree is canonical (".claude" must win). A real single-harness install never
 // reaches the probe; it resolves by script path.
-const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc"] as const;
+export const KNOWN_HARNESS_DIRS = [".claude", ".kiro", ".codex", ".aidlc"] as const;
 
 // True for a plausible harness dir name: a dot-prefixed segment, e.g. ".claude"
 // / ".kiro" / ".gemini". Guards the script-path derivation so an unexpected
@@ -903,20 +903,30 @@ function shellCommandSegments(command: string): string[] {
 // Classify commands for the runtime-compile hook's cheap PostToolUse gate.
 // Transition matching stays intentionally lexical, but the recursion guard
 // only examines real unquoted shell-command segments.
+const runtimeCompileHarnessPattern = KNOWN_HARNESS_DIRS
+  .map((dir) => dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+  .join("|");
+const runtimeCompileTool = new RegExp(
+  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-(state|jump|bolt|utility)\\.ts\\b`,
+);
+const runtimeCompileReport = new RegExp(
+  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-orchestrate\\.ts\\b.*\\breport\\b`,
+);
+const runtimeCompileSelf = new RegExp(
+  `\\bbun\\b.*(?:${runtimeCompileHarnessPattern})/tools/aidlc-runtime\\.ts\\b`,
+);
+
 export function classifyRuntimeCompileCommand(
   command: string,
 ): "reject" | "fire" | "pass" {
   const invokesRuntime = shellCommandSegments(command)
     .some((segment) => /^\s*aidlc\s+runtime\b/.test(segment));
-  if (
-    /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-runtime\.ts\b/.test(command) ||
-    invokesRuntime
-  ) {
+  if (runtimeCompileSelf.test(command) || invokesRuntime) {
     return "reject";
   }
   if (
-    /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-(state|jump|bolt|utility)\.ts\b/.test(command) ||
-    /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-orchestrate\.ts\b.*\breport\b/.test(command) ||
+    runtimeCompileTool.test(command) ||
+    runtimeCompileReport.test(command) ||
     /\baidlc\s+(?:state|jump|bolt)\b|\baidlc\s+(?:status|doctor|version|help)\b|\baidlc\s+scope\s+change\b|\baidlc\s+config\s+set\b/.test(command) ||
     /\baidlc\s+report\b|\baidlc\s+orchestrate\s+report\b|\baidlc\s+next\b.*\breport\b/.test(command)
   ) {

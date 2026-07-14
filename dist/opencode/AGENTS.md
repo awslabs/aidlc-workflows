@@ -4,10 +4,10 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
 ## Prerequisites
 
-- **opencode ≥ 1.17**: the plugin hook surface this install relies on (`tool.execute.after`, `chat.message`, `session.idle` on the event bus, `experimental.session.compacting`) and project-local `.aidlc/skills/` + `.opencode/agents/` discovery are current-line features. Check with `opencode --version`.
+- **opencode ≥ 1.17**: the plugin hook surface this install relies on (`tool.execute.before`, `tool.execute.after`, `chat.message`, `session.idle` on the event bus, `experimental.session.compacting`) and project-local `.aidlc/skills/` + `.opencode/agents/` discovery are current-line features. Check with `opencode --version`.
 - **bun**: Required for the CLI tools and hook scripts (state management, audit logging, orchestration engine). Install via `curl -fsSL https://bun.sh/install | bash`. `bun` must be on your PATH for the shells opencode spawns; the AIDLC adapter plugin also probes `~/.bun/bin/bun` directly.
 - **Model/provider**: the shipped `opencode.json` pins no model — your global opencode configuration (`~/.config/opencode/opencode.json`) supplies the default. Tiered personas pin `amazon-bedrock/global.anthropic.claude-sonnet-4-6`; override per agent under `agent:` in the project `opencode.json` if your provider differs.
-- **Permissions**: the shipped project `opencode.json` pre-approves ONLY `bun .aidlc/tools/*` and `bun .aidlc/hooks/*` shell commands; every other bash command prompts. There is no blanket shell trust. In `opencode run` non-interactive sessions, pass `--auto` only if you accept auto-approval of the remaining prompts — prefer interactive sessions for gated workflows.
+- **Permissions**: the shipped project `opencode.json` pre-approves ONLY single `bun .aidlc/tools/<file>.ts ...` and `bun .aidlc/hooks/<file>.ts ...` invocations; the adapter rejects chaining, redirection, and command substitution after those prefixes. Every other bash command prompts. There is no blanket shell trust. In `opencode run` non-interactive sessions, pass `--auto` only if you accept auto-approval of the remaining prompts; prefer interactive sessions for gated workflows.
 - **Locking**: Audit log file locking is handled portably using mkdir-based locking in the system temp directory (no external dependencies).
 - **Hook permissions**: All 12 hooks are TypeScript (`.ts`) and run via `bun`. No executable bits required — works identically on macOS, Linux, and native Windows PowerShell.
 
@@ -39,9 +39,9 @@ For full documentation, see `docs/guide/` (User Guide), `docs/harness-engineerin
 This is the same AI-DLC core that ships to every harness — one deterministic engine, state machine, audit trail, and stage set, rendered onto opencode. On opencode:
 
 - Approval gates and questions render as **numbered prose options** (no structured-question widget); the questions FILE with `[Answer]:` tags remains the source of truth.
-- Hooks ride the **AIDLC adapter plugin** (`.opencode/plugin/aidlc-opencode-adapter.ts`): audit, sensors, runtime-compile, presence minting, and pre-compaction state validation all fire from opencode's plugin hook surface.
+- Hooks ride the **AIDLC adapter plugin** (`.opencode/plugin/aidlc-opencode-adapter.ts`): reviewer read-scope enforcement and the AIDLC bash-command boundary run before tools; audit and sensors cover write, edit, and apply_patch; runtime-compile, presence minting, and pre-compaction state validation run from the matching opencode moments.
 - The forwarding-loop enforcement (the Stop hook) rides `session.idle` and re-engages the loop by **injecting a nudge prompt** — advisory, not blocking; a chatting or pausing human is released by the hook's interactive cap.
-- The AI-DLC method (`aidlc/spaces/<space>/memory/*.md`) reaches ambient context via the `instructions` glob in the project `opencode.json` — `/aidlc space <name>` re-points it.
+- The AI-DLC method (`aidlc/spaces/<space>/memory/*.md`) reaches ambient context via the `instructions` glob in the project `opencode.json` or `opencode.jsonc`; `/aidlc space <name>` re-points it without removing JSONC comments.
 - There is **no statusline** and **no welcome message**; use `/aidlc --status` and the progress lines at gates.
 - Construction swarm runs as **task-tool fan-out only** (`AIDLC_USE_SWARM=1` is a loud no-op).
 - Session-end audit events (`SESSION_ENDED`) are not emitted — opencode has no session-end hook moment; pre-compaction validation DOES fire (`experimental.session.compacting`).

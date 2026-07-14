@@ -23,12 +23,10 @@ import { dirname, join, relative } from "node:path";
 import type { EmitContext, EmitResult } from "../../scripts/manifest-types.ts";
 import { projectTier } from "../../core/tools/aidlc-tiers.ts";
 
-// Rewrite a core persona .md into its opencode-native subagent twin: the
-// frontmatter `tier: <t>` line becomes the projected `model:`/`variant:` keys
-// (omitted when null — the inherit-by-omission contract) followed by
-// `mode: subagent`. Everything else (name, display_name, description,
-// disallowedTools — opencode routes unknown keys into `options` silently) and
-// the body pass through. Mirrors the packager's projectTierFrontmatter shape.
+// Rewrite a core persona .md into its opencode-native subagent twin. The
+// frontmatter tier becomes model/variant plus mode, and the core Task denial
+// becomes opencode's native permission map. Unknown disallowed tools fail the
+// build instead of silently landing in opencode's inert options bag.
 function emitSubagentMd(raw: string, srcPath: string, tierCap: EmitContext["tierCap"]): string {
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
@@ -36,21 +34,43 @@ function emitSubagentMd(raw: string, srcPath: string, tierCap: EmitContext["tier
   const fm = m[1];
   const tierMatch = fm.match(/^tier:\s*(\S+)\s*$/m);
   if (!tierMatch) throw new Error(`${srcPath}: agent frontmatter has no tier: line.`);
+  const disallowedMatch = fm.match(/^disallowedTools:\s*(.*?)\s*$/m);
+  if (disallowedMatch && !/\bTask\b/i.test(disallowedMatch[1])) {
+    throw new Error(
+      `${srcPath}: opencode emission cannot project disallowedTools: ${disallowedMatch[1]}.`,
+    );
+  }
   const proj = projectTier(tierMatch[1], "opencode", tierCap); // throws on unknown tier
   const lines: string[] = [];
   if (proj.model !== null) lines.push(`model: ${proj.model}`);
   if (proj.variant !== null) lines.push(`variant: ${proj.variant}`);
   lines.push("mode: subagent");
+  if (disallowedMatch) lines.push("permission:", "  task: deny");
   const newFm = fm
     .split(/\r?\n/)
-    .flatMap((line) => (/^tier:/.test(line) ? lines : [line]))
+    .flatMap((line) => {
+      if (/^disallowedTools:/.test(line)) return [];
+      return /^tier:/.test(line) ? lines : [line];
+    })
     .join("\n");
   return raw.replace(m[0], () => `---\n${newFm}\n---\n`);
+}
+
+function projectActiveMemoryReferences(raw: string): string {
+  return raw
+    .replaceAll(".aidlc/rules/aidlc-org.md", "aidlc/spaces/default/memory/org.md")
+    .replaceAll(".aidlc/rules/aidlc-team.md", "aidlc/spaces/default/memory/team.md")
+    .replaceAll(".aidlc/rules/aidlc-project.md", "aidlc/spaces/default/memory/project.md")
+    .replaceAll(".aidlc/rules/", "aidlc/spaces/default/memory/");
 }
 
 export default function emit(ctx: EmitContext): EmitResult {
   const { coreRoot, harnessRoot, distRoot, substituteToken, tierCap } = ctx;
   const SHELL = join(distRoot, ".opencode");
+  const ACTIVE_MEMORY = join(distRoot, "aidlc", "spaces", "default", "memory");
+  if (!existsSync(ACTIVE_MEMORY)) {
+    throw new Error(`opencode emission requires the shipped memory tree at ${ACTIVE_MEMORY}.`);
+  }
 
   const emissions: Array<{ path: string; content: () => string }> = [];
 
@@ -59,8 +79,23 @@ export default function emit(ctx: EmitContext): EmitResult {
   for (const f of readdirSync(agentsDir).filter((x) => x.endsWith(".md")).sort()) {
     emissions.push({
       path: join(SHELL, "agents", f),
-      content: () =>
-        substituteToken(emitSubagentMd(readFileSync(join(agentsDir, f), "utf-8"), join(agentsDir, f), tierCap)),
+      content: () => {
+        const projected = substituteToken(
+          emitSubagentMd(
+            readFileSync(join(agentsDir, f), "utf-8"),
+            join(agentsDir, f),
+            tierCap,
+          ),
+        );
+        return projectActiveMemoryReferences(projected);
+      },
+    });
+    // The conductor reads this core-projected copy for inline persona framing.
+    // It needs the same valid method path as the native subagent twin.
+    const inlinePath = join(distRoot, ".aidlc", "agents", f);
+    emissions.push({
+      path: inlinePath,
+      content: () => projectActiveMemoryReferences(readFileSync(inlinePath, "utf-8")),
     });
   }
 

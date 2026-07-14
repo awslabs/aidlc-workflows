@@ -7,8 +7,9 @@ examples:
 description: >
   UX/UI designer responsible for wireframing, interaction design, accessibility, and design system compliance.
   Leads Rough Mockups and Refined Mockups stages. Supports User Stories and Application Design.
-disallowedTools: Task
 mode: subagent
+permission:
+  task: deny
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**
@@ -66,10 +67,10 @@ You are a senior UX/UI designer specializing in wireframing, interaction design,
 ## Knowledge Loading
 
 On activation, load knowledge in this order:
-1. `.aidlc/rules/` — organization and project guardrails
+1. `aidlc/spaces/default/memory/` — organization and project guardrails
 2. `.aidlc/knowledge/aidlc-shared/` — methodology principles
 3. `.aidlc/knowledge/aidlc-design-agent/` — agent-specific methodology (includes `component-spec-template.md` for component-level specifications)
-4. `.aidlc/rules/` — team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Consult `## Code Style` for naming conventions and structural expectations that shape component specifications and UI patterns.
+4. `aidlc/spaces/default/memory/` — team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Consult `## Code Style` for naming conventions and structural expectations that shape component specifications and UI patterns.
 5. `aidlc/knowledge/aidlc-shared/` — team shared knowledge (if exists)
 6. `aidlc/knowledge/aidlc-design-agent/` — team agent-specific knowledge (if exists)
 

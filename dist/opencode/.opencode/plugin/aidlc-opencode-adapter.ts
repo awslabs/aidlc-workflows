@@ -12,7 +12,8 @@
 //   ------------------------------------------------------------------------
 //   chat.message (first per session)     → aidlc-session-start.ts  (SessionStart)
 //   chat.message (every human turn)      → aidlc-mint-presence.ts  (UserPromptSubmit)
-//   tool.execute.after write|edit        → aidlc-audit-logger.ts + aidlc-sensor-fire.ts (PostToolUse Write|Edit)
+//   tool.execute.before                  → bash boundary + aidlc-reviewer-scope.ts (PreToolUse)
+//   tool.execute.after write|edit|patch  → aidlc-audit-logger.ts + aidlc-sensor-fire.ts (PostToolUse Write|Edit)
 //   tool.execute.after bash              → aidlc-runtime-compile.ts (PostToolUse Bash)
 //   tool.execute.after todowrite         → aidlc-sync-statusline.ts (PostToolUse TaskUpdate)
 //   tool.execute.after task              → aidlc-log-subagent.ts    (SubagentStop)
@@ -34,6 +35,11 @@
 //   - Presence minting is skipped for subagent (child) sessions when the
 //     parent lookup succeeds; on lookup failure it fails OPEN (mints) so a
 //     gate approval is never wedged by a transient API error.
+//   - tool.execute.before carries no active-agent field. Reviewer identity is
+//     correlated from chat.message.agent by session; when that field is absent,
+//     a child session is treated as scoped registration while a dispatch record
+//     exists. This can scope another child worker during that narrow window,
+//     but never scopes the main session.
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -60,30 +66,36 @@ function runCore(
   hookFile: string,
   input: Record<string, unknown>,
   cwd: string,
-): Promise<{ stdout: string; code: number }> {
+): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
     const bin = bunBin();
-    if (bin === null) return resolve({ stdout: "", code: 0 });
+    if (bin === null) return resolve({ stdout: "", stderr: "", code: 0 });
     try {
       const child = spawn(bin, [join(cwd, HOOKS_SUBDIR, hookFile)], {
         cwd,
-        stdio: ["pipe", "pipe", "ignore"],
+        stdio: ["pipe", "pipe", "pipe"],
       });
       let out = "";
+      let err = "";
       child.stdout.on("data", (d: Buffer) => {
         out += d.toString();
       });
-      child.on("error", () => resolve({ stdout: "", code: 0 })); // fail open
-      child.on("close", (code: number | null) => resolve({ stdout: out, code: code ?? 0 }));
+      child.stderr.on("data", (d: Buffer) => {
+        err += d.toString();
+      });
+      child.on("error", () => resolve({ stdout: "", stderr: "", code: 0 })); // fail open
+      child.on("close", (code: number | null) =>
+        resolve({ stdout: out, stderr: err, code: code ?? 0 })
+      );
       child.stdin.write(JSON.stringify(input));
       child.stdin.end();
     } catch {
-      resolve({ stdout: "", code: 0 }); // fail open
+      resolve({ stdout: "", stderr: "", code: 0 }); // fail open
     }
   });
 }
 
-type PluginInput = {
+export type PluginInput = {
   client: {
     session: {
       get: (opts: { path: { id: string } }) => Promise<{ data?: { parentID?: string } }>;
@@ -96,12 +108,157 @@ type PluginInput = {
   directory: string;
 };
 
+const AIDLC_BUN_PREFIX = /^bun[ \t]+\.aidlc\/(?:tools|hooks)\//;
+const AIDLC_BUN_COMMAND =
+  /^bun[ \t]+\.aidlc\/(?:tools|hooks)\/[A-Za-z0-9][A-Za-z0-9._-]*\.ts(?:[ \t]+[\s\S]*)?[ \t]*$/;
+
+function isSingleShellCommand(command: string): boolean {
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === '"') {
+        quote = null;
+        continue;
+      }
+      if (ch === "`" || (ch === "$" && command[i + 1] === "(")) return false;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (
+      ch === "\n" ||
+      ch === "\r" ||
+      ch === "`" ||
+      ch === ";" ||
+      ch === "|" ||
+      ch === "&" ||
+      ch === "(" ||
+      ch === ")" ||
+      ch === "<" ||
+      ch === ">" ||
+      (ch === "$" && command[i + 1] === "(")
+    ) {
+      return false;
+    }
+  }
+  return quote === null && !escaped;
+}
+
+/** Return a denial reason only when the static AIDLC allow-prefix would match. */
+export function aidlcBashBoundaryViolation(command: string): string | null {
+  if (!AIDLC_BUN_PREFIX.test(command)) return null;
+  if (AIDLC_BUN_COMMAND.test(command) && isSingleShellCommand(command)) return null;
+  return (
+    "AIDLC bash permission allows one direct bun invocation only. " +
+    "Run the .aidlc tool or hook as a single command without chaining, redirection, or command substitution."
+  );
+}
+
+/** Extract every source and destination path touched by an apply_patch call. */
+export function applyPatchPaths(args: Record<string, unknown>): string[] {
+  const patch =
+    (args.patchText as string) ??
+    (args.patch as string) ??
+    (args.command as string) ??
+    "";
+  const paths: string[] = [];
+  for (const match of patch.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)) {
+    paths.push(match[1].trim());
+  }
+  for (const match of patch.matchAll(/^\*\*\* Move to: (.+)$/gm)) {
+    paths.push(match[1].trim());
+  }
+  return Array.from(new Set(paths.filter((p) => p.length > 0)));
+}
+
+type ReviewerCall = {
+  toolName: "Read" | "Edit" | "Write" | "Glob" | "Grep" | "Bash";
+  toolInput: Record<string, unknown>;
+};
+
+function reviewerCalls(tool: string, args: Record<string, unknown>): ReviewerCall[] {
+  if (tool === "bash") {
+    return [{ toolName: "Bash", toolInput: { command: (args.command as string) ?? "" } }];
+  }
+  if (tool === "read") {
+    return [{
+      toolName: "Read",
+      toolInput: { file_path: (args.filePath as string) ?? (args.path as string) ?? "" },
+    }];
+  }
+  if (tool === "write") {
+    return [{
+      toolName: "Write",
+      toolInput: { file_path: (args.filePath as string) ?? (args.path as string) ?? "" },
+    }];
+  }
+  if (tool === "edit") {
+    return [{
+      toolName: "Edit",
+      toolInput: { file_path: (args.filePath as string) ?? (args.path as string) ?? "" },
+    }];
+  }
+  if (tool === "glob") {
+    return [{
+      toolName: "Glob",
+      toolInput: {
+        pattern: (args.pattern as string) ?? "",
+        path: (args.path as string) ?? "",
+      },
+    }];
+  }
+  if (tool === "grep") {
+    return [{
+      toolName: "Grep",
+      toolInput: {
+        pattern: (args.pattern as string) ?? "",
+        path: (args.path as string) ?? "",
+        glob: (args.include as string) ?? "",
+      },
+    }];
+  }
+  if (tool === "apply_patch") {
+    return applyPatchPaths(args).map((filePath) => ({
+      toolName: "Write",
+      toolInput: { file_path: filePath },
+    }));
+  }
+  return [];
+}
+
+function sessionStartHandled(stdout: string): boolean {
+  try {
+    const parsed = JSON.parse(stdout) as { additionalContext?: unknown };
+    return typeof parsed.additionalContext === "string";
+  } catch {
+    return false;
+  }
+}
+
 export default async ({ client, directory }: PluginInput) => {
-  // Sessions whose first human turn already forwarded session-start.
+  // Sessions whose session-start hook reached an active workflow.
   const started = new Set<string>();
   // Sessions confirmed as main (no parentID) — presence + stop enforcement
   // apply only to these; child (task-tool) sessions are workers, not humans.
   const mainSession = new Map<string, boolean>();
+  const sessionAgent = new Map<string, string>();
+  const idleInFlight = new Set<string>();
 
   async function isMainSession(sessionID: string): Promise<boolean> {
     const cached = mainSession.get(sessionID);
@@ -119,16 +276,16 @@ export default async ({ client, directory }: PluginInput) => {
 
   return {
     "chat.message": async (
-      input: { sessionID: string },
+      input: { sessionID: string; agent?: string },
       output: { parts: Array<{ type?: string; text?: string }> },
     ) => {
+      if (input.agent) sessionAgent.set(input.sessionID, input.agent);
       // Never treat this plugin's own stop-nudge injection as a human turn.
       const first = output.parts.find((p) => p.type === "text");
       if (first?.text?.startsWith(NUDGE_SENTINEL)) return;
       if (!(await isMainSession(input.sessionID))) return;
       if (!started.has(input.sessionID)) {
-        started.add(input.sessionID);
-        await runCore(
+        const result = await runCore(
           "aidlc-session-start.ts",
           {
             hook_event_name: "SessionStart",
@@ -137,8 +294,52 @@ export default async ({ client, directory }: PluginInput) => {
           },
           directory,
         );
+        // A fresh project has no state yet, so the core hook emits no context.
+        // Retry on later human turns until an active workflow is available.
+        if (sessionStartHandled(result.stdout)) started.add(input.sessionID);
       }
       await runCore("aidlc-mint-presence.ts", { hook_event_name: "UserPromptSubmit" }, directory);
+    },
+
+    "tool.execute.before": async (
+      input: { tool: string; sessionID: string; callID: string },
+      output: { args: Record<string, unknown> },
+    ) => {
+      const args = output.args ?? {};
+      if (input.tool === "bash") {
+        const command = (args.command as string) ?? "";
+        const violation = aidlcBashBoundaryViolation(command);
+        if (violation) throw new Error(violation);
+      }
+
+      const calls = reviewerCalls(input.tool, args);
+      if (calls.length === 0) return;
+
+      const agent = sessionAgent.get(input.sessionID);
+      const identity =
+        agent
+          ? { agent_type: agent }
+          : (await isMainSession(input.sessionID))
+            ? null
+            : { scoped_registration: true };
+      if (identity === null) return;
+
+      for (const call of calls) {
+        const result = await runCore(
+          "aidlc-reviewer-scope.ts",
+          {
+            hook_event_name: "PreToolUse",
+            tool_name: call.toolName,
+            tool_input: call.toolInput,
+            cwd: directory,
+            ...identity,
+          },
+          directory,
+        );
+        if (result.code === 2) {
+          throw new Error(result.stderr.trim() || "reviewer read-scope refused this tool call");
+        }
+      }
     },
 
     "tool.execute.after": async (input: {
@@ -148,29 +349,31 @@ export default async ({ client, directory }: PluginInput) => {
       args: Record<string, unknown>;
     }) => {
       const { tool, args } = input;
-      if (tool === "write" || tool === "edit") {
-        const filePath = (args.filePath as string) ?? "";
-        if (!filePath) return;
-        const payload = {
-          hook_event_name: "PostToolUse",
-          tool_name: "Write",
-          tool_input: { file_path: filePath },
-        };
-        // audit THEN sensors, mirroring the Claude settings.json order.
-        await runCore("aidlc-audit-logger.ts", payload, directory);
-        await runCore("aidlc-sensor-fire.ts", payload, directory);
+      if (tool === "write" || tool === "edit" || tool === "apply_patch") {
+        const paths =
+          tool === "apply_patch"
+            ? applyPatchPaths(args)
+            : [((args.filePath as string) ?? (args.path as string) ?? "")];
+        for (const filePath of paths) {
+          if (!filePath) continue;
+          const payload = {
+            hook_event_name: "PostToolUse",
+            tool_name: "Write",
+            tool_input: { file_path: filePath },
+          };
+          // audit THEN sensors, mirroring the Claude settings.json order.
+          await runCore("aidlc-audit-logger.ts", payload, directory);
+          await runCore("aidlc-sensor-fire.ts", payload, directory);
+        }
         return;
       }
       if (tool === "bash") {
-        await runCore(
-          "aidlc-runtime-compile.ts",
-          {
-            hook_event_name: "PostToolUse",
-            tool_name: "Bash",
-            tool_input: { command: (args.command as string) ?? "" },
-          },
-          directory,
-        );
+        const payload = {
+          hook_event_name: "PostToolUse",
+          tool_name: "Bash",
+          tool_input: { command: (args.command as string) ?? "" },
+        };
+        await runCore("aidlc-runtime-compile.ts", payload, directory);
         return;
       }
       if (tool === "todowrite") {
@@ -215,25 +418,31 @@ export default async ({ client, directory }: PluginInput) => {
       // with no chat.message here is another project's or a worker's.
       if (!sessionID || !started.has(sessionID)) return;
       if (!(await isMainSession(sessionID))) return;
+      if (idleInFlight.has(sessionID)) return;
+      idleInFlight.add(sessionID);
       // opencode provides no stop_hook_active flag and no transcript, so the
       // core hook's run-mode-aware no-progress ceiling is the loop guard here
       // (same degradation profile as Kiro; the conversational carve-out is
       // inert and the INTERACTIVE cap releases a chatting human).
-      const res = await runCore(
-        "aidlc-stop.ts",
-        { hook_event_name: "Stop", stop_hook_active: false },
-        directory,
-      );
       try {
-        const parsed = JSON.parse(res.stdout) as { decision?: string; reason?: string };
-        if (parsed.decision === "block" && parsed.reason) {
-          await client.session.prompt({
-            path: { id: sessionID },
-            body: { parts: [{ type: "text", text: `${NUDGE_SENTINEL} ${parsed.reason}` }] },
-          });
+        const res = await runCore(
+          "aidlc-stop.ts",
+          { hook_event_name: "Stop", stop_hook_active: false },
+          directory,
+        );
+        try {
+          const parsed = JSON.parse(res.stdout) as { decision?: string; reason?: string };
+          if (parsed.decision === "block" && parsed.reason) {
+            await client.session.prompt({
+              path: { id: sessionID },
+              body: { parts: [{ type: "text", text: `${NUDGE_SENTINEL} ${parsed.reason}` }] },
+            });
+          }
+        } catch {
+          /* no/unparseable output → allow the stop (advisory) */
         }
-      } catch {
-        /* no/unparseable output → allow the stop (advisory) */
+      } finally {
+        idleInFlight.delete(sessionID);
       }
     },
   };

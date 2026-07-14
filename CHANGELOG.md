@@ -11,6 +11,12 @@ Adds a fifth harness distribution: **opencode** (opencode.ai, verified live on 1
 * Tier projection gains an `opencode` flavor: judgment agents omit `model`/`variant` (session defaults win); balanced pins `amazon-bedrock/global.anthropic.claude-sonnet-4-6`; templated adds `variant: medium`.
 * `/aidlc --doctor` on opencode checks the adapter plugin, the project-root `opencode.json`, and `.opencode/command/aidlc.md`; `/aidlc space <name>` re-points the `instructions` glob in `opencode.json` (the opencode native include).
 * `SESSION_ENDED` is not emitted on opencode (no session-end hook moment); the swarm runs as task-tool fan-out only (`AIDLC_USE_SWARM=1` is a loud no-op). Full differences: `docs/guide/harnesses/opencode.md`.
+* OpenCode AIDLC bun permissions now have a plugin-enforced command boundary: one direct `.aidlc` tool or hook invocation is allowed, while chaining, redirection, command substitution, and appended commands are rejected before execution.
+* Reviewer read-scope enforcement now runs from `tool.execute.before` for OpenCode child sessions, with exact agent identity when OpenCode supplies it and child-session scoping as the documented fallback.
+* `/aidlc space <name>` supports `opencode.jsonc` and preserves comments and trailing commas in either config filename while repointing the method include and persona memory paths.
+* OpenCode transitions under `.aidlc/tools/` now trigger runtime-graph recompilation, and `apply_patch` changes emit audit rows and fire sensors for every affected path.
+* Native OpenCode subagents deny the `task` tool through `permission.task`, and their method references point at the shipped active-space memory tree.
+* Session-start retries until an active workflow can be stamped, and concurrent idle events for one session produce at most one forwarding-loop nudge.
 
 ## [2.4.5] - 2026-07-17
 

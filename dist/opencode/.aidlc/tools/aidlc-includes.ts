@@ -15,8 +15,8 @@
 // gitignored+generated without a fresh-clone chicken-and-egg). They ship pointed
 // at the `default` space. `repointHarnessIncludes(projectDir, space)` does a
 // SURGICAL in-place rewrite of ONLY the `aidlc/spaces/<X>/memory` pointer
-// segment, leaving every other byte untouched. Identical treatment for all three
-// harnesses — no file is created, regenerated whole, or special-cased.
+// segment, leaving every other byte untouched. Identical treatment for all
+// harnesses. No file is created, regenerated whole, or special-cased.
 //
 // It runs at two moments: bootstrap (first `/aidlc` / --doctor / SessionStart —
 // idempotent no-op when the pointer already matches the active space) and on a
@@ -106,26 +106,31 @@ function repointCodexConfig(raw: string, space: string): string | null {
   return next === raw ? null : next;
 }
 
-/** Rewrite the method glob in an opencode.json `instructions` array to the
- *  given space, preserving every other entry and field. Parse→edit→re-serialize
- *  (structural round-trip, like the Kiro rewriter). Returns null when there is
- *  no method glob or it already matches. */
+/** Rewrite the method glob in an opencode.json/jsonc `instructions` array to
+ *  the given space, preserving comments, trailing commas, and every byte
+ *  outside the one matching string. Returns null when there is no method glob
+ *  or it already matches. */
 function repointOpencodeInstructions(raw: string, space: string): string | null {
-  const json = JSON.parse(raw) as { instructions?: unknown };
-  if (!Array.isArray(json.instructions)) return null;
   const target = `${spaceMemoryRel(space)}/**/*.md`;
-  let changed = false;
-  const rewritten = json.instructions.map((r) => {
-    if (typeof r === "string" && /^aidlc\/spaces\/[^/]+\/memory\/\*\*\/\*\.md$/.test(r)) {
-      if (r !== target) changed = true;
-      return target;
-    }
-    return r;
-  });
-  if (!changed) return null;
-  json.instructions = rewritten;
-  // Two-space indent + trailing newline matches the authored opencode.json shape.
-  return `${JSON.stringify(json, null, 2)}\n`;
+  const array = raw.match(/("instructions"\s*:\s*\[)([\s\S]*?)(\])/);
+  if (!array || array.index === undefined) return null;
+  const body = array[2];
+  const nextBody = body.replace(
+    /(")aidlc\/spaces\/[^/"]+\/memory\/\*\*\/\*\.md(")/g,
+    `$1${target}$2`,
+  );
+  if (nextBody === body) return null;
+  const start = array.index + array[1].length;
+  return `${raw.slice(0, start)}${nextBody}${raw.slice(start + body.length)}`;
+}
+
+/** Rewrite active-space memory paths in an opencode persona body. */
+function repointOpencodeAgentMemory(raw: string, space: string): string | null {
+  const next = raw.replace(
+    /aidlc\/spaces\/[^/]+\/memory\//g,
+    `${spaceMemoryRel(space)}/`,
+  );
+  return next === raw ? null : next;
 }
 
 /** Surgically repoint a single committed include file to `space` using `rewrite`,
@@ -206,12 +211,41 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
 
   if (harness === ".aidlc") {
     // opencode (engine dir .aidlc): opencode reads the project-root
-    // opencode.json, whose `instructions` glob is the method include.
-    const configPath = join(projectDir, "opencode.json");
+    // opencode.json/jsonc, whose `instructions` glob is the method include.
+    const jsonPath = join(projectDir, "opencode.json");
+    const jsoncPath = join(projectDir, "opencode.jsonc");
+    const configPath = existsSync(jsonPath) ? jsonPath : jsoncPath;
     if (existsSync(configPath)) {
       const raw = readSafe(configPath);
       if (raw !== null) {
-        repointFile(configPath, "opencode.json", raw, sp, repointOpencodeInstructions, written);
+        repointFile(
+          configPath,
+          configPath === jsonPath ? "opencode.json" : "opencode.jsonc",
+          raw,
+          sp,
+          repointOpencodeInstructions,
+          written,
+        );
+      }
+    }
+    // Inline and native persona bodies carry explicit method paths for
+    // on-demand reads. Keep both aligned with the active-space cursor.
+    for (const relDir of [join(".aidlc", "agents"), join(".opencode", "agents")]) {
+      const agentsDir = join(projectDir, relDir);
+      if (!existsSync(agentsDir)) continue;
+      for (const name of readdirSync(agentsDir).sort()) {
+        if (!name.endsWith(".md")) continue;
+        const p = join(agentsDir, name);
+        const raw = readSafe(p);
+        if (raw === null) continue;
+        repointFile(
+          p,
+          join(relDir, name),
+          raw,
+          sp,
+          repointOpencodeAgentMemory,
+          written,
+        );
       }
     }
     return written;

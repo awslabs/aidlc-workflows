@@ -15,14 +15,24 @@
 //       CLI-style engine script there CRASHES the session (live-reproduced on
 //       1.17.18). The engine must stay in .aidlc/.
 //   (4) The emitted subagent twins carry `mode: subagent` (none may register
-//       as a primary agent) and the tier projection's opencode-native keys.
+//       as a primary agent), native task denial, and valid active-memory paths.
 //
 // WHY SUBPROCESS for (1). Same idiom as t141/t150: the packager is a CLI; we
 // pin its observable behavior, not its internals.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
@@ -89,6 +99,8 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
       const fm = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
       expect(fm, `${f}: registers as a subagent`).toMatch(/^mode: subagent$/m);
       expect(fm, `${f}: no raw tier: leak`).not.toMatch(/^tier:/m);
+      expect(fm, `${f}: no inert disallowedTools leak`).not.toMatch(/^disallowedTools:/m);
+      expect(fm, `${f}: native task denial`).toMatch(/^permission:\n {2}task: deny$/m);
       // Balanced/templated pin the Bedrock sonnet id; judgment omits model
       // (inherit-by-omission). Either way a bare non-provider-prefixed model
       // value would be an authoring bug on this harness.
@@ -99,7 +111,72 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     }
   });
 
-  test("5: shipped opencode prose names no other harness's engine dir", () => {
+  test("5: opencode resolves a projected persona with task disabled", () => {
+    const opencode = Bun.which("opencode");
+    if (!opencode) {
+      console.warn("opencode executable unavailable; raw native permission assertion still ran");
+      return;
+    }
+    const xdg = mkdtempSync(join(tmpdir(), "t240-opencode-xdg-"));
+    try {
+      const project = join(xdg, "project");
+      const agents = join(project, ".opencode", "agents");
+      mkdirSync(agents, { recursive: true });
+      copyFileSync(
+        join(SHELL, "agents", "aidlc-architect-agent.md"),
+        join(agents, "aidlc-architect-agent.md"),
+      );
+      const r = spawnSync(opencode, ["debug", "agent", "aidlc-architect-agent"], {
+        encoding: "utf-8",
+        cwd: project,
+        env: {
+          ...process.env,
+          ANTHROPIC_API_KEY: "test",
+          OPENCODE_CONFIG_CONTENT: JSON.stringify({
+            model: "anthropic/claude-sonnet-4-20250514",
+          }),
+          XDG_CACHE_HOME: join(xdg, "cache"),
+          XDG_CONFIG_HOME: join(xdg, "config"),
+          XDG_DATA_HOME: join(xdg, "data"),
+        },
+      });
+      if (r.status !== 0) console.error(r.stderr);
+      expect(r.status).toBe(0);
+      const resolved = JSON.parse(r.stdout) as {
+        permission?: Array<{ permission?: string; action?: string }>;
+        tools?: Record<string, boolean>;
+      };
+      expect(resolved.tools?.task).toBe(false);
+      expect(
+        resolved.permission?.some(
+          (rule) => rule.permission === "task" && rule.action === "deny",
+        ),
+      ).toBe(true);
+    } finally {
+      rmSync(xdg, { recursive: true, force: true });
+    }
+  });
+
+  test("6: inline and native personas reference the shipped active-space memory tree", () => {
+    const memory = join(OPENCODE_ROOT, "aidlc", "spaces", "default", "memory");
+    expect(existsSync(memory)).toBe(true);
+    for (const agentsDir of [join(ENGINE, "agents"), join(SHELL, "agents")]) {
+      for (const f of readdirSync(agentsDir).filter((x) => x.endsWith(".md"))) {
+        const raw = readFileSync(join(agentsDir, f), "utf-8");
+        expect(raw, `${f}: no nonexistent rules path`).not.toContain(".aidlc/rules/");
+        if (
+          raw.includes("organization and project guardrails") ||
+          raw.includes("execution guardrails")
+        ) {
+          expect(raw, `${f}: projected active memory path`).toContain(
+            "aidlc/spaces/default/memory/",
+          );
+        }
+      }
+    }
+  });
+
+  test("7: shipped opencode prose names no other harness's engine dir", () => {
     const r = spawnSync(
       "grep",
       ["-rn", "bun .claude/tools/", OPENCODE_ROOT],
@@ -109,7 +186,7 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     expect(r.status).toBe(1);
   });
 
-  test("6: the shipped opencode.json wires skills, method instructions, and the bun allowlist", () => {
+  test("8: the shipped opencode.json wires skills, method instructions, and the bun allowlist", () => {
     const cfg = JSON.parse(readFileSync(join(OPENCODE_ROOT, "opencode.json"), "utf-8")) as {
       skills?: { paths?: string[] };
       instructions?: string[];

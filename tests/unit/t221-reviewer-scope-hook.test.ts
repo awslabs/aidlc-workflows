@@ -14,7 +14,7 @@
 //       records and assert the exit code + stderr + the record's janitoring.
 //       Same rationale as t121/t180: in-process would bypass the contracted
 //       surface.
-//   (c) REGISTRATION + PROTOCOL (mechanism none): the four harness wiring
+//   (c) REGISTRATION + PROTOCOL (mechanism none): the harness wiring
 //       surfaces and the 12a dispatch-record prose, so a wiring or prose sweep
 //       cannot silently drop the enforcement while the hook file survives.
 

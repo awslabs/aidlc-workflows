@@ -7,8 +7,9 @@ description: >
   once a human approves at the gate - authors it as scope data (front/report)
   or proposes pending-stage suffix flips (in-flight). Dispatched by the
   /aidlc orchestrator; never invoked directly by a stage.
-disallowedTools: Task
 mode: subagent
+permission:
+  task: deny
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

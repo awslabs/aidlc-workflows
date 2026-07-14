@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 468,
+    "total": 469,
     "enumeratedByClass": {
-      "function": 242,
+      "function": 243,
       "audit": 72,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 98,
+      "function": 99,
       "audit": 31,
       "scope": 9,
       "stage": 8,
@@ -1741,6 +1741,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:KNOWN_HARNESS_DIRS",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t241-opencode-adapter.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:KNOWN_PER_UNIT_STAGES",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3247,6 +3259,10 @@
         },
         {
           "file": "tests/unit/t226-detector-corpus.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t241-opencode-adapter.test.ts",
           "mechanism": "none"
         }
       ],
