@@ -118,8 +118,11 @@ To opt a SINGLE agent out instead, edit the projected value in your installed `d
 
 ## Agent Comparison Matrix
 
-| Agent | Bash | WebSearch | Tier | Lead Stages | Support Stages | Total |
-|-------|------|-----------|------|-------------|----------------|-------|
+`Yes` in the next two columns means expected use of an inherited tool, not an
+access grant.
+
+| Agent | Bash Expected Use | WebSearch Expected Use | Tier | Lead Stages | Support Stages | Total |
+|-------|-------------------|------------------------|------|-------------|----------------|-------|
 | aidlc-product-agent | No | Yes | judgment | 5 | 3 | 8 |
 | aidlc-design-agent | No | Yes | judgment | 2 | 2 | 4 |
 | aidlc-delivery-agent | No | No | templated | 3 | 2 | 5 |
@@ -136,8 +139,8 @@ To opt a SINGLE agent out instead, edit the projected value in your installed `d
 - aidlc-architect-agent has the broadest stage involvement (9 stages across 3 phases).
 - Across the full 14-agent roster, nine agents carry the `judgment` tier and five step down (the two `balanced` reviewers plus the three `templated` planners); the stepped-down agents produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
 - aidlc-compliance-agent operates purely in an advisory capacity (4 support stages, no lead stages).
-- Six of 11 agents have Bash access, all in roles that need CLI interaction.
-- Three agents have WebSearch access for research tasks.
+- Six of 11 agents are expected to use Bash for CLI interaction.
+- Three agents are expected to use WebSearch for research tasks.
 
 ---
 

@@ -419,15 +419,17 @@ The `permissions.allow` array in `.claude/settings.json` pre-approves Claude Cod
 
 ### Agent Tool Restrictions
 
-Every agent inherits the full session toolset by default; the only shipped restriction is `disallowedTools: Task`. A persona can be narrowed by adding an optional `tools:` allowlist to its frontmatter (which drops inherited MCP tools unless the `mcp__<server>__<tool>` ids are also listed), but none of the 11 shipped agents do so. The table below records which agents the methodology *expects* to exercise Bash and WebSearch in their stage work.
+Every agent inherits the full session toolset by default; the only shipped restriction is `disallowedTools: Task`. A persona can be narrowed by adding an optional `tools:` allowlist to its frontmatter (which drops inherited MCP tools unless the `mcp__<server>__<tool>` ids are also listed), but none of the 14 shipped agents do so. The table below records which agents the methodology *expects* to exercise Bash and WebSearch in their stage work.
 
-| Claude Code Tool | Agents That Have It |
-|------------------|---------------------|
+| Claude Code Tool | Agents Expected to Exercise It |
+|------------------|---------------------------------|
 | Bash | aidlc-aws-platform-agent, aidlc-devsecops-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
 | WebSearch | aidlc-product-agent, aidlc-design-agent, aidlc-compliance-agent |
 | Read/Edit/Write/Glob/Grep/AskUserQuestion | All 14 agents |
 
-**Pattern:** Bash access is given to agents that need CLI interaction (build tools, test commands, infrastructure). WebSearch is given to research-oriented agents (market research, design references, regulatory frameworks).
+**Pattern:** Bash is expected in roles that need CLI interaction (build tools,
+test commands, infrastructure). WebSearch is expected in research-oriented
+roles (market research, design references, regulatory frameworks).
 
 ---
 

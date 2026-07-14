@@ -1,12 +1,13 @@
 # Adding an Agent
 
 An agent is the *who* of the framework — a persona with a domain, a tool
-allowlist, and a tier. The 11 shipped agents cover product, design, delivery,
-architecture, AWS platform, compliance, DevSecOps, development, quality,
-pipeline-deploy, and operations. When your team needs a domain the framework
-doesn't cover (a data-governance reviewer or a mobile specialist, say), you
-add a persona by dropping a single Markdown file
-into `core/agents/`. No TypeScript.
+allowlist, and a tier. The 14 shipped agents comprise 11 domain experts
+covering product, design, delivery, architecture, AWS platform, compliance,
+DevSecOps, development, quality, pipeline-deploy, and operations; two
+review-only agents; and the adaptive-workflows composer. When your team needs
+a domain the framework doesn't cover (a data-governance reviewer or a mobile
+specialist, say), you add a persona by dropping a single Markdown file into
+`core/agents/`. No TypeScript.
 
 This chapter walks the workflow: what a persona file is, the judgment calls in
 its frontmatter, and the two-step truth that an agent which is *visible* is not
@@ -21,7 +22,7 @@ Agents](../guide/06-agents.md).
 Every agent is one flat file at `core/agents/<slug>-agent.md`: YAML
 frontmatter on top, a Markdown body below. The shipped files all carry the
 `aidlc-` prefix (`aidlc-architect-agent.md`, `aidlc-developer-agent.md`); a file
-you add is yours and need not use that prefix. Treat the shipped 11 as
+you add is yours and need not use that prefix. Treat the shipped 14 as
 framework files — they get overwritten on upgrade, so customize *what an
 existing agent knows* through team knowledge rather than editing the file (see
 [Team knowledge](07-team-knowledge.md)). A genuinely new persona is a different
@@ -64,7 +65,7 @@ The parser keys off this, and a mismatch is the easiest way to author an agent
 that never resolves. The loader rejects duplicate agent `name` values across
 files and names both files in the error.
 
-**An agent inherits the full session toolset by default.** None of the 11
+**An agent inherits the full session toolset by default.** None of the 14
 shipped agents declare a `tools:` allowlist, so each one reaches every tool the
 session provides — `Read`, `Edit`, `Write`, `Glob`, `Grep`, `AskUserQuestion`,
 `Bash`, `WebSearch`, and the inherited MCP tools alike. To narrow a persona,
@@ -201,7 +202,7 @@ one, see [Agent System: How to Modify an Agent](../reference/05-agent-system.md#
   Update them in the same change that adds the agent.
 - **The agent file's body.** Only the frontmatter is parsed; the body prose is
   read by the agent itself when it activates, so write it carefully to match the
-  shipped 11.
+  shipped 14.
 
 ---
 

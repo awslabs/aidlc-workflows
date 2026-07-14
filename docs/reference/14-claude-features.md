@@ -20,11 +20,11 @@ harness parameter. Add a column when you port to a new harness.
 | AI-DLC Concept | Claude Code | Kiro CLI | Kiro IDE | Codex CLI |
 |----------------|-------------|----------|----------|-----------|
 | **Orchestrator entry** (`/aidlc` + runners) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`$aidlc`) |
-| **Agent personas** (14 total) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | Persona `.md` with IDE tool grants + agent configs | `.agents/` TOMLs |
+| **Agent personas** (14 total) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | Persona `.md`; delegation targets add IDE `tools:` grants | `.agents/` TOMLs |
 | **Automation** (audit, state, tracking) | Hooks via `settings.json` | Hooks via `agents/aidlc.json` | `.kiro/hooks/*.kiro.hook` files | Hooks via `.codex/hooks.json` (one adapter) |
-| **Standing rules** (the layer chain) | `aidlc/spaces/<space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via `AIDLC_RULES_DIR`) |
+| **Standing rules** (the layer chain) | `aidlc/spaces/<space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via runtime `rules_in_context` paths) | `aidlc/spaces/<space>/memory/` (via `AIDLC_RULES_DIR`) |
 | **Project onboarding doc** | `CLAUDE.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` |
-| **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | `.kiro/settings/cli.json` + agent frontmatter | `.codex/config.toml` (+ Starlark `rules/`) |
+| **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | Agent `.md` `tools:` frontmatter for delegates | `.codex/config.toml` (+ Starlark `rules/`) |
 
 The deterministic engine, state machine, audit log, stage graph, and swarm
 referee underneath are byte-identical across every harness — only the primitives

@@ -14,12 +14,12 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     prereq_bullets: `- **Kiro IDE**: Sign in and select Claude Opus 4.8 as the chat model before starting a workflow.
 - **bun**: Required for the CLI tools and hook scripts (state management, audit logging, orchestration engine). Install via \`curl -fsSL https://bun.sh/install | bash\`. \`bun\` must be on your PATH for the non-interactive shells the harness spawns — these source \`~/.zshenv\` (zsh) or \`~/.bashrc\` (bash), NOT \`~/.zshrc\`.
-- **Activation**: Open the project in Kiro IDE. The install selects the \`aidlc\` conductor as the workspace default and registers \`.kiro/hooks/*.kiro.hook\` in the IDE's Agent Hooks panel.
+- **Activation**: Open the project in Kiro IDE and invoke \`/aidlc\`; the command loads the shipped \`skills/aidlc/SKILL.md\` conductor. The \`.kiro/hooks/*.kiro.hook\` files register in the IDE's Agent Hooks panel.
 - **Permissions**: delegation-target agent \`.md\` files receive the IDE-native read/write/shell grants they need. The conductor's approval gates and your IDE permission settings remain the control boundary.`,
 
     prereq_bullets_tail: "",
 
-    agents_note: `On Kiro the conductor is \`agents/aidlc.json\`; dedicated JSON configs cover the two stage workers, two reviewers, and composer that the conductor delegates through the Kiro \`subagent\` tool, while domain personas can also be adopted inline.`,
+    agents_note: `On Kiro IDE the \`/aidlc\` command loads \`skills/aidlc/SKILL.md\` as the conductor. Delegated workers, reviewers, and the composer load their Markdown personas with IDE-native tool grants; the shipped agent-v1 JSON files and \`settings/cli.json\` are CLI-only compatibility surfaces and do not select an IDE default agent.`,
 
     structure_extra: "",
 
