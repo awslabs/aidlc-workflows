@@ -17,7 +17,8 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, posix, relative, win32 } from "node:path";
+import { stringify } from "smol-toml";
 import type { EmitContext } from "../../scripts/manifest-types.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import onboardingFills from "./onboarding.fills.ts";
@@ -184,28 +185,32 @@ export function trustEntries(
   hooksJsonPath?: string,
   harnessDir = ".codex",
 ): string {
-  const path = hooksJsonPath ?? `${projectDir}/${harnessDir}/hooks.json`;
+  // A supplied hooks path is already the Codex trust identity: preserve it
+  // exactly. For the default, choose the path implementation from the project
+  // spelling so Windows installers can generate native paths even when this
+  // packager is invoked from Unix (and vice versa).
+  const projectPath =
+    win32.isAbsolute(projectDir) && !posix.isAbsolute(projectDir) ? win32 : posix;
+  const path = hooksJsonPath ?? projectPath.join(projectDir, harnessDir, "hooks.json");
   const counters: Record<string, number> = {};
-  const lines: string[] = [];
+  const state: Record<string, { trusted_hash: string }> = {};
   for (const { event, target } of HOOK_WIRING) {
     const snake = SNAKE[event];
     const idx = counters[snake] ?? 0;
     counters[snake] = idx + 1;
     const hash = trustHash(snake, adapterCmd(harnessDir, target));
-    lines.push(`[hooks.state."${path}:${snake}:${idx}:0"]`);
-    lines.push(`trusted_hash = "${hash}"`);
-    lines.push("");
+    state[`${path}:${snake}:${idx}:0`] = { trusted_hash: hash };
   }
-  return lines.join("\n");
+  return stringify({ hooks: { state } });
 }
 
 function emitTrustSeed(harnessDir: string): string {
   return (
     `# dist/codex hook-trust pre-seed (S9a) — TEMPLATE.\n` +
-    `# Append these entries to the USER config.toml ($CODEX_HOME/config.toml)\n` +
-    `# after replacing <PROJECT_DIR> with the project's absolute path, or run:\n` +
-    `#   bun scripts/package.ts codex trust --project <abs-dir>\n` +
-    `# to print them substituted and ready to paste. The hash covers the\n` +
+    `# Generate ready-to-paste entries with the TOML serializer:\n` +
+    `#   bun scripts/package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]\n` +
+    `# Append the command's complete stdout to the USER config.toml\n` +
+    `# ($CODEX_HOME/config.toml). The hash covers the\n` +
     `# normalized hook identity (event + command + defaults), NOT the path —\n` +
     `# only the key changes per install. Codex then runs the hooks without a\n` +
     `# TUI trust pass (the --dangerously-bypass-hook-trust flag does NOT fire\n` +

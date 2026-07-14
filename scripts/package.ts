@@ -752,11 +752,11 @@ const argv = process.argv.slice(2);
 // installer to paste into $CODEX_HOME/config.toml (the trust-seed.toml recipe).
 if (argv[0] === "codex" && argv[1] === "trust") {
   const pIdx = argv.indexOf("--project");
-  if (pIdx === -1 || !argv[pIdx + 1]) {
+  const hIdx = argv.indexOf("--hooks-json");
+  if (pIdx === -1 || !argv[pIdx + 1] || (hIdx !== -1 && !argv[hIdx + 1])) {
     console.error("usage: package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]");
     process.exit(1);
   }
-  const hIdx = argv.indexOf("--hooks-json");
   const { trustEntries } = require(join(HARNESS_ROOT, "codex", "emit.ts")) as {
     trustEntries: (project: string, hooksJson?: string) => string;
   };

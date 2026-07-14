@@ -1,8 +1,8 @@
 # dist/codex hook-trust pre-seed (S9a) — TEMPLATE.
-# Append these entries to the USER config.toml ($CODEX_HOME/config.toml)
-# after replacing <PROJECT_DIR> with the project's absolute path, or run:
-#   bun scripts/package.ts codex trust --project <abs-dir>
-# to print them substituted and ready to paste. The hash covers the
+# Generate ready-to-paste entries with the TOML serializer:
+#   bun scripts/package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]
+# Append the command's complete stdout to the USER config.toml
+# ($CODEX_HOME/config.toml). The hash covers the
 # normalized hook identity (event + command + defaults), NOT the path —
 # only the key changes per install. Codex then runs the hooks without a
 # TUI trust pass (the --dangerously-bypass-hook-trust flag does NOT fire

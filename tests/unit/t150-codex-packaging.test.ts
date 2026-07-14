@@ -23,11 +23,47 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { parse } from "smol-toml";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 const CODEX_DST = join(REPO_ROOT, "dist", "codex", ".codex");
+const TRUST_SUFFIXES = [
+  "session_start:0:0",
+  "user_prompt_submit:0:0",
+  "pre_tool_use:0:0",
+  "post_tool_use:0:0",
+  "post_tool_use:1:0",
+  "post_tool_use:2:0",
+  "pre_compact:0:0",
+  "post_compact:0:0",
+  "subagent_stop:0:0",
+  "stop:0:0",
+] as const;
+
+type TrustDocument = {
+  hooks: {
+    state: Record<string, { trusted_hash: string }>;
+  };
+};
+
+type TrustEntries = (project: string, hooksJson?: string) => string;
+
+function parseTrustDocument(source: string): TrustDocument {
+  return parse(source) as unknown as TrustDocument;
+}
+
+function trustEntries(): TrustEntries {
+  const emitter = require(join(REPO_ROOT, "harness", "codex", "emit.ts")) as {
+    trustEntries: TrustEntries;
+  };
+  return emitter.trustEntries;
+}
+
+function expectedTrustKeys(hooksJsonPath: string): string[] {
+  return TRUST_SUFFIXES.map((suffix) => `${hooksJsonPath}:${suffix}`);
+}
 
 function* walk(dir: string): Generator<string> {
   for (const entry of readdirSync(dir).sort()) {
@@ -126,9 +162,10 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     }
   });
 
-  test("6: the SHIPPED trust-seed.toml is exactly what emit.ts's trustEntries() produces", () => {
-    // The installer pastes the entries in dist/codex/.codex/trust-seed.toml into
-    // $CODEX_HOME/config.toml so Codex runs the hooks without a TUI trust pass.
+  test("6: the complete shipped trust-seed is valid TOML and exactly matches trustEntries()", () => {
+    // The installer generates entries through the trust command and pastes its
+    // stdout into $CODEX_HOME/config.toml, so paths always pass through the TOML
+    // serializer and Codex runs the hooks without a TUI trust pass.
     // The pre-seed is only sound while every shipped hash matches the live hook
     // identity emit.ts hashes. Guard that by calling the REAL exported
     // trustEntries() (not an inlined copy of the recipe) and asserting it
@@ -136,16 +173,23 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     // trustHash's recipe, HOOK_WIRING, or the adapter command ever drifts, the
     // shipped hashes go stale and Codex silently rejects every hook — this fails
     // then, where --check cannot (a buggy emit regenerates the same wrong bytes).
-    const { trustEntries } = require(join(REPO_ROOT, "harness", "codex", "emit.ts")) as {
-      trustEntries: (project: string, hooksJson?: string) => string;
-    };
+    const emitTrustEntries = trustEntries();
     const shipped = readFileSync(join(CODEX_DST, "trust-seed.toml"), "utf-8");
+    const parsed = parseTrustDocument(shipped);
+    expect(Object.keys(parsed.hooks.state)).toEqual(
+      expectedTrustKeys("<PROJECT_DIR>/.codex/hooks.json"),
+    );
     // The shipped file is a header comment block + the trustEntries() body. The
     // body begins at the first [hooks.state ...] line.
     const bodyStart = shipped.indexOf("[hooks.state");
     expect(bodyStart).toBeGreaterThan(-1);
+    const header = shipped.slice(0, bodyStart);
+    expect(header).toContain(
+      "bun scripts/package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]",
+    );
+    expect(header).not.toMatch(/replac\w*\s+<PROJECT_DIR>/i);
     const shippedBody = shipped.slice(bodyStart).trimEnd();
-    const produced = trustEntries("<PROJECT_DIR>").trimEnd();
+    const produced = emitTrustEntries("<PROJECT_DIR>").trimEnd();
     expect(produced).toBe(shippedBody);
     // And the real session_start hash is a sha256 over the live adapter identity
     // — a concrete anchor so a silent recipe change can't pass by emitting a
@@ -155,7 +199,69 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     );
   });
 
-  test("8: skills tree — every runner carries the S9f implicit-invocation guard; the orchestrator does not", () => {
+  test("7: default trust paths round-trip Unix and Windows path characters exactly", () => {
+    const emitTrustEntries = trustEntries();
+    const cases = [
+      {
+        project: "/tmp/example-proj",
+        hooksJson: "/tmp/example-proj/.codex/hooks.json",
+      },
+      {
+        project: '/srv/AI DLC/project "quoted"\\literal',
+        hooksJson: '/srv/AI DLC/project "quoted"\\literal/.codex/hooks.json',
+      },
+      {
+        project: String.raw`C:\Users\Jane Doe\AI "DLC"`,
+        hooksJson: String.raw`C:\Users\Jane Doe\AI "DLC"\.codex\hooks.json`,
+      },
+      {
+        project: String.raw`\\server\shared projects\AI "DLC"`,
+        hooksJson: String.raw`\\server\shared projects\AI "DLC"\.codex\hooks.json`,
+      },
+    ];
+
+    for (const { project, hooksJson } of cases) {
+      const output = emitTrustEntries(project);
+      const parsed = parseTrustDocument(output);
+      expect(Object.keys(parsed.hooks.state)).toEqual(expectedTrustKeys(hooksJson));
+      for (const entry of Object.values(parsed.hooks.state)) {
+        expect(entry.trusted_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+      }
+    }
+
+    // The common Unix form remains byte-identical to the historical output.
+    expect(emitTrustEntries("/tmp/example-proj")).toStartWith(
+      '[hooks.state."/tmp/example-proj/.codex/hooks.json:session_start:0:0"]\n' +
+        'trusted_hash = "sha256:ec7321a5902723dfe5d1b79fe13a48724fdf69a2029f83d4168ae28da6121c96"\n\n',
+    );
+  });
+
+  test("8: explicit hooks-json paths are preserved and complete CLI stdout parses", () => {
+    const project = "/tmp/project path that must not replace the hook path";
+    const hooksJson = String.raw`D:\custom hooks\hook "set"\hooks.json`;
+    const emitTrustEntries = trustEntries();
+    const expected = emitTrustEntries(project, hooksJson);
+    const direct = parseTrustDocument(expected);
+    expect(Object.keys(direct.hooks.state)).toEqual(expectedTrustKeys(hooksJson));
+
+    const r = spawnSync(
+      "bun",
+      [PACKAGE_SCRIPT, "codex", "trust", "--project", project, "--hooks-json", hooksJson],
+      {
+        encoding: "utf-8",
+        cwd: REPO_ROOT,
+      },
+    );
+    expect(r.status).toBe(0);
+    expect(r.stderr).toBe("");
+    // console.log adds one newline to the already newline-terminated TOML.
+    expect(r.stdout).toBe(`${expected}\n`);
+    const parsedStdout = parseTrustDocument(r.stdout);
+    expect(Object.keys(parsedStdout.hooks.state)).toEqual(expectedTrustKeys(hooksJson));
+    expect(r.stdout).not.toContain(project);
+  });
+
+  test("9: skills tree — every runner carries the S9f implicit-invocation guard; the orchestrator does not", () => {
     const skillsDir = join(REPO_ROOT, "dist", "codex", ".agents", "skills");
     const dirs = readdirSync(skillsDir).filter((d) =>
       statSync(join(skillsDir, d)).isDirectory(),
@@ -187,22 +293,20 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     expect(probe).toContain("bun .codex/tools/aidlc-orchestrate.ts next --stage intent-capture --single");
   });
 
-  test("7: trust subcommand substitutes the project path into every entry", () => {
+  test("10: trust subcommand substitutes the project path into every entry", () => {
     const r = spawnSync("bun", [PACKAGE_SCRIPT, "codex", "trust", "--project", "/tmp/example-proj"], {
       encoding: "utf-8",
       cwd: REPO_ROOT,
     });
     expect(r.status).toBe(0);
-    const entries = r.stdout.match(/\[hooks\.state\."[^"]+"\]/g) ?? [];
-    // One entry per registered hook group (8 wirings + the 1 PostCompact = 9).
+    const parsed = parseTrustDocument(r.stdout);
+    const entries = Object.keys(parsed.hooks.state);
     const wiring = JSON.parse(readFileSync(join(CODEX_DST, "hooks.json"), "utf-8")) as {
       hooks: Record<string, Array<unknown>>;
     };
     const groupCount = Object.values(wiring.hooks).reduce((n, g) => n + g.length, 0);
     expect(entries.length).toBe(groupCount);
-    for (const e of entries) {
-      expect(e).toContain("/tmp/example-proj/.codex/hooks.json:");
-    }
+    expect(entries).toEqual(expectedTrustKeys("/tmp/example-proj/.codex/hooks.json"));
     expect(r.stdout).not.toContain("<PROJECT_DIR>");
   });
 });
