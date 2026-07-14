@@ -138,6 +138,18 @@ function fail(name: string, message: string): never {
   throw new Error(`harness matrix [${name}]: ${message}`);
 }
 
+export function manifestGrantsIdeAgentTools(
+  manifest: Pick<HarnessManifest, "frontmatterAdditions">,
+): boolean {
+  return (
+    manifest.frontmatterAdditions?.some(
+      ({ file, lines }) =>
+        /^agents\/[^/]+\.md$/.test(file) &&
+        lines.some((line) => line.split(":", 1)[0]?.trim() === "tools"),
+    ) ?? false
+  );
+}
+
 function validateManifest(
   name: ShippedHarnessName,
   manifest: HarnessManifest,
@@ -193,9 +205,8 @@ function validateManifest(
   ) {
     fail(name, "memoryInclude does not agree with manifest-owned include surfaces");
   }
-  const hasFrontmatterAdditions = (manifest.frontmatterAdditions?.length ?? 0) > 0;
-  if (hasFrontmatterAdditions !== capabilities.ideAgentTools) {
-    fail(name, "ideAgentTools does not agree with manifest frontmatterAdditions");
+  if (manifestGrantsIdeAgentTools(manifest) !== capabilities.ideAgentTools) {
+    fail(name, "ideAgentTools does not agree with manifest agent tools grants");
   }
   if (
     manifest.plugin &&

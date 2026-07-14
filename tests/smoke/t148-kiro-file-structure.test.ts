@@ -13,7 +13,10 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+import {
+  HARNESS_MATRIX,
+  manifestGrantsIdeAgentTools,
+} from "../harness/harness-matrix.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO = join(REPO_ROOT, "dist", "kiro");
@@ -87,6 +90,24 @@ describe("t148 dist/kiro file structure", () => {
       const a = readJson(join(K, "agents", f));
       expect((a.tools as string[]) ?? []).not.toContain("subagent");
     }
+  });
+
+  test("IDE-agent capability ignores unrelated frontmatter additions", () => {
+    expect(
+      manifestGrantsIdeAgentTools({
+        frontmatterAdditions: [
+          { file: "agents/aidlc-example-agent.md", lines: ["badge: example"] },
+          { file: "skills/aidlc/SKILL.md", lines: [`tools: ["read"]`] },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      manifestGrantsIdeAgentTools({
+        frontmatterAdditions: [
+          { file: "agents/aidlc-example-agent.md", lines: [`tools: ["read"]`] },
+        ],
+      }),
+    ).toBe(true);
   });
 
   test("IDE-native tools: frontmatter grant on delegation targets - kiro-ide ONLY", () => {
