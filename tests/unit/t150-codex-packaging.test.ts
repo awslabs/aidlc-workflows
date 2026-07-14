@@ -218,6 +218,10 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
         project: String.raw`\\server\shared projects\AI "DLC"`,
         hooksJson: String.raw`\\server\shared projects\AI "DLC"\.codex\hooks.json`,
       },
+      {
+        project: "//server/share/project",
+        hooksJson: String.raw`\\server\share\project\.codex\hooks.json`,
+      },
     ];
 
     for (const { project, hooksJson } of cases) {
