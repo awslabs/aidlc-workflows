@@ -46,9 +46,14 @@
 //   - selecting "Request changes" -> aidlc-state.ts handleReject (:769): emits
 //     GATE_REJECTED + STAGE_REVISING, marks [?]->[R], Revision Count++ (:786).
 //     The orchestrator then re-runs the stage and re-presents the SAME gate.
-//   - bugfix scope: Ideation entirely SKIP; first post-init EXECUTE gate is
-//     requirements-analysis on a brownfield workspace (reverse-engineering runs
-//     first; scope-mapping.json "bugfix" + aidlc-utility.ts greenfield downgrade).
+//   - bugfix scope: Ideation entirely SKIP; on a brownfield workspace the first
+//     post-init approval gate is reverse-engineering's (it runs first and holds
+//     its own Request-Changes gate), then requirements-analysis
+//     (scope-mapping.json "bugfix" + aidlc-utility.ts greenfield downgrade).
+//     RE is a codekb stage: its revision at the gate is counted via the
+//     approve-time backstop's codekb arm (aidlc-state.ts producesArtifactFile;
+//     the 2026-07-13 live run proved the pre-fix gap - reject honored
+//     conversationally, Revision Count stuck at 0).
 //   - Completed counter == `- [x]` grid count (aidlc-state.ts:256-258 sync); the
 //     terminator + the cross-run comparison both read this field.
 //   - the AUQ gate footer + caret signal is gridHasMenu (tui-drive.ts; `❯` on

@@ -166,9 +166,14 @@ function hasStageAuditEvent(
 // SUFFIX `/<slug>/<name>.md` rather than resolving one absolute dir, so it
 // covers BOTH the standard <record>/<phase>/<slug>/ layout AND the per-unit
 // construction/<unit>/<slug>/ layout without needing to know the {unit}
-// segment. The audit File field is stored forward-slash-normalised
-// (aidlc-audit-logger.ts), so the forward-slash suffix match is harness-neutral;
-// we still normalise defensively in case a caller passes a raw OS path.
+// segment. Codekb stages get their own arm: their produces live DIRECTLY under
+// a per-repo dir beneath the space codekb root (codekb/<repo>/<name>.md) with
+// no <slug> segment anywhere, so the suffix idiom matches the codekb marker +
+// one repo segment instead - the matcher analog of the placement split
+// producesDirsForStage handles for the artifact guard. The audit File field is
+// stored forward-slash-normalised (aidlc-audit-logger.ts), so the
+// forward-slash matching is harness-neutral; we still normalise defensively in
+// case a caller passes a raw OS path.
 function producesArtifactFile(
   stage: { slug: string; produces?: string[] },
   file: string
@@ -176,6 +181,16 @@ function producesArtifactFile(
   const produces = stage.produces ?? [];
   if (produces.length === 0) return false;
   const norm = file.replace(/\\/g, "/");
+  if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
+    return produces.some((name) => {
+      const idx = norm.lastIndexOf(`/${name}.md`);
+      if (idx === -1 || idx + `/${name}.md`.length !== norm.length) return false;
+      // Exactly one <repo> segment between /codekb/ and /<name>.md.
+      const head = norm.slice(0, idx);
+      const repoSlash = head.lastIndexOf("/");
+      return repoSlash !== -1 && head.slice(0, repoSlash).endsWith("/codekb");
+    });
+  }
   return produces.some((name) => norm.endsWith(`/${stage.slug}/${name}.md`));
 }
 
@@ -227,14 +242,16 @@ function producesArtifactFile(
 //
 // Fail-open everywhere (empty ledger, no anchor, no post-anchor human turn ->
 // false): the backstop only ever ADDS a reject it can prove happened; when the
-// evidence is absent it does nothing and the normal approve proceeds. codekb
-// stages are excluded entirely: their produces live directly under <repo>/ with
-// no <slug> subdir, and that multi-repo drift is a separate mechanism.
+// evidence is absent it does nothing and the normal approve proceeds. Codekb
+// stages are covered via producesArtifactFile's codekb arm (their produces live
+// under codekb/<repo>/ with no <slug> subdir; the audit-logger hook logs those
+// writes). They were previously excluded outright, which - combined with the
+// hook not logging codekb paths at all - left a revised-then-approved
+// reverse-engineering gate with Revision Count 0 and no GATE_REJECTED row.
 function unrecordedRevisionSinceGateOpen(
   pd: string,
   stage: { slug: string; produces?: string[] }
 ): boolean {
-  if (KNOWN_CODEKB_STAGES.has(stage.slug)) return false;
   const audit = readAllAuditShards(pd);
   if (audit.length === 0) return false; // no ledger -> nothing to reconcile
   const RELEVANT = new Set([

@@ -25,8 +25,10 @@
 //      pre-response `## Review` append - the critical false-positive guard).
 // With the STAGE_STARTED fallback anchor, a produces write must ALSO precede the
 // first post-anchor HUMAN_TURN (mid-stage coaching before any production is not
-// a revision - scenario 10). Fail-open everywhere; codekb stages excluded;
-// off-switch AIDLC_SKIP_REVISION_BACKSTOP=1.
+// a revision - scenario 10). Fail-open everywhere; codekb stages covered via
+// producesArtifactFile's codekb arm (scenario 12 - they were previously
+// excluded outright, which left a revised reverse-engineering gate with
+// Revision Count 0); off-switch AIDLC_SKIP_REVISION_BACKSTOP=1.
 //
 // This is a PROCESS-boundary test: it spawns the real dist tools (state, audit)
 // and drives the real audit-logger hook over stdin, so the audit File shape and
@@ -463,5 +465,46 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(
       auditBlocks(proj).filter((b) => b.event === "GATE_REJECTED" && b.stage === slug).length,
     ).toBe(1);
+  });
+
+  // --- Scenario 12: the codekb stage (reverse-engineering) - the live t139
+  // finding. RE's produces live under the SPACE codekb root
+  // (aidlc/spaces/<space>/codekb/<repo>/<name>.md, no <slug> segment), which
+  // previously (a) the audit-logger hook did not log at all and (b) the
+  // backstop excluded outright - so a revised-then-approved RE gate left
+  // Revision Count 0 with no GATE_REJECTED row. Bug flow on the RE gate:
+  // gate-start; HUMAN_TURN (request changes); codekb ARTIFACT_UPDATED (the
+  // conversational revision); HUMAN_TURN (approve); approve -> backfill fires.
+  test("12: codekb stage (reverse-engineering) revision at the gate backfills too", () => {
+    // Re-seed with the brownfield fixture whose Current Stage is
+    // reverse-engineering (the default seed's mid-ideation fixture has RE
+    // outside its plan).
+    cleanupTestProject(proj);
+    proj = createTestProject();
+    seedStateFile(proj, "state-brownfield-init-done.md");
+    const slug = field(proj, "Current Stage");
+    expect(slug).toBe("reverse-engineering");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]); // anchor
+    recordHumanTurn(proj); // human requests changes at the RE gate (the pivot)
+    // The conductor revises a codekb artifact in place - the production path
+    // shape: <proj>/aidlc/spaces/default/codekb/<repo>/architecture.md.
+    fireArtifact(
+      proj,
+      join(proj, "aidlc", "spaces", "default", "codekb", "my-repo", "architecture.md"),
+    );
+    recordHumanTurn(proj); // human approves
+    const r = guarded(proj, ["approve", slug, "--user-input", "looks good now"]);
+    expect(r.rc).toBe(0);
+
+    expect(field(proj, "Revision Count")).toBe("1");
+    const rejected = auditBlocks(proj).filter(
+      (b) => b.event === "GATE_REJECTED" && b.stage === slug,
+    );
+    expect(rejected.length).toBe(1);
+    expect(rejected[0].recovered).toBe(true);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+    // The hook actually logged the codekb write (the other half of the fix).
+    expect(eventCount(proj, "ARTIFACT_UPDATED")).toBeGreaterThanOrEqual(1);
   });
 });

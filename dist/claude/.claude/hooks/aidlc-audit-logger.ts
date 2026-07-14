@@ -11,6 +11,7 @@ import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
   auditFilePath,
   type ClaudeCodeHookInput,
+  codekbDir,
   docsRoot,
   errorMessage,
   hookDebug,
@@ -56,16 +57,36 @@ const file: string = parsed.tool_input?.file_path ?? "";
 const auditFileValue = file.replace(/\\/g, "/");
 const fileNorm = auditFileValue; // forward-slash form for all path matching below
 
-// Only log writes to the active intent's RECORD tree. The record re-roots per
-// intent (aidlc/spaces/<space>/intents/<slug>-<id8>/…), so a bare
-// `includes("aidlc-docs/")` gate would DROP every artifact write on the workspace
-// layout. docsRoot() resolves that per-intent root when an intent is active, else
-// the bare space record root — the write is logged iff it lands under that root.
+// Only log writes to the active intent's RECORD tree, plus the space's codekb
+// tree. The record re-roots per intent (aidlc/spaces/<space>/intents/
+// <slug>-<id8>/…), so a bare `includes("aidlc-docs/")` gate would DROP every
+// artifact write on the workspace layout. docsRoot() resolves that per-intent
+// root when an intent is active, else the bare space record root - the write is
+// logged iff it lands under that root. The codekb arm covers reverse-
+// engineering's artifacts: they live at the SPACE level keyed by repo
+// (aidlc/spaces/<space>/codekb/<repo>/…, a sibling of intents/, outside the
+// record root), and without it those writes emit no ARTIFACT_* rows at all -
+// which blinded the approve-time gate-revision backstop to codekb revisions
+// (Revision Count silently stayed 0 on a revised-then-approved RE gate).
+// codekbDir(pd, "_") is <pd>/aidlc/spaces/<space>/codekb/_; its parent is the
+// codekb root for the active space (same idiom as producesDirsForStage in
+// aidlc-state.ts).
 const recordRoot = docsRoot(projectDir).replace(/\\/g, "/").replace(/\/$/, "");
 const underRecord = fileNorm === recordRoot || fileNorm.startsWith(`${recordRoot}/`);
-hookDebug(projectDir, "audit-logger", "path-gate", { tool, file: fileNorm, recordRoot, underRecord });
-if (!underRecord) {
-  hookDebug(projectDir, "audit-logger", "exit: not under record root");
+const codekbRoot = join(codekbDir(projectDir, "_"), "..")
+  .replace(/\\/g, "/")
+  .replace(/\/$/, "");
+const underCodekb = fileNorm.startsWith(`${codekbRoot}/`);
+hookDebug(projectDir, "audit-logger", "path-gate", {
+  tool,
+  file: fileNorm,
+  recordRoot,
+  underRecord,
+  codekbRoot,
+  underCodekb,
+});
+if (!underRecord && !underCodekb) {
+  hookDebug(projectDir, "audit-logger", "exit: not under record or codekb root");
   process.exit(0);
 }
 
@@ -90,12 +111,15 @@ if (!existsSync(auditFile)) {
 }
 
 // Extract the context breadcrumb: the path relative to the record root (the
-// per-intent record dir on the new layout, or the flat `aidlc-docs/` root).
-// Prefer the record-root prefix; fall back to the `aidlc-docs/` anchor for a
-// flat-legacy write that didn't match the active record root.
+// per-intent record dir on the new layout, or the flat `aidlc-docs/` root),
+// or "codekb > <repo> > <name>" for a codekb write. Prefer the root prefixes;
+// fall back to the `aidlc-docs/` anchor for a flat-legacy write that didn't
+// match either root.
 let context: string;
 if (underRecord && fileNorm.length > recordRoot.length) {
   context = fileNorm.slice(recordRoot.length + 1).replace(/\//g, " > ");
+} else if (underCodekb) {
+  context = `codekb > ${fileNorm.slice(codekbRoot.length + 1).replace(/\//g, " > ")}`;
 } else {
   const aidlcIdxPosix = file.indexOf("aidlc-docs/");
   const aidlcIdxWin = file.indexOf("aidlc-docs\\");
