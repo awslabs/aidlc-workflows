@@ -34,6 +34,7 @@ const TIMEOUT_MS = 60_000;
 const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
+const KIRO_DIST = join(REPO_ROOT, "dist", "kiro", ".kiro");
 const STAGE_TABLE_BEGIN =
   "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
@@ -500,9 +501,14 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   // --- Silent-failure seams (round-4): each must DROP-LOG, never silently no-op ---
   // Helper: compose a hand-built synthetic plugin into a fresh copy of the base
   // install, returning { drops, projectDir } so a test can assert on the drops.
-  function composeSynthetic(name: string, files: Record<string, string>): { drops: string; proj: string } {
+  function composeSynthetic(
+    name: string,
+    files: Record<string, string>,
+    harnessLeaf: ".claude" | ".kiro" = ".claude",
+  ): { drops: string; proj: string } {
     const proj = mkdtempSync(join(tmp, `syn-${name}-`));
-    cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    const baseDist = harnessLeaf === ".kiro" ? KIRO_DIST : CLAUDE_DIST;
+    cpSync(baseDist, join(proj, harnessLeaf), { recursive: true });
     const root = join(proj, "_plugin");
     // minimal projection: manifest + the one working compose hook + given files
     cpSync(join(pluginBuilt, ".claude-plugin"), join(root, ".claude-plugin"), { recursive: true });
@@ -518,7 +524,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     }
     const r = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
       cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
-      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: harnessLeaf },
     });
     expect(r.status).toBe(0); // compose is fail-open — never breaks the session
     // Drops files are per-plugin (`plugin-compose-<key>.drops`) — aggregate any
@@ -532,6 +538,70 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     }
     return { drops, proj };
   }
+
+  test("Kiro rejects plugin-owned ensemble collaborators with a compose drop", () => {
+    const stage = [
+      "---",
+      "slug: syn-kiro-ensemble",
+      "plugin: syn-kiro",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: aidlc-product-agent",
+      "support_agents:",
+      "  - syn-kiro-collaborator-agent",
+      "mode: mob",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic Kiro Ensemble",
+      "",
+      "## Steps",
+      "body",
+      "",
+    ].join("\n");
+    const agent = [
+      "---",
+      "name: syn-kiro-collaborator-agent",
+      "display_name: Synthetic Kiro Collaborator",
+      "plugin: syn-kiro",
+      "---",
+      "",
+      "# Synthetic Kiro Collaborator",
+      "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic(
+      "syn-kiro",
+      {
+        "stages/inception/syn-kiro-ensemble.md": stage,
+        "agents/syn-kiro-collaborator-agent.md": agent,
+      },
+      ".kiro",
+    );
+
+    expect(existsSync(join(
+      proj,
+      ".kiro",
+      "aidlc-common",
+      "stages",
+      "inception",
+      "syn-kiro-ensemble.md",
+    ))).toBe(false);
+    expect(existsSync(join(
+      proj,
+      ".kiro",
+      "agents",
+      "syn-kiro-collaborator-agent.md",
+    ))).toBe(false);
+    expect(drops).toContain('stage "syn-kiro-ensemble"');
+    expect(drops).toContain('agent "syn-kiro-collaborator-agent"');
+    expect(drops).toContain("agent-v1 JSON + trustedAgents registration");
+    expect(drops).toContain("change the stage's mode to inline");
+  });
 
   test("unresolvable fragment anchor is dropped-with-log, not silent (R4-2)", () => {
     const { drops } = composeSynthetic("syn-anchor", {

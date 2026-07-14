@@ -24,7 +24,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -33,6 +33,7 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   resetAidlcEnv,
+  seededAuditShard,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -41,6 +42,7 @@ resetAidlcEnv();
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const SHIPPED_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 
 // user-stories' declared support agents (verified frontmatter).
 const MOB_SUPPORTS = [
@@ -111,18 +113,17 @@ function writeContribution(proj: string, agent: string, firstLine?: string): voi
   );
 }
 
-function report(proj: string, env: Record<string, string | undefined> = {}): Directive {
+function runReport(
+  proj: string,
+  args: string[],
+  env: Record<string, string | undefined> = {},
+): Directive {
   const r = spawnSync(
     BUN,
     [
       ORCH,
       "report",
-      "--stage",
-      "user-stories",
-      "--result",
-      "approved",
-      "--user-input",
-      "Approve",
+      ...args,
       "--project-dir",
       proj,
     ],
@@ -138,6 +139,91 @@ function report(proj: string, env: Record<string, string | undefined> = {}): Dir
   } catch {
     return { kind: "unparseable", message: r.stdout + r.stderr };
   }
+}
+
+function report(proj: string, env: Record<string, string | undefined> = {}): Directive {
+  return runReport(
+    proj,
+    [
+      "--stage",
+      "user-stories",
+      "--result",
+      "approved",
+      "--user-input",
+      "Approve",
+    ],
+    env,
+  );
+}
+
+function reportSingle(proj: string): Directive {
+  return runReport(proj, [
+    "--single",
+    "--stage",
+    "user-stories",
+    "--result",
+    "approved",
+  ]);
+}
+
+function auditText(proj: string): string {
+  const path = seededAuditShard(proj);
+  return existsSync(path) ? readFileSync(path, "utf-8") : "";
+}
+
+function graphVariant(
+  proj: string,
+  mutate: (node: Record<string, unknown>) => void,
+): string {
+  const graph = JSON.parse(readFileSync(SHIPPED_GRAPH, "utf-8")) as Array<Record<string, unknown>>;
+  const node = graph.find((entry) => entry.slug === "user-stories");
+  if (!node) throw new Error("shipped graph has no user-stories node");
+  mutate(node);
+  const path = join(proj, "stage-graph-fixture.json");
+  writeFileSync(path, `${JSON.stringify(graph, null, 2)}\n`);
+  return path;
+}
+
+function seedBoltDag(proj: string, units: string[]): void {
+  writeFileSync(
+    join(seededRecordDir(proj), "runtime-graph.json"),
+    `${JSON.stringify({
+      bolt_dag: {
+        units: units.map((name) => ({ name, depends_on: [] })),
+        batches: [units],
+      },
+    }, null, 2)}\n`,
+  );
+}
+
+function writeUnitContribution(proj: string, unit: string, agent: string): void {
+  const dir = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    "user-stories",
+    "contributions",
+  );
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, `${agent}.md`),
+    `**Collaborator:** ${agent}\n\n## Contribution\n- a point\n\n## Positions\n- None\n`,
+  );
+}
+
+function writeUnitArtifact(proj: string, unit: string): void {
+  const dir = join(seededRecordDir(proj), "construction", unit, "user-stories");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "fixture-artifact.md"), `# Fixture artifact for ${unit}\n`);
+}
+
+function setAutonomous(proj: string): void {
+  const path = seededStateFile(proj);
+  const state = readFileSync(path, "utf-8").replace(
+    /^(- \*\*Scope\*\*: .*)$/m,
+    "$1\n- **Construction Autonomy Mode**: autonomous",
+  );
+  writeFileSync(path, state);
 }
 
 describe("t236 ensemble evidence gate — mob approval requires contribution files", () => {
@@ -191,5 +277,69 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     const proj = seedProject("[x]");
     const d = report(proj);
     expect(d.message ?? "").not.toContain("ensemble must convene");
+  });
+
+  test("report --single refuses missing mob evidence without writing synthetic audit rows", () => {
+    const proj = seedProject();
+    const before = auditText(proj);
+    const d = reportSingle(proj);
+    expect(d.kind).toBe("error");
+    expect(d.message).toContain("aidlc-developer-agent");
+    expect(d.message).toContain("ensemble must convene");
+    expect(auditText(proj)).toBe(before);
+  });
+
+  test("per-unit ensemble evidence is required and accepted under every unit stage directory", () => {
+    const missingProj = seedProject();
+    const missingGraph = graphVariant(missingProj, (node) => {
+      node.phase = "construction";
+      node.for_each = "unit-of-work";
+      node.mode = "mob";
+      node.support_agents = ["aidlc-design-agent"];
+      node.produces = ["fixture-artifact"];
+      node.optional_produces = [];
+    });
+    seedBoltDag(missingProj, ["alpha", "beta"]);
+    writeUnitArtifact(missingProj, "alpha");
+    writeUnitArtifact(missingProj, "beta");
+    writeUnitContribution(missingProj, "alpha", "aidlc-design-agent");
+    const missing = report(missingProj, { AIDLC_STAGE_GRAPH: missingGraph });
+    expect(missing.kind).toBe("error");
+    expect(missing.message).toContain('aidlc-design-agent for unit "beta"');
+    expect(missing.message).toContain(
+      "construction/<unit>/user-stories/contributions/<agent-slug>.md",
+    );
+
+    const completeProj = seedProject();
+    const completeGraph = graphVariant(completeProj, (node) => {
+      node.phase = "construction";
+      node.for_each = "unit-of-work";
+      node.mode = "mob";
+      node.support_agents = ["aidlc-design-agent"];
+      node.produces = ["fixture-artifact"];
+      node.optional_produces = [];
+    });
+    seedBoltDag(completeProj, ["alpha", "beta"]);
+    writeUnitArtifact(completeProj, "alpha");
+    writeUnitArtifact(completeProj, "beta");
+    writeUnitContribution(completeProj, "alpha", "aidlc-design-agent");
+    writeUnitContribution(completeProj, "beta", "aidlc-design-agent");
+    const complete = report(completeProj, { AIDLC_STAGE_GRAPH: completeGraph });
+    expect(complete.message ?? "").not.toContain("ensemble must convene");
+  });
+
+  test("autonomous subagent mode without real swarm eligibility still requires evidence", () => {
+    const proj = seedProject();
+    setAutonomous(proj);
+    const graph = graphVariant(proj, (node) => {
+      node.phase = "inception";
+      delete node.for_each;
+      node.mode = "subagent";
+      node.support_agents = ["aidlc-design-agent"];
+    });
+    const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
+    expect(d.kind).toBe("error");
+    expect(d.message).toContain("aidlc-design-agent (no contribution file)");
+    expect(d.message).toContain("ensemble must convene");
   });
 });

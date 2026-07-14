@@ -6,7 +6,8 @@ examples:
   - error-handling.md
 description: >
   Senior developer responsible for code generation, reverse engineering, and data modelling.
-  Leads Reverse Engineering code scan and Code Generation stages.
+  Leads Reverse Engineering code scan and Code Generation stages, and collaborates in the
+  User Stories mob ensemble.
 disallowedTools: Task
 tier: judgment
 ---

@@ -1879,6 +1879,41 @@ function handleNext(args: string[], projectDir: string | undefined): void {
 const SWARM_FOR_EACH = "unit-of-work";
 const SWARM_MODE = "subagent";
 
+// Resolve the eligible autonomous swarm's batches, or null when any trigger
+// condition is absent. Both emission and report-side exemptions use this one
+// predicate so a mode/autonomy pair cannot masquerade as a real swarm.
+function eligibleAutonomousSwarmBatches(
+  node: GraphStage,
+  scope: string,
+  stateContent: string | null,
+  projectDir: string,
+): string[][] | null {
+  if (node.phase !== "construction") return null;
+  if (node.for_each !== SWARM_FOR_EACH || node.mode !== SWARM_MODE) return null;
+  if (isSkeletonGateStage(node, scope)) return null;
+  if (readAutonomyMode(stateContent) !== "autonomous") return null;
+  const r = resolveBoltBatches(projectDir);
+  if (r.state !== "ok" || r.batches.length === 0) return null;
+  return r.batches;
+}
+
+// Report-side swarm exemptions apply only after every unit in an eligible
+// autonomous swarm has a convergence row. An in-flight or ineligible stage
+// must still satisfy the ordinary disk-backed approval guards.
+function isSettledAutonomousSwarm(
+  node: GraphStage,
+  scope: string,
+  stateContent: string | null,
+  projectDir: string,
+): boolean {
+  const batches = eligibleAutonomousSwarmBatches(node, scope, stateContent, projectDir);
+  if (batches === null) return false;
+  const units = batches.flat();
+  if (units.length === 0) return false;
+  const converged = swarmConvergedUnits(projectDir, node.slug);
+  return units.every((unit) => converged.has(unit));
+}
+
 // Try to handle an eligible autonomous swarm stage, returning true (and emitting)
 // ONLY when every trigger condition holds:
 //   - the slug resolves to a Construction stage that is the per-unit build stage
@@ -1927,15 +1962,8 @@ function tryEmitSwarm(
 ): boolean {
   const node = nodeForSlug(slug);
   if (!node) return false;
-  if (node.phase !== "construction") return false;
-  if (node.for_each !== SWARM_FOR_EACH || node.mode !== SWARM_MODE) return false;
-  // Never swarm the walking-skeleton gate stage — Bolt 1 is always gated and
-  // human-approved before any batch fans out (structural defense-in-depth).
-  if (isSkeletonGateStage(node, scope)) return false;
-  if (readAutonomyMode(stateContent) !== "autonomous") return false;
-  const r = resolveBoltBatches(projectDir);
-  if (r.state !== "ok" || r.batches.length === 0) return false;
-  const batches = r.batches;
+  const batches = eligibleAutonomousSwarmBatches(node, scope, stateContent, projectDir);
+  if (batches === null) return false;
 
   // Select the first topological batch with an unconverged unit; emit only that
   // batch's still-owed units. Ledger signal = SWARM_UNIT_CONVERGED (see above),
@@ -2861,6 +2889,79 @@ function syntheticWorkflowId(slug: string): string {
   return `single-stage:${slug}`;
 }
 
+type EnsembleEvidenceResult =
+  | { ok: true }
+  | { ok: false; message: string };
+
+// Validate the structural completion evidence required by mob and
+// subagent-with-supports stages. Per-unit stages carry one contribution set
+// under every unit's stage directory; ordinary stages carry one set under the
+// stage directory.
+function checkEnsembleEvidence(
+  node: GraphStage,
+  slug: string,
+  pd: string,
+  recordPrefix: string | null,
+  scope: string,
+  stateContent: string | null,
+): EnsembleEvidenceResult {
+  const isGated = node.phase !== "initialization";
+  const needsEnsembleEvidence =
+    node.mode === "mob" ||
+    (node.mode === "subagent" && (node.support_agents ?? []).length > 0);
+  if (
+    !isGated ||
+    !needsEnsembleEvidence ||
+    isSettledAutonomousSwarm(node, scope, stateContent, pd) ||
+    process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE === "1"
+  ) {
+    return { ok: true };
+  }
+
+  const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
+  const perUnit = isPerUnit(node);
+  const contributionDirs: Array<{ path: string; unit: string | null }> = perUnit
+    ? orderedUnits(pd).map((unit) => ({
+        path: join(pd, prefix, "construction", unit, slug, "contributions"),
+        unit,
+      }))
+    : [{
+        path: join(pd, prefix, node.phase, slug, "contributions"),
+        unit: null,
+      }];
+  const missing: string[] = [];
+  for (const { path, unit } of contributionDirs) {
+    for (const agent of node.support_agents ?? []) {
+      const f = join(path, `${agent}.md`);
+      const subject = unit === null ? agent : `${agent} for unit "${unit}"`;
+      let firstLine = "";
+      try {
+        firstLine = readFileSync(f, "utf-8").split("\n", 1)[0].trim();
+      } catch {
+        missing.push(`${subject} (no contribution file)`);
+        continue;
+      }
+      if (firstLine !== `**Collaborator:** ${agent}`) {
+        missing.push(`${subject} (missing identity-marker first line)`);
+      }
+    }
+  }
+  if (missing.length === 0) return { ok: true };
+
+  const contributionPath = perUnit
+    ? `${prefix}/construction/<unit>/${slug}/contributions/<agent-slug>.md`
+    : `${prefix}/${node.phase}/${slug}/contributions/<agent-slug>.md`;
+  return {
+    ok: false,
+    message:
+      `Stage "${slug}" is mode: ${node.mode} - its ensemble must convene before approval, and the ` +
+      `contribution files are the evidence. Missing or malformed: ${missing.join("; ")}. ` +
+      `Dispatch each support agent to write ${contributionPath} ` +
+      `(first line: **Collaborator:** <agent-slug>) per stage-protocol.md §5, then re-report. ` +
+      `Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run stage whose files were lost.`,
+  };
+}
+
 // Handle `report --single --stage <slug> --result <outcome>`: commit the lone
 // STAGE_STARTED / STAGE_COMPLETED pair for `<slug>` under a SYNTHETIC workflow
 // id, audit-only, then emit `done`. This is the WRITE half of the stage-runner
@@ -2924,6 +3025,21 @@ function handleSingleReport(
   }
 
   const pd = resolveProjectDir(projectDir);
+  const stateContent = loadStateFileIfPresent(pd);
+  const scope = stateContent ? (getField(stateContent, "Scope")?.trim() || DEFAULT_SCOPE) : DEFAULT_SCOPE;
+  const recordPrefix = relativeRecordDir(pd);
+  const evidence = checkEnsembleEvidence(
+    node,
+    node.slug,
+    pd,
+    recordPrefix,
+    scope,
+    stateContent,
+  );
+  if (!evidence.ok) {
+    emit(errorDirective(evidence.message));
+    return;
+  }
   const wfId = syntheticWorkflowId(node.slug);
 
   const started = spawnAuditAppend(pd, "STAGE_STARTED", {
@@ -3104,7 +3220,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // and its artifacts may legitimately be absent (a fresh clone, moved files), so
   // the guard must not turn a harmless replay into an error.
   //
-  // Scoped to the INLINE per-unit loop, NOT the autonomous code-generation swarm.
+  // Scoped to the INLINE per-unit loop, NOT a settled autonomous
+  // code-generation swarm.
   // The swarm climbs the Bolt DAG one BATCH per `next` (tryEmitSwarm emits the
   // first batch with an unconverged unit, then presents the stage's single gate
   // once every batch has converged), with the swarm referee (aidlc-swarm.ts
@@ -3112,14 +3229,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // `complete --merge` consolidates only the AIDLC metadata back to the main
   // checkout (a converged unit's produced artifacts stay in its Bolt worktree),
   // so this disk-coverage check would find EVERY swarm unit uncovered and refuse
-  // the approve outright even after the whole stage has built. So we exclude the
-  // swarm condition (per-unit + mode:subagent + autonomous) from the guard and
-  // let the swarm's own per-batch convergence (SWARM_UNIT_CONVERGED, the ledger
-  // signal tryEmitSwarm advances on) stand as its coverage proof. The guard
-  // remains for every inline per-unit stage (the four design stages, and
-  // code-generation when it falls back to the inline path off the swarm).
+  // the approve outright even after the whole stage has built. We exclude only a
+  // fully converged swarm that satisfies the same eligibility predicate as
+  // tryEmitSwarm. The guard remains for every inline per-unit stage (the four
+  // design stages, and code-generation when it falls back to the inline path off
+  // the swarm).
   const isAutonomousSwarm =
-    node.mode === SWARM_MODE && readAutonomyMode(stateContent) === "autonomous";
+    isSettledAutonomousSwarm(node, scope, stateContent, pd);
   if (isGated && isPerUnit(node) && stageCheckbox.state !== "completed" && !isAutonomousSwarm) {
     const r = resolveBoltBatches(pd);
     if (r.state === "malformed") {
@@ -3150,11 +3266,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   }
 
   // Ensemble evidence gate, DETERMINISTIC enforcement on the approve path.
-  // On a mob stage — or a hub-and-spoke subagent stage with declared
-  // support_agents — the collaborators' contribution files ARE the proof the
-  // ensemble convened (stage-protocol.md §5 "Completion evidence"): one file
-  // per declared support agent at <record>/<phase>/<slug>/contributions/
-  // <agent-slug>.md, whose FIRST line is the identity marker verbatim
+  // On a mob stage, or a hub-and-spoke subagent stage with declared
+  // support_agents, the collaborators' contribution files are the structural
+  // completion evidence checked by the engine: one file per declared support
+  // agent at <record>/<phase>/<slug>/contributions/<agent-slug>.md, whose FIRST
+  // line is the identity marker verbatim
   // (`**Collaborator:** <agent-slug>`). A conductor that ran the stage as
   // inline voices produces no files, so the approve is refused with the
   // remediation named. pipeline stages carry no contribution-file
@@ -3163,52 +3279,24 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // like the per-unit guard above: gated, not-yet-completed stages only (an
   // already-[x] stage is an idempotent recovery replay whose files may
   // legitimately be gone), and the autonomous swarm is excluded for the same
-  // reason the per-unit coverage guard excludes it - swarm workers write
+  // reason the per-unit coverage guard excludes it: swarm workers write
   // inside Bolt worktrees, so a main-tree disk check would refuse the settle
-  // report even after a genuinely converged run (inert today: no per-unit
-  // build stage declares support_agents, but the two adjacent guards must
-  // treat the swarm symmetrically). Per-unit ensemble stages (none shipped)
-  // would keep contributions under the unit's stage dir; this guard checks
-  // the stage-level dir, matching every shipped ensemble stage. Escape
-  // hatch: AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 (recovering a legitimately-run
-  // stage whose contribution files were lost).
-  const needsEnsembleEvidence =
-    node.mode === "mob" ||
-    (node.mode === "subagent" && (node.support_agents ?? []).length > 0);
-  if (
-    isGated &&
-    needsEnsembleEvidence &&
-    !isAutonomousSwarm &&
-    stageCheckbox.state !== "completed" &&
-    process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE !== "1"
-  ) {
+  // report even after a genuinely converged run. Per-unit ensemble stages keep
+  // contributions under each unit's stage dir. Escape hatch:
+  // AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 (recovering a legitimately-run stage
+  // whose contribution files were lost).
+  if (stageCheckbox.state !== "completed") {
     const recordPrefix = relativeRecordDir(pd);
-    const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
-    const contribDir = join(pd, prefix, node.phase, slug, "contributions");
-    const missing: string[] = [];
-    for (const agent of node.support_agents ?? []) {
-      const f = join(contribDir, `${agent}.md`);
-      let firstLine = "";
-      try {
-        firstLine = readFileSync(f, "utf-8").split("\n", 1)[0].trim();
-      } catch {
-        missing.push(`${agent} (no contribution file)`);
-        continue;
-      }
-      if (firstLine !== `**Collaborator:** ${agent}`) {
-        missing.push(`${agent} (missing identity-marker first line)`);
-      }
-    }
-    if (missing.length > 0) {
-      emit({
-        kind: "error",
-        message:
-          `Stage "${slug}" is mode: ${node.mode} — its ensemble must convene before approval, and the ` +
-          `contribution files are the evidence. Missing or malformed: ${missing.join("; ")}. ` +
-          `Dispatch each support agent to write ${prefix}/${node.phase}/${slug}/contributions/<agent-slug>.md ` +
-          `(first line: **Collaborator:** <agent-slug>) per stage-protocol.md §5, then re-report. ` +
-          `Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run stage whose files were lost.`,
-      });
+    const evidence = checkEnsembleEvidence(
+      node,
+      slug,
+      pd,
+      recordPrefix,
+      scope,
+      stateContent,
+    );
+    if (!evidence.ok) {
+      emit(errorDirective(evidence.message));
       return;
     }
   }

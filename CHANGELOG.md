@@ -14,6 +14,8 @@ The three-role ensemble (North Star Goal 1): a stage's `mode` is now its communi
 * Kiro CLI/IDE delegation roster closed: all 14 personas are now dispatchable (`.kiro/agents/*.json` + conductor `trustedAgents`); the nine new collaborator configs carry read+shell plus an `aidlc/spaces/**`-scoped write grant (for their contribution files).
 * `aidlc-graph compile` emits an `[advisory]` on stderr when the per-unit Construction build stage carries a mode other than `subagent` - that shape silently takes the stage off the autonomous swarm path.
 * Scope decisions recorded: transports are conductor-simulated on all five harnesses in v1 (native nested dispatch and live-team rooms are documented follow-ups; Kiro CLI refuses nested delegation at runtime, so the hub is its permanent floor); the review loop stays the `reviewer` field, not a mode.
+* `report --single` now enforces the same ensemble evidence gate as the main workflow path. Per-unit ensembles are checked under every unit's stage directory, and the autonomous swarm exemption applies only to eligible Construction swarms after every unit has converged.
+* Kiro CLI/IDE grants the Developer collaborator scoped write access to `aidlc/spaces/**`. Kiro composition now rejects plugin stages that would dispatch plugin-owned agents without a native agent-v1 configuration and `trustedAgents` registration, naming the stage, agent, and remediation in the compose drops log.
 
 ## [2.4.6] - 2026-07-17
 

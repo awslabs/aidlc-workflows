@@ -110,6 +110,21 @@ describe("t148 dist/kiro file structure", () => {
     ).toBe(true);
   });
 
+  test("developer, design, and quality agents retain space-scoped write grants on Kiro CLI and IDE", () => {
+    for (const harness of ["kiro", "kiro-ide"]) {
+      const agentsDir = join(REPO_ROOT, "dist", harness, ".kiro", "agents");
+      for (const agent of [
+        "aidlc-developer-agent",
+        "aidlc-design-agent",
+        "aidlc-quality-agent",
+      ]) {
+        const config = readJson(join(agentsDir, `${agent}.json`));
+        const settings = config.toolsSettings as Record<string, { allowedPaths?: string[] }>;
+        expect(settings.fs_write?.allowedPaths).toContain("aidlc/spaces/**");
+      }
+    }
+  });
+
   test("IDE-native tools: frontmatter grant on delegation targets - kiro-ide ONLY", () => {
     // The Kiro IDE resolves a delegated subagent's tools from the agent .md
     // frontmatter, not from the agent-v1 JSON the CLI reads (field-proven:

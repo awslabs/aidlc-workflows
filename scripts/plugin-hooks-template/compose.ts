@@ -444,6 +444,101 @@ function emitOpencodeNativeAgent({ file, content }: CopyContext): string {
   return content.replace(m[0], () => `---\n${fm}\n---\n`);
 }
 
+function combinePrechecks(...checks: Array<CopyPrecheck | undefined>): CopyPrecheck {
+  return (ctx) => checks.every((check) => check === undefined || check(ctx));
+}
+
+interface KiroPluginAgentPrechecks {
+  stage: CopyPrecheck;
+  agent: CopyPrecheck;
+}
+
+// Kiro cannot dispatch a Markdown-only plugin persona. Native dispatch also
+// requires a hand-authored agent-v1 JSON and conductor trustedAgents entry,
+// neither of which can be derived safely from persona prose. Reject only plugin
+// stages that would dispatch plugin-owned agents; inline plugin personas remain
+// composable because the conductor loads them without subagent dispatch.
+async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | null> {
+  if (HARNESS_LEAF !== ".kiro") return null;
+
+  const pluginAgentFiles = walk(join(PLUGIN_ROOT, "agents")).filter((file) => file.endsWith(".md"));
+  const pluginAgents = new Map<string, string>();
+  for (const file of pluginAgentFiles) {
+    const content = readFileSync(file, "utf-8");
+    const rel = relative(join(PLUGIN_ROOT, "agents"), file).replace(/\\/g, "/");
+    const fallback = rel.split("/").pop()!.replace(/\.md$/, "");
+    pluginAgents.set(frontmatterName(content) ?? fallback, file);
+  }
+  if (pluginAgents.size === 0) return null;
+
+  let parse: ((raw: string) => Record<string, unknown>) | null = null;
+  try {
+    const lib = await import(join(HARNESS_DIR, "tools", "aidlc-lib.ts"));
+    if (typeof lib.parseStageFrontmatter === "function") parse = lib.parseStageFrontmatter;
+  } catch {
+    // The installed parser is required for a safe dispatch-topology decision.
+  }
+  if (!parse) {
+    recordDrop(
+      `plugin "${PLUGIN_NAME}" Kiro agent composition skipped: the installed stage parser is unavailable, so plugin-owned dispatch safety cannot be validated`,
+    );
+    for (const file of walk(join(PLUGIN_ROOT, "stages")).filter((path) => path.endsWith(".md"))) {
+      composeDroppedStageSlugs.add(file.replace(/\\/g, "/").split("/").pop()!.replace(/\.md$/, ""));
+    }
+    return {
+      stage: ({ file }) => !file.endsWith(".md"),
+      agent: ({ file }) => !file.endsWith(".md"),
+    };
+  }
+
+  const rejectedStageFiles = new Set<string>();
+  const rejectedAgents = new Set<string>();
+  const stagesRoot = join(PLUGIN_ROOT, "stages");
+  for (const file of walk(stagesRoot).filter((path) => path.endsWith(".md"))) {
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = parse(readFileSync(file, "utf-8"));
+    } catch {
+      continue;
+    }
+    const mode = typeof parsed.mode === "string" ? parsed.mode : "";
+    const supportAgents = Array.isArray(parsed.support_agents)
+      ? parsed.support_agents.filter((agent): agent is string => typeof agent === "string")
+      : [];
+    const dispatches =
+      mode === "mob" ||
+      mode === "pipeline" ||
+      (mode === "subagent" && supportAgents.length > 0);
+    if (!dispatches) continue;
+
+    const leadAgent = typeof parsed.lead_agent === "string" ? parsed.lead_agent : "";
+    const referencedPluginAgents = [leadAgent, ...supportAgents]
+      .filter((agent) => pluginAgents.has(agent));
+    if (referencedPluginAgents.length === 0) continue;
+
+    const rel = relative(stagesRoot, file).replace(/\\/g, "/");
+    const slug = typeof parsed.slug === "string"
+      ? parsed.slug
+      : rel.split("/").pop()!.replace(/\.md$/, "");
+    rejectedStageFiles.add(rel);
+    composeDroppedStageSlugs.add(slug);
+    for (const agent of referencedPluginAgents) {
+      rejectedAgents.add(agent);
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" stage "${slug}" uses plugin-owned agent "${agent}" with mode "${mode}" and was not composed: Kiro CLI/IDE cannot dispatch plugin-owned ensemble collaborators without a hand-authored agent-v1 JSON + trustedAgents registration; author harness/kiro/agents/${agent}.json and add it to aidlc.json's trustedAgents, or change the stage's mode to inline`,
+      );
+    }
+  }
+
+  return {
+    stage: ({ rel }) => !rejectedStageFiles.has(rel.replace(/\\/g, "/")),
+    agent: ({ rel, content }) => {
+      const fallback = rel.replace(/\\/g, "/").split("/").pop()!.replace(/\.md$/, "");
+      return !rejectedAgents.has(frontmatterName(content) ?? fallback);
+    },
+  };
+}
+
 // Validate a plugin stage file against the INSTALLED engine's schema before
 // copying it into the install. Compile is all-or-nothing - aidlc-graph.ts
 // throws on the first schema-invalid stage file - so one bad copy (e.g. a
@@ -455,10 +550,10 @@ function emitOpencodeNativeAgent({ file, content }: CopyContext): string {
 // and routes while being behaviorally dead. Fails OPEN (copies) when the
 // installed lib can't be loaded - a partial install already can't compile,
 // so we don't add a second failure mode.
-// Slugs the schema precheck refused, so the "did my stages reach the compiled
-// graph?" self-heal probe below doesn't see a deliberately-dropped stage as a
+// Slugs a compose precheck refused, so the "did my stages reach the compiled
+// graph?" self-heal probe below does not see a deliberately-dropped stage as a
 // failed compile and force a recompile every session.
-const schemaDroppedStageSlugs = new Set<string>();
+const composeDroppedStageSlugs = new Set<string>();
 async function installedStageSchemaPrecheck(): Promise<CopyPrecheck> {
   let parse: ((raw: string) => Record<string, unknown>) | null = null;
   let validate: ((obj: unknown) => { valid: boolean; errors?: string[] }) | null = null;
@@ -501,7 +596,7 @@ async function installedStageSchemaPrecheck(): Promise<CopyPrecheck> {
       }
     }
     if (errors.length === 0) return true;
-    schemaDroppedStageSlugs.add(rel.replace(/\\/g, "/").split("/").pop()!.replace(/\.md$/, ""));
+    composeDroppedStageSlugs.add(rel.replace(/\\/g, "/").split("/").pop()!.replace(/\.md$/, ""));
     recordDrop(
       `plugin "${PLUGIN_NAME}" stage file "${rel}" not composed: ${errors.join("; ")} - fix the plugin's stage file and re-run compose`,
     );
@@ -788,7 +883,12 @@ try {
       "plugin-owned stages/scopes/agents not composed: installed engine predates the plugin: ownership key - re-copy your dist/<harness>/ shell, then re-run compose",
     );
   } else {
-    changed = copyTreeNoClobber(join(PLUGIN_ROOT, "stages"), STAGES_DIR, "stage", await installedStageSchemaPrecheck()) || changed;
+    const kiroAgentPrechecks = await kiroPluginAgentPrechecks();
+    const stagePrecheck = combinePrechecks(
+      kiroAgentPrechecks?.stage,
+      await installedStageSchemaPrecheck(),
+    );
+    changed = copyTreeNoClobber(join(PLUGIN_ROOT, "stages"), STAGES_DIR, "stage", stagePrecheck) || changed;
     const scopesDir = join(HARNESS_DIR, "scopes");
     const agentsDir = join(HARNESS_DIR, "agents");
     changed = copyTreeNoClobber(join(PLUGIN_ROOT, "scopes"), scopesDir, "scopes", installedNameCollisionPrecheck(scopesDir, "scopes")) || changed;
@@ -796,7 +896,10 @@ try {
       join(PLUGIN_ROOT, "agents"),
       agentsDir,
       "agents",
-      installedNameCollisionPrecheck(agentsDir, "agents"),
+      combinePrechecks(
+        kiroAgentPrechecks?.agent,
+        installedNameCollisionPrecheck(agentsDir, "agents"),
+      ),
       HARNESS_LEAF === ".aidlc"
         ? ({ content }) => projectOpencodeAgentMemory(content)
         : undefined,
@@ -1092,9 +1195,9 @@ try {
     if (!existsSync(dir)) continue;
     for (const f of readdirSync(dir)) if (f.endsWith(".md")) pluginStages.push({ slug: f.slice(0, -3), phase });
   }
-  // A schema-dropped stage never landed on disk, so it can never reach the
+  // A compose-dropped stage never landed on disk, so it can never reach the
   // graph - expecting it there would force a futile recompile every session.
-  const pluginSlugs = pluginStages.map((s) => s.slug).filter((s) => !schemaDroppedStageSlugs.has(s));
+  const pluginSlugs = pluginStages.map((s) => s.slug).filter((s) => !composeDroppedStageSlugs.has(s));
   const graphPath = join(HARNESS_DIR, "tools", "data", "stage-graph.json");
   const readGraph = (): Array<{ slug?: string; plugin?: string; phase?: string; enabled?: boolean }> | null => {
     try {
