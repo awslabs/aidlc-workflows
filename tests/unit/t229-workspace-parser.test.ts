@@ -238,18 +238,18 @@ describe("classifier and next parser parity", () => {
   test("workspace migration rows render the same utility subcommand at both call sites", () => {
     const rows: Array<{ args: string[]; invocation: string }> = [
       { args: ["space"], invocation: "space" },
-      { args: ["space", "teamB"], invocation: "space switch teamB" },
+      { args: ["space", "teamB"], invocation: "space teamB" },
       { args: ["space", "create", "teamB"], invocation: "space-create teamB" },
       { args: ["space", "list"], invocation: "space" },
       { args: ["space", "list", "--json"], invocation: "space --json" },
       { args: ["space", "switch", "teamB"], invocation: "space switch teamB" },
       { args: ["space-create", "teamB"], invocation: "space-create teamB" },
-      { args: ["intent", "some-slug"], invocation: "intent switch some-slug" },
+      { args: ["intent", "some-slug"], invocation: "intent some-slug" },
       { args: ["intent", "list"], invocation: "intent" },
       { args: ["intent", "list", "--json"], invocation: "intent --json" },
       { args: ["intent", "switch", "list"], invocation: "intent switch list" },
       { args: ["intent", "birth", "--scope", "poc", "--label", "x"], invocation: "intent-birth --scope poc --label x" },
-      { args: ["space", "foo", "--status"], invocation: "space switch foo" },
+      { args: ["space", "foo", "--status"], invocation: "space foo" },
     ];
     for (const row of rows) {
       const cmd = classifyTerminalCommand(row.args);
@@ -305,14 +305,14 @@ describe("classifier and next parser parity", () => {
     const cmd = classifyTerminalCommand(["space", "foo", "--status"]);
     expect(cmd).toEqual({
       subcommand: "space",
-      args: ["switch", "foo"],
+      arg: "foo",
       source: "workspace-verb",
     });
     const projectDir = scratchProject();
     try {
       const d = directive(projectDir, ["space", "foo", "--status"]);
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("aidlc-utility.ts space switch foo");
+      expect(d.message).toContain("aidlc-utility.ts space foo");
       expect(d.message).not.toContain("aidlc-utility.ts status");
     } finally {
       cleanup(projectDir);

@@ -569,7 +569,19 @@ export function workspaceCommandUtilityArgv(command: WorkspaceCommand): string[]
     case "list":
       return command.json ? [command.noun, "--json"] : [command.noun];
     case "switch":
-      return [command.noun, "switch", command.name];
+      // Explicit `switch <name>` must forward the literal "switch" token so
+      // the utility reads <name> as the switch target even when it shadows a
+      // verb (e.g. `intent switch birth` reaching a pre-existing intent named
+      // "birth" instead of re-reading "birth" as the birth verb). Bare-name
+      // sugar (`space teamB`, explicit: false) is unaffected by that bug and
+      // must keep the original 2-token shape: the utility's bare
+      // `[noun, name]` form IS the switch (see handleIntent/handleSpace's
+      // "verbOrTarget = name when not a recognized verb" branch), and every
+      // downstream consumer (the classifier's terminal print, the Kiro
+      // adapter, t114/t178/t198) pins that shape as still-desired behavior.
+      return command.explicit
+        ? [command.noun, "switch", command.name]
+        : [command.noun, command.name];
     case "create":
       return ["space-create", command.name];
     case "birth":

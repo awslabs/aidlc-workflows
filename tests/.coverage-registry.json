@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 97,
+      "function": 98,
       "audit": 31,
       "scope": 9,
       "stage": 8,
@@ -3075,8 +3075,13 @@
       "unitClass": "function",
       "unitId": "function:workspaceCommandUtilityArgv",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/unit/t229-workspace-parser.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -5038,6 +5043,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t238-build-binaries.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t27.test.ts",
           "mechanism": "cli"
         },
@@ -5227,6 +5236,10 @@
       "coveredBy": [
         {
           "file": "tests/unit/t231-handler-additions.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t238-build-binaries.test.ts",
           "mechanism": "cli"
         }
       ],
