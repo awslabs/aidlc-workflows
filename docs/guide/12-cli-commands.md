@@ -2,10 +2,12 @@
 
 All AI-DLC commands start with the orchestrator invocation. This chapter is a complete reference for every invocation pattern and flag.
 
-> **Invocation prefix differs by harness.** On Claude Code and Kiro IDE you type
-> `/aidlc`; on Codex CLI it is `$aidlc` (or `/skills` → aidlc). The flags and
-> behaviour below are identical either way — only the prefix changes. The examples
-> use `/aidlc`; substitute `$aidlc` on Codex. See [Running on Codex CLI](harnesses/codex-cli.md).
+> **Invocation prefix differs by harness.** On Claude Code, Kiro CLI, and Kiro
+> IDE you type `/aidlc`; on Codex CLI it is `$aidlc` (or `/skills` → aidlc).
+> The flags and behaviour below are identical either way — only the prefix
+> changes. The examples use `/aidlc`; substitute `$aidlc` on Codex. See the
+> [Kiro CLI](harnesses/kiro-cli.md), [Kiro IDE](harnesses/kiro-ide.md), and
+> [Codex CLI](harnesses/codex-cli.md) harness guides.
 
 ---
 
@@ -19,6 +21,9 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc compose --report <path>` | Compose from a scan report (triage findings into a compact fix-and-ship run) |
 | `/aidlc --new-scope "<task>"` | Force the composer to synthesize a custom scope even when a stock scope matches |
 | `/aidlc` | Resume an existing workflow (if an intent exists) or birth the first intent and start new |
+| `/aidlc intent [name]` | List intents in the active space, or switch to an existing intent |
+| `/aidlc space [name]` | List spaces, or switch to an existing space |
+| `/aidlc space-create <name>` | Create a new space from the framework baseline |
 | `/aidlc --status` | Display a read-only status summary |
 | `/aidlc --doctor` | Run a health check on your setup |
 | `/aidlc --stage <slug\|#>` | Jump to a specific stage |
@@ -189,6 +194,30 @@ operation (worktree, swarm, Bolt) targets one repo; the conductor passes
 `--repo <name>` to anchor it, required only when an intent spans more than one
 repo. An intent with no recorded repos is the single-repo default (git runs in the
 workspace/project dir). See [Artifacts Reference](14-artifacts-reference.md).
+
+---
+
+### `/aidlc intent [name]` — List or switch intents
+
+Bare `/aidlc intent` lists the intents in the active space; add `--json` for
+structured output. `/aidlc intent <name>` switches the per-user active-intent
+cursor to an existing intent by unambiguous slug or full record-dir name. It
+never creates an intent or advances a workflow.
+
+### `/aidlc space [name]` — List or switch spaces
+
+Bare `/aidlc space` lists spaces; add `--json` for structured output.
+`/aidlc space <name>` switches the per-user active-space cursor and re-points
+the harness-native method include to that space. It never creates a space or
+advances an intent.
+
+### `/aidlc space-create <name>` — Create a space
+
+Creates a new team space with the full `memory/`, `knowledge/`, `codekb/`, and
+`intents/` shape, seeded from the framework baseline rather than another
+team's learned practices. It does not switch spaces automatically. See
+[Spaces and Intents](03-spaces-and-intents.md) for the workspace model,
+switching examples, and what is committed.
 
 ---
 
@@ -434,9 +463,29 @@ Display a summary of available commands and flags.
 
 ## Deterministic CLI Tools
 
-Beyond the `/aidlc` flags above, this implementation ships three Bun/TypeScript tools that the hooks call automatically as a workflow runs. You rarely invoke them by hand — they keep the audit trail, the Sensor results, and the runtime graph in sync without you asking. They are documented here because they surface in `--doctor` output and in the `audit/` shards, and because each one is a useful debug handle when you want to see what the framework saw.
+Beyond the `/aidlc` flags above, this implementation ships several
+Bun/TypeScript tools that the hooks and stage protocol call as a workflow runs.
+You rarely invoke them by hand, but each is also a useful debug handle.
 
-Run any of them with `bun .claude/tools/<tool>.ts <subcommand>`.
+Use `bun <harness-dir>/tools/<tool>.ts <subcommand>`, where `<harness-dir>` is
+`.claude` on Claude Code, `.kiro` on Kiro CLI and Kiro IDE, and `.codex` on
+Codex CLI.
+
+### `aidlc-utility codekb-path` - resolve the code knowledge directory
+
+This is a **direct utility invocation**, not an `/aidlc codekb-path` command:
+
+```bash
+bun .claude/tools/aidlc-utility.ts codekb-path --repo <repo>
+bun .kiro/tools/aidlc-utility.ts codekb-path --repo <repo>
+bun .codex/tools/aidlc-utility.ts codekb-path --repo <repo>
+```
+
+It prints the active space's deterministic
+`aidlc/spaces/<space>/codekb/<repo>/` path. Add `--json` for
+`{space, repo, dir}`. The query writes nothing, creates no directory, and emits
+no audit event; reverse-engineering stage prose invokes it directly so paths
+are never derived by hand.
 
 ### `aidlc-utility detect` - read-only workspace scan
 

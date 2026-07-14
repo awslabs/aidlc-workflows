@@ -27,9 +27,9 @@ bun install --frozen-lockfile
 
 ```
 core/                # Hand-authored, harness-neutral source (tools, stages, agents, rules, knowledge, hooks)
-harness/<name>/      # Per-harness authored surfaces (manifest, orchestrator skill, settings/config; e.g. claude/, kiro/, codex/)
+harness/<name>/      # Per-harness authored surfaces; claude/, kiro/, kiro-ide/, codex/
 scripts/package.ts   # The build: regenerates dist/<harness>/ from core/ + harness/ (`--check` drift-guards it)
-dist/<harness>/      # GENERATED distributables (claude/.claude/, kiro/.kiro/ + AGENTS.md, codex/) — never hand-edit; run the packager
+dist/<harness>/      # GENERATED: dist/claude/, dist/kiro/, dist/kiro-ide/, dist/codex/ — never hand-edit
 tests/               # All-TypeScript test suite (t*.test.ts, run via bun)
 docs/                # Documentation
   guide/             # User guide (how to use AI-DLC)
@@ -43,7 +43,7 @@ For the full architecture, see [reference/01-architecture.md](01-architecture.md
 
 1. **Fork and branch** from `main`, then run `bun install --frozen-lockfile`
 2. **Read the architecture** -- [reference/01-architecture.md](01-architecture.md) explains the execution model, agent delegation, and hook system
-3. **Understand the entry points** -- the deterministic engine `core/tools/aidlc-orchestrate.ts` (`next` / `report`) owns routing; the conductor `harness/claude/skills/aidlc/SKILL.md` is a thin forwarding loop that acts on its directives. For the normative engine / directive / conductor / swarm contract see [The Skill System](17-skill-system.md)
+3. **Understand the entry points** -- the deterministic engine `core/tools/aidlc-orchestrate.ts` (with exactly three subcommands: `next`, `report`, and `park`) owns routing; the conductor `harness/claude/skills/aidlc/SKILL.md` is a thin forwarding loop that acts on its directives. For the normative engine / directive / conductor / swarm contract see [The Skill System](17-skill-system.md)
 4. **Make changes** -- Edit the harness-neutral source in `core/` (tools, stages, agents, hooks, rules, knowledge) or a harness surface in `harness/<name>/` (the orchestrator skill, settings). Then run `bun scripts/package.ts` to regenerate `dist/` — never hand-edit `dist/`, the drift guard (`package.ts --check`) will fail CI
 5. **Test** -- Run `bun tests/run-tests.ts` before submitting
 6. **Submit** -- Open a PR against `main`
@@ -92,7 +92,12 @@ For handlers that require no LLM reasoning (print text, read/format files, check
 
 The `--help`, `--version`, `--status`, and `--doctor` handlers are reference implementations.
 
-The `codekb-path` handler is a read-only **query verb** (like `intent <name>` and `space`): it is dispatched from stage prose, emits NO audit event, drives NO SKILL.md task tracking, and creates NO directory (`mkdir`). It simply prints the canonical per-repo codekb directory the reverse-engineering stage writes its artifacts into, so prose never hand-derives that path.
+The `codekb-path` handler is a read-only **direct utility verb**: stage prose
+invokes `bun <harness-dir>/tools/aidlc-utility.ts codekb-path`, not
+`/aidlc codekb-path`. It emits NO audit event, drives NO SKILL.md task tracking,
+and creates NO directory (`mkdir`). It simply prints the canonical per-repo
+codekb directory the reverse-engineering stage writes its artifacts into, so
+prose never hand-derives that path.
 
 ### LLM-driven handlers
 For handlers that benefit from agent reasoning (filesystem scanning, decision-making):
@@ -240,7 +245,7 @@ Agent metadata (display name, example knowledge files) is read from each agent's
 - **Stage-graph participation**. Stage frontmatter references agents by slug in its `lead_agent` / `support_agents` fields, and `aidlc-graph.ts compile` carries those into `stage-graph.json`. Adding a new agent without naming it in any stage's frontmatter means the agent exists but never runs. Stage-graph schema validation (`core/tools/aidlc-stage-schema.ts`) is wired in: `aidlc-graph.ts compile` validates every stage's frontmatter (and `compile --check` is the CI drift guard), and `/aidlc --doctor` re-runs the same `validateStageFrontmatter` plus a "Graph references" check that every `lead_agent` / `support_agents` slug resolves.
 - **Knowledge file existence**. `examples` is a list of suggested filenames documented in the agent→examples table — they're not created or validated. Users place the actual content in `aidlc/knowledge/<agent>/` (the space-level knowledge dir).
 - **Doc tables listing agents**. The Phase Participation matrix at `docs/reference/05-agent-system.md:119-131` and the agent→examples table at `core/knowledge/aidlc-shared/knowledge-readme-template.md:16-29` are maintained by hand. Update them in the same PR that adds the agent (see Documentation Policy below).
-- **`.claude/agents/<new-agent>.md` body content**. Only the frontmatter is parsed. The body prose (Core Responsibilities, Knowledge Loading sequence, etc.) is read by the agent itself when activated — write it to match the other 11 agent files' structure.
+- **`.claude/agents/<new-agent>.md` body content**. Only the frontmatter is parsed. The body prose (Core Responsibilities, Knowledge Loading sequence, etc.) is read by the agent itself when activated — write it to match the existing agent files' structure.
 
 ## Documentation Policy
 

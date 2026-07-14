@@ -1,14 +1,14 @@
 # Agent Reference
 
-Technical reference for the 11 AI-DLC agents: configuration, stage ownership,
-collaboration patterns, and comparison data.
+Technical reference for AI-DLC's 14-agent roster: 11 domain experts, 2
+review-only agents, and the adaptive-workflows composer.
 
 For design philosophy and rationale, see the
 [Agents chapter in the User Guide](../../guide/06-agents.md).
 
 ---
 
-## The 13 Agents (11 domain experts + 2 reviewers)
+## The 14 Agents (11 domain experts + 2 reviewers + composer)
 
 | # | Agent | Domain |
 |---|-------|--------|
@@ -25,6 +25,7 @@ For design philosophy and rationale, see the
 | 11 | [aidlc-operations-agent](operations-agent.md) | Observability, incident response, feedback loops |
 | 12 | aidlc-product-lead-agent | Review-only: requirements / user-story / UX quality gate (balanced tier) |
 | 13 | aidlc-architecture-reviewer-agent | Review-only: technical-design soundness / implementability gate (balanced tier) |
+| 14 | aidlc-composer-agent | Adaptive workflow composition: proposes tailored stage plans and pending-stage reshapes |
 
 ---
 

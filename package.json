@@ -1,5 +1,5 @@
 {
-  "name": "aidlc-claude-code-dev",
+  "name": "aidlc-workflows-dev",
   "version": "0.0.0",
   "type": "module",
   "private": true,
@@ -8,13 +8,12 @@
     "lint": "biome check --error-on-warnings core harness scripts plugins tests",
     "check": "bun scripts/package.ts --check && bun run typecheck && bun run lint"
   },
-  "description": "Dev-only tooling for the AIDLC framework — not part of the distributable. The shipped framework lives at dist/claude/.claude/ and is copied into user projects via `cp -r dist/claude/.claude/ your-project/.claude/` (see README.md). All framework hooks and tools run via bun without requiring this package; bun-types here only powers contributor LSP coverage.",
+  "description": "Dev-only tooling for the multi-harness AI-DLC framework. Generated distributions live under dist/<harness>/ and run via bun without requiring this private package.",
   "author": "Amazon.com, Inc. or its affiliates",
   "license": "MIT-0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/awslabs/aidlc-workflows",
-    "directory": "claude-code"
+    "url": "https://github.com/awslabs/aidlc-workflows"
   },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.158",

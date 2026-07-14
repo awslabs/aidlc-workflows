@@ -15,7 +15,7 @@
 //     escape (the forged-audit-entry defence the source comments on at :248)
 //   - that appending twice keeps BOTH blocks (append-not-overwrite invariant)
 //   - that an invalid event type is rejected by throw, before any disk write
-//   - that EVERY one of the 71 VALID_EVENT_TYPES is accepted
+//   - that EVERY one of the 72 VALID_EVENT_TYPES is accepted
 // A regression that dropped escaping, overwrote prior history, reordered the
 // header fields, or narrowed the accepted event set would turn one of these
 // red.
@@ -79,7 +79,7 @@ afterAll(() => {
   }
 });
 
-// The 71 canonical event types, mirrored from aidlc-audit.ts VALID_EVENT_TYPES.
+// The 72 canonical event types, mirrored from aidlc-audit.ts VALID_EVENT_TYPES.
 // Kept as an explicit literal (not re-derived from the source) so that a silent
 // addition/removal in the source surfaces here as a count mismatch worth a look.
 const VALID_EVENT_TYPES = [
@@ -113,6 +113,7 @@ const VALID_EVENT_TYPES = [
   "ARTIFACT_UPDATED",
   "ARTIFACT_REUSED",
   "SUBAGENT_COMPLETED",
+  "REVIEWER_SCOPE_BLOCKED",
   "HEALTH_CHECKED",
   "SCOPE_DETECTED",
   "SCOPE_CHANGED",
@@ -336,9 +337,9 @@ describe("appendAuditEntryUnlocked — escaping and append-not-overwrite", () =>
 });
 
 describe("VALID_EVENT_TYPES — every canonical type is accepted", () => {
-  test("the mirrored list has 71 entries with no duplicates", () => {
-    expect(VALID_EVENT_TYPES.length).toBe(71);
-    expect(new Set(VALID_EVENT_TYPES).size).toBe(71);
+  test("the mirrored list has 72 entries with no duplicates", () => {
+    expect(VALID_EVENT_TYPES.length).toBe(72);
+    expect(new Set(VALID_EVENT_TYPES).size).toBe(72);
   });
 
   // Loop over ALL valid types: each must append a block whose **Event**

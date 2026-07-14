@@ -4,7 +4,7 @@
 > **GA Preview — under active development.** AI-DLC Workflows 2.0 is a GA Preview release. Interfaces, stage definitions, the agent roster, and the install model are still evolving, and breaking changes can land between releases. Expect rough edges, pin a known-good version for anything you depend on, and review all generated output before you act on it. See the [roadmap](https://awslabs.github.io/aidlc-workflows/roadmap.html) for what's shipped, in flight, and planned.
 > **For production use, stay on the stable [`main`](https://github.com/awslabs/aidlc-workflows/tree/main) branch.**
 
-A native implementation of the **AI-DLC methodology** (AI-Driven Development Life Cycle) that runs on **many harnesses from one source of truth** — today Claude Code, Kiro IDE, Kiro CLI, and Codex CLI, and any capable harness you port it to. Run a full software-development lifecycle — 11 domain-expert agents working through a 32-stage workflow, and you approve every gate — in whichever harness you use.
+A native implementation of the **AI-DLC methodology** (AI-Driven Development Life Cycle) that runs on **many harnesses from one source of truth** — today Claude Code, Kiro IDE, Kiro CLI, and Codex CLI, and any capable harness you port it to. Run a full software-development lifecycle with a 14-agent roster — 11 domain experts, 2 review-only agents, and the adaptive-workflows composer — working through a 32-stage workflow, with you approving every gate.
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
@@ -30,7 +30,7 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 ## Key Features
 
 - **[5 phases, 32 stages](docs/guide/04-phases-and-stages.md)** — Initialization, Ideation, Inception, Construction, Operation
-- **[11 domain-expert agents](docs/guide/06-agents.md)** — product, design, delivery, architect, aws-platform, compliance, devsecops, developer, quality, pipeline-deploy, operations
+- **[14-agent roster](docs/guide/06-agents.md)** — 11 domain experts, 2 quality-gate reviewers, and the adaptive-workflows composer
 - **[9 adaptive scopes](docs/guide/05-scopes-and-depth.md)** (enterprise through workshop) with auto-detection from freeform intent, plus an **[adaptive composer](docs/guide/05-scopes-and-depth.md#the-adaptive-composer)** (`/aidlc compose`) that proposes a tailored stage plan from your task, a scan report, or the running workflow
 - **[3 depth levels](docs/guide/05-scopes-and-depth.md#the-3-depth-levels)** (Minimal/Standard/Comprehensive) — control artifact detail per stage
 - **[3 test strategy levels](docs/guide/05-scopes-and-depth.md#the-3-test-strategy-levels)** (Minimal/Standard/Comprehensive) — independent of depth for flexible test coverage
@@ -38,7 +38,7 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 - **[Approval gates at every stage](docs/guide/07-interaction-modes.md)** — you stay in control of all decisions
 - **[Two-tier knowledge system](docs/guide/08-knowledge.md)** — methodology knowledge ships with the framework; team knowledge is user-managed
 - **[Rules and a learning loop](docs/guide/09-rules-and-the-learning-loop.md)** — human corrections become persistent behavioral rules
-- **[68-event audit trail](docs/guide/10-state-and-audit.md)** - structured logging for enterprise traceability
+- **[72-event audit trail](docs/guide/10-state-and-audit.md)** - structured logging for enterprise traceability
 - **[Session resume](docs/guide/11-session-management.md)** — continue from checkpoint, redo, jump to stage, or start fresh
 
 ## Methodology and implementation
@@ -241,7 +241,7 @@ aidlc-claude/
 ├── core/                       # ONE harness-neutral source of truth
 │   ├── tools/                  #   25 aidlc-*.ts engine tools (+ data/scaffold/ templates)
 │   ├── aidlc-common/           #   stage protocol + 32 stage files + conductor
-│   ├── agents/                 #   11 domain-expert personas
+│   ├── agents/                 #   14 agents: 11 domain + 2 reviewers + composer
 │   ├── knowledge/ memory/ scopes/ sensors/ hooks/
 │   ├── skills/                 #   3 session skills (session-cost, replay, outcomes-pack)
 │   └── templates/              #   onboarding skeleton → each harness's CLAUDE.md / AGENTS.md

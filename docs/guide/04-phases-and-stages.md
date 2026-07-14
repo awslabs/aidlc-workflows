@@ -412,6 +412,6 @@ If verification fails, the conductor reports the issues and asks whether to proc
 ## Next Steps
 
 - [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) — how scopes control which stages execute
-- [Agents](06-agents.md) — the 11 agents and their roles
+- [Agents](06-agents.md) — the 14-agent roster and its domain, review, and composition roles
 - [Your First Workflow](02-your-first-workflow.md) — annotated walkthrough
 - [Glossary](glossary.md) — terminology reference

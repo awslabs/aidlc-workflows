@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "aidlc-claude-code-dev",
+      "name": "aidlc-workflows-dev",
       "devDependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.158",
         "@biomejs/biome": "2.4.16",

@@ -179,7 +179,8 @@ knowledge base at `aidlc/spaces/<space>/codekb/<repo>/` — a store shared acros
 every intent in the space, keyed by repo rather than by intent. The path is
 resolved outside the record-relative rule via the `isCodekb` branch in
 `resolveArtifactPath` (`dist/claude/.claude/tools/aidlc-orchestrate.ts`), and
-the same directory is printed by the read-only `/aidlc codekb-path` command.
+the same directory is printed by the read-only direct utility invocation
+`bun <harness-dir>/tools/aidlc-utility.ts codekb-path`.
 
 **Canonical name ≠ filename for collisions.** Where a collision is split
 (see above), the on-disk filename may keep the pre-split form

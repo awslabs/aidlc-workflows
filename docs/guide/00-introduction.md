@@ -48,11 +48,11 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 |--------|-------|
 | Phases | 5 (Initialization, Ideation, Inception, Construction, Operation) |
 | Stages | 32 |
-| Agents | 11 domain-expert personas |
+| Agents | 14 total: 11 domain experts, 2 reviewers, and the composer |
 | Scopes | 9 (enterprise through workshop) + auto-detect |
 | Depth levels | 3 (Minimal, Standard, Comprehensive) |
 | Test strategy levels | 3 (Minimal, Standard, Comprehensive) |
-| Audit event types | 68 |
+| Audit event types | 72 |
 
 ## Guide Map
 
@@ -63,7 +63,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Spaces and Intents](03-spaces-and-intents.md) | The workspace layout: running many pieces of work across spaces and intents |
 | [Phases and Stages](04-phases-and-stages.md) | The 5 phases and 32 stages explained |
 | [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) | How to choose and override scope/depth/test strategy |
-| [Agents](06-agents.md) | The 11 agents: who does what and when |
+| [Agents](06-agents.md) | The 14-agent roster: 11 domain experts, 2 reviewers, and the composer |
 | [Agent deep dives](agents/README.md) | Per-agent reference pages: responsibilities, stages, knowledge |
 | [Interaction Modes](07-interaction-modes.md) | Guide Me / Edit File / Chat and approval gates |
 | [Knowledge](08-knowledge.md) | Adding company standards and conventions |
@@ -77,5 +77,5 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Worked Examples](16-worked-examples.md) | Full bugfix and feature walkthroughs |
 | [Skills and Runner Commands](17-skills.md) | The `/aidlc-*` stage- and scope-runner commands and the author-your-own-runner path |
 | [Workshop Mode](workshop-mode.md) | Multi-developer manual recipe for the workshop scope (claim semantics via git push) |
-| [Running on other harnesses](harnesses/README.md) | Install and run on Kiro IDE or Codex CLI, and what differs per harness |
+| [Running on other harnesses](harnesses/README.md) | Install and run on Kiro CLI, Kiro IDE, or Codex CLI, and what differs per harness |
 | [Glossary](glossary.md) | All terminology defined |

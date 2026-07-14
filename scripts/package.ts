@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // scripts/package.ts — THE build entry for the one-core-N-harnesses layout.
 //
-//   bun scripts/package.ts            regenerate dist/{claude,kiro,codex}
+//   bun scripts/package.ts            regenerate dist/{claude,kiro,kiro-ide,codex}
 //   bun scripts/package.ts --check     total drift guard (exit 1 on any drift)
 //   bun scripts/package.ts <name>      regenerate just one harness
 //   bun scripts/package.ts <name> --check
@@ -18,7 +18,7 @@
 //      stage-graph.json + scope-grid.json — compiled data lives only in dist).
 //   4. GENERATE runners into the assembled tree by composing aidlc-runner-gen's
 //      exported render fns under AIDLC_HARNESS_DIR (the proven codex idiom, now
-//      uniform for all three harnesses).
+//      uniform for all shipped harnesses).
 //   5. EMIT via harness/<name>/emit.ts if the manifest declares one (codex only
 //      today: config.toml, hooks.json, trust-seed, agent TOMLs, .agents/skills).
 //

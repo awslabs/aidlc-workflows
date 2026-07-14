@@ -35,7 +35,7 @@ trees. The core uses the same building blocks in every harness:
 
 - **Edit `core/` (or `harness/<name>/`), never `dist/`.** `dist/<harness>/` is generated. After editing, run `bun scripts/package.ts` to regenerate and `bun scripts/package.ts --check` to confirm no drift (the CI guard fails on a hand-edited or stale dist).
 - The orchestrator skill (`harness/<name>/skills/aidlc/SKILL.md`) is per-harness; the engine and methodology live in `core/`.
-- `harness/claude/CLAUDE.md` is the user-facing CLAUDE.md that ships in `dist/claude/` — it is NOT this file. Edit it when changing user-facing Claude behavior (commands, prerequisites, conventions); the Kiro/Codex equivalents are each harness's `AGENTS.md` (codex's is emitted from CLAUDE.md by `harness/codex/emit.ts`).
+- User-facing onboarding is rendered from `core/templates/onboarding.md` plus each harness's `onboarding.fills.ts`. Edit the shared template for common behavior and `harness/<name>/onboarding.fills.ts` for harness-specific commands, prerequisites, or conventions; the packager emits `dist/claude/.claude/CLAUDE.md` and the Kiro/Codex `AGENTS.md` files.
 - "harness" has three senses in this repo: `harness/` (top-level, the per-CLI distribution surfaces — this effort), `docs/harness-engineering/` (the Harness Engineer Guide), and `tests/harness/` (test-suite helper library) — unrelated.
 - See `docs/guide/` (User Guide), `docs/harness-engineering/` (Harness Engineer Guide), and `docs/reference/` (Developer Reference) for full documentation
 

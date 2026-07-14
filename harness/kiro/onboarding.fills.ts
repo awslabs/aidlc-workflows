@@ -19,7 +19,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     prereq_bullets_tail: "",
 
-    agents_note: `On Kiro the conductor is \`agents/aidlc.json\`; the two subagent stages (2.1, 3.5) delegate to \`aidlc-developer-agent.json\` / \`aidlc-architect-agent.json\` via the Kiro \`subagent\` tool, and the 11 persona \`.md\` files are adopted inline.`,
+    agents_note: `On Kiro the conductor is \`agents/aidlc.json\`; dedicated JSON configs cover the two stage workers, two reviewers, and composer that the conductor delegates through the Kiro \`subagent\` tool, while domain personas can also be adopted inline.`,
 
     structure_extra: "",
 

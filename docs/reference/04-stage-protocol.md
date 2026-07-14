@@ -563,11 +563,20 @@ never spawn subagents.
 Example: Feasibility uses `aidlc-architect-agent` (lead) + `aidlc-aws-platform-agent` +
 `aidlc-compliance-agent`, all inline.
 
-### The 11 Agents
+### The 11 Domain Agents
+
+The full 14-agent roster comprises 11 domain agents, 2 review-only agents, and
+the adaptive-workflows composer. The domain agents that lead and support stage
+work are:
 
 aidlc-product-agent, aidlc-design-agent, aidlc-delivery-agent, aidlc-architect-agent,
 aidlc-aws-platform-agent, aidlc-compliance-agent, aidlc-devsecops-agent, aidlc-developer-agent,
 aidlc-quality-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent.
+
+The two review-only agents run independent checks when stage frontmatter names
+a reviewer; see [Reviewer Invocation](#reviewer-invocation). The composer
+proposes and reshapes adaptive stage plans instead of leading domain stage
+work. See the full [Agent Reference](agents/README.md).
 
 ---
 

@@ -1,6 +1,6 @@
-// harness/kiro/onboarding.fills.ts — Kiro CLI's onboarding-doc fills.
+// harness/kiro-ide/onboarding.fills.ts — Kiro IDE's onboarding-doc fills.
 // Rendered with core/templates/onboarding.md by scripts/onboarding.ts into
-// dist/kiro/AGENTS.md (project root). {{HARNESS_DIR}} → .kiro and the
+// dist/kiro-ide/AGENTS.md (project root). {{HARNESS_DIR}} → .kiro and the
 // rules/ → steering/ rename are applied by the packager transform afterwards.
 
 import type { OnboardingFills } from "../../scripts/onboarding.ts";
@@ -12,27 +12,27 @@ const fills: OnboardingFills = {
 
 This project uses AI-DLC (AI-Driven Development Life Cycle) for structured development, running on the **Kiro IDE harness**. The workspace shell ships in \`.kiro/\` (no setup command); the engine auto-births the first intent when you describe what to build. Run \`/aidlc\` followed by a scope or project description to begin. Run \`/aidlc --doctor\` to validate your setup, \`/aidlc --version\` to print the framework version, \`/aidlc --stage <slug>\` to jump to a specific stage, \`/aidlc --phase <name>\` to jump to a phase, \`/aidlc --depth <level>\` to override depth, \`/aidlc --test-strategy <level>\` to override test volume. Run \`/aidlc compose "<task>"\` to have the adaptive composer propose a tailored EXECUTE/SKIP plan (works up front, from a scan report via \`--report <path>\`, and mid-workflow to re-shape the pending stages - every proposal stops at an approve/edit/reject gate).`,
 
-    prereq_bullets: `- **Kiro CLI ≥ 2.6**: the hooks/skills/agent features this install relies on (stop hook with blocking, preToolUse/postToolUse matchers, \`.kiro/skills/\` slash commands, workspace \`chat.defaultAgent\`) shipped in the 2.x line. Check with \`kiro-cli --version\`.
+    prereq_bullets: `- **Kiro IDE**: Sign in and select Claude Opus 4.8 as the chat model before starting a workflow.
 - **bun**: Required for the CLI tools and hook scripts (state management, audit logging, orchestration engine). Install via \`curl -fsSL https://bun.sh/install | bash\`. \`bun\` must be on your PATH for the non-interactive shells the harness spawns — these source \`~/.zshenv\` (zsh) or \`~/.bashrc\` (bash), NOT \`~/.zshrc\`.
-- **Activation**: this install ships \`.kiro/settings/cli.json\` setting \`chat.defaultAgent: "aidlc"\`, so a plain \`kiro-cli chat\` in this project uses the AI-DLC agent and \`/aidlc\` just works. **Note: the workspace default takes precedence over any global default agent you have configured.** If you prefer your own default, delete that settings line and start sessions with \`kiro-cli chat --agent aidlc\` instead.
-- **Permissions**: the \`aidlc\` agent pre-approves ONLY \`bun .kiro/tools/*\` shell commands (plus read-only tools); everything else prompts. There is no blanket shell trust. In \`--no-interactive\` runs, tools that would prompt are auto-approved by the harness — prefer interactive sessions for gated workflows.`,
+- **Activation**: Open the project in Kiro IDE. The install selects the \`aidlc\` conductor as the workspace default and registers \`.kiro/hooks/*.kiro.hook\` in the IDE's Agent Hooks panel.
+- **Permissions**: delegation-target agent \`.md\` files receive the IDE-native read/write/shell grants they need. The conductor's approval gates and your IDE permission settings remain the control boundary.`,
 
     prereq_bullets_tail: "",
 
-    agents_note: `On Kiro the conductor is \`agents/aidlc.json\`; the two subagent stages (2.1, 3.5) delegate to \`aidlc-developer-agent.json\` / \`aidlc-architect-agent.json\` via the Kiro \`subagent\` tool, and the 11 persona \`.md\` files are adopted inline.`,
+    agents_note: `On Kiro the conductor is \`agents/aidlc.json\`; dedicated JSON configs cover the two stage workers, two reviewers, and composer that the conductor delegates through the Kiro \`subagent\` tool, while domain personas can also be adopted inline.`,
 
     structure_extra: "",
 
-    guide_pointer: `The Kiro-specific guide (install, what differs, the live journey test) is \`docs/guide/harnesses/kiro-cli.md\`.`,
+    guide_pointer: `The Kiro IDE-specific guide (install, hook wiring, and harness differences) is \`docs/guide/harnesses/kiro-ide.md\`.`,
 
     sections_before_resumption: `## What's different on this harness
 
-This is the same AI-DLC core that ships to every harness — one deterministic engine, state machine, audit trail, and stage set, rendered onto Kiro CLI. On Kiro:
+This is the same AI-DLC core that ships to every harness — one deterministic engine, state machine, audit trail, and stage set, rendered onto Kiro IDE. On Kiro IDE:
 
 - Approval gates and questions render as **numbered prose options** (no structured-question widget); the questions FILE with \`[Answer]:\` tags remains the source of truth.
 - There is **no statusline** and **no welcome message**; use \`/aidlc --status\` and the progress lines at gates.
 - Construction swarm runs as **subagent fan-out only** (\`AIDLC_USE_SWARM=1\` is a loud no-op).
-- Session-end and pre-compaction audit events (\`SESSION_ENDED\`, \`SESSION_COMPACTED\`) are not emitted — Kiro has no hooks for those moments.
+- \`SESSION_STARTED\` and \`SESSION_ENDED\` are emitted; Kiro IDE has no pre-compaction event, so \`SESSION_COMPACTED\` is not emitted.
 - **MCP servers**: none ship, and the Kiro MCP config mechanism is not configured here (the Claude distribution ships five; Kiro ships zero today).
 - A workflow's \`aidlc/\` workspace tree is harness-neutral: a project can move between Claude Code and Kiro IDE installs (supported but untested — keep both \`.claude/\` and \`.kiro/\` in sync via the framework's packaging if you do this).
 `,

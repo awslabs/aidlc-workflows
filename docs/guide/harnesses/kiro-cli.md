@@ -59,11 +59,12 @@ workspace default.
 
 ## Usage
 
-Identical to the Claude Code harness: `/aidlc <description>` starts a
-workflow, `/aidlc --status` reports position, `--doctor`,
-`--stage`, `--phase`, `--depth`, `--test-strategy` all work, and
-the per-stage (`/aidlc-application-design`) and per-scope (`/aidlc-feature`)
-runner skills are installed.
+Start `kiro-cli chat` in the project, then invoke the conductor with
+`/aidlc <description>`. `/aidlc --status` reports position; `/aidlc --doctor`,
+`--stage`, `--phase`, `--depth`, and `--test-strategy` all work. Workspace
+navigation uses `/aidlc intent [name]`, `/aidlc space [name]`, and
+`/aidlc space-create <name>`. The per-stage (`/aidlc-application-design`) and
+per-scope (`/aidlc-feature`) runner skills are installed too.
 
 ## What's different on Kiro
 

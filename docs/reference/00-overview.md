@@ -8,7 +8,7 @@ If you are **using** AI-DLC to build software, start with the [User Guide](../gu
 
 > **Paths in this reference.** AI-DLC is authored once and generated per harness, so a file is named by one of three conventions, by intent:
 > - **`core/…`** -- the hand-authored, harness-neutral **source of truth** (e.g. `core/tools/aidlc-orchestrate.ts`, `core/aidlc-common/stages/`). This is where you edit. When a path names where a file is *authored* or *changed*, it is a `core/` path.
-> - **`dist/<harness>/…`** -- the **generated, committed, drift-guarded** distribution (`dist/claude/.claude/`, `dist/kiro/.kiro/`, `dist/codex/`). Never hand-edited; reproduced byte-for-byte by `bun scripts/package.ts`. Cited only when describing what *ships*.
+> - **`dist/<harness>/…`** -- the **generated, committed, drift-guarded** distribution (`dist/claude/.claude/`, `dist/kiro/.kiro/`, `dist/kiro-ide/.kiro/`, `dist/codex/`). Never hand-edited; reproduced byte-for-byte by `bun scripts/package.ts`. Cited only when describing what *ships*.
 > - **`<harness-dir>/…`** (e.g. `.claude/`, `.kiro/`, `.codex/`) -- the **runtime** location inside an *installed* project, where commands run and the framework reads/writes during a workflow (`bun .claude/tools/aidlc-graph.ts compile`, `loadAgents()` reading `.claude/agents/`). The directory is a parameter of the harness.
 >
 > Where this reference shows a bare `.claude/` path, read it as the runtime location for the Claude harness specifically; the same file is authored in `core/` and ships to each harness's own directory.
@@ -23,18 +23,18 @@ If you are **using** AI-DLC to build software, start with the [User Guide](../gu
 | [Stage Protocol](04-stage-protocol.md) | Behavioral contract: approval gates, compliance checklist |
 | [Stages](04-stages/) | Per-phase stage documentation (5 files) |
 | [Agent System](05-agent-system.md) | Agent structure, frontmatter contract, configuration matrix |
-| [Hooks and Tools](06-hooks-and-tools.md) | Hook system, CLI tools, 68-event audit taxonomy |
+| [Hooks and Tools](06-hooks-and-tools.md) | Hook system, CLI tools, 72-event audit taxonomy |
 | [Sensor System](07-sensor-system.md) | Sensor manifest schema, PULL imports, fire model, default severity |
 | [Rule System](08-rule-system.md) | Rule file layout, scope derivation, the layer-chain resolver, conflict gates |
 | [Testing](09-testing.md) | Test pyramid, tiers, stubs, fixtures, test registry |
 | [Knowledge System](10-knowledge-system.md) | Two-tier architecture, loading order, templates |
 | [Contributing](11-contributing.md) | Development workflow, utility handler checklist, documentation policy |
-| [State Machine](12-state-machine.md) | Workflow / phase / stage machines, 68-event taxonomy, audit-first rules |
+| [State Machine](12-state-machine.md) | Workflow / phase / stage machines, 72-event taxonomy, audit-first rules |
 | [Runtime Graph](13-runtime-graph.md) | The compiled `runtime-graph.json` artifact: data-plane mirror of the stage graph |
 | [Harness Primitives Mapping](14-claude-features.md) | How each AI-DLC concept maps to a harness's native primitives (Claude Code in depth) |
 | [Stage Definition](15-stage-definition.md) | YAML frontmatter contract, three-compartment body, compile pipeline |
 | [Artifact Vocabulary](16-artifact-vocabulary.md) | Naming rules, collision policy, filesystem mapping, and how to view the live registry |
-| [Engine and Skill System](17-skill-system.md) | The orchestration engine (`next`/`report`), the typed directive contract, the conductor, plural skills, scope shape, and the swarm referee |
+| [Engine and Skill System](17-skill-system.md) | The orchestration engine (`next`/`report`/`park`), the typed directive contract, the conductor, plural skills, scope shape, and the swarm referee |
 | [Plugin Mechanism](18-plugin-mechanism.md) | The AIDLC plugin system: manifest, install-time composition as a real host plugin, the additive contribution seam, multi-tenant guards, and as-built status. Authoring walkthrough at [harness-engineering/10](../harness-engineering/10-authoring-a-plugin.md) |
 | [Diagrams](diagrams.md) | All Mermaid diagrams in one place |
 | [Agents](agents/) | Technical agent reference (frontmatter, tooling, stage ownership) |

@@ -52,7 +52,7 @@ Ships with the framework. Contains shared principles and per-agent methodology r
 .claude/knowledge/
 ├── aidlc-shared/                       # Loaded by every agent
 │   ├── ai-dlc-principles.md        # Core methodology principles
-│   ├── audit-format.md             # 68-event audit taxonomy
+│   ├── audit-format.md             # 72-event audit taxonomy
 │   ├── brownfield.md               # Brownfield safeguards and reverse-engineering guidance
 │   ├── knowledge-readme-template.md # Optional README template a team can copy into Tier 2
 │   ├── state-template.md           # State file contract
@@ -176,7 +176,7 @@ Error responses follow:
 |-------|-------|
 | Editing `.claude/agents/aidlc-architect-agent.md` | Add a file under `aidlc/knowledge/aidlc-architect-agent/` |
 | Editing `.claude/knowledge/aidlc-architect-agent/architecture-guide.md` | Add a file under `aidlc/knowledge/aidlc-architect-agent/` |
-| Putting everything in `knowledge/aidlc-shared/` | Use agent-specific directories unless the standard truly applies to all 11 agents |
+| Putting everything in `knowledge/aidlc-shared/` | Use agent-specific directories unless the standard truly applies to all 14 agents |
 | One large `company-standards.md` covering API, auth, data, and logging | Split into `api-gateway-standards.md`, `auth-standards.md`, etc. |
 
 ---

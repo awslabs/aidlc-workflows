@@ -21,7 +21,7 @@
 //       :19-113  const VALID_EVENT_TYPES = new Set([ "STAGE_STARTED", ... ]);
 //       :117-185 const EVENT_HEADINGS: Record<string,string> = { TYPE: "...", };
 //   - dist/claude/.claude/knowledge/aidlc-shared/audit-format.md
-//       "## Event Registry (71 events, 18 categories)" .. "## Hook-Generated"
+//       "## Event Registry (72 events, 19 categories)" .. "## Hook-Generated"
 //       — backtick-delimited `EVENT_TYPE` cells in the registry tables.
 //
 // Extraction parity with the .sh (so the sets are byte-identical to what the

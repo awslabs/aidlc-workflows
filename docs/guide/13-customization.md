@@ -8,7 +8,8 @@ AI-DLC is designed to adapt to your team's needs. This chapter covers settings o
 > the statusline command, `$CLAUDE_PROJECT_DIR`, tool-permission blocks) is
 > **Claude Code-specific**. Kiro configures the equivalents in
 > `.kiro/settings/cli.json` + its agent config, and Codex in `.codex/config.toml`
-> + Starlark rules — see [Running on Kiro CLI](harnesses/kiro-cli.md) and
+> + Starlark rules — see [Running on Kiro CLI](harnesses/kiro-cli.md),
+> [Running on Kiro IDE](harnesses/kiro-ide.md), and
 > [Running on Codex CLI](harnesses/codex-cli.md) for each harness's surfaces.
 
 ---

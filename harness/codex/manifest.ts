@@ -2,7 +2,7 @@
 //
 // Projects core/ into dist/codex/.codex/ (rules → aidlc-rules, D-10) and defers
 // every codex-specific surface to emit.ts (config.toml, hooks.json, trust-seed,
-// AGENTS.md, 11 agent TOMLs, the .agents/skills/ tree). Mirrors the proven
+// AGENTS.md, 14 agent TOMLs, the .agents/skills/ tree). Mirrors the proven
 // package-codex.ts spike, generalized onto the unified packager.
 //
 // Codex specifics vs Claude/Kiro:

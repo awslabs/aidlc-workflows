@@ -1,6 +1,6 @@
 # Agents
 
-AI-DLC uses 11 domain-expert agent personas that the conductor activates during stages. This chapter explains the philosophy behind the agent design, what each agent does, and when they appear.
+AI-DLC ships 14 agent personas: 11 domain experts that execute stage work, 2 review-only agents, and the adaptive-workflows composer. This chapter explains the full roster, beginning with the domain agents and then covering the reviewers and composer.
 
 ---
 
@@ -83,9 +83,9 @@ flowchart TD
 
 ---
 
-## The 11 Agents
+## The 11 Domain Agents
 
-> **Customizing what a shipped agent knows?** Do not edit the shipped 11 agent files at `.claude/agents/*.md` — they're framework files and get overwritten on upgrade. Add your company standards to the space-level `aidlc/knowledge/<agent-name>/` instead. See [Knowledge](08-knowledge.md) for the full workflow. Teams that want a *new* agent (not just knowledge for the existing 11) can drop a file at `.claude/agents/<slug>.md` with the required frontmatter — that file is user-owned. See [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
+> **Customizing what a shipped agent knows?** Do not edit the 14 shipped agent files at `.claude/agents/*.md` — they're framework files and get overwritten on upgrade. Add your company standards to the space-level `aidlc/knowledge/<agent-name>/` instead. See [Knowledge](08-knowledge.md) for the full workflow. Teams that want a *new* agent can drop a file at `.claude/agents/<slug>.md` with the required frontmatter — that file is user-owned. See [Contributing: Adding an Agent](../reference/11-contributing.md#adding-an-agent).
 
 Each agent below has a **deep-dive page** — its full responsibilities, the stages it leads and supports, and the knowledge it loads. The [agent deep-dive index](agents/README.md) lists all 11; the per-agent links are inline under each heading.
 
@@ -231,11 +231,11 @@ This table shows which agents are active in which phases, and whether they serve
 
 ## Agent Tool Access
 
-Every agent inherits the **full session toolset** — all of Claude Code's built-in tools plus any MCP tools provisioned to the session. The one shipped restriction is `disallowedTools: Task` (only the conductor spawns subagents); none of the 11 agents declare a `tools:` allowlist. So the table below is not a set of per-agent grants — it records which tools each persona is *expected* to exercise in its stage work.
+Every agent inherits the **full session toolset** — all of Claude Code's built-in tools plus any MCP tools provisioned to the session. The one shipped restriction is `disallowedTools: Task` (only the conductor spawns subagents); none of the 14 agents declare a `tools:` allowlist. So the table below is not a set of per-agent grants — it records which tools each persona is *expected* to exercise in its work.
 
 | Tool | Expected to exercise it |
 |------|-------------|
-| Read, Edit, Write, Glob, Grep, AskUserQuestion | All 11 agents |
+| Read, Edit, Write, Glob, Grep, AskUserQuestion | All 14 agents |
 | Bash | aidlc-aws-platform-agent, aidlc-devsecops-agent, aidlc-developer-agent, aidlc-quality-agent, aidlc-pipeline-deploy-agent, aidlc-operations-agent |
 | WebSearch | aidlc-product-agent, aidlc-design-agent, aidlc-compliance-agent |
 | Task | None (blocked on every agent via `disallowedTools: Task`) |
@@ -244,7 +244,7 @@ To genuinely narrow a persona, add an optional `tools:` allowlist to its frontma
 
 ### MCP servers are shared, not per-agent
 
-The table above shows the built-in tools each persona is expected to use; in practice every agent inherits all of them. MCP servers follow the same inherit-all model: this implementation declares them once in `.mcp.json` at the project root (beside `.claude/`), Claude Code provisions them to the session, and every agent inherits all of them — there is no per-agent grant. Each of the 11 agents can reach every declared server (`context7` and the four AWS servers) with no further configuration, and a server you lack credentials for is simply unavailable rather than a blocker. To stop a specific agent from reaching a server, narrow that agent's `tools:` allowlist to the fully-qualified `mcp__<server>__<tool>` ids it should keep (for example `mcp__context7__<tool>`); this implementation ships no such restrictions today.
+The table above shows the built-in tools each persona is expected to use; in practice every agent inherits all of them. MCP servers follow the same inherit-all model: this implementation declares them once in `.mcp.json` at the project root (beside `.claude/`), Claude Code provisions them to the session, and every agent inherits all of them — there is no per-agent grant. Each of the 14 agents can reach every declared server (`context7` and the four AWS servers) with no further configuration, and a server you lack credentials for is simply unavailable rather than a blocker. To stop a specific agent from reaching a server, narrow that agent's `tools:` allowlist to the fully-qualified `mcp__<server>__<tool>` ids it should keep (for example `mcp__context7__<tool>`); this implementation ships no such restrictions today.
 
 See [Getting Started](01-getting-started.md) for the server registry and credentials, and [Harness Primitives Mapping](../reference/14-claude-features.md#mcp-servers) for how MCP maps onto Claude Code's native tool model.
 

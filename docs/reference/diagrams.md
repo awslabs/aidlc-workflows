@@ -246,7 +246,18 @@ flowchart TD
 
 ## 6. Agent Collaboration Map
 
-The AI-DLC system uses 11 domain-expert agents. The conductor (SKILL.md) performs each agent invocation as the engine directs; agents never invoke each other directly. Information flows between agents through artifacts stored in the intent's record dir (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`). The diagram below shows the primary information flows between agents, culminating in the feedback loop from aidlc-operations-agent back to aidlc-product-agent.
+The full 14-agent roster comprises 11 domain agents, 2 review-only agents, and
+the adaptive-workflows composer. This diagram intentionally covers the 11
+domain agents and their primary artifact flows. The review-only agents perform
+independent product and architecture checks, while the composer proposes and
+reshapes adaptive stage plans; see the [Agent Reference](agents/README.md) and
+[Reviewer Invocation](04-stage-protocol.md#reviewer-invocation).
+
+The conductor (SKILL.md) performs each agent invocation as the engine directs;
+agents never invoke each other directly. Information flows between agents
+through artifacts stored in the intent's record dir
+(`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`). The diagram culminates in
+the feedback loop from aidlc-operations-agent back to aidlc-product-agent.
 
 ```mermaid
 flowchart TD

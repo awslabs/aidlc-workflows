@@ -3,8 +3,8 @@
 AI-DLC's methodology concepts are harness-neutral; each CLI harness expresses
 them through its own native primitives. This chapter maps the AI-DLC concept to
 the primitive each harness uses, then details the **Claude Code** expression in
-depth (it is the most fully documented harness; Kiro and Codex express the same
-concepts through their own equivalents, summarised per chapter in
+depth (it is the most fully documented harness; Kiro CLI, Kiro IDE, and Codex
+express the same concepts through their own equivalents, summarised per chapter in
 [Running on other harnesses](../guide/harnesses/README.md), and the source
 contract for adding a harness is [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md)).
 
@@ -17,20 +17,20 @@ For hooks: see [Hooks and Tools](06-hooks-and-tools.md). For knowledge: see [Kno
 The AI-DLC concept is the constant; the primitive that carries it is the
 harness parameter. Add a column when you port to a new harness.
 
-| AI-DLC Concept | Claude Code | Kiro CLI | Codex CLI |
-|----------------|-------------|----------|-----------|
-| **Orchestrator entry** (`/aidlc` + runners) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`$aidlc`) |
-| **Agent personas** (11 domain experts) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | `.agents/` TOMLs |
-| **Automation** (audit, state, tracking) | Hooks via `settings.json` | Hooks via `agents/aidlc.json` | Hooks via `.codex/hooks.json` (one adapter) |
-| **Standing rules** (the layer chain) | `aidlc/spaces/<space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via `AIDLC_RULES_DIR`) |
-| **Project onboarding doc** | `CLAUDE.md` | `AGENTS.md` | `AGENTS.md` |
-| **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | `.codex/config.toml` (+ Starlark `rules/`) |
+| AI-DLC Concept | Claude Code | Kiro CLI | Kiro IDE | Codex CLI |
+|----------------|-------------|----------|----------|-----------|
+| **Orchestrator entry** (`/aidlc` + runners) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`$aidlc`) |
+| **Agent personas** (14 total) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | Persona `.md` with IDE tool grants + agent configs | `.agents/` TOMLs |
+| **Automation** (audit, state, tracking) | Hooks via `settings.json` | Hooks via `agents/aidlc.json` | `.kiro/hooks/*.kiro.hook` files | Hooks via `.codex/hooks.json` (one adapter) |
+| **Standing rules** (the layer chain) | `aidlc/spaces/<space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via `AIDLC_RULES_DIR`) |
+| **Project onboarding doc** | `CLAUDE.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` |
+| **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | `.kiro/settings/cli.json` + agent frontmatter | `.codex/config.toml` (+ Starlark `rules/`) |
 
 The deterministic engine, state machine, audit log, stage graph, and swarm
 referee underneath are byte-identical across every harness — only the primitives
 that carry them differ. The rest of this chapter documents the **Claude Code**
-expression of each primitive in detail; for the Kiro and Codex equivalents see
-their guide chapters.
+expression of each primitive in detail; for the Kiro CLI, Kiro IDE, and Codex
+equivalents see their guide chapters.
 
 ---
 
@@ -38,8 +38,8 @@ their guide chapters.
 
 The sections that follow describe how Claude Code in particular expresses each
 primitive — its skill frontmatter, agent loading modes, `settings.json` blocks,
-and `.mcp.json` model. Kiro and Codex carry the same concepts through the
-primitives in the table above; where a mechanic is Claude-only (the
+and `.mcp.json` model. Kiro CLI, Kiro IDE, and Codex carry the same concepts
+through the primitives in the table above; where a mechanic is Claude-only (the
 `companyAnnouncements` welcome message, the statusline command, the
 `AskUserQuestion` gate widget), it is called out as such.
 
@@ -384,4 +384,4 @@ Steps 1-2a happen for every conversation, even non-AI-DLC ones — and because e
 - [Hooks and Tools](06-hooks-and-tools.md) -- hook system, audit taxonomy, CLI tools
 - [Knowledge System](10-knowledge-system.md) -- two-tier knowledge, loading order
 - [Porting to a New Harness](../harness-engineering/09-porting-to-a-new-harness.md) -- how to add a column to the mapping above: the manifest, hook adapter, and `emit.ts` contract
-- [Running on other harnesses](../guide/harnesses/README.md) -- the Kiro and Codex expressions of these primitives, per harness
+- [Running on other harnesses](../guide/harnesses/README.md) -- the Kiro CLI, Kiro IDE, and Codex expressions of these primitives

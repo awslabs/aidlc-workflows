@@ -193,7 +193,6 @@ Utilities:
   space             List spaces (read-only; --json for structured output)
   space <name>      Switch the active space (team)
   space-create <name>  Create a new space (team) seeded from the framework baseline
-  codekb-path       Print the deterministic per-repo codekb directory (read-only)
   select-plugins [names]  Show or set enabled plugins (comma-separated names)
   --doctor          Run health check on hooks, settings, and directory structure
   --stage <id>      Jump to a specific stage (by slug or number, e.g., code-generation or 3.5)
@@ -3800,7 +3799,7 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   }
 }
 
-// `/aidlc codekb-path [--repo <name>] [--json]` — read-only. Prints the
+// `aidlc-utility.ts codekb-path [--repo <name>] [--json]` — read-only. Prints the
 // deterministic space-level per-repo codekb directory (forward-slash, workspace-
 // relative) the reverse-engineering stage writes its 9 artifacts into. The repo
 // is the caller-supplied --repo, else the engine-resolved codekbRepoName (the

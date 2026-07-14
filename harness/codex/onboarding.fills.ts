@@ -37,7 +37,7 @@ gate).`,
     prereq_bullets_tail: `- **Permissions**: \`.codex/rules/default.rules\` (Starlark prefix rules) pre-allows the deterministic core's exact command prefixes — \`bun .codex/tools/\`, \`bun .codex/hooks/\`, and \`git worktree\`/\`commit\`/\`add\` — so workflows run without per-call prompts. The sandbox is \`workspace-write\`; commands outside the allowlist prompt.
 - **Personal overrides**: Settings in \`~/.codex/config.toml\` merge over the project \`.codex/config.toml\`. Put machine-specific overrides (model, AWS profile/region, environment variables) there to avoid changing the shared project config.`,
 
-    agents_note: `On Codex the agent personas are transposed into \`.agents/\` TOMLs (the conductor reads the persona \`.md\` bodies as prose); the two subagent stages (2.1, 3.5) run as \`codex exec\` workers.`,
+    agents_note: `On Codex all 14 agent personas are transposed into \`.agents/\` TOMLs (the conductor reads the persona \`.md\` bodies as prose); delegated stage workers, reviewers, and the composer run through Codex subagent roles.`,
 
     structure_extra: "",
 

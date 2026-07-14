@@ -3,8 +3,9 @@
 > Part of the [AI-DLC documentation](../README.md) · [User Guide](../guide/00-introduction.md) · **Harness Engineer Guide** · [Developer Reference](../reference/00-overview.md)
 
 AI-DLC is a methodology, and this implementation ships it working out of the box
-on the harness you use — Claude Code, Kiro CLI, Kiro IDE, or Codex CLI: 11 agents, 32
-stages, 9 scopes, a set of rules and sensors. This guide is for the person who
+on the harness you use — Claude Code, Kiro CLI, Kiro IDE, or Codex CLI: 14 agents
+(11 domain experts, 2 reviewers, and the composer), 32 stages, 9 scopes, a set
+of rules and sensors. This guide is for the person who
 wants to **reshape** that methodology — change which stages run, add an agent for
 a domain the framework doesn't cover, tighten a scope, teach the framework a
 standing rule, or wire a deterministic check into a stage.
@@ -51,8 +52,8 @@ until a stage opts to use it.
 
 Two pieces of machinery move work through these stages, and as a harness
 engineer you shape the **data** both of them read. The deterministic **engine**
-(`core/tools/aidlc-orchestrate.ts`, with its `next` and `report`
-subcommands) reads `aidlc-state.md` and the compiled `stage-graph.json`,
+(`core/tools/aidlc-orchestrate.ts`, with exactly three subcommands: `next`,
+`report`, and `park`) reads `aidlc-state.md` and the compiled `stage-graph.json`,
 decides what runs next, and emits one typed directive. The **conductor**
 (`skills/aidlc/SKILL.md`) is a thin forwarding loop that carries each directive
 out. Routing lives in the engine; your stage files, scopes, and rules are the
@@ -112,9 +113,9 @@ Everything a harness engineer authors lives in **`core/`** — the hand-authored
 harness-neutral source of truth (stages under `core/aidlc-common/stages/`,
 agents under `core/agents/`, scopes, rules, sensors, knowledge, tools, hooks).
 The per-harness `dist/<harness>/` trees you actually run (`dist/claude/.claude/`,
-`dist/kiro/.kiro/`, `dist/codex/`) are **generated** from `core/` plus a thin
-`harness/<name>/` surface, and they are **drift-guarded** — a hand-edit there is
-rejected by CI. The loop is always:
+`dist/kiro/.kiro/`, `dist/kiro-ide/.kiro/`, `dist/codex/`) are **generated**
+from `core/` plus a thin `harness/<name>/` surface, and they are
+**drift-guarded** — a hand-edit there is rejected by CI. The loop is always:
 
 ```bash
 # 1. edit the source in core/ (never dist/)
