@@ -46,7 +46,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import type { HarnessManifest } from "./manifest-types.ts";
@@ -751,16 +751,43 @@ const argv = process.argv.slice(2);
 // print the codex hook-trust entries with <PROJECT_DIR> substituted, for the
 // installer to paste into $CODEX_HOME/config.toml (the trust-seed.toml recipe).
 if (argv[0] === "codex" && argv[1] === "trust") {
-  const pIdx = argv.indexOf("--project");
-  const hIdx = argv.indexOf("--hooks-json");
-  if (pIdx === -1 || !argv[pIdx + 1] || (hIdx !== -1 && !argv[hIdx + 1])) {
-    console.error("usage: package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]");
+  const usage =
+    "usage: package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]";
+  const failTrustArgs = (reason: string): never => {
+    console.error(`codex trust: ${reason}`);
+    console.error(usage);
     process.exit(1);
+  };
+  const absoluteOnEitherPlatform = (path: string): boolean =>
+    posix.isAbsolute(path) || win32.isAbsolute(path);
+  let project: string | null = null;
+  let hooksJson: string | null = null;
+  const trustArgs = argv.slice(2);
+  for (let i = 0; i < trustArgs.length; i += 2) {
+    const flag = trustArgs[i];
+    const value = trustArgs[i + 1];
+    if (flag !== "--project" && flag !== "--hooks-json") {
+      failTrustArgs(`unknown argument "${flag}"`);
+    }
+    if (!value || value.startsWith("--")) {
+      failTrustArgs(`${flag} requires an absolute path`);
+    }
+    if (!absoluteOnEitherPlatform(value)) {
+      failTrustArgs(`${flag} must be an absolute path`);
+    }
+    if (flag === "--project") {
+      if (project !== null) failTrustArgs("--project may be specified only once");
+      project = value;
+    } else {
+      if (hooksJson !== null) failTrustArgs("--hooks-json may be specified only once");
+      hooksJson = value;
+    }
   }
+  const resolvedProject = project ?? failTrustArgs("--project is required");
   const { trustEntries } = require(join(HARNESS_ROOT, "codex", "emit.ts")) as {
     trustEntries: (project: string, hooksJson?: string) => string;
   };
-  console.log(trustEntries(argv[pIdx + 1], hIdx !== -1 ? argv[hIdx + 1] : undefined));
+  console.log(trustEntries(resolvedProject, hooksJson ?? undefined));
   process.exit(0);
 }
 

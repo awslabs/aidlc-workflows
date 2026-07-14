@@ -261,7 +261,52 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     expect(r.stdout).not.toContain(project);
   });
 
-  test("9: skills tree — every runner carries the S9f implicit-invocation guard; the orchestrator does not", () => {
+  test("9: trust subcommand rejects malformed, relative, unknown, and duplicate arguments", () => {
+    const cases: Array<{ args: string[]; error: string }> = [
+      {
+        args: ["codex", "trust", "--hooks-json", "--project", "/tmp/project"],
+        error: "--hooks-json requires an absolute path",
+      },
+      {
+        args: ["codex", "trust", "--project", "relative/project"],
+        error: "--project must be an absolute path",
+      },
+      {
+        args: ["codex", "trust", "--project", "/tmp/project", "--hooks-json", "hooks.json"],
+        error: "--hooks-json must be an absolute path",
+      },
+      {
+        args: ["codex", "trust", "--project", "/tmp/project", "--hooks-josn", "/tmp/hooks.json"],
+        error: 'unknown argument "--hooks-josn"',
+      },
+      {
+        args: [
+          "codex",
+          "trust",
+          "--project",
+          "/tmp/project",
+          "--project",
+          "/tmp/other",
+        ],
+        error: "--project may be specified only once",
+      },
+    ];
+
+    for (const { args, error } of cases) {
+      const r = spawnSync("bun", [PACKAGE_SCRIPT, ...args], {
+        encoding: "utf-8",
+        cwd: REPO_ROOT,
+      });
+      expect(r.status, args.join(" ")).toBe(1);
+      expect(r.stdout, args.join(" ")).toBe("");
+      expect(r.stderr, args.join(" ")).toContain(error);
+      expect(r.stderr, args.join(" ")).toContain(
+        "usage: package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]",
+      );
+    }
+  });
+
+  test("10: skills tree — every runner carries the S9f implicit-invocation guard; the orchestrator does not", () => {
     const skillsDir = join(REPO_ROOT, "dist", "codex", ".agents", "skills");
     const dirs = readdirSync(skillsDir).filter((d) =>
       statSync(join(skillsDir, d)).isDirectory(),
@@ -293,7 +338,7 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
     expect(probe).toContain("bun .codex/tools/aidlc-orchestrate.ts next --stage intent-capture --single");
   });
 
-  test("10: trust subcommand substitutes the project path into every entry", () => {
+  test("11: trust subcommand substitutes the project path into every entry", () => {
     const r = spawnSync("bun", [PACKAGE_SCRIPT, "codex", "trust", "--project", "/tmp/example-proj"], {
       encoding: "utf-8",
       cwd: REPO_ROOT,
