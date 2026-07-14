@@ -122,16 +122,19 @@ matching `agent_type`).
 Structural divergence a declarative row can't express is `emit.ts` — a plugin
 the manifest references that the packager calls with an `EmitContext`
 (`coreRoot`, `harnessRoot`, `distRoot`, `harnessDir`, `substituteToken`,
-`check`) and that returns the paths it wrote. Codex's is the worked example:
+`tierCap`). The emitter writes its outputs beneath `distRoot`. Codex's is the
+worked example:
 `config.toml`, `hooks.json`, the hook-trust pre-seed, the `AGENTS.md` merge, the
 agent-TOML transpositions, and the `.agents/skills/` tree (composed from
 `core/tools/aidlc-runner-gen.ts`'s exported render functions under
 `AIDLC_HARNESS_DIR`, never reimplemented). Harnesses whose surfaces are all
 authored files (Claude, Kiro) set `emit: null`.
 
-`emit` honors `ctx.check`: under `--check` it diffs its outputs and returns
-problems instead of writing, so the drift guard covers emit-owned files that
-live outside `<harnessDir>` (e.g. `.agents/skills/`, the root `AGENTS.md`).
+Under `--check`, the packager supplies a temporary `distRoot`, runs the same
+emitter, then compares the complete generated root with the committed
+distribution. Emit-owned files outside `<harnessDir>` (for example
+`.agents/skills/` and the root `AGENTS.md`) therefore participate in the same
+missing, differing, and orphan checks as declarative outputs.
 
 ## Step 4 — the one transform class
 

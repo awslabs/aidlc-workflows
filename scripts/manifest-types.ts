@@ -44,21 +44,6 @@ export type EmitContext = {
    * plugin must not re-resolve it.
    */
   tierCap: "judgment" | "balanced" | "templated" | null;
-  /** True for a --check run (verify only, write nothing). */
-  check: boolean;
-};
-
-/**
- * The result of an emit() run. The packager no longer consumes it - the
- * generated-file inventory and the orphan scan derive from a full walk of the
- * dist root - but emit plugins still return it as a self-describing record of
- * what they produced.
- */
-export type EmitResult = {
-  /** Absolute paths the emit plugin wrote (or would write under --check). */
-  written: string[];
-  /** Problems found under --check (MISSING/DIFFERS/...), empty on a clean run. */
-  problems: string[];
 };
 
 /**
@@ -127,8 +112,12 @@ export type HarnessManifest = {
    * needs the compiled .codex/tools/data/*.json). Claude/Kiro leave this false.
    */
   skipRunnerGen?: boolean;
-  /** Optional per-shell emission plugin (codex only today). */
-  emit: ((ctx: EmitContext) => EmitResult) | null;
+  /**
+   * Optional per-shell emission plugin (codex only today). It always writes
+   * into ctx.distRoot; under --check the packager supplies a temporary root and
+   * compares the complete generated tree with the committed distribution.
+   */
+  emit: ((ctx: EmitContext) => void) | null;
   /**
    * How AIDLC plugins project into THIS harness (the hybrid delivery seam).
    * Optional: when omitted, the packager derives a sensible default from

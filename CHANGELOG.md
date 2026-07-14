@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.2] - 2026-07-16
+
+The multi-harness packager now treats each `dist/<harness>/` directory as one generated root, closing drift gaps for project-root onboarding, configuration, and removed outputs. **Upgrade:** re-copy your `dist/<harness>/` shell into the project after regenerating it with this version.
+
+* Graph compilation and runner generation now receive the manifest's actual `harnessDir`, including custom harness directories.
+* An explicitly named harness without a manifest exits nonzero instead of being silently skipped.
+* `bun scripts/package.ts --check` now detects modified, removed, and renamed project-root outputs, including Kiro `AGENTS.md`, `.mcp.json`, and `.gitignore`.
+* Emitters write into the packager-provided distribution root; check mode builds that root in a temporary directory and applies the same complete-tree drift scan.
+
 ## [2.4.1] - 2026-07-16
 
 Revision counting now works for the Reverse Engineering gate. Rejecting the RE approval gate ("Request Changes") previously left `Revision Count` at 0 with no `GATE_REJECTED` row when the orchestrator honored the revision conversationally without running the reject verb: codekb artifact writes were invisible to the audit trail, so the approve-time backstop that backfills unrecorded rejects had nothing to see and excluded codekb stages outright. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

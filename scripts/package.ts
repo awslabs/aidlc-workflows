@@ -624,7 +624,6 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
       harnessDir,
       substituteToken: (s: string) => substituteToken(s, harnessDir),
       tierCap: TIER_CAP,
-      check: false,
     });
   }
   return [...walk(outRoot)];

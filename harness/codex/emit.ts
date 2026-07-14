@@ -18,7 +18,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import type { EmitContext, EmitResult } from "../../scripts/manifest-types.ts";
+import type { EmitContext } from "../../scripts/manifest-types.ts";
 import { renderOnboarding } from "../../scripts/onboarding.ts";
 import onboardingFills from "./onboarding.fills.ts";
 import { projectTier } from "../../core/tools/aidlc-tiers.ts";
@@ -244,9 +244,9 @@ function tomlMultiline(s: string): string {
 
 // ---------------------------------------------------------------------------
 // emit() — the manifest entry point. Assembles every codex-only emission as a
-// {path, content} list, then writes (or, under check, returns the diff).
+// {path, content} list, then writes it into the packager-provided dist root.
 // ---------------------------------------------------------------------------
-export default function emit(ctx: EmitContext): EmitResult {
+export default function emit(ctx: EmitContext): void {
   // tierCap is the packager's resolved pack-time cap, passed through so the
   // emit-owned TOML projections use the SAME cap as every declarative
   // projection - never re-resolved here.
@@ -389,24 +389,12 @@ export default function emit(ctx: EmitContext): EmitResult {
     emissions.push({ path: join(SKILLS_DST, skill, "agents", "openai.yaml"), content: () => IMPLICIT_GUARD });
   }
 
-  // --- write or check --------------------------------------------------------
-  const written: string[] = [];
-  const problems: string[] = [];
-  if (ctx.check) {
-    for (const { path, content } of emissions) {
-      const want = content();
-      if (!existsSync(path)) problems.push(`MISSING emission: ${relative(distRoot, path)}`);
-      else if (readFileSync(path, "utf-8") !== want) problems.push(`DIFFERS emission: ${relative(distRoot, path)}`);
-      written.push(path);
-    }
-  } else {
-    // Clean-sweep the emitted skills tree so a removed runner doesn't linger.
-    rmSync(SKILLS_DST, { recursive: true, force: true });
-    for (const { path, content } of emissions) {
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, content(), "utf-8");
-      written.push(path);
-    }
+  // Clean-sweep the emitted skills tree so a removed runner doesn't linger.
+  // In --check mode distRoot is temporary; the packager compares its complete
+  // inventory with the committed distribution after emit returns.
+  rmSync(SKILLS_DST, { recursive: true, force: true });
+  for (const { path, content } of emissions) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content(), "utf-8");
   }
-  return { written, problems };
 }
