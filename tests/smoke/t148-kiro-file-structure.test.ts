@@ -13,6 +13,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const KIRO = join(REPO_ROOT, "dist", "kiro");
@@ -121,11 +122,10 @@ describe("t148 dist/kiro file structure", () => {
       }
     }
     // Leak guard: the grant is IDE-native and must not ship anywhere else.
-    for (const tree of [
-      join(REPO_ROOT, "dist", "claude", ".claude", "agents"),
-      join(K, "agents"), // dist/kiro (CLI)
-      join(REPO_ROOT, "dist", "codex", ".codex", "agents"),
-    ]) {
+    const nonIdeAgentTrees = HARNESS_MATRIX.filter(
+      (harness) => !harness.capabilities.ideAgentTools,
+    ).map((harness) => join(harness.engineRoot, "agents"));
+    for (const tree of nonIdeAgentTrees) {
       for (const f of readdirSync(tree).filter((n) => n.endsWith(".md"))) {
         expect(fmToolsOf(join(tree, f))).toBeUndefined();
       }

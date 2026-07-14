@@ -1,19 +1,18 @@
 // covers: file:skills, contract:agent-skills-spec-conformance
 //
-// t123 (unit) — Agent-Skills-spec conformance over the FULL shipped skill set
-// under dist/claude/.claude/skills/, asserted with the complete frontmatter
+// t123 (unit) — Agent-Skills-spec conformance over every shipped harness's
+// declared skill root, asserted with the complete frontmatter
 // parser (the unit-tier sibling of the smoke-tier structural sweep). Migrated
 // from tests/unit/t123-skills-spec-conformance.sh (TAP plan: 1 dir-count guard
 // + 3 conformance assertions per skill = 1 + 3×38 = 115 assertions).
 //
 // Mechanism: none. There is no tool / process / argv / exit-code seam under
-// test — the subject IS the on-disk shape of the shipped skill set and the
+// test — the subject IS the on-disk shape of each shipped skill set and the
 // YAML frontmatter bytes of each SKILL.md. The .sh sourced lib/tap.sh and
 // shelled to `bun -e` ONLY to PARSE (read the stage graph; run the frontmatter
 // extractor); it never invoked an aidlc tool as a process-boundary contract.
-// So the twin reads the same static files in-process (resolved from the
-// harness's AIDLC_SRC, the same dist/claude/.claude root the .sh reached via
-// $AIDLC_SRC) and asserts. Zero LLM, zero tokens, zero subprocess. The ONE
+// So the twin reads the same static files in-process, with skill roots resolved
+// by the shared harness matrix. Zero LLM, zero tokens, zero subprocess. The ONE
 // in-repo import - defaultScopeBatch from aidlc-runner-gen.ts - is a pure
 // function import, not a spawn (the .sh hardcoded the same four scope-runner
 // names in SCOPE_RUNNER_SKILLS; calling the function is STRONGER: it tracks the
@@ -30,8 +29,8 @@
 // block-scalar-aware non-empty contract is what this twin preserves verbatim
 // from the .sh's inline `bun -e` parser (t123-skills-spec-conformance.sh:94-124).
 //
-// Subject under test (the shipped skill set + each SKILL.md's frontmatter):
-//   dist/claude/.claude/skills/<skill>/SKILL.md — for the DERIVED expected set:
+// Subject under test (each shipped skill set + each SKILL.md's frontmatter):
+//   dist/<harness>/<skill-root>/<skill>/SKILL.md, for the DERIVED expected set:
 //     - 4 base skills (orchestrator + 3 read-only session skills)
 //     - the generator's default-batch scope-runners (imported here, not
 //       hardcoded)
@@ -72,17 +71,16 @@
 //         -> per-skill "SKILL.md body <= 500 lines" (wc -l counts newlines —
 //            mirrored as the count of "\n", not the split-array length).
 //
-// 1 + 3×38 = 115 .sh assertions -> 1 set-equality test() + 3 expect()s × 38
-// skills (114) = 115 expect()-bearing assertions, same observables, the
-// dir-count + name-derivation STRONGER.
+// The original assertion set is preserved independently for every discovered
+// distribution, including Codex's emitted .agents/skills layout.
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { defaultScopeBatch } from "../../dist/claude/.claude/tools/aidlc-runner-gen.ts";
 
-const SKILLS_DIR = join(AIDLC_SRC, "skills");
 const STAGE_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 
 // --- The four base skills (orchestrator + the three read-only session skills).
@@ -130,10 +128,10 @@ const EXPECTED_SKILLS = [
  * contains a SKILL.md (mirrors the .sh's for-loop over the skills dir that
  * keeps directories carrying a SKILL.md file).
  */
-function discoveredSkills(): string[] {
-  return readdirSync(SKILLS_DIR)
+function discoveredSkills(skillsDir: string): string[] {
+  return readdirSync(skillsDir)
     .filter((name) => {
-      const dir = join(SKILLS_DIR, name);
+      const dir = join(skillsDir, name);
       return statSync(dir).isDirectory() && existsSync(join(dir, "SKILL.md"));
     })
     .sort();
@@ -193,15 +191,12 @@ function parseFrontmatter(text: string): FrontmatterParse {
   return { name, descPresent, descNonEmpty };
 }
 
-describe("t123 (unit) skills-spec conformance — shipped skill set (migrated from t123-skills-spec-conformance.sh, plan 115)", () => {
-  // --- Test 1: the shipped skill set is exactly the DERIVED expected set ---
-  test("shipped skill set == derived expected set (sorted, exact) [.sh test 1]", () => {
-    // STRONGER than the .sh's joined-string assert_eq: element-by-element.
-    // Asserts both that the count matches (115's dir-count guard: base 4 +
-    // 4 scope-runners + 29 stage-runners + aidlc-init = 38) and that the
-    // membership is exact.
-    expect(discoveredSkills()).toEqual(EXPECTED_SKILLS);
-  });
+describe("t123 (unit) skills-spec conformance — every shipped skill set", () => {
+  for (const harness of HARNESS_MATRIX) {
+    test(`${harness.name}: shipped skill set == derived expected set (sorted, exact)`, () => {
+      expect(discoveredSkills(harness.skillsRoot)).toEqual(EXPECTED_SKILLS);
+    });
+  }
 });
 
 // --- Per-skill spec conformance (3 expect()s each). One describe block per
@@ -209,35 +204,27 @@ describe("t123 (unit) skills-spec conformance — shipped skill set (migrated fr
 // TAP lines. The set iterated is the DERIVED expected set (sorted), exactly the
 // .sh's `for skill in $(echo "$EXPECTED_SKILLS" | tr ' ' '\n' | sort)`.
 describe("t123 (unit) skills-spec conformance — per-skill SKILL.md invariants", () => {
-  for (const skill of EXPECTED_SKILLS) {
-    const file = join(SKILLS_DIR, skill, "SKILL.md");
+  for (const harness of HARNESS_MATRIX) {
+    for (const skill of EXPECTED_SKILLS) {
+      const file = join(harness.skillsRoot, skill, "SKILL.md");
 
-    test(`${skill}: frontmatter name == dir [.sh per-skill 1]`, () => {
-      // STRONGER than `grep ^name: <skill>`: the value is read from inside the
-      // frontmatter fence and matched exactly. A missing SKILL.md (the .sh's
-      // not_ok branch) parses to an empty name here, so this row fails loudly.
-      const text = existsSync(file) ? readFileSync(file, "utf-8") : "";
-      expect(parseFrontmatter(text).name).toBe(skill);
-    });
+      test(`${harness.name}/${skill}: frontmatter name == dir`, () => {
+        const text = existsSync(file) ? readFileSync(file, "utf-8") : "";
+        expect(parseFrontmatter(text).name).toBe(skill);
+      });
 
-    test(`${skill}: description present AND non-empty (block-scalar aware) [.sh per-skill 2]`, () => {
-      // The load-bearing unit-tier contract: the .sh required descPresent==1
-      // AND descNonEmpty==1. Every shipped SKILL.md uses `description: >`, so
-      // the parser must follow the block scalar to the first non-empty
-      // continuation line. An empty/dangling `description: >` fails this row —
-      // the failure event is reachable, mirroring the .sh's not_ok.
-      const text = existsSync(file) ? readFileSync(file, "utf-8") : "";
-      const fm = parseFrontmatter(text);
-      expect(fm.descPresent).toBe(true);
-      expect(fm.descNonEmpty).toBe(true);
-    });
+      test(`${harness.name}/${skill}: description present and non-empty`, () => {
+        const text = existsSync(file) ? readFileSync(file, "utf-8") : "";
+        const fm = parseFrontmatter(text);
+        expect(fm.descPresent).toBe(true);
+        expect(fm.descNonEmpty).toBe(true);
+      });
 
-    test(`${skill}: SKILL.md body <= 500 lines [.sh per-skill 3]`, () => {
-      // The .sh used `wc -l < file`, which counts newline characters. Mirror
-      // that exactly (number of "\n"), not the split-array length.
-      const text = existsSync(file) ? readFileSync(file, "utf-8") : "";
-      const lines = (text.match(/\n/g) ?? []).length;
-      expect(lines).toBeLessThanOrEqual(500);
-    });
+      test(`${harness.name}/${skill}: SKILL.md body <= 500 lines`, () => {
+        const text = existsSync(file) ? readFileSync(file, "utf-8") : "";
+        const lines = (text.match(/\n/g) ?? []).length;
+        expect(lines).toBeLessThanOrEqual(500);
+      });
+    }
   }
 });

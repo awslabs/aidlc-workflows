@@ -1,25 +1,24 @@
 // covers: file:skills, contract:agent-skills-spec-conformance
 //
 // t123 (smoke) — Agent-Skills-spec structural conformance over EVERY shipped
-// skill dir under dist/claude/.claude/skills/. Migrated from
+// harness's declared skill root. Migrated from
 // tests/smoke/t123-skills-spec-conformance.sh (TAP plan: 1 dir-count guard +
 // 5 structural assertions per skill = 1 + 5×38 = 191 assertions).
 //
 // Mechanism: none. There is no tool / process / argv seam under test — the
-// subject IS the on-disk shape of the shipped skill set and the bytes of each
+// subject IS the on-disk shape of each shipped skill set and the bytes of each
 // SKILL.md. The .sh sourced lib/tap.sh and shelled to `bun -e` only to PARSE
 // (read the graph, extract the frontmatter `name`); it never invoked an aidlc
 // tool as a process-boundary contract. So the twin reads the same static files
-// in-process (resolved from the harness's AIDLC_SRC, the same
-// dist/claude/.claude root the .sh reached via $CLAUDE_DIR) and asserts. Zero
+// in-process, with skill roots resolved by the shared harness matrix. Zero
 // LLM, zero tokens, zero subprocess. The ONE in-repo import - defaultScopeBatch
 // from aidlc-runner-gen.ts - is a pure function import, not a spawn (the .sh
 // hardcoded the same four scope-runner names in SCOPE_RUNNER_SKILLS; calling
 // the function is STRONGER: it tracks the generator's source of truth so a
 // default-batch edit flows into this guard automatically).
 //
-// Subject under test (the shipped skill set + each SKILL.md):
-//   dist/claude/.claude/skills/<skill>/SKILL.md — for the DERIVED expected set:
+// Subject under test (each shipped skill set + each SKILL.md):
+//   dist/<harness>/<skill-root>/<skill>/SKILL.md, for the DERIVED expected set:
 //     - 4 base skills (orchestrator + 3 read-only session skills)
 //     - the generator's default-batch scope-runners (imported here, not
 //       hardcoded)
@@ -59,17 +58,16 @@
 //   .sh per-skill test E (wc -l <= 500, ok/not_ok)
 //         -> per-skill "SKILL.md body <= 500 lines"
 //
-// 1 + 5×38 = 191 .sh assertions -> 1 set-equality test() + 5 expect()s ×
-// 38 skills (190) = 191 expect()-bearing assertions, same observables, the
-// dir-count + name-derivation STRONGER.
+// The original assertion set is preserved independently for every discovered
+// distribution, including Codex's emitted .agents/skills layout.
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { defaultScopeBatch } from "../../dist/claude/.claude/tools/aidlc-runner-gen.ts";
 
-const SKILLS_DIR = join(AIDLC_SRC, "skills");
 const STAGE_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 
 // --- The four base skills (orchestrator + the three read-only session skills).
@@ -117,10 +115,10 @@ const EXPECTED_SKILLS = [
  * contains a SKILL.md (mirrors the .sh for-loop over the skills dir that keeps
  * directories carrying a SKILL.md file).
  */
-function discoveredSkills(): string[] {
-  return readdirSync(SKILLS_DIR)
+function discoveredSkills(skillsDir: string): string[] {
+  return readdirSync(skillsDir)
     .filter((name) => {
-      const dir = join(SKILLS_DIR, name);
+      const dir = join(skillsDir, name);
       return (
         statSync(dir).isDirectory() && existsSync(join(dir, "SKILL.md"))
       );
@@ -137,14 +135,24 @@ function frontmatterName(text: string): string {
   return nm ? nm[1].trim().replace(/^["']|["']$/g, "") : "";
 }
 
-describe("t123 (smoke) skills-spec conformance — shipped skill set (migrated from t123-skills-spec-conformance.sh, plan 191)", () => {
-  // --- Test 1: the shipped skill set is exactly the DERIVED expected set ---
-  test("shipped skill set == derived expected set (sorted, exact) [.sh test 1]", () => {
-    // STRONGER than the .sh's joined-string assert_eq: element-by-element.
-    // Asserts both that the count matches (191's dir-count guard) and that the
-    // membership is exact — every base + scope-runner + stage-runner + init.
-    expect(discoveredSkills()).toEqual(EXPECTED_SKILLS);
-  });
+describe("t123 (smoke) skills-spec conformance — every shipped skill set", () => {
+  for (const harness of HARNESS_MATRIX) {
+    test(`${harness.name}: shipped skill set == derived expected set (sorted, exact)`, () => {
+      expect(discoveredSkills(harness.skillsRoot)).toEqual(EXPECTED_SKILLS);
+    });
+
+    test(`${harness.name}: generated runners invoke the manifest harness dir`, () => {
+      const runner = readFileSync(
+        join(harness.skillsRoot, "aidlc-code-generation", "SKILL.md"),
+        "utf-8",
+      );
+      expect(runner).toContain(`bun ${harness.manifest.harnessDir}/tools/`);
+      expect(runner).not.toContain("{{HARNESS_DIR}}");
+      if (harness.manifest.skipRunnerGen) {
+        expect(existsSync(join(harness.engineRoot, "skills"))).toBe(false);
+      }
+    });
+  }
 });
 
 // --- Per-skill structural conformance (5 expect()s each). One describe block
@@ -152,39 +160,34 @@ describe("t123 (smoke) skills-spec conformance — shipped skill set (migrated f
 // per-skill TAP lines. The set iterated is the DERIVED expected set (sorted),
 // exactly the .sh's `for skill in $(echo "$EXPECTED_SKILLS" | ... | sort)`.
 describe("t123 (smoke) skills-spec conformance — per-skill SKILL.md invariants", () => {
-  for (const skill of EXPECTED_SKILLS) {
-    const file = join(SKILLS_DIR, skill, "SKILL.md");
+  for (const harness of HARNESS_MATRIX) {
+    for (const skill of EXPECTED_SKILLS) {
+      const file = join(harness.skillsRoot, skill, "SKILL.md");
 
-    test(`${skill}: SKILL.md exists [.sh per-skill A]`, () => {
-      expect(existsSync(file)).toBe(true);
-    });
+      test(`${harness.name}/${skill}: SKILL.md exists`, () => {
+        expect(existsSync(file)).toBe(true);
+      });
 
-    test(`${skill}: frontmatter name == dir [.sh per-skill B]`, () => {
-      const text = readFileSync(file, "utf-8");
-      expect(frontmatterName(text)).toBe(skill);
-    });
+      test(`${harness.name}/${skill}: frontmatter name == dir`, () => {
+        const text = readFileSync(file, "utf-8");
+        expect(frontmatterName(text)).toBe(skill);
+      });
 
-    test(`${skill}: has a description: line [.sh per-skill C]`, () => {
-      const text = readFileSync(file, "utf-8");
-      // Same anchor as assert_grep "^description:": a line that starts the
-      // `description:` key (multiline mode).
-      expect(/^description:/m.test(text)).toBe(true);
-    });
+      test(`${harness.name}/${skill}: has a description: line`, () => {
+        const text = readFileSync(file, "utf-8");
+        expect(/^description:/m.test(text)).toBe(true);
+      });
 
-    test(`${skill}: carries no hooks: block [.sh per-skill D]`, () => {
-      const text = readFileSync(file, "utf-8");
-      // Same anchor as assert_not_grep "^hooks:" — Fork 2→B moved the spine to
-      // settings.json. The failure row IS reachable: any SKILL.md that grows a
-      // `hooks:` key at line-start fails here.
-      expect(/^hooks:/m.test(text)).toBe(false);
-    });
+      test(`${harness.name}/${skill}: carries no hooks: block`, () => {
+        const text = readFileSync(file, "utf-8");
+        expect(/^hooks:/m.test(text)).toBe(false);
+      });
 
-    test(`${skill}: SKILL.md body <= 500 lines [.sh per-skill E]`, () => {
-      const text = readFileSync(file, "utf-8");
-      // The .sh used `wc -l < file`, which counts newline characters. Mirror
-      // that exactly (number of "\n"), not the split-array length.
-      const lines = (text.match(/\n/g) ?? []).length;
-      expect(lines).toBeLessThanOrEqual(500);
-    });
+      test(`${harness.name}/${skill}: SKILL.md body <= 500 lines`, () => {
+        const text = readFileSync(file, "utf-8");
+        const lines = (text.match(/\n/g) ?? []).length;
+        expect(lines).toBeLessThanOrEqual(500);
+      });
+    }
   }
 });

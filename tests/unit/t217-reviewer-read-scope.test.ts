@@ -14,19 +14,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
+import { AIDLC_SRC } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const PROTOCOL = "aidlc-common/protocols/stage-protocol.md";
 const PERSONA = "agents/aidlc-architecture-reviewer-agent.md";
 const KNOWLEDGE = "knowledge/aidlc-architecture-reviewer-agent/reviewing.md";
 const SKILL = "skills/aidlc/SKILL.md";
-
-const HARNESS_SKILL_SOURCES = [
-  { name: "claude", path: join(REPO_ROOT, "harness", "claude", SKILL) },
-  { name: "kiro", path: join(REPO_ROOT, "harness", "kiro", SKILL) },
-  { name: "kiro-ide", path: join(REPO_ROOT, "harness", "kiro-ide", SKILL) },
-  { name: "codex", path: join(REPO_ROOT, "harness", "codex", SKILL) },
-];
 
 describe("t217 reviewer read-scope bound is stated on every surface", () => {
   test("stage-protocol §12a step 1 names directive.consumes as a per-unit pass-list entry", () => {
@@ -67,9 +61,10 @@ describe("t217 reviewer read-scope bound is stated on every surface", () => {
   });
 
   test("orchestrator SKILL.md reviewer bullet names directive.consumes and the read-scope bound", () => {
-    for (const harnessSkill of HARNESS_SKILL_SOURCES) {
-      const body = readFileSync(harnessSkill.path, "utf-8");
-      const labelledBody = `harness ${harnessSkill.name}: ${harnessSkill.path}\n${body}`;
+    for (const harness of HARNESS_MATRIX) {
+      const path = join(harness.authoredRoot, SKILL);
+      const body = readFileSync(path, "utf-8");
+      const labelledBody = `harness ${harness.name}: ${path}\n${body}`;
       // Reviewer step bullet exists and now carries both parts of the bound.
       expect(labelledBody).toMatch(/Reviewer step \(§12a\)/);
       expect(labelledBody).toMatch(/directive\.consumes/);

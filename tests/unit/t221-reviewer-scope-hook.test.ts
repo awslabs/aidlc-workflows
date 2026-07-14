@@ -31,6 +31,7 @@ import {
   type ScopeContext,
   type ReviewerDispatch,
 } from "../../dist/claude/.claude/hooks/aidlc-reviewer-scope.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -532,31 +533,44 @@ describe("t221 (b) dispatch-record lifecycle (shipped hook, subprocess)", () => 
 
 describe("t221 (c) harness registration and protocol prose", () => {
   test("Claude settings.json wires the hook on PreToolUse with the file/search/shell matcher", () => {
-    const s = JSON.parse(readFileSync(join(AIDLC_SRC, "settings.json"), "utf-8")) as {
-      hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
-    };
-    const groups = s.hooks?.PreToolUse ?? [];
-    const group = groups.find((g) =>
-      (g.hooks ?? []).some((h) => (h.command ?? "").includes("aidlc-reviewer-scope.ts")),
+    const harnesses = HARNESS_MATRIX.filter(
+      (harness) => harness.capabilities.reviewerScopeRegistration === "claude-settings",
     );
-    expect(group).toBeDefined();
-    expect(group?.matcher).toBe("Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash");
+    expect(harnesses.length).toBeGreaterThan(0);
+    for (const harness of harnesses) {
+      const s = JSON.parse(readFileSync(join(harness.engineRoot, "settings.json"), "utf-8")) as {
+        hooks?: Record<string, Array<{ matcher?: string; hooks?: Array<{ command?: string }> }>>;
+      };
+      const groups = s.hooks?.PreToolUse ?? [];
+      const group = groups.find((g) =>
+        (g.hooks ?? []).some((h) => (h.command ?? "").includes("aidlc-reviewer-scope.ts")),
+      );
+      expect(group, harness.name).toBeDefined();
+      expect(group?.matcher).toBe(
+        "Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash",
+      );
+    }
   });
 
   test("Kiro CLI wires the adapter's reviewer-scope target inside BOTH reviewer agent JSONs", () => {
-    for (const agent of ["aidlc-architecture-reviewer-agent", "aidlc-product-lead-agent"]) {
-      const a = JSON.parse(
-        readFileSync(join(REPO_ROOT, "dist", "kiro", ".kiro", "agents", `${agent}.json`), "utf-8"),
-      ) as { hooks?: { preToolUse?: Array<{ matcher?: string; command?: string }> } };
-      const entries = a.hooks?.preToolUse ?? [];
-      expect(entries.length).toBeGreaterThanOrEqual(3);
-      const matchers = entries.map((e) => e.matcher).sort();
-      expect(matchers).toEqual(["execute_bash", "fs_read", "fs_write"]);
-      for (const e of entries) {
-        // The registration passes its own agent name as argv[3] so the
-        // adapter forwards a real identity (compared against the dispatch
-        // record's reviewer field) instead of a bare scoped_registration.
-        expect(e.command).toContain(`aidlc-kiro-adapter.ts reviewer-scope ${agent}`);
+    const harnesses = HARNESS_MATRIX.filter(
+      (harness) => harness.capabilities.reviewerScopeRegistration === "kiro-agent-json",
+    );
+    expect(harnesses.length).toBeGreaterThan(0);
+    for (const harness of harnesses) {
+      for (const agent of ["aidlc-architecture-reviewer-agent", "aidlc-product-lead-agent"]) {
+        const a = JSON.parse(
+          readFileSync(join(harness.engineRoot, "agents", `${agent}.json`), "utf-8"),
+        ) as { hooks?: { preToolUse?: Array<{ matcher?: string; command?: string }> } };
+        const entries = a.hooks?.preToolUse ?? [];
+        expect(entries.length, `${harness.name}/${agent}`).toBeGreaterThanOrEqual(3);
+        const matchers = entries.map((e) => e.matcher).sort();
+        expect(matchers).toEqual(["execute_bash", "fs_read", "fs_write"]);
+        for (const e of entries) {
+          // The registration passes its own agent name so the adapter forwards
+          // a real identity instead of a bare scoped_registration.
+          expect(e.command).toContain(`aidlc-kiro-adapter.ts reviewer-scope ${agent}`);
+        }
       }
     }
   });
@@ -569,18 +583,37 @@ describe("t221 (c) harness registration and protocol prose", () => {
     // rather than a dead hook - the 12a prose bound governs on that harness.
     // This pins the deliberate absence so a future blanket-registration sweep
     // does not wire an inert (or worse, blindly blocking) entry.
-    const ideHooks = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "hooks");
-    expect(existsSync(join(ideHooks, "aidlc-reviewer-scope.kiro.hook"))).toBe(false);
+    const harnesses = HARNESS_MATRIX.filter(
+      (harness) => harness.capabilities.reviewerScopeRegistration === "unsupported",
+    );
+    expect(harnesses.length).toBeGreaterThan(0);
+    for (const harness of harnesses) {
+      expect(existsSync(join(harness.engineRoot, "hooks", "aidlc-reviewer-scope.kiro.hook"))).toBe(
+        false,
+      );
+    }
   });
 
   test("Codex hooks.json wires the adapter's reviewer-scope target on PreToolUse", () => {
-    const wiring = JSON.parse(
-      readFileSync(join(REPO_ROOT, "dist", "codex", ".codex", "hooks.json"), "utf-8"),
-    ) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> };
-    const pre = wiring.hooks.PreToolUse ?? [];
-    expect(
-      pre.some((g) => g.hooks.some((h) => h.command === "bun .codex/hooks/aidlc-codex-adapter.ts reviewer-scope")),
-    ).toBe(true);
+    const harnesses = HARNESS_MATRIX.filter(
+      (harness) => harness.capabilities.reviewerScopeRegistration === "codex-hooks",
+    );
+    expect(harnesses.length).toBeGreaterThan(0);
+    for (const harness of harnesses) {
+      const wiring = JSON.parse(
+        readFileSync(join(harness.engineRoot, "hooks.json"), "utf-8"),
+      ) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> };
+      const pre = wiring.hooks.PreToolUse ?? [];
+      expect(
+        pre.some((g) =>
+          g.hooks.some(
+            (h) =>
+              h.command ===
+              `bun ${harness.manifest.harnessDir}/hooks/aidlc-codex-adapter.ts reviewer-scope`,
+          ),
+        ),
+      ).toBe(true);
+    }
   });
 
   test("stage-protocol 12a carries the dispatch-record write (step 1) and delete (step 3)", () => {
@@ -596,10 +629,10 @@ describe("t221 (c) harness registration and protocol prose", () => {
     expect(body).toMatch(/Read verdict.*delete `<record>\/\.aidlc-reviewer-dispatch\.json`/s);
   });
 
-  test("all four harness SKILL.md reviewer bullets carry the dispatch-record instruction", () => {
-    for (const h of ["claude", "kiro", "kiro-ide", "codex"]) {
-      const body = readFileSync(join(REPO_ROOT, "harness", h, "skills", "aidlc", "SKILL.md"), "utf-8");
-      const labelled = `harness ${h}: ${body}`;
+  test("every harness SKILL.md reviewer bullet carries the dispatch-record instruction", () => {
+    for (const harness of HARNESS_MATRIX) {
+      const body = readFileSync(join(harness.authoredRoot, "skills", "aidlc", "SKILL.md"), "utf-8");
+      const labelled = `harness ${harness.name}: ${body}`;
       expect(labelled).toContain(".aidlc-reviewer-dispatch.json");
       expect(labelled).toContain("Delete the dispatch record");
     }

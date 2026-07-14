@@ -35,29 +35,28 @@ import { join } from "node:path";
 const CASE_TIMEOUT_MS = 60_000;
 import {
   cleanupWorkspaceJourney,
-  type JourneyHarness,
   setupWorkspaceJourney,
 } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 import { discoverSiblingRepos, listIntents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
-const HARNESS_ENGINE_DIR: Record<JourneyHarness, string> = {
-  claude: ".claude",
-  kiro: ".kiro",
-  codex: ".codex",
-};
-
 describe("t177 workspace-journey fixture (deterministic, no LLM)", () => {
-  for (const harness of ["claude", "kiro", "codex"] as JourneyHarness[]) {
-    test(`${harness}: seeds the shell + two sibling repos, no pre-born intent`, () => {
-      const journey = setupWorkspaceJourney(harness);
+  for (const harness of HARNESS_MATRIX) {
+    test(`${harness.name}: seeds the shell + two sibling repos, no pre-born intent`, () => {
+      const journey = setupWorkspaceJourney(harness.name);
       try {
         // The root is a fresh tmpdir, NOT nested under .claude/worktrees/ (the
         // construction-worktree guard's requirement — see the fixture comment).
         expect(journey.root.includes(`${join(".claude", "worktrees")}`)).toBe(false);
 
         // The shipped harness engine dir landed.
-        const engineDir = join(journey.root, HARNESS_ENGINE_DIR[harness]);
+        const engineDir = join(journey.root, harness.manifest.harnessDir);
         expect(existsSync(engineDir)).toBe(true);
+        for (const rootFile of harness.capabilities.rootFiles) {
+          expect(existsSync(join(journey.root, rootFile)), `${harness.name}: ${rootFile}`).toBe(
+            true,
+          );
+        }
 
         // The sibling aidlc/ memory shell landed (the default space's memory),
         // so the rule-layer resolver finds the method.

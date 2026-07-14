@@ -46,6 +46,7 @@ import {
   loadRules,
 } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const tempDirs: string[] = [];
 function mkTemp(tag: string): string {
@@ -144,21 +145,19 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     join(REPO_ROOT, "dist", harness, "aidlc", "spaces", "default", "memory");
 
   test("5: every harness ships the relocated method tree at the workspace root", () => {
-    // All four shipped harnesses, kiro-ide included — it ships the workspace shell
-    // like the others, so it must carry the relocated method tree too.
-    for (const h of ["claude", "kiro", "codex", "kiro-ide"]) {
-      const top = readdirSync(MEM(h)).sort();
+    for (const harness of HARNESS_MATRIX) {
+      const top = readdirSync(MEM(harness.name)).sort();
       // org/team/project + phases/ are P5's relocated method; templates/ is the
       // SEED-shipped TPL override floor (empty-but-present via a .gitkeep) — it
       // is part of the shipped shell, so the method top-level now includes it.
-      expect(top, `${h} method top-level`).toEqual([
+      expect(top, `${harness.name} method top-level`).toEqual([
         "org.md",
         "phases",
         "project.md",
         "team.md",
         "templates",
       ]);
-      expect(readdirSync(join(MEM(h), "phases")).sort()).toEqual([
+      expect(readdirSync(join(MEM(harness.name), "phases")).sort()).toEqual([
         "construction.md",
         "ideation.md",
         "inception.md",
@@ -202,34 +201,36 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
   });
 
   test("7: EVERY Kiro-family agent resources glob points at the active space's memory tree (not the now-empty steering dir)", () => {
-    // Derive BOTH the harness list and the agent list from disk — do NOT hardcode.
+    // Select Kiro agent-JSON distributions from explicit matrix capabilities,
+    // then derive the agent list from each shipped tree.
     // A closed list let the kiro-ide harness + the two reviewer personas ship
     // pointing at the empty `.kiro/steering/*.md` glob (loading zero method files)
     // because they were absent from the enumerated set. Every dist tree that ships
     // `.kiro/agents/*.json` (kiro CLI + kiro IDE) and every agent in it that
     // declares a `resources` array must resolve the method via the relocated
     // memory glob, and none may still point at the retired steering glob.
-    const distRoot = join(REPO_ROOT, "dist");
-    const kiroTrees = readdirSync(distRoot).filter((h) =>
-      existsSync(join(distRoot, h, ".kiro", "agents")),
+    const kiroTrees = HARNESS_MATRIX.filter(
+      (harness) => harness.capabilities.kiroAgentJson,
     );
-    // Both Kiro distributions must be present (guards against the dir-detection
-    // silently matching zero trees and vacuously passing).
-    expect(kiroTrees.sort()).toEqual(["kiro", "kiro-ide"]);
+    expect(kiroTrees.length).toBeGreaterThan(0);
 
     let checkedAgents = 0;
-    for (const h of kiroTrees) {
-      const agentsDir = join(distRoot, h, ".kiro", "agents");
+    let expectedAgents = 0;
+    for (const harness of kiroTrees) {
+      const agentsDir = join(harness.engineRoot, "agents");
       const agentFiles = readdirSync(agentsDir).filter((f) => f.endsWith(".json"));
-      expect(agentFiles.length, `${h} ships agent JSONs`).toBeGreaterThan(0);
+      expect(agentFiles.length, `${harness.name} ships agent JSONs`).toBeGreaterThan(0);
+      expectedAgents += agentFiles.length;
+      let harnessChecked = 0;
       for (const f of agentFiles) {
         const json = JSON.parse(readFileSync(join(agentsDir, f), "utf-8")) as {
           resources?: string[];
         };
-        // Only agents that declare a method-loading resources array are in scope.
+        expect(Array.isArray(json.resources), `${harness.name}/${f}: resources`).toBe(true);
         if (!json.resources) continue;
         checkedAgents++;
-        expect(json.resources, `${h}/${f} resources → relocated memory`).toContain(
+        harnessChecked++;
+        expect(json.resources, `${harness.name}/${f} resources → relocated memory`).toContain(
           "file://aidlc/spaces/default/memory/**/*.md",
         );
         // The old steering glob is gone from `resources` (note: `.kiro/steering/**`
@@ -237,13 +238,12 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
         // permission, NOT a method-load glob, so we only inspect `resources`).
         expect(
           json.resources.some((r) => r.includes(".kiro/steering")),
-          `${h}/${f} resources must not point at the empty steering dir`,
+          `${harness.name}/${f} resources must not point at the empty steering dir`,
         ).toBe(false);
       }
+      expect(harnessChecked, `${harness.name}: agents with resources`).toBeGreaterThan(0);
     }
-    // All 5 agents × 2 trees declare resources today; guard the floor so a
-    // regression that drops the arrays cannot make this test vacuous.
-    expect(checkedAgents).toBeGreaterThanOrEqual(10);
+    expect(checkedAgents).toBe(expectedAgents);
   });
 
   test("8: Codex include is wired (AIDLC_RULES_DIR seam + AGENTS.md)", () => {

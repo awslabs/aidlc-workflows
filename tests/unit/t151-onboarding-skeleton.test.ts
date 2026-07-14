@@ -12,8 +12,8 @@
 //   (2) An incomplete fill set (a declared slot left unprovided that the renderer
 //       fails to blank) cannot pass — the renderer THROWS. We assert the
 //       completeness guard fires on a deliberately-broken skeleton.
-//   (3) Each shipped harness (claude, kiro, codex) renders with zero leftover
-//       markers via its real fills — the same guarantee, on the live harnesses.
+//   (3) Each manifest-discovered shipped harness renders with zero leftover
+//       markers via its real fills, and its projected onboarding file exists.
 //
 // Mechanism: none. Pure in-process render over the skeleton + fills modules.
 // Zero spawn, zero LLM, zero tokens.
@@ -27,6 +27,7 @@ import {
   renderOnboarding,
   type OnboardingFills,
 } from "../../scripts/onboarding.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const SKELETON = readFileSync(
   join(REPO_ROOT, "core", "templates", "onboarding.md"),
@@ -100,26 +101,24 @@ describe("t151 onboarding skeleton — a new harness gets a complete doc for fre
   });
 
   test("3: every shipped harness renders with zero leftover markers via its real fills", () => {
-    const harnesses: Array<[string, string]> = [
-      ["claude", ".claude"],
-      ["kiro", ".kiro"],
-      ["codex", ".codex"],
-    ];
-    for (const [name, dir] of harnesses) {
+    for (const harness of HARNESS_MATRIX) {
       const fills = (
-        require(join(REPO_ROOT, "harness", name, "onboarding.fills.ts")) as {
+        require(harness.onboardingFills) as {
           default: OnboardingFills;
         }
       ).default;
       let rendered = renderOnboarding(SKELETON, fills);
-      rendered = rendered.split("{{HARNESS_DIR}}").join(dir);
-      expect({ harness: name, leftover: noLeftoverMarkers(rendered) }).toEqual({
-        harness: name,
+      rendered = rendered.split("{{HARNESS_DIR}}").join(harness.manifest.harnessDir);
+      expect({ harness: harness.name, leftover: noLeftoverMarkers(rendered) }).toEqual({
+        harness: harness.name,
         leftover: null,
       });
-      // Shared sections present for the real harness too.
+
+      const shipped = readFileSync(harness.onboardingDist, "utf-8");
+      expect(noLeftoverMarkers(shipped), `${harness.name}: shipped onboarding markers`).toBeNull();
       for (const section of REQUIRED_SECTIONS) {
         expect(rendered).toContain(section);
+        expect(shipped, `${harness.name}: shipped ${section}`).toContain(section);
       }
     }
   });

@@ -17,10 +17,14 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  HARNESS_MATRIX,
+  type ShippedHarnessName,
+} from "../harness/harness-matrix.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
@@ -32,10 +36,16 @@ const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
 const STAGE_TABLE_BEGIN =
   "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
-// The COMMITTED projection — only existsSync-probed (never mutated) by the
-// "packager emits" assertions. The compose run below uses a FRESHLY BUILT copy
-// under tmp (see beforeAll) so this test never regenerates the committed dist.
-const PLUGIN_CLAUDE_COMMITTED = join(REPO_ROOT, "dist", "plugins", PLUGIN, "claude");
+
+function fileInventory(root: string, relative = ""): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(join(root, relative)).sort()) {
+    const rel = join(relative, entry);
+    if (statSync(join(root, rel)).isDirectory()) files.push(...fileInventory(root, rel));
+    else files.push(rel);
+  }
+  return files;
+}
 
 // Absolute path to a stage's compiled node in a composed project.
 function graph(projectDir: string): Array<Record<string, any>> {
@@ -80,21 +90,30 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   let project: string;
   let pluginBuilt: string;
   let coreRunnerBefore: string;
+  const pluginBuilds = new Map<ShippedHarnessName, string>();
 
   beforeAll(() => {
     tmp = mkdtempSync(join(tmpdir(), "aidlc-t188-"));
 
-    // 1. Build the plugin projection into tmp via the target-dir seam — NEVER
-    //    regenerate the committed dist/ (write-mode package.ts rmSync's the
-    //    committed trees, which masks drift and races sibling tests under the
-    //    parallel integration tier). This exercises the real emitter in isolation.
-    pluginBuilt = join(tmp, "plugin", "claude");
-    const build = spawnSync(BUN, [PACKAGE_TS, "plugin", "build", PLUGIN, "claude", pluginBuilt], {
-      cwd: REPO_ROOT,
-      encoding: "utf-8",
-      timeout: TIMEOUT_MS - 5_000,
-    });
-    if (build.status !== 0) throw new Error(`plugin build failed: ${build.stderr}`);
+    // 1. Build every manifest-discovered projection into tmp via the target-dir
+    //    seam. This exercises the real emitter without mutating committed dist.
+    for (const harness of HARNESS_MATRIX) {
+      const built = join(tmp, "plugin", harness.name);
+      const build = spawnSync(
+        BUN,
+        [PACKAGE_TS, "plugin", "build", PLUGIN, harness.name, built],
+        {
+          cwd: REPO_ROOT,
+          encoding: "utf-8",
+          timeout: TIMEOUT_MS - 5_000,
+        },
+      );
+      if (build.status !== 0) {
+        throw new Error(`plugin build failed for ${harness.name}: ${build.stderr}`);
+      }
+      pluginBuilds.set(harness.name, built);
+    }
+    pluginBuilt = pluginBuilds.get("claude")!;
 
     // 2. Fresh base project = a copy of dist/claude/.claude (read-only source).
     project = join(tmp, "proj");
@@ -117,28 +136,53 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       },
     });
     if (compose.status !== 0) throw new Error(`compose.ts failed: ${compose.stderr}`);
-  });
+  }, TIMEOUT_MS);
 
   afterAll(() => {
     if (tmp && existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
   });
 
-  // --- Packager emits the projection ---
-  test("packager emits a Claude host-plugin projection", () => {
-    expect(existsSync(join(PLUGIN_CLAUDE_COMMITTED, ".claude-plugin", "plugin.json"))).toBe(true);
-    expect(existsSync(join(PLUGIN_CLAUDE_COMMITTED, "hooks", "compose.ts"))).toBe(true);
-    expect(existsSync(join(PLUGIN_CLAUDE_COMMITTED, "hooks", "hooks.json"))).toBe(true);
-  });
+  // --- Packager emits every projection; Claude remains the compose E2E below ---
+  test("every harness projection carries its declared host manifest, wiring, and content", () => {
+    for (const harness of HARNESS_MATRIX) {
+      const built = pluginBuilds.get(harness.name)!;
+      const committed = join(REPO_ROOT, "dist", "plugins", PLUGIN, harness.name);
+      expect(existsSync(committed), `${harness.name}: committed projection`).toBe(true);
+      expect(fileInventory(committed), `${harness.name}: committed inventory`).toEqual(
+        fileInventory(built),
+      );
 
-  test("packager emits scopes, agents, and knowledge in the Claude projection", () => {
-    expect(existsSync(join(PLUGIN_CLAUDE_COMMITTED, "scopes", "test-pro-validation.md"))).toBe(true);
-    expect(existsSync(join(PLUGIN_CLAUDE_COMMITTED, "agents", "test-pro-metrics-agent.md"))).toBe(true);
-    expect(existsSync(join(PLUGIN_CLAUDE_COMMITTED, "knowledge", "test-pro-metrics-agent", "methodology.md"))).toBe(true);
-  });
-
-  test("all four harness projections emit", () => {
-    for (const h of ["claude", "codex", "kiro", "kiro-ide"]) {
-      expect(existsSync(join(REPO_ROOT, "dist", "plugins", PLUGIN, h))).toBe(true);
+      const manifestFile = join(
+        built,
+        harness.capabilities.plugin.manifestDir,
+        "plugin.json",
+      );
+      const hostManifest = JSON.parse(readFileSync(manifestFile, "utf-8")) as {
+        name?: string;
+      };
+      expect(hostManifest.name, harness.name).toBe(`aidlc-${PLUGIN}`);
+      expect(existsSync(join(built, "hooks", "compose.ts"))).toBe(true);
+      const wiring = readFileSync(
+        join(built, harness.capabilities.plugin.wiringFile),
+        "utf-8",
+      );
+      expect(wiring, `${harness.name}: harness dir wiring`).toContain(
+        `AIDLC_HARNESS_DIR=${harness.manifest.harnessDir}`,
+      );
+      expect(existsSync(join(built, "stages", "construction", "test-pro-integration.md"))).toBe(
+        true,
+      );
+      expect(existsSync(join(built, "contributions", "construction", "build-and-test.md"))).toBe(
+        true,
+      );
+      // #550 plugin content buckets: scopes, agents, and knowledge must project
+      // into EVERY harness (stronger than the pre-matrix Claude-only guard).
+      expect(existsSync(join(built, "scopes", "test-pro-validation.md")), `${harness.name}: scope`).toBe(true);
+      expect(existsSync(join(built, "agents", "test-pro-metrics-agent.md")), `${harness.name}: agent`).toBe(true);
+      expect(
+        existsSync(join(built, "knowledge", "test-pro-metrics-agent", "methodology.md")),
+        `${harness.name}: knowledge`,
+      ).toBe(true);
     }
   });
 

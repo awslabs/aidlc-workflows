@@ -2,9 +2,8 @@
 //
 // t181 — PER-HARNESS CONDUCTOR-SKILL FRESHNESS GATE. Mechanism: none
 // (readFileSync over harness/*/skills/aidlc/SKILL.md, zero spawn, zero LLM, zero
-// tokens). Technique: deterministic closed predicate, harness list derived FROM
-// DISK (mirrors t156 §7's readdirSync+filter+floor idiom — never a hardcoded
-// [claude,kiro,codex] triple, so a NEW harness tree is auto-covered).
+// tokens). Technique: deterministic closed predicate over the shared,
+// manifest-discovered harness matrix, so a new harness cannot escape the gate.
 //
 // WHY THIS EXISTS (the P11 "RESOLVE (2)" obligation): the workspace refactor
 // (per-intent layout, --init retirement, intent/space verbs, multi-repo --repo,
@@ -30,20 +29,15 @@
 // package.ts --check), so gating the authored source covers every tree.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
-const HARNESS_DIR = join(REPO_ROOT, "harness");
-
-/** Authored conductor SKILLs, repo-root-relative (posix), derived FROM DISK:
- *  every harness/<h>/ that ships skills/aidlc/SKILL.md. Disk-derivation (not a
- *  hardcoded list) means a newly-added harness tree is covered automatically and
- *  cannot escape the gate by being absent from a static triple. */
+/** Authored conductor SKILLs for every manifest-discovered distribution. */
 function harnessSkills(): string[] {
-  return readdirSync(HARNESS_DIR)
-    .filter((h) => existsSync(join(HARNESS_DIR, h, "skills", "aidlc", "SKILL.md")))
-    .map((h) => `harness/${h}/skills/aidlc/SKILL.md`)
+  return HARNESS_MATRIX
+    .map((harness) => `harness/${harness.name}/skills/aidlc/SKILL.md`)
     .sort();
 }
 
@@ -63,16 +57,9 @@ const REQUIRED_TOKENS = [
 describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () => {
   const skills = harnessSkills();
 
-  test("the disk-derived harness-SKILL set covers all four shipped trees (no vacuous pass)", () => {
-    // Floor guard (mirrors t156 §7): if the dir-detection silently matched zero
-    // trees the positive/negative scans below would vacuously pass. Pin the
-    // known four so a regression that hides a tree (or empties harness/) trips.
-    expect(skills).toEqual([
-      "harness/claude/skills/aidlc/SKILL.md",
-      "harness/codex/skills/aidlc/SKILL.md",
-      "harness/kiro-ide/skills/aidlc/SKILL.md",
-      "harness/kiro/skills/aidlc/SKILL.md",
-    ]);
+  test("the matrix-derived harness-SKILL set covers every shipped tree", () => {
+    expect(skills.length).toBe(HARNESS_MATRIX.length);
+    for (const rel of skills) expect(existsSync(join(REPO_ROOT, rel)), rel).toBe(true);
   });
 
   test("no shipped conductor SKILL carries the retired `--init` command", () => {
