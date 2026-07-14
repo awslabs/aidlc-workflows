@@ -40,10 +40,7 @@ import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { seedCustomHarness } from "./custom-harness.ts";
-import {
-  harnessByName,
-  type ShippedHarnessName,
-} from "./harness-matrix.ts";
+import type { ShippedHarnessName } from "./harness-matrix.ts";
 
 const HARNESS_DIR = dirname(fileURLToPath(import.meta.url));
 const requireHere = createRequire(import.meta.url);
@@ -643,6 +640,13 @@ export function setupWorkspaceJourney(harness: JourneyHarness = "claude"): Works
   // 1. Copy the complete shipped distribution root. The matrix resolves the
   //    manifest-backed dist row; copying its entries keeps this fixture agnostic
   //    to engine-dir, root-file, and emitted-skill layout differences.
+  //    Loaded lazily, NOT at module scope: harness-matrix.ts walks harness/ and
+  //    dist/ at import time, and fixtures.ts is imported by sandbox tests (t52's
+  //    t48 sandbox) whose trees ship neither - a top-level import throws ENOENT
+  //    there. Same posture as resetSelectionSensitiveCaches above.
+  const { harnessByName } = requireHere(
+    "./harness-matrix.ts",
+  ) as typeof import("./harness-matrix.ts");
   const distRoot = harnessByName(harness).distRoot;
   for (const entry of readdirSync(distRoot)) {
     cpSync(join(distRoot, entry), join(root, entry), { recursive: true });
