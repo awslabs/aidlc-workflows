@@ -295,24 +295,25 @@ function* walk(dir: string): Generator<string> {
 // MISSING / DIFFERS / ORPHAN problem strings prefixed by `relPrefix`. The single
 // built-vs-committed walk shared by checkHarness and checkPlugins so both drift
 // guards stay in lockstep (round-2: the two had drifted into separate copies).
-// `isExempt(rel)` skips a committed-only path from the orphan sweep (authored
-// files the build legitimately doesn't produce).
+// `generatedFiles` lets a builder pass its explicit inventory; otherwise this
+// helper inventories `built` itself. `isExempt(rel)` skips a committed-only
+// authored path that the manifest explicitly permits.
 function diffTrees(
   built: string,
   committed: string,
   relPrefix: string,
+  generatedFiles?: readonly string[],
   isExempt: (rel: string) => boolean = () => false,
 ): string[] {
   const problems: string[] = [];
   const builtFiles = new Set<string>();
-  if (existsSync(built)) {
-    for (const f of walk(built)) {
-      const rel = relative(built, f);
-      builtFiles.add(rel);
-      const c = join(committed, rel);
-      if (!existsSync(c)) problems.push(`MISSING in dist: ${relPrefix}/${rel}`);
-      else if (!readFileSync(f).equals(readFileSync(c))) problems.push(`DIFFERS: ${relPrefix}/${rel}`);
-    }
+  const files = generatedFiles ?? (existsSync(built) ? [...walk(built)] : []);
+  for (const f of files) {
+    const rel = relative(built, f);
+    builtFiles.add(rel);
+    const c = join(committed, rel);
+    if (!existsSync(c)) problems.push(`MISSING in dist: ${relPrefix}/${rel}`);
+    else if (!readFileSync(f).equals(readFileSync(c))) problems.push(`DIFFERS: ${relPrefix}/${rel}`);
   }
   if (existsSync(committed)) {
     for (const f of walk(committed)) {
@@ -387,27 +388,23 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
 // Emit the method ("memory") tree at the WORKSPACE ROOT of the dist tree
 // (dist/<name>/aidlc/spaces/default/memory/), copying core/memory/ verbatim with
 // the standard .md token transform (a no-op on the neutral method files, which
-// carry no {{HARNESS_DIR}} token). Returns the absolute paths it wrote so
-// checkHarness can byte-diff them (they live OUTSIDE <harnessDir>, like the
-// projectRoot harness files). Same source + destination for every harness — the
-// method is harness-neutral; the per-harness native include is what differs.
+// carry no {{HARNESS_DIR}} token). Same source + destination for every harness
+// — the method is harness-neutral; the per-harness native include is what
+// differs.
 function emitMemory(
   outRoot: string,
   harnessDir: string,
   rulesRename: string | null,
   harness: "claude" | "codex" | "kiro",
-): string[] {
+): void {
   const srcDir = join(CORE_ROOT, MEMORY_SRC);
-  const written: string[] = [];
-  if (!existsSync(srcDir)) return written;
+  if (!existsSync(srcDir)) return;
   for (const file of walk(srcDir)) {
     const rel = relative(srcDir, file);
     const outPath = join(outRoot, MEMORY_DST, rel);
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, transform(file, readFileSync(file), harnessDir, rulesRename, harness));
-    written.push(outPath);
   }
-  return written;
 }
 
 // Engine-only-install self-heal: emit the SAME core/memory/ tree a SECOND time,
@@ -415,8 +412,8 @@ function emitMemory(
 // install carries the method content with it (the first /aidlc copies it out via
 // ensureWorkspaceDirs/frameworkMemorySeedDir). Mirrors emitMemory's transform
 // (a no-op on the neutral method files) but writes into treeRoot (the harness
-// engine dir), so the normal in-harness walk + byte-diff covers it — no
-// outsideHarness bookkeeping needed. Same source as emitMemory, different dst.
+// engine dir), so the generated-root inventory covers it. Same source as
+// emitMemory, different destination.
 function emitMemorySeed(
   treeRoot: string,
   harnessDir: string,
@@ -436,17 +433,15 @@ function emitMemorySeed(
 // Emit the active-space CURSOR (aidlc/active-space -> "default") into the dist
 // tree, as part of the workspace shell (SEED). Lives at the dist root beside
 // the harness dir (dist/<name>/aidlc/active-space), OUTSIDE <harnessDir>, like
-// the memory tree and projectRoot harness files. Returns the absolute path it
-// wrote so checkHarness can byte-diff + orphan-scan it. Harness-neutral: same
-// pointer value for every harness (the resolver follows it identically). The
-// dist .gitignore ignores this path for the END USER's workspace; OUR repo
-// commits the shipped pointer via git add -f on the seed commit (see the
+// the memory tree and projectRoot harness files. Harness-neutral: same pointer
+// value for every harness (the resolver follows it identically). The dist
+// .gitignore ignores this path for the END USER's workspace; OUR repo commits
+// the shipped pointer via git add -f on the seed commit (see the
 // ACTIVE_SPACE_REL note).
-function emitActiveSpace(outRoot: string): string {
+function emitActiveSpace(outRoot: string): void {
   const outPath = join(outRoot, ACTIVE_SPACE_REL);
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, ACTIVE_SPACE_VALUE);
-  return outPath;
 }
 
 // Copy the committed compiled-data JSON into the assembled tree so
@@ -470,8 +465,9 @@ function seedCompiledData(treeRoot: string, seedFrom: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Build one harness tree into `outRoot` (the dist/<name> dir). Returns the set
-// of paths the copy+generate steps produced, for the orphan scan.
+// Build one harness tree into `outRoot` (the dist/<name> dir). Returns the full
+// generated-file inventory rooted there, including project-root files beside
+// <harnessDir> (onboarding/config, workspace memory, emitted skills, and so on).
 // `seedFrom` is the committed <harnessDir> tree the compiled-data seed is read
 // from (the same tree under --check; a pre-sweep stash under write).
 // ---------------------------------------------------------------------------
@@ -482,10 +478,6 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   // knows (Kiro CLI and Kiro IDE share the "kiro" flavor - identical model
   // dial). Declared per manifest, never inferred from the harness name.
   const harnessKind = m.tierFlavor;
-  // Out-of-harness paths the build produced (memory tree + any emit output),
-  // returned for checkHarness's byte-diff of files OUTSIDE <harnessDir>.
-  const outsideHarness: string[] = [];
-
   // 1. Copy core dirs with token substitution + rules rename. Manifest-declared
   //    frontmatter additions (harness-native fields, e.g. the Kiro IDE's
   //    subagent `tools:` grant) are appended during this projection; every
@@ -566,18 +558,18 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   //     the compile step's loadRules resolves rules_in_context from this tree
   //     (AIDLC_RULES_DIR points there below), so it has to exist first.
   const memoryDir = join(outRoot, MEMORY_DST);
-  outsideHarness.push(...emitMemory(outRoot, harnessDir, m.rulesRename, harnessKind));
+  emitMemory(outRoot, harnessDir, m.rulesRename, harnessKind);
 
   // 2d. Emit the active-space cursor (aidlc/active-space -> "default") — part of
   //     the shipped shell so a fresh copy resolves the default space with no
   //     ceremony (SEED). Outside <harnessDir>, like the memory tree.
-  outsideHarness.push(emitActiveSpace(outRoot));
+  emitActiveSpace(outRoot);
 
   // 2e. Engine-only-install self-heal: bundle the SAME method content INSIDE the
   //     engine dir at <harnessDir>/tools/data/memory-seed/, so an engine-only
   //     install (no sibling aidlc/ shell) can self-heal — the first /aidlc copies
-  //     it out via ensureWorkspaceDirs. Inside <harnessDir>, so the in-harness
-  //     walk byte-diffs it under --check (no outsideHarness entry).
+  //     it out via ensureWorkspaceDirs. Inside <harnessDir>, so the generated
+  //     root inventory byte-diffs it under --check.
   emitMemorySeed(treeRoot, harnessDir, m.rulesRename, harnessKind);
 
   // 3. Compile the stage graph into the assembled tree (writes harness-correct
@@ -598,7 +590,7 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   // override the robust choice. The renameRulesInCompiledData backstop still
   // runs for renamed-rules harnesses to normalize any residual <dir>/rules/
   // prose-path that a future code path might emit (guarded no-op today).
-  runTool(treeRoot, ["tools/aidlc-graph.ts", "compile"], memoryDir);
+  runTool(treeRoot, harnessDir, ["tools/aidlc-graph.ts", "compile"], memoryDir);
   if (m.rulesRename) renameRulesInCompiledData(treeRoot, harnessDir, m.rulesRename);
 
   // 3b. Emit tools/data/harness.json — the runtime's open-set source of truth
@@ -616,28 +608,26 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
   //    Codex skips this — it ships no <harnessDir>/skills/; emit() composes the
   //    whole skill set into .agents/skills/ instead.
   if (!m.skipRunnerGen) {
-    runTool(treeRoot, ["tools/aidlc-runner-gen.ts", "write"]);
-    runTool(treeRoot, ["tools/aidlc-runner-gen.ts", "scopes"]);
+    runTool(treeRoot, harnessDir, ["tools/aidlc-runner-gen.ts", "write"]);
+    runTool(treeRoot, harnessDir, ["tools/aidlc-runner-gen.ts", "scopes"]);
   }
 
-  // 5. Per-shell emissions (codex only today). Returns the absolute paths it
-  //    wrote, so the caller can byte-diff emit-owned files that live OUTSIDE
-  //    <harnessDir> (e.g. .agents/skills/, the root AGENTS.md) under --check.
+  // 5. Per-shell emissions (codex only today). These may live outside
+  //    <harnessDir> (e.g. .agents/skills/ and root AGENTS.md); the generated
+  //    root inventory includes them automatically.
   if (m.emit) {
-    outsideHarness.push(
-      ...m.emit({
-        repoRoot: REPO_ROOT,
-        coreRoot: CORE_ROOT,
-        harnessRoot: harnessSrcRoot,
-        distRoot: outRoot,
-        harnessDir,
-        substituteToken: (s: string) => substituteToken(s, harnessDir),
-        tierCap: TIER_CAP,
-        check: false,
-      }).written,
-    );
+    m.emit({
+      repoRoot: REPO_ROOT,
+      coreRoot: CORE_ROOT,
+      harnessRoot: harnessSrcRoot,
+      distRoot: outRoot,
+      harnessDir,
+      substituteToken: (s: string) => substituteToken(s, harnessDir),
+      tierCap: TIER_CAP,
+      check: false,
+    });
   }
-  return outsideHarness;
+  return [...walk(outRoot)];
 }
 
 // Run an in-tree tool (bun <treeRoot>/<rel> ...) with the harness env seams set
@@ -646,14 +636,14 @@ function buildTree(m: HarnessManifest, outRoot: string, seedFrom: string): strin
 // (dist/<name>/aidlc/spaces/default/memory/) so rules_in_context is populated at
 // compile time — every harness needs it now that the method lives at the
 // workspace root, not inside <harnessDir>.
-function runTool(treeRoot: string, args: string[], rulesDirAbs?: string | null): void {
+function runTool(
+  treeRoot: string,
+  harnessDir: string,
+  args: string[],
+  rulesDirAbs?: string | null,
+): void {
   const toolPath = join(treeRoot, args[0]);
   const rest = args.slice(1);
-  const harnessDir = treeRoot.endsWith(".kiro")
-    ? ".kiro"
-    : treeRoot.endsWith(".codex")
-      ? ".codex"
-      : ".claude";
   const env: Record<string, string> = {
     ...process.env,
     AIDLC_SRC: treeRoot,
@@ -715,13 +705,11 @@ function writeHarness(name: string): void {
         cpSync(src, dst);
       }
     }
-    // Clean sweep the harness dir so removed core files don't linger.
-    if (existsSync(treeRoot)) rmSync(treeRoot, { recursive: true, force: true });
-    // Also sweep the workspace-root method tree (dist/<name>/aidlc/) so a
-    // removed/renamed memory file (e.g. a dropped phase rule) doesn't linger
-    // beside the freshly emitted one — the harness-dir sweep above misses it.
-    const memoryRoot = join(distDir, "aidlc");
-    if (existsSync(memoryRoot)) rmSync(memoryRoot, { recursive: true, force: true });
+    // dist/<name>/ is one generated root. Sweep that root, not selected
+    // subdirectories, so removed/renamed project-root outputs cannot linger.
+    // Siblings at dist/ (plugins, specifications, and unrelated assets) remain
+    // outside this harness-owned boundary.
+    if (existsSync(distDir)) rmSync(distDir, { recursive: true, force: true });
     buildTree(m, distDir, seedStash);
     console.log(`[${name}] regenerated dist/${name}/${m.harnessDir}`);
   } finally {
@@ -734,53 +722,29 @@ function writeHarness(name: string): void {
 // ---------------------------------------------------------------------------
 function checkHarness(name: string): string[] {
   const m = loadManifest(name);
-  const committed = join(REPO_ROOT, "dist", name, m.harnessDir);
+  const committedDistRoot = join(REPO_ROOT, "dist", name);
+  const committedTreeRoot = join(committedDistRoot, m.harnessDir);
   const tmp = mkdtempSync(join(tmpdir(), `aidlc-pkg-${name}-`));
-  const problems: string[] = [];
+  let problems: string[] = [];
   try {
     // Seed compile from the committed tree (untouched under --check).
-    const emitWritten = buildTree(m, tmp, committed);
-    const builtRoot = join(tmp, m.harnessDir);
-    // Built ↔ committed diff (MISSING / DIFFERS / ORPHAN), shared with checkPlugins.
-    // authoredExempt paths are legitimately committed-only (not build output).
-    problems.push(...diffTrees(builtRoot, committed, `${name}/${m.harnessDir}`,
-      (rel) => m.authoredExempt.some((re) => re.test(rel))));
-    // Project-root harness files (e.g. dist/<name>/AGENTS.md) live OUTSIDE the
-    // harness dir — diff each explicitly (built into tmp/<dst> vs dist/<name>/<dst>).
-    const committedDistRoot = join(REPO_ROOT, "dist", name);
-    for (const { dst, projectRoot } of m.harnessFiles) {
-      if (!projectRoot) continue;
-      const built = readFileSync(join(tmp, dst));
-      const committedPath = join(committedDistRoot, dst);
-      if (!existsSync(committedPath)) problems.push(`MISSING in dist: ${name}/${dst}`);
-      else if (!readFileSync(committedPath).equals(built)) problems.push(`DIFFERS: ${name}/${dst}`);
-    }
-    // Emit-owned files OUTSIDE <harnessDir> (codex: .agents/skills/, root
-    // AGENTS.md). buildTree returns their tmp paths; diff each against committed.
-    const emitOutsideHarness = emitWritten.filter((p) => !p.startsWith(join(tmp, m.harnessDir) + "/"));
-    const committedEmitSet = new Set<string>();
-    for (const builtPath of emitOutsideHarness) {
-      const rel = relative(tmp, builtPath);
-      committedEmitSet.add(rel);
-      const committedPath = join(committedDistRoot, rel);
-      if (!existsSync(committedPath)) problems.push(`MISSING in dist: ${name}/${rel}`);
-      else if (!readFileSync(committedPath).equals(readFileSync(builtPath)))
-        problems.push(`DIFFERS: ${name}/${rel}`);
-    }
-    // Orphan scan over out-of-harness dirs the build owns (codex emit's
-    // .agents/; the method tree at aidlc/). committedEmitSet holds every
-    // out-of-harness file the build produced (emit output + the memory tree), so
-    // a committed file under these roots that the build DIDN'T produce is a
-    // stale orphan — e.g. a removed phase rule still committed under
-    // dist/<name>/aidlc/spaces/default/memory/phases/.
-    for (const sub of [".agents", "aidlc"]) {
-      const dir = join(committedDistRoot, sub);
-      if (!existsSync(dir)) continue;
-      for (const f of walk(dir)) {
-        const rel = relative(committedDistRoot, f);
-        if (!committedEmitSet.has(rel)) problems.push(`ORPHAN in dist: ${name}/${rel}`);
-      }
-    }
+    const generatedFiles = buildTree(m, tmp, committedTreeRoot);
+    // The whole harness distribution is generated, not just <harnessDir>.
+    // Diffing its root makes every generated file part of the same
+    // bidirectional contract: missing/modified root onboarding and config are
+    // caught, and outputs removed or renamed in a manifest become ORPHANs.
+    const harnessPrefix = `${m.harnessDir}${sep}`;
+    problems = diffTrees(
+      tmp,
+      committedDistRoot,
+      name,
+      generatedFiles,
+      (rel) => {
+        if (!rel.startsWith(harnessPrefix)) return false;
+        const harnessRel = rel.slice(harnessPrefix.length).split(sep).join("/");
+        return m.authoredExempt.some((re) => re.test(harnessRel));
+      },
+    );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -1108,19 +1072,19 @@ const named = argv.find((a) => !a.startsWith("--"));
 // named target builds just that one.
 const targets = named ? [named] : discoverHarnessNames();
 
-// Only build harnesses that actually have a manifest. Discovery already
-// guarantees this, so the filter only matters for an explicit named target that
-// lacks a manifest — surface that as a skip rather than a crash.
-const present = targets.filter((n) => existsSync(join(HARNESS_ROOT, n, "manifest.ts")));
-const absent = targets.filter((n) => !present.includes(n));
-if (absent.length > 0) console.log(`(skipping harness(es) without a manifest: ${absent.join(", ")})`);
+if (named && !existsSync(join(HARNESS_ROOT, named, "manifest.ts"))) {
+  console.error(
+    `unknown harness "${named}" (have: ${discoverHarnessNames().join(", ") || "none"})`,
+  );
+  process.exit(1);
+}
 
 if (check) {
   let problems: string[] = [];
-  for (const n of present) problems = problems.concat(checkHarness(n));
+  for (const n of targets) problems = problems.concat(checkHarness(n));
   // drift-guard dist/plugins/ too; the top-level orphan sweep runs only on a
   // whole-repo check (no named target), never a single-harness one.
-  problems = problems.concat(checkPlugins(present, !named));
+  problems = problems.concat(checkPlugins(targets, !named));
   if (problems.length > 0) {
     console.error(`\npackage --check FAILED (${problems.length} problem(s)):`);
     for (const p of problems.slice(0, 40)) console.error("  " + p);
@@ -1128,7 +1092,7 @@ if (check) {
   }
   console.log("package --check: all harness trees in sync with core/ + harness/.");
 } else {
-  for (const n of present) writeHarness(n);
+  for (const n of targets) writeHarness(n);
   // Emit plugin projections (the hybrid: per-harness host plugins from plugins/<name>/)
-  emitPlugins(present);
+  emitPlugins(targets);
 }
