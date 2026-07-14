@@ -14,6 +14,7 @@
 
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -74,6 +75,7 @@ type TargetResult = {
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_ENTRY = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts");
 const DEFAULT_OUT_DIR = join(REPO_ROOT, "build", "binaries");
+const RUNTIME_ASSET_ROOT = join(REPO_ROOT, "dist", "claude", ".claude");
 const MIN_CROSS_BYTES = 10 * 1024 * 1024;
 const DEV_SPAWN_MARKER = "/* dev-mode bun spawn */";
 
@@ -275,6 +277,23 @@ function delegatePluginSyncGate(artifact: string): GateResult {
   );
 }
 
+function delegateDoctorDataGate(artifact: string): GateResult {
+  const result = run(artifact, ["doctor"], { cwd: tmpdir(), timeoutMs: 30_000 });
+  const output = `${result.stdout}\n${result.stderr}`;
+  const crashSignature = output.match(/Cannot find module|\/\$bunfs\/|ENOENT/)?.[0] ?? "";
+  const reportEmitted = result.stdout.includes("AI-DLC Health Check");
+  return commandGate(
+    "delegate-doctor-data",
+    result,
+    !result.error && reportEmitted && crashSignature === "",
+    {
+      expected: "doctor report without compiled-data crash signatures",
+      actual: crashSignature || "doctor report emitted",
+      detail: "runs doctor from os.tmpdir() against executable-relative runtime data",
+    },
+  );
+}
+
 function pathlessVersionGate(artifact: string): GateResult {
   const result = run(artifact, ["version"], {
     cwd: tmpdir(),
@@ -328,6 +347,57 @@ function devSpawnGrepGate(entry: string): GateResult {
       `sourceBytes=${source.length}; markerPresentInSource=${markerPresent}; ` +
       `badLines=${JSON.stringify(badLines)}; pathless-version is the runtime gate ` +
       "for the native version path",
+  };
+}
+
+function runtimeAssetsGate(artifact: string): GateResult {
+  const artifactDir = dirname(artifact);
+  const assets = [
+    {
+      source: join(RUNTIME_ASSET_ROOT, "tools", "data"),
+      destination: join(artifactDir, "data"),
+    },
+    {
+      source: join(RUNTIME_ASSET_ROOT, "scopes"),
+      destination: join(artifactDir, "..", "scopes"),
+    },
+    {
+      source: join(RUNTIME_ASSET_ROOT, "agents"),
+      destination: join(artifactDir, "..", "agents"),
+    },
+    {
+      source: join(RUNTIME_ASSET_ROOT, "aidlc-common", "stages"),
+      destination: join(artifactDir, "..", "aidlc-common", "stages"),
+    },
+  ];
+
+  try {
+    for (const asset of assets) {
+      rmSync(asset.destination, { recursive: true, force: true });
+      cpSync(asset.source, asset.destination, { recursive: true, force: true });
+    }
+  } catch (error) {
+    return {
+      name: "runtime-assets",
+      ok: false,
+      kind: "inspection",
+      expected: "runtime asset trees copied beside the executable",
+      actual: String(error),
+    };
+  }
+
+  const missing = assets
+    .filter((asset) => !existsSync(asset.destination))
+    .map((asset) => asset.destination);
+  return {
+    name: "runtime-assets",
+    ok: missing.length === 0,
+    kind: "inspection",
+    expected: assets.length,
+    actual: assets.length - missing.length,
+    detail: missing.length === 0
+      ? "data, scopes, agents, and stage definitions staged"
+      : `missing destinations: ${missing.join(", ")}`,
   };
 }
 
@@ -397,11 +467,13 @@ function buildTarget(target: TargetConfig): TargetResult {
   result.artifact = actual.artifact;
   result.artifactNote = actual.note;
   result.bytes = statSync(actual.artifact).size;
+  result.gates.push(runtimeAssetsGate(actual.artifact));
 
   if (target.name === "native") {
     result.gates.push(versionGate(actual.artifact));
     result.gates.push(helpGate(actual.artifact));
     result.gates.push(delegatePluginSyncGate(actual.artifact));
+    result.gates.push(delegateDoctorDataGate(actual.artifact));
     result.gates.push(devSpawnGrepGate(ENTRY));
     result.gates.push(pathlessVersionGate(actual.artifact));
   } else {

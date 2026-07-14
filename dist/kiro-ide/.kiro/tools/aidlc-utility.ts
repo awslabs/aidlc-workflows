@@ -2510,49 +2510,59 @@ function handleDoctor(projectDir: string): void {
   // it must create nothing. On a project with a born intent the emit fires
   // exactly as before (BARE appendAuditEvent — the only throw is a real write
   // failure, which the rest of the codebase lets propagate).
-  const pairedRules = loadRules();
-  // sensors_applicable is REQUIRED on a compiled graph node, but a
-  // hand-rolled or pre-milestone-9 graph JSON can omit it; `?? []` keeps this
-  // advisory row from crashing doctor on a malformed/legacy graph (the
-  // same defensive posture the cycle/orphan/scope checks take above).
-  const sensorIds = new Set(
-    loadGraph().flatMap((n) => (n.sensors_applicable ?? []).map((s) => s.id))
-  );
-  let pairM = 0;
-  let pairX = 0;
-  let pairP = 0;
-  // unpaired holds the U set (sensor id named but absent anywhere);
-  // unpaired.length is U, so no separate counter is needed.
-  const unpaired: Array<{ file: string; sensor: string }> = [];
-  for (const rule of pairedRules) {
-    const pairing = rule.frontmatter.pairing;
-    if (pairing === undefined) continue;
-    pairM++;
-    if (pairing === "feedforward-only") {
-      pairX++;
-      continue;
+  let pairedRuleCount: number | null = null;
+  try {
+    const pairedRules = loadRules();
+    pairedRuleCount = pairedRules.length;
+    // sensors_applicable is REQUIRED on a compiled graph node, but a
+    // hand-rolled or pre-milestone-9 graph JSON can omit it; `?? []` keeps this
+    // advisory row from crashing doctor on a malformed/legacy graph (the
+    // same defensive posture the cycle/orphan/scope checks take above).
+    const sensorIds = new Set(
+      loadGraph().flatMap((n) => (n.sensors_applicable ?? []).map((s) => s.id))
+    );
+    let pairM = 0;
+    let pairX = 0;
+    let pairP = 0;
+    // unpaired holds the U set (sensor id named but absent anywhere);
+    // unpaired.length is U, so no separate counter is needed.
+    const unpaired: Array<{ file: string; sensor: string }> = [];
+    for (const rule of pairedRules) {
+      const pairing = rule.frontmatter.pairing;
+      if (pairing === undefined) continue;
+      pairM++;
+      if (pairing === "feedforward-only") {
+        pairX++;
+        continue;
+      }
+      const bareId = pairing.replace(/^aidlc-/, "");
+      if (sensorIds.has(bareId)) {
+        pairP++;
+      } else {
+        unpaired.push({ file: rule.path, sensor: pairing });
+      }
     }
-    const bareId = pairing.replace(/^aidlc-/, "");
-    if (sensorIds.has(bareId)) {
-      pairP++;
+    const needing = pairM - pairX;
+    let coverageLabel: string;
+    if (needing === 0) {
+      coverageLabel = `Paired sensor coverage: no sensor-bound rules (${pairX} feedforward-only)`;
     } else {
-      unpaired.push({ file: rule.path, sensor: pairing });
+      coverageLabel = `Paired sensor coverage: ${pairP}/${needing} guardrails paired (${pairX} feedforward-only)`;
     }
+    if (unpaired.length > 0) {
+      const unpairedDetail = unpaired
+        .map((u) => `unpaired: ${u.file} → ${u.sensor} (no stage binds it)`)
+        .join("; ");
+      coverageLabel = `${coverageLabel}; ${unpairedDetail}`;
+    }
+    results.push({ pass: true, label: coverageLabel });
+  } catch (e) {
+    results.push({
+      pass: false,
+      label: "Paired sensor coverage: check failed",
+      fix: errorMessage(e),
+    });
   }
-  const needing = pairM - pairX;
-  let coverageLabel: string;
-  if (needing === 0) {
-    coverageLabel = `Paired sensor coverage: no sensor-bound rules (${pairX} feedforward-only)`;
-  } else {
-    coverageLabel = `Paired sensor coverage: ${pairP}/${needing} guardrails paired (${pairX} feedforward-only)`;
-  }
-  if (unpaired.length > 0) {
-    const unpairedDetail = unpaired
-      .map((u) => `unpaired: ${u.file} → ${u.sensor} (no stage binds it)`)
-      .join("; ");
-    coverageLabel = `${coverageLabel}; ${unpairedDetail}`;
-  }
-  results.push({ pass: true, label: coverageLabel });
 
   // ---------------------------------------------------------------------------
   // Check 7 — Intent registry ⇄ record-dir reconciliation
@@ -2628,11 +2638,11 @@ function handleDoctor(projectDir: string): void {
   // initialized project both GUARDRAIL_LOADED and HEALTH_CHECKED emit as before.
   const auditExists = auditShards(projectDir).length > 0;
 
-  if (auditExists) {
+  if (auditExists && pairedRuleCount !== null) {
     appendAuditEvent(projectDir, "GUARDRAIL_LOADED", {
       Scope: "all",
       Path: `${harnessDir()}/${rulesSubdir()}/`,
-      "Rule count": String(pairedRules.length),
+      "Rule count": String(pairedRuleCount),
     });
   }
 

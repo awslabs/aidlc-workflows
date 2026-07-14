@@ -59,7 +59,10 @@ New config get/list and plugin list/sync commands land in the dispatcher grammar
 * `/aidlc init` now errors with `init now lays down the project data tree and is not yet available in this release. To start work, describe what to build: /aidlc "build the auth service".`
 * Plugin SessionStart hooks now probe for `aidlc` on `PATH` first and run `aidlc plugin sync`; a nonzero result falls back to the existing bun plus `hooks/compose.ts` command, and the hook still skips cleanly when neither executable is available.
 * Native `aidlc` binaries now statically embed all 15 dispatcher delegate modules, so routed commands reach their handlers instead of failing with a missing module error.
+* Native `aidlc` binaries now resolve the compiled stage graph, scope grid, scopes, and agents relative to the running executable when module-relative paths are absent.
+* `aidlc doctor` now reports a missing or unreadable stage graph as a failing advisory row instead of crashing before the health report is printed.
 * Native binary builds now gate a real `plugin sync` delegate in addition to inline version and help routes, catching missing compiled delegate modules before release.
+* Native binary builds now stage runtime data beside each executable and gate a real `doctor` report for missing-module, Bun virtual-filesystem, and missing-file crash signatures.
 * Migration note for stale `init` callers: describe what to build instead, for example `/aidlc "build the auth service"`.
 
 ## [2.3.15] - 2026-07-14

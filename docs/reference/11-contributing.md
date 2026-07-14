@@ -52,8 +52,11 @@ For the full architecture, see [reference/01-architecture.md](01-architecture.md
 Release binary artifacts are not part of `dist/` and are not produced by the
 packager. After `bun scripts/package.ts --check` is clean, run
 `bun scripts/build-binaries.ts` for the native artifact or add `--all-targets`
-for the release matrix. The script writes ignored artifacts and
-`build-results.json` under `build/binaries/` and fails if any smoke gate fails.
+for the release matrix. The script writes executables, their `data/` assets,
+and `build-results.json` under `build/binaries/`. It stages the sibling
+`agents/`, `scopes/`, and `aidlc-common/stages/` trees under `build/` so the
+bundle mirrors the installed `<harness>/tools/` layout. Any failed smoke gate
+fails the build.
 
 ## Testing
 

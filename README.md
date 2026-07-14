@@ -259,7 +259,7 @@ aidlc-claude/
 ├── scripts/
 │   ├── package.ts              # THE build entry: copy core+harness per manifest → graph compile →
 │   │                           #   runner-gen → emit() per tree.  --check = total drift guard (CI)
-│   ├── build-binaries.ts       # release-only compiled CLI artifacts into ignored build/binaries/
+│   ├── build-binaries.ts       # release-only CLI bundles under ignored build/
 │   └── manifest-types.ts       # shared manifest contract
 │
 │  ─────────── GENERATED, COMMITTED, DRIFT-GUARDED — never hand-edit ───────────

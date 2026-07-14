@@ -221,7 +221,7 @@ interface ShippedHarnessData {
 let _shippedHarnessData: ShippedHarnessData | null = null;
 
 export function harnessDataPath(): string {
-  return join(DATA_DIR, "harness.json");
+  return join(resolveDataDir(), "harness.json");
 }
 
 function readShippedHarnessData(): ShippedHarnessData {
@@ -3377,7 +3377,21 @@ export function latestStartedStageSlug(audit: string): string | null {
 
 // --- Data loaders ---
 
-const DATA_DIR = join(dirname(fileURLToPath(import.meta.url)), "data");
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = join(MODULE_DIR, "data");
+
+function resolveModuleOrExecutablePath(
+  moduleRelativePath: string,
+  ...executableRelativeSegments: string[]
+): string {
+  return existsSync(moduleRelativePath)
+    ? moduleRelativePath
+    : join(dirname(process.execPath), ...executableRelativeSegments);
+}
+
+function resolveDataDir(): string {
+  return resolveModuleOrExecutablePath(DATA_DIR, "data");
+}
 
 let _stageGraph: StageEntry[] | null = null;
 let _stageGraphAll: StageEntry[] | null = null;
@@ -3388,14 +3402,14 @@ let _scopeMapping: Record<string, ScopeDefinition> | null = null;
 // while still sharing a process in rare cases. AIDLC_STAGE_GRAPH pattern
 // matches AIDLC_PROJECT_DIR in resolveProjectDir() above.
 function stageGraphPath(): string {
-  return process.env.AIDLC_STAGE_GRAPH ?? join(DATA_DIR, "stage-graph.json");
+  return process.env.AIDLC_STAGE_GRAPH ?? join(resolveDataDir(), "stage-graph.json");
 }
 
 // Exported so the read-only `detect` verb can TELL the composer agent where
 // the runtime scope registry lives (the paths are module-relative to the
 // installed tool, which a prose agent cannot derive itself).
 export function scopeGridPath(): string {
-  return process.env.AIDLC_SCOPE_GRID ?? join(DATA_DIR, "scope-grid.json");
+  return process.env.AIDLC_SCOPE_GRID ?? join(resolveDataDir(), "scope-grid.json");
 }
 
 // scope-mapping.json is retired. It survives ONLY as a test
@@ -3415,7 +3429,9 @@ function scopeMappingPath(): string | null {
 // Exported for the same reason as scopeGridPath: `detect --json` prints it so
 // the composer agent is told the authoritative write target per harness.
 export function scopesDir(): string {
-  return process.env.AIDLC_SCOPES_DIR ?? join(dirname(fileURLToPath(import.meta.url)), "..", "scopes");
+  const moduleRelativePath = join(MODULE_DIR, "..", "scopes");
+  return process.env.AIDLC_SCOPES_DIR
+    ?? resolveModuleOrExecutablePath(moduleRelativePath, "..", "scopes");
 }
 
 export function loadStageGraph(): StageEntry[] {
@@ -3733,7 +3749,9 @@ export interface AgentMetadata {
 // the agent-metadata loader at an isolated tree. Evaluated at call time so
 // tests that set/unset mid-process see the change.
 export function agentsDir(): string {
-  return process.env.AIDLC_AGENTS_DIR ?? join(dirname(fileURLToPath(import.meta.url)), "..", "agents");
+  const moduleRelativePath = join(MODULE_DIR, "..", "agents");
+  return process.env.AIDLC_AGENTS_DIR
+    ?? resolveModuleOrExecutablePath(moduleRelativePath, "..", "agents");
 }
 
 let _agents: AgentMetadata[] | null = null;

@@ -197,13 +197,27 @@ const __FILE_DIR = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__FILE_DIR, "data");
 const DEFAULT_STAGES_DIR = join(__FILE_DIR, "..", "aidlc-common", "stages");
 
+function resolveModuleOrExecutablePath(
+  moduleRelativePath: string,
+  ...executableRelativeSegments: string[]
+): string {
+  return existsSync(moduleRelativePath)
+    ? moduleRelativePath
+    : join(dirname(process.execPath), ...executableRelativeSegments);
+}
+
+function resolveDataDir(): string {
+  return resolveModuleOrExecutablePath(DATA_DIR, "data");
+}
+
 /** Resolve the stages directory. AIDLC_STAGES_DIR env-var seam mirrors
  *  AIDLC_RULES_DIR + AIDLC_SENSORS_DIR so t89's fixture-driven import
  *  tests can isolate from the real stages tree (e.g., zero-sensors
  *  scenarios where no stage may declare any imports). Evaluated at call
  *  time. */
 function stagesDir(): string {
-  return process.env.AIDLC_STAGES_DIR ?? DEFAULT_STAGES_DIR;
+  return process.env.AIDLC_STAGES_DIR
+    ?? resolveModuleOrExecutablePath(DEFAULT_STAGES_DIR, "..", "aidlc-common", "stages");
 }
 
 /** Resolve the stage-graph.json path. Mirrors lib.ts:loadStageGraph()'s
@@ -211,7 +225,7 @@ function stagesDir(): string {
  *  loader and compile-check at a temp file. Evaluated at call time so tests
  *  that set/unset the env mid-process see the change. */
 function stageGraphPath(): string {
-  return process.env.AIDLC_STAGE_GRAPH ?? join(DATA_DIR, "stage-graph.json");
+  return process.env.AIDLC_STAGE_GRAPH ?? join(resolveDataDir(), "stage-graph.json");
 }
 
 // The relocated method ("memory") is harness-neutral and lives at the
@@ -300,7 +314,7 @@ export function memoryTemplatesDir(projectDir: string, space?: string): string {
  *  falls through to the floor. AIDLC_FRAMEWORK_TEMPLATES_DIR is a test/relocation
  *  seam mirroring AIDLC_TEMPLATES_DIR. */
 export function frameworkTemplatesDir(): string {
-  return process.env.AIDLC_FRAMEWORK_TEMPLATES_DIR ?? join(DATA_DIR, "templates");
+  return process.env.AIDLC_FRAMEWORK_TEMPLATES_DIR ?? join(resolveDataDir(), "templates");
 }
 
 /** Engine-only-install self-heal: the ENGINE-BUNDLED method ("memory") seed — the
@@ -313,7 +327,7 @@ export function frameworkTemplatesDir(): string {
  *  like frameworkTemplatesDir, so it is harness-correct on every harness.
  *  AIDLC_MEMORY_SEED_DIR is a test/relocation seam mirroring AIDLC_FRAMEWORK_TEMPLATES_DIR. */
 export function frameworkMemorySeedDir(): string {
-  return process.env.AIDLC_MEMORY_SEED_DIR ?? join(DATA_DIR, "memory-seed");
+  return process.env.AIDLC_MEMORY_SEED_DIR ?? join(resolveDataDir(), "memory-seed");
 }
 
 /** Resolve the sensors directory. AIDLC_SENSORS_DIR env-var seam mirrors
@@ -328,7 +342,7 @@ function sensorsDir(): string {
  *  point `compile --check` at a tempfile without touching the real grid.
  *  Evaluated at call time so tests that set/unset mid-process see it. */
 function scopeGridPath(): string {
-  return process.env.AIDLC_SCOPE_GRID ?? join(DATA_DIR, "scope-grid.json");
+  return process.env.AIDLC_SCOPE_GRID ?? join(resolveDataDir(), "scope-grid.json");
 }
 
 let _graph: GraphStage[] | null = null;

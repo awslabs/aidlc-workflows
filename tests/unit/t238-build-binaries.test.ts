@@ -1,5 +1,6 @@
 // covers: file:scripts/build-binaries.ts, tool:aidlc, subcommand:aidlc-utility:version
 // covers: subcommand:aidlc-utility:plugin-sync
+// covers: subcommand:aidlc-utility:doctor
 //
 // Native-only unit coverage for the release binary builder. The cross-target
 // matrix, including Bun's Windows .exe append behavior, is intentionally left
@@ -119,6 +120,13 @@ describe("t238 build-binaries release builder", () => {
     expect(delegatePluginSync.stderr).not.toContain("Cannot find module");
     expect(delegatePluginSync.stderr).not.toContain("/$bunfs/");
 
+    const delegateDoctorData = gate(native, "delegate-doctor-data");
+    expect(delegateDoctorData.ok).toBe(true);
+    expect(delegateDoctorData.stdout).toContain("AI-DLC Health Check");
+    expect(`${delegateDoctorData.stdout ?? ""}${delegateDoctorData.stderr ?? ""}`).not.toMatch(
+      /Cannot find module|\/\$bunfs\/|ENOENT/,
+    );
+
     const rerun = spawnSync(native.artifact, ["version"], {
       cwd: tmpdir(),
       encoding: "utf-8",
@@ -136,6 +144,17 @@ describe("t238 build-binaries release builder", () => {
     expect(pluginSync.stdout ?? "").toBe("no installed plugins; nothing to sync\n");
     expect(`${pluginSync.stdout ?? ""}${pluginSync.stderr ?? ""}`).not.toContain("Cannot find module");
     expect(`${pluginSync.stdout ?? ""}${pluginSync.stderr ?? ""}`).not.toContain("/$bunfs/");
+
+    const doctor = spawnSync(native.artifact, ["doctor"], {
+      cwd: tmpdir(),
+      encoding: "utf-8",
+      timeout: 30_000,
+    });
+    expect(doctor.status === 0 || doctor.status === 1).toBe(true);
+    expect(doctor.stdout ?? "").toContain("AI-DLC Health Check");
+    expect(`${doctor.stdout ?? ""}${doctor.stderr ?? ""}`).not.toMatch(
+      /Cannot find module|\/\$bunfs\/|ENOENT/,
+    );
 
     const utility = spawnSync(BUN, [UTILITY_TS, "version"], {
       cwd: tmpdir(),
@@ -164,6 +183,10 @@ describe("t238 build-binaries release builder", () => {
           "  process.stdout.write(\"aidlc fake help\\n\");",
           "  process.exit(0);",
           "}",
+          "if (verb === \"doctor\") {",
+          "  process.stderr.write(\"ENOENT: /$bunfs/root/data/stage-graph.json\\n\");",
+          "  process.exit(1);",
+          "}",
           "process.stderr.write(\"unknown fake command\\n\");",
           "process.exit(2);",
           "",
@@ -188,6 +211,11 @@ describe("t238 build-binaries release builder", () => {
       const delegatePluginSync = gate(native, "delegate-plugin-sync");
       expect(delegatePluginSync.ok).toBe(false);
       expect(result.stderr).toContain("delegate-plugin-sync gate failed");
+
+      const delegateDoctorData = gate(native, "delegate-doctor-data");
+      expect(delegateDoctorData.ok).toBe(false);
+      expect(delegateDoctorData.actual).toBe("ENOENT");
+      expect(result.stderr).toContain("delegate-doctor-data gate failed");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -297,6 +297,17 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     expect(r.status).toBe(1); // STRONGER: failing check exits 1
   });
 
+  test("6b: missing stage graph is reported without crashing doctor", () => {
+    const p = track(createTestProject());
+    const missingGraph = join(p, "missing-stage-graph.json");
+    const r = doctor(p, { AIDLC_STAGE_GRAPH: missingGraph });
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("AI-DLC Health Check");
+    expect(r.out).toContain("Paired sensor coverage: check failed");
+    expect(r.out).toContain(`Stage graph not readable at ${missingGraph}`);
+    expect(r.out).not.toContain('{"error":');
+  });
+
   test("7: orphan files happy -> graph entries all have files", () => {
     const p = track(createTestProject());
     const r = doctor(p);
