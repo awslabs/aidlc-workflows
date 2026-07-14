@@ -48,7 +48,12 @@ export type EmitContext = {
   check: boolean;
 };
 
-/** The result of an emit() run: the files it owns, for the orphan scan + --check. */
+/**
+ * The result of an emit() run. The packager no longer consumes it - the
+ * generated-file inventory and the orphan scan derive from a full walk of the
+ * dist root - but emit plugins still return it as a self-describing record of
+ * what they produced.
+ */
 export type EmitResult = {
   /** Absolute paths the emit plugin wrote (or would write under --check). */
   written: string[];
