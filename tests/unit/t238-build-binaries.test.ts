@@ -1,4 +1,5 @@
 // covers: file:scripts/build-binaries.ts, tool:aidlc, subcommand:aidlc-utility:version
+// covers: subcommand:aidlc-utility:plugin-sync
 //
 // Native-only unit coverage for the release binary builder. The cross-target
 // matrix, including Bun's Windows .exe append behavior, is intentionally left
@@ -35,6 +36,9 @@ type RunResult = {
 type GateResult = {
   name: string;
   ok: boolean;
+  status?: number | null;
+  stdout?: string;
+  stderr?: string;
   actual?: string | number;
   expected?: string | number;
 };
@@ -93,7 +97,7 @@ function stampedVersion(stdout: string): string {
 }
 
 describe("t238 build-binaries release builder", () => {
-  test("native build compiles, gates, records results, and reruns version from /tmp", () => {
+  test("native build compiles, gates, and runs version plus a delegate from /tmp", () => {
     const result = runBuild();
     expect(result.error).toBeUndefined();
     expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -109,6 +113,12 @@ describe("t238 build-binaries release builder", () => {
     expect(version.ok).toBe(true);
     expect(version.actual).toBe(AIDLC_VERSION);
 
+    const delegatePluginSync = gate(native, "delegate-plugin-sync");
+    expect(delegatePluginSync.ok).toBe(true);
+    expect(delegatePluginSync.actual).toBe("no installed plugins; nothing to sync");
+    expect(delegatePluginSync.stderr).not.toContain("Cannot find module");
+    expect(delegatePluginSync.stderr).not.toContain("/$bunfs/");
+
     const rerun = spawnSync(native.artifact, ["version"], {
       cwd: tmpdir(),
       encoding: "utf-8",
@@ -116,6 +126,16 @@ describe("t238 build-binaries release builder", () => {
     });
     expect(rerun.status).toBe(0);
     expect(stampedVersion(rerun.stdout ?? "")).toBe(AIDLC_VERSION);
+
+    const pluginSync = spawnSync(native.artifact, ["plugin", "sync"], {
+      cwd: tmpdir(),
+      encoding: "utf-8",
+      timeout: 30_000,
+    });
+    expect(pluginSync.status).toBe(0);
+    expect(pluginSync.stdout ?? "").toBe("no installed plugins; nothing to sync\n");
+    expect(`${pluginSync.stdout ?? ""}${pluginSync.stderr ?? ""}`).not.toContain("Cannot find module");
+    expect(`${pluginSync.stdout ?? ""}${pluginSync.stderr ?? ""}`).not.toContain("/$bunfs/");
 
     const utility = spawnSync(BUN, [UTILITY_TS, "version"], {
       cwd: tmpdir(),
@@ -164,6 +184,10 @@ describe("t238 build-binaries release builder", () => {
       expect(version.ok).toBe(false);
       expect(version.actual).toBe("0.0.0");
       expect(version.expected).toBe(AIDLC_VERSION);
+
+      const delegatePluginSync = gate(native, "delegate-plugin-sync");
+      expect(delegatePluginSync.ok).toBe(false);
+      expect(result.stderr).toContain("delegate-plugin-sync gate failed");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

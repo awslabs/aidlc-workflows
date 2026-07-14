@@ -49,7 +49,7 @@ Reviewers are now verifiers: every declared review runs under an explicit **adve
 
 ## [2.3.16] - 2026-07-14
 
-New config get/list and plugin list/sync commands land in the dispatcher grammar, `init` changes meaning for a transition release by returning a loud error instead of silently creating an intent, and the future `init` will scaffold the project from the installed harness dist. The plugin hook now prefers an installed `aidlc` binary before falling back to direct bun compose.
+New config get/list and plugin list/sync commands land in the dispatcher grammar, `init` changes meaning for a transition release by returning a loud error instead of silently creating an intent, and the future `init` will scaffold the project from the installed harness dist. Native binaries now embed dispatcher delegates, and the plugin hook safely falls back to direct bun compose.
 
 * New `/aidlc config get <key>` command for `depth` and `test-strategy`.
 * New `/aidlc config list` command, with `/aidlc config list --json` emitting `{"depth":...,"test-strategy":...}`.
@@ -57,7 +57,9 @@ New config get/list and plugin list/sync commands land in the dispatcher grammar
 * New `/aidlc plugin list` command, with `/aidlc plugin list --json` emitting installed plugin names, enabled state, and `selectionActive`.
 * New `/aidlc plugin sync` command composes installed plugin roots by running each plugin's `hooks/compose.ts`; with no installed plugin trees it exits 0 with `no installed plugins; nothing to sync`.
 * `/aidlc init` now errors with `init now lays down the project data tree and is not yet available in this release. To start work, describe what to build: /aidlc "build the auth service".`
-* Plugin SessionStart hooks now probe for `aidlc` on `PATH` first and run `aidlc plugin sync`, then fall back to the existing bun plus `hooks/compose.ts` command, and still skip cleanly when neither executable is available.
+* Plugin SessionStart hooks now probe for `aidlc` on `PATH` first and run `aidlc plugin sync`; a nonzero result falls back to the existing bun plus `hooks/compose.ts` command, and the hook still skips cleanly when neither executable is available.
+* Native `aidlc` binaries now statically embed all 15 dispatcher delegate modules, so routed commands reach their handlers instead of failing with a missing module error.
+* Native binary builds now gate a real `plugin sync` delegate in addition to inline version and help routes, catching missing compiled delegate modules before release.
 * Migration note for stale `init` callers: describe what to build instead, for example `/aidlc "build the auth service"`.
 
 ## [2.3.15] - 2026-07-14
@@ -66,13 +68,14 @@ Workspace nouns gained real verbs (`list`, `switch`, `create`, and `birth`) whil
 
 * `/aidlc space create teamB` now creates space `teamB`; previously it attempted to switch to a space named `create`. The legacy `/aidlc space-create teamB` spelling still works.
 * `/aidlc space list` now lists spaces, and `/aidlc space list --json` or `/aidlc space --json` emits the existing structured space listing.
-* `/aidlc space switch teamB` now explicitly switches to `teamB`; bare `/aidlc space teamB` still switches as before. `/aidlc space create` and `/aidlc space switch` now return usage errors instead of treating the verb as a name.
+* `/aidlc space switch teamB` now explicitly switches to `teamB` through both the engine and dispatcher without reinterpreting a verb-shaped name; bare `/aidlc space teamB` still switches as before. `/aidlc space create` and `/aidlc space switch` now return usage errors instead of treating the verb as a name.
 * `/aidlc intent list` now lists intents, and `/aidlc intent list --json` or `/aidlc intent --json` emits the existing structured intent listing.
-* `/aidlc intent switch list` now explicitly switches to an existing intent whose slug is `list`; bare `/aidlc intent <name>` still switches as before. `/aidlc intent switch` now returns a usage error instead of switching to `switch`.
+* `/aidlc intent switch list` now preserves the explicit `switch` token through both the engine and dispatcher, so existing intents named `list` or `birth` are selected instead of listing or creating records; bare `/aidlc intent <name>` still switches as before. `/aidlc intent switch` now returns a usage error instead of switching to `switch`.
 * `/aidlc intent birth --scope poc --label x` now forwards the remaining flags to `intent-birth`; previously the terminal workspace branch collapsed the command to `intent birth` and lost the flags.
 * `/aidlc intent archive foo`, `/aidlc intent rename foo`, `/aidlc intent show foo`, and the matching `space` forms now return "reserved for a future workspace verb and is not implemented yet" with guidance to use explicit `switch` to reach an existing record with that name.
 * New intent labels and space names may not be `help`, current workspace verbs, or reserved future verbs; creation fails with a reserved-name message asking for a descriptive label or team name. Existing records with those names remain reachable via explicit `intent switch <name>` or `space switch <name>`, and doctor reports them as an advisory.
 * Kiro CLI `/aidlc` verb interception now keeps double-quoted names as one argv token, so `/aidlc space create "My Space"` reaches the utility as one name.
+* The runtime compile recursion guard now rejects `aidlc runtime` only at the start of a shell command segment; prose such as `--user-input "aidlc runtime notes"` no longer suppresses recompilation after a real state transition.
 
 ## [2.3.10] - 2026-07-14
 

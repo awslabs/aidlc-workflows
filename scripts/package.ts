@@ -899,7 +899,7 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
   // executable, exit 0 with a note rather than running a non-existent binary.
   const aidlcExpr =
     'AIDLC=$(command -v aidlc 2>/dev/null || true); ' +
-    `[ -n "$AIDLC" ] && { AIDLC_HARNESS_DIR=${harnessLeaf} "$AIDLC" plugin sync; exit $?; }; `;
+    `[ -n "$AIDLC" ] && { AIDLC_HARNESS_DIR=${harnessLeaf} "$AIDLC" plugin sync && exit 0; }; `;
   const bunExpr =
     'BUN=$(command -v bun 2>/dev/null || true); ' +
     '[ -z "$BUN" ] && [ -x "$HOME/.bun/bin/bun" ] && BUN="$HOME/.bun/bin/bun"; ' +

@@ -569,7 +569,7 @@ export function workspaceCommandUtilityArgv(command: WorkspaceCommand): string[]
     case "list":
       return command.json ? [command.noun, "--json"] : [command.noun];
     case "switch":
-      return [command.noun, command.name];
+      return [command.noun, "switch", command.name];
     case "create":
       return ["space-create", command.name];
     case "birth":
@@ -827,9 +827,12 @@ export function isEngineEngagementSegment(seg: string): boolean {
 export function classifyRuntimeCompileCommand(
   command: string,
 ): "reject" | "fire" | "pass" {
+  const invokesRuntime = command
+    .split(/&&|\|\||[;|\n]/)
+    .some((segment) => /^\s*aidlc\s+runtime\b/.test(segment));
   if (
     /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-runtime\.ts\b/.test(command) ||
-    /\baidlc\s+runtime\b/.test(command)
+    invokesRuntime
   ) {
     return "reject";
   }

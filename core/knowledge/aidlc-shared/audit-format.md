@@ -14,7 +14,7 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| ✓ `WORKFLOW_STARTED` | Scope determined, workflow begins | Timestamp, Scope, Request | `tools/aidlc-utility.ts init` |
+| ✓ `WORKFLOW_STARTED` | Scope determined, workflow begins | Timestamp, Scope, Request | `tools/aidlc-utility.ts intent-birth` |
 | ✓ `WORKFLOW_COMPLETED` | All in-scope stages done | Timestamp, Scope, Details | `tools/aidlc-state.ts complete-workflow` |
 | ✓ `WORKFLOW_PARKED` | Workflow parked mid-flow for a later session (no stage advanced) | Stage, Timestamp | `tools/aidlc-state.ts park` |
 | ✓ `WORKFLOW_UNPARKED` | Park marker cleared on explicit `--resume` re-entry | Timestamp | `tools/aidlc-state.ts unpark` |
@@ -23,19 +23,19 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| ✓ `PHASE_STARTED` | Phase begins (first in-scope stage about to run) | Timestamp, Phase, Stage count, Scope | `tools/aidlc-utility.ts init` (Init phase), `tools/aidlc-state.ts advance` (phase boundary) |
+| ✓ `PHASE_STARTED` | Phase begins (first in-scope stage about to run) | Timestamp, Phase, Stage count, Scope | `tools/aidlc-utility.ts intent-birth` (Init phase), `tools/aidlc-state.ts advance` (phase boundary) |
 | ✓ `PHASE_COMPLETED` | Crossed a phase boundary | Timestamp, From phase, To phase, Stages completed | `tools/aidlc-state.ts advance`, `tools/aidlc-state.ts complete-workflow` |
 | `PHASE_VERIFIED` | Traceability check at boundary | Timestamp, Phase boundary, Pass/fail, Issues | `tools/aidlc-state.ts advance`, `tools/aidlc-state.ts complete-workflow` |
-| `PHASE_SKIPPED` | Scope excludes phase | Timestamp, Phase, Scope, Reason | `tools/aidlc-utility.ts init` (per-phase scope eval) |
+| `PHASE_SKIPPED` | Scope excludes phase | Timestamp, Phase, Scope, Reason | `tools/aidlc-utility.ts intent-birth` (per-phase scope eval) |
 
 ### Stage Lifecycle (6 events)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| ✓ `STAGE_STARTED` | Stage enters `[-]` Active | Timestamp, Stage, Agent | `tools/aidlc-state.ts advance`, `tools/aidlc-utility.ts init` (init stages) |
+| ✓ `STAGE_STARTED` | Stage enters `[-]` Active | Timestamp, Stage, Agent | `tools/aidlc-state.ts advance`, `tools/aidlc-utility.ts intent-birth` (init stages) |
 | `STAGE_AWAITING_APPROVAL` | Stage enters `[?]` (gate open) | Timestamp, Stage, Artifacts, optional `Recovered=true` (backfilled gate row) | `tools/aidlc-state.ts gate-start` (organic, or `--recovered` backfill), `tools/aidlc-state.ts revise` (gate re-entry), `tools/aidlc-state.ts reject` (backfill when gate-start was skipped), `tools/aidlc-state.ts approve` (backstop re-entry row after a backfilled revision) |
 | `STAGE_REVISING` | Stage enters `[R]` (user rejected gate) | Timestamp, Stage, Revision count, Feedback, optional `Recovered=true` (backfilled by the approve-time revision backstop) | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill) |
-| ✓ `STAGE_COMPLETED` | Stage finishes (`[x]`) | Timestamp, Stage, Details, Artifacts | `tools/aidlc-state.ts approve` (gated stages; also auto-advances to next), `tools/aidlc-state.ts advance` (non-gated stages), `tools/aidlc-utility.ts init` (init stages) |
+| ✓ `STAGE_COMPLETED` | Stage finishes (`[x]`) | Timestamp, Stage, Details, Artifacts | `tools/aidlc-state.ts approve` (gated stages; also auto-advances to next), `tools/aidlc-state.ts advance` (non-gated stages), `tools/aidlc-utility.ts intent-birth` (init stages) |
 | `STAGE_JUMPED` | Forward/backward/redo jump target reached | Timestamp, Direction, Source, Target, Scope | `tools/aidlc-jump.ts execute` |
 | `STAGE_SKIPPED` | Stage skipped during jump (`[S]`) | Timestamp, Stage, Reason | `tools/aidlc-jump.ts execute`, `tools/aidlc-state.ts skip` |
 

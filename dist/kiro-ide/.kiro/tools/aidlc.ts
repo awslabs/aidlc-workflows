@@ -513,6 +513,10 @@ function handleWorkspace(argv: string[]): Action {
   }
   const utilityArgv = workspaceCommandUtilityArgv(command);
   if (utilityArgv === null) return nounError(argv[0], argv[1]);
+  const projectDirIndex = argv.indexOf("--project-dir");
+  if (projectDirIndex >= 0 && !utilityArgv.includes("--project-dir")) {
+    utilityArgv.push(...argv.slice(projectDirIndex, projectDirIndex + 2));
+  }
   return { type: "delegate", tool: TOOLS.utility, args: utilityArgv };
 }
 
@@ -707,10 +711,51 @@ function runDelegateDev(tool: string, args: string[]): number {
   }
 }
 
+type DelegateModule = {
+  main(argv: string[]): void | Promise<void>;
+};
+
+async function loadDelegate(tool: string): Promise<DelegateModule | null> {
+  switch (tool) {
+    case TOOLS.audit:
+      return import("./aidlc-audit.ts");
+    case TOOLS.bolt:
+      return import("./aidlc-bolt.ts");
+    case TOOLS.graph:
+      return import("./aidlc-graph.ts");
+    case TOOLS.jump:
+      return import("./aidlc-jump.ts");
+    case TOOLS.learnings:
+      return import("./aidlc-learnings.ts");
+    case TOOLS.log:
+      return import("./aidlc-log.ts");
+    case TOOLS.orchestrate:
+      return import("./aidlc-orchestrate.ts");
+    case TOOLS.runnerGen:
+      return import("./aidlc-runner-gen.ts");
+    case TOOLS.runtime:
+      return import("./aidlc-runtime.ts");
+    case TOOLS.sensor:
+      return import("./aidlc-sensor.ts");
+    case TOOLS.state:
+      return import("./aidlc-state.ts");
+    case TOOLS.swarm:
+      return import("./aidlc-swarm.ts");
+    case TOOLS.utility:
+      return import("./aidlc-utility.ts");
+    case TOOLS.validate:
+      return import("./aidlc-validate.ts");
+    case TOOLS.worktree:
+      return import("./aidlc-worktree.ts");
+    default:
+      return null;
+  }
+}
+
 async function runDelegateInProcess(tool: string, args: string[]): Promise<number> {
   try {
-    const mod = await import(pathToFileURL(toolPath(tool)).href);
-    if (typeof mod.main !== "function") {
+    const mod = await loadDelegate(tool);
+    if (mod === null || typeof mod.main !== "function") {
       text(2, `${JSON.stringify({ error: `${tool} does not export main(argv)` })}\n`);
       return 1;
     }

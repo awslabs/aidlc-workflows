@@ -125,8 +125,9 @@ function entriesUnder(root: string): string[] {
 function materializedCompiledDispatcher(): string {
   if (compiledDispatcher) return compiledDispatcher;
   compiledRoot = mkdtempSync(join(tmpdir(), "aidlc-t230-"));
-  const targetTools = join(compiledRoot, "$bunfs", "tools");
-  mkdirSync(dirname(targetTools), { recursive: true });
+  const targetRoot = join(compiledRoot, "$bunfs");
+  const targetTools = join(targetRoot, "tools");
+  cpSync(join(REPO_ROOT, "dist", "claude", ".claude"), targetRoot, { recursive: true });
   cpSync(CORE_TOOLS_DIR, targetTools, { recursive: true });
   compiledDispatcher = join(targetTools, "aidlc.ts");
   return compiledDispatcher;
@@ -255,7 +256,7 @@ describe("t230 dispatcher route parity", () => {
       name: "intent switch maps through workspace parser",
       routerArgs: ["intent", "switch", "fixture-8000000000000001"],
       tool: "aidlc-utility.ts",
-      toolArgs: ["intent", "fixture-8000000000000001"],
+      toolArgs: ["intent", "switch", "fixture-8000000000000001"],
       fixture: true,
     },
     {
@@ -275,7 +276,7 @@ describe("t230 dispatcher route parity", () => {
       name: "space switch maps through workspace parser",
       routerArgs: ["space", "switch", "default"],
       tool: "aidlc-utility.ts",
-      toolArgs: ["space", "default"],
+      toolArgs: ["space", "switch", "default"],
       fixture: true,
     },
     {

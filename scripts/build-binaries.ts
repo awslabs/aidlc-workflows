@@ -16,6 +16,7 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -254,6 +255,26 @@ function helpGate(artifact: string): GateResult {
   );
 }
 
+function delegatePluginSyncGate(artifact: string): GateResult {
+  const result = run(artifact, ["plugin", "sync"], { cwd: tmpdir(), timeoutMs: 30_000 });
+  const output = `${result.stdout}\n${result.stderr}`;
+  const moduleError = /Cannot find module|\/\$bunfs\//.test(output);
+  const actual = result.stdout.trim();
+  return commandGate(
+    "delegate-plugin-sync",
+    result,
+    !result.error &&
+      result.status === 0 &&
+      actual === "no installed plugins; nothing to sync" &&
+      !moduleError,
+    {
+      expected: "no installed plugins; nothing to sync",
+      actual: actual || result.stderr.trim(),
+      detail: "runs a real utility delegate from the compiled artifact",
+    },
+  );
+}
+
 function pathlessVersionGate(artifact: string): GateResult {
   const result = run(artifact, ["version"], {
     cwd: tmpdir(),
@@ -280,35 +301,33 @@ function markerFreeBunSpawnLine(line: string): boolean {
 }
 
 function devSpawnGrepGate(entry: string): GateResult {
-  const result = run(process.execPath, ["build", entry, "--target=bun"], {
-    cwd: REPO_ROOT,
-    timeoutMs: 60_000,
-  });
-  if (result.status !== 0 || result.error) {
-    return commandGate("dev-spawn-grep", result, false, {
-      detail: "could not build the text bundle used for dev-spawn inspection",
-    });
+  let source: string;
+  try {
+    source = readFileSync(entry, "utf-8");
+  } catch (error) {
+    return {
+      name: "dev-spawn-grep",
+      ok: false,
+      kind: "inspection",
+      expected: "readable dispatcher source",
+      actual: String(error),
+    };
   }
-
-  const badLines = result.stdout
+  const badLines = source
     .split(/\r?\n/)
     .filter(markerFreeBunSpawnLine)
     .slice(0, 10);
-  const markerPresent = result.stdout.includes(DEV_SPAWN_MARKER);
+  const markerPresent = source.includes(DEV_SPAWN_MARKER);
   return {
     name: "dev-spawn-grep",
-    ok: badLines.length === 0,
+    ok: markerPresent && badLines.length === 0,
     kind: "inspection",
-    command: result.command,
-    cwd: result.cwd,
-    status: result.status,
-    stderr: result.stderr,
-    expected: "no marker-free literal bun spawn in the text bundle",
+    expected: "no marker-free literal bun spawn in the dispatcher source",
     actual: badLines.length,
     detail:
-      `bundleBytes=${result.stdout.length}; markerPresentInBundle=${markerPresent}; ` +
-      `badLines=${JSON.stringify(badLines)}; inline comments may be stripped by Bun, ` +
-      "so pathless-version is the runtime fallback gate for the native version path",
+      `sourceBytes=${source.length}; markerPresentInSource=${markerPresent}; ` +
+      `badLines=${JSON.stringify(badLines)}; pathless-version is the runtime gate ` +
+      "for the native version path",
   };
 }
 
@@ -382,6 +401,7 @@ function buildTarget(target: TargetConfig): TargetResult {
   if (target.name === "native") {
     result.gates.push(versionGate(actual.artifact));
     result.gates.push(helpGate(actual.artifact));
+    result.gates.push(delegatePluginSyncGate(actual.artifact));
     result.gates.push(devSpawnGrepGate(ENTRY));
     result.gates.push(pathlessVersionGate(actual.artifact));
   } else {

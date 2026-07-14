@@ -1,5 +1,6 @@
 // covers: subcommand:aidlc-utility:space, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space-create
-// covers: function:parseWorkspaceCommand, function:classifyTerminalCommand, function:RESERVED_RECORD_NAMES
+// covers: function:parseWorkspaceCommand, function:workspaceCommandUtilityArgv, function:classifyTerminalCommand
+// covers: function:RESERVED_RECORD_NAMES
 // covers: function:splitDoubleQuotedArgs
 
 import { describe, expect, test } from "bun:test";
@@ -22,11 +23,14 @@ import {
   RESERVED_RECORD_NAME_LIST,
   RESERVED_RECORD_NAMES,
   splitDoubleQuotedArgs,
+  workspaceCommandUtilityArgv,
 } from "../../core/tools/aidlc-lib.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc.ts");
 const ORCH = join(REPO_ROOT, "core", "tools", "aidlc-orchestrate.ts");
 const UTIL = join(REPO_ROOT, "core", "tools", "aidlc-utility.ts");
+const CORE_TOOLS_DIR = join(REPO_ROOT, "core", "tools");
 const DIST_DATA = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "data");
 const TOOL_ENV = {
   AIDLC_STAGE_GRAPH: join(DIST_DATA, "stage-graph.json"),
@@ -61,6 +65,22 @@ function runUtility(projectDir: string, args: string[]): { status: number; stdou
   const stdout = r.stdout ?? "";
   const stderr = r.stderr ?? "";
   return { status: r.status ?? -1, stdout, stderr, out: stdout + stderr };
+}
+
+function runDispatcher(cwd: string, args: string[]): { status: number; stdout: string; stderr: string } {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...TOOL_ENV,
+    AIDLC_DISPATCH_TOOLS_DIR: CORE_TOOLS_DIR,
+  };
+  delete env.CLAUDE_PROJECT_DIR;
+  const r = spawnSync("bun", [DISPATCHER, ...args], {
+    cwd,
+    encoding: "utf-8",
+    env,
+    timeout: 30_000,
+  });
+  return { status: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
 function directive(projectDir: string, args: string[]): Record<string, string> {
@@ -150,6 +170,17 @@ describe("parseWorkspaceCommand", () => {
     });
   });
 
+  test("utility argv keeps the explicit switch token for verb-shaped names", () => {
+    const command = parseWorkspaceCommand(["intent", "switch", "birth"]);
+    expect(command).toEqual({
+      kind: "switch",
+      noun: "intent",
+      name: "birth",
+      explicit: true,
+    });
+    expect(workspaceCommandUtilityArgv(command)).toEqual(["intent", "switch", "birth"]);
+  });
+
   test("migration delta missing-name and reserved-future verbs are errors, not sugar switches", () => {
     expect(parseWorkspaceCommand(["space", "create"])).toMatchObject({
       kind: "error",
@@ -207,18 +238,18 @@ describe("classifier and next parser parity", () => {
   test("workspace migration rows render the same utility subcommand at both call sites", () => {
     const rows: Array<{ args: string[]; invocation: string }> = [
       { args: ["space"], invocation: "space" },
-      { args: ["space", "teamB"], invocation: "space teamB" },
+      { args: ["space", "teamB"], invocation: "space switch teamB" },
       { args: ["space", "create", "teamB"], invocation: "space-create teamB" },
       { args: ["space", "list"], invocation: "space" },
       { args: ["space", "list", "--json"], invocation: "space --json" },
-      { args: ["space", "switch", "teamB"], invocation: "space teamB" },
+      { args: ["space", "switch", "teamB"], invocation: "space switch teamB" },
       { args: ["space-create", "teamB"], invocation: "space-create teamB" },
-      { args: ["intent", "some-slug"], invocation: "intent some-slug" },
+      { args: ["intent", "some-slug"], invocation: "intent switch some-slug" },
       { args: ["intent", "list"], invocation: "intent" },
       { args: ["intent", "list", "--json"], invocation: "intent --json" },
-      { args: ["intent", "switch", "list"], invocation: "intent list" },
+      { args: ["intent", "switch", "list"], invocation: "intent switch list" },
       { args: ["intent", "birth", "--scope", "poc", "--label", "x"], invocation: "intent-birth --scope poc --label x" },
-      { args: ["space", "foo", "--status"], invocation: "space foo" },
+      { args: ["space", "foo", "--status"], invocation: "space switch foo" },
     ];
     for (const row of rows) {
       const cmd = classifyTerminalCommand(row.args);
@@ -274,14 +305,14 @@ describe("classifier and next parser parity", () => {
     const cmd = classifyTerminalCommand(["space", "foo", "--status"]);
     expect(cmd).toEqual({
       subcommand: "space",
-      arg: "foo",
+      args: ["switch", "foo"],
       source: "workspace-verb",
     });
     const projectDir = scratchProject();
     try {
       const d = directive(projectDir, ["space", "foo", "--status"]);
       expect(d.kind).toBe("print");
-      expect(d.message).toContain("aidlc-utility.ts space foo");
+      expect(d.message).toContain("aidlc-utility.ts space switch foo");
       expect(d.message).not.toContain("aidlc-utility.ts status");
     } finally {
       cleanup(projectDir);
@@ -319,14 +350,29 @@ describe("utility handlers and reservation chokepoints", () => {
     }
   });
 
-  test("intent switch can reach a pre-existing intent whose slug is now a verb", () => {
+  test("engine and dispatcher switch to a verb-named intent without birthing", () => {
     const projectDir = scratchProject();
     try {
-      seedIntent(projectDir, "list", "260711-list");
-      const r = runUtility(projectDir, ["intent", "switch", "list"]);
+      seedIntent(projectDir, "birth", "260711-birth");
+      const registry = join(projectDir, "aidlc", "spaces", "default", "intents", "intents.json");
+      const before = readFileSync(registry, "utf-8");
+
+      const d = directive(projectDir, ["intent", "switch", "birth"]);
+      expect(d.kind).toBe("print");
+      expect(d.message).toContain("aidlc-utility.ts intent switch birth");
+
+      const r = runDispatcher(REPO_ROOT, [
+        "intent",
+        "switch",
+        "birth",
+        "--project-dir",
+        projectDir,
+      ]);
       expect(r.status).toBe(0);
       expect(r.stdout).toContain("Active intent");
-      expect(readFileSync(join(projectDir, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim()).toBe("260711-list");
+      expect(r.stderr).toBe("");
+      expect(readFileSync(registry, "utf-8")).toBe(before);
+      expect(readFileSync(join(projectDir, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim()).toBe("260711-birth");
     } finally {
       cleanup(projectDir);
     }

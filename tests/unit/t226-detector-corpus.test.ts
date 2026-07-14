@@ -741,6 +741,12 @@ describe("detector corpus", () => {
     expect(classifyRuntimeCompileCommand(" aidlc state approve")).toBe("fire");
 
     expect(classifyRuntimeCompileCommand("aidlc runtime compile")).toBe("reject");
+    expect(classifyRuntimeCompileCommand("cd x && aidlc runtime compile")).toBe("reject");
+    expect(
+      classifyRuntimeCompileCommand(
+        'aidlc state approve application-design --user-input "aidlc runtime notes"',
+      ),
+    ).toBe("fire");
   });
 
   test("new top-level park is intentional engagement", () => {
