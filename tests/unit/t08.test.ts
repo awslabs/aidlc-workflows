@@ -142,8 +142,6 @@ function proj(): string {
 const statePath = (p: string): string => join(seededRecordDir(p), "aidlc-state.md");
 const recoveryPath = (p: string): string =>
   join(seededRecordDir(p), ".aidlc-recovery.md");
-const heartbeatPath = (p: string): string =>
-  join(seededRecordDir(p), ".aidlc-hooks-health", "validate-state.last");
 // With NO state file the active-intent cursor does not resolve (a record without
 // aidlc-state.md is not honoured), so docsRoot() falls back to the bare SPACE
 // record root — the heartbeat/breadcrumb land there, not under the record.

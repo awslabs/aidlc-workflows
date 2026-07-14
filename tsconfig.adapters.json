@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "dist/codex/.codex/hooks/aidlc-codex-adapter.ts",
+    "dist/kiro/.kiro/hooks/aidlc-kiro-adapter.ts",
+    "dist/kiro-ide/.kiro/hooks/aidlc-kiro-adapter.ts"
+  ],
+  "exclude": []
+}

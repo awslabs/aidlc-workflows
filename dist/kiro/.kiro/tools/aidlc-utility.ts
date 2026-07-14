@@ -476,7 +476,7 @@ function removeListValues(content: string, field: string, values: ReadonlySet<st
   const blockRe = new RegExp(`^${field}:\\n((?:  - .+\\n)*)`, "m");
   const m = content.match(blockRe);
   if (!m) return content;
-  const kept = [...m[1].matchAll(/^  - (.+)$/gm)]
+  const kept = [...m[1].matchAll(/^ {2}- (.+)$/gm)]
     .map((x) => x[1])
     .filter((v) => {
       const bare = v.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
@@ -489,10 +489,10 @@ function removeListValues(content: string, field: string, values: ReadonlySet<st
 }
 
 function removeConsumesEntries(content: string, artifacts: ReadonlySet<string>): string {
-  const blockRe = /^consumes:\n((?:  - artifact:.*\n(?:    (?:required|conditional_on):.*\n)*)*)/m;
+  const blockRe = /^consumes:\n((?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m;
   const m = content.match(blockRe);
   if (!m) return content;
-  const kept = [...m[1].matchAll(/^  - artifact:\s*([\w-]+).*\n(?:    (?:required|conditional_on):.*\n)*/gm)]
+  const kept = [...m[1].matchAll(/^ {2}- artifact:\s*([\w-]+).*\n(?: {4}(?:required|conditional_on):.*\n)*/gm)]
     .filter((entry) => !artifacts.has(entry[1]))
     .map((entry) => entry[0]);
   const replacement = kept.length > 0 ? `consumes:\n${kept.join("")}` : "consumes: []\n";

@@ -29,7 +29,13 @@ function harnessPath(project: string): string {
   return join(project, ".claude", "tools", "data", "harness.json");
 }
 
-function graph(project: string): Array<Record<string, any>> {
+interface GraphStage {
+  slug?: string;
+  enabled?: false;
+  produces?: string[];
+  sensors?: string[];
+}
+function graph(project: string): GraphStage[] {
   return JSON.parse(readFileSync(graphPath(project), "utf-8"));
 }
 

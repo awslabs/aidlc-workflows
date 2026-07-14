@@ -264,6 +264,8 @@ function patchedFiles(command: string): Array<{ path: string; tool: "Write" | "E
 
 // --- Targets ------------------------------------------------------------------
 
+// Keep explicit breaks after process.exit(): Biome does not model Bun's
+// declaration as terminating a switch branch.
 switch (target) {
   case "session-start": {
     reconcilePriorSession();
@@ -281,6 +283,7 @@ switch (target) {
     persistResponse(wrapped, 0);
     if (wrapped) process.stdout.write(wrapped);
     process.exit(0);
+    break;
   }
 
   case "audit-and-sensors": {
@@ -300,6 +303,7 @@ switch (target) {
     }
     persistResponse("", 0);
     process.exit(0);
+    break;
   }
 
   case "state-sync": {
@@ -319,6 +323,7 @@ switch (target) {
     }
     persistResponse("", 0);
     process.exit(0);
+    break;
   }
 
   case "runtime-compile": {
@@ -327,6 +332,7 @@ switch (target) {
     runCore("aidlc-runtime-compile.ts", rawInput);
     persistResponse("", 0);
     process.exit(0);
+    break;
   }
 
   case "validate-state": {
@@ -335,6 +341,7 @@ switch (target) {
     runCore("aidlc-validate-state.ts", rawInput);
     persistResponse("", 0);
     process.exit(0);
+    break;
   }
 
   case "post-compact": {
@@ -350,6 +357,7 @@ switch (target) {
     persistResponse(wrapped, 0);
     if (wrapped) process.stdout.write(wrapped);
     process.exit(0);
+    break;
   }
 
   case "log-subagent": {
@@ -358,6 +366,7 @@ switch (target) {
     runCore("aidlc-log-subagent.ts", rawInput);
     persistResponse("", 0);
     process.exit(0);
+    break;
   }
 
   case "stop": {
@@ -367,6 +376,7 @@ switch (target) {
     persistResponse(r.stdout, r.code);
     if (r.stdout) process.stdout.write(r.stdout);
     process.exit(r.code);
+    break;
   }
 
   case "reviewer-scope": {
@@ -425,6 +435,7 @@ switch (target) {
     }
     persistResponse("", 0);
     process.exit(0);
+    break;
   }
 
   case "mint": {
@@ -442,6 +453,7 @@ switch (target) {
     }
     persistResponse("", 0);
     process.exit(0);
+    break;
   }
 
   default:

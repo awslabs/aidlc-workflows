@@ -77,7 +77,6 @@ import {
   FIXTURES_DIR,
   seedStateFile,
   seededAuditDir,
-  seededRecordDir,
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test

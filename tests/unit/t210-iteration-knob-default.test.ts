@@ -37,8 +37,6 @@ import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
-  DEFAULT_RECORD_DIR,
-  DEFAULT_SPACE,
   resetAidlcEnv,
   seededRecordDir,
   seededStateFile,
@@ -48,8 +46,6 @@ resetAidlcEnv();
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
-
-const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
 const FD_PRODUCES = [
   "business-logic-model",

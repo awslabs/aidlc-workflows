@@ -121,7 +121,7 @@ describe("t172 migration preserves the pre-migration audit trail (B2)", () => {
     const shards = auditShards(proj, intent ?? undefined);
     expect(shards.length).toBeGreaterThan(0);
     for (const s of shards) {
-      expect(s.startsWith(join(record, "audit") + "/")).toBe(true);
+      expect(s.startsWith(`${join(record, "audit")}/`)).toBe(true);
       expect(s.endsWith(".md")).toBe(true);
     }
     // The relocated shard actually holds the migrated content.

@@ -190,9 +190,8 @@ function arrayLiteralBodies(code: string): string[] {
 function literalScopeNames(body: string): string[] {
   const names = new Set<string>();
   const re = /(["'`])((?:\\.|(?!\1)[\s\S])*?)\1/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(body)) !== null) {
-    const value = match[2];
+  for (const m of body.matchAll(re)) {
+    const value = m[2];
     if ((CORE_SCOPE_NAMES as readonly string[]).includes(value)) names.add(value);
   }
   return [...names].sort();

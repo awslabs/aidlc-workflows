@@ -94,8 +94,8 @@ describe("t204 doctor compose-marker probe", () => {
     // Advisory pass: check-mark row, ", fresh" label, and NO fix text appended
     // (only fail rows carry the remediation) - a live gate in a second
     // terminal must not contribute to a non-zero doctor exit.
-    expect(out).toMatch(new RegExp(`\\u2713\\s+Compose marker present \\(.*fresh\\)`));
-    expect(out).not.toMatch(new RegExp(`\\u2717\\s+Compose marker present`));
+    expect(out).toMatch(/\u2713\s+Compose marker present \(.*fresh\)/);
+    expect(out).not.toMatch(/\u2717\s+Compose marker present/);
   });
 
   test("a STALE marker (past the TTL) renders as a FAIL row with the remediation", () => {
@@ -103,7 +103,7 @@ describe("t204 doctor compose-marker probe", () => {
     // One hour past the shared freshness window - the orphan case.
     seedMarker(proj, COMPOSE_MARKER_TTL_MS / 1000 + 60 * 60);
     const { out, status } = runDoctor(proj);
-    expect(out).toMatch(new RegExp(`\\u2717\\s+Compose marker present \\(.*stale\\)`));
+    expect(out).toMatch(/\u2717\s+Compose marker present \(.*stale\)/);
     // The remediation names the delete path (or resolving the gate).
     expect(out).toContain("rm aidlc/.aidlc-compose-pending");
     // A fail row implies the non-zero exit CI keys off.
@@ -116,6 +116,6 @@ describe("t204 doctor compose-marker probe", () => {
     const { out } = runDoctor(proj);
     expect(out).toContain("Compose marker present");
     expect(out).toContain("3h old");
-    expect(out).toMatch(new RegExp(`\\u2713\\s+Compose marker present \\(.*3h old, fresh\\)`));
+    expect(out).toMatch(/\u2713\s+Compose marker present \(.*3h old, fresh\)/);
   });
 });

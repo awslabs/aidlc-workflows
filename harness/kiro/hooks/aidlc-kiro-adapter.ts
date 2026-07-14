@@ -190,7 +190,7 @@ if (target === "verb-intercept") {
 // goes stale and a legitimate advancing next runs). Advisory/fail-open: any
 // parse/read failure exits 0 and never blocks a real next.
 if (target === "pretool-block") {
-  const cmdStr = String((kiro.tool_input ?? {}).command ?? "");
+  const cmdStr = String(kiro.tool_input?.command ?? "");
   const cwd = kiro.cwd ?? process.cwd();
   const m = cmdStr.match(/aidlc-orchestrate\.ts\s+next\b([^\n]*)/);
   const nextArgs = m ? m[1].trim().split(/\s+/).filter((t) => t.length > 0) : [];

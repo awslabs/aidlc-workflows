@@ -75,11 +75,10 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { hostname, tmpdir } from "node:os";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import {
   AIDLC_SRC,

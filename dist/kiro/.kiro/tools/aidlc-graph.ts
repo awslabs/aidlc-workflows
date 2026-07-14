@@ -1504,7 +1504,7 @@ export function selectionDroppedOrderingEdges(
   for (const stage of stages.filter((s) => s.enabled !== false)) {
     for (const dep of stage.requires_stage ?? []) {
       const depStage = bySlug.get(dep);
-      if (!depStage || depStage.enabled !== false) continue;
+      if (depStage?.enabled !== false) continue;
       dropped.push(`${stage.slug} requires ${dep} (${stagePluginOwner(depStage)}, disabled)`);
     }
   }

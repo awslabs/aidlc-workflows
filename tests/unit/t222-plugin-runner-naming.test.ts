@@ -197,7 +197,7 @@ describe("t222 plugin ownership and runner naming", () => {
     const core = compiled.stages.find((s) => s.slug === "code-generation");
     const plugin = compiled.stages.find((s) => s.slug === "test-pro-integration");
     expect(plugin?.plugin).toBe("test-pro");
-    expect(Object.prototype.hasOwnProperty.call(core ?? {}, "plugin")).toBe(false);
+    expect(Object.hasOwn(core ?? {}, "plugin")).toBe(false);
     expect(compiled.json).toContain('"plugin": "test-pro"');
   });
 

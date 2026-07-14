@@ -130,6 +130,7 @@ describe("t152 Windows portability guard", () => {
     expect(lib).not.toMatch(/const \{ loadScopeGrid \} = require\("\.\/aidlc-graph\.ts"\)/);
 
     const typeCheck = read("dist/claude/.claude/tools/aidlc-sensor-type-check.ts");
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: assertion matches literal TypeScript source
     expect(typeCheck).toContain('`${result.stdout ?? ""}${result.stderr ?? ""}`');
     expect(typeCheck).toContain("stdout.split(/\\r?\\n/)");
     expect(typeCheck).toContain("parseTscOutput(output)");

@@ -906,6 +906,7 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
   const hooksDir = join(outDir, "hooks");
   mkdirSync(hooksDir, { recursive: true });
   for (const f of readdirSync(templateHooks)) cpSync(join(templateHooks, f), join(hooksDir, f));
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: literal shell parameter expansions
   const rootExpr = harnessName === "claude" ? "${CLAUDE_PLUGIN_ROOT}" : "${PLUGIN_ROOT}";
   // Resolve bun on a bare PATH (PATH, then ~/.bun/bin). If neither is executable,
   // exit 0 with a note rather than running a non-existent binary — the pre-fold
@@ -926,6 +927,7 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
         name: `aidlc-${pluginName}-compose`,
         description: `Composes the ${pluginName} AIDLC plugin on first interaction.`,
         when: { type: "promptSubmit" },
+        // biome-ignore lint/suspicious/noThenProperty: required Kiro hook schema field
         then: { type: "runCommand", command },
       }, null, 2) + "\n"
     );

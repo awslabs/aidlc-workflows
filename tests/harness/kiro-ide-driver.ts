@@ -79,7 +79,7 @@ export class CdpTarget {
       this.ws = new WebSocket(this.wsUrl);
       this.ws.onopen = () => resolve();
       this.ws.onerror = (e: unknown) =>
-        reject(new Error("ws error: " + ((e as { message?: string })?.message ?? "unknown")));
+        reject(new Error(`ws error: ${(e as { message?: string })?.message ?? "unknown"}`));
       this.ws.onmessage = (ev: MessageEvent) => {
         let msg: {
           id?: number;
@@ -139,7 +139,7 @@ export class CdpTarget {
       awaitPromise: true,
     })) as { exceptionDetails?: unknown; result?: { value?: T } };
     if (r.exceptionDetails) {
-      throw new Error("eval exception: " + JSON.stringify(r.exceptionDetails).slice(0, 300));
+      throw new Error(`eval exception: ${JSON.stringify(r.exceptionDetails).slice(0, 300)}`);
     }
     return r.result?.value as T;
   }
@@ -163,7 +163,7 @@ export class CdpTarget {
       contextId,
     })) as { exceptionDetails?: unknown; result?: { value?: T } };
     if (r.exceptionDetails) {
-      throw new Error("ctx eval exception: " + JSON.stringify(r.exceptionDetails).slice(0, 200));
+      throw new Error(`ctx eval exception: ${JSON.stringify(r.exceptionDetails).slice(0, 200)}`);
     }
     return r.result?.value as T;
   }

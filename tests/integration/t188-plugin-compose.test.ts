@@ -37,13 +37,21 @@ const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
 // under tmp (see beforeAll) so this test never regenerates the committed dist.
 const PLUGIN_CLAUDE_COMMITTED = join(REPO_ROOT, "dist", "plugins", PLUGIN, "claude");
 
+interface GraphStage {
+  slug?: string;
+  produces?: string[];
+  consumes?: Array<{ artifact?: string; required?: boolean }>;
+  sensors_applicable?: Array<{ id?: string }>;
+  enabled?: false;
+}
+
 // Absolute path to a stage's compiled node in a composed project.
-function graph(projectDir: string): Array<Record<string, any>> {
+function graph(projectDir: string): GraphStage[] {
   return JSON.parse(
     readFileSync(join(projectDir, ".claude", "tools", "data", "stage-graph.json"), "utf-8")
-  );
+  ) as GraphStage[];
 }
-function stage(projectDir: string, slug: string): Record<string, any> | undefined {
+function stage(projectDir: string, slug: string): GraphStage | undefined {
   return graph(projectDir).find((s) => s.slug === slug);
 }
 function stageSourcePath(projectDir: string, phase: string, slug: string): string {
@@ -221,7 +229,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
 
   test("contribution merges consumes into the target stage node", () => {
     const bat = stage(project, "build-and-test");
-    const consumed = (bat?.consumes ?? []).map((c: any) => c.artifact);
+    const consumed = (bat?.consumes ?? []).map((c) => c.artifact);
     // BOTH test-pro consumes must land — not just the first (round-2 blocker:
     // the old parser dropped every entry after the first).
     expect(consumed).toContain("test-pro-testability-requirements");
@@ -229,17 +237,17 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // ...and each authored `required: false` must be preserved, not flipped to
     // true by an empty `required` scan (the same blocker's second half).
     for (const art of ["test-pro-testability-requirements", "test-pro-test-harness-design"]) {
-      const entry = (bat?.consumes ?? []).find((c: any) => c.artifact === art);
+      const entry = (bat?.consumes ?? []).find((c) => c.artifact === art);
       expect(entry?.required).toBe(false);
     }
     // The pre-existing core consumes are untouched (still required: true).
-    const core = (bat?.consumes ?? []).find((c: any) => c.artifact === "code-generation-plan");
+    const core = (bat?.consumes ?? []).find((c) => c.artifact === "code-generation-plan");
     expect(core?.required).toBe(true);
   });
 
   test("contribution merges sensors into the target stage node", () => {
     const bat = stage(project, "build-and-test");
-    const sensors = (bat?.sensors_applicable ?? []).map((s: any) => s.id);
+    const sensors = (bat?.sensors_applicable ?? []).map((s) => s.id);
     expect(sensors).toContain("coverage-threshold");
     expect(sensors).toContain("requirement-coverage");
   });
@@ -301,8 +309,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // must detect the missing slug and recompile, restoring all 34 stages — even
     // though no stage source changed (changed=false on the rerun).
     const graphPath = join(project, ".claude", "tools", "data", "stage-graph.json");
-    const full = JSON.parse(readFileSync(graphPath, "utf-8"));
-    const stripped = full.filter((s: any) => !String(s.slug ?? "").startsWith("test-pro-"));
+    const full = JSON.parse(readFileSync(graphPath, "utf-8")) as GraphStage[];
+    const stripped = full.filter((s) => !String(s.slug ?? "").startsWith("test-pro-"));
     expect(stripped.length).toBeLessThan(full.length); // sanity: we removed some
     writeFileSync(graphPath, JSON.stringify(stripped));
 
@@ -623,10 +631,10 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   test("a BOM-prefixed contribution is not silently skipped (R5-C4)", () => {
     // A UTF-8 BOM before the frontmatter must not make the whole contribution a
     // no-op — the produces still merges (BOM stripped before the ^--- anchor).
-    const bom = "﻿" + [
+    const bom = `﻿${[
       "---", "target: build-and-test", "plugin: syn-bom",
       "adds:", "  produces:", "    - syn-bom-artifact", "---", "",
-    ].join("\n");
+    ].join("\n")}`;
     const { proj } = composeSynthetic("syn-bom", { "contributions/construction/build-and-test.md": bom });
     const body = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8");
     expect(body).toContain("syn-bom-artifact"); // merged despite the BOM
@@ -676,7 +684,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
     require("node:fs").mkdirSync(hd, { recursive: true });
     writeFileSync(join(hd, "session-start.last"), "2026-07-08T00:00:00Z"); // heartbeat present
-    writeFileSync(join(hd, "plugin-compose.drops"), dropLines.join("\n") + "\n");
+    writeFileSync(join(hd, "plugin-compose.drops"), `${dropLines.join("\n")}\n`);
     const r = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-utility.ts"), "doctor"], {
       cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
       env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
@@ -896,7 +904,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const linkBase = mkdtempSync(join(tmp, "gb-link-"));
     const link = join(linkBase, "lnk");
     symlinkSync(realDir, link);
-    for (const arg of [link, link + "/"]) {
+    for (const arg of [link, `${link}/`]) {
       const { code, out } = pluginBuild(arg);
       expect(code).toBe(1);
       expect(out).toContain("symlink");

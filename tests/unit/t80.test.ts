@@ -50,7 +50,6 @@ import { spawnSync } from "node:child_process";
 import {
   cpSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";

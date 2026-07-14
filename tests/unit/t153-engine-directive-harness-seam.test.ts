@@ -55,6 +55,7 @@ function* walkTs(dir: string): Generator<string> {
 }
 
 describe("t153 engine directive harness seam — no hardcoded .claude/tools in core directives", () => {
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: test name documents literal source syntax
   test("every `bun <harness>/tools|hooks/` directive in core/*.ts uses ${harnessDir()}, not a hardcoded dir", () => {
     const stray: string[] = [];
     for (const scanDir of SCAN_DIRS) {
@@ -70,6 +71,7 @@ describe("t153 engine directive harness seam — no hardcoded .claude/tools in c
     }
     if (stray.length > 0) {
       console.error(
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: diagnostic prescribes literal source syntax
         "hardcoded harness-dir tool directives in core/ (use `bun ${harnessDir()}/tools/...`):\n" +
           stray.join("\n"),
       );

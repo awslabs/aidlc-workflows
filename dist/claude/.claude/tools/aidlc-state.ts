@@ -880,7 +880,7 @@ function workspaceHasSourceFile(pd: string): boolean {
   for (const entry of entries) {
     if (HARNESS_DOC_DIRS.has(entry)) continue;
     const p = join(pd, entry);
-    let st;
+    let st: ReturnType<typeof statSync>;
     try {
       st = statSync(p);
     } catch {

@@ -51,7 +51,7 @@ describe("t145 packaging parity — dist/ is in sync with core/ + harness/", () 
     });
     // On drift the check prints the offending MISSING/DIFFERS/ORPHAN paths.
     if (res.status !== 0) {
-      console.error("package --check output:\n" + (res.stdout ?? "") + (res.stderr ?? ""));
+      console.error(`package --check output:\n${res.stdout ?? ""}${res.stderr ?? ""}`);
     }
     expect(res.status).toBe(0);
   }, CHECK_TIMEOUT_MS);
@@ -63,7 +63,7 @@ describe("t145 packaging parity — dist/ is in sync with core/ + harness/", () 
       timeout: CHECK_TIMEOUT_MS - 5_000,
     });
     if (res.status !== 0) {
-      console.error("package claude --check output:\n" + (res.stdout ?? "") + (res.stderr ?? ""));
+      console.error(`package claude --check output:\n${res.stdout ?? ""}${res.stderr ?? ""}`);
     }
     expect(res.status).toBe(0);
     expect(res.stdout).toContain("[claude] --check: OK");

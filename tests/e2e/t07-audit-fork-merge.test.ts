@@ -82,7 +82,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -95,7 +94,6 @@ import {
   cleanupWorktreeFixture,
   FIXTURES_DIR,
   seededAuditDir,
-  seededRecordDir,
   seededStateFile,
   setupWorktreeFixture,
 } from "../harness/fixtures.ts";

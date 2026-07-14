@@ -234,7 +234,7 @@ function readShippedHarnessData(): ShippedHarnessData {
     const raw = readFileSync(p, "utf-8");
     const parsed = JSON.parse(raw) as { rulesSubdir?: unknown; plugins?: unknown };
     let plugins: ReadonlySet<string> | null = null;
-    if (Object.prototype.hasOwnProperty.call(parsed, "plugins")) {
+    if (Object.hasOwn(parsed, "plugins")) {
       if (!Array.isArray(parsed.plugins)) {
         throw new Error(`${p}: harness.json field "plugins" must be an array of non-empty strings.`);
       }
@@ -660,15 +660,15 @@ export function relativeSpaceRecordPrefix(space: string = DEFAULT_SPACE): string
 // re-mint.
 
 // Generate a UUIDv7: a 48-bit Unix-ms timestamp prefix + version 7 nibble +
-// random/variant tail. Sorting by uuid string is creation order. Uses new Date()
-// for the timestamp (permitted; isoTimestamp does the same) and randomUUID() for
-// the random + variant bits (no Math.random): take the v4 uuid's 32 hex digits,
+// random/variant tail. Sorting by uuid string is creation order. Date.now()
+// supplies the timestamp; randomUUID() supplies the random + variant bits (no
+// Math.random): take the v4 uuid's 32 hex digits,
 // overwrite the first 12 (the timestamp) and the 13th (the version nibble → 7),
 // and keep digits 13..31 (which include the v4 variant nibble) cryptographically
 // sourced.
 export function uuidv7(): string {
   const hex = randomUUID().replace(/-/g, ""); // 32 hex chars, v4
-  const ms = new Date().getTime();
+  const ms = Date.now();
   const tsHex = ms.toString(16).padStart(12, "0").slice(-12); // 48 bits = 12 hex
   const body = `${tsHex}7${hex.slice(13)}`; // ts(12) + version(1) + tail(19)
   return `${body.slice(0, 8)}-${body.slice(8, 12)}-${body.slice(12, 16)}-${body.slice(16, 20)}-${body.slice(20, 32)}`;
@@ -1116,7 +1116,7 @@ export function activeIntentUuid(projectDir: string, space?: string): string | n
   const activeDir = activeIntent(projectDir, sp);
   if (activeDir === null) return null;
   const match = listIntents(projectDir, sp).find((i) => i.dirName === activeDir);
-  return match && match.uuid ? match.uuid : null;
+  return match?.uuid ? match.uuid : null;
 }
 
 // Resolve an intent UUID to its registry row across EVERY space (a conversation

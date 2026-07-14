@@ -166,7 +166,7 @@ function selectedPlugins(): Set<string> | null {
   try {
     const raw = readFileSync(join(HARNESS_DIR, "tools", "data", "harness.json"), "utf-8");
     const parsed = JSON.parse(raw) as { plugins?: unknown };
-    if (!Object.prototype.hasOwnProperty.call(parsed, "plugins")) return null;
+    if (!Object.hasOwn(parsed, "plugins")) return null;
     if (!Array.isArray(parsed.plugins)) return null;
     const names = parsed.plugins.filter((v): v is string => typeof v === "string" && v.trim().length > 0);
     return new Set(names.map((s) => s.trim()));
@@ -325,7 +325,7 @@ function installedNameRoster(dir: string): Map<string, string> {
 
 function installedNameCollisionPrecheck(dst: string, kind: "agents" | "scopes"): CopyPrecheck {
   const installedByName = installedNameRoster(dst);
-  return ({ file, rel, dest, content }) => {
+  return ({ file, dest, content }) => {
     if (!file.endsWith(".md")) return true;
     // `aidlc-` is core's namespace: a scope declaring an aidlc--prefixed
     // plugin: would generate a runner dir on core's `aidlc-<name>` path and
@@ -485,7 +485,7 @@ function mergeListField(content: string, field: string, items: string[], target:
     recordDrop(`contribution to ${target}: no '${field}:' field to append to (adds dropped)`);
     return content;
   }
-  const existing = new Set([...m[1].matchAll(/^  - (.+)$/gm)].map((x) => x[1].trim()));
+  const existing = new Set([...m[1].matchAll(/^ {2}- (.+)$/gm)].map((x) => x[1].trim()));
   const toAdd = items.filter((i) => !existing.has(i));
   if (toAdd.length === 0) return content;
   added?.push(...toAdd);
@@ -510,7 +510,7 @@ function mergeConsumes(content: string, entries: ConsumeEntry[], target: string,
   // an append AFTER the last core entry — omit `conditional_on` and the block
   // ends early, splicing the new entry INSIDE a core entry and stealing its
   // brownfield gate (round-2 major). The new entries land past the whole block.
-  const blockRe = /^(consumes:\n(?:  - artifact:.*\n(?:    (?:required|conditional_on):.*\n)*)*)/m;
+  const blockRe = /^(consumes:\n(?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m;
   const m = content.match(blockRe);
   if (!m) {
     recordDrop(`contribution to ${target}: no 'consumes:' field to append to`);
@@ -537,10 +537,10 @@ function mergeRequiredSections(content: string, items: string[], target: string,
     added?.push(...items);
     return content.replace(emptyRe, "required_sections:\n" + render(items));
   }
-  const blockRe = /^(required_sections:\n(?:  - .+\n)*)/m;
+  const blockRe = /^(required_sections:\n(?: {2}- .+\n)*)/m;
   const m = content.match(blockRe);
   if (m) {
-    const existing = new Set([...m[1].matchAll(/^  - (.+?)\s*$/gm)].map((x) => x[1].replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1")));
+    const existing = new Set([...m[1].matchAll(/^ {2}- (.+?)\s*$/gm)].map((x) => x[1].replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1")));
     const toAdd = items.filter((s) => !existing.has(s));
     if (toAdd.length === 0) return content;
     added?.push(...toAdd);
@@ -717,7 +717,8 @@ try {
   })();
   const recordContrib = (target: string, field: keyof StageContribRecord, values: string[]): void => {
     if (values.length === 0) return;
-    const rec = (contribManifest[target] ??= {});
+    contribManifest[target] ??= {};
+    const rec = contribManifest[target];
     if (field === "required_sections_created") return; // set directly, not via list
     const prior = new Set((rec[field] as string[] | undefined) ?? []);
     for (const v of values) prior.add(v);
@@ -776,9 +777,9 @@ try {
       // regex stops at the first non-4-space entry, so a mis-indented line
       // silently truncated the list (entries after it vanished with no log).
       const listOf = (f: string): string[] => {
-        const s = addsBlock.match(new RegExp(`^  ${f}:\\n((?:    - [\\w-]+\\n?)*)`, "m"));
-        const parsed = s ? [...s[1].matchAll(/^    - ([\w-]+)/gm)].map((x) => x[1]) : [];
-        const declaredBlock = addsBlock.match(new RegExp(`^  ${f}:\\n((?:\\s+- .*\\n?)*)`, "m"))?.[1] ?? "";
+        const s = addsBlock.match(new RegExp(`^ {2}${f}:\\n((?: {4}- [\\w-]+\\n?)*)`, "m"));
+        const parsed = s ? [...s[1].matchAll(/^ {4}- ([\w-]+)/gm)].map((x) => x[1]) : [];
+        const declaredBlock = addsBlock.match(new RegExp(`^ {2}${f}:\\n((?:\\s+- .*\\n?)*)`, "m"))?.[1] ?? "";
         const declared = (declaredBlock.match(/^\s+- /gm) ?? []).length;
         if (declared > parsed.length) {
           recordDrop(`contribution to ${target}: parsed ${parsed.length} of ${declared} adds.${f} entries (check indentation - entries must be 4-space "    - kebab-name"); some dropped`);
@@ -791,7 +792,7 @@ try {
         // bind to the artifact above it, or entry 2+ is dropped and required flips
         // (round-2 blocker). Each entry starts at `- artifact:` and owns every
         // following indented non-dash line until the next `- artifact:`.
-        const block = addsBlock.match(/^  consumes:\n((?:    -? .*\n?)*)/m)?.[1];
+        const block = addsBlock.match(/^ {2}consumes:\n((?: {4}-? .*\n?)*)/m)?.[1];
         if (!block) return [];
         const out: Array<{ artifact: string; required: boolean; conditional_on?: string }> = [];
         // Split on ANY-indent `- artifact:` (a YAML-legal 6-space list must still
@@ -819,7 +820,7 @@ try {
       // author sees it had no effect, per the no-silent-failures contract. (When a
       // surface graduates, add it to IMPLEMENTED_ADDS + a merge call below.)
       const IMPLEMENTED_ADDS = new Set(["produces", "sensors", "consumes", "required_sections"]);
-      for (const km of addsBlock.matchAll(/^  ([a-z_]+):/gm)) {
+      for (const km of addsBlock.matchAll(/^ {2}([a-z_]+):/gm)) {
         if (!IMPLEMENTED_ADDS.has(km[1])) {
           recordDrop(`contribution to ${target}: adds.${km[1]} is not yet an implemented merge surface (only produces/sensors/consumes/required_sections); ignored`, "advisory");
         }
@@ -830,10 +831,10 @@ try {
       // only a MATCHED pair of outer quotes — a `[^"]` class dropped any value
       // with an interior quote (`"Say "Hi" Section"`) silently (round-5).
       const requiredSections = (() => {
-        const s = addsBlock.match(/^  required_sections:\n((?:    - .*\n?)*)/m)?.[1];
+        const s = addsBlock.match(/^ {2}required_sections:\n((?: {4}- .*\n?)*)/m)?.[1];
         if (!s) return [];
         const out: string[] = [];
-        for (const x of s.matchAll(/^    - (.+?)\s*$/gm)) {
+        for (const x of s.matchAll(/^ {4}- (.+?)\s*$/gm)) {
           const v = x[1].replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1").trim();
           // An empty (or quote-only) value would merge a useless `- ""` into the
           // stage with no signal — drop-log it instead (round-6).
@@ -863,7 +864,10 @@ try {
       recordContrib(target, "sensors", addedSensors);
       recordContrib(target, "consumes", addedConsumes);
       recordContrib(target, "required_sections", addedSections);
-      if (sectionsMeta.created) (contribManifest[target] ??= {}).required_sections_created = true;
+      if (sectionsMeta.created) {
+        contribManifest[target] ??= {};
+        contribManifest[target].required_sections_created = true;
+      }
       if (addedProduces.length || addedSensors.length || addedConsumes.length || addedSections.length) {
         contribManifestDirty = true;
       }

@@ -178,11 +178,12 @@ export class AcpSession {
     try {
       for await (const chunk of stderr as AsyncIterable<Uint8Array>) {
         sbuf += this.dec.decode(chunk);
-        let nl: number;
-        while ((nl = sbuf.indexOf("\n")) >= 0) {
+        let nl = sbuf.indexOf("\n");
+        while (nl >= 0) {
           const line = sbuf.slice(0, nl);
           sbuf = sbuf.slice(nl + 1);
           if (line.trim()) writeAcpTrace(this.tracePath, "stderr", { line });
+          nl = sbuf.indexOf("\n");
         }
       }
     } catch {
@@ -193,10 +194,11 @@ export class AcpSession {
   private async readLoop(): Promise<void> {
     for await (const chunk of this.proc.stdout as AsyncIterable<Uint8Array>) {
       this.buf += this.dec.decode(chunk);
-      let nl: number;
-      while ((nl = this.buf.indexOf("\n")) >= 0) {
+      let nl = this.buf.indexOf("\n");
+      while (nl >= 0) {
         const line = this.buf.slice(0, nl);
         this.buf = this.buf.slice(nl + 1);
+        nl = this.buf.indexOf("\n");
         if (!line.trim()) continue;
         let msg: Record<string, unknown>;
         try {

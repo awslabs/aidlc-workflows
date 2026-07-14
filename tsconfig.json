@@ -12,9 +12,12 @@
     "types": ["bun-types"]
   },
   "include": [
-    "core/hooks/*.ts",
-    "core/tools/*.ts",
-    "harness/*/*.ts",
-    "scripts/*.ts"
+    "core/**/*.ts",
+    "harness/**/*.ts",
+    "scripts/**/*.ts",
+    "plugins/*/tools/**/*.ts"
+  ],
+  "exclude": [
+    "harness/*/hooks/*-adapter.ts"
   ]
 }

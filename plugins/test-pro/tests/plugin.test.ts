@@ -58,7 +58,7 @@ function agentRoster(): string[] {
 
 // Core stage slugs (contribution targets must resolve to one of these).
 function coreStageSlugs(): Set<string> {
-  return new Set(walk(CORE_STAGES).map((p) => p.replace(/\.md$/, "").split("/").pop()!));
+  return new Set(walk(CORE_STAGES).map((p) => basename(p, ".md")));
 }
 
 const pluginStageFiles = walk(join(PLUGIN_ROOT, "stages"));
@@ -80,7 +80,7 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
   describe("stage frontmatter (same validator as core)", () => {
     const ctx: ValidationContext = { agents: agentRoster() };
     for (const file of pluginStageFiles) {
-      const name = file.split("/").pop()!;
+      const name = basename(file);
       test(`${name} validates`, () => {
         const fm = parseStageFrontmatter(readFileSync(file, "utf-8"));
         const r = validateStageFrontmatter(fm, ctx);
@@ -121,14 +121,14 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
   describe("contributions (target resolution + namespacing)", () => {
     const cores = coreStageSlugs();
     for (const file of contributionFiles) {
-      const name = file.split("/").pop()!;
+      const name = basename(file);
       const content = readFileSync(file, "utf-8");
       const fm = content.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
 
       test(`${name} targets a real core stage`, () => {
         const target = fm.match(/^target:\s*(.+)$/m)?.[1].trim();
         expect(target).toBeTruthy();
-        expect(cores.has(target!)).toBe(true);
+        expect(cores.has(target ?? "")).toBe(true);
       });
 
       test(`${name} declares plugin: ${PLUGIN_NAME}`, () => {
@@ -151,7 +151,7 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
   // --- Plugin-shipped scopes and agents keep filename identity stable ---
   describe("scope and agent naming", () => {
     for (const file of pluginScopeFiles) {
-      const name = file.split("/").pop()!;
+      const name = basename(file);
       test(`${name} scope name matches filename stem`, () => {
         const raw = readFileSync(file, "utf-8");
         const fm = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
@@ -160,7 +160,7 @@ describe(`${PLUGIN_NAME} plugin — own content validation`, () => {
     }
 
     for (const file of pluginAgentFiles) {
-      const name = file.split("/").pop()!;
+      const name = basename(file);
       test(`${name} agent name matches filename stem`, () => {
         const raw = readFileSync(file, "utf-8");
         const fm = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
