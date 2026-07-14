@@ -293,6 +293,9 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
   const kiroHarnesses = HARNESS_MATRIX.filter(
     (harness) => harness.capabilities.kiroAgentJson,
   );
+  test("matrix exposes at least one kiroAgentJson harness (floor guard)", () => {
+    expect(kiroHarnesses.length).toBeGreaterThan(0);
+  });
   for (const harness of kiroHarnesses) {
     test(`${harness.name} agent JSONs: judgment omits "model", balanced pins sonnet-4.5, NO effort-like keys anywhere`, () => {
       for (const { file, model } of KIRO_JSON) {

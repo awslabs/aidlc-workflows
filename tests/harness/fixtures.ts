@@ -583,9 +583,9 @@ export function setupIntegrationProject(
 // its own git-init'd sibling repos makes toplevel == dirname(common-dir) hold
 // for each repo, so the guard passes (the same posture setupCodexProject takes).
 //
-// Harness-parameterized so every shipped distribution can reuse ONE fixture.
-// The three live logic drivers (Claude SDK, Kiro ACP, Codex exec) select their
-// respective CLI rows; the deterministic fixture test also covers Kiro IDE.
+// Harness-parameterized so every shipped distribution can reuse ONE fixture:
+// the matrix resolves any discovered harness's dist root, so live drivers and
+// deterministic fixture tests alike pick their row without touching this file.
 // ============================================================================
 
 export type JourneyHarness = ShippedHarnessName;

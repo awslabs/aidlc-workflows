@@ -125,6 +125,7 @@ describe("t148 dist/kiro file structure", () => {
     const nonIdeAgentTrees = HARNESS_MATRIX.filter(
       (harness) => !harness.capabilities.ideAgentTools,
     ).map((harness) => join(harness.engineRoot, "agents"));
+    expect(nonIdeAgentTrees.length).toBeGreaterThan(0);
     for (const tree of nonIdeAgentTrees) {
       for (const f of readdirSync(tree).filter((n) => n.endsWith(".md"))) {
         expect(fmToolsOf(join(tree, f))).toBeUndefined();

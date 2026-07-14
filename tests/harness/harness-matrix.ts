@@ -212,7 +212,10 @@ if (discoveredNames.join("\n") !== metadataNames.join("\n")) {
   throw new Error(
     "harness matrix metadata must exactly cover discovered manifests\n" +
       `discovered: ${discoveredNames.join(", ")}\n` +
-      `metadata: ${metadataNames.join(", ")}`,
+      `metadata: ${metadataNames.join(", ")}\n` +
+      "fix: add a HARNESS_CAPABILITIES entry for the new harness in " +
+      "tests/harness/harness-matrix.ts (validateManifest cross-checks it " +
+      "against the manifest, so every field must reflect the real distribution)",
   );
 }
 
