@@ -333,7 +333,9 @@ function walk(dir: string): string[] {
   return out;
 }
 
-type CopyPrecheck = (ctx: { file: string; rel: string; dest: string; content: string }) => boolean;
+type CopyContext = { file: string; rel: string; content: string };
+type CopyPrecheck = (ctx: CopyContext & { dest: string }) => boolean;
+type CopyTransform = (ctx: CopyContext) => string;
 
 function frontmatterName(content: string): string | null {
   const name = frontmatter(content).match(/^name:\s*(.+)$/m)?.[1].trim();
@@ -382,6 +384,64 @@ function installedNameCollisionPrecheck(dst: string, kind: "agents" | "scopes"):
     );
     return false;
   };
+}
+
+function projectOpencodeAgentMemory(raw: string): string {
+  return raw
+    .replaceAll(".aidlc/rules/aidlc-org.md", "aidlc/spaces/default/memory/org.md")
+    .replaceAll(".aidlc/rules/aidlc-team.md", "aidlc/spaces/default/memory/team.md")
+    .replaceAll(".aidlc/rules/aidlc-project.md", "aidlc/spaces/default/memory/project.md")
+    .replaceAll(".aidlc/rules/", "aidlc/spaces/default/memory/");
+}
+
+function opencodeNativeAgentPrecheck(dst: string): CopyPrecheck {
+  const collision = installedNameCollisionPrecheck(dst, "agents");
+  return (ctx) => {
+    if (!collision(ctx)) return false;
+    if (!ctx.content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/)) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" has no closed frontmatter block; not copied to OpenCode's native roster`,
+      );
+      return false;
+    }
+    const disallowed = frontmatter(ctx.content).match(/^disallowedTools:\s*(.*?)\s*$/m)?.[1];
+    if (disallowed && !/^\s*Task\s*$/i.test(disallowed)) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" agent file "${ctx.rel}" cannot project disallowedTools "${disallowed}" to OpenCode; not copied`,
+      );
+      return false;
+    }
+    return true;
+  };
+}
+
+function emitOpencodeNativeAgent({ file, content }: CopyContext): string {
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+  if (!m) throw new Error(`${file}: plugin agent has no closed frontmatter block`);
+  let fm = m[1]
+    .split(/\r?\n/)
+    .filter((line) =>
+      !/^disallowedTools:/.test(line) &&
+      !/^mode:/.test(line) &&
+      !/^tier:/.test(line) &&
+      !/^effort:/.test(line)
+    )
+    .filter((line) => {
+      const model = line.match(/^model:\s*(.*?)(?:\s+#.*)?\s*$/)?.[1];
+      return model === undefined || model.includes("/");
+    })
+    .join("\n");
+  if (/^permission:\s*$/m.test(fm)) {
+    if (/^ {2}task:/m.test(fm)) {
+      fm = fm.replace(/^ {2}task:.*$/m, "  task: deny");
+    } else {
+      fm = fm.replace(/^permission:\s*$/m, "permission:\n  task: deny");
+    }
+  } else {
+    fm += "\npermission:\n  task: deny";
+  }
+  fm += "\nmode: subagent";
+  return content.replace(m[0], () => `---\n${fm}\n---\n`);
 }
 
 // Validate a plugin stage file against the INSTALLED engine's schema before
@@ -457,7 +517,13 @@ async function installedStageSchemaPrecheck(): Promise<CopyPrecheck> {
 // trying to ship a file that shadows core or another plugin) and is dropped-with-
 // log — silently skipping it made a plugin "override" a no-op with no evidence
 // (round-4). An identical dest is a benign idempotent re-run (no log).
-function copyTreeNoClobber(src: string, dst: string, kind: string, precheck?: CopyPrecheck): boolean {
+function copyTreeNoClobber(
+  src: string,
+  dst: string,
+  kind: string,
+  precheck?: CopyPrecheck,
+  transform?: CopyTransform,
+): boolean {
   if (!existsSync(src)) return false;
   let wrote = false;
   for (const file of walk(src)) {
@@ -466,6 +532,9 @@ function copyTreeNoClobber(src: string, dst: string, kind: string, precheck?: Co
     let buf = readFileSync(file);
     if (file.endsWith(".md")) {
       buf = Buffer.from(buf.toString("utf-8").replaceAll("{{HARNESS_DIR}}", HARNESS_LEAF));
+    }
+    if (transform) {
+      buf = Buffer.from(transform({ file, rel, content: buf.toString("utf-8") }));
     }
     if (existsSync(dest)) {
       // no-clobber — never replace core/another plugin. Log only a genuine
@@ -723,7 +792,25 @@ try {
     const scopesDir = join(HARNESS_DIR, "scopes");
     const agentsDir = join(HARNESS_DIR, "agents");
     changed = copyTreeNoClobber(join(PLUGIN_ROOT, "scopes"), scopesDir, "scopes", installedNameCollisionPrecheck(scopesDir, "scopes")) || changed;
-    changed = copyTreeNoClobber(join(PLUGIN_ROOT, "agents"), agentsDir, "agents", installedNameCollisionPrecheck(agentsDir, "agents")) || changed;
+    changed = copyTreeNoClobber(
+      join(PLUGIN_ROOT, "agents"),
+      agentsDir,
+      "agents",
+      installedNameCollisionPrecheck(agentsDir, "agents"),
+      HARNESS_LEAF === ".aidlc"
+        ? ({ content }) => projectOpencodeAgentMemory(content)
+        : undefined,
+    ) || changed;
+    if (HARNESS_LEAF === ".aidlc") {
+      const nativeAgentsDir = join(PROJECT_DIR, ".opencode", "agents");
+      changed = copyTreeNoClobber(
+        join(PLUGIN_ROOT, "agents"),
+        nativeAgentsDir,
+        "OpenCode native agents",
+        opencodeNativeAgentPrecheck(nativeAgentsDir),
+        (ctx) => projectOpencodeAgentMemory(emitOpencodeNativeAgent(ctx)),
+      ) || changed;
+    }
   }
   changed = copyTreeNoClobber(join(PLUGIN_ROOT, "knowledge"), join(HARNESS_DIR, "knowledge"), "knowledge") || changed;
   changed = copyTreeNoClobber(join(PLUGIN_ROOT, "sensors"), join(HARNESS_DIR, "sensors"), "sensor") || changed;

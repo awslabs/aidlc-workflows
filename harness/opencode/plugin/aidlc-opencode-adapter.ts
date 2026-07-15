@@ -12,7 +12,7 @@
 //   ------------------------------------------------------------------------
 //   chat.message (first per session)     → aidlc-session-start.ts  (SessionStart)
 //   chat.message (every human turn)      → aidlc-mint-presence.ts  (UserPromptSubmit)
-//   tool.execute.before                  → bash boundary + aidlc-reviewer-scope.ts (PreToolUse)
+//   tool.execute.before                  → entrypoint boundary + aidlc-reviewer-scope.ts (PreToolUse)
 //   tool.execute.after write|edit|patch  → aidlc-audit-logger.ts + aidlc-sensor-fire.ts (PostToolUse Write|Edit)
 //   tool.execute.after bash              → aidlc-runtime-compile.ts (PostToolUse Bash)
 //   tool.execute.after todowrite         → aidlc-sync-statusline.ts (PostToolUse TaskUpdate)
@@ -32,9 +32,9 @@
 //   - session-start's additionalContext has no injection channel; the hook
 //     still runs for its side effects (session→intent stamp, state checks).
 //   - There is no session-end moment; SESSION_ENDED is not emitted.
-//   - Presence minting is skipped for subagent (child) sessions when the
-//     parent lookup succeeds; on lookup failure it fails OPEN (mints) so a
-//     gate approval is never wedged by a transient API error.
+//   - Presence minting is skipped for subagent (child) sessions. A parent
+//     lookup failure fails closed for that event and is retried later; an
+//     uncertain child can never mint a HUMAN_TURN into the shared ledger.
 //   - tool.execute.before carries no active-agent field. Reviewer identity is
 //     correlated from chat.message.agent by session; when that field is absent,
 //     a child session is treated as scoped registration while a dispatch record
@@ -43,7 +43,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
 
 const NUDGE_SENTINEL = "[aidlc-forwarding-nudge]";
@@ -106,27 +106,31 @@ export type PluginInput = {
     };
   };
   directory: string;
+  /** Unit-test seam. Production uses the build-time list embedded by emit.ts. */
+  aidlcEntrypoints?: ReadonlySet<string>;
 };
 
 const AIDLC_BUN_PREFIX = /^bun[ \t]+\.aidlc\/(?:tools|hooks)\//;
-const AIDLC_BUN_COMMAND =
-  /^bun[ \t]+\.aidlc\/(?:tools|hooks)\/[A-Za-z0-9][A-Za-z0-9._-]*\.ts(?:[ \t]+[\s\S]*)?[ \t]*$/;
+const AIDLC_ENTRYPOINT = /^\.aidlc\/(tools|hooks)\/([A-Za-z0-9][A-Za-z0-9._-]*\.ts)$/;
 
-function isSingleShellCommand(command: string): boolean {
+// emit.ts replaces the empty array with every packaged .aidlc/{tools,hooks}/*.ts
+// path. The adapter can then reject a newly-authored payload.ts even though the
+// host's coarse bash permission glob matches it.
+const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
+  /* @aidlc-shipped-entrypoints@ */ [],
+);
+
+/** Parse one expansion-free shell command into argv, or reject shell syntax. */
+function directShellWords(command: string): string[] | null {
+  const words: string[] = [];
+  let word = "";
+  let wordStarted = false;
   let quote: "'" | '"' | null = null;
-  let escaped = false;
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === "\\") {
-      escaped = true;
-      continue;
-    }
     if (quote === "'") {
       if (ch === "'") quote = null;
+      else word += ch;
       continue;
     }
     if (quote === '"') {
@@ -134,44 +138,77 @@ function isSingleShellCommand(command: string): boolean {
         quote = null;
         continue;
       }
-      if (ch === "`" || (ch === "$" && command[i + 1] === "(")) return false;
+      if (ch === "\\" && i + 1 < command.length) {
+        const next = command[++i];
+        if (next === "\n" || next === "\r") return null;
+        word += next;
+        continue;
+      }
+      if (ch === "`" || ch === "$" || ch === "\n" || ch === "\r") return null;
+      word += ch;
       continue;
     }
     if (ch === "'" || ch === '"') {
       quote = ch;
+      wordStarted = true;
+      continue;
+    }
+    if (ch === " " || ch === "\t") {
+      if (wordStarted) {
+        words.push(word);
+        word = "";
+        wordStarted = false;
+      }
       continue;
     }
     if (
       ch === "\n" ||
       ch === "\r" ||
+      ch === "\\" ||
       ch === "`" ||
+      ch === "$" ||
+      ch === "#" ||
       ch === ";" ||
       ch === "|" ||
       ch === "&" ||
       ch === "(" ||
       ch === ")" ||
       ch === "<" ||
-      ch === ">" ||
-      (ch === "$" && command[i + 1] === "(")
+      ch === ">"
     ) {
-      return false;
+      return null;
     }
+    word += ch;
+    wordStarted = true;
   }
-  return quote === null && !escaped;
+  if (quote !== null) return null;
+  if (wordStarted) words.push(word);
+  return words;
 }
 
 /** Return a denial reason only when the static AIDLC allow-prefix would match. */
-export function aidlcBashBoundaryViolation(command: string): string | null {
+function aidlcBashBoundaryViolation(
+  command: string,
+  allowedEntrypoints: ReadonlySet<string> = shippedAidlcEntrypoints,
+): string | null {
   if (!AIDLC_BUN_PREFIX.test(command)) return null;
-  if (AIDLC_BUN_COMMAND.test(command) && isSingleShellCommand(command)) return null;
+  const words = directShellWords(command);
+  const target = words?.[1]?.match(AIDLC_ENTRYPOINT);
+  if (
+    words?.[0] === "bun" &&
+    target &&
+    allowedEntrypoints.has(`${target[1]}/${target[2]}`)
+  ) {
+    return null;
+  }
   return (
-    "AIDLC bash permission allows one direct bun invocation only. " +
-    "Run the .aidlc tool or hook as a single command without chaining, redirection, or command substitution."
+    "AIDLC bash permission allows one direct invocation of a shipped tool or hook only. " +
+    "Use an unchanged .aidlc entrypoint without chaining, redirection, expansion, or command substitution."
   );
 }
 
 /** Extract every source and destination path touched by an apply_patch call. */
-export function applyPatchPaths(args: Record<string, unknown>): string[] {
+function applyPatchPaths(args: Record<string, unknown>): string[] {
   const patch =
     (args.patchText as string) ??
     (args.patch as string) ??
@@ -188,7 +225,7 @@ export function applyPatchPaths(args: Record<string, unknown>): string[] {
 }
 
 type ReviewerCall = {
-  toolName: "Read" | "Edit" | "Write" | "Glob" | "Grep" | "Bash";
+  toolName: "Read" | "Edit" | "Write" | "LS" | "Glob" | "Grep" | "Bash";
   toolInput: Record<string, unknown>;
 };
 
@@ -233,6 +270,12 @@ function reviewerCalls(tool: string, args: Record<string, unknown>): ReviewerCal
       },
     }];
   }
+  if (tool === "list") {
+    return [{
+      toolName: "LS",
+      toolInput: { path: (args.path as string) ?? "" },
+    }];
+  }
   if (tool === "apply_patch") {
     return applyPatchPaths(args).map((filePath) => ({
       toolName: "Write",
@@ -251,9 +294,16 @@ function sessionStartHandled(stdout: string): boolean {
   }
 }
 
-export default async ({ client, directory }: PluginInput) => {
+export default async ({
+  client,
+  directory,
+  aidlcEntrypoints = shippedAidlcEntrypoints,
+}: PluginInput) => {
   // Sessions whose session-start hook reached an active workflow.
   const started = new Set<string>();
+  // Main sessions that delivered a real human turn. Stop enforcement keys on
+  // this lighter latch because workflow state can be born during turn one.
+  const sawHumanTurn = new Set<string>();
   // Sessions confirmed as main (no parentID) — presence + stop enforcement
   // apply only to these; child (task-tool) sessions are workers, not humans.
   const mainSession = new Map<string, boolean>();
@@ -263,15 +313,16 @@ export default async ({ client, directory }: PluginInput) => {
   async function isMainSession(sessionID: string): Promise<boolean> {
     const cached = mainSession.get(sessionID);
     if (cached !== undefined) return cached;
-    let main = true; // fail OPEN: a wedged gate is worse than a stray mint
     try {
       const s = await client.session.get({ path: { id: sessionID } });
-      main = !s.data?.parentID;
+      const main = !s.data?.parentID;
+      mainSession.set(sessionID, main);
+      return main;
     } catch {
-      /* lookup failure → treat as main */
+      // An uncertain child must never mint human presence. Do not cache the
+      // transient failure; a later event gets a fresh lookup.
+      return false;
     }
-    mainSession.set(sessionID, main);
-    return main;
   }
 
   return {
@@ -284,6 +335,7 @@ export default async ({ client, directory }: PluginInput) => {
       const first = output.parts.find((p) => p.type === "text");
       if (first?.text?.startsWith(NUDGE_SENTINEL)) return;
       if (!(await isMainSession(input.sessionID))) return;
+      sawHumanTurn.add(input.sessionID);
       if (!started.has(input.sessionID)) {
         const result = await runCore(
           "aidlc-session-start.ts",
@@ -308,7 +360,7 @@ export default async ({ client, directory }: PluginInput) => {
       const args = output.args ?? {};
       if (input.tool === "bash") {
         const command = (args.command as string) ?? "";
-        const violation = aidlcBashBoundaryViolation(command);
+        const violation = aidlcBashBoundaryViolation(command, aidlcEntrypoints);
         if (violation) throw new Error(violation);
       }
 
@@ -356,10 +408,11 @@ export default async ({ client, directory }: PluginInput) => {
             : [((args.filePath as string) ?? (args.path as string) ?? "")];
         for (const filePath of paths) {
           if (!filePath) continue;
+          const absolutePath = isAbsolute(filePath) ? filePath : join(directory, filePath);
           const payload = {
             hook_event_name: "PostToolUse",
             tool_name: "Write",
-            tool_input: { file_path: filePath },
+            tool_input: { file_path: absolutePath },
           };
           // audit THEN sensors, mirroring the Claude settings.json order.
           await runCore("aidlc-audit-logger.ts", payload, directory);
@@ -414,9 +467,9 @@ export default async ({ client, directory }: PluginInput) => {
     event: async ({ event }: { event: { type: string; properties?: Record<string, unknown> } }) => {
       if (event.type !== "session.idle") return;
       const sessionID = (event.properties?.sessionID as string) ?? "";
-      // Enforce only on sessions this plugin saw a human turn in: a session
-      // with no chat.message here is another project's or a worker's.
-      if (!sessionID || !started.has(sessionID)) return;
+      // A workflow can be born during the first turn, after session-start saw
+      // no state. Let the core Stop hook's own state-file guard decide.
+      if (!sessionID || !sawHumanTurn.has(sessionID)) return;
       if (!(await isMainSession(sessionID))) return;
       if (idleInFlight.has(sessionID)) return;
       idleInFlight.add(sessionID);
@@ -424,6 +477,7 @@ export default async ({ client, directory }: PluginInput) => {
       // core hook's run-mode-aware no-progress ceiling is the loop guard here
       // (same degradation profile as Kiro; the conversational carve-out is
       // inert and the INTERACTIVE cap releases a chatting human).
+      let nudgeReason: string | null = null;
       try {
         const res = await runCore(
           "aidlc-stop.ts",
@@ -433,16 +487,21 @@ export default async ({ client, directory }: PluginInput) => {
         try {
           const parsed = JSON.parse(res.stdout) as { decision?: string; reason?: string };
           if (parsed.decision === "block" && parsed.reason) {
-            await client.session.prompt({
-              path: { id: sessionID },
-              body: { parts: [{ type: "text", text: `${NUDGE_SENTINEL} ${parsed.reason}` }] },
-            });
+            nudgeReason = parsed.reason;
           }
         } catch {
           /* no/unparseable output → allow the stop (advisory) */
         }
       } finally {
         idleInFlight.delete(sessionID);
+      }
+      // Release serialization before the prompt: OpenCode may synchronously
+      // deliver the continuation's next idle while this promise is pending.
+      if (nudgeReason) {
+        await client.session.prompt({
+          path: { id: sessionID },
+          body: { parts: [{ type: "text", text: `${NUDGE_SENTINEL} ${nudgeReason}` }] },
+        });
       }
     },
   };

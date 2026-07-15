@@ -112,16 +112,11 @@ function repointCodexConfig(raw: string, space: string): string | null {
  *  or it already matches. */
 function repointOpencodeInstructions(raw: string, space: string): string | null {
   const target = `${spaceMemoryRel(space)}/**/*.md`;
-  const array = raw.match(/("instructions"\s*:\s*\[)([\s\S]*?)(\])/);
-  if (!array || array.index === undefined) return null;
-  const body = array[2];
-  const nextBody = body.replace(
+  const next = raw.replace(
     /(")aidlc\/spaces\/[^/"]+\/memory\/\*\*\/\*\.md(")/g,
     `$1${target}$2`,
   );
-  if (nextBody === body) return null;
-  const start = array.index + array[1].length;
-  return `${raw.slice(0, start)}${nextBody}${raw.slice(start + body.length)}`;
+  return next === raw ? null : next;
 }
 
 /** Rewrite active-space memory paths in an opencode persona body. */
@@ -214,13 +209,16 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
     // opencode.json/jsonc, whose `instructions` glob is the method include.
     const jsonPath = join(projectDir, "opencode.json");
     const jsoncPath = join(projectDir, "opencode.jsonc");
-    const configPath = existsSync(jsonPath) ? jsonPath : jsoncPath;
-    if (existsSync(configPath)) {
+    for (const [configPath, relPath] of [
+      [jsonPath, "opencode.json"],
+      [jsoncPath, "opencode.jsonc"],
+    ] as const) {
+      if (!existsSync(configPath)) continue;
       const raw = readSafe(configPath);
       if (raw !== null) {
         repointFile(
           configPath,
-          configPath === jsonPath ? "opencode.json" : "opencode.jsonc",
+          relPath,
           raw,
           sp,
           repointOpencodeInstructions,

@@ -19,8 +19,8 @@
 // `skills.paths: [".aidlc/skills"]` for skill discovery there.
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
-import type { EmitContext, EmitResult } from "../../scripts/manifest-types.ts";
+import { dirname, join } from "node:path";
+import type { EmitContext } from "../../scripts/manifest-types.ts";
 import { projectTier } from "../../core/tools/aidlc-tiers.ts";
 
 // Rewrite a core persona .md into its opencode-native subagent twin. The
@@ -64,7 +64,27 @@ function projectActiveMemoryReferences(raw: string): string {
     .replaceAll(".aidlc/rules/", "aidlc/spaces/default/memory/");
 }
 
-export default function emit(ctx: EmitContext): EmitResult {
+function embedShippedEntrypoints(raw: string, distRoot: string): string {
+  const marker = "/* @aidlc-shipped-entrypoints@ */ []";
+  const entries = ["hooks", "tools"].flatMap((dir) =>
+    readdirSync(join(distRoot, ".aidlc", dir), { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
+      .map((entry) => `${dir}/${entry.name}`)
+  ).sort();
+  if (!raw.includes(marker)) {
+    throw new Error("opencode adapter is missing its shipped-entrypoint emission marker.");
+  }
+  const rendered = JSON.stringify(entries, null, 2)
+    .split("\n")
+    .map((line, index) => index === 0 ? line : `  ${line}`)
+    .join("\n");
+  return raw.replace(
+    marker,
+    `/* @aidlc-shipped-entrypoints@ */ ${rendered}`,
+  );
+}
+
+export default function emit(ctx: EmitContext): void {
   const { coreRoot, harnessRoot, distRoot, substituteToken, tierCap } = ctx;
   const SHELL = join(distRoot, ".opencode");
   const ACTIVE_MEMORY = join(distRoot, "aidlc", "spaces", "default", "memory");
@@ -106,26 +126,19 @@ export default function emit(ctx: EmitContext): EmitResult {
   });
   emissions.push({
     path: join(SHELL, "plugin", "aidlc-opencode-adapter.ts"),
-    content: () => readFileSync(join(harnessRoot, "plugin", "aidlc-opencode-adapter.ts"), "utf-8"),
+    content: () =>
+      embedShippedEntrypoints(
+        readFileSync(join(harnessRoot, "plugin", "aidlc-opencode-adapter.ts"), "utf-8"),
+        distRoot,
+      ),
   });
 
-  const written: string[] = [];
-  const problems: string[] = [];
-  if (ctx.check) {
-    for (const { path, content } of emissions) {
-      const want = content();
-      if (!existsSync(path)) problems.push(`MISSING emission: ${relative(distRoot, path)}`);
-      else if (readFileSync(path, "utf-8") !== want) problems.push(`DIFFERS emission: ${relative(distRoot, path)}`);
-      written.push(path);
-    }
-  } else {
-    // Clean-sweep the shell so a removed persona/command doesn't linger.
-    rmSync(SHELL, { recursive: true, force: true });
-    for (const { path, content } of emissions) {
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, content(), "utf-8");
-      written.push(path);
-    }
+  // Clean-sweep the shell so a removed persona/command cannot linger. In
+  // --check mode the packager supplies an isolated distRoot, then compares the
+  // complete generated tree with the committed distribution.
+  rmSync(SHELL, { recursive: true, force: true });
+  for (const { path, content } of emissions) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content(), "utf-8");
   }
-  return { written, problems };
 }

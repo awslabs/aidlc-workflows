@@ -283,7 +283,10 @@ with status called out so an author is not misled:
 `agents/<plugin>-<role>-agent.md`, with frontmatter `name` equal to the filename
 stem and `plugin: <plugin>`. Compose copies them into `<harness>/agents/`
 without clobbering core or another plugin; an identical file is an idempotent
-skip, and different content at the same destination is drop-logged.
+skip, and different content at the same destination is drop-logged. On
+OpenCode, compose also emits a native `.opencode/agents/` twin with
+`mode: subagent`, `permission.task: deny`, and OpenCode-valid model/memory
+frontmatter.
 
 **Knowledge = methodology only** *(✅ projected + composed).* A plugin ships
 per-agent methodology knowledge into `knowledge/<agent-slug>/`, composed into

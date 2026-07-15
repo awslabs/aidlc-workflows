@@ -69,10 +69,6 @@ const manifest: HarnessManifest = {
   // .aidlc/ is AIDLC's own dir; core's rules/ name has nothing to collide with.
   rulesRename: null,
 
-  // Every authored .opencode/ surface is emit-owned (scanned by emit's own
-  // check); nothing authored lives inside the core-copied .aidlc/ dirs.
-  authoredExempt: [],
-
   emit,
 
   // Host plugin projection: opencode's own plugin store is JS-module-shaped

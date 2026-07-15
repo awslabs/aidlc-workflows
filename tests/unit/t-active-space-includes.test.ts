@@ -301,6 +301,7 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
     rmSync(join(root, "opencode.json"));
     const before = `{
   // Keep this project note.
+  // "instructions": ["aidlc/spaces/default/memory/**/*.md"],
   "instructions": [
     "docs/project.md",
     "aidlc/spaces/default/memory/**/*.md",
@@ -319,11 +320,28 @@ describe("t-active-space-includes: opencode opencode.json instructions glob", ()
     expect(written).toEqual(["opencode.jsonc"]);
     const after = readFileSync(join(root, "opencode.jsonc"), "utf-8");
     expect(after).toBe(
-      before.replace(
+      before.replaceAll(
         "aidlc/spaces/default/memory/**/*.md",
         "aidlc/spaces/teamB/memory/**/*.md",
       ),
     );
+  });
+
+  test("re-points both config filenames when both are present", () => {
+    const root = setup();
+    const jsonc = `{
+  "instructions": ["aidlc/spaces/default/memory/**/*.md"],
+}
+`;
+    writeFileSync(join(root, "opencode.jsonc"), jsonc, "utf-8");
+
+    const written = repointHarnessIncludes(root, "teamB");
+    expect(written).toEqual(["opencode.json", "opencode.jsonc"]);
+    for (const name of ["opencode.json", "opencode.jsonc"]) {
+      const body = readFileSync(join(root, name), "utf-8");
+      expect(body).toContain("aidlc/spaces/teamB/memory/**/*.md");
+      expect(body).not.toContain("aidlc/spaces/default/memory/**/*.md");
+    }
   });
 
   test("re-points explicit inline and native agent memory references with the config", () => {

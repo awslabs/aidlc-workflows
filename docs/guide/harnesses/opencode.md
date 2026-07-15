@@ -50,11 +50,13 @@ script (top-level dispatch, `process.exit`) crashes the session
 
    `opencode.json` carries three load-bearing blocks: `skills.paths` (skill
    discovery from `.aidlc/skills`), `instructions` (the method-tree include —
-   `/aidlc space <name>` re-points it), and the bash permission allowlist for
-   `bun .aidlc/tools/*` / `bun .aidlc/hooks/*`. If you merge into an existing
-   `opencode.json` or `opencode.jsonc`, keep all three. The adapter enforces
-   the permission boundary: an allowed AIDLC bun prefix must remain one direct
-   command, with no chaining, redirection, or command substitution.
+   `/aidlc space <name>` re-points it), and permission rules for AIDLC bash
+   entrypoints plus edits under `.aidlc/tools/` and `.aidlc/hooks/`. If you
+   merge into an existing `opencode.json` or `opencode.jsonc`, keep all three.
+   The adapter enforces the permission boundary: the target must be an entrypoint
+   embedded from the packaged tree, invoked as one direct command with no
+   chaining, redirection, expansion, or command substitution. Engine-code edits
+   prompt for approval.
 
 2. Apply the `.gitignore` entries from the shipped `AGENTS.md` § "Git
    Integration" before starting a workflow (per-clone audit shards are
@@ -84,6 +86,7 @@ script (top-level dispatch, `process.exit`) crashes the session
   them inline for most stages and delegates via the `task` tool for the two
   subagent stages (2.1 reverse-engineering, 3.5 code-generation). Their native
   permission map denies `task`, so delegated agents cannot delegate again.
+  Plugin composition emits the same `.opencode/agents/` twin for plugin personas.
 - **Space switches preserve JSONC.** `/aidlc space <name>` updates the method
   glob in either `opencode.json` or `opencode.jsonc` without stripping comments
   or trailing commas, and keeps explicit persona memory paths aligned.
@@ -104,5 +107,5 @@ opencode run --command aidlc -- "--status"  # /aidlc --status through the harnes
 ```
 
 The doctor's opencode-specific checks: the adapter plugin present at
-`.opencode/plugin/`, the project-root `opencode.json` present, and
-`.opencode/command/aidlc.md` present.
+`.opencode/plugin/`, a project-root `opencode.json` or `opencode.jsonc`
+present, and `.opencode/command/aidlc.md` present.

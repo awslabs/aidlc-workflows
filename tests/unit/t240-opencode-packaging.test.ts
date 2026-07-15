@@ -23,18 +23,21 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import createAdapter from "../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts";
 
 const PACKAGE_SCRIPT = join(REPO_ROOT, "scripts", "package.ts");
 const CLAUDE_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
@@ -190,10 +193,86 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
     const cfg = JSON.parse(readFileSync(join(OPENCODE_ROOT, "opencode.json"), "utf-8")) as {
       skills?: { paths?: string[] };
       instructions?: string[];
-      permission?: { bash?: Record<string, string> };
+      permission?: {
+        bash?: Record<string, string>;
+        edit?: Record<string, string>;
+      };
     };
     expect(cfg.skills?.paths).toContain(".aidlc/skills");
     expect(cfg.instructions).toContain("aidlc/spaces/default/memory/**/*.md");
     expect(cfg.permission?.bash?.["bun .aidlc/tools/*"]).toBe("allow");
+    expect(cfg.permission?.edit?.[".aidlc/tools/**"]).toBe("ask");
+    expect(cfg.permission?.edit?.[".aidlc/hooks/**"]).toBe("ask");
+  });
+
+  test("9: the adapter embeds exactly the shipped tool and hook entrypoints", async () => {
+    const moduleExports = await import(
+      "../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts"
+    );
+    expect(Object.keys(moduleExports)).toEqual(["default"]);
+
+    const expected = ["hooks", "tools"].flatMap((dir) =>
+      readdirSync(join(ENGINE, dir), { withFileTypes: true })
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".ts"))
+        .map((entry) => `${dir}/${entry.name}`)
+    ).sort();
+    const adapter = readFileSync(
+      join(OPENCODE_ROOT, ".opencode", "plugin", "aidlc-opencode-adapter.ts"),
+      "utf-8",
+    );
+    const emitted = adapter.match(
+      /\/\* @aidlc-shipped-entrypoints@ \*\/\s*(\[[\s\S]*?\])\s*,\s*\n\);/,
+    )?.[1];
+    expect(emitted).toBeDefined();
+    expect(JSON.parse(emitted ?? "[]")).toEqual(expected);
+    const adapterHooks = await createAdapter({
+      client: {
+        session: {
+          get: async () => ({ data: {} }),
+          prompt: async () => {},
+        },
+      },
+      directory: OPENCODE_ROOT,
+    });
+    const before = adapterHooks["tool.execute.before"];
+    for (const entrypoint of expected) {
+      await expect(
+        before(
+          { tool: "bash", sessionID: "main", callID: entrypoint },
+          { args: { command: `bun .aidlc/${entrypoint}` } },
+        ),
+      ).resolves.toBeUndefined();
+    }
+    await expect(
+      before(
+        { tool: "bash", sessionID: "main", callID: "unknown" },
+        { args: { command: "bun .aidlc/tools/payload.ts" } },
+      ),
+    ).rejects.toThrow(
+      "shipped tool or hook",
+    );
+  });
+
+  test("10: doctor accepts an opencode.jsonc-only install", () => {
+    const root = mkdtempSync(join(tmpdir(), "t240-opencode-doctor-"));
+    try {
+      const project = join(root, "project");
+      cpSync(OPENCODE_ROOT, project, { recursive: true });
+      renameSync(join(project, "opencode.json"), join(project, "opencode.jsonc"));
+      const r = spawnSync(
+        "bun",
+        [join(project, ".aidlc", "tools", "aidlc-utility.ts"), "doctor", "--project-dir", project],
+        {
+          cwd: project,
+          encoding: "utf-8",
+          env: { ...process.env, AIDLC_HARNESS_DIR: ".aidlc" },
+        },
+      );
+      expect(r.stdout).toContain(
+        "✓  opencode.json or opencode.jsonc present (permissions + method instructions glob)",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

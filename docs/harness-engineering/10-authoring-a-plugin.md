@@ -217,7 +217,9 @@ projection remains deferred (doc 18 §8 Status).
   `agents/test-pro-metrics-agent.md` has `name: test-pro-metrics-agent`). It is
   discovered automatically after compose, and your plugin's stages may name it
   as `lead_agent`/`support_agents`. A same-path collision with different content
-  is not overwritten; compose records a drop log. See
+  is not overwritten; compose records a drop log. OpenCode composition also
+  creates the native `.opencode/agents/` subagent twin and denies nested
+  `task` delegation. See
   [Adding an Agent](03-adding-an-agent.md).
 - **Sensors.** Ship the manifest `sensors/aidlc-<id>.md` **and** its script under
   `tools/` (both — a manifest alone is discoverable but its script must live in

@@ -1295,13 +1295,15 @@ function handleDoctor(projectDir: string): void {
         "hook trust: ensure [hooks.state] entries are pre-seeded in $CODEX_HOME/config.toml (`bun scripts/package.ts codex trust --project <dir>`) or run one TUI trust pass",
     });
   } else if (harness === ".aidlc") {
-    // opencode: the wiring config is the project-root opencode.json
+    // opencode: the wiring config is the project-root opencode.json/jsonc
     // (permissions + the method-include instructions glob) plus the /aidlc
     // command entry; the plugin adapter is checked with the hook roster above.
+    const opencodeJson = join(projectDir, "opencode.json");
+    const opencodeJsonc = join(projectDir, "opencode.jsonc");
     results.push({
-      pass: existsSync(join(projectDir, "opencode.json")),
-      label: "opencode.json present (permissions + method instructions glob)",
-      fix: "copy from `dist/opencode/opencode.json` (project root, beside .opencode/)",
+      pass: existsSync(opencodeJson) || existsSync(opencodeJsonc),
+      label: "opencode.json or opencode.jsonc present (permissions + method instructions glob)",
+      fix: "copy `dist/opencode/opencode.json` beside .opencode/, or merge it into opencode.jsonc",
     });
     results.push({
       pass: existsSync(join(projectDir, ".opencode", "command", "aidlc.md")),

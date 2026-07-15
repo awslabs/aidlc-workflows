@@ -33,6 +33,7 @@ const TIMEOUT_MS = 60_000;
 
 const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
+const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
 const STAGE_TABLE_BEGIN =
   "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
@@ -192,6 +193,47 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         `${harness.name}: knowledge`,
       ).toBe(true);
     }
+  });
+
+  test("OpenCode compose emits plugin agents to both inline and native rosters", () => {
+    const pluginOpenCode = join(tmp, "plugin", "opencode");
+    const build = spawnSync(
+      BUN,
+      [PACKAGE_TS, "plugin", "build", PLUGIN, "opencode", pluginOpenCode],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+      },
+    );
+    if (build.status !== 0) throw new Error(`opencode plugin build failed: ${build.stderr}`);
+
+    const opencodeProject = mkdtempSync(join(tmp, "opencode-compose-"));
+    cpSync(OPENCODE_DIST, opencodeProject, { recursive: true });
+    const compose = spawnSync(BUN, [join(pluginOpenCode, "hooks", "compose.ts")], {
+      cwd: opencodeProject,
+      encoding: "utf-8",
+      timeout: TIMEOUT_MS - 5_000,
+      env: {
+        ...process.env,
+        PLUGIN_ROOT: pluginOpenCode,
+        AIDLC_PROJECT_DIR: opencodeProject,
+        AIDLC_HARNESS_DIR: ".aidlc",
+      },
+    });
+    if (compose.status !== 0) throw new Error(`opencode compose failed: ${compose.stderr}`);
+
+    const inline = join(opencodeProject, ".aidlc", "agents", "test-pro-metrics-agent.md");
+    const native = join(opencodeProject, ".opencode", "agents", "test-pro-metrics-agent.md");
+    expect(existsSync(inline)).toBe(true);
+    expect(existsSync(native)).toBe(true);
+    const body = readFileSync(native, "utf-8");
+    expect(body).toMatch(/^mode: subagent$/m);
+    expect(body).toMatch(/^permission:\n {2}task: deny$/m);
+    expect(body).not.toMatch(/^disallowedTools:/m);
+    expect(body).not.toMatch(/^model: sonnet$/m);
+    expect(body).not.toContain(".aidlc/rules/");
+    expect(body).toContain("aidlc/spaces/default/memory/");
   });
 
   // --- New stages compose + route ---
