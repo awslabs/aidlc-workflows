@@ -20,6 +20,7 @@ import {
   TOOLS,
   renderAllHelp,
   renderHumanHelp,
+  resolveAction,
 } from "../../core/tools/aidlc.ts";
 import {
   cleanupTestProject,
@@ -581,6 +582,31 @@ describe("t230 dispatcher help and errors", () => {
 });
 
 describe("t230 dispatcher hook routing", () => {
+  test("adapter routing separates harness, target, and extra arguments", () => {
+    const codex = resolveAction(["adapter", "codex", "session-start"]);
+    expect(codex.type).toBe("adapter");
+    if (codex.type === "adapter") {
+      expect(codex.harness).toBe("codex");
+      expect(codex.target).toBe("session-start");
+      expect(codex.extraArgs).toEqual([]);
+      expect(codex.path.endsWith("aidlc-codex-adapter.ts")).toBe(true);
+    }
+
+    const kiro = resolveAction([
+      "adapter",
+      "kiro",
+      "reviewer-scope",
+      "aidlc-product-lead-agent",
+    ]);
+    expect(kiro.type).toBe("adapter");
+    if (kiro.type === "adapter") {
+      expect(kiro.harness).toBe("kiro");
+      expect(kiro.target).toBe("reviewer-scope");
+      expect(kiro.extraArgs).toEqual(["aidlc-product-lead-agent"]);
+      expect(kiro.path.endsWith("aidlc-kiro-adapter.ts")).toBe(true);
+    }
+  });
+
   test("hook validate-state dispatches to run(input) and writes heartbeat", () => {
     const projectDir = makeProject();
     const res = viaDispatcher(["hook", "validate-state"], projectDir, {}, "{}");
@@ -608,5 +634,30 @@ describe("t230 dispatcher hook routing", () => {
     expect(res.stderr.toString("utf-8")).toBe("");
     expect(res.stdout.byteLength).toBeGreaterThan(0);
     expect(res.stdout.toString("utf-8")).toContain("Intent Capture");
+  });
+
+  test("Codex adapter target dispatches through the installed harness adapter", () => {
+    const projectDir = makeProject();
+    cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), join(projectDir, ".codex"), {
+      recursive: true,
+    });
+    const input = JSON.stringify({
+      hook_event_name: "PreCompact",
+      cwd: projectDir,
+      session_id: "t230-adapter",
+    });
+    const res = viaDispatcher(
+      ["adapter", "codex", "validate-state"],
+      projectDir,
+      {},
+      input,
+    );
+
+    expect(res.exitCode).toBe(0);
+    expect(res.stderr.toString("utf-8")).toBe("");
+    expect(
+      existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "validate-state.last")) ||
+        existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last")),
+    ).toBe(true);
   });
 });

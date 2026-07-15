@@ -16,6 +16,7 @@ import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
+  mkdtempSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -159,13 +160,14 @@ function asString(value: string | Buffer | undefined): string {
 function run(
   command: string,
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string; timeoutMs?: number } = {},
 ): CommandResult {
   const cwd = options.cwd ?? REPO_ROOT;
   const proc = spawnSync(command, args, {
     cwd,
     encoding: "utf-8",
     env: options.env ?? process.env,
+    input: options.input,
     timeout: options.timeoutMs ?? 300_000,
   });
   return {
@@ -277,6 +279,222 @@ function delegatePluginSyncGate(artifact: string): GateResult {
   );
 }
 
+function realPluginSyncGate(artifact: string): GateResult {
+  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-plugin-"));
+  const pluginRoot = join(REPO_ROOT, "dist", "plugins", "test-pro", "claude");
+  try {
+    cpSync(RUNTIME_ASSET_ROOT, join(project, ".claude"), { recursive: true });
+    cpSync(join(REPO_ROOT, "dist", "claude", "aidlc"), join(project, "aidlc"), {
+      recursive: true,
+    });
+    const result = run(artifact, ["plugin", "sync", "--project-dir", project], {
+      cwd: project,
+      env: {
+        ...process.env,
+        PATH: "",
+        AIDLC_HARNESS_DIR: ".claude",
+        AIDLC_PLUGIN_ROOT: pluginRoot,
+        CLAUDE_PROJECT_DIR: project,
+      },
+      timeoutMs: 60_000,
+    });
+    const composedStage = join(
+      project,
+      ".claude",
+      "aidlc-common",
+      "stages",
+      "construction",
+      "test-pro-integration.md",
+    );
+    const graphPath = join(project, ".claude", "tools", "data", "stage-graph.json");
+    let graphContainsPlugin = false;
+    try {
+      const graph = JSON.parse(readFileSync(graphPath, "utf-8")) as Array<{ slug?: string }>;
+      graphContainsPlugin = graph.some((stage) => stage.slug === "test-pro-integration");
+    } catch {
+      graphContainsPlugin = false;
+    }
+    const output = `${result.stdout}\n${result.stderr}`;
+    return commandGate(
+      "real-plugin-sync",
+      result,
+      result.status === 0 &&
+        result.stdout.trim() === "plugin sync complete: 1 plugin(s)" &&
+        existsSync(composedStage) &&
+        graphContainsPlugin &&
+        !/unknown command|Cannot find module|\/\$bunfs\//.test(output),
+      {
+        expected: "real plugin compose and graph compile succeed without PATH bun",
+        actual: existsSync(composedStage) && graphContainsPlugin
+          ? result.stdout.trim()
+          : result.stderr.trim() || "composed graph entry missing",
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
+function pathlessOrchestrateGate(
+  artifact: string,
+  name: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  expectedKind: string,
+  expectedText: string,
+): GateResult {
+  const project = mkdtempSync(join(tmpdir(), `aidlc-binary-${name}-`));
+  try {
+    const result = run(artifact, [...args, "--project-dir", project], {
+      cwd: project,
+      env: {
+        ...process.env,
+        ...env,
+        PATH: "",
+        CLAUDE_PROJECT_DIR: project,
+      },
+      timeoutMs: 30_000,
+    });
+    let kind = "";
+    let directiveText = "";
+    try {
+      const directive = JSON.parse(result.stdout) as {
+        kind?: string;
+        message?: string;
+        reason?: string;
+      };
+      kind = directive.kind ?? "";
+      directiveText = directive.message ?? directive.reason ?? "";
+    } catch {
+      kind = "";
+    }
+    const output = `${result.stdout}\n${result.stderr}`;
+    return commandGate(
+      name,
+      result,
+      result.status === 0 &&
+        kind === expectedKind &&
+        directiveText.includes(expectedText) &&
+        !/Executable not found|unknown command|Cannot find module|\/\$bunfs\//.test(output),
+      {
+        expected: `${expectedKind} directive containing ${expectedText}`,
+        actual: kind ? `${kind}: ${directiveText}` : result.stderr.trim() || result.stdout.trim(),
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
+function hookGate(artifact: string): GateResult {
+  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-hook-"));
+  try {
+    const result = run(artifact, ["hook", "validate-state"], {
+      cwd: project,
+      env: { ...process.env, PATH: "", CLAUDE_PROJECT_DIR: project },
+      input: "{}",
+      timeoutMs: 30_000,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    const heartbeat = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      ".aidlc-hooks-health",
+      "validate-state.last",
+    );
+    return commandGate(
+      "hook-validate-state",
+      result,
+      result.status === 0 &&
+        existsSync(heartbeat) &&
+        !/not available|Cannot find module|\/\$bunfs\/|unknown command/.test(output),
+      {
+        expected: "compiled hook route writes validate-state heartbeat",
+        actual: existsSync(heartbeat) ? "heartbeat written" : result.stderr.trim(),
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
+function statuslineGate(artifact: string): GateResult {
+  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-statusline-"));
+  try {
+    const input = JSON.stringify({
+      workspace: { project_dir: project },
+      model: { id: "claude-test" },
+      context_window: { used_percentage: 5 },
+    });
+    const result = run(artifact, ["statusline"], {
+      cwd: project,
+      env: { ...process.env, PATH: "" },
+      input,
+      timeoutMs: 30_000,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    return commandGate(
+      "statusline",
+      result,
+      result.status === 0 &&
+        result.stdout.trim().length > 0 &&
+        !/not available|Cannot find module|\/\$bunfs\//.test(output),
+      {
+        expected: "non-empty compiled statusline output",
+        actual: result.stdout.trim() || result.stderr.trim(),
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
+function codexAdapterGate(artifact: string): GateResult {
+  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-codex-"));
+  try {
+    cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), join(project, ".codex"), {
+      recursive: true,
+    });
+    const input = JSON.stringify({
+      hook_event_name: "PreCompact",
+      cwd: project,
+      session_id: `binary-gate-${Date.now()}`,
+    });
+    const result = run(artifact, ["adapter", "codex", "validate-state"], {
+      cwd: project,
+      env: { ...process.env, PATH: "" },
+      input,
+      timeoutMs: 30_000,
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    const heartbeat = join(
+      project,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      ".aidlc-hooks-health",
+      "validate-state.last",
+    );
+    return commandGate(
+      "adapter-codex-validate-state",
+      result,
+      result.status === 0 &&
+        existsSync(heartbeat) &&
+        !/not available|Cannot find module|\/\$bunfs\/|unknown command/.test(output),
+      {
+        expected: "Codex adapter invokes validate-state",
+        actual: existsSync(heartbeat) ? "heartbeat written" : result.stderr.trim(),
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
 function delegateDoctorDataGate(artifact: string): GateResult {
   const result = run(artifact, ["doctor"], { cwd: tmpdir(), timeoutMs: 30_000 });
   const output = `${result.stdout}\n${result.stderr}`;
@@ -369,6 +587,14 @@ function runtimeAssetsGate(artifact: string): GateResult {
       source: join(RUNTIME_ASSET_ROOT, "aidlc-common", "stages"),
       destination: join(artifactDir, "..", "aidlc-common", "stages"),
     },
+    {
+      source: join(RUNTIME_ASSET_ROOT, "tools"),
+      destination: join(artifactDir, "..", "tools"),
+    },
+    {
+      source: join(RUNTIME_ASSET_ROOT, "hooks"),
+      destination: join(artifactDir, "..", "hooks"),
+    },
   ];
 
   try {
@@ -396,7 +622,7 @@ function runtimeAssetsGate(artifact: string): GateResult {
     expected: assets.length,
     actual: assets.length - missing.length,
     detail: missing.length === 0
-      ? "data, scopes, agents, and stage definitions staged"
+      ? "data, scopes, agents, stages, tools, and hooks staged"
       : `missing destinations: ${missing.join(", ")}`,
   };
 }
@@ -473,9 +699,37 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(versionGate(actual.artifact));
     result.gates.push(helpGate(actual.artifact));
     result.gates.push(delegatePluginSyncGate(actual.artifact));
+    result.gates.push(realPluginSyncGate(actual.artifact));
     result.gates.push(delegateDoctorDataGate(actual.artifact));
     result.gates.push(devSpawnGrepGate(ENTRY));
     result.gates.push(pathlessVersionGate(actual.artifact));
+    result.gates.push(pathlessOrchestrateGate(
+      actual.artifact,
+      "pathless-next-env-scope",
+      ["next"],
+      { AWS_AIDLC_DEFAULT_SCOPE: "feature" },
+      "error",
+      "No workflow state found",
+    ));
+    result.gates.push(pathlessOrchestrateGate(
+      actual.artifact,
+      "pathless-park",
+      ["park"],
+      {},
+      "error",
+      "State file not found",
+    ));
+    result.gates.push(pathlessOrchestrateGate(
+      actual.artifact,
+      "pathless-single-audit",
+      ["report", "--single", "--stage", "requirements-analysis", "--result", "completed"],
+      {},
+      "done",
+      "committed under synthetic workflow",
+    ));
+    result.gates.push(hookGate(actual.artifact));
+    result.gates.push(statuslineGate(actual.artifact));
+    result.gates.push(codexAdapterGate(actual.artifact));
   } else {
     result.gates.push(sizeGate(result.bytes));
     result.gates.push(fileGate(actual.artifact, target.fileNeedle ?? ""));

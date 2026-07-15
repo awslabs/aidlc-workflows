@@ -439,4 +439,31 @@ describe("Kiro quoted argv tokenizer", () => {
       source: "workspace-verb",
     });
   });
+
+  test("engine directives preserve multi-word workspace arguments", () => {
+    const projectDir = scratchProject();
+    try {
+      const cases = [
+        {
+          args: ["space", "create", "My Space"],
+          command: "aidlc-utility.ts space-create 'My Space'",
+        },
+        {
+          args: ["space", "switch", "My Space"],
+          command: "aidlc-utility.ts space switch 'My Space'",
+        },
+        {
+          args: ["intent", "birth", "--scope", "poc", "--label", "My Work"],
+          command: "aidlc-utility.ts intent-birth --scope poc --label 'My Work'",
+        },
+      ];
+      for (const item of cases) {
+        const result = directive(projectDir, item.args);
+        expect(result.kind, item.args.join(" ")).toBe("print");
+        expect(result.message, item.args.join(" ")).toContain(item.command);
+      }
+    } finally {
+      cleanup(projectDir);
+    }
+  });
 });

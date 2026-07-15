@@ -60,9 +60,12 @@ New config get/list and plugin list/sync commands land in the dispatcher grammar
 * Plugin SessionStart hooks now probe for `aidlc` on `PATH` first and run `aidlc plugin sync`; a nonzero result falls back to the existing bun plus `hooks/compose.ts` command, and the hook still skips cleanly when neither executable is available.
 * Native `aidlc` binaries now statically embed all 15 dispatcher delegate modules, so routed commands reach their handlers instead of failing with a missing module error.
 * Native `aidlc` binaries now resolve the compiled stage graph, scope grid, scopes, and agents relative to the running executable when module-relative paths are absent.
+* Native orchestration now re-enters the compiled dispatcher for environment-scope resolution, jumps, state transitions, and audit appends, so these paths do not require a separate `bun` executable on `PATH`.
+* Native plugin sync imports each plugin composer and routes its graph, generated-table, and runner refreshes through the compiled dispatcher; hook, statusline, and harness-adapter routes now resolve installed or executable-relative runtime assets.
 * `aidlc doctor` now reports a missing or unreadable stage graph as a failing advisory row instead of crashing before the health report is printed.
-* Native binary builds now gate a real `plugin sync` delegate in addition to inline version and help routes, catching missing compiled delegate modules before release.
-* Native binary builds now stage runtime data beside each executable and gate a real `doctor` report for missing-module, Bun virtual-filesystem, and missing-file crash signatures.
+* Workspace terminal directives preserve multi-word names and labels as one shell argument, so quoted `space create`, `space switch`, and `intent birth --label` values reach the utility unchanged.
+* Native binary builds now gate real plugin composition, PATH-empty orchestration, hook, statusline, and Codex adapter paths in addition to inline version, help, and doctor routes.
+* Native binary builds now stage runtime data, tools, and hooks beside each executable and gate a real `doctor` report for missing-module, Bun virtual-filesystem, and missing-file crash signatures.
 * Migration note for stale `init` callers: describe what to build instead, for example `/aidlc "build the auth service"`.
 
 ## [2.3.15] - 2026-07-14

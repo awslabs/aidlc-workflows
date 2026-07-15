@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   artifactsRegistryFor,
@@ -768,7 +768,7 @@ function pluginRootCandidatesFromEnv(): string[] {
   return [...new Set(roots)];
 }
 
-function handlePluginSync(projectDir: string): void {
+async function handlePluginSync(projectDir: string): Promise<void> {
   const roots = pluginRootCandidatesFromEnv();
   const composePaths = roots
     .map((root) => ({ root, compose: join(root, "hooks", "compose.ts") }))
@@ -780,17 +780,51 @@ function handlePluginSync(projectDir: string): void {
   }
 
   for (const item of composePaths) {
+    const composeEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      AIDLC_HARNESS_DIR: harnessDir(),
+      AIDLC_PROJECT_DIR: projectDir,
+      AIDLC_PLUGIN_ROOT: item.root,
+      CLAUDE_PLUGIN_ROOT: item.root,
+      PLUGIN_ROOT: item.root,
+    };
+    if (import.meta.url.includes("/$bunfs/")) {
+      const envKeys = [
+        "AIDLC_HARNESS_DIR",
+        "AIDLC_PROJECT_DIR",
+        "AIDLC_PLUGIN_ROOT",
+        "CLAUDE_PLUGIN_ROOT",
+        "PLUGIN_ROOT",
+        "AIDLC_COMPILED_EXECUTABLE",
+      ] as const;
+      const previous = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+      Object.assign(process.env, composeEnv, {
+        AIDLC_COMPILED_EXECUTABLE: process.execPath,
+      });
+      try {
+        const mod = await import(pathToFileURL(item.compose).href) as {
+          compose?: () => void | Promise<void>;
+        };
+        if (typeof mod.compose !== "function") {
+          die(`plugin-sync failed for ${item.root}: compose.ts does not export compose()`);
+        }
+        await mod.compose();
+      } catch (error) {
+        die(`plugin-sync failed for ${item.root}: ${errorMessage(error)}`);
+      } finally {
+        for (const key of envKeys) {
+          const value = previous[key];
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      }
+      continue;
+    }
+
     const result = spawnSync(process.execPath, [item.compose], {
       cwd: projectDir,
       encoding: "utf-8",
-      env: {
-        ...process.env,
-        AIDLC_HARNESS_DIR: harnessDir(),
-        AIDLC_PROJECT_DIR: projectDir,
-        AIDLC_PLUGIN_ROOT: item.root,
-        CLAUDE_PLUGIN_ROOT: item.root,
-        PLUGIN_ROOT: item.root,
-      },
+      env: composeEnv,
     });
     if (result.status !== 0) {
       const detail = (result.stderr || result.stdout || `exit ${result.status ?? 1}`).trim();
@@ -5093,7 +5127,7 @@ function handleResolveEnvScope(): void {
 // CLI entry point
 // ---------------------------------------------------------------------------
 
-export function main(argv: string[]): void {
+export async function main(argv: string[]): Promise<void> {
   const rawArgs = argv;
   errorArgs = [...rawArgs];
   const { positional, flags } = parseArgs(rawArgs);
@@ -5145,7 +5179,7 @@ export function main(argv: string[]): void {
       handlePluginList(flags);
       break;
     case "plugin-sync":
-      handlePluginSync(projectDir);
+      await handlePluginSync(projectDir);
       break;
     // init / state-init are transition-only and intentionally absent from help.
     // Stale init callers get a loud error for this release; workflow start is
@@ -5199,4 +5233,8 @@ export function main(argv: string[]): void {
   }
 }
 
-if (import.meta.main) main(process.argv.slice(2));
+if (import.meta.main) {
+  void main(process.argv.slice(2)).catch((error) => {
+    die(errorMessage(error));
+  });
+}

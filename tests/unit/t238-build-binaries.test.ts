@@ -120,6 +120,18 @@ describe("t238 build-binaries release builder", () => {
     expect(delegatePluginSync.stderr).not.toContain("Cannot find module");
     expect(delegatePluginSync.stderr).not.toContain("/$bunfs/");
 
+    for (const name of [
+      "real-plugin-sync",
+      "pathless-next-env-scope",
+      "pathless-park",
+      "pathless-single-audit",
+      "hook-validate-state",
+      "statusline",
+      "adapter-codex-validate-state",
+    ]) {
+      expect(gate(native, name).ok, name).toBe(true);
+    }
+
     const delegateDoctorData = gate(native, "delegate-doctor-data");
     expect(delegateDoctorData.ok).toBe(true);
     expect(delegateDoctorData.stdout).toContain("AI-DLC Health Check");

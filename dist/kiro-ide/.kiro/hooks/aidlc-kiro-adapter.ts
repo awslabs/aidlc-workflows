@@ -62,7 +62,11 @@ interface IdeHookContext {
   toolSuccess?: boolean;
 }
 
-export async function run(target: string, input: string): Promise<number> {
+export async function run(
+  target: string,
+  input: string,
+  _extraArgs: string[] = [],
+): Promise<number> {
 void input;
 // LOAD-BEARING (not debug-only): this is the base dir for resolve(projectDir,
 // rawPath) that turns the IDE's workspace-relative write path into the absolute
@@ -325,7 +329,11 @@ function buildForward(): Forward {
 function runCore(hookFile: string, input: Record<string, unknown>): { stdout: string; code: number } {
   // Reuse the exact bun binary running this adapter; the child must not depend on
   // PATH containing bun (the hook environment often lacks the bun install dir).
-  const r = Bun.spawnSync([process.execPath, join(HOOKS_DIR, hookFile)], {
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const command = executable
+    ? [executable, "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
+    : [process.execPath, join(HOOKS_DIR, hookFile)];
+  const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",
     stderr: "ignore",
@@ -377,5 +385,5 @@ return result.code;
 
 if (import.meta.main) {
   const input = (process.env.USER_PROMPT ?? "").length > 0 ? "" : await Bun.stdin.text();
-  process.exit(await run(process.argv[2] ?? "", input));
+  process.exit(await run(process.argv[2] ?? "", input, process.argv.slice(3)));
 }

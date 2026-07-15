@@ -396,7 +396,7 @@ export const ROUTES: readonly Route[] = [
     classification: "routing-only",
     verbs: ["adapter"],
     routeOnly: "adapter",
-    all: ["adapter <target>"],
+    all: ["adapter <harness> <target> [args]"],
   },
 ];
 // ROUTES_TABLE_END
@@ -405,7 +405,7 @@ export type Action =
   | { type: "delegate"; tool: string; args: string[] }
   | { type: "hook"; name: string; path: string }
   | { type: "statusline"; path: string }
-  | { type: "adapter"; target: string; path: string }
+  | { type: "adapter"; harness: AdapterHarness; target: string; extraArgs: string[]; path: string }
   | { type: "version" }
   | { type: "stub"; message: string; code: number }
   | { type: "help"; all: boolean }
@@ -432,8 +432,44 @@ function toolsDir(): string {
   return dispatcherDir();
 }
 
-function hooksDir(): string {
-  return join(dispatcherDir(), "..", "hooks");
+type AdapterHarness = "codex" | "kiro" | "kiro-ide";
+
+const ADAPTER_HARNESS_LEAF: Record<AdapterHarness, string> = {
+  codex: ".codex",
+  kiro: ".kiro",
+  "kiro-ide": ".kiro",
+};
+
+function isAdapterHarness(value: string): value is AdapterHarness {
+  return Object.prototype.hasOwnProperty.call(ADAPTER_HARNESS_LEAF, value);
+}
+
+function resolveHookPath(file: string, harness?: AdapterHarness): string {
+  const moduleRelative = join(dispatcherDir(), "..", "hooks", file);
+  const leaves = harness
+    ? [ADAPTER_HARNESS_LEAF[harness]]
+    : [
+        process.env.AIDLC_HARNESS_DIR,
+        ".claude",
+        ".kiro",
+        ".codex",
+      ].filter((value, index, values): value is string =>
+        typeof value === "string" && value.length > 0 && values.indexOf(value) === index
+      );
+  const installed = leaves.map((leaf) => join(process.cwd(), leaf, "hooks", file));
+  const executableRelative = harness
+    ? join(
+        dirname(process.execPath),
+        "..",
+        "harnesses",
+        harness,
+        ADAPTER_HARNESS_LEAF[harness],
+        "hooks",
+        file,
+      )
+    : join(dirname(process.execPath), "..", "hooks", file);
+  const candidates = [moduleRelative, ...installed, executableRelative];
+  return candidates.find((candidate) => existsSync(candidate)) ?? moduleRelative;
 }
 
 function routeForms(route: Route): string[] {
@@ -591,17 +627,26 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
     const name = argv[1];
     if (!name) return nounError("hook", undefined);
     if (!isSafeName(name)) return nounError("hook", name);
-    return { type: "hook", name, path: join(hooksDir(), `aidlc-${name}.ts`) };
+    return { type: "hook", name, path: resolveHookPath(`aidlc-${name}.ts`) };
   }
   if (route.routeOnly === "statusline") {
-    return { type: "statusline", path: join(hooksDir(), "aidlc-statusline.ts") };
+    return { type: "statusline", path: resolveHookPath("aidlc-statusline.ts") };
   }
   if (route.routeOnly === "adapter") {
-    const target = argv[1];
+    const harness = argv[1];
+    const target = argv[2];
+    if (!harness) return nounError("adapter", undefined);
+    if (!isAdapterHarness(harness)) return nounError("adapter", harness);
     if (!target) return nounError("adapter", undefined);
     if (!isSafeName(target)) return nounError("adapter", target);
-    const file = target === "codex" ? "aidlc-codex-adapter.ts" : "aidlc-kiro-adapter.ts";
-    return { type: "adapter", target, path: join(hooksDir(), file) };
+    const file = harness === "codex" ? "aidlc-codex-adapter.ts" : "aidlc-kiro-adapter.ts";
+    return {
+      type: "adapter",
+      harness,
+      target,
+      extraArgs: argv.slice(3),
+      path: resolveHookPath(file, harness),
+    };
   }
   return nounError(argv[0], argv[1]);
 }
@@ -801,15 +846,28 @@ async function runStatusline(action: Extract<Action, { type: "statusline" }>): P
 
 async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise<number> {
   if (!existsSync(action.path)) {
-    text(2, `aidlc adapter ${action.target}: not available in this install\n`);
+    text(2, `aidlc adapter ${action.harness} ${action.target}: not available in this install\n`);
     return 1;
   }
-  const mod = await import(pathToFileURL(action.path).href);
-  if (typeof mod.run !== "function") {
-    text(2, `aidlc adapter ${action.target}: adapter does not export run(target, input)\n`);
-    return 1;
+  const previousHarness = process.env.AIDLC_HARNESS_DIR;
+  const previousExecutable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  process.env.AIDLC_HARNESS_DIR = ADAPTER_HARNESS_LEAF[action.harness];
+  if (import.meta.url.includes("/$bunfs/")) {
+    process.env.AIDLC_COMPILED_EXECUTABLE = process.execPath;
   }
-  return await mod.run(action.target, await readStdin());
+  try {
+    const mod = await import(pathToFileURL(action.path).href);
+    if (typeof mod.run !== "function") {
+      text(2, `aidlc adapter ${action.harness} ${action.target}: adapter does not export run(target, input, extraArgs)\n`);
+      return 1;
+    }
+    return await mod.run(action.target, await readStdin(), action.extraArgs);
+  } finally {
+    if (previousHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
+    else process.env.AIDLC_HARNESS_DIR = previousHarness;
+    if (previousExecutable === undefined) delete process.env.AIDLC_COMPILED_EXECUTABLE;
+    else process.env.AIDLC_COMPILED_EXECUTABLE = previousExecutable;
+  }
 }
 
 async function execute(action: Action): Promise<number> {

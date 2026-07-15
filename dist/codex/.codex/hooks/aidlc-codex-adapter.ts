@@ -75,7 +75,11 @@ interface CodexHookInput {
   stop_hook_active?: boolean;
 }
 
-export async function run(target: string, input: string): Promise<number> {
+export async function run(
+  target: string,
+  input: string,
+  _extraArgs: string[] = [],
+): Promise<number> {
 let rawInput = "";
 let codex: CodexHookInput = {};
 if (!process.stdin.isTTY) {
@@ -167,7 +171,11 @@ try {
 function runCore(hookFile: string, input: string): { stdout: string; code: number } {
   // Reuse the exact bun binary running this adapter; the child must not depend on
   // PATH containing bun (the hook environment often lacks the bun install dir).
-  const r = Bun.spawnSync([process.execPath, join(HOOKS_DIR, hookFile)], {
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const command = executable
+    ? [executable, "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
+    : [process.execPath, join(HOOKS_DIR, hookFile)];
+  const r = Bun.spawnSync(command, {
     stdin: Buffer.from(input, "utf-8"),
     stdout: "pipe",
     stderr: "ignore",
@@ -182,7 +190,11 @@ function runCoreWithStderr(
   hookFile: string,
   input: string,
 ): { stdout: string; stderr: string; code: number } {
-  const r = Bun.spawnSync([process.execPath, join(HOOKS_DIR, hookFile)], {
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const command = executable
+    ? [executable, "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
+    : [process.execPath, join(HOOKS_DIR, hookFile)];
+  const r = Bun.spawnSync(command, {
     stdin: Buffer.from(input, "utf-8"),
     stdout: "pipe",
     stderr: "pipe",
@@ -452,5 +464,5 @@ switch (target) {
 }
 
 if (import.meta.main) {
-  process.exit(await run(process.argv[2] ?? "", await Bun.stdin.text()));
+  process.exit(await run(process.argv[2] ?? "", await Bun.stdin.text(), process.argv.slice(3)));
 }

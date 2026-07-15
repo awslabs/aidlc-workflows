@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// compose.ts — AIDLC plugin SessionStart compose hook (single bun entry point).
+// compose.ts — AIDLC plugin SessionStart compose hook and importable composer.
 //
 // Replaces the former compose.sh + compose-contributions.ts + compose-fragments.ts
 // trio. Folding to one TS file removes the shell-portability bug class entirely:
@@ -188,6 +188,38 @@ function selectCommandForPlugin(): string {
   return `bun ${HARNESS_LEAF}/tools/aidlc-utility.ts select-plugins ${[...names].sort().join(",")}`;
 }
 
+function installedToolCommand(tool: "utility" | "graph" | "runner", args: string[]): string[] {
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE?.trim();
+  if (!executable) {
+    const files = {
+      utility: "aidlc-utility.ts",
+      graph: "aidlc-graph.ts",
+      runner: "aidlc-runner-gen.ts",
+    };
+    return [process.execPath, join(HARNESS_DIR, "tools", files[tool]), ...args];
+  }
+  if (tool === "utility") return [executable, "gen", ...args];
+  if (tool === "graph") return [executable, "graph", ...args];
+  if (args[0] === "write") return [executable, "gen", "runners", ...args.slice(1)];
+  if (args[0] === "scopes") return [executable, "gen", "runner-scopes", ...args.slice(1)];
+  if (args[0] === "list") return [executable, "gen", "runner-list", ...args.slice(1)];
+  throw new Error(`No compiled dispatcher route for aidlc-runner-gen ${args.join(" ")}`);
+}
+
+function installedToolEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    AIDLC_HARNESS_DIR: HARNESS_LEAF,
+    AIDLC_STAGE_GRAPH: join(HARNESS_DIR, "tools", "data", "stage-graph.json"),
+    AIDLC_SCOPE_GRID: join(HARNESS_DIR, "tools", "data", "scope-grid.json"),
+    AIDLC_STAGES_DIR: STAGES_DIR,
+    AIDLC_SENSORS_DIR: join(HARNESS_DIR, "sensors"),
+    AIDLC_SCOPES_DIR: join(HARNESS_DIR, "scopes"),
+    AIDLC_AGENTS_DIR: join(HARNESS_DIR, "agents"),
+    AIDLC_RULES_DIR: join(PROJECT_DIR, "aidlc", "spaces", "default", "memory"),
+  };
+}
+
 function refreshSkillGeneratedRegion(
   verb: "scope-table" | "stage-table",
   beginMarker: string,
@@ -211,10 +243,11 @@ function refreshSkillGeneratedRegion(
     return;
   }
 
-  const r = spawnSync(process.execPath, [join(HARNESS_DIR, "tools", "aidlc-utility.ts"), verb], {
+  const [command, ...args] = installedToolCommand("utility", [verb]);
+  const r = spawnSync(command, args, {
     cwd: PROJECT_DIR,
     encoding: "utf-8",
-    env: { ...process.env, AIDLC_HARNESS_DIR: HARNESS_LEAF },
+    env: installedToolEnv(),
   });
   if (r.status !== 0) {
     recordDrop(`aidlc-utility ${verb} failed: ${(r.stderr || r.stdout || "").slice(0, 400)}`);
@@ -262,13 +295,14 @@ async function installedSchemaAccepts(key: string, sampleValue: unknown): Promis
 }
 
 // Guard: only compose in an AIDLC project, with a resolvable plugin root.
+export async function compose(): Promise<void> {
 if (!existsSync(join(HARNESS_DIR, "tools", "aidlc-graph.ts"))) {
-  process.exit(0); // not an AIDLC project — nothing to do (no drop: not our project)
+  return; // not an AIDLC project — nothing to do (no drop: not our project)
 }
 if (!PLUGIN_ROOT) {
   recordDrop("plugin root env not set (CLAUDE_PLUGIN_ROOT/PLUGIN_ROOT/AIDLC_PLUGIN_ROOT)");
   await flushDrops();
-  process.exit(0);
+  return;
 }
 // A set-but-wrong PLUGIN_ROOT (e.g. a mistyped path from a hand-run command)
 // would otherwise pass the non-empty check and then find nothing to copy/merge —
@@ -276,7 +310,7 @@ if (!PLUGIN_ROOT) {
 if (!existsSync(PLUGIN_ROOT)) {
   recordDrop(`plugin root does not exist: "${PLUGIN_ROOT}" — check the AIDLC_PLUGIN_ROOT path`);
   await flushDrops();
-  process.exit(0);
+  return;
 }
 
 if (!pluginEnabledBySelection()) {
@@ -1020,11 +1054,11 @@ try {
   const retryPending = existsSync(retryMarker);
   let recompiled = false;
   if (changed || graphMissingPluginStage || retryPending) {
-    const bun = process.execPath;
-    const r = spawnSync(bun, [join(HARNESS_DIR, "tools", "aidlc-graph.ts"), "compile"], {
+    const [command, ...args] = installedToolCommand("graph", ["compile"]);
+    const r = spawnSync(command, args, {
       cwd: PROJECT_DIR,
       encoding: "utf-8",
-      env: { ...process.env, AIDLC_HARNESS_DIR: HARNESS_LEAF },
+      env: installedToolEnv(),
     });
     if (r.status !== 0) {
       recordDrop(`aidlc-graph compile failed: ${(r.stderr || "").slice(0, 400)}`);
@@ -1046,10 +1080,10 @@ try {
     if (!skillsDirExists) {
       recordDrop(`runner regeneration skipped: ${HARNESS_LEAF}/skills not present in this install`, "advisory");
     } else {
-      const bun = process.execPath;
-      const runnerEnv = { ...process.env, AIDLC_HARNESS_DIR: HARNESS_LEAF };
+      const runnerEnv = installedToolEnv();
       const runRunnerGen = (args: string[], label: string): boolean => {
-        const r = spawnSync(bun, [join(HARNESS_DIR, "tools", "aidlc-runner-gen.ts"), ...args], {
+        const [command, ...commandArgs] = installedToolCommand("runner", args);
+        const r = spawnSync(command, commandArgs, {
           cwd: PROJECT_DIR,
           encoding: "utf-8",
           env: runnerEnv,
@@ -1072,3 +1106,6 @@ try {
 // Flush any recorded drops to the installed hooks-health dir (--doctor surfaces
 // them). Best-effort — flushDrops swallows its own errors.
 await flushDrops();
+}
+
+if (import.meta.main) await compose();

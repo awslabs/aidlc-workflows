@@ -179,16 +179,30 @@ function emit(directive: Directive): void {
   console.log(JSON.stringify(result.data));
 }
 
-// --- Composing the sibling CLI tools (shell-out) ---
+// --- Composing sibling CLI tools ---
 //
 // The non-happy-path branches reuse aidlc-jump.ts / aidlc-utility.ts handlers,
 // none of which is importable (both files export zero CLI handlers). We resolve
-// the tools directory off THIS module's own location so the spawned `bun <tool>`
-// runs the same shipped copy regardless of the caller's cwd.
+// the tools directory off THIS module's own location in source mode. A compiled
+// executable re-enters the public dispatcher grammar instead.
 const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
+const IS_COMPILED = import.meta.url.includes("/$bunfs/");
 
 function toolPath(file: string): string {
   return join(TOOLS_DIR, file);
+}
+
+function toolCommand(toolFile: string, args: string[]): string[] {
+  if (IS_COMPILED) {
+    if (toolFile === "aidlc-utility.ts" && args[0] === "resolve-env-scope") {
+      return [process.execPath, "scope", "resolve-env", ...args.slice(1)];
+    }
+    if (toolFile === "aidlc-jump.ts") {
+      return [process.execPath, "jump", ...args];
+    }
+    throw new Error(`No compiled dispatcher route for ${toolFile} ${args.join(" ")}`);
+  }
+  return [process.execPath, toolPath(toolFile), ...args];
 }
 
 // The result of spawning a sibling tool: its exit code plus captured streams.
@@ -203,7 +217,7 @@ interface ToolRun {
 
 function runTool(toolFile: string, args: string[]): ToolRun {
   const proc = Bun.spawnSync({
-    cmd: ["bun", toolPath(toolFile), ...args],
+    cmd: toolCommand(toolFile, args),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -250,6 +264,11 @@ function printDirective(message: string): PrintDirective {
 
 function errorDirective(message: string): ErrorDirective {
   return { kind: "error", message };
+}
+
+function shellArg(value: string): string {
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 
 // parked - the terminal directive a parked workflow emits (issue #367). Carries
@@ -1353,7 +1372,7 @@ function handleNext(args: string[], projectDir: string | undefined): void {
       return;
     }
     const [verb, ...tail] = argv;
-    const suffix = tail.length > 0 ? ` ${tail.join(" ")}` : "";
+    const suffix = tail.length > 0 ? ` ${tail.map(shellArg).join(" ")}` : "";
     emit(printDirective(
       `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${verb}${suffix}\`, print its output verbatim, then stop.`,
     ));
@@ -2677,18 +2696,25 @@ function parseReportFlags(args: string[]): ReportFlags {
   return flags;
 }
 
-// Shell out to a sibling aidlc-state.ts subcommand. Resolves the tool relative
-// to this file so the engine and the tool it drives stay co-located. Returns
-// the child's exitCode + captured streams; a non-zero exitCode means
-// aidlc-state.ts rejected the transition via error() (which exits non-zero),
-// and the engine surfaces that as an error directive rather than a silent miss.
+// Run an aidlc-state.ts subcommand through the sibling source tool or the
+// compiled dispatcher's `state` noun. Returns the child's exitCode + captured
+// streams; a non-zero exitCode means aidlc-state.ts rejected the transition via
+// error() and the engine surfaces that as an error directive.
 function spawnState(
   projectDir: string,
   subArgs: string[],
 ): { exitCode: number; stdout: string; stderr: string } {
-  const toolPath = fileURLToPath(new URL("./aidlc-state.ts", import.meta.url));
+  const command = IS_COMPILED
+    ? [process.execPath, "state", ...subArgs, "--project-dir", projectDir]
+    : [
+        process.execPath,
+        fileURLToPath(new URL("./aidlc-state.ts", import.meta.url)),
+        ...subArgs,
+        "--project-dir",
+        projectDir,
+      ];
   const result = Bun.spawnSync({
-    cmd: ["bun", "run", toolPath, ...subArgs, "--project-dir", projectDir],
+    cmd: command,
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -2716,8 +2742,27 @@ function spawnAuditAppend(
   for (const [k, v] of Object.entries(fields)) {
     fieldArgs.push("--field", `${k}=${v}`);
   }
+  const command = IS_COMPILED
+    ? [
+        process.execPath,
+        "audit",
+        "append",
+        eventType,
+        ...fieldArgs,
+        "--project-dir",
+        projectDir,
+      ]
+    : [
+        process.execPath,
+        auditTool,
+        "append",
+        eventType,
+        ...fieldArgs,
+        "--project-dir",
+        projectDir,
+      ];
   const result = Bun.spawnSync({
-    cmd: ["bun", "run", auditTool, "append", eventType, ...fieldArgs, "--project-dir", projectDir],
+    cmd: command,
     stdout: "pipe",
     stderr: "pipe",
   });

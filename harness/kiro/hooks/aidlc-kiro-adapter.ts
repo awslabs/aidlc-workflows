@@ -55,7 +55,11 @@ interface KiroHookInput {
   assistant_response?: string;
 }
 
-export async function run(target: string, input: string): Promise<number> {
+export async function run(
+  target: string,
+  input: string,
+  extraArgs: string[] = [],
+): Promise<number> {
 let kiro: KiroHookInput = {};
 if (!process.stdin.isTTY) {
   try {
@@ -140,10 +144,19 @@ if (target === "verb-intercept") {
   if (cmd.error !== undefined) {
     out = cmd.error;
   } else {
+    const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+    const compiledArgs = (() => {
+      if (cmd.subcommand === "space-create") return ["space", "create", ...forwarded];
+      if (cmd.subcommand === "intent-birth") return ["intent", "birth", ...forwarded];
+      return [cmd.subcommand, ...forwarded];
+    })();
     const utilArgs = [join(".kiro", "tools", "aidlc-utility.ts"), cmd.subcommand, ...forwarded];
     // Reuse the exact bun binary running this adapter; the child must not depend on
     // PATH containing bun (the hook environment often lacks the bun install dir).
-    const run = Bun.spawnSync([process.execPath, ...utilArgs], { cwd, stdout: "pipe", stderr: "pipe" });
+    const run = Bun.spawnSync(
+      executable ? [executable, ...compiledArgs] : [process.execPath, ...utilArgs],
+      { cwd, stdout: "pipe", stderr: "pipe" },
+    );
     out = ((run.stdout?.toString() ?? "") + (run.stderr?.toString() ?? "")).trim();
   }
 
@@ -277,8 +290,8 @@ if (target === "pretool-block") {
 // conductor's), so every call arriving through this registration is that
 // reviewer's - the scoping IS the agent identity on Kiro, whose hook
 // payloads carry no agent_type. Each registration passes ITS OWN agent name
-// as argv[3] (`reviewer-scope <agent-name>`), which the shim forwards as
-// agent_type so the core hook still compares against the dispatch record's
+// as an extra argument (`reviewer-scope <agent-name>`), which the shim forwards
+// as agent_type so the core hook still compares against the dispatch record's
 // reviewer field - a stale record naming a DIFFERENT reviewer then fails
 // open exactly like on Claude/Codex, instead of scoping the wrong agent.
 // The shim normalizes the alias payload (shell -> Bash {command}; read ->
@@ -310,10 +323,14 @@ if (target === "reviewer-scope") {
     const wops = (ti.operations as Array<{ path?: string }>) ?? [];
     coreInput.paths = wops.map((o) => o.path ?? "").filter((p) => p.length > 0);
   } else {
-    process.exit(0);
+    return 0;
   }
-  const registeredAgent = process.argv[3] ?? "";
-  const r = Bun.spawnSync([process.execPath, join(HOOKS_DIR, "aidlc-reviewer-scope.ts")], {
+  const registeredAgent = extraArgs[0] ?? "";
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const command = executable
+    ? [executable, "hook", "reviewer-scope"]
+    : [process.execPath, join(HOOKS_DIR, "aidlc-reviewer-scope.ts")];
+  const r = Bun.spawnSync(command, {
     stdin: Buffer.from(
       JSON.stringify({
         hook_event_name: "PreToolUse",
@@ -332,9 +349,9 @@ if (target === "reviewer-scope") {
   const stderrText = r.stderr?.toString() ?? "";
   if (r.exitCode === 2) {
     process.stderr.write(stderrText);
-    process.exit(2); // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+    return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
   }
-  process.exit(0);
+  return 0;
 }
 
 // Normalize Kiro's alias tool names to the canonical names the core hooks
@@ -451,7 +468,11 @@ function buildForward(): Forward {
 function runCore(hookFile: string, input: Record<string, unknown>): { stdout: string; code: number } {
   // Reuse the exact bun binary running this adapter; the child must not depend on
   // PATH containing bun (the hook environment often lacks the bun install dir).
-  const r = Bun.spawnSync([process.execPath, join(HOOKS_DIR, hookFile)], {
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const command = executable
+    ? [executable, "hook", hookFile.replace(/^aidlc-|\.ts$/g, "")]
+    : [process.execPath, join(HOOKS_DIR, hookFile)];
+  const r = Bun.spawnSync(command, {
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",
     stderr: "ignore",
@@ -495,5 +516,5 @@ return result.code;
 }
 
 if (import.meta.main) {
-  process.exit(await run(process.argv[2] ?? "", await Bun.stdin.text()));
+  process.exit(await run(process.argv[2] ?? "", await Bun.stdin.text(), process.argv.slice(3)));
 }
