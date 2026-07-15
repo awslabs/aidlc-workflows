@@ -24,7 +24,8 @@ bodies and the org/team rule layers, not in which stages run.
 
 ## Membership
 
-`feature` marks all 32 stages EXECUTE. It is the fallback the scope
+`feature` marks all 32 delivery-path stages EXECUTE (every stage except
+the 4 discovery-only ideation stages). It is the fallback the scope
 detector returns when freeform text contains no scope keyword or reads
 like a project description (the >5-word heuristic). There are no keyword
 triggers of its own — it is the catch-all, so any unmatched intent lands

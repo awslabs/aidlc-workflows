@@ -153,11 +153,12 @@ describe("t15 — knowledge-file inventory + non-emptiness (mechanism: none)", (
 
   // .sh L11-14: dynamic TAP plan = 11 + 11 + 7 + TOTAL_FILES. Re-derive that
   // arithmetic from the live tree so the migrated suite cannot silently shrink
-  // the surface: pin the total .md count at 56 and the summed plan at 85.
-  test("TAP-plan parity: 14 + 14 + 7 + TOTAL == 94 with TOTAL == 59 [.sh L11-14]", () => {
+  // the surface: pin the total .md count at 60 and the summed plan at 95
+  // (discovery-test-primitives.md joined aidlc-shared/ with the discovery scope).
+  test("TAP-plan parity: 14 + 14 + 7 + TOTAL == 95 with TOTAL == 60 [.sh L11-14]", () => {
     const total = findMd(KNOWLEDGE_DIR).length;
-    expect(total).toBe(59);
+    expect(total).toBe(60);
     const plan = 14 + 14 + 7 + total;
-    expect(plan).toBe(94);
+    expect(plan).toBe(95);
   });
 });

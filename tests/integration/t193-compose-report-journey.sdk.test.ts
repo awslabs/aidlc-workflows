@@ -16,7 +16,7 @@
 //   conductor: dispatch -> triage -> proposal (matched: bugfix) -> gate
 //              (answerScript approves) -> NO scope write (stock match) ->
 //              same-turn birth on bugfix.
-//   disk:      NO new scope file (still 9 + 9 - the matched path skips the
+//   disk:      NO new scope file (still 10 + 10 - the matched path skips the
 //              write); a born intent whose state carries Scope: bugfix.
 //
 // The deterministic halves are pinned by t198 (the --report flag parses,
@@ -65,7 +65,7 @@ describe("t193 report composer journey (/aidlc compose --report, sdk live)", () 
           join(proj, "scan-report-sample.json"),
         );
         const scopesDir = join(proj, ".claude", "scopes");
-        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(9);
+        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(10);
 
         const r = await driveAidlc(
           "/aidlc compose --report scan-report-sample.json",
@@ -88,16 +88,16 @@ describe("t193 report composer journey (/aidlc compose --report, sdk live)", () 
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
 
-        // Matched-stock path: NO scope write (still exactly the 9 stock files
-        // + 9 grid keys).
+        // Matched-stock path: NO scope write (still exactly the 10 stock files
+        // + 10 grid keys).
         expect(
           readdirSync(scopesDir).filter((f) => f.startsWith("aidlc-") && f.endsWith(".md"))
             .length,
-        ).toBe(9);
+        ).toBe(10);
         const grid = JSON.parse(
           readFileSync(join(proj, ".claude", "tools", "data", "scope-grid.json"), "utf-8"),
         ) as Record<string, unknown>;
-        expect(Object.keys(grid).length).toBe(9);
+        expect(Object.keys(grid).length).toBe(10);
 
         // The born workflow rides the triaged route: a compact incremental
         // scope (bugfix, or security-patch if the composer judged the hotspot

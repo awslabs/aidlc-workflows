@@ -23,6 +23,7 @@ AI-DLC uses a two-tier knowledge system that separates framework methodology fro
 |   +-- audit-format.md            # 68-event audit taxonomy
 |   +-- knowledge-readme-template.md  # Optional README template a team can copy into Tier 2
 |   +-- state-template.md          # State file contract
+|   +-- discovery-test-primitives.md  # The five test moves and nine plan templates (discovery scope)
 +-- aidlc-product-agent/
 |   +-- requirements-guide.md
 |   +-- product-guide.md

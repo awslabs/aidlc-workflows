@@ -434,7 +434,7 @@ function handleFire(args: string[]): void {
 		// §10 MIDDLE branch: the framework-default templates dir (engine-shipped,
 		// read-only, space-independent). The sensor consults it ONLY when the team
 		// override above misses, so resolution is team → framework-default → floor.
-		// Ships zero files at GA → the branch gracefully falls through to the floor.
+		// Ships nine discovery defaults; other stems fall to the floor.
 		scriptArgs.push("--framework-templates-dir", frameworkTemplatesDir());
 	}
 	const detailDir = join(sensorsDir(projectDir), stageSlug);

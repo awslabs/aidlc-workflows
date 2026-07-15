@@ -1,0 +1,10 @@
+[
+  "workspace-scaffold",
+  "workspace-detection",
+  "state-init",
+  "intent-capture",
+  "discovery-current-state",
+  "discovery-future-state",
+  "discovery-experimentation",
+  "discovery-decision"
+]

@@ -26,7 +26,7 @@
 //       * Current Stage is NOT touched — the rewrite preserves the
 //         `## Current Status` block; only the `## Stage Progress` checkbox
 //         section + the numbered fields are rebuilt. (Mirrors .sh Test 6.)
-//   - The 9 canonical scopes are exactly the keys of
+//   - The 10 stock scopes (the .sh's 9 plus discovery) are exactly the keys of
 //     data/scope-mapping.json: enterprise, feature, mvp, poc, bugfix,
 //     refactor, infra, security-patch, workshop (verified by reading the
 //     JSON keys) — identical to the .sh's Test-3 loop list.
@@ -50,9 +50,9 @@
 //       scopeChangedCount(audit) === 1 (STRONGER: counts the row against the
 //       seeded audit-sample.md baseline — which contains NO SCOPE_CHANGED —
 //       rather than a bare presence grep) + res.status === 0.
-//   - .sh Test 3  loop: each of 9 scopes -> state '\*\*Scope\*\*: <t>'  ->
+//   - .sh Test 3  loop: each of 10 scopes -> state '\*\*Scope\*\*: <t>'  ->
 //       Test 3: per-scope sub-test, getField(state,"Scope") === target exact,
-//       all 9 targets (the .sh emitted a single `ok` after the loop; we keep
+//       all 10 targets (the .sh emitted a single `ok` after the loop; we keep
 //       one expect per scope so a single bad scope is pinpointed — STRONGER).
 //   - .sh Test 4  invalid scope: $? == 1                          -> Test 4:
 //       res.status === 1 (same observable) + stderr/stdout names the bad scope
@@ -70,7 +70,7 @@
 //       assert is a STRONGER addition matching the .sh's stated intent).
 //
 // 7 .sh asserts -> 7 expect()-bearing test() cases here (Test 3 keeps its
-// single .sh `ok` semantics but iterates 9 scopes inside one case with one
+// single .sh `ok` semantics but iterates 10 scopes inside one case with one
 // expect per scope).
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's create_test_project + seed_audit_file
@@ -114,8 +114,9 @@ const STATE_MID_IDEATION = join(
   "state-mid-ideation.md",
 );
 
-// The 9 canonical scopes — exactly the .sh's Test-3 loop AND the keys of
-// data/scope-mapping.json (verified this session).
+// The 10 stock scopes — the .sh's Test-3 loop of 9, plus discovery (added
+// in v2.2.x, and the scope-change target the discovery commit continuation
+// relies on).
 const CANONICAL_SCOPES = [
   "enterprise",
   "feature",
@@ -126,6 +127,7 @@ const CANONICAL_SCOPES = [
   "infra",
   "security-patch",
   "workshop",
+  "discovery",
 ] as const;
 
 const tempDirs: string[] = [];
@@ -249,8 +251,8 @@ describe("t36 aidlc-utility scope-change — CLI contract (migrated from t36-uti
     expect(scopeChangedCount(readAllAuditShards(p))).toBe(1);
   });
 
-  // --- .sh Test 3: each of the 9 canonical scopes accepted as a target ---
-  test("3: all 9 canonical scopes accepted as targets", () => {
+  // --- .sh Test 3 loop plus discovery: each stock scope accepted as a target ---
+  test("3: all 10 stock scopes accepted as targets", () => {
     for (const target of CANONICAL_SCOPES) {
       const p = proj();
       scopeChange(["--scope", target], p);

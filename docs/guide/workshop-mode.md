@@ -56,7 +56,7 @@ Per-project default scopes can be set via `AWS_AIDLC_DEFAULT_SCOPE=workshop` in 
 
 ### Run Inception solo
 
-The facilitator drives Inception stages 2.1 through 2.8 in sequence, hitting every gate. The workshop scope skips Ideation entirely (1.1–1.7) — the project is pre-decided, so there's nothing to ideate.
+The facilitator drives Inception stages 2.1 through 2.8 in sequence, hitting every gate. The workshop scope skips Ideation entirely (1.1–1.11) — the project is pre-decided, so there's nothing to ideate.
 
 **Stage 2.2 (practices-discovery) is load-bearing for workshop mode.** This is where the team affirms branching strategy, walking-skeleton stance, testing posture, and deployment cadence — and Construction reads those affirmations on every per-Bolt decision. Run the affirmation gate with the group, not solo: the answers govern what happens on every participant's machine for the rest of the workshop.
 

@@ -17,6 +17,9 @@ The aidlc-design-agent leads two stages and supports two others. It ensures that
 
 | Stage | Phase | Contribution |
 |-------|-------|-------------|
+| 1.8 Discovery Current State | Ideation | Captures the design language record (discovery scope only) |
+| 1.9 Discovery Future State | Ideation | Visual expression of the future-state options (discovery scope only) |
+| 1.10 Discovery Experimentation | Ideation | Mock-up work in the captured design language (discovery scope only) |
 | 2.4 User Stories | Inception | Enriches stories with interaction details and UX acceptance criteria |
 | 2.6 Application Design | Inception | Contributes UI component specifications |
 

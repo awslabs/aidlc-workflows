@@ -22,8 +22,8 @@
 //   (a) a gate fired (askedQuestions >= 1);
 //   (b) the birth ran (`State initialized:` tool-result - only
 //       handleIntentBirth emits it);
-//   (c) a NEW scope .md landed in .claude/scopes/ (10 files, was 9) AND
-//       scope-grid.json gained its entry (10 keys, was 9) - BOTH files, the
+//   (c) a NEW scope .md landed in .claude/scopes/ (11 files, was 10) AND
+//       scope-grid.json gained its entry (11 keys, was 10) - BOTH files, the
 //       write contract;
 //   (d) the born state's Scope names the composed scope (not a stock name);
 //   (e) the composed .md carries keywords: [] (empty list or no entries).
@@ -57,7 +57,7 @@ const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY }
 
 // A task built to NOT fit any stock grid: it needs deployment/observability
 // (operation stages) against an existing system but no ideation and no new
-// product surface - none of the 9 stock scopes covers that shape. The prompt
+// product surface - none of the 10 stock scopes covers that shape. The prompt
 // explicitly asks for a custom plan so a stock match is a live failure signal.
 const TASK =
   "harden the deployment pipeline and add observability for our existing service - no new features, compose a custom plan for exactly this";
@@ -71,7 +71,7 @@ const APPROVE_ALL = {
 };
 
 const STOCK_SCOPES = new Set([
-  "bugfix", "enterprise", "feature", "infra", "mvp", "poc", "refactor",
+  "bugfix", "discovery", "enterprise", "feature", "infra", "mvp", "poc", "refactor",
   "security-patch", "workshop",
 ]);
 
@@ -86,7 +86,7 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> bir
       try {
         const scopesDir = join(proj, ".claude", "scopes");
         const gridPath = join(proj, ".claude", "tools", "data", "scope-grid.json");
-        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(9);
+        expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(10);
 
         const r = await driveAidlc(`/aidlc compose "${TASK}"`, {
           projectDir: proj,
@@ -101,17 +101,17 @@ describe("t192 front composer journey (/aidlc compose -> approve -> write -> bir
         // (b) the birth ran in the SAME drive (one /aidlc invocation).
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
 
-        // (c) BOTH scope files landed: a 10th .md + a 10th grid key.
+        // (c) BOTH scope files landed: an 11th .md + an 11th grid key.
         const scopeFiles = readdirSync(scopesDir).filter(
           (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
         );
-        expect(scopeFiles.length).toBe(10);
+        expect(scopeFiles.length).toBe(11);
         const grid = JSON.parse(readFileSync(gridPath, "utf-8")) as Record<
           string,
           { stages?: Record<string, string> }
         >;
         const gridKeys = Object.keys(grid);
-        expect(gridKeys.length).toBe(10);
+        expect(gridKeys.length).toBe(11);
         const composedName = gridKeys.find((k) => !STOCK_SCOPES.has(k));
         expect(composedName).toBeDefined();
         // The grid entry is a real stages map, not an empty stub.

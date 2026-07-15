@@ -124,6 +124,7 @@ describe("t31 aidlc-utility help — CLI contract (migrated from t31-help-text-c
     "infra",
     "security-patch",
     "workshop", // S2: 9th scope, header-claimed but unasserted in the .sh
+    "discovery", // 10th scope (v2.2.x) — help renders every scope row
   ] as const;
 
   for (const scope of SCOPES) {
@@ -166,16 +167,19 @@ describe("t31 aidlc-utility help — CLI contract (migrated from t31-help-text-c
     });
   }
 
-  // --- Stage-count semantics (compiled from scope-mapping.json EXECUTE/Total). ---
-  test("enterprise/feature shows 'All 32 stages'", () => {
-    // execute === total -> "All <total> stages" (aidlc-utility.ts:156-157).
-    expect(HELP.stdout).toContain("All 32 stages");
+  // --- Stage-count semantics (compiled from the scope grid EXECUTE/Total). ---
+  test("enterprise/feature shows '32 of 36 stages'", () => {
+    // execute !== total -> "<execute> of <total> stages" (aidlc-utility.ts:156-157).
+    // Before the discovery-only stages landed, enterprise/feature executed
+    // ALL stages and rendered "All 32 stages"; at the 36-stage graph they
+    // execute 32 of 36 (the discovery stages are tagged [discovery] only).
+    expect(HELP.stdout).toContain("32 of 36 stages");
   });
 
-  test("bugfix shows compiled '7 of 32 stages' count", () => {
+  test("bugfix shows compiled '7 of 36 stages' count", () => {
     // execute !== total -> "<execute> of <total> stages"; bugfix tallies 7
-    // EXECUTE of 32 (was the stale "~8 stages" pre-milestone-10).
-    expect(HELP.stdout).toContain("7 of 32 stages");
+    // EXECUTE of 36 (was the stale "~8 stages" pre-milestone-10).
+    expect(HELP.stdout).toContain("7 of 36 stages");
   });
 
   test("feature row shows '(default)' marker", () => {

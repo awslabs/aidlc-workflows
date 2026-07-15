@@ -74,7 +74,7 @@ flowchart TD
 
 ### `/aidlc [scope]` — Start with explicit scope
 
-Start a new workflow with one of the enabled scopes. Core ships 9 named scopes; plugins can add more, and `select-plugins` can hide disabled plugin/core scopes from runtime.
+Start a new workflow with one of the enabled scopes. Core ships 10 named scopes; plugins can add more, and `select-plugins` can hide disabled plugin/core scopes from runtime.
 
 **Syntax:**
 
@@ -118,7 +118,7 @@ Describe what you want to build and the engine auto-detects the appropriate scop
 
 ```
 /aidlc Fix the null pointer in ProfileSerializer
-> Starting a "bugfix" workflow for: "Fix the null pointer in ProfileSerializer" - 7 of 32 stages, 4 approval gates, 1 stage repeats per unit of work in Construction. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.
+> Starting a "bugfix" workflow for: "Fix the null pointer in ProfileSerializer" - 7 of 36 stages, 4 approval gates, 1 stage repeats per unit of work in Construction. Confirm to proceed, name a different scope, or say "compose" for a tailored plan.
 ```
 
 ---
@@ -259,12 +259,12 @@ Validate that all of this implementation's prerequisites, configuration, and sta
 ✓ Hook drops: none recorded
 ✓ State matches last audit event (no drift)
 ✓ Cycle detection: 0 cycles
-✓ Orphan stage files: 32 graph entries all have files
+✓ Orphan stage files: 36 graph entries all have files
 ✓ Uncompiled stage files: 0 stage files missing from the compiled graph
-✓ Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=32
-✓ Scope validation: 9 scopes valid (29 advisories)
-✓ Schema validation: 32/32 stages valid
-✓ Graph references: 122 artifacts + edges resolved
+✓ Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=33, bootstrap=3
+✓ Scope validation: 10 scopes valid (27 advisories)
+✓ Schema validation: 36/36 stages validated
+✓ Graph references: 131 artifacts + edges resolved
 ✓ Keyword overlap: no conflicts
 ✓ Rule drift: no team/project rule overlaps org policy
 ✓ Paired sensor coverage: no sensor-bound rules (0 feedforward-only)
@@ -538,7 +538,7 @@ Pre-set the default scope for a project. Read from `.claude/settings.json` `env`
 }
 ```
 
-**Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `workshop`.
+**Valid values:** `enterprise`, `feature`, `mvp`, `poc`, `bugfix`, `refactor`, `infra`, `security-patch`, `workshop`, `discovery`.
 
 **Precedence:** explicit CLI flag > keyword detection > `AWS_AIDLC_DEFAULT_SCOPE` > hard-coded fallback.
 

@@ -42,10 +42,11 @@
 //     .sh 4 (| EXECUTE / Total column)   -> "A4: region carries the | EXECUTE / Total column"
 //   Section B (row count, 1 assert):
 //     .sh 5 (row count == JSON keys)     -> "B: region row count matches scope-grid.json key count"
-//   Section C (per-scope EXECUTE, 9 asserts):
+//   Section C (per-scope EXECUTE, one assert per scope):
 //     .sh 6-14 (one per scope, alpha)    -> "C: <scope> EXECUTE cell matches scope-grid.json"
-//       (one test() per scope: bugfix, enterprise, feature, infra, mvp, poc,
-//        refactor, security-patch, workshop — same 9, same order)
+//       (one test() per scope: bugfix, discovery, enterprise, feature, infra,
+//        mvp, poc, refactor, security-patch, workshop — the .sh's nine plus
+//        the discovery scope added in v2.2.x, same alphabetical order)
 //   Section D (phase-presence semantics, 3 asserts):
 //     .sh 15 (bugfix 0 ideation EXEC)    -> "D1: bugfix executes zero ideation-phase stages"
 //     .sh 16 (workshop 0 ideation EXEC)  -> "D2: workshop executes zero ideation-phase stages"
@@ -56,9 +57,9 @@
 //     committed SKILL.md region against canonicalScopeTableRegion(
 //     renderScopeTable()) — the committed table is provably the transpose of
 //     the grid, not merely "contains the markers / count agrees".
-//   - Section C asserts exact integers (7, 32, 13, 22, 8, 8, 10, 25) derived
-//     from the grid AND read from the table cell, on the SAME scope row —
-//     co-located, not "the number appears somewhere".
+//   - Section C asserts exact integers (7, 8, 32, 32, 13, 22, 8, 8, 10, 25)
+//     derived from the grid AND read from the table cell, on the SAME scope
+//     row — co-located, not "the number appears somewhere".
 //   - Section D guards against a vacuous pass: both the ideation slug set and
 //     the operation slug set must be non-empty, or "zero EXECUTE among them"
 //     would be trivially true.
@@ -80,9 +81,11 @@ const STAGE_GRAPH_PATH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 const BEGIN = "<!-- BEGIN: compiled scope grid";
 const END = "<!-- END: compiled scope grid -->";
 
-// The nine scopes the .sh iterated, in the SAME alphabetical order.
+// The ten scopes the compiled grid carries, in the SAME alphabetical order the
+// .sh iterated its original nine (discovery landed after bugfix in v2.2.x).
 const SCOPES = [
   "bugfix",
+  "discovery",
   "enterprise",
   "feature",
   "infra",
@@ -168,7 +171,7 @@ describe("t30 Section B — table row count matches scope-grid.json", () => {
       .filter((l) => /^\| [a-z-]+ /.test(l)).length;
     const jsonCount = Object.keys(readGrid()).length;
     expect(rowCount).toBe(jsonCount);
-    // Cross-check: the data rows are exactly the nine scopes we iterate below.
+    // Cross-check: the data rows are exactly the ten scopes we iterate below.
     expect(jsonCount).toBe(SCOPES.length);
   });
 });
@@ -188,6 +191,37 @@ describe("t30 Section C — each scope's EXECUTE cell matches scope-grid.json", 
       expect(fromTable).toBe(fromGrid);
     });
   }
+});
+
+// =============================================================================
+// Section C2 — discovery scope mapping (added with the discovery scope)
+// =============================================================================
+describe("t30 Section C2 — discovery scope maps to exactly its 8 EXECUTE stages", () => {
+  test("C2: discovery executes exactly the 3 init stages + intent-capture + the 4 ideation discovery stages", () => {
+    const grid = readGrid();
+    const executeSlugs = Object.entries(grid.discovery.stages)
+      .filter(([, v]) => v === "EXECUTE")
+      .map(([slug]) => slug)
+      .sort();
+    expect(executeSlugs).toEqual(
+      [
+        "workspace-scaffold",
+        "workspace-detection",
+        "state-init",
+        "intent-capture",
+        "discovery-current-state",
+        "discovery-future-state",
+        "discovery-experimentation",
+        "discovery-decision",
+      ].sort(),
+    );
+    // Every other stage in the grid column is SKIP (36-stage universe).
+    const skipCount = Object.values(grid.discovery.stages).filter(
+      (v) => v === "SKIP",
+    ).length;
+    expect(executeSlugs.length).toBe(8);
+    expect(skipCount).toBe(Object.keys(grid.discovery.stages).length - 8);
+  });
 });
 
 // =============================================================================

@@ -97,6 +97,12 @@ The compile step's slug-alphabetical tiebreak is a safety net. For stages
 that must land in a specific order, author the edge explicitly rather than
 relying on alphabetical accident.
 
+A stage's `number` and display `name` are computed the same way: the first
+compile seeds them for a new slug (next free per-phase index, title-cased
+slug), and an author pins or renumbers by editing that one field in the
+committed `stage-graph.json` — every subsequent compile harvests and
+preserves the pinned value (see the header comment in `aidlc-graph.ts`).
+
 ### `for_each`
 
 Names an artifact whose instances drive iteration. The stage runs once per

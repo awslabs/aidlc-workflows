@@ -1,10 +1,10 @@
 # Scopes
 
-A scope is the dial that decides *which* of the framework's 32 stages run for a given kind of work, and which sit out. A bugfix doesn't need market research or a deployment pipeline; a regulated enterprise feature needs all of it. Rather than asking the user to hand-pick stages every time, AI-DLC ships nine named scopes — each one a curated EXECUTE/SKIP verdict over the full stage set, paired with a default depth and test strategy. Pick the scope and the rest cascades.
+A scope is the dial that decides *which* of the framework's 36 stages run for a given kind of work, and which sit out. A bugfix doesn't need market research or a deployment pipeline; a regulated enterprise feature needs all of it. Rather than asking the user to hand-pick stages every time, AI-DLC ships ten named scopes — each one a curated EXECUTE/SKIP verdict over the full stage set, paired with a default depth and test strategy. Pick the scope and the rest cascades.
 
 For a harness engineer, a scope is pure data, authored the same way every other primitive is — as a file. It is two halves: one `core/scopes/aidlc-<name>.md` file (its identity — name, depth, keywords, description) plus a per-stage membership tag (each stage's frontmatter `scopes:` list naming the scopes it runs under). Adding or tuning a scope requires no TypeScript. This chapter walks the workflow: what a scope is made of, how to add a team scope, how to tune an existing one, and what the tooling checks for you versus what it leaves to you.
 
-For the full nine-scope catalog with use cases and the routing table users read, see [Scopes, Depth, and Test Strategy](../guide/05-scopes-and-depth.md) in the User Guide. This chapter is the authoring side of that same data.
+For the full ten-scope catalog with use cases and the routing table users read, see [Scopes, Depth, and Test Strategy](../guide/05-scopes-and-depth.md) in the User Guide. This chapter is the authoring side of that same data.
 
 ---
 
@@ -73,7 +73,7 @@ The exhaustive field-by-field contract — including how `keywords` are word-bou
 
 A scope and a stage point at each other from opposite ends, and it helps to hold both directions in view.
 
-A **stage** declares its own identity — its phase, its lead agent, the artifacts it consumes and produces, and now the scopes it runs under (its `scopes:` list). A **scope** declares its identity in its own `.md` file — name, depth, keywords, description — with no per-stage membership inside it; membership lives on the stages. The binding between them is the scope name. When you add a new stage (see [Adding a Stage](02-adding-a-stage.md)), you put the scope membership *on that stage* — its `scopes:` list names every scope that should run it. A stage that names no scope is `SKIP` everywhere. The transpose at compile turns those per-stage lists into the grid, so membership is authored once, on the stage, rather than re-declared in nine separate scope blocks.
+A **stage** declares its own identity — its phase, its lead agent, the artifacts it consumes and produces, and now the scopes it runs under (its `scopes:` list). A **scope** declares its identity in its own `.md` file — name, depth, keywords, description — with no per-stage membership inside it; membership lives on the stages. The binding between them is the scope name. When you add a new stage (see [Adding a Stage](02-adding-a-stage.md)), you put the scope membership *on that stage* — its `scopes:` list names every scope that should run it. A stage that names no scope is `SKIP` everywhere. The transpose at compile turns those per-stage lists into the grid, so membership is authored once, on the stage, rather than re-declared in ten separate scope blocks.
 
 That separation is the same data-versus-code line the rest of this guide rests on (see [Harness Engineer Guide](00-overview.md)). The scope file is data about *identity*; the stage's `scopes:` list is data about *membership*; the compiled grid is the transpose of the two.
 
@@ -126,7 +126,7 @@ Tuning is a smaller edit, but it lands on the stage, not the scope. Two changes 
 
 Either way, the recompile-and-doctor pair from step 3 above applies. The edit is small; the verification is the same.
 
-A note on layering: tuning the shipped scopes edits framework-shipped files directly — a stage's `scopes:` tag or a shipped `core/scopes/aidlc-*.md`. That's legitimate for a fork that wants different defaults, but be aware you're changing files that carry the `aidlc-` lineage and a framework upgrade may want to reconcile them. Adding a net-new scope file alongside the shipped nine is the cleaner path when you want a team-specific behavior without touching the defaults everyone else relies on.
+A note on layering: tuning the shipped scopes edits framework-shipped files directly — a stage's `scopes:` tag or a shipped `core/scopes/aidlc-*.md`. That's legitimate for a fork that wants different defaults, but be aware you're changing files that carry the `aidlc-` lineage and a framework upgrade may want to reconcile them. Adding a net-new scope file alongside the shipped ten is the cleaner path when you want a team-specific behavior without touching the defaults everyone else relies on.
 
 ---
 

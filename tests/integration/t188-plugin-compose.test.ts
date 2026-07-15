@@ -147,7 +147,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const slugs = graph(project).map((s) => s.slug);
     expect(slugs).toContain("test-pro-integration");
     expect(slugs).toContain("test-pro-full-suite");
-    expect(graph(project).length).toBe(34); // 32 core + 2 test-pro
+    expect(graph(project).length).toBe(38); // 36 core + 2 test-pro
   });
 
   test("compose refreshes SKILL.md Stage Graph with plugin stages", () => {
@@ -298,7 +298,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   test("compose recompiles when the graph lost the plugin's stages", () => {
     // Simulate a transient compile failure: strip the plugin stages out of the
     // committed graph (as a killed-mid-compile install would leave it). A rerun
-    // must detect the missing slug and recompile, restoring all 34 stages — even
+    // must detect the missing slug and recompile, restoring all 38 stages — even
     // though no stage source changed (changed=false on the rerun).
     const graphPath = join(project, ".claude", "tools", "data", "stage-graph.json");
     const full = JSON.parse(readFileSync(graphPath, "utf-8"));

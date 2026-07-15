@@ -7,10 +7,12 @@
 #   2. framework default   <harness>/tools/data/templates/<artifact>.md          (THIS dir)
 #   3. else                the generic >=2-H2 floor                              (fallthrough)
 #
-# The framework ships NO default template files at GA (the structure exists and
-# is extensible, but every artifact hits the generic floor until a team authors
-# its own template, OR a later PR drops a default <artifact>.md here). Resolution
-# falls through gracefully when this dir holds only this marker.
+# The framework ships NINE default template files here (one per
+# discovery-scope artifact — assumptions-record through test-plans; the
+# intent-statement deliberately ships none). Every other
+# artifact still hits the generic floor until a team authors its own template,
+# OR a later PR drops a default <artifact>.md here. The resolution order is
+# unchanged, and a team template still WINS over any default in this dir.
 #
 # Distinct from the TEAM override dir (aidlc/spaces/<space>/memory/templates/,
 # via memoryTemplatesDir()): that one a team hand-authors and it WINS over this

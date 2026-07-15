@@ -205,7 +205,7 @@ Run the health check to confirm everything is in place:
 | State file | the active intent's `aidlc-state.md` matches its audit trail (no drift) |
 | Hook heartbeats | `.aidlc-hooks-health/` contains recent timestamps from hook executions |
 | Graph integrity | No cycles in `stage-graph.json`; every slug has a matching stage file |
-| Scope validation | All 9 scopes walk cleanly against the graph (advisories for scope-truncation gaps are expected) |
+| Scope validation | All 10 scopes walk cleanly against the graph (advisories for scope-truncation gaps are expected) |
 | Schema + references | Every stage's YAML frontmatter validates, and every consumes/requires_stage reference resolves |
 | Keyword overlap | No keyword is claimed by more than one scope across the `.claude/scopes/*.md` files |
 | Pending-compose marker | Reports a present `aidlc/.aidlc-compose-pending` (the in-flight compose gate marker) with its age. Fresh (under 24h, the normal state at an open compose gate) passes as advisory; stale (a crashed compose gate stranded it) fails. Silent when absent. Remediation: delete it if no compose gate is pending, or resolve the gate |
@@ -227,10 +227,10 @@ Run the health check to confirm everything is in place:
 ✓ Hook heartbeats: not yet fired (first workflow stage will populate)
 ✓ State matches last audit event (no drift)
 ✓ Cycle detection: 0 cycles
-✓ Orphan stage files: 32 graph entries all have files
-✓ Scope validation: 9 scopes valid (29 advisories)
-✓ Schema validation: 32/32 stages valid
-✓ Graph references: 122 artifacts + edges resolved
+✓ Orphan stage files: 36 graph entries all have files
+✓ Scope validation: 10 scopes valid (27 advisories)
+✓ Schema validation: 36/36 stages valid
+✓ Graph references: 131 artifacts + edges resolved
 ✓ Keyword overlap: no conflicts
 ```
 

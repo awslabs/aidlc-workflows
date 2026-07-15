@@ -77,13 +77,15 @@ function isExecute(scope: string, slug: string): boolean {
 
 describe("t39 scope EXECUTE-count validation — loadScopeMapping (migrated from t39-scope-stage-count-validation.sh, plan 9)", () => {
   // S1 (STRONGER, not in the .sh): the loader returns a usable map keyed by the
-  // nine canonical scopes, each carrying a `stages` record. The .sh assumed
-  // this shape implicitly by indexing m[scope].stages; pin it once up front so
-  // a missing/renamed scope fails loudly here rather than as a TypeError mid-case.
-  test("0a: loadScopeMapping returns the nine canonical scopes (S3)", () => {
+  // ten canonical scopes (the .sh's nine plus discovery, added v2.2.x), each
+  // carrying a `stages` record. The .sh assumed this shape implicitly by
+  // indexing m[scope].stages; pin it once up front so a missing/renamed scope
+  // fails loudly here rather than as a TypeError mid-case.
+  test("0a: loadScopeMapping returns the ten canonical scopes (S3)", () => {
     expect(Object.keys(MAPPING).sort()).toEqual(
       [
         "bugfix",
+        "discovery",
         "enterprise",
         "feature",
         "infra",
@@ -112,13 +114,14 @@ describe("t39 scope EXECUTE-count validation — loadScopeMapping (migrated from
     }
   });
 
-  // 1. Enterprise: all 32 stages EXECUTE.
-  test("1: enterprise executes all 32 stages", () => {
+  // 1. Enterprise: 32 stages EXECUTE (the discovery stages are NOT tagged
+  // enterprise, so the count stays 32 in the 36-stage universe).
+  test("1: enterprise executes its 32 delivery-path stages", () => {
     expect(execCount("enterprise")).toBe(32);
   });
 
-  // 2. Feature: all 32 stages EXECUTE.
-  test("2: feature executes all 32 stages", () => {
+  // 2. Feature: 32 stages EXECUTE (discovery stages not tagged feature).
+  test("2: feature executes its 32 delivery-path stages", () => {
     expect(execCount("feature")).toBe(32);
   });
 
@@ -168,5 +171,11 @@ describe("t39 scope EXECUTE-count validation — loadScopeMapping (migrated from
     const n = execCount("workshop");
     expect(n).toBeGreaterThanOrEqual(20);
     expect(n).toBeLessThanOrEqual(28);
+  });
+
+  // 10. Discovery (added v2.2.x, not in the .sh): exactly 8 — the 3 init
+  // stages plus the 4 ideation discovery stages (1.8-1.11).
+  test("10: discovery executes exactly 8 stages", () => {
+    expect(execCount("discovery")).toBe(8);
   });
 });

@@ -95,7 +95,7 @@ Each agent below has a **deep-dive page** — its full responsibilities, the sta
 
 The aidlc-product-agent acts as the product manager and business analyst. It captures intent, conducts market research, defines scope, elicits requirements, and produces user stories. It is the most active agent in the Ideation and Inception phases.
 
-- **Leads:** intent-capture, market-research, scope-definition, requirements-analysis, user-stories
+- **Leads:** intent-capture, market-research, scope-definition, requirements-analysis, user-stories, and the four discovery stages (discovery-current-state, discovery-future-state, discovery-experimentation, discovery-decision — discovery scope only)
 - **Supports:** rough-mockups, approval-handoff, refined-mockups
 - **Special tools:** WebSearch (for market research)
 
@@ -106,7 +106,7 @@ The aidlc-product-agent acts as the product manager and business analyst. It cap
 The aidlc-design-agent creates wireframes, mockups, and interaction specifications. It works closely with the aidlc-product-agent on user-facing features and with the aidlc-developer-agent to ensure designs are implementable.
 
 - **Leads:** rough-mockups, refined-mockups
-- **Supports:** user-stories, application-design
+- **Supports:** user-stories, application-design, and three discovery stages (discovery-current-state, discovery-future-state, discovery-experimentation — discovery scope only)
 - **Special tools:** WebSearch (for design research)
 
 ### [aidlc-delivery-agent](agents/delivery-agent.md)
@@ -116,7 +116,7 @@ The aidlc-design-agent creates wireframes, mockups, and interaction specificatio
 The aidlc-delivery-agent acts as the engineering manager. It assesses team capacity, forms the mob composition, plans delivery sequencing, and manages phase handoffs.
 
 - **Leads:** team-formation, approval-handoff, delivery-planning
-- **Supports:** scope-definition, units-generation
+- **Supports:** scope-definition, units-generation, discovery-decision (discovery scope only)
 - **Special tools:** None beyond the shared set
 
 ### [aidlc-architect-agent](agents/architect-agent.md)
@@ -126,7 +126,7 @@ The aidlc-delivery-agent acts as the engineering manager. It assesses team capac
 The aidlc-architect-agent is the central design authority. It has the broadest stage involvement (9 stages across 3 phases) and carries the `judgment` tier — alongside seven other high-judgment agents (product, design, developer, quality, devsecops, compliance, aws-platform). A judgment agent inherits your session's own model and effort, so it is never downgraded below what you chose. Only delivery, pipeline-deploy, and operations carry the `templated` tier (a mid-size model at reduced effort), because their output is dominantly templated planning, CI/CD YAML, and runbook scaffolding.
 
 - **Leads:** feasibility, application-design, units-generation, functional-design, nfr-requirements, nfr-design
-- **Supports:** intent-capture, reverse-engineering (synthesis), delivery-planning
+- **Supports:** intent-capture, reverse-engineering (synthesis), delivery-planning, discovery-current-state and discovery-future-state (discovery scope only)
 
 ### [aidlc-aws-platform-agent](agents/aws-platform-agent.md)
 
@@ -165,7 +165,7 @@ The aidlc-devsecops-agent reviews designs for security, defines security require
 The aidlc-developer-agent spans three phases — from reverse engineering in Inception through deployment support in Operation. It runs code scans of existing codebases and generates implementation code.
 
 - **Leads:** reverse-engineering (code scan), code-generation
-- **Supports:** practices-discovery, functional-design, deployment-execution
+- **Supports:** practices-discovery, functional-design, deployment-execution, discovery-experimentation (discovery scope only)
 
 Workspace detection (workspace-detection) used to be a subagent of the aidlc-developer-agent; it now runs deterministically inside `aidlc-utility init` using rule-based file and manifest detection.
 - **Special tools:** Bash (for build and run commands)
@@ -177,7 +177,7 @@ Workspace detection (workspace-detection) used to be a subagent of the aidlc-dev
 The aidlc-quality-agent defines test strategy, generates test suites, validates quality gates, and runs performance testing.
 
 - **Leads:** build-and-test, performance-validation
-- **Supports:** practices-discovery, nfr-requirements
+- **Supports:** practices-discovery, nfr-requirements, discovery-experimentation (discovery scope only)
 - **Special tools:** Bash (for test execution)
 
 ### [aidlc-pipeline-deploy-agent](agents/pipeline-deploy-agent.md)
@@ -208,21 +208,21 @@ This table shows which agents are active in which phases, and whether they serve
 
 | Agent | Phase 0 | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
 |-------|---------|---------|---------|---------|---------|
-| aidlc-product-agent | — | L (intent-capture, market-research, scope-definition), S (rough-mockups, approval-handoff) | L (requirements-analysis, user-stories), S (refined-mockups) | — | — |
-| aidlc-design-agent | — | L (rough-mockups) | L (refined-mockups), S (user-stories, application-design) | — | — |
-| aidlc-delivery-agent | — | L (team-formation, approval-handoff), S (scope-definition) | L (delivery-planning), S (units-generation) | — | — |
-| aidlc-architect-agent | — | L (feasibility), S (intent-capture) | L (application-design, units-generation), S (reverse-engineering, delivery-planning) | L (functional-design, nfr-requirements, nfr-design) | — |
+| aidlc-product-agent | — | L (intent-capture, market-research, scope-definition, discovery-current-state, discovery-future-state, discovery-experimentation, discovery-decision), S (rough-mockups, approval-handoff) | L (requirements-analysis, user-stories), S (refined-mockups) | — | — |
+| aidlc-design-agent | — | L (rough-mockups), S (discovery-current-state, discovery-future-state, discovery-experimentation) | L (refined-mockups), S (user-stories, application-design) | — | — |
+| aidlc-delivery-agent | — | L (team-formation, approval-handoff), S (scope-definition, discovery-decision) | L (delivery-planning), S (units-generation) | — | — |
+| aidlc-architect-agent | — | L (feasibility), S (intent-capture, discovery-current-state, discovery-future-state) | L (application-design, units-generation), S (reverse-engineering, delivery-planning) | L (functional-design, nfr-requirements, nfr-design) | — |
 | aidlc-aws-platform-agent | — | S (feasibility) | S (application-design) | L (infrastructure-design), S (nfr-design) | L (environment-provisioning), S (feedback-optimization) |
 | aidlc-compliance-agent | — | S (feasibility) | — | S (nfr-requirements, infrastructure-design) | S (environment-provisioning) |
 | aidlc-devsecops-agent | — | — | S (practices-discovery) | S (nfr-requirements, infrastructure-design, build-and-test) | S (environment-provisioning) |
-| aidlc-developer-agent | — | — | L (reverse-engineering), S (practices-discovery) | L (code-generation), S (functional-design) | S (deployment-execution) |
-| aidlc-quality-agent | — | — | S (practices-discovery) | L (build-and-test), S (nfr-requirements) | L (performance-validation) |
+| aidlc-developer-agent | — | S (discovery-experimentation) | L (reverse-engineering), S (practices-discovery) | L (code-generation), S (functional-design) | S (deployment-execution) |
+| aidlc-quality-agent | — | S (discovery-experimentation) | S (practices-discovery) | L (build-and-test), S (nfr-requirements) | L (performance-validation) |
 | aidlc-pipeline-deploy-agent | — | — | L (practices-discovery) | L (ci-pipeline) | L (deployment-pipeline, deployment-execution) |
 | aidlc-operations-agent | — | — | — | — | L (observability-setup, incident-response, feedback-optimization) |
 
 ### Observations
 
-- The **aidlc-architect-agent** has the broadest involvement (9 stages across 3 phases). It carries the `judgment` tier (inherits your session's model and effort), as do seven other high-judgment agents; only **aidlc-delivery-agent**, **aidlc-pipeline-deploy-agent**, and **aidlc-operations-agent** carry the `templated` tier
+- The **aidlc-product-agent** leads the most stages (nine, four of them discovery-scope only), and the **aidlc-architect-agent** has the broadest involvement (11 stages across 3 phases). The architect carries the `judgment` tier (inherits your session's model and effort), as do seven other high-judgment agents; only **aidlc-delivery-agent**, **aidlc-pipeline-deploy-agent**, and **aidlc-operations-agent** carry the `templated` tier
 - The **aidlc-developer-agent** spans 3 phases: Inception, Construction, and Operation
 - The **aidlc-compliance-agent** and **aidlc-devsecops-agent** operate purely in support roles, participating in stages led by others
 - The **aidlc-operations-agent** closes the lifecycle loop by feeding insights back to the aidlc-product-agent

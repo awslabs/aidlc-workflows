@@ -24,7 +24,7 @@ This mirrors how effective human teams work: a mob of 3-5 people covers an entir
 
 At its core, AI-DLC runs a simple loop. A deterministic **engine** decides what happens next; the **conductor** (the `/aidlc` session, `SKILL.md`) carries it out, then asks the engine for the next move. Across that loop the framework:
 
-1. **Reads stage files** — 32 stage definitions across 5 phases, each specifying inputs, steps, outputs, and the lead agent
+1. **Reads stage files** — 36 stage definitions across 5 phases, each specifying inputs, steps, outputs, and the lead agent
 2. **Loads agent personas** — Activates domain-expert perspectives (architect, developer, product manager, etc.) with specialized knowledge
 3. **Manages state and audit** — Tracks progress in `aidlc-state.md` and logs every decision to the intent's `audit/` shards for traceability
 4. **Delegates to subagents** — For stages requiring focused, autonomous work (reverse engineering, code generation), spawns a subprocess
@@ -47,9 +47,9 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | Metric | Value |
 |--------|-------|
 | Phases | 5 (Initialization, Ideation, Inception, Construction, Operation) |
-| Stages | 32 |
+| Stages | 36 |
 | Agents | 11 domain-expert personas |
-| Scopes | 9 (enterprise through workshop) + auto-detect |
+| Scopes | 10 (enterprise through workshop, plus opt-in discovery) + auto-detect |
 | Depth levels | 3 (Minimal, Standard, Comprehensive) |
 | Test strategy levels | 3 (Minimal, Standard, Comprehensive) |
 | Audit event types | 68 |
@@ -61,7 +61,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Getting Started](01-getting-started.md) | Prerequisites, installation, first health check |
 | [Your First Workflow](02-your-first-workflow.md) | Annotated walkthrough of a complete run |
 | [Spaces and Intents](03-spaces-and-intents.md) | The workspace layout: running many pieces of work across spaces and intents |
-| [Phases and Stages](04-phases-and-stages.md) | The 5 phases and 32 stages explained |
+| [Phases and Stages](04-phases-and-stages.md) | The 5 phases and 36 stages explained |
 | [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) | How to choose and override scope/depth/test strategy |
 | [Agents](06-agents.md) | The 11 agents: who does what and when |
 | [Agent deep dives](agents/README.md) | Per-agent reference pages: responsibilities, stages, knowledge |
@@ -76,6 +76,7 @@ To reshape *how* AI-DLC behaves — add a stage or an agent, define a scope, aut
 | [Troubleshooting](15-troubleshooting.md) | Symptom-based problem solving |
 | [Worked Examples](16-worked-examples.md) | Full bugfix and feature walkthroughs |
 | [Skills and Runner Commands](17-skills.md) | The `/aidlc-*` stage- and scope-runner commands and the author-your-own-runner path |
+| [Running a Discovery Initiative](18-discovery-walkthrough.md) | Exploring and validating an idea before building, end to end |
 | [Workshop Mode](workshop-mode.md) | Multi-developer manual recipe for the workshop scope (claim semantics via git push) |
 | [Running on other harnesses](harnesses/README.md) | Install and run on Kiro IDE or Codex CLI, and what differs per harness |
 | [Glossary](glossary.md) | All terminology defined |

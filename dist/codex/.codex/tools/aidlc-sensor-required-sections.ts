@@ -44,7 +44,8 @@ interface Flags {
 	// (<harness>/tools/data/templates/) — the engine-shipped MIDDLE tier,
 	// consulted only when the team dir misses. Threaded by the dispatcher.
 	// Absent or a clean miss → fall through to the generic ≥2-H2 floor. The
-	// framework ships zero defaults at GA, so this normally misses.
+	// framework ships nine defaults (the discovery artifacts); any
+	// other artifact misses here.
 	frameworkTemplatesDir?: string;
 	// Comma-joined set of artifact NAMES (output-filename stems) this stage
 	// declares template-eligible — the `produces` entries that are NOT
@@ -159,10 +160,11 @@ function main(): void {
 	//   3. else                the generic ≥2-H2 floor              (no template)
 	// The artifact name IS the output filename stem (the X→X.md convention;
 	// resolveArtifactPath builds `<...>/${name}.md`, aidlc-orchestrate.ts:649).
-	// The framework ships zero defaults at GA, so tier 2 normally misses and the
-	// behaviour is identical to today (everything hits the floor) — but the
-	// branch exists so a later PR can drop in a default <stem>.md without touching
-	// resolution. The agent reads the SAME order (stage-protocol.md) — no drift.
+	// The framework ships nine defaults (one per discovery-scope
+	// artifact), so tier 2 hits for those stems and misses for every other
+	// artifact (which keeps the floor) — the branch was built so a PR could drop
+	// in a default <stem>.md without touching resolution, and discovery did.
+	// The agent reads the SAME order (stage-protocol.md) — no drift.
 	//
 	// ELIGIBILITY GATE (required, not optional): the stem==artifact key is
 	// unsound for questions/timestamp markers (a `*-questions.md` Q&A file is

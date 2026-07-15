@@ -41,7 +41,7 @@
 // reduction (t14...:21) before the `[ -n ]` test.
 //
 // EQUAL-OR-STRONGER additions (beyond the 160 .sh assertions):
-//   - S1: a count guard asserting exactly 32 stage files are discovered, so a
+//   - S1: a count guard asserting exactly 36 stage files are discovered, so a
 //     dropped/renamed stage dir surfaces as a hard failure instead of silently
 //     shrinking the matrix (the .sh's `plan 160` would have caught a count
 //     drift only as a TAP plan/observed mismatch; here it is an explicit assert).
@@ -92,11 +92,13 @@ function frontmatterField(path: string, key: string): string {
 }
 
 describe("t14 stage-content-validation — parseStageFrontmatter (migrated from t14-stage-content-validation.sh, plan 160)", () => {
-  // S1 (STRONGER): the .sh planned exactly 160 assertions over 32 stages x 5.
-  // Pin the discovered stage count so a dropped/renamed/added stage dir fails
-  // loudly here rather than as an opaque TAP plan mismatch.
-  test("discovers exactly 32 stage files (5 assertions each = 160)", () => {
-    expect(STAGES.length).toBe(32);
+  // S1 (STRONGER): the .sh planned exactly 160 assertions over 32 stages x 5;
+  // the shipped tree has since grown to 36 stages (x 5 = 180) with the four
+  // ideation discovery stages. Pin the discovered stage count so a
+  // dropped/renamed/added stage dir fails loudly here rather than as an opaque
+  // TAP plan mismatch.
+  test("discovers exactly 36 stage files (5 assertions each = 180)", () => {
+    expect(STAGES.length).toBe(36);
   });
 
   // S2 (STRONGER): pin parseStageFrontmatter's two documented throw paths — the

@@ -63,7 +63,7 @@ const STAGE_TABLE: ReadonlyArray<readonly [phase: string, slug: string]> = [
   ["initialization", "workspace-scaffold"],
   ["initialization", "workspace-detection"],
   ["initialization", "state-init"],
-  // Ideation (7)
+  // Ideation (11)
   ["ideation", "intent-capture"],
   ["ideation", "market-research"],
   ["ideation", "feasibility"],
@@ -71,6 +71,10 @@ const STAGE_TABLE: ReadonlyArray<readonly [phase: string, slug: string]> = [
   ["ideation", "team-formation"],
   ["ideation", "rough-mockups"],
   ["ideation", "approval-handoff"],
+  ["ideation", "discovery-current-state"],
+  ["ideation", "discovery-future-state"],
+  ["ideation", "discovery-experimentation"],
+  ["ideation", "discovery-decision"],
   // Inception (8)
   ["inception", "reverse-engineering"],
   ["inception", "practices-discovery"],
@@ -108,12 +112,13 @@ function parseStage(phase: string, slug: string): Record<string, unknown> {
   >;
 }
 
-// Guard: the .sh hard-coded a plan of 64 (32 stages x 2). Pin the table
-// length so a stage added/removed without updating this port is caught,
-// matching the .sh's implicit count contract.
+// Guard: the .sh hard-coded a plan of 64 (32 stages x 2); the table has since
+// grown to 36 with the four ideation discovery stages (plan 72 = 36 x 2). Pin
+// the table length so a stage added/removed without updating this port is
+// caught, matching the .sh's implicit count contract.
 describe("t05 stage table integrity", () => {
-  test("table holds exactly 32 stages (plan 64 = 32 x 2)", () => {
-    expect(STAGE_TABLE.length).toBe(32);
+  test("table holds exactly 36 stages (plan 72 = 36 x 2)", () => {
+    expect(STAGE_TABLE.length).toBe(36);
   });
 });
 

@@ -28,11 +28,11 @@
 //     pin (2), rules_in_context / sensors_applicable array + FIELD_ORDER shape,
 //     resolveSensorsForStage declared-order, withAuditLock reentrancy (2).
 //   MUST STAY SPAWN (process.exit / module-load env read / CLI stdout / parallel-process):
-//     plan-identity parity (9 scopes via `state lookup stages-in-scope` byte-exact),
-//     AIDLC_GRAPH_RESOLVE=1 `resolve <scope> --stdout` cutover parity (9 scopes byte-exact
+//     plan-identity parity (10 scopes via `state lookup stages-in-scope` byte-exact),
+//     AIDLC_GRAPH_RESOLVE=1 `resolve <scope> --stdout` cutover parity (10 scopes byte-exact
 //       vs mr9-parity fixtures) + the gate (no flag -> exit 1, stderr), env-seam read,
-//     nextInScopeStage walk parity (9 scopes via `lookup next-stage`),
-//     firstInScopeStageOfPhase parity (9 scopes x 5 phases via `lookup first-in-phase`),
+//     nextInScopeStage walk parity (10 scopes via `lookup next-stage`),
+//     firstInScopeStageOfPhase parity (10 scopes x 5 phases via `lookup first-in-phase`),
 //     AIDLC_STAGE_GRAPH env-override-honoured-by-rewired-stagesInScope,
 //     compile --check drift (clean->0 / mutated->1 / restore->0),
 //     AIDLC_RULES_DIR populate-from-disk + --check drift, AIDLC_SENSORS_DIR populate +
@@ -101,6 +101,7 @@ const SCOPES = [
   "infra",
   "security-patch",
   "workshop",
+  "discovery",
 ] as const;
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"] as const;
 
@@ -197,10 +198,11 @@ describe("t66 producersOf / consumersOf (in-process)", () => {
 // =============================================================================
 
 describe("t66 topoSort (in-process)", () => {
-  // .sh:79-84
-  test("topoSort(loadGraph()) returns 32 stages starting with workspace-scaffold", () => {
+  // .sh:79-84 — 32 stages at the .sh's writing; 36 since intent-capture was
+  // extended and the four ideation discovery stages (1.8-1.11) landed.
+  test("topoSort(loadGraph()) returns 36 stages starting with workspace-scaffold", () => {
     const order = topoSort(loadGraph());
-    expect(`${order.length}:${order[0]}`).toBe("32:workspace-scaffold");
+    expect(`${order.length}:${order[0]}`).toBe("36:workspace-scaffold");
   });
   // .sh:86-95
   test("topoSort throws on cycle input", () => {
@@ -218,7 +220,7 @@ describe("t66 topoSort (in-process)", () => {
 
 describe("t66 findCycles (in-process)", () => {
   // .sh:101-105
-  test("findCycles(loadGraph()) returns [] for today's 32-stage graph", () => {
+  test("findCycles(loadGraph()) returns [] for today's 36-stage graph", () => {
     expect(findCycles(loadGraph()).length).toBe(0);
   });
   // .sh:107-115 — A->B->A
@@ -267,8 +269,9 @@ describe("t66 subgraphForScope (in-process)", () => {
     const sorted = [...nums].sort(numericOrder);
     expect(nums).toEqual(sorted);
   });
-  // .sh:176-189 — per-scope sizes match EXECUTE count for all 9 scopes
-  test("subgraphForScope size matches EXECUTE count for all 9 scopes", () => {
+  // .sh:176-189 — per-scope sizes match EXECUTE count for all 9 scopes at the .sh's
+  // writing; 10 since discovery landed.
+  test("subgraphForScope size matches EXECUTE count for all 10 scopes", () => {
     const mapping = loadScopeMapping();
     const mismatches: string[] = [];
     for (const scope of SCOPES) {
@@ -398,9 +401,22 @@ describe("t66 graph traversal — full graph (in-process)", () => {
 // =============================================================================
 
 describe("t66 graph traversal — per-scope sub-DAG (in-process)", () => {
-  // .sh:337-341 — enterprise sub-DAG is the full graph
-  test("enterprise sub-DAG equals full graph", () => {
-    expect(subgraphForScope("enterprise").length).toBe(loadGraph().length);
+  // .sh:337-341 — enterprise was the full graph at the .sh's writing; since
+  // the discovery stages (tagged [discovery] only) landed, enterprise EXECUTEs
+  // 32 of the 36 stages — the full graph minus the 4 discovery-only stages
+  // (intent-capture is shared: discovery runs it too, so it stays on-path).
+  test("enterprise sub-DAG equals full graph minus the 4 discovery-only stages", () => {
+    const full = loadGraph();
+    const sub = subgraphForScope("enterprise");
+    expect(sub.length).toBe(full.length - 4);
+    const onPath = new Set(sub.map((s) => s.slug));
+    const offPath = full.filter((s) => !onPath.has(s.slug)).map((s) => s.slug).sort();
+    expect(offPath).toEqual([
+      "discovery-current-state",
+      "discovery-decision",
+      "discovery-experimentation",
+      "discovery-future-state",
+    ]);
   });
   // .sh:344-356 — bugfix sub-DAG has sawed-off edges (producers off-path)
   test("bugfix sub-DAG has sawed-off edges (producers off-path)", () => {
@@ -431,13 +447,13 @@ describe("t66 graph traversal — per-scope sub-DAG (in-process)", () => {
 });
 
 // =============================================================================
-// Plan-identity parity — byte-exact for 9 scopes (.sh:381-390, 9 assertions)
+// Plan-identity parity — byte-exact for 10 scopes (.sh:381-390, 9 assertions; discovery is the 10th)
 // MUST STAY SPAWN: asserts the CLI `state lookup stages-in-scope` stdout matches the
 // golden fixtures byte-for-byte (process-boundary stdout contract). The .sh re-pretty-
 // prints the CLI's single-line JSON with JSON.stringify(parse, null, 2); reproduced here.
 // =============================================================================
 
-describe("t66 plan-identity parity (spawnSync CLI-boundary: 9 scopes)", () => {
+describe("t66 plan-identity parity (spawnSync CLI-boundary: 10 scopes)", () => {
   for (const scope of SCOPES) {
     test(`plan-identity parity: ${scope} byte-exact`, () => {
       const res = spawnSync(BUN, [STATE_TS, "lookup", "stages-in-scope", scope], {
@@ -453,7 +469,7 @@ describe("t66 plan-identity parity (spawnSync CLI-boundary: 9 scopes)", () => {
 });
 
 // =============================================================================
-// AIDLC_GRAPH_RESOLVE=1 resolve cutover parity — byte-exact for 9 scopes
+// AIDLC_GRAPH_RESOLVE=1 resolve cutover parity — byte-exact for 10 scopes
 // (.sh:407-415, 9 assertions). MUST STAY SPAWN: this is an ENV-GATED CLI
 // subcommand whose entire subject is a process-boundary seam — a FRESH process
 // must (a) read AIDLC_GRAPH_RESOLVE at module/handler time to lift the gate and
@@ -465,7 +481,7 @@ describe("t66 plan-identity parity (spawnSync CLI-boundary: 9 scopes)", () => {
 // proving the frontmatter-derived grid == the LEGACY scope-mapping-derived plan
 // BEFORE scope-mapping.json was retired. scope-mapping.json IS now retired
 // (verified: dist/claude/.claude/tools/data/ has scope-grid.json, no
-// scope-mapping.json; nine .claude/scopes/aidlc-<scope>.md files are the
+// scope-mapping.json; ten .claude/scopes/aidlc-<scope>.md files are the
 // authored source). resolvePlanForScope() (aidlc-graph.ts:762-780) reads
 // loadScopeGrid()[scope] — the compiled grid — so this resolve path now pins the
 // CURRENT shipped surface, and its output still equals the mr9-parity fixtures
@@ -521,13 +537,13 @@ describe("t66 AIDLC_GRAPH_RESOLVE=1 resolve cutover parity (spawnSync env-gated 
 });
 
 // =============================================================================
-// nextInScopeStage walk parity — 9 scopes (.sh:396-423, 1 grouped assertion)
+// nextInScopeStage walk parity — 10 scopes (.sh:396-423, 1 grouped assertion)
 // MUST STAY SPAWN: drives the CLI `state lookup next-stage <slug> <scope>` walk loop
 // (process-boundary; each step is a fresh process emitting next or "none").
 // =============================================================================
 
-describe("t66 nextInScopeStage walk parity (spawnSync CLI-boundary: 9 scopes)", () => {
-  test("nextInScopeStage walk parity byte-exact for 9 scopes", () => {
+describe("t66 nextInScopeStage walk parity (spawnSync CLI-boundary: 10 scopes)", () => {
+  test("nextInScopeStage walk parity byte-exact for 10 scopes", () => {
     const fails: string[] = [];
     for (const scope of SCOPES) {
       const scopeRows = JSON.parse(
@@ -551,16 +567,16 @@ describe("t66 nextInScopeStage walk parity (spawnSync CLI-boundary: 9 scopes)", 
       if (actual !== expected) fails.push(scope);
     }
     expect(fails).toEqual([]);
-  }, 120000); // many sequential CLI spawns across 9 scopes (workshop ~25 steps)
+  }, 120000); // many sequential CLI spawns across 10 scopes (workshop ~25 steps)
 });
 
 // =============================================================================
-// firstInScopeStageOfPhase parity — 9 scopes x 5 phases (.sh:430-458, 1 grouped assertion)
+// firstInScopeStageOfPhase parity — 10 scopes x 5 phases (.sh:430-458, 1 grouped assertion)
 // MUST STAY SPAWN: drives the CLI `state lookup first-in-phase <phase> <scope>` per cell.
 // =============================================================================
 
 describe("t66 firstInScopeStageOfPhase parity (spawnSync CLI-boundary)", () => {
-  test("firstInScopeStageOfPhase parity byte-exact for 9 scopes x 5 phases", () => {
+  test("firstInScopeStageOfPhase parity byte-exact for 10 scopes x 5 phases", () => {
     const fails: string[] = [];
     for (const scope of SCOPES) {
       const obj: Record<string, string> = {};
@@ -575,7 +591,7 @@ describe("t66 firstInScopeStageOfPhase parity (spawnSync CLI-boundary)", () => {
       if (actual !== expected) fails.push(scope);
     }
     expect(fails).toEqual([]);
-  }, 120000); // 9 scopes x 5 phases = 45 sequential CLI spawns
+  }, 120000); // 10 scopes x 5 phases = 50 sequential CLI spawns
 });
 
 // =============================================================================
@@ -758,6 +774,7 @@ describe("t66 validateScope (in-process)", () => {
   test("validateScope: the per-scope advisory edge sets are exactly the accepted baseline", () => {
     const EXPECTED: Record<string, string[]> = {
       bugfix: ["code-generation->unit-of-work"],
+      discovery: [],
       enterprise: [],
       feature: [],
       infra: [
@@ -1005,8 +1022,10 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
     expect(res.stdout.trimEnd()).toBe(expected.trimEnd());
   });
 
-  // .sh:892-900 — Group B: element counts match live sources (4 assertions)
-  test("export element counts: stages=32, scopes=9, artifacts=122, agents=14", () => {
+  // .sh:892-900 — Group B: element counts match live sources (4 assertions).
+  // 32/9/122 at the .sh's writing; 36 stages / 10 scopes / 131 artifacts since
+  // the discovery scope landed (intent-capture extended + 4 discovery stages).
+  test("export element counts: stages=36, scopes=10, artifacts=131, agents=14", () => {
     const res = spawnSync(BUN, [GRAPH_TS, "export"], { encoding: "utf8" });
     const out = JSON.parse(res.stdout) as {
       stages: unknown[];
@@ -1014,9 +1033,9 @@ describe("t66 designer export (spawnSync CLI-boundary)", () => {
       artifacts: unknown[];
       agents: unknown[];
     };
-    expect(out.stages.length).toBe(32);
-    expect(Object.keys(out.scopes).length).toBe(9);
-    expect(out.artifacts.length).toBe(122);
+    expect(out.stages.length).toBe(36);
+    expect(Object.keys(out.scopes).length).toBe(10);
+    expect(out.artifacts.length).toBe(131);
     expect(out.agents.length).toBe(14);
   });
 

@@ -4,7 +4,7 @@
 
 The aidlc-architect-agent is your solutions architect. It translates requirements into robust system architectures, produces Architecture Decision Records (ADRs), designs domain models, and decomposes projects into implementable units of work. It thinks in patterns and trade-offs, producing designs that developers can implement directly.
 
-The aidlc-architect-agent leads the most stages of any single agent in the lifecycle — six in total — spanning Ideation, Inception, and Construction. It is the primary design authority and carries the `judgment` tier along with the seven other high-judgment agents, so it inherits your session's own model and effort rather than pinning one. Only delivery, pipeline-deploy, and operations carry the `templated` tier (a mid-size model at reduced effort) because their output is dominantly templated.
+The aidlc-architect-agent leads six stages spanning Ideation, Inception, and Construction — more than any agent except the product agent. It is the primary design authority and carries the `judgment` tier along with the seven other high-judgment agents, so it inherits your session's own model and effort rather than pinning one. Only delivery, pipeline-deploy, and operations carry the `templated` tier (a mid-size model at reduced effort) because their output is dominantly templated.
 
 ## Stages Led
 
@@ -24,6 +24,8 @@ It also leads the synthesis step of stage 2.1 (Reverse Engineering), where it re
 | Stage | Phase | Contribution |
 |-------|-------|-------------|
 | 1.1 Intent Capture | Ideation | Provides technical context |
+| 1.8 Discovery Current State | Ideation | Code mining and standards perspective (discovery scope only) |
+| 1.9 Discovery Future State | Ideation | Feasibility perspective on options (discovery scope only) |
 | 2.1 Reverse Engineering (Synthesis step) | Inception | Synthesizes code scan results into a coherent architectural model |
 | 2.8 Delivery Planning | Inception | Validates build order against architecture dependencies |
 

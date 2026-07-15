@@ -52,7 +52,7 @@ corrections as durable Rules is handled by the §13 Learnings Ritual in
 ## Overview
 
 The stage protocol is the mandatory behavioral contract governing how every
-stage in the AI-DLC workflow executes. All 32 stages across five phases
+stage in the AI-DLC workflow executes. All 36 stages across five phases
 (Initialization, Ideation, Inception, Construction, Operation) follow this protocol without
 exception. The conductor (`SKILL.md`) hands stage execution to agent
 personas; the protocol stays independent of phase and agent, defining
@@ -264,7 +264,7 @@ Progress: [N]/[total] overall | [phase-N]/[phase-total] [Phase] stages complete.
 ```
 
 Count only current-phase stages. Include completed and skipped in numerator.
-Example: `Progress: 13/32 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff`
+Example: `Progress: 13/36 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff`
 
 ---
 
@@ -422,7 +422,7 @@ Before beginning any stage, transition sidebar tasks:
 2. Current stage task -> mark `in_progress` with `activeForm: "Running [Stage Name]"`
 
 Rules: task must be `in_progress` for spinner to display. Update BEFORE
-reading stage file. Applies to all 32 stages. If task IDs lost (compaction),
+reading stage file. Applies to all 36 stages. If task IDs lost (compaction),
 use `TaskList` to find by subject. For skipped stages:
 `TaskUpdate({ taskId: [ID], status: "completed", description: "[original] -- Skipped: [reason]" })`
 
@@ -586,7 +586,7 @@ existence, then offers to resume from the last incomplete stage.
 | Phase/Stage Group | Context to Load |
 |-------------------|----------------|
 | **Initialization (0.1-0.3)** | Workspace filesystem; `aidlc-state.md` |
-| **Ideation (1.1-1.7)** | `<record>/ideation/` artifacts; guardrails |
+| **Ideation (1.1-1.11)** | `<record>/ideation/` artifacts; guardrails; discovery runs reload the decision pack and evidence record first |
 | **Inception -- RE** | RE artifacts; ideation scope/feasibility |
 | **Inception -- Requirements** | RE artifacts (if performed); requirements-analysis docs |
 | **Inception -- Design** | Requirements; user stories; application-design docs |
@@ -718,8 +718,8 @@ and problem complexity.
 
 | Scope | Default Depth | Test Strategy | Typical Stages | Notes |
 |-------|--------------|---------------|---------------:|-------|
-| enterprise | Comprehensive | Comprehensive | 32 | All stages |
-| feature | Standard | Standard | 32 | All stages |
+| enterprise | Comprehensive | Comprehensive | 32 | All delivery-path stages |
+| feature | Standard | Standard | 32 | All delivery-path stages |
 | mvp | Standard | Standard | 22 | Skip all Operation |
 | poc | Minimal | Minimal | ~8 | Initialization + Ideation + core Inception |
 | bugfix | Minimal | Minimal | ~8 | Targeted |
@@ -727,6 +727,7 @@ and problem complexity.
 | infra | Standard | Standard | ~13 | Infra-focused |
 | security-patch | Minimal | Minimal | ~10 | Security-focused |
 | workshop | Standard | **Minimal** | 25 | Standard depth for learning; Nyquist testing for pace |
+| discovery | Standard | Standard | 8 | Initialization + discovery ideation; ends in commit / pivot / park |
 
 User can override depth or test strategy at any approval gate.
 
@@ -764,7 +765,7 @@ brief analysis, skip optional stages:
 | **AI-DLC** | AI-Driven Development Life Cycle -- the methodology this system implements |
 | **Phase** | Top-level grouping: Initialization, Ideation, Inception, Construction, Operation |
 | **Stage** | A discrete step within a phase (e.g., Intent Capture, Code Generation) |
-| **Scope** | Controls which stages execute and at what depth (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, workshop) |
+| **Scope** | Controls which stages execute and at what depth (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, workshop, discovery) |
 | **Depth** | Artifact detail scale: Minimal, Standard, or Comprehensive |
 | **Unit of Work** | An independently implementable package of features; the Construction iteration unit. One pass through stages 3.1-3.7. |
 | **Service** | A deployable process or container (API server, worker, frontend app) |

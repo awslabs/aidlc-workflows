@@ -50,6 +50,26 @@
     "action": "EXECUTE"
   },
   {
+    "slug": "discovery-current-state",
+    "phase": "ideation",
+    "action": "SKIP"
+  },
+  {
+    "slug": "discovery-future-state",
+    "phase": "ideation",
+    "action": "SKIP"
+  },
+  {
+    "slug": "discovery-experimentation",
+    "phase": "ideation",
+    "action": "SKIP"
+  },
+  {
+    "slug": "discovery-decision",
+    "phase": "ideation",
+    "action": "SKIP"
+  },
+  {
     "slug": "reverse-engineering",
     "phase": "inception",
     "action": "EXECUTE"

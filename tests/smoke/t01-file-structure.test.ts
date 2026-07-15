@@ -23,11 +23,11 @@
 //   .sh L20-29  11 hooks (each)                        -> "ships each of the 12 framework hooks" + "ships EXACTLY the 12 expected aidlc-*.ts hooks" (count strengthening; grew to 11 with the human-turn mint hook, 12 with the reviewer-scope hook)
 //   .sh L32-34  11 agents (loop)                       -> "ships each of the 14 agent personas" + "ships EXACTLY 14 aidlc-*-agent.md files" (count strengthening; roster grew to 13 with the two reviewer personas, then 14 with the composer)
 //   .sh L38-40  3 initialization stages (loop)         -> "ships the 3 initialization stages"
-//   .sh L43-45  7 ideation stages (loop)               -> "ships the 7 ideation stages"
-//   .sh L48-50  8 inception stages (loop)              -> "ships the 8 inception stages"
-//   .sh L53-55  7 construction stages (loop)           -> "ships the 7 construction stages"
-//   .sh L58-60  7 operation stages (loop)              -> "ships the 7 operation stages"
-//   .sh (all stages)                                   -> "ships EXACTLY 32 stage files across the 5 phases" (count strengthening)
+//   .sh L43-45  7 ideation stages (loop)               -> "ships the 11 ideation stages" (grew to 11 with the four discovery stages)
+//   .sh L48-50  8 inception stages (loop)               -> "ships the 8 inception stages"
+//   .sh L53-55  7 construction stages (loop)            -> "ships the 7 construction stages"
+//   .sh L58-60  7 operation stages (loop)               -> "ships the 7 operation stages"
+//   .sh (all stages)                                   -> "ships EXACTLY 36 stage files across the 5 phases" (count strengthening)
 //   .sh L63-64  settings.json + settings.local.json.example -> "ships settings.json and settings.local.json.example"
 //   .sh L67  state-template.md                          -> "ships knowledge/aidlc-shared/state-template.md"
 //   .sh L70-71  org + project rules                     -> "ships the org and project rule layers"
@@ -86,8 +86,9 @@ const HOOKS = [
   "aidlc-stop.ts",
 ] as const;
 
-// The 32 stage files, partitioned by phase exactly as the .sh's per-phase loops
-// did (3 + 7 + 8 + 7 + 7 = 32).
+// The 36 stage files, partitioned by phase exactly as the .sh's per-phase loops
+// did (3 + 11 + 8 + 7 + 7 = 36; ideation grew from 7 to 11 with the four
+// discovery stages, 1.8-1.11).
 const STAGES: Record<string, readonly string[]> = {
   initialization: ["workspace-scaffold", "workspace-detection", "state-init"],
   ideation: [
@@ -98,6 +99,10 @@ const STAGES: Record<string, readonly string[]> = {
     "team-formation",
     "rough-mockups",
     "approval-handoff",
+    "discovery-current-state",
+    "discovery-future-state",
+    "discovery-experimentation",
+    "discovery-decision",
   ],
   inception: [
     "reverse-engineering",
@@ -185,7 +190,7 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
     }
   });
 
-  test("ships the 7 ideation stages [.sh L43-45]", () => {
+  test("ships the 11 ideation stages [.sh L43-45]", () => {
     for (const s of STAGES.ideation) {
       expect(existsSync(at("aidlc-common", "stages", "ideation", `${s}.md`))).toBe(true);
     }
@@ -211,10 +216,10 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
     }
   });
 
-  // STRONGER: the 5 phase dirs together hold EXACTLY 32 .md stage files, and
+  // STRONGER: the 5 phase dirs together hold EXACTLY 36 .md stage files, and
   // each phase dir holds exactly its expected count. The .sh's per-phase loops
   // asserted membership; this also pins that no extra stage file ships.
-  test("ships EXACTLY 32 stage files across the 5 phases [.sh all stages — count strengthening]", () => {
+  test("ships EXACTLY 36 stage files across the 5 phases [.sh all stages — count strengthening]", () => {
     let total = 0;
     for (const [phase, stages] of Object.entries(STAGES)) {
       const dir = at("aidlc-common", "stages", phase);
@@ -224,7 +229,7 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
       expect(shipped).toEqual([...stages].map((s) => `${s}.md`).sort());
       total += shipped.length;
     }
-    expect(total).toBe(32);
+    expect(total).toBe(36);
   });
 
   test("ships settings.json and settings.local.json.example [.sh L63-64]", () => {
@@ -254,10 +259,10 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
   // assert_file_exists calls. The roster later grew by two reviewer agent
   // personas (product-lead, architecture-reviewer) to 65, then by the
   // human-turn mint hook to 66, then by the composer persona to 67, then by
-  // the reviewer-scope hook to 68. Re-derive the full path list from the same
+  // the reviewer-scope hook to 68, and the four ideation discovery stages to 72. Re-derive the full path list from the same
   // data the loops drove and pin its length, so the migrated suite cannot
   // silently shrink the structural surface the .sh enforced.
-  test("asserts EXACTLY 68 shipped paths (TAP plan 63 + 2 reviewer agents + 2 hooks + the composer) [.sh L9]", () => {
+  test("asserts EXACTLY 72 shipped paths (TAP plan 63 + 2 reviewer agents + 2 hooks + the composer + 4 discovery stages) [.sh L9]", () => {
     const paths: string[] = [
       at("skills", "aidlc", "SKILL.md"), // 1
       at("aidlc-common", "protocols", "stage-protocol.md"), // 2
@@ -267,16 +272,16 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
       ...AGENTS.map((a) => at("agents", `aidlc-${a}-agent.md`)), // 16-29 (14)
       ...Object.entries(STAGES).flatMap(([phase, stages]) =>
         stages.map((s) => at("aidlc-common", "stages", phase, `${s}.md`)),
-      ), // 30-61 (32)
-      at("settings.json"), // 62
-      at("settings.local.json.example"), // 63
-      at("knowledge", "aidlc-shared", "state-template.md"), // 64
-      mem("org.md"), // 65 — method relocated to aidlc/spaces/default/memory/
-      mem("project.md"), // 66
-      at("CLAUDE.md"), // 67
+      ), // 30-65 (36)
+      at("settings.json"), // 67
+      at("settings.local.json.example"), // 68
+      at("knowledge", "aidlc-shared", "state-template.md"), // 69
+      mem("org.md"), // 70 — method relocated to aidlc/spaces/default/memory/
+      mem("project.md"), // 70
+      at("CLAUDE.md"), // 71
     ];
-    expect(paths.length).toBe(68);
-    // Every one of the 68 must exist — the .sh's full TAP plan, re-proven as a
+    expect(paths.length).toBe(72);
+    // Every one of the 72 must exist — the .sh's full TAP plan, re-proven as a
     // single set so the count and the existence checks cannot drift apart.
     for (const p of paths) {
       expect(existsSync(p)).toBe(true);

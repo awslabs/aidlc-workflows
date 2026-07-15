@@ -137,12 +137,13 @@ const ROWS = extractGraphRows();
 describe("t38 Lead Agent cross-check (migrated from t38-stage-agent-cross-check.sh, plan 32)", () => {
   // The .sh's `plan 32` froze the row count; reproduce that as an explicit
   // corpus guard so a dropped/added Stage Graph row fails loudly (test.each
-  // over an empty/short table would otherwise pass vacuously).
-  test("the Stage Graph table has the pinned 32 rows", () => {
-    expect(ROWS.length).toBe(32);
+  // over an empty/short table would otherwise pass vacuously). The table has
+  // since grown to 36 rows with the four ideation discovery stages (1.8-1.11).
+  test("the Stage Graph table has the pinned 36 rows", () => {
+    expect(ROWS.length).toBe(36);
   });
 
-  // --- The 32 per-row Lead Agent assertions (one `ok`/`not_ok` each) ---------
+  // --- The 36 per-row Lead Agent assertions (one `ok`/`not_ok` each) ---------
   test.each(ROWS)(
     "row '$slug': Lead Agent frontmatter matches graph ($leadAgent)",
     (row) => {

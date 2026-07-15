@@ -28,8 +28,8 @@
 //       conductor did not improvise a grid inline;
 //   (c) a gate fired (askedQuestions >= 1) and the run stopped there;
 //   (d) NOTHING was written: no aidlc-state.md (no birth), no composed scope
-//       file in .claude/scopes/ beyond the 9 stock ones, scope-grid.json
-//       still has exactly 9 keys. P0 stops at render - the write is P2.
+//       file in .claude/scopes/ beyond the 10 stock ones, scope-grid.json
+//       still has exactly 10 keys. P0 stops at render - the write is P2.
 //
 // It SPENDS TOKENS - driveAidlc drives the real /aidlc on Opus/Bedrock. Gated
 // on claude-CLI presence (the file calls driveAidlc(), so claude-gate.ts marks
@@ -95,17 +95,17 @@ describe("t189 composer dispatch (/aidlc compose, sdk live)", () => {
           existsSync(join(intentsDir, d, "aidlc-state.md")),
         );
         expect(stateFiles).toEqual([]);
-        // No composed scope file (the 9 stock scopes only):
+        // No composed scope file (the 10 stock scopes only):
         const scopesDir = join(proj, ".claude", "scopes");
         const scopeFiles = readdirSync(scopesDir).filter(
           (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
         );
-        expect(scopeFiles.length).toBe(9);
-        // No grid mutation (exactly the 9 stock keys):
+        expect(scopeFiles.length).toBe(10);
+        // No grid mutation (exactly the 10 stock keys):
         const grid = JSON.parse(
           readFileSync(join(proj, ".claude", "tools", "data", "scope-grid.json"), "utf-8"),
         ) as Record<string, unknown>;
-        expect(Object.keys(grid).length).toBe(9);
+        expect(Object.keys(grid).length).toBe(10);
       } finally {
         cleanupTestProject(proj);
       }

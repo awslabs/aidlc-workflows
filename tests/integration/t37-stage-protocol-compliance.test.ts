@@ -133,12 +133,13 @@ function allStageFiles(): { slug: string; path: string }[] {
 const STAGE_FILES = allStageFiles();
 
 describe("every stage references the stage protocol", () => {
-  // .sh: the protocol-reference loop scored every stage. All 32 shipped stages
-  // — including the 3 init stages — reference stage-protocol, so this is the
-  // STRONGER form: every stage must reference it (the .sh's only failing branch
-  // was a non-init stage missing the reference).
-  test("the shipped tree has exactly 32 stage files [.sh TOTAL_STAGES]", () => {
-    expect(STAGE_FILES.length).toBe(32);
+  // .sh: the protocol-reference loop scored every stage. All 36 shipped stages
+  // (32 at the .sh's writing, +4 ideation discovery stages) — including the 3
+  // init stages — reference stage-protocol, so this is the STRONGER form:
+  // every stage must reference it (the .sh's only failing branch was a
+  // non-init stage missing the reference).
+  test("the shipped tree has exactly 36 stage files [.sh TOTAL_STAGES]", () => {
+    expect(STAGE_FILES.length).toBe(36);
   });
 
   for (const { slug, path } of STAGE_FILES) {

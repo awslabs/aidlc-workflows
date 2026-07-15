@@ -43,9 +43,9 @@
 //                                   emits SCOPE_DETECTED with **Detected scope**: <s>
 //
 // Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
-//   .sh test 1  (9 shipped scope files)                     -> "exactly 9 shipped aidlc-*.md scope files exist"
+//   .sh test 1  (9 shipped scope files)                     -> "exactly 10 shipped aidlc-*.md scope files exist" (grew to 10 with discovery)
 //   .sh test 2  (frontmatter name == filename stem)          -> "every shipped scope file's frontmatter name == its slug"
-//   .sh test 3  (validScopes() == 9 names, alphabetical)     -> "validScopes() == the 9 .md-derived names, alphabetical"
+//   .sh test 3  (validScopes() == 9 names, alphabetical)     -> "validScopes() == the 10 .md-derived names, alphabetical"
 //   .sh test 4  (loadScopeMetadata bugfix depth/kw/desc)     -> "loadScopeMetadata reads bugfix depth/keywords/description from .md"
 //   .sh test 5  (workshop testStrategy override)             -> "loadScopeMetadata reads workshop's testStrategy override from .md"
 //   .sh test 6  (loadScopeMapping poc derived fields)        -> "loadScopeMapping poc depth/keywords/description derive from .md"
@@ -90,10 +90,12 @@ const UTIL = fileURLToPath(
   new URL("../../dist/claude/.claude/tools/aidlc-utility.ts", import.meta.url),
 );
 
-// The 9 scopes the framework ships, alphabetical — the .sh's hard-coded
-// expectation (t125:62). Each is a literal independent of source iteration.
+// The 10 scopes the framework ships, alphabetical — the .sh's hard-coded
+// expectation (t125:62) plus the discovery scope added in v2.2.x. Each is a
+// literal independent of source iteration.
 const SHIPPED_SCOPES = [
   "bugfix",
+  "discovery",
   "enterprise",
   "feature",
   "infra",
@@ -127,11 +129,11 @@ afterEach(() => {
 });
 
 describe("shipped scope files — frontmatter + derived metadata (in-process)", () => {
-  test("exactly 9 shipped aidlc-*.md scope files exist [.sh test 1]", () => {
+  test("exactly 10 shipped aidlc-*.md scope files exist [.sh test 1]", () => {
     const files = readdirSync(SCOPES_DIR).filter(
       (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
     );
-    expect(files.length).toBe(9);
+    expect(files.length).toBe(10);
   });
 
   test("every shipped scope file's frontmatter name == its slug [.sh test 2]", () => {
@@ -150,7 +152,7 @@ describe("shipped scope files — frontmatter + derived metadata (in-process)", 
     }
   });
 
-  test("validScopes() == the 9 .md-derived names, alphabetical [.sh test 3]", () => {
+  test("validScopes() == the 10 .md-derived names, alphabetical [.sh test 3]", () => {
     expect([...validScopes()]).toEqual(SHIPPED_SCOPES);
   });
 
@@ -228,7 +230,7 @@ describe("dropped-file scope dynamics (AIDLC_SCOPES_DIR seam)", () => {
     const scopes = [...validScopes()];
     // The drop made it valid with zero code change...
     expect(scopes).toContain("dropscope");
-    // ...alongside all 9 shipped scopes that were copied into the sandbox.
+    // ...alongside all 10 shipped scopes that were copied into the sandbox.
     for (const s of SHIPPED_SCOPES) expect(scopes).toContain(s);
   });
 

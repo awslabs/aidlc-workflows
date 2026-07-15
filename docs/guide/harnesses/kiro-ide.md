@@ -2,7 +2,7 @@
 
 One of the framework's harnesses: `dist/kiro-ide/` runs the same AI-DLC
 methodology inside [Kiro IDE](https://kiro.dev/). One deterministic core —
-the tools, 32 stage files, protocols, knowledge, sensors, scopes, and rules —
+the tools, 36 stage files, protocols, knowledge, sensors, scopes, and rules —
 is byte-shared across every harness; only the shell (skills, agent configs,
 hook wiring, activation) differs.
 
@@ -154,7 +154,7 @@ Installed and activated? The methodology is the same on every harness — keep
 going with the neutral chapters:
 
 - [Your First Workflow](../02-your-first-workflow.md) — an annotated end-to-end run.
-- [Phases and Stages](../04-phases-and-stages.md) — the 5 phases and 32 stages.
+- [Phases and Stages](../04-phases-and-stages.md) — the 5 phases and 36 stages.
 - [Scopes, Depth, and Test Strategy](../05-scopes-and-depth.md) — right-sizing a run.
 - [Glossary](../glossary.md) — every term defined.
 

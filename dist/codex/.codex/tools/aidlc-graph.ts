@@ -295,10 +295,10 @@ export function memoryTemplatesDir(projectDir: string, space?: string): string {
  *  compiled data, resolved relative to THIS tool's location (like DATA_DIR), so
  *  it is harness-correct and space-INDEPENDENT (a framework default is the same
  *  for every space — it's the baseline a team optionally overrides per-space via
- *  `memoryTemplatesDir`). The framework ships zero default files at GA, so this
- *  dir resolves but holds only a marker → the sensor's middle branch misses and
- *  falls through to the floor. AIDLC_FRAMEWORK_TEMPLATES_DIR is a test/relocation
- *  seam mirroring AIDLC_TEMPLATES_DIR. */
+ *  `memoryTemplatesDir`). The framework ships nine default files (the discovery
+ *  artifacts); for any other artifact the sensor's middle branch
+ *  misses and falls through to the floor. AIDLC_FRAMEWORK_TEMPLATES_DIR is a
+ *  test/relocation seam mirroring AIDLC_TEMPLATES_DIR. */
 export function frameworkTemplatesDir(): string {
   return process.env.AIDLC_FRAMEWORK_TEMPLATES_DIR ?? join(DATA_DIR, "templates");
 }
@@ -948,7 +948,7 @@ export function subgraphForScope(scope: string): GraphStage[] {
  *  numeric order, shaped `{slug, phase, action}` — byte-identical to
  *  lib.ts's stagesInScope() / the legacy scope-mapping-derived plan. The
  *  `aidlc-graph resolve` subcommand writes this to .aidlc-plan.json. The
- *  parity test asserts this matches the legacy plan across all 9 scopes. */
+ *  parity test asserts this matches the legacy plan across all 10 scopes. */
 export function resolvePlanForScope(
   scope: string
 ): Array<{ slug: string; phase: string; action: "EXECUTE" | "SKIP" }> {

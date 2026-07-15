@@ -16,6 +16,8 @@ consumes:
     required: false
   - artifact: scope-document
     required: false
+  - artifact: decision-pack
+    required: false
   - artifact: business-overview
     required: false
     conditional_on: brownfield
@@ -61,6 +63,7 @@ Load aidlc-product-agent persona from `agents/aidlc-product-agent.md` and knowle
 
 - If brownfield: Read RE artifacts from `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints)
 - Read user's project description from `<record>/audit/<host>-<clone>.md`
+- When a decision pack is among the inputs (a discovery run committed into this workflow), read its handoff contract and honor its consumption note: settled entries are pre-answers to confirm with the person, never to re-elicit; exclusions are boundaries this analysis must not reopen; open items join the clarifying questions with the pack's recommendations attached. The intent statement already carries the validated framing in its What Discovery Validated section.
 
 ### Step 3: Analyze User Request
 
@@ -96,6 +99,11 @@ Evaluate coverage across six dimensions:
 6. **Quality attributes** — Maintainability, testability, accessibility, usability
 
 Identify gaps in each dimension.
+
+When a decision pack is among the inputs, check its handoff contract's
+closing map before declaring a dimension a gap — a committed discovery run
+pre-fills much of this analysis, and re-asking what the record already
+answers is the failure mode the contract exists to prevent.
 
 ### Step 7: Generate Clarifying Questions
 
@@ -133,6 +141,11 @@ Create `<record>/inception/requirements-analysis/requirements.md` containing:
 - **Assumptions** — Documented assumptions with rationale
 - **Out of scope** — Explicitly excluded items
 - **Open questions** — Any remaining uncertainties for later stages
+
+When a decision pack fed this analysis, requirements derived from it cite
+`decision-pack.md` as their source (the same way brownfield requirements cite
+RE artifacts) — provenance the audit can follow, in a citation form the
+upstream-coverage sensor accepts when the pack is among the consumed inputs.
 
 ### Step 11: Update State
 
@@ -172,7 +185,7 @@ This stage's outputs are markdown artefacts under `<record>/inception/requiremen
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `intent-statement`, `scope-document`, `team-practices`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter, filtered to those present on disk. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `intent-statement`, `scope-document`, `team-practices`, and — after a discovery run committed into this workflow — `decision-pack`).
 
 ## Learn
 

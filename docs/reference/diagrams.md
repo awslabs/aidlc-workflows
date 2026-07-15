@@ -15,7 +15,7 @@ This document contains all Mermaid diagrams that visualize the AI-DLC (AI-Driven
 
 ## 1. End-to-End Lifecycle
 
-The AI-DLC methodology organizes work into five sequential phases. Each phase has a verification gate at its boundary that must pass before the next phase begins. The full lifecycle spans 32 stages across the five phases, with scope determining which stages actually execute.
+The AI-DLC methodology organizes work into five sequential phases. Each phase has a verification gate at its boundary that must pass before the next phase begins. The full lifecycle spans 36 stages across the five phases, with scope determining which stages actually execute.
 
 ```mermaid
 graph LR
@@ -25,10 +25,10 @@ graph LR
         Z1 -.->|"3 stages"| Z4
     end
 
-    subgraph IDEATION["IDEATION (1.1-1.7)"]
+    subgraph IDEATION["IDEATION (1.1-1.11)"]
         I1["Intent Capture"]
         I7["Approval & Handoff"]
-        I1 -.->|"7 stages"| I7
+        I1 -.->|"11 stages: 7 delivery, 4 discovery-only"| I7
     end
 
     subgraph INCEPTION["INCEPTION (2.1-2.8)"]
@@ -604,6 +604,10 @@ This reference table maps every stage to its execution mode and lead agent for q
 | 1.5 | Team Formation | inline | aidlc-delivery-agent |
 | 1.6 | Rough Mockups | inline | aidlc-design-agent |
 | 1.7 | Approval & Handoff | inline | aidlc-delivery-agent |
+| 1.8 | Discovery Current State | inline | aidlc-product-agent |
+| 1.9 | Discovery Future State | inline | aidlc-product-agent |
+| 1.10 | Discovery Experimentation | inline | aidlc-product-agent |
+| 1.11 | Discovery Decision | inline | aidlc-product-agent |
 | 2.1 | Reverse Engineering | subagent (two-step) | aidlc-developer-agent + aidlc-architect-agent |
 | 2.2 | Practices Discovery | inline | aidlc-pipeline-deploy-agent |
 | 2.3 | Requirements Analysis | inline | aidlc-product-agent |

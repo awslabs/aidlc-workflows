@@ -19,6 +19,7 @@ Workspace Detection (0.2) used to be led by the aidlc-developer-agent as a subag
 
 | Stage | Phase | Contribution |
 |-------|-------|-------------|
+| 1.10 Discovery Experimentation | Ideation | Build and Run test steps (discovery scope only) |
 | 2.2 Practices Discovery | Inception | Code-pattern evidence scan |
 | 3.1 Functional Design | Construction | API contracts and data model input |
 | 4.3 Deployment Execution | Operation | Database migrations |

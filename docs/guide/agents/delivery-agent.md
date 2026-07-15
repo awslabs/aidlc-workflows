@@ -19,6 +19,7 @@ The aidlc-delivery-agent leads three stages spanning Ideation and Inception. It 
 | Stage | Phase | Contribution |
 |-------|-------|-------------|
 | 1.4 Scope Definition | Ideation | Validates scope against delivery feasibility |
+| 1.11 Discovery Decision | Ideation | Handoff perspective on the decision pack (discovery scope only) |
 | 2.7 Units Generation | Inception | Aligns unit granularity with planning needs |
 
 ## What to Expect

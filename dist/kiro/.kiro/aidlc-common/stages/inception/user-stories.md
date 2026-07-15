@@ -16,6 +16,8 @@ produces:
 consumes:
   - artifact: requirements
     required: true
+  - artifact: decision-pack
+    required: false
   - artifact: business-overview
     required: false
     conditional_on: brownfield
@@ -68,6 +70,7 @@ If skipping, update aidlc-state.md with skip reason and proceed to next stage.
 
 - Read `<record>/inception/requirements-analysis/requirements.md`
 - If brownfield: Read relevant RE artifacts from `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints)
+- When a decision pack is among the inputs (a discovery run committed into this workflow), draw personas from its stakeholder evidence and honor its handoff contract: settled entries are pre-answers to confirm, exclusions are story boundaries, and the evidence record's tested user journeys are grounded story material.
 
 ---
 
@@ -119,6 +122,11 @@ Based on the approved plan, generate:
 - Story dependencies and relationships
 - INVEST compliance notes
 
+When a decision pack fed this stage, stories and personas grounded in it cite
+`decision-pack.md` as their source — provenance the audit can follow, in a
+citation form the upstream-coverage sensor accepts when the pack is among
+the consumed inputs.
+
 ### Step 9: Update State
 
 Update `<record>/aidlc-state.md`:
@@ -139,7 +147,7 @@ This stage's outputs are markdown artefacts under `<record>/inception/user-stori
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `requirements`, `team-practices`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter, filtered to those present on disk. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `requirements`, `team-practices`, and — after a discovery run committed into this workflow — `decision-pack`).
 
 ## Learn
 

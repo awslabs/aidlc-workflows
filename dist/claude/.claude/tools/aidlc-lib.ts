@@ -4100,7 +4100,7 @@ export function nextInScopeStage(
   // take precedence over scope-mapping. The common case (no overrides,
   // or only SKIP overrides) produces byte-identical output to
   // subgraphForScope-based iteration — proven by t66 walk parity across
-  // all 9 scopes. The uncommon case (a hand-edited state file promoting
+  // all 10 scopes. The uncommon case (a hand-edited state file promoting
   // a scope-SKIP stage to EXECUTE) is the power-user escape hatch
   // aidlc-state.ts:276-284's explicit-advance path also honours; keeping
   // both callers consistent on the same input.

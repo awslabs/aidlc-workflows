@@ -20,21 +20,21 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 452,
+    "total": 457,
     "enumeratedByClass": {
       "function": 231,
       "audit": 72,
-      "scope": 9,
-      "stage": 32,
+      "scope": 10,
+      "stage": 36,
       "hook": 12,
       "subcommand": 89,
       "render-surface": 7
     },
     "coveredByClass": {
       "function": 95,
-      "audit": 31,
-      "scope": 9,
-      "stage": 8,
+      "audit": 33,
+      "scope": 10,
+      "stage": 12,
       "hook": 11,
       "subcommand": 76,
       "render-surface": 7
@@ -358,8 +358,13 @@
       "unitClass": "audit",
       "unitId": "SCOPE_CHANGED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t214-discovery-continuation.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -496,8 +501,13 @@
       "unitClass": "audit",
       "unitId": "STAGE_SKIPPED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t214-discovery-continuation.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "audit",
@@ -3445,6 +3455,18 @@
     },
     {
       "unitClass": "scope",
+      "unitId": "discovery",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t213-discovery-scope.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "scope",
       "unitId": "enterprise",
       "minMechanism": "none",
       "coveredBy": [
@@ -3635,6 +3657,54 @@
     },
     {
       "unitClass": "stage",
+      "unitId": "ideation/discovery-current-state",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t213-discovery-scope.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "ideation/discovery-decision",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t213-discovery-scope.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "ideation/discovery-experimentation",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t213-discovery-scope.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "stage",
+      "unitId": "ideation/discovery-future-state",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t213-discovery-scope.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "stage",
       "unitId": "ideation/feasibility",
       "minMechanism": "none",
       "coveredBy": [
@@ -3657,6 +3727,10 @@
         {
           "file": "tests/e2e/t-tui-t73-intent-capture.serial.test.ts",
           "mechanism": "tui"
+        },
+        {
+          "file": "tests/integration/t213-discovery-scope.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -4758,6 +4832,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t214-discovery-continuation.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t17.test.ts",
           "mechanism": "cli"
         }
@@ -5086,6 +5164,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/integration/t214-discovery-continuation.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t214-routing-cost-strings.test.ts",
           "mechanism": "cli"
         },
@@ -5141,6 +5223,10 @@
       "unitId": "aidlc-utility set-status",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t214-discovery-continuation.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t27.test.ts",
           "mechanism": "cli"

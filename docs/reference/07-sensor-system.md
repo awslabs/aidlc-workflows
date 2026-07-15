@@ -168,12 +168,12 @@ compile-snapshotted: a manifest edit during the workflow does NOT
 change what fires for the in-flight workflow's writes (BGP-stability
 property — see [Plane Architecture](02-plane-architecture.md)).
 
-### Per-stage sensor matrix (32 framework stages)
+### Per-stage sensor matrix (36 framework stages)
 
 | Stages | `sensors:` |
 |---|---|
 | 3 initialization (workspace-scaffold, workspace-detection, state-init) | `[]` (deterministic setup, no agent-authored markdown) |
-| 7 ideation, 8 inception, 7 operation markdown stages + `code-generation` | `[required-sections, upstream-coverage]` for markdown stages; `[linter, type-check]` for `code-generation` (code only) |
+| 11 ideation, 8 inception, 7 operation markdown stages + `code-generation` | `[required-sections, upstream-coverage]` for markdown stages; `[linter, type-check]` for `code-generation` (code only) |
 | `build-and-test` | `[required-sections, upstream-coverage, type-check]` (linter intentionally omitted — build runs canonical lint) |
 | 5 construction-design (ci-pipeline, functional-design, infrastructure-design, nfr-design, nfr-requirements) | `[required-sections, upstream-coverage, linter, type-check]` (markdown design with code samples) |
 

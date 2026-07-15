@@ -3,8 +3,8 @@
 > Part of the [AI-DLC documentation](../README.md) · [User Guide](../guide/00-introduction.md) · **Harness Engineer Guide** · [Developer Reference](../reference/00-overview.md)
 
 AI-DLC is a methodology, and this implementation ships it working out of the box
-on the harness you use — Claude Code, Kiro CLI, Kiro IDE, or Codex CLI: 11 agents, 32
-stages, 9 scopes, a set of rules and sensors. This guide is for the person who
+on the harness you use — Claude Code, Kiro CLI, Kiro IDE, or Codex CLI: 11 agents, 36
+stages, 10 scopes, a set of rules and sensors. This guide is for the person who
 wants to **reshape** that methodology — change which stages run, add an agent for
 a domain the framework doesn't cover, tighten a scope, teach the framework a
 standing rule, or wire a deterministic check into a stage.
@@ -61,7 +61,7 @@ inputs that steer it.
 Everything else a harness engineer configures hangs off these two:
 
 - **Scopes** decide *which* stages run for a given kind of work (a bugfix runs
-  7 of 32 stages; an enterprise feature runs all of them).
+  7 of 36 stages; an enterprise feature runs all 32 delivery-path stages).
 - **Rules** are standing decisions that travel into every workflow — your
   team's "always do it this way."
 - **Sensors** are deterministic checks bound to stages — an advisory second

@@ -28,7 +28,7 @@ Each agent carries context across stages because they are present throughout. Th
 
 ## Scope System
 
-Not every task requires all 32 stages. Scopes (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, workshop) determine which stages execute and at what depth.
+Not every task requires all 36 stages. Scopes (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, workshop, discovery) determine which stages execute and at what depth.
 
 ## Self-Learning Guardrails
 

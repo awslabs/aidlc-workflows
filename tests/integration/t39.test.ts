@@ -18,7 +18,7 @@
 // initialization} (line 1791), one PHASE_SKIPPED per phase the scope excludes
 // entirely (no EXECUTE stages — line 1804), and — when the first post-init
 // stage is in a later phase — a SECOND PHASE_STARTED for that phase at the
-// init→first-phase handoff (line 2130). It writes the `## Phase Progress`
+// init→first-phase handoff (aidlc-utility.ts, PHASE_STARTED emit near line 2508). It writes the `## Phase Progress`
 // block (lines 2036-2042) with each phase tagged Active/Pending/Skipped
 // (phaseStatus, line 2028). The audit row shape is `**Event**: <TYPE>` at
 // line start (aidlc-audit.ts:258), exactly what the .sh greps.
@@ -42,7 +42,9 @@
 //       the excluded set).
 //
 // 9 scopes × 3 .sh asserts = 27 -> 27 expect()-bearing test() cases here
-// (one describe per scope, 3 test()s each).
+// (one describe per scope, 3 test()s each), PLUS the discovery scope (added
+// v2.2.x, not in the .sh) with the same 3 assertions and a 4th pinning the
+// init→ideation handoff PHASE_STARTED.
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's create_test_project +
 // cleanup_test_project per scope): each scope uses a FRESH temp project dir
@@ -176,6 +178,32 @@ function skippedPhases(content: string): string[] {
 }
 
 /**
+ * Collect the `**Phase**: <name>` values from every PHASE_STARTED block in
+ * audit CONTENT (shard-concat). Same block-walk as skippedPhases. Used by the
+ * discovery block to pin the init→ideation handoff PHASE_STARTED
+ * (aidlc-utility.ts init emits a second PHASE_STARTED for the first
+ * post-init stage's phase — the PHASE_STARTED emit near aidlc-utility.ts:2508).
+ */
+function startedPhases(content: string): string[] {
+  let matched = false;
+  const phases: string[] = [];
+  for (const line of content.split("\n")) {
+    if (line.startsWith("## ") || line === "---") {
+      matched = false;
+      continue;
+    }
+    if (line.startsWith("**Event**: ")) {
+      matched = line === "**Event**: PHASE_STARTED";
+      continue;
+    }
+    if (matched && line.startsWith("**Phase**: ")) {
+      phases.push(line.slice("**Phase**: ".length));
+    }
+  }
+  return phases;
+}
+
+/**
  * Read the status of a phase from the state file's `## Phase Progress`
  * section. The tool writes lines like `- **Ideation**: Skipped`
  * (aidlc-utility.ts:2036-2042). Mirrors the .sh's
@@ -214,6 +242,10 @@ const EXPECTED_SKIPPED: Record<string, string[]> = {
   infra: ["ideation"],
   "security-patch": ["ideation"],
   workshop: ["ideation"],
+  // discovery (added v2.2.x, not in the .sh): EXECUTEs only the 3 init stages
+  // + the 4 ideation discovery stages, so inception/construction/operation
+  // are fully excluded per the compiled scope-grid.json.
+  discovery: ["inception", "construction", "operation"],
 };
 
 const SCOPES = [
@@ -226,6 +258,7 @@ const SCOPES = [
   "infra",
   "security-patch",
   "workshop",
+  "discovery",
 ] as const;
 
 describe("t39 aidlc-utility init — per-scope phase sequence (migrated from t39-per-scope-phase-sequence.sh, plan 27)", () => {
@@ -288,6 +321,20 @@ describe("t39 aidlc-utility init — per-scope phase sequence (migrated from t39
         // complement would over-reach past the original observable.
         expect(phaseProgressStatus(s, "Initialization")).toBe("Verified");
       });
+
+      // --- Discovery-only assertion 4 (not in the .sh — the scope landed in
+      // v2.2.x): discovery's first post-init stage is intent-capture (1.1,
+      // ideation), so the init→first-stage handoff must ALSO emit a
+      // PHASE_STARTED for ideation (aidlc-utility.ts near line 2508) alongside the
+      // initialization one asserted in test 1. Per the compiled grid, ideation
+      // is the ONLY post-init phase discovery starts. ---
+      if (scope === "discovery") {
+        test(`4: PHASE_STARTED emitted for ideation at the init handoff (discovery)`, () => {
+          const started = startedPhases(readAudit(proj));
+          expect(started).toContain("initialization");
+          expect(started).toContain("ideation");
+        });
+      }
     });
   }
 });

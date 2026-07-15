@@ -41,8 +41,9 @@
 //       res.status===0 pin (the .sh discarded $? on the bare emission call).
 //   §2 deterministic + alphabetical (2 asserts) -> Tests 6-7:
 //     - two emissions byte-equal (Test 6); row names == alphabetical EXPECTED
-//       "bugfix enterprise feature infra mvp poc refactor security-patch
-//       workshop" (Test 7), parsed by the same `^| <name>` regex the .sh awk'd.
+//       "bugfix discovery enterprise feature infra mvp poc refactor
+//       security-patch workshop" (Test 7), parsed by the same `^| <name>`
+//       regex the .sh awk'd.
 //   §3 row count == scopes/*.md count (1 assert) -> Test 8: the .sh pinned
 //       rows matching `^| <name>` === `ls scopes/aidlc-*.md | wc -l`. v0.6.0
 //       deleted scope-mapping.json; loadScopeMapping() now derives the scope
@@ -50,7 +51,7 @@
 //       + scope-grid.json `.stages`, so that filesystem count is STILL the live
 //       source — the .sh assertion is restored faithfully against it (NOT
 //       obsolete). STRONGER: also pins gridCount === mdCount === rendered rows
-//       === 9 (triangulate the rendered table against BOTH shipped surfaces).
+//       === 10 (triangulate the rendered table against BOTH shipped surfaces).
 //   §4 --check clean exit 0 on real SKILL.md (1 assert) -> Test 9: res.status===0
 //       (no AIDLC_SKILL_MD_PATH override -> the shipped SKILL.md).
 //   §5 --check exit 1 on drifted SKILL.md (2 asserts) -> Tests 10-11: copy the
@@ -282,7 +283,7 @@ function rowNames(tableOut: string): string[] {
 }
 
 const EXPECTED_ROW_ORDER =
-  "bugfix enterprise feature infra mvp poc refactor security-patch workshop";
+  "bugfix discovery enterprise feature infra mvp poc refactor security-patch workshop";
 
 // ============================================================
 // scope-table — emission shape (.sh §1)
@@ -344,8 +345,8 @@ describe("t67 scope-table emission (migrated from t67-scope-table.sh §1-3)", ()
     // STRONGER: the compiled grid covers exactly the scopes/*.md set …
     expect(gridCount).toBe(mdCount);
     expect(rowCount).toBe(gridCount);
-    // … and the concrete count is pinned.
-    expect(rowCount).toBe(9);
+    // … and the concrete count is pinned (10 scopes since discovery landed).
+    expect(rowCount).toBe(10);
   });
 });
 

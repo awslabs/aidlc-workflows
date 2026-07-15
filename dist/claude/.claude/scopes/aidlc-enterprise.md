@@ -25,7 +25,8 @@ performance-validation) on the back end.
 
 ## Membership
 
-`enterprise` is the only scope that marks every one of the 32 stages
-EXECUTE. It is the reference column for the EXECUTE/SKIP grid — every other
-scope is a subset of this one. There are no keyword triggers; the scope is
+`enterprise` marks every one of the 32 delivery-path stages EXECUTE (the
+opt-in `discovery` ideation stages are the only stages outside it). It is
+the reference column for the EXECUTE/SKIP grid — every other scope except
+`discovery` is a subset of this one. There are no keyword triggers; the scope is
 chosen deliberately, not inferred from a description.

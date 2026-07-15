@@ -57,8 +57,9 @@ When resuming, load context appropriate to the current phase and stage type:
 - Workspace Detection loads fresh filesystem scan
 - State Init reads workspace classification from Workspace Detection
 
-**IDEATION stages (1.1–1.7):**
+**IDEATION stages (1.1–1.11):**
 - Load `<record>/ideation/` artifacts completed so far (intent capture, market research, feasibility, scope)
+- For a discovery run (stages 1.8–1.11), the decision pack and evidence record are the load-bearing context — reload them first, along with the assumptions record and the open questions record
 - Load guardrails from `.claude/rules/`
 
 **INCEPTION — RE (Reverse Engineering) stages:**

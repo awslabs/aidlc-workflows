@@ -85,7 +85,7 @@ Things that are **not** artifacts in this registry:
    entry and `requires_stage[]` slug must resolve against the derived registry.
    Orphan consumers are reported as broken references.
 
-All 32 stage files declare `produces:`, so the derivation returns the full
+All 36 stage files declare `produces:`, so the derivation returns the full
 registry. The tool is well-defined on empty data too — a stage with no
 `produces:` simply contributes nothing — but in the shipped framework every
 stage is populated.

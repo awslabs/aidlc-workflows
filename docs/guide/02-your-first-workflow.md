@@ -56,7 +56,7 @@ The orchestrator writes the intent's `aidlc-state.md` (under its record dir) wit
 
 ```
 ─── Scope Detection ───────────────────────────────────────────────────────────
-Detected scope: feature (Standard depth, Standard test strategy, all 32 stages)
+Detected scope: feature (Standard depth, Standard test strategy, 32 of 36 stages)
 ▸ Approve scope? [Yes / Change scope / Change depth / Change test strategy]
 > Yes
 ```
@@ -79,7 +79,15 @@ The status line at the bottom of your terminal updates:
 
 This shows: current phase, stage display name, phase progress bar, phase progress ratio, and lead agent. The bar and the ratio share the same scope — both count `[x]` stages within the current phase, so the bar advances every time the ratio does. Remaining context (`ctx:N%`) is always shown on the right, color-coded as it drops.
 
-The aidlc-product-agent asks you to choose an interaction mode:
+The stage first asks one intake question: beyond your description, is there
+anything you can point at (tickets, notes, links), any materials to hand over
+(documents, data, a running product), anything already decided elsewhere, or
+a date a decision is needed by? If the description is your whole input,
+answer "none of these" and continue — nothing else changes. Anything you do
+supply is read first, so the stage only asks you what your materials did not
+already answer.
+
+The aidlc-product-agent then asks you to choose an interaction mode:
 
 ```
 ▸ Choose interaction mode:
@@ -103,8 +111,11 @@ After the agent completes its work, you see a completion summary and an approval
 
 | Artifact | Contents |
 |----------|----------|
-| intent-capture.md | Problem statement, target users, success criteria |
-| intent-capture-questions.md | 5 questions, all answered |
+| intent-statement.md | Problem statement, target users, success criteria |
+| stakeholder-map.md | Key stakeholders, decision-makers, communication needs |
+| intent-capture-questions.md | The questions asked, all answered |
+| source-inventory.md | What you handed over ("None" if nothing) |
+| open-questions-record.md | What the initiative still needs to learn |
 
 **Review:** `<record>/ideation/intent-capture/` (the intent's record dir)
 
@@ -118,7 +129,7 @@ Choose **Approve** to continue, or **Request Changes** to provide feedback. See 
 After approval, a progress line appears:
 
 ```
-Progress: 4/32 overall | 1/7 IDEATION stages complete. Next: Market Research
+Progress: 4/36 overall | 1/7 IDEATION stages complete. Next: Market Research
 ```
 
 ### Remaining Ideation Stages
@@ -273,7 +284,7 @@ Throughout the workflow, the terminal status line shows your current position:
 ## Next Steps
 
 - [Spaces and Intents](03-spaces-and-intents.md) — how the workspace holds many runs, and how to start and switch between them
-- [Phases and Stages](04-phases-and-stages.md) — detailed breakdown of all 5 phases and 32 stages
+- [Phases and Stages](04-phases-and-stages.md) — detailed breakdown of all 5 phases and 36 stages
 - [Interaction Modes](07-interaction-modes.md) — Guide Me, Edit File, and Chat explained
 - [Session Management](11-session-management.md) — resuming, redoing, and jumping between stages
 - [Glossary](glossary.md) — terminology reference

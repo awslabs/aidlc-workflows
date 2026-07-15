@@ -195,23 +195,23 @@ After the user selects "Approve", display a progress line before proceeding.
 
 **When every compiled stage is in scope**:
 ```
-Progress: [N]/32 overall | [phase-N]/[phase-total] [Phase] stages complete. Next: [Next Stage Name]
+Progress: [N]/36 overall | [phase-N]/[phase-total] [Phase] stages complete. Next: [Next Stage Name]
 ```
 
 **When the active scope executes fewer stages than the compiled total**, show
 in-scope progress with overall shown parenthetically:
 ```
-Progress: [X]/[S] in-scope stages complete ([N]/32 overall) | [phase-N]/[phase-total] [Phase]. Next: [Next Stage Name]
+Progress: [X]/[S] in-scope stages complete ([N]/36 overall) | [phase-N]/[phase-total] [Phase]. Next: [Next Stage Name]
 ```
 Where `S` = total `EXECUTE` stages for the current scope, derived from the
 compiled scope grid. Use `bun .claude/tools/aidlc-utility.ts
 scope-table` when you need the current totals; never carry a hand-maintained
 per-scope count table in this protocol.
 
-Example (full-scope): "Progress: 13/32 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff"
-Example (reduced-scope): "Progress: 5/8 in-scope stages complete (7/32 overall) | 2/3 CONSTRUCTION. Next: Build & Test"
+Example (full-scope): "Progress: 13/36 overall | 3/7 IDEATION stages complete. Next: Approval & Handoff"
+Example (reduced-scope): "Progress: 5/8 in-scope stages complete (7/36 overall) | 2/3 CONSTRUCTION. Next: Build & Test"
 
-Count only stages in the current phase (INITIALIZATION, IDEATION, INCEPTION, CONSTRUCTION, or OPERATION). Include both completed and skipped stages in the numerator.
+Count only stages in the current phase (INITIALIZATION, IDEATION, INCEPTION, CONSTRUCTION, or OPERATION), and only stages the active scope executes — plan SKIP rows are outside both the phase numerator and the phase total. In the numerator, include stages completed and stages runtime-skipped (`[S]`) during the run. The overall counter works the same way against the full graph: completed plus `[S]` over 36, so a finished feature run reads 32/36 (the four discovery SKIP rows are counted by neither side).
 
 ---
 
@@ -399,7 +399,7 @@ Rules:
 - The `[slug]` suffix in `activeForm` is required. A PostToolUse hook parses it to automatically sync the state file (Lifecycle Phase, Current Stage, Active Agent, checkbox `[-]`).
 - The task MUST be `in_progress` for the activeForm spinner to display — `pending` tasks show nothing.
 - Update BEFORE reading the stage file or doing any stage work.
-- This applies to all 32 stages. No exceptions.
+- This applies to all 36 stages. No exceptions.
 - If task IDs are not in context (e.g., after compaction), use `TaskList` to find by subject.
 - For skipped stages, mark completed with skip note: TaskUpdate({ taskId: [ID], status: "completed", description: "[original] — Skipped: [reason]" })
 
@@ -639,11 +639,12 @@ scope/depth/count table - never copy stage counts into this protocol.
 | bugfix | Minimal |
 | refactor | Minimal |
 | security-patch | Minimal |
+| discovery | Standard |
 
 ### Depth levels
 - **Minimal** (poc, bugfix, refactor, security-patch): ~2-4 questions per stage, minimal artifacts, brief analysis
-- **Standard** (feature, mvp, infra): ~5-8 questions per stage, full artifacts at moderate detail
-- **Comprehensive** (enterprise): ~8-12+ questions per stage, comprehensive artifacts with deep analysis, all stages execute
+- **Standard** (feature, mvp, infra, discovery): ~5-8 questions per stage, full artifacts at moderate detail
+- **Comprehensive** (enterprise): ~8-12+ questions per stage, comprehensive artifacts with deep analysis, all delivery-path stages execute
 
 The orchestrator determines appropriate depth based on scope selection. Users can override at three points:
 1. Via the `--depth` flag: `/aidlc --scope bugfix --depth comprehensive` or `/aidlc --depth minimal`
@@ -713,7 +714,7 @@ Key terms used throughout AI-DLC documentation:
 |------|-----------|
 | **Phase** | Top-level grouping: INITIALIZATION, IDEATION, INCEPTION, CONSTRUCTION, OPERATION |
 | **Stage** | A discrete step within a phase (e.g., Intent Capture, Requirements Analysis, Code Generation, Observability Setup) |
-| **Scope** | Controls which stages execute and at what depth. Nine built-in scopes, one file per scope under `.claude/scopes/aidlc-<name>.md`: enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, workshop. Custom scopes can be added without editing this file. |
+| **Scope** | Controls which stages execute and at what depth. Ten built-in scopes, one file per scope under `.claude/scopes/aidlc-<name>.md`: enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, workshop, discovery. Custom scopes can be added without editing this file. |
 | **Bolt** | One execution of Construction stages 3.1–3.5 for a Unit (or small group of dependency-linked Units). Stages 3.6 (Build and Test) and 3.7 (CI Pipeline) run **once** after all Bolts complete, not per-Bolt. The first Bolt is the **walking skeleton** — the thinnest end-to-end slice that proves the architecture. |
 | **Walking skeleton** | The first Bolt in Construction — smallest end-to-end slice that exercises every integration point. Always gated and interactive so humans can confirm the shape before the rest of Construction runs. |
 | **Ladder prompt** | The single prompt that fires after the walking-skeleton gate asking the user to choose between "continue autonomously" and "gate every Bolt". The choice is recorded in state (`Construction Autonomy Mode`) and governs the rest of Construction. |
@@ -751,7 +752,7 @@ Before creating any artifact file, validate:
 ### Template overrides
 Before writing artifact `X` (keyed by the output filename stem — artifact `X` writes to `X.md`), resolve its template in this order, override-before-default, first hit wins:
 1. **team template** — `aidlc/spaces/<space>/memory/templates/X.md` (the active space's hand-authored override);
-2. **framework default** — the engine-shipped default `X.md` *if one ships* (none ship at GA, so this normally misses);
+2. **framework default** — the engine-shipped default `X.md` *if one ships* (the framework ships nine defaults, one per discovery artifact; other artifacts miss here);
 3. **else** — no template: follow the stage's existing prose.
 
 If a template resolves (tier 1 or 2), follow its structure: use its `##` headings as the skeleton to fill. A resolved template is used whole-doc (verbatim structure, no section merge). The `required-sections` sensor verifies the output against the SAME resolution order and the SAME file, so the produced shape and the checked shape cannot drift.

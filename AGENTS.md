@@ -23,7 +23,7 @@ The hand-authored source lives in `core/` (harness-neutral) + `harness/<name>/`
 (per-CLI surfaces); `bun scripts/package.ts` regenerates the `dist/<harness>/`
 trees. The core uses the same building blocks in every harness:
 
-- **Skills** (`skills/aidlc/`) — Orchestrator (`SKILL.md`), stage protocol, and 32 stage files across 5 phases (initialization, ideation, inception, construction, operation)
+- **Skills** (`skills/aidlc/`) — Orchestrator (`SKILL.md`), stage protocol, and 36 stage files across 5 phases (initialization, ideation, inception, construction, operation)
 - **Agents** (`agents/`) — 14 `aidlc-<role>-agent.md` files: 11 domain-expert personas (product, design, delivery, architect, aws-platform, compliance, devsecops, developer, quality, pipeline-deploy, operations), 2 review-only agents (product-lead, architecture-reviewer), and the adaptive-workflows composer (aidlc-composer-agent)
 - **Method/rules** (`memory/`) — Layered config in the space memory layer: `org.md` (framework defaults), `team.md` (affirmed practices), `project.md` (project overrides), and `phases/<phase>.md` for ideation/inception/construction/operation
 - **Sensors** (`sensors/`) — Deterministic verification manifests (advisory): `aidlc-required-sections.md`, `aidlc-upstream-coverage.md`, `aidlc-linter.md`, `aidlc-type-check.md`

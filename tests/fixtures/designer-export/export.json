@@ -23,7 +23,8 @@
         "refactor",
         "infra",
         "security-patch",
-        "workshop"
+        "workshop",
+        "discovery"
       ],
       "inputs": "none (first stage after session start)",
       "outputs": "the per-intent record tree (stage artifact dirs + verification dir) and the space-level knowledge/ dir",
@@ -68,7 +69,8 @@
         "refactor",
         "infra",
         "security-patch",
-        "workshop"
+        "workshop",
+        "discovery"
       ],
       "inputs": "none (scans filesystem)",
       "outputs": "workspace classification (greenfield/brownfield), technology stack detection",
@@ -113,7 +115,8 @@
         "refactor",
         "infra",
         "security-patch",
-        "workshop"
+        "workshop",
+        "discovery"
       ],
       "inputs": "workspace classification from workspace-detection, scope from orchestrator",
       "outputs": "<record>/aidlc-state.md (full populated version, engine-resolved)",
@@ -148,7 +151,9 @@
       "produces": [
         "intent-statement",
         "stakeholder-map",
-        "intent-capture-questions"
+        "intent-capture-questions",
+        "source-inventory",
+        "open-questions-record"
       ],
       "consumes": [],
       "requires_stage": [],
@@ -160,10 +165,11 @@
         "enterprise",
         "feature",
         "mvp",
-        "poc"
+        "poc",
+        "discovery"
       ],
-      "inputs": "User's project description ($ARGUMENTS), scope selection",
-      "outputs": "intent-statement.md, stakeholder-map.md, intent-capture-questions.md (under this stage's record dir, engine-resolved)",
+      "inputs": "User's project description or the asks they point at ($ARGUMENTS), supplied materials, scope selection",
+      "outputs": "intent-statement.md, stakeholder-map.md, intent-capture-questions.md, source-inventory.md, open-questions-record.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -674,6 +680,318 @@
       ]
     },
     {
+      "slug": "discovery-current-state",
+      "number": "1.8",
+      "name": "Discovery Current State",
+      "phase": "ideation",
+      "execution": "ALWAYS",
+      "condition": "Builds the evidenced as-is picture the framing decision rests on",
+      "lead_agent": "aidlc-product-agent",
+      "support_agents": [
+        "aidlc-design-agent",
+        "aidlc-architect-agent"
+      ],
+      "mode": "inline",
+      "produces": [
+        "current-state",
+        "design-language-record"
+      ],
+      "consumes": [
+        {
+          "artifact": "intent-statement",
+          "required": true
+        },
+        {
+          "artifact": "open-questions-record",
+          "required": true
+        },
+        {
+          "artifact": "source-inventory",
+          "required": false
+        }
+      ],
+      "requires_stage": [
+        "intent-capture"
+      ],
+      "sensors": [
+        "required-sections",
+        "upstream-coverage"
+      ],
+      "scopes": [
+        "discovery"
+      ],
+      "inputs": "Intent statement, open questions record, source inventory (if exists), supplied materials",
+      "outputs": "current-state.md, design-language-record.md (under this stage's record dir, engine-resolved)",
+      "rules_in_context": [
+        {
+          "path": "aidlc/spaces/default/memory/org.md",
+          "scope": "org"
+        },
+        {
+          "path": "aidlc/spaces/default/memory/team.md",
+          "scope": "team"
+        },
+        {
+          "path": "aidlc/spaces/default/memory/project.md",
+          "scope": "project"
+        },
+        {
+          "path": "aidlc/spaces/default/memory/phases/ideation.md",
+          "scope": "phase"
+        }
+      ],
+      "sensors_applicable": [
+        {
+          "id": "required-sections",
+          "path": ".claude/sensors/aidlc-required-sections.md",
+          "matches": "**/{aidlc-docs,intents}/**"
+        },
+        {
+          "id": "upstream-coverage",
+          "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "matches": "**/{aidlc-docs,intents}/**"
+        }
+      ]
+    },
+    {
+      "slug": "discovery-future-state",
+      "number": "1.9",
+      "name": "Discovery Future State",
+      "phase": "ideation",
+      "execution": "ALWAYS",
+      "condition": "Chooses the problem framing and expresses the future state as testable options",
+      "lead_agent": "aidlc-product-agent",
+      "support_agents": [
+        "aidlc-design-agent",
+        "aidlc-architect-agent"
+      ],
+      "mode": "inline",
+      "produces": [
+        "future-state",
+        "assumptions-record"
+      ],
+      "consumes": [
+        {
+          "artifact": "current-state",
+          "required": true
+        },
+        {
+          "artifact": "open-questions-record",
+          "required": true
+        },
+        {
+          "artifact": "intent-statement",
+          "required": true
+        },
+        {
+          "artifact": "design-language-record",
+          "required": false
+        }
+      ],
+      "requires_stage": [
+        "discovery-current-state"
+      ],
+      "sensors": [
+        "required-sections",
+        "upstream-coverage"
+      ],
+      "scopes": [
+        "discovery"
+      ],
+      "inputs": "Current state, open questions record, intent statement, design language record (if exists)",
+      "outputs": "future-state.md, assumptions-record.md (under this stage's record dir, engine-resolved)",
+      "rules_in_context": [
+        {
+          "path": "aidlc/spaces/default/memory/org.md",
+          "scope": "org"
+        },
+        {
+          "path": "aidlc/spaces/default/memory/team.md",
+          "scope": "team"
+        },
+        {
+          "path": "aidlc/spaces/default/memory/project.md",
+          "scope": "project"
+        },
+        {
+          "path": "aidlc/spaces/default/memory/phases/ideation.md",
+          "scope": "phase"
+        }
+      ],
+      "sensors_applicable": [
+        {
+          "id": "required-sections",
+          "path": ".claude/sensors/aidlc-required-sections.md",
+          "matches": "**/{aidlc-docs,intents}/**"
+        },
+        {
+          "id": "upstream-coverage",
+          "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "matches": "**/{aidlc-docs,intents}/**"
+        }
+      ]
+    },
+    {
+      "slug": "discovery-experimentation",
+      "number": "1.10",
+      "name": "Discovery Experimentation",
+      "phase": "ideation",
+      "execution": "ALWAYS",
+      "condition": "Tests the riskiest assumptions before commitment through composed test plans",
+      "lead_agent": "aidlc-product-agent",
+      "support_agents": [
+        "aidlc-developer-agent",
+        "aidlc-quality-agent",
+        "aidlc-design-agent"
+      ],
+      "mode": "inline",
+      "produces": [
+        "test-plans",
+        "evidence-record"
+      ],
+      "consumes": [
+        {
+          "artifact": "assumptions-record",
+          "required": true
+        },
+        {
+          "artifact": "future-state",
+          "required": true
+        },
+        {
+          "artifact": "current-state",
+          "required": true
+        },
+        {
+          "artifact": "design-language-record",
+          "required": false
+        }
+      ],
+      "requires_stage": [
+        "discovery-future-state"
+      ],
+      "sensors": [
+        "required-sections",
+        "upstream-coverage"
+      ],
+      "scopes": [
+        "discovery"
+      ],
+      "inputs": "The assumptions record (riskiest first), the confirmed current-state and future-state artifacts, the design language record where one exists, plus this stage's own artifacts on disk when resuming",
+      "outputs": "test-plans.md, evidence-record.md (under this stage's record dir, engine-resolved)",
+      "rules_in_context": [
+        {
+          "path": "aidlc/spaces/default/memory/org.md",
+          "scope": "org"
+        },
+        {
+          "path": "aidlc/spaces/default/memory/team.md",
+          "scope": "team"
+        },
+        {
+          "path": "aidlc/spaces/default/memory/project.md",
+          "scope": "project"
+        },
+        {
+          "path": "aidlc/spaces/default/memory/phases/ideation.md",
+          "scope": "phase"
+        }
+      ],
+      "sensors_applicable": [
+        {
+          "id": "required-sections",
+          "path": ".claude/sensors/aidlc-required-sections.md",
+          "matches": "**/{aidlc-docs,intents}/**"
+        },
+        {
+          "id": "upstream-coverage",
+          "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "matches": "**/{aidlc-docs,intents}/**"
+        }
+      ]
+    },
+    {
+      "slug": "discovery-decision",
+      "number": "1.11",
+      "name": "Discovery Decision",
+      "phase": "ideation",
+      "execution": "ALWAYS",
+      "condition": "Ends the phase over the decision pack — commit, pivot, or park",
+      "lead_agent": "aidlc-product-agent",
+      "support_agents": [
+        "aidlc-product-lead-agent",
+        "aidlc-delivery-agent"
+      ],
+      "mode": "inline",
+      "produces": [
+        "decision-pack"
+      ],
+      "consumes": [
+        {
+          "artifact": "evidence-record",
+          "required": true
+        },
+        {
+          "artifact": "assumptions-record",
+          "required": true
+        },
+        {
+          "artifact": "intent-statement",
+          "required": true
+        },
+        {
+          "artifact": "future-state",
+          "required": true
+        },
+        {
+          "artifact": "open-questions-record",
+          "required": true
+        }
+      ],
+      "requires_stage": [
+        "discovery-experimentation"
+      ],
+      "sensors": [
+        "required-sections",
+        "upstream-coverage"
+      ],
+      "scopes": [
+        "discovery"
+      ],
+      "inputs": "The evidence record, assumptions record, intent statement, future-state, and open questions record",
+      "outputs": "decision-pack.md (under this stage's record dir, engine-resolved)",
+      "rules_in_context": [
+        {
+          "path": "aidlc/spaces/default/memory/org.md",
+          "scope": "org"
+        },
+        {
+          "path": "aidlc/spaces/default/memory/team.md",
+          "scope": "team"
+        },
+        {
+          "path": "aidlc/spaces/default/memory/project.md",
+          "scope": "project"
+        },
+        {
+          "path": "aidlc/spaces/default/memory/phases/ideation.md",
+          "scope": "phase"
+        }
+      ],
+      "sensors_applicable": [
+        {
+          "id": "required-sections",
+          "path": ".claude/sensors/aidlc-required-sections.md",
+          "matches": "**/{aidlc-docs,intents}/**"
+        },
+        {
+          "id": "upstream-coverage",
+          "path": ".claude/sensors/aidlc-upstream-coverage.md",
+          "matches": "**/{aidlc-docs,intents}/**"
+        }
+      ]
+    },
+    {
       "slug": "reverse-engineering",
       "number": "2.1",
       "name": "Reverse Engineering",
@@ -871,6 +1189,10 @@
           "required": false
         },
         {
+          "artifact": "decision-pack",
+          "required": false
+        },
+        {
           "artifact": "business-overview",
           "required": false,
           "conditional_on": "brownfield"
@@ -965,6 +1287,10 @@
         {
           "artifact": "requirements",
           "required": true
+        },
+        {
+          "artifact": "decision-pack",
+          "required": false
         },
         {
           "artifact": "business-overview",
@@ -1067,6 +1393,14 @@
         },
         {
           "artifact": "team-practices",
+          "required": false
+        },
+        {
+          "artifact": "design-language-record",
+          "required": false
+        },
+        {
+          "artifact": "evidence-record",
           "required": false
         }
       ],
@@ -2805,6 +3139,10 @@
         "team-formation": "SKIP",
         "rough-mockups": "SKIP",
         "approval-handoff": "SKIP",
+        "discovery-current-state": "SKIP",
+        "discovery-future-state": "SKIP",
+        "discovery-experimentation": "SKIP",
+        "discovery-decision": "SKIP",
         "reverse-engineering": "EXECUTE",
         "practices-discovery": "SKIP",
         "requirements-analysis": "EXECUTE",
@@ -2837,6 +3175,50 @@
       "runner": true,
       "skeleton": false
     },
+    "discovery": {
+      "depth": "Standard",
+      "stages": {
+        "workspace-scaffold": "EXECUTE",
+        "workspace-detection": "EXECUTE",
+        "state-init": "EXECUTE",
+        "intent-capture": "EXECUTE",
+        "market-research": "SKIP",
+        "feasibility": "SKIP",
+        "scope-definition": "SKIP",
+        "team-formation": "SKIP",
+        "rough-mockups": "SKIP",
+        "approval-handoff": "SKIP",
+        "discovery-current-state": "EXECUTE",
+        "discovery-future-state": "EXECUTE",
+        "discovery-experimentation": "EXECUTE",
+        "discovery-decision": "EXECUTE",
+        "reverse-engineering": "SKIP",
+        "practices-discovery": "SKIP",
+        "requirements-analysis": "SKIP",
+        "user-stories": "SKIP",
+        "refined-mockups": "SKIP",
+        "application-design": "SKIP",
+        "units-generation": "SKIP",
+        "delivery-planning": "SKIP",
+        "functional-design": "SKIP",
+        "nfr-requirements": "SKIP",
+        "nfr-design": "SKIP",
+        "infrastructure-design": "SKIP",
+        "code-generation": "SKIP",
+        "build-and-test": "SKIP",
+        "ci-pipeline": "SKIP",
+        "deployment-pipeline": "SKIP",
+        "environment-provisioning": "SKIP",
+        "deployment-execution": "SKIP",
+        "observability-setup": "SKIP",
+        "incident-response": "SKIP",
+        "performance-validation": "SKIP",
+        "feedback-optimization": "SKIP"
+      },
+      "keywords": [],
+      "description": "Explore and validate an idea before deciding to build it (opt-in)",
+      "skeleton": false
+    },
     "enterprise": {
       "depth": "Comprehensive",
       "stages": {
@@ -2850,6 +3232,10 @@
         "team-formation": "EXECUTE",
         "rough-mockups": "EXECUTE",
         "approval-handoff": "EXECUTE",
+        "discovery-current-state": "SKIP",
+        "discovery-future-state": "SKIP",
+        "discovery-experimentation": "SKIP",
+        "discovery-decision": "SKIP",
         "reverse-engineering": "EXECUTE",
         "practices-discovery": "EXECUTE",
         "requirements-analysis": "EXECUTE",
@@ -2890,6 +3276,10 @@
         "team-formation": "EXECUTE",
         "rough-mockups": "EXECUTE",
         "approval-handoff": "EXECUTE",
+        "discovery-current-state": "SKIP",
+        "discovery-future-state": "SKIP",
+        "discovery-experimentation": "SKIP",
+        "discovery-decision": "SKIP",
         "reverse-engineering": "EXECUTE",
         "practices-discovery": "EXECUTE",
         "requirements-analysis": "EXECUTE",
@@ -2931,6 +3321,10 @@
         "team-formation": "SKIP",
         "rough-mockups": "SKIP",
         "approval-handoff": "SKIP",
+        "discovery-current-state": "SKIP",
+        "discovery-future-state": "SKIP",
+        "discovery-experimentation": "SKIP",
+        "discovery-decision": "SKIP",
         "reverse-engineering": "SKIP",
         "practices-discovery": "EXECUTE",
         "requirements-analysis": "EXECUTE",
@@ -2975,6 +3369,10 @@
         "team-formation": "SKIP",
         "rough-mockups": "EXECUTE",
         "approval-handoff": "SKIP",
+        "discovery-current-state": "SKIP",
+        "discovery-future-state": "SKIP",
+        "discovery-experimentation": "SKIP",
+        "discovery-decision": "SKIP",
         "reverse-engineering": "EXECUTE",
         "practices-discovery": "EXECUTE",
         "requirements-analysis": "EXECUTE",
@@ -3019,6 +3417,10 @@
         "team-formation": "SKIP",
         "rough-mockups": "SKIP",
         "approval-handoff": "SKIP",
+        "discovery-current-state": "SKIP",
+        "discovery-future-state": "SKIP",
+        "discovery-experimentation": "SKIP",
+        "discovery-decision": "SKIP",
         "reverse-engineering": "EXECUTE",
         "practices-discovery": "SKIP",
         "requirements-analysis": "EXECUTE",
@@ -3064,6 +3466,10 @@
         "team-formation": "SKIP",
         "rough-mockups": "SKIP",
         "approval-handoff": "SKIP",
+        "discovery-current-state": "SKIP",
+        "discovery-future-state": "SKIP",
+        "discovery-experimentation": "SKIP",
+        "discovery-decision": "SKIP",
         "reverse-engineering": "EXECUTE",
         "practices-discovery": "SKIP",
         "requirements-analysis": "EXECUTE",
@@ -3108,6 +3514,10 @@
         "team-formation": "SKIP",
         "rough-mockups": "SKIP",
         "approval-handoff": "SKIP",
+        "discovery-current-state": "SKIP",
+        "discovery-future-state": "SKIP",
+        "discovery-experimentation": "SKIP",
+        "discovery-decision": "SKIP",
         "reverse-engineering": "EXECUTE",
         "practices-discovery": "SKIP",
         "requirements-analysis": "EXECUTE",
@@ -3154,6 +3564,10 @@
         "team-formation": "SKIP",
         "rough-mockups": "SKIP",
         "approval-handoff": "SKIP",
+        "discovery-current-state": "SKIP",
+        "discovery-future-state": "SKIP",
+        "discovery-experimentation": "SKIP",
+        "discovery-decision": "SKIP",
         "reverse-engineering": "EXECUTE",
         "practices-discovery": "EXECUTE",
         "requirements-analysis": "EXECUTE",
@@ -3194,6 +3608,7 @@
     "api-documentation",
     "approval-handoff-questions",
     "architecture",
+    "assumptions-record",
     "bolt-plan",
     "build-and-test-summary",
     "build-instructions",
@@ -3217,8 +3632,10 @@
     "components",
     "constraint-register",
     "cost-analysis",
+    "current-state",
     "dashboards",
     "decision-log",
+    "decision-pack",
     "decisions",
     "delivery-planning-questions",
     "dependencies",
@@ -3227,6 +3644,7 @@
     "deployment-log",
     "deployment-pipeline-questions",
     "deployment-strategy",
+    "design-language-record",
     "design-system-mapping",
     "discovered-rules",
     "domain-entities",
@@ -3235,12 +3653,14 @@
     "environment-provisioning-questions",
     "escalation-matrix",
     "evidence",
+    "evidence-record",
     "external-dependency-map",
     "feasibility-assessment",
     "feasibility-questions",
     "feedback-loop",
     "feedback-optimization-questions",
     "frontend-components",
+    "future-state",
     "health-check-report",
     "incident-plan",
     "incident-response-questions",
@@ -3262,6 +3682,7 @@
     "monitoring-design",
     "nfr-validation-matrix",
     "observability-setup-questions",
+    "open-questions-record",
     "performance-design",
     "performance-requirements",
     "performance-test-instructions",
@@ -3293,6 +3714,7 @@
     "slo-config",
     "slo-report",
     "smoke-test-results",
+    "source-inventory",
     "stakeholder-map",
     "stories",
     "team-allocation",
@@ -3301,6 +3723,7 @@
     "team-practices",
     "tech-stack-decisions",
     "technology-stack",
+    "test-plans",
     "tracing-config",
     "unit-of-work",
     "unit-of-work-dependency",

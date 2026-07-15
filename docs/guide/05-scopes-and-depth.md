@@ -4,15 +4,15 @@ Scopes control **which stages execute**. Depth controls **how much detail** each
 
 ---
 
-## The 9 Core Scopes
+## The 10 Core Scopes
 
-Core ships 9 named scopes. Each scope defines a stage set and a default depth level. Plugin installs can add more scopes, and an install can narrow which plugin scopes are visible with `bun .claude/tools/aidlc-utility.ts select-plugins <names>`. When a `plugins` selection disables core (`aidlc` omitted), the core scope files remain installed but are not valid runtime scopes until core is re-enabled; the Initialization stages still run for every enabled scope.
+Core ships 10 named scopes. Each scope defines a stage set and a default depth level. Plugin installs can add more scopes, and an install can narrow which plugin scopes are visible with `bun .claude/tools/aidlc-utility.ts select-plugins <names>`. When a `plugins` selection disables core (`aidlc` omitted), the core scope files remain installed but are not valid runtime scopes until core is re-enabled; the Initialization stages still run for every enabled scope.
 
 ### enterprise
 
 **Use when:** Building a regulated enterprise feature that requires full audit trail, compliance review, and production-grade operations.
 
-- **Stages:** All 32
+- **Stages:** 32 of 36 (all delivery-path stages)
 - **Default depth:** Comprehensive
 - **Includes:** Full compliance, security, and operations stages
 
@@ -20,7 +20,7 @@ Core ships 9 named scopes. Each scope defines a stage set and a default depth le
 
 **Use when:** Building a new feature of any size. This is the default scope when AI-DLC cannot determine a more specific match.
 
-- **Stages:** All 32
+- **Stages:** 32 of 36 (all delivery-path stages)
 - **Default depth:** Standard
 - **Includes:** All stages, standard artifact detail
 
@@ -28,15 +28,15 @@ Core ships 9 named scopes. Each scope defines a stage set and a default depth le
 
 **Use when:** Building a greenfield minimum viable product. Skips late-stage operations but retains full design and construction.
 
-- **Stages:** 22 of 32
+- **Stages:** 22 of 36
 - **Default depth:** Standard
-- **Skips:** All 7 Operation stages (deployment pipeline, environment provisioning, deployment execution, observability, incident response, performance validation, feedback) plus Market Research, Team Formation, and Approval Handoff from Ideation (10 skipped, 22 executed)
+- **Skips:** All 7 Operation stages (deployment pipeline, environment provisioning, deployment execution, observability, incident response, performance validation, feedback) plus Market Research, Team Formation, and Approval Handoff from Ideation, plus the 4 discovery-only stages (14 skipped, 22 executed)
 
 ### poc
 
 **Use when:** Proving feasibility quickly. Skips most Ideation and Inception stages, focuses on getting to code fast.
 
-- **Stages:** 8 of 32
+- **Stages:** 8 of 36
 - **Default depth:** Minimal
 - **Skips:** Market Research, Feasibility, Team Formation, Mockups, User Stories, most Operation stages
 
@@ -44,7 +44,7 @@ Core ships 9 named scopes. Each scope defines a stage set and a default depth le
 
 **Use when:** Fixing a specific bug. Streamlined path from intent capture through code generation and testing.
 
-- **Stages:** 7 of 32
+- **Stages:** 7 of 36
 - **Default depth:** Minimal
 - **Skips:** Market Research, Feasibility, Team Formation, Mockups, most design and architecture stages, all Operation stages
 
@@ -52,7 +52,7 @@ Core ships 9 named scopes. Each scope defines a stage set and a default depth le
 
 **Use when:** Cleaning up or restructuring existing code without changing functionality.
 
-- **Stages:** 8 of 32
+- **Stages:** 8 of 36
 - **Default depth:** Minimal
 - **Skips:** Similar to bugfix — focused on code analysis, design, and implementation
 
@@ -60,7 +60,7 @@ Core ships 9 named scopes. Each scope defines a stage set and a default depth le
 
 **Use when:** Making infrastructure changes (new environments, CDK/CloudFormation updates, cost optimization).
 
-- **Stages:** 13 of 32
+- **Stages:** 13 of 36
 - **Default depth:** Standard
 - **Skips:** User-facing stages (stories, mockups, user flows) — focuses on architecture, infrastructure, and deployment
 
@@ -68,7 +68,7 @@ Core ships 9 named scopes. Each scope defines a stage set and a default depth le
 
 **Use when:** Responding to a CVE or security vulnerability. Fast path through security-relevant stages.
 
-- **Stages:** 10 of 32
+- **Stages:** 10 of 36
 - **Default depth:** Minimal
 - **Skips:** Market Research, Team Formation, Mockups, non-security design stages
 
@@ -76,12 +76,20 @@ Core ships 9 named scopes. Each scope defines a stage set and a default depth le
 
 **Use when:** Running an AI-DLC workshop or training session. The project is pre-decided by the facilitator; participants work through inception, construction, and operation as a mob.
 
-- **Stages:** 25 of 32
+- **Stages:** 25 of 36
 - **Default depth:** Standard
 - **Default test strategy:** Minimal (Nyquist) — keeps workshop pace fast
-- **Skips:** All Ideation stages (1.1-1.7) — project scope is pre-decided
+- **Skips:** All Ideation stages (1.1-1.11) — project scope is pre-decided
 
 See [Workshop Mode](workshop-mode.md) for the multi-developer manual recipe and claim semantics.
+
+### discovery
+
+**Use when:** Exploring an idea that is not yet a commitment. Discovery is opt-in: it ships no keywords, so auto-detection never routes to it — reach it explicitly with `/aidlc discovery` (or `--scope discovery`). For a start-to-finish walkthrough, see [Running a Discovery Initiative](18-discovery-walkthrough.md). It runs 8 stages (the 3 initialization stages, the shared intent-capture stage, and the 4 discovery ideation stages): capture the asks and materials the initiative starts from, build a picture of how things work today, frame what the future could look like as options, test the riskiest assumptions first, and end in an explicit decision — commit (build it), pivot (keep what was learned, try a different framing), or park (stop for now, keep everything, reopen any time). On commit you choose where the build happens: continue in the same workspace (the workflow changes to a delivery scope and carries straight on into Inception with the full record) or hand off to another repository or team (the decision pack travels, this workflow completes).
+
+- **Stages:** 8 of 36
+- **Default depth:** Standard
+- **Skips:** The six questionnaire ideation stages (1.2-1.7) and all of Inception, Construction, and Operation — a commit decision continues into (or hands off to) a delivery scope
 
 ---
 
@@ -91,15 +99,16 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 
 | Scope | EXECUTE / Total | Depth | Test Strategy | Use Case |
 |-------|-----------------|-------|---------------|----------|
-| `enterprise` | 32 / 32 | Comprehensive | Comprehensive | Regulated enterprise feature, full audit trail |
-| `feature` | 32 / 32 | Standard | Standard | Default for new features |
-| `mvp` | 22 / 32 | Standard | Standard | Greenfield, skip late operations |
-| `poc` | 8 / 32 | Minimal | Minimal | Prove feasibility fast |
-| `bugfix` | 7 / 32 | Minimal | Minimal | Fix a specific bug |
-| `refactor` | 8 / 32 | Minimal | Minimal | Clean up existing code |
-| `infra` | 13 / 32 | Standard | Standard | Infrastructure change |
-| `security-patch` | 10 / 32 | Minimal | Minimal | CVE response |
-| `workshop` | 25 / 32 | Standard | **Minimal** | AI-DLC workshop or training session |
+| `enterprise` | 32 / 36 | Comprehensive | Comprehensive | Regulated enterprise feature, full audit trail |
+| `feature` | 32 / 36 | Standard | Standard | Default for new features |
+| `mvp` | 22 / 36 | Standard | Standard | Greenfield, skip late operations |
+| `poc` | 8 / 36 | Minimal | Minimal | Prove feasibility fast |
+| `bugfix` | 7 / 36 | Minimal | Minimal | Fix a specific bug |
+| `refactor` | 8 / 36 | Minimal | Minimal | Clean up existing code |
+| `infra` | 13 / 36 | Standard | Standard | Infrastructure change |
+| `security-patch` | 10 / 36 | Minimal | Minimal | CVE response |
+| `workshop` | 25 / 36 | Standard | **Minimal** | AI-DLC workshop or training session |
+| `discovery` | 8 / 36 | Standard | Standard | Idea-to-decision exploration (opt-in, never auto-detected) |
 | (auto-detect) | Varies | Varies | Varies | AI determines from freeform intent |
 
 Scopes differ by an order of magnitude in ceremony: `poc` runs 8 stages with 5 approval gates, while `feature` runs all 32 with 29 gates and five design stages that fan out per Unit of Work in Construction. So the scope confirmation line always names the exact numbers - stage count, approval-gate count, and any per-unit fan-out - computed from the compiled grid, never estimated. You know what you are consenting to before the workflow starts.
@@ -134,7 +143,7 @@ The engine analyzes your intent against keyword patterns:
 After a clear keyword match, you get a one-line confirmation naming the MATCHED scope and the ceremony it carries, straight from the compiled grid:
 
 ```
-Starting a "bugfix" workflow for: "fix login bug" - 7 of 32 stages, 4 approval gates, 1 stage repeats per unit of work in Construction. Confirm to proceed,
+Starting a "bugfix" workflow for: "fix login bug" - 7 of 36 stages, 4 approval gates, 1 stage repeats per unit of work in Construction. Confirm to proceed,
 name a different scope, or say "compose" for a tailored plan.
 ```
 
@@ -346,7 +355,7 @@ You can change the test strategy at three points:
 | Regulated feature requiring compliance | `enterprise` |
 | AI-DLC workshop or training lab | `workshop` |
 
-When in doubt, start with `feature` — it includes all 32 stages, and you can skip individual stages at their approval gates.
+When in doubt, start with `feature` — it includes all 32 delivery-path stages, and you can skip individual stages at their approval gates.
 
 ---
 

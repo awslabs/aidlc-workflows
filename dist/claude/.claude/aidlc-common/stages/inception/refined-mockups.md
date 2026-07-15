@@ -26,6 +26,10 @@ consumes:
     required: true
   - artifact: team-practices
     required: false
+  - artifact: design-language-record
+    required: false
+  - artifact: evidence-record
+    required: false
 requires_stage:
   - user-stories
 sensors:
@@ -55,6 +59,7 @@ Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledg
 - Read rough mockups from `<record>/ideation/rough-mockups/` (if exists)
 - Read user stories from `<record>/inception/user-stories/`
 - Read requirements from `<record>/inception/requirements-analysis/`
+- When a discovery run committed into this workflow, read what it validated visually: `design-language-record.md` (the recorded component inventory, tokens, and conventions — design within them, and record any deliberate departure) and `evidence-record.md` (mock-up variants people already tested — a variant marked promote is the starting point, not a suggestion; cite `design-language-record.md` and `evidence-record.md` in the mockup outputs so the source of each choice is followable)
 
 The workshop scope skips rough-mockups by design (no Ideation phase); when the wireframes and user-flow inputs are absent, design the refined mockups directly from the user stories and requirements — never invent the content of a missing artifact.
 
@@ -98,7 +103,7 @@ This stage's outputs are markdown artefacts under `<record>/inception/refined-mo
 The imported sensors check those outputs:
 
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
-- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `wireframes`, `user-flow`, `stories`, `requirements`, `team-practices`).
+- **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter, filtered to those present on disk. Failure mode: missing upstream references emit `SENSOR_FAILED` listing each unreferenced artefact (this stage consumes `wireframes`, `user-flow`, `stories`, `requirements`, `team-practices`, and — after a discovery run committed into this workflow — `design-language-record` and `evidence-record`).
 
 ## Learn
 

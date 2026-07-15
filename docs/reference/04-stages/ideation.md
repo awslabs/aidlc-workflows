@@ -1,14 +1,18 @@
-# Ideation Phase -- Stage Reference (1.1-1.7)
+# Ideation Phase -- Stage Reference (1.1-1.11)
 
 ## Phase Overview
 
 The Ideation phase is the second of five phases in the AI-DLC lifecycle. It
 establishes the foundation for the entire initiative by capturing intent,
 validating feasibility, defining scope, and securing approval before any
-technical work begins. The phase runs stages 1.1 through 1.7 and concludes
-with a go/no-go gate that controls entry into the Inception phase.
+technical work begins. The phase holds two paths: the delivery path (stages
+1.1 through 1.7) concludes with a go/no-go gate that controls entry into the
+Inception phase, and the opt-in discovery path (stage 1.1 followed by stages
+1.8 through 1.11, run only by the `discovery` scope) is an idea-to-decision
+flow that concludes with an explicit commit, pivot, or park decision. Both
+paths share the same entry point: Stage 1.1 Intent Capture.
 
-All seven stages execute inline (no subagent delegation) and follow the
+All eleven stages execute inline (no subagent delegation) and follow the
 standard stage-protocol.md for approval gates, question format, and completion
 messages. The orchestrator routes through them sequentially, skipping
 CONDITIONAL stages that do not apply to the current scope.
@@ -20,9 +24,11 @@ CONDITIONAL stages that do not apply to the current scope.
 - All stages except Stage 1.1 depend on outputs from earlier stages.
 - Stage 1.7 runs a phase boundary verification check before handing off to
   Inception.
-- The phase is bookended by two ALWAYS stages (1.1 Intent Capture and 1.7
-  Approval & Handoff); the five middle stages are CONDITIONAL and may be
-  skipped depending on scope.
+- The delivery path is bookended by two ALWAYS stages (1.1 Intent Capture and
+  1.7 Approval & Handoff); the five middle stages are CONDITIONAL and may be
+  skipped depending on scope. The four discovery stages (1.8-1.11) are ALWAYS
+  within their path but belong only to the `discovery` scope — every other
+  scope skips them.
 
 **Scope-driven stage inclusion:**
 
@@ -37,6 +43,7 @@ CONDITIONAL stages that do not apply to the current scope.
 | infra            | None (Ideation skipped entirely)            |
 | security-patch   | None (Ideation skipped entirely)            |
 | workshop         | None (Ideation skipped entirely)            |
+| discovery        | 1.1, then 1.8-1.11                          |
 
 ---
 
@@ -51,6 +58,10 @@ CONDITIONAL stages that do not apply to the current scope.
 | 1.5   | Team Formation              | CONDITIONAL | aidlc-delivery-agent  | --                                          | inline |
 | 1.6   | Rough Mockups               | CONDITIONAL | aidlc-design-agent    | aidlc-product-agent                               | inline |
 | 1.7   | Approval & Handoff          | ALWAYS      | aidlc-delivery-agent  | aidlc-product-agent                               | inline |
+| 1.8   | Discovery Current State     | ALWAYS      | aidlc-product-agent   | aidlc-design-agent, aidlc-architect-agent         | inline |
+| 1.9   | Discovery Future State      | ALWAYS      | aidlc-product-agent   | aidlc-design-agent, aidlc-architect-agent         | inline |
+| 1.10  | Discovery Experimentation   | ALWAYS      | aidlc-product-agent   | aidlc-developer-agent, aidlc-quality-agent, aidlc-design-agent | inline |
+| 1.11  | Discovery Decision          | ALWAYS      | aidlc-product-agent   | aidlc-product-lead-agent, aidlc-delivery-agent    | inline |
 
 ---
 
@@ -76,6 +87,16 @@ classifies the project type (greenfield, brownfield, or migration). The
 resulting intent statement and stakeholder map become the foundation that all
 downstream stages build upon.
 
+The stage works materials-first: the person may point at existing asks
+(tickets, exports, notes, links) and hand over supporting materials, and the
+stage answers its clarifying questions from those sources before asking the
+person anything — each material-derived answer carries its source and stays
+`unconfirmed` until the person validates it at the gate. It also records any
+mandate (something already decided elsewhere) and any decide-by date, and
+seeds a source inventory and an open questions record that later stages
+consume. With nothing supplied beyond the project description, the
+questionnaire path is unchanged.
+
 If the user provided freeform intent text via `$ARGUMENTS`, that text is passed
 as seed context so the stage does not re-ask "what do you want to build?"
 
@@ -89,25 +110,30 @@ as seed context so the stage does not re-ask "what do you want to build?"
 
 1. **Load Agent Personas** -- Load aidlc-product-agent persona and knowledge. Load aidlc-architect-agent persona for technical context perspective.
 2. **Load Prior Context** -- Read user's project description. Check for existing artifacts. Load guardrails.
-3. **Generate Clarifying Questions** -- Create `<record>/ideation/intent-capture/intent-capture-questions.md` with questions covering business problem, customer, success metrics, initiative trigger, project type. Uses `[Answer]:` tag format with A-E options plus X (Other). Offers tri-mode question flow.
-4. **Collect and Analyze Answers** -- Confirm all tags filled. Run ambiguity/contradiction analysis.
-5. **Generate Artifacts** -- Produce intent statement and stakeholder map.
-6. **Update State** -- Mark 1.1 as `[x]` completed.
-7. **Present Completion & Request Approval** -- Standard 2-option gate.
+3. **Collect the Asks and Materials** -- Ask once for asks, supporting materials, any mandate, and any decide-by date. When asks or materials arrive, record the person's own reading verbatim before any agent synthesis.
+4. **Generate the Source Inventory** -- One row per supplied material; "None" is a valid inventory.
+5. **Generate Clarifying Questions** -- Create `<record>/ideation/intent-capture/intent-capture-questions.md` with questions covering business problem, customer, success metrics, initiative trigger, project type. Answers found in the materials are filled in with their source and marked `unconfirmed`; only the remainder is asked. Uses `[Answer]:` tag format with A-E options plus X (Other). Offers tri-mode question flow.
+6. **Collect and Analyze Answers** -- Confirm all tags filled. Run ambiguity/contradiction analysis. Flag a material scope misfit and offer the composer or a restart rather than proceeding silently.
+7. **Generate Artifacts** -- Produce intent statement (with conditional Where This Came From, Already Decided, and Decide-By Date sections when the run supplied them), stakeholder map, and the open questions record.
+8. **Update State** -- Mark 1.1 as `[x]` completed.
+9. **Present Completion & Request Approval** -- Standard 2-option gate.
 
 ### Outputs
 
 | File                          | Contents                                                      |
 |-------------------------------|---------------------------------------------------------------|
-| `intent-statement.md`         | Problem Statement, Target Customer, Success Metrics, Initiative Trigger, Project Type, Initial Scope Signal |
+| `intent-statement.md`         | Problem Statement, Target Customer, Success Metrics, Initiative Trigger, Project Type, Initial Scope Signal; plus Where This Came From, Already Decided, and Decide-By Date when the run supplied them. On a discovery commit, stage 1.11 adds a What Discovery Validated section (the one cross-stage write in the phase) |
 | `stakeholder-map.md`          | Key stakeholders and interests, decision-makers vs. influencers, communication requirements |
 | `intent-capture-questions.md` | Clarifying questions with `[Answer]:` tags (input artifact) |
+| `source-inventory.md`         | One row per supplied material and what it likely answers; suggested-but-not-supplied; gaps |
+| `open-questions-record.md`    | The questions the initiative still carries, with answers, sources, and confidence |
 
 ### Notes
 
 - First stage of every workflow. No prior artifacts other than user input.
 - Freeform intent in `$ARGUMENTS` is used as seed context.
 - The intent statement feeds every subsequent Ideation stage and carries forward into Inception.
+- Under the `discovery` scope this stage is the discovery path's entry point: the intent statement, source inventory, and open questions record feed Stage 1.8 Discovery Current State directly.
 
 ---
 
@@ -363,6 +389,117 @@ Special 3-option gate:
 
 ---
 
+## Stage 1.8: Discovery Current State
+
+### Metadata
+
+| Field            | Value                                                                  |
+|------------------|------------------------------------------------------------------------|
+| Phase            | Ideation                                                               |
+| Stage #          | 1.8                                                                    |
+| Condition        | Discovery scope only (always runs within it) -- builds the evidenced as-is picture the framing decision rests on |
+| Lead Agent       | aidlc-product-agent                                                    |
+| Support Agents   | aidlc-design-agent, aidlc-architect-agent                              |
+| Mode             | inline                                                                 |
+| Completion Emoji | :mag:                                                                  |
+
+### Purpose
+
+Builds an evidenced picture of the current state from the intent statement,
+the open questions record, and the source inventory (if it exists) —
+evidence before interpretation.
+
+### Outputs
+
+`current-state.md`, `design-language-record.md`.
+
+---
+
+## Stage 1.9: Discovery Future State
+
+### Metadata
+
+| Field            | Value                                                                  |
+|------------------|------------------------------------------------------------------------|
+| Phase            | Ideation                                                               |
+| Stage #          | 1.9                                                                    |
+| Condition        | Discovery scope only (always runs within it) -- chooses the problem framing and expresses the future state as testable options |
+| Lead Agent       | aidlc-product-agent                                                    |
+| Support Agents   | aidlc-design-agent, aidlc-architect-agent                              |
+| Mode             | inline                                                                 |
+| Completion Emoji | :art:                                                                  |
+
+### Purpose
+
+Chooses a problem framing from genuinely distinct candidates and expresses
+the future state as options, recording the assumptions each option rests on.
+
+### Outputs
+
+`future-state.md`, `assumptions-record.md`.
+
+---
+
+## Stage 1.10: Discovery Experimentation
+
+### Metadata
+
+| Field            | Value                                                                  |
+|------------------|------------------------------------------------------------------------|
+| Phase            | Ideation                                                               |
+| Stage #          | 1.10                                                                   |
+| Condition        | Discovery scope only (always runs within it) -- tests the riskiest assumptions before commitment through composed test plans |
+| Lead Agent       | aidlc-product-agent                                                    |
+| Support Agents   | aidlc-developer-agent, aidlc-quality-agent, aidlc-design-agent         |
+| Mode             | inline                                                                 |
+| Completion Emoji | :test_tube:                                                            |
+
+### Purpose
+
+Tests the riskiest assumptions first, composing test plans over the recorded
+assumptions and capturing what the tests actually showed as an evidence
+record.
+
+### Outputs
+
+`test-plans.md`, `evidence-record.md`.
+
+---
+
+## Stage 1.11: Discovery Decision
+
+### Metadata
+
+| Field            | Value                                                                  |
+|------------------|------------------------------------------------------------------------|
+| Phase            | Ideation                                                               |
+| Stage #          | 1.11                                                                   |
+| Condition        | Discovery scope only (always runs within it) -- ends the phase over the decision pack: commit, pivot, or park |
+| Lead Agent       | aidlc-product-agent                                                    |
+| Support Agents   | aidlc-product-lead-agent, aidlc-delivery-agent                         |
+| Mode             | inline                                                                 |
+| Completion Emoji | :scales:                                                               |
+
+### Purpose
+
+Compiles the evidence, assumptions, intent statement, future state, and open
+questions into a decision pack and ends the discovery path in an explicit
+commit, pivot, or park decision. On commit the person chooses where the
+build happens: continue here (the stage relays `scope-change` to the chosen
+delivery scope, marks the covered ideation stages skipped, and the same
+workflow proceeds into Inception with the full record) or hand off (the
+workflow completes and the pack's handoff contract travels to the receiving
+team). Discovery itself runs no delivery-path stages.
+
+### Outputs
+
+`decision-pack.md` (on a commit, with the appended handoff contract). A
+commit also writes the What Discovery Validated section into stage 1.1's
+`intent-statement.md` — the one cross-stage write in the phase, so the
+intent delivery reads reflects the validated framing.
+
+---
+
 ## Phase Summary
 
 ### Key Outputs
@@ -376,12 +513,18 @@ Special 3-option gate:
 7. **Concept Mockups** (1.6) -- Wireframes/user flows or system context diagrams (when applicable).
 8. **Initiative Brief** (1.7) -- Executive one-pager synthesizing all Ideation outputs.
 9. **Phase Boundary Verification** (1.7) -- Traceability check results.
+10. **Decision Pack** (1.11) -- Commit/pivot/park decision over the discovery evidence (discovery scope only).
 
 ### Handoff to Inception
 
 Upon approval at Stage 1.7, the framework transitions to the Inception
 phase. Inception begins with Stage 2.1 Reverse Engineering (for brownfield
 projects) or Stage 2.3 Requirements Analysis (for greenfield projects).
+Under the `discovery` scope the phase instead ends at Stage 1.11 with a
+commit, pivot, or park decision. A commit either continues into Inception in
+the same workspace (the decision stage relays the engine's scope change and
+the workflow carries on under the chosen delivery scope) or hands off to a
+delivery workflow elsewhere via the decision pack's handoff contract.
 
 ## Cross-References
 

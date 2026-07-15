@@ -38,6 +38,10 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
     team-formation/                 (conditional)
     rough-mockups/                  (conditional)
     approval-handoff/
+    discovery-current-state/        (discovery scope only)
+    discovery-future-state/         (discovery scope only)
+    discovery-experimentation/      (discovery scope only)
+    discovery-decision/             (discovery scope only)
 
   inception/                        # Phase 2 artifacts
     reverse-engineering/            (conditional: brownfield)
@@ -141,17 +145,21 @@ flowchart LR
 
 The welcome message is rendered at session start via `companyAnnouncements` in `settings.json` — it is not a stage and produces no artifact.
 
-### Ideation (stages 1.1-1.7)
+### Ideation (stages 1.1-1.11)
 
 | Stage | Key Artifacts | Condition |
 |-------|--------------|-----------|
-| 1.1 Intent Capture | `intent-statement.md`, `stakeholder-map.md` | Always |
+| 1.1 Intent Capture | `intent-statement.md`, `stakeholder-map.md`, `source-inventory.md`, `open-questions-record.md` | Always |
 | 1.2 Market Research | `competitive-analysis.md`, `build-vs-buy.md` | Conditional |
 | 1.3 Feasibility | `feasibility-assessment.md`, `constraint-register.md`, `raid-log.md` | Conditional |
 | 1.4 Scope Definition | `scope-document.md`, `intent-backlog.md` | Always |
 | 1.5 Team Formation | `team-assessment.md`, `mob-composition.md` | Conditional |
 | 1.6 Rough Mockups | `wireframes.md`, `user-flow.md` | Conditional |
 | 1.7 Approval & Handoff | `initiative-brief.md`, `decision-log.md` | Always |
+| 1.8 Discovery Current State | `current-state.md`, `design-language-record.md` | Discovery scope only |
+| 1.9 Discovery Future State | `future-state.md`, `assumptions-record.md` | Discovery scope only |
+| 1.10 Discovery Experimentation | `test-plans.md`, `evidence-record.md` | Discovery scope only |
+| 1.11 Discovery Decision | `decision-pack.md` | Discovery scope only |
 
 ### Inception (stages 2.1-2.8)
 

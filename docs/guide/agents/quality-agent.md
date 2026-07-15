@@ -17,6 +17,7 @@ The aidlc-quality-agent leads two stages — one in Construction and one in Oper
 
 | Stage | Phase | Contribution |
 |-------|-------|-------------|
+| 1.10 Discovery Experimentation | Ideation | Evidence discipline for test verdicts (discovery scope only) |
 | 2.2 Practices Discovery | Inception | Surfaces testing posture and quality practices from existing code |
 | 3.2 NFR Requirements | Construction | Defines testable quality attribute scenarios |
 

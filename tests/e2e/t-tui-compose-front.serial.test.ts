@@ -37,8 +37,8 @@ const TASK =
   "harden the deployment pipeline and add observability for our existing service - no new features, compose a custom plan for exactly this";
 
 const STOCK_SCOPES = new Set([
-  "bugfix", "enterprise", "feature", "infra", "mvp", "poc", "refactor",
-  "security-patch", "workshop",
+  "bugfix", "discovery", "enterprise", "feature", "infra", "mvp", "poc",
+  "refactor", "security-patch", "workshop",
 ]);
 
 function drive(args: string[]): { rc: number; stdout: string } {
@@ -116,16 +116,16 @@ describe("t-tui compose front journey (live claude TUI)", () => {
         });
         expect(gateRc).toBe(0);
 
-        // The two-file write landed: a 10th scope .md + a 10th grid key.
+        // The two-file write landed: an 11th scope .md + an 11th grid key.
         const scopesDir = join(sandbox, ".claude", "scopes");
         const scopeFiles = readdirSync(scopesDir).filter(
           (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
         );
-        expect(scopeFiles.length).toBe(10);
+        expect(scopeFiles.length).toBe(11);
         const grid = JSON.parse(
           readFileSync(join(sandbox, ".claude", "tools", "data", "scope-grid.json"), "utf-8"),
         ) as Record<string, unknown>;
-        expect(Object.keys(grid).length).toBe(10);
+        expect(Object.keys(grid).length).toBe(11);
         const composed = Object.keys(grid).find((k) => !STOCK_SCOPES.has(k));
         expect(composed).toBeDefined();
 

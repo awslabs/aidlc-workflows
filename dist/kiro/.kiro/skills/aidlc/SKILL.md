@@ -39,7 +39,7 @@ Loop:
   4. repeat unless directive.kind == done
 ```
 
-Each `next` reads the workflow state and the compiled stage graph and returns **exactly one** typed directive (JSON) on stdout. It mutates nothing. The directive's `kind` names the single move to make; you make that move, then `report` commits the resulting transition so the next `next` reads fresh state. **Report once per directive; never call the state tools (`aidlc-state.ts approve/advance/…`) directly** — the engine's `report` dispatches them, and a speculative direct call gets the engine's state-guard error. Pass `$ARGUMENTS` through to the first `next` verbatim — the engine parses flags (`--status`, `--stage`, `--scope`, `--depth`, freeform text, …) and resolves the scope, so you do not pre-parse or strip them.
+Each `next` reads the workflow state and the compiled stage graph and returns **exactly one** typed directive (JSON) on stdout. It mutates nothing. The directive's `kind` names the single move to make; you make that move, then `report` commits the resulting transition so the next `next` reads fresh state. **Report once per directive; never call the state tools (`aidlc-state.ts approve/advance/…`) directly** — the engine's `report` dispatches them, and a speculative direct call gets the engine's state-guard error. The one exception: a stage body may explicitly relay a named workflow-level verb (`jump`, `park`, `scope-change`, `set-status`, `state skip`) — engine commands the stage file instructs by name, not report-owned stage transitions (jump, park, scope-change, and skip each emit their own audit event; set-status is a plain state-field write with no event of its own). Pass `$ARGUMENTS` through to the first `next` verbatim — the engine parses flags (`--status`, `--stage`, `--scope`, `--depth`, freeform text, …) and resolves the scope, so you do not pre-parse or strip them.
 
 Run the engine binary directly via the shell tool. If a directive looks malformed or names a move you cannot make, that is an engine signal worth surfacing to the user, never a cue to improvise the routing in prose.
 
@@ -138,15 +138,16 @@ The engine resolves scope-level stage routing internally (it reads the compiled 
 
 | Scope          | Depth         | TestStrategy | EXECUTE / Total |
 |----------------|---------------|--------------|-----------------|
-| bugfix         | Minimal       | (default)    | 7 / 32          |
-| enterprise     | Comprehensive | (default)    | 32 / 32         |
-| feature        | Standard      | (default)    | 32 / 32         |
-| infra          | Standard      | (default)    | 13 / 32         |
-| mvp            | Standard      | (default)    | 22 / 32         |
-| poc            | Minimal       | (default)    | 8 / 32          |
-| refactor       | Minimal       | (default)    | 8 / 32          |
-| security-patch | Minimal       | (default)    | 10 / 32         |
-| workshop       | Standard      | Minimal      | 25 / 32         |
+| bugfix         | Minimal       | (default)    | 7 / 36          |
+| discovery      | Standard      | (default)    | 8 / 36          |
+| enterprise     | Comprehensive | (default)    | 32 / 36         |
+| feature        | Standard      | (default)    | 32 / 36         |
+| infra          | Standard      | (default)    | 13 / 36         |
+| mvp            | Standard      | (default)    | 22 / 36         |
+| poc            | Minimal       | (default)    | 8 / 36          |
+| refactor       | Minimal       | (default)    | 8 / 36          |
+| security-patch | Minimal       | (default)    | 10 / 36         |
+| workshop       | Standard      | Minimal      | 25 / 36         |
 
 <!-- END: compiled scope grid -->
 
@@ -170,6 +171,10 @@ The engine reads the compiled `data/stage-graph.json` directly for all routing; 
 | team-formation | 1.5 | Team Formation | Ideation | CONDITIONAL | aidlc-delivery-agent | — | inline |
 | rough-mockups | 1.6 | Rough Mockups | Ideation | CONDITIONAL | aidlc-design-agent | aidlc-product-agent | inline |
 | approval-handoff | 1.7 | Approval & Handoff | Ideation | ALWAYS | aidlc-delivery-agent | aidlc-product-agent | inline |
+| discovery-current-state | 1.8 | Discovery Current State | Ideation | ALWAYS | aidlc-product-agent | aidlc-design-agent, aidlc-architect-agent | inline |
+| discovery-future-state | 1.9 | Discovery Future State | Ideation | ALWAYS | aidlc-product-agent | aidlc-design-agent, aidlc-architect-agent | inline |
+| discovery-experimentation | 1.10 | Discovery Experimentation | Ideation | ALWAYS | aidlc-product-agent | aidlc-developer-agent, aidlc-quality-agent, aidlc-design-agent | inline |
+| discovery-decision | 1.11 | Discovery Decision | Ideation | ALWAYS | aidlc-product-agent | aidlc-product-lead-agent, aidlc-delivery-agent | inline |
 | reverse-engineering | 2.1 | Reverse Engineering | Inception | CONDITIONAL | aidlc-developer-agent | aidlc-architect-agent | subagent |
 | practices-discovery | 2.2 | Practices Discovery | Inception | CONDITIONAL | aidlc-pipeline-deploy-agent | aidlc-quality-agent, aidlc-developer-agent, aidlc-devsecops-agent | inline |
 | requirements-analysis | 2.3 | Requirements Analysis | Inception | ALWAYS | aidlc-product-agent | — | inline |
@@ -203,7 +208,7 @@ The engine reads the compiled `data/stage-graph.json` directly for all routing; 
 - **STAGE RITUAL IS ATOMIC**: Once a stage starts, EVERY step fires: questions → artifact → reviewer (§12a, if declared) → learnings (§13) → gate. No step is skippable. "Skip to stage X" skips INTERMEDIATE stages, NOT the target stage's ritual. Complete the current stage fully (including learnings) before jumping.
 - **AUTONOMY IS NEVER INFERRED**: A user saying "go with recommended" for one stage is a one-time instruction for THAT stage. The next stage starts fresh. NEVER carry forward autonomy. NEVER self-answer questions without explicit permission for THIS specific stage.
 - **User control**: The user can override any stage decision at any approval gate.
-- **11 domain experts**: Each stage leverages the appropriate agent persona; personas load inline from `.kiro/agents/aidlc-<role>-agent.md` for 30 of 32 stages.
+- **11 domain experts**: Each stage leverages the appropriate agent persona; personas load inline from `.kiro/agents/aidlc-<role>-agent.md` for 34 of 36 stages.
 - **Approval gates**: Every stage except the bootstrap initialization stages presents an approval gate.
 - **Questions in markdown files**: All questions go in markdown files using `[Answer]:` tags with A-E + X (Other) options — the file is always the source of truth.
 - **Tri-mode interaction**: The user chooses guided, self-guided, or chat mode for answering questions.
