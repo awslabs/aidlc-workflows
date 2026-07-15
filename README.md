@@ -581,6 +581,7 @@ xcopy "%USERPROFILE%\Downloads\aidlc-rules\aws-aidlc-rule-details" ".aidlc-rule-
 ---
 
 ### Other Agents
+- [Quay](https://github.com/Das-rebel/quay) - Autonomous AI Software Factory with customizable agent pipelines, MCP integration, real-time Mission Control dashboard, cost tracking. TypeScript/Svelte, MIT license.
 
 AI-DLC works with any coding agent that supports project-level rules or steering files. The general approach:
 
