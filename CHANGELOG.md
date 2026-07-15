@@ -59,13 +59,14 @@ New config get/list and plugin list/sync commands land in the dispatcher grammar
 * `/aidlc init` now errors with `init now lays down the project data tree and is not yet available in this release. To start work, describe what to build: /aidlc "build the auth service".`
 * Plugin SessionStart hooks now probe for `aidlc` on `PATH` first and run `aidlc plugin sync`; a nonzero result falls back to the existing bun plus `hooks/compose.ts` command, and the hook still skips cleanly when neither executable is available.
 * Native `aidlc` binaries now statically embed all 15 dispatcher delegate modules, so routed commands reach their handlers instead of failing with a missing module error.
-* Native `aidlc` binaries now resolve the compiled stage graph, scope grid, scopes, and agents relative to the running executable when module-relative paths are absent.
-* Native orchestration now re-enters the compiled dispatcher for environment-scope resolution, jumps, state transitions, and audit appends, so these paths do not require a separate `bun` executable on `PATH`.
-* Native plugin sync imports each plugin composer and routes its graph, generated-table, and runner refreshes through the compiled dispatcher; hook, statusline, and harness-adapter routes now resolve installed or executable-relative runtime assets.
+* Native `aidlc` binaries now resolve data, sensors, scopes, agents, stages, skills, hooks, and conductor prose from the active project install or the executable's packaged harness runtime.
+* Native `aidlc` binaries detect the project's harness directory (`.claude`, `.kiro`, or `.codex`, by probing for `tools/data/harness.json`) when `AIDLC_HARNESS_DIR` is unset, instead of assuming `.claude`; the env var still overrides, and `.claude` remains the fallback outside any install.
+* Native orchestration, plugin selection, Bolt, Swarm, and sensor workers re-enter the compiled dispatcher for sibling-tool work, so these paths do not require a separate `bun` executable on `PATH`.
+* Native plugin sync imports each plugin composer and routes graph, generated-table, and runner refreshes through the compiled dispatcher; hook, statusline, and harness-adapter routes resolve installed or packaged runtime assets.
 * `aidlc doctor` now reports a missing or unreadable stage graph as a failing advisory row instead of crashing before the health report is printed.
 * Workspace terminal directives preserve multi-word names and labels as one shell argument, so quoted `space create`, `space switch`, and `intent birth --label` values reach the utility unchanged.
-* Native binary builds now gate real plugin composition, PATH-empty orchestration, hook, statusline, and Codex adapter paths in addition to inline version, help, and doctor routes.
-* Native binary builds now stage runtime data, tools, and hooks beside each executable and gate a real `doctor` report for missing-module, Bun virtual-filesystem, and missing-file crash signatures.
+* Native binary builds now gate sensors, graph compilation, output validation, generated runners/tables, plugin selection/composition, conductor persona delivery, workspace aliases/flags, Bolt/Swarm self-reentry, orchestration, hooks, statusline, and Codex adapters.
+* Every target now ships under `build/binaries/<target>/` with complete Claude, Codex, Kiro, and Kiro IDE distributions under `runtime/<harness>/`; `doctor` must report a non-zero complete schema count without missing-module, Bun virtual-filesystem, or missing-file crash signatures.
 * Migration note for stale `init` callers: describe what to build instead, for example `/aidlc "build the auth service"`.
 
 ## [2.3.15] - 2026-07-14

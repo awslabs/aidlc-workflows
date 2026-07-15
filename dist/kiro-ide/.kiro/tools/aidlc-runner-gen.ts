@@ -58,7 +58,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   errorMessage,
   frontmatterBlock,
@@ -70,13 +69,14 @@ import {
   scopeGridPath,
 } from "./aidlc-lib.ts";
 import { type GraphStage, loadGraph } from "./aidlc-graph.ts";
+import {
+  resolveHarnessPath,
+  resolveSkillsPath,
+} from "./aidlc-runtime-paths.ts";
 
 // Resolve the skills/ dir off THIS module's location (tools/ → ../skills/) so the
 // generator writes into the shipped tree regardless of the caller's cwd, mirroring
 // how the engine resolves aidlc-common/ and the stage files.
-const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
-const SKILLS_DIR = join(TOOLS_DIR, "..", "skills");
-
 // =========================================================================
 // STAGE-RUNNER HALF
 // =========================================================================
@@ -298,27 +298,28 @@ conductor runs the same forwarding loop as \`/aidlc\`.
 // aidlc-workspace-scaffold) left by an earlier generation that emitted runners
 // for all 32 stages. Returns the slugs written.
 function handleWrite(): string[] {
+  const skillsDir = defaultSkillsDir(true);
   const slugs = stageSlugs();
   const compiledSet = new Set(slugs);
   for (const node of runnableStages()) {
-    const dir = join(SKILLS_DIR, runnerDirName(node));
+    const dir = join(skillsDir, runnerDirName(node));
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "SKILL.md"), renderStageRunner(node), "utf-8");
   }
   // Emit the init-phase wrapper.
-  const initDir = join(SKILLS_DIR, INIT_RUNNER_DIR);
+  const initDir = join(skillsDir, INIT_RUNNER_DIR);
   if (!existsSync(initDir)) mkdirSync(initDir, { recursive: true });
   writeFileSync(join(initDir, "SKILL.md"), renderInitRunner(), "utf-8");
   // Emit the composer shortcut.
-  const composeDir = join(SKILLS_DIR, COMPOSE_RUNNER_DIR);
+  const composeDir = join(skillsDir, COMPOSE_RUNNER_DIR);
   if (!existsSync(composeDir)) mkdirSync(composeDir, { recursive: true });
   writeFileSync(join(composeDir, "SKILL.md"), renderComposeRunner(), "utf-8");
   // Prune stale stage-runner dirs: old per-init runners and runners for stages
   // now absent from the filtered graph because their plugin is disabled.
   const legacyBareSlugs = pluginOwnedStageSlugsForLegacy();
-  for (const entry of readdirSync(SKILLS_DIR, { withFileTypes: true })) {
+  for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    const dir = join(SKILLS_DIR, entry.name);
+    const dir = join(skillsDir, entry.name);
     const slug = generatedRunnerSlugForPrune(
       join(dir, "SKILL.md"),
       entry.name,
@@ -419,11 +420,12 @@ function onDiskRunnerSlugs(): string[] {
 }
 
 function onDiskRunnerEntries(): Array<{ slug: string; dir: string }> {
-  if (!existsSync(SKILLS_DIR)) return [];
+  const skillsDir = defaultSkillsDir();
+  if (!existsSync(skillsDir)) return [];
   const found: Array<{ slug: string; dir: string }> = [];
-  for (const entry of readdirSync(SKILLS_DIR, { withFileTypes: true })) {
+  for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    const dir = join(SKILLS_DIR, entry.name);
+    const dir = join(skillsDir, entry.name);
     const slug = runnerSlugFromSkill(join(dir, "SKILL.md"));
     if (slug) found.push({ slug, dir });
   }
@@ -467,11 +469,11 @@ function handleCheck(): void {
 // =========================================================================
 
 function scopesDir(): string {
-  return process.env.AIDLC_SCOPES_DIR ?? join(TOOLS_DIR, "..", "scopes");
+  return process.env.AIDLC_SCOPES_DIR ?? resolveHarnessPath(["scopes"]);
 }
 
-function defaultSkillsDir(): string {
-  return SKILLS_DIR;
+function defaultSkillsDir(mutable = false): string {
+  return resolveSkillsPath([], { mutable });
 }
 
 function scopeNamesInWrittenGrid(): ReadonlySet<string> {
@@ -635,7 +637,7 @@ function parseScopeArgs(argv: string[]): { check: boolean; all: boolean; out: st
 
 function handleScopes(rest: string[]): void {
   const { check, all, out } = parseScopeArgs(rest);
-  const skillsDir = out ?? defaultSkillsDir();
+  const skillsDir = out ?? defaultSkillsDir(!check);
   const discovered = discoverScopes();
   const batch = resolveBatch(all, discovered);
 

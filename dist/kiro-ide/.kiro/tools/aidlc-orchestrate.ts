@@ -134,6 +134,7 @@ import {
 // import is safe (aidlc-utility.ts main() runs only under import.meta.main,
 // and utility never imports this module - no cycle).
 import { inferScopeFromText } from "./aidlc-utility.ts";
+import { resolveHarnessPath } from "./aidlc-runtime-paths.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
 // a pure read: an absent state file is a legitimate branch (no workflow yet),
@@ -603,16 +604,15 @@ function stageFileFor(phase: string, slug: string): string {
 // its persona in-context with zero per-skill diligence (per the engine design). The file
 // is resolved relative to THIS module (tools/ → ../aidlc-common/) so the shipped
 // copy is read regardless of the caller's cwd, mirroring how stage files resolve.
-const CONDUCTOR_PERSONA_PATH = join(TOOLS_DIR, "..", "aidlc-common", "conductor.md");
-
 // Read the conductor persona, or null if it is absent (a fork that deleted it,
 // or a partial install). The delivery is best-effort: a missing persona is not a
 // routing error — the run-stage directive is still well-formed without the
 // optional field — so we never fail the workflow over it.
 function readConductorPersona(): string | null {
-  if (!existsSync(CONDUCTOR_PERSONA_PATH)) return null;
+  const conductorPersonaPath = resolveHarnessPath(["aidlc-common", "conductor.md"]);
+  if (!existsSync(conductorPersonaPath)) return null;
   try {
-    return readFileSync(CONDUCTOR_PERSONA_PATH, "utf-8");
+    return readFileSync(conductorPersonaPath, "utf-8");
   } catch {
     return null;
   }

@@ -76,6 +76,7 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import { parseArgs, resolveConstructionRepo, resolveProjectDir, worktreePath } from "./aidlc-lib.ts";
+import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 
 const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -112,11 +113,17 @@ interface ToolRun {
 }
 
 function runTool(toolFile: string, args: string[], projectDir: string): ToolRun {
-  const result = spawnSync(
-    "bun",
-    [join(TOOLS_DIR, toolFile), "--project-dir", projectDir, ...args],
-    { encoding: "utf-8", cwd: projectDir, timeout: 60_000 }
-  );
+  const executable = compiledExecutable();
+  const noun = toolFile.replace(/^aidlc-/, "").replace(/\.ts$/, "");
+  const command = executable
+    ? [executable, noun, ...args, "--project-dir", projectDir]
+    : [process.execPath, join(TOOLS_DIR, toolFile), "--project-dir", projectDir, ...args];
+  const result = spawnSync(command[0], command.slice(1), {
+    encoding: "utf-8",
+    cwd: projectDir,
+    timeout: 60_000,
+    env: { ...process.env, AIDLC_PROJECT_DIR: projectDir },
+  });
   return {
     ok: result.status === 0,
     stdout: result.stdout ?? "",

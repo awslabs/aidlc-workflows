@@ -266,7 +266,7 @@ function makeProject(withState: boolean): string {
   tempDirs.push(proj);
   mkdirSync(join(proj, ".claude", "tools", "data"), { recursive: true });
   mkdirSync(join(proj, ".claude", "hooks"), { recursive: true });
-  for (const t of ["aidlc-runtime.ts", "aidlc-lib.ts", "aidlc-audit.ts"]) {
+  for (const t of ["aidlc-runtime.ts", "aidlc-lib.ts", "aidlc-runtime-paths.ts", "aidlc-audit.ts"]) {
     copyFileSync(join(SRC_TOOLS, t), join(proj, ".claude", "tools", t));
   }
   copyFileSync(

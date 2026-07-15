@@ -439,6 +439,42 @@ describe("t230 dispatcher route parity", () => {
       entriesUnder(join(directProject, "aidlc", "spaces", "router-space")),
     );
   });
+
+  test("legacy top-level space-create remains routed", () => {
+    const directProject = makeProject();
+    const routedProject = makeProject();
+    const old = direct("aidlc-utility.ts", ["space-create", "legacy-space"], directProject);
+    const routed = viaDispatcher(["space-create", "legacy-space"], routedProject);
+
+    expectSameRun(routed, old, "space-create");
+    expect(existsSync(join(routedProject, "aidlc", "spaces", "legacy-space"))).toBe(true);
+  });
+
+  test("--project-dir is global and may be interleaved with workspace tokens", () => {
+    const projectDir = makeProject();
+    const routed = viaDispatcher(
+      ["space", "--project-dir", projectDir, "create", "interleaved-space"],
+      REPO_ROOT,
+    );
+
+    expect(routed.exitCode).toBe(0);
+    expect(existsSync(join(projectDir, "aidlc", "spaces", "interleaved-space"))).toBe(true);
+  });
+});
+
+describe("t230 dispatcher global flag translation", () => {
+  test("extracts --project-dir before noun/verb parsing and restores it for delegation", () => {
+    expect(resolveAction(["space", "--project-dir", "/tmp/example", "create", "teamB"])).toEqual({
+      type: "delegate",
+      tool: "aidlc-utility.ts",
+      args: ["space-create", "teamB", "--project-dir", "/tmp/example"],
+    });
+    expect(resolveAction(["--project-dir", "/tmp/example", "space-create", "teamC"])).toEqual({
+      type: "delegate",
+      tool: "aidlc-utility.ts",
+      args: ["space-create", "teamC", "--project-dir", "/tmp/example"],
+    });
+  });
 });
 
 describe("t230 dispatcher dev and compiled in-process modes", () => {

@@ -45,6 +45,11 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  resolveDistributionPath,
+  resolveHarnessPath,
+  runtimeProjectDir,
+} from "./aidlc-runtime-paths.ts";
+import {
   _resetAgentsForTests,
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
@@ -194,20 +199,9 @@ export interface ScopeValidation {
 // --- Module-local state ---
 
 const __FILE_DIR = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__FILE_DIR, "data");
-const DEFAULT_STAGES_DIR = join(__FILE_DIR, "..", "aidlc-common", "stages");
-
-function resolveModuleOrExecutablePath(
-  moduleRelativePath: string,
-  ...executableRelativeSegments: string[]
-): string {
-  return existsSync(moduleRelativePath)
-    ? moduleRelativePath
-    : join(dirname(process.execPath), ...executableRelativeSegments);
-}
 
 function resolveDataDir(): string {
-  return resolveModuleOrExecutablePath(DATA_DIR, "data");
+  return resolveHarnessPath(["tools", "data"]);
 }
 
 /** Resolve the stages directory. AIDLC_STAGES_DIR env-var seam mirrors
@@ -217,7 +211,7 @@ function resolveDataDir(): string {
  *  time. */
 function stagesDir(): string {
   return process.env.AIDLC_STAGES_DIR
-    ?? resolveModuleOrExecutablePath(DEFAULT_STAGES_DIR, "..", "aidlc-common", "stages");
+    ?? resolveHarnessPath(["aidlc-common", "stages"]);
 }
 
 /** Resolve the stage-graph.json path. Mirrors lib.ts:loadStageGraph()'s
@@ -260,11 +254,18 @@ function memorySegmentsForSpace(space: string): string[] {
 /** Resolve the method ("memory") directory — the single source of truth for
  *  the layered practices (org/team/project + phases/). AIDLC_RULES_DIR env-var
  *  seam mirrors AIDLC_STAGE_GRAPH so t88's fixture-driven inheritance tests can
- *  isolate from the real tree. Evaluated at call time. The default resolves the
- *  workspace-root aidlc/spaces/default/memory/ relative to this tool's location
- *  (<ws>/<harness>/tools/ → up two to the workspace root). */
+ *  isolate from the real tree. Evaluated at call time. Ladder: env seam →
+ *  project-dir workspace root → this tool's location (<ws>/<harness>/tools/ →
+ *  up two to the workspace root; module-relative, so a dev checkout or an
+ *  installed tree resolves without env) → the executable's packaged
+ *  distribution (compiled binary outside any install). */
 function rulesDir(): string {
-  return process.env.AIDLC_RULES_DIR ?? join(__FILE_DIR, "..", "..", ...MEMORY_SEGMENTS);
+  if (process.env.AIDLC_RULES_DIR) return process.env.AIDLC_RULES_DIR;
+  const projectRules = join(runtimeProjectDir(), ...MEMORY_SEGMENTS);
+  if (existsSync(projectRules)) return projectRules;
+  const moduleRules = join(__FILE_DIR, "..", "..", ...MEMORY_SEGMENTS);
+  if (existsSync(moduleRules)) return moduleRules;
+  return resolveDistributionPath(MEMORY_SEGMENTS);
 }
 
 /** The harness-neutral DISPLAY path baked into each RuleResolution — the
@@ -334,7 +335,7 @@ export function frameworkMemorySeedDir(): string {
  *  AIDLC_RULES_DIR so t89's fixture-driven import tests can isolate from
  *  the real .claude/sensors/ tree. Evaluated at call time. */
 function sensorsDir(): string {
-  return process.env.AIDLC_SENSORS_DIR ?? join(__FILE_DIR, "..", "sensors");
+  return process.env.AIDLC_SENSORS_DIR ?? resolveHarnessPath(["sensors"]);
 }
 
 /** Resolve the compiled scope-grid.json path. Mirrors stageGraphPath()'s

@@ -296,6 +296,10 @@ bun scripts/build-binaries.ts                 # native binary + mandatory smoke 
 bun scripts/build-binaries.ts --all-targets   # release matrix
 ```
 
+Each target is emitted under `build/binaries/<target>/` with the executable
+and a `runtime/<harness>/` copy of every generated harness distribution it may
+dispatch into.
+
 Adding a whole new harness? See [Porting to a New Harness](docs/harness-engineering/09-porting-to-a-new-harness.md). The authoritative build reference is the [Contributing Guide](docs/reference/11-contributing.md#development-workflow).
 
 ## Testing

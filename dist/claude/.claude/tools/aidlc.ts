@@ -8,6 +8,7 @@ import {
   workspaceCommandUtilityArgv,
 } from "./aidlc-lib.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
+import { packagedDistributionRoot, runtimeHarnessDir } from "./aidlc-runtime-paths.ts";
 
 type Classification = "passthrough" | "translation" | "stub" | "routing-only" | "help";
 type RouteKind =
@@ -60,6 +61,10 @@ export const TOOLS = {
   runnerGen: "aidlc-runner-gen.ts",
   runtime: "aidlc-runtime.ts",
   sensor: "aidlc-sensor.ts",
+  sensorLinter: "aidlc-sensor-linter.ts",
+  sensorRequiredSections: "aidlc-sensor-required-sections.ts",
+  sensorTypeCheck: "aidlc-sensor-type-check.ts",
+  sensorUpstreamCoverage: "aidlc-sensor-upstream-coverage.ts",
   state: "aidlc-state.ts",
   swarm: "aidlc-swarm.ts",
   utility: "aidlc-utility.ts",
@@ -76,6 +81,7 @@ export const SLASH_FLAG_ALIASES: readonly Alias[] = [
   { from: "--scope", to: "next --scope", irregular: true },
   { from: "--upgrade", to: "upgrade", irregular: true },
   { from: "config-change", to: "config set", irregular: true },
+  { from: "space-create", to: "space create", irregular: true },
 ];
 
 // ROUTES_TABLE_START
@@ -406,6 +412,7 @@ export type Action =
   | { type: "hook"; name: string; path: string }
   | { type: "statusline"; path: string }
   | { type: "adapter"; harness: AdapterHarness; target: string; extraArgs: string[]; path: string }
+  | { type: "sensor-script-file"; path: string; args: string[] }
   | { type: "version" }
   | { type: "stub"; message: string; code: number }
   | { type: "help"; all: boolean }
@@ -446,10 +453,11 @@ function isAdapterHarness(value: string): value is AdapterHarness {
 
 function resolveHookPath(file: string, harness?: AdapterHarness): string {
   const moduleRelative = join(dispatcherDir(), "..", "hooks", file);
+  const runtimeLeaf = harness ? ADAPTER_HARNESS_LEAF[harness] : runtimeHarnessDir();
   const leaves = harness
     ? [ADAPTER_HARNESS_LEAF[harness]]
     : [
-        process.env.AIDLC_HARNESS_DIR,
+        runtimeLeaf,
         ".claude",
         ".kiro",
         ".codex",
@@ -457,17 +465,12 @@ function resolveHookPath(file: string, harness?: AdapterHarness): string {
         typeof value === "string" && value.length > 0 && values.indexOf(value) === index
       );
   const installed = leaves.map((leaf) => join(process.cwd(), leaf, "hooks", file));
-  const executableRelative = harness
-    ? join(
-        dirname(process.execPath),
-        "..",
-        "harnesses",
-        harness,
-        ADAPTER_HARNESS_LEAF[harness],
-        "hooks",
-        file,
-      )
-    : join(dirname(process.execPath), "..", "hooks", file);
+  const executableRelative = join(
+    packagedDistributionRoot(runtimeLeaf, harness),
+    runtimeLeaf,
+    "hooks",
+    file,
+  );
   const candidates = [moduleRelative, ...installed, executableRelative];
   return candidates.find((candidate) => existsSync(candidate)) ?? moduleRelative;
 }
@@ -549,10 +552,6 @@ function handleWorkspace(argv: string[]): Action {
   }
   const utilityArgv = workspaceCommandUtilityArgv(command);
   if (utilityArgv === null) return nounError(argv[0], argv[1]);
-  const projectDirIndex = argv.indexOf("--project-dir");
-  if (projectDirIndex >= 0 && !utilityArgv.includes("--project-dir")) {
-    utilityArgv.push(...argv.slice(projectDirIndex, projectDirIndex + 2));
-  }
   return { type: "delegate", tool: TOOLS.utility, args: utilityArgv };
 }
 
@@ -653,6 +652,34 @@ function handleRouteOnly(route: Route, argv: string[]): Action {
 
 function resolveAlias(argv: string[]): Action | undefined {
   const head = argv[0];
+  if (head === "space-create") return handleWorkspace(argv);
+  if (head === "__sensor-script-file") {
+    const path = argv[1];
+    if (
+      !path ||
+      !basename(path).startsWith("aidlc-sensor-") ||
+      !basename(path).endsWith(".ts")
+    ) {
+      return topLevelError(argv.slice(0, 2).join(" "));
+    }
+    return {
+      type: "sensor-script-file",
+      path: isAbsolute(path) ? path : resolve(process.cwd(), path),
+      args: argv.slice(2),
+    };
+  }
+  if (head === "__sensor-script") {
+    const scripts: Record<string, string> = {
+      linter: TOOLS.sensorLinter,
+      "required-sections": TOOLS.sensorRequiredSections,
+      "type-check": TOOLS.sensorTypeCheck,
+      "upstream-coverage": TOOLS.sensorUpstreamCoverage,
+    };
+    const tool = scripts[argv[1] ?? ""];
+    return tool
+      ? { type: "delegate", tool, args: argv.slice(2) }
+      : topLevelError(argv.slice(0, 2).join(" "));
+  }
   if (head === "--status") return { type: "delegate", tool: TOOLS.utility, args: ["status", ...argv.slice(1)] };
   if (head === "--doctor") return { type: "delegate", tool: TOOLS.utility, args: ["doctor", ...argv.slice(1)] };
   if (head === "--version") return { type: "version" };
@@ -713,7 +740,7 @@ function resolveNoun(argv: string[]): Action | undefined {
   return nounError(noun, argv[1]);
 }
 
-export function resolveAction(argv: string[]): Action {
+function resolveActionWithoutGlobalFlags(argv: string[]): Action {
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
     return { type: "help", all: false };
   }
@@ -732,6 +759,32 @@ export function resolveAction(argv: string[]): Action {
 
   return topLevelError(argv[0]);
 }
+
+export function resolveAction(argv: string[]): Action {
+  const clean: string[] = [];
+  let projectDir: string | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] !== "--project-dir") {
+      clean.push(argv[i]);
+      continue;
+    }
+    const value = argv[++i];
+    if (!value || value.startsWith("--")) {
+      return {
+        type: "error",
+        code: 1,
+        message: "aidlc: --project-dir requires a path value\n",
+      };
+    }
+    projectDir = value;
+  }
+
+  const action = resolveActionWithoutGlobalFlags(clean);
+  if (projectDir && action.type === "delegate") {
+    action.args.push("--project-dir", projectDir);
+  }
+  return action;
+}
 // TRANSLATION_LOGIC_END
 
 function toolPath(tool: string): string {
@@ -742,12 +795,23 @@ function bunExecutable(): string {
   return basename(process.execPath).startsWith("bun") ? process.execPath : "bun";
 }
 
+function delegatedProjectDir(args: readonly string[]): string | undefined {
+  const index = args.indexOf("--project-dir");
+  return index >= 0 ? args[index + 1] : undefined;
+}
+
 function runDelegateDev(tool: string, args: string[]): number {
   try {
     const child = Bun.spawnSync([bunExecutable(), toolPath(tool), ...args], { /* dev-mode bun spawn */
       cwd: process.cwd(),
       stdout: "inherit",
       stderr: "inherit",
+      env: {
+        ...process.env,
+        ...(delegatedProjectDir(args)
+          ? { AIDLC_PROJECT_DIR: delegatedProjectDir(args) }
+          : {}),
+      },
     });
     return child.exitCode ?? 1;
   } catch (error) {
@@ -782,6 +846,14 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-runtime.ts");
     case TOOLS.sensor:
       return import("./aidlc-sensor.ts");
+    case TOOLS.sensorLinter:
+      return import("./aidlc-sensor-linter.ts");
+    case TOOLS.sensorRequiredSections:
+      return import("./aidlc-sensor-required-sections.ts");
+    case TOOLS.sensorTypeCheck:
+      return import("./aidlc-sensor-type-check.ts");
+    case TOOLS.sensorUpstreamCoverage:
+      return import("./aidlc-sensor-upstream-coverage.ts");
     case TOOLS.state:
       return import("./aidlc-state.ts");
     case TOOLS.swarm:
@@ -798,6 +870,9 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
 }
 
 async function runDelegateInProcess(tool: string, args: string[]): Promise<number> {
+  const previousProjectDir = process.env.AIDLC_PROJECT_DIR;
+  const projectDir = delegatedProjectDir(args);
+  if (projectDir) process.env.AIDLC_PROJECT_DIR = projectDir;
   try {
     const mod = await loadDelegate(tool);
     if (mod === null || typeof mod.main !== "function") {
@@ -811,6 +886,9 @@ async function runDelegateInProcess(tool: string, args: string[]): Promise<numbe
   } catch (error) {
     text(2, `${JSON.stringify({ error: errorMessage(error) })}\n`);
     return 1;
+  } finally {
+    if (previousProjectDir === undefined) delete process.env.AIDLC_PROJECT_DIR;
+    else process.env.AIDLC_PROJECT_DIR = previousProjectDir;
   }
 }
 
@@ -870,6 +948,24 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
   }
 }
 
+async function runSensorScriptFile(
+  action: Extract<Action, { type: "sensor-script-file" }>,
+): Promise<number> {
+  if (!existsSync(action.path)) {
+    text(2, `aidlc sensor worker: not found: ${action.path}\n`);
+    return 1;
+  }
+  const mod = await import(pathToFileURL(action.path).href) as {
+    main?: (argv: string[]) => void | Promise<void>;
+  };
+  if (typeof mod.main !== "function") {
+    text(2, `aidlc sensor worker: ${action.path} does not export main(argv)\n`);
+    return 1;
+  }
+  await mod.main(action.args);
+  return typeof process.exitCode === "number" ? process.exitCode : 0;
+}
+
 async function execute(action: Action): Promise<number> {
   const isCompiled = import.meta.url.includes("/$bunfs/");
   if (action.type === "delegate") {
@@ -890,6 +986,7 @@ async function execute(action: Action): Promise<number> {
   if (action.type === "hook") return await runHook(action);
   if (action.type === "statusline") return await runStatusline(action);
   if (action.type === "adapter") return await runAdapter(action);
+  if (action.type === "sensor-script-file") return await runSensorScriptFile(action);
   if (action.type === "stub" || action.type === "error") {
     text(2, action.message);
     return action.code;
@@ -899,6 +996,14 @@ async function execute(action: Action): Promise<number> {
 
 export async function main(argv: string[]): Promise<void> {
   process.exitCode = 0;
+  if (import.meta.url.includes("/$bunfs/") && !process.env.AIDLC_HARNESS_DIR) {
+    // Compiled, no explicit harness: probe the project install (.claude /
+    // .kiro / .codex by tools/data/harness.json) rather than assuming
+    // .claude — module-relative derivation can't work from $bunfs, and every
+    // delegate and sibling tool reads this env, so pin the probe's answer
+    // once here. Falls back to .claude when no install is present.
+    process.env.AIDLC_HARNESS_DIR = runtimeHarnessDir();
+  }
   const code = await execute(resolveAction(argv));
   process.exitCode = code;
 }

@@ -55,6 +55,10 @@ import {
 	sensorsDir,
 	withAuditLock,
 } from "./aidlc-lib.ts";
+import {
+	compiledExecutable,
+	resolveHarnessPath,
+} from "./aidlc-runtime-paths.ts";
 
 // --- Constants ---
 
@@ -148,9 +152,17 @@ function resolveScriptPath(command: string): string {
 	// string without a non-null assertion.
 	const parts = tsToken.split("/");
 	const basename = parts[parts.length - 1];
-	const scriptDir = process.env.AIDLC_SENSOR_SCRIPT_DIR ?? __FILE_DIR;
+	const scriptDir = process.env.AIDLC_SENSOR_SCRIPT_DIR
+		?? (compiledExecutable() ? resolveHarnessPath(["tools"]) : __FILE_DIR);
 	return join(scriptDir, basename);
 }
+
+const BUNDLED_SENSOR_IDS = new Set([
+	"linter",
+	"required-sections",
+	"type-check",
+	"upstream-coverage",
+]);
 
 // --- Fire id ---
 
@@ -442,7 +454,10 @@ function handleFire(args: string[]): void {
 
 	// --- 1f. Resolve sibling script path + timeout ---
 	const scriptAbsPath = resolveScriptPath(sensor.manifest.command);
-	if (!existsSync(scriptAbsPath)) {
+	if (
+		(!compiledExecutable() || !BUNDLED_SENSOR_IDS.has(sensor.id)) &&
+		!existsSync(scriptAbsPath)
+	) {
 		dispatchError(`per-sensor script missing on disk: ${scriptAbsPath}`);
 	}
 	const timeoutSeconds =
@@ -476,7 +491,17 @@ function handleFire(args: string[]): void {
 
 	// --- 5. Spawn (no lock held). Wall-clock measured for branch a. ---
 	const startedAt = Date.now();
-	const result = spawnSync("bun", [ctx.scriptAbsPath, ...ctx.scriptArgs], {
+	const executable = compiledExecutable();
+	const useBundledWorker =
+		executable &&
+		BUNDLED_SENSOR_IDS.has(ctx.sensor.id) &&
+		!process.env.AIDLC_SENSOR_SCRIPT_DIR;
+	const command = useBundledWorker
+		? [executable, "__sensor-script", ctx.sensor.id, ...ctx.scriptArgs]
+		: executable
+			? [executable, "__sensor-script-file", ctx.scriptAbsPath, ...ctx.scriptArgs]
+		: [process.execPath, ctx.scriptAbsPath, ...ctx.scriptArgs];
+	const result = spawnSync(command[0], command.slice(1), {
 		encoding: "utf-8",
 		timeout: timeoutMs,
 		cwd: projectDir,

@@ -3,6 +3,9 @@ import { accessSync, appendFileSync, constants as fsConstants, cpSync, existsSyn
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  resolveHarnessPath,
+} from "./aidlc-runtime-paths.ts";
 // Type-only import for the lazy-loaded aidlc-graph.ts dependency. The
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
@@ -307,17 +310,20 @@ export function resolveProjectDir(explicitDir?: string): string {
   // 1. Explicit --project-dir argument
   if (explicitDir) return explicitDir;
 
-  // 2. CLAUDE_PROJECT_DIR env var
+  // 2. Dispatcher/plugin explicit project environment
+  if (process.env.AIDLC_PROJECT_DIR) return process.env.AIDLC_PROJECT_DIR;
+
+  // 3. CLAUDE_PROJECT_DIR env var
   if (process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
 
-  // 3. Script path derivation (open-set): this module ships at
+  // 4. Script path derivation (open-set): this module ships at
   //    <project>/<harness>/tools/, so strip "<harness>/tools" for ANY harness
   //    dir name — the project root is the dir two levels up.
   const scriptDir = dirname(fileURLToPath(import.meta.url));
   const fromScript = stripHarnessLeaf(scriptDir, "tools");
   if (fromScript) return fromScript;
 
-  // 4. CWD has a known harness directory (dev repo).
+  // 5. CWD has a known harness directory (dev repo).
   const cwd = process.cwd();
   for (const h of KNOWN_HARNESS_DIRS) {
     if (existsSync(join(cwd, h))) {
@@ -3389,20 +3395,8 @@ export function latestStartedStageSlug(audit: string): string | null {
 
 // --- Data loaders ---
 
-const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(MODULE_DIR, "data");
-
-function resolveModuleOrExecutablePath(
-  moduleRelativePath: string,
-  ...executableRelativeSegments: string[]
-): string {
-  return existsSync(moduleRelativePath)
-    ? moduleRelativePath
-    : join(dirname(process.execPath), ...executableRelativeSegments);
-}
-
 function resolveDataDir(): string {
-  return resolveModuleOrExecutablePath(DATA_DIR, "data");
+  return resolveHarnessPath(["tools", "data"]);
 }
 
 let _stageGraph: StageEntry[] | null = null;
@@ -3441,9 +3435,8 @@ function scopeMappingPath(): string | null {
 // Exported for the same reason as scopeGridPath: `detect --json` prints it so
 // the composer agent is told the authoritative write target per harness.
 export function scopesDir(): string {
-  const moduleRelativePath = join(MODULE_DIR, "..", "scopes");
   return process.env.AIDLC_SCOPES_DIR
-    ?? resolveModuleOrExecutablePath(moduleRelativePath, "..", "scopes");
+    ?? resolveHarnessPath(["scopes"]);
 }
 
 export function loadStageGraph(): StageEntry[] {
@@ -3761,9 +3754,8 @@ export interface AgentMetadata {
 // the agent-metadata loader at an isolated tree. Evaluated at call time so
 // tests that set/unset mid-process see the change.
 export function agentsDir(): string {
-  const moduleRelativePath = join(MODULE_DIR, "..", "agents");
   return process.env.AIDLC_AGENTS_DIR
-    ?? resolveModuleOrExecutablePath(moduleRelativePath, "..", "agents");
+    ?? resolveHarnessPath(["agents"]);
 }
 
 let _agents: AgentMetadata[] | null = null;

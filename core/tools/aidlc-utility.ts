@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   artifactsRegistryFor,
@@ -112,12 +112,15 @@ import {
 } from "./aidlc-lib.ts";
 import { validateStageFrontmatter } from "./aidlc-stage-schema.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
+import {
+  compiledExecutable,
+  resolveHarnessPath,
+  resolveSkillsPath,
+} from "./aidlc-runtime-paths.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 
 const VALID_DEPTHS: Record<string, string> = {
   minimal: "Minimal",
@@ -305,7 +308,7 @@ function resetSelectionSensitiveCaches(): void {
 }
 
 function stageGraphDataPath(): string {
-  return join(TOOLS_DIR, "data", "stage-graph.json");
+  return resolveHarnessPath(["tools", "data", "stage-graph.json"], { mutable: true });
 }
 
 function knownPluginNames(): string[] {
@@ -368,12 +371,37 @@ function writePluginSelection(names: string[]): void {
 }
 
 function runBunTool(projectDir: string, rel: string, args: string[], label: string): void {
+  let dispatcherArgs: string[];
+  if (rel === "aidlc-graph.ts") {
+    dispatcherArgs = ["graph", ...args];
+  } else if (rel === "aidlc-runner-gen.ts" && args[0] === "write") {
+    dispatcherArgs = ["gen", "runners", ...args.slice(1)];
+  } else if (rel === "aidlc-runner-gen.ts" && args[0] === "scopes") {
+    dispatcherArgs = ["gen", "runner-scopes", ...args.slice(1)];
+  } else {
+    throw new Error(`No dispatcher route for ${rel} ${args.join(" ")}`);
+  }
+  dispatcherArgs.push("--project-dir", projectDir);
+  const executable = compiledExecutable();
+  const command = executable
+    ? [executable, ...dispatcherArgs]
+    : [
+        process.execPath,
+        resolveHarnessPath(["tools", rel], { projectDir }),
+        ...args,
+        "--project-dir",
+        projectDir,
+      ];
   const result = Bun.spawnSync({
-    cmd: [process.execPath, join(TOOLS_DIR, rel), ...args],
+    cmd: command,
     cwd: projectDir,
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, AIDLC_HARNESS_DIR: harnessDir() },
+    env: {
+      ...process.env,
+      AIDLC_HARNESS_DIR: harnessDir(),
+      AIDLC_PROJECT_DIR: projectDir,
+    },
   });
   if (result.exitCode !== 0) {
     const stdout = new TextDecoder().decode(result.stdout).trim();
@@ -433,7 +461,7 @@ function replaceGeneratedRegion(
 function regenerateSelectionSurfaces(projectDir: string): void {
   runBunTool(projectDir, "aidlc-graph.ts", ["compile"], "aidlc-graph compile");
   resetSelectionSensitiveCaches();
-  const skillsDir = join(TOOLS_DIR, "..", "skills");
+  const skillsDir = resolveSkillsPath([], { mutable: true, projectDir });
   if (existsSync(skillsDir)) {
     runBunTool(projectDir, "aidlc-runner-gen.ts", ["write"], "aidlc-runner-gen write");
     runBunTool(projectDir, "aidlc-runner-gen.ts", ["scopes"], "aidlc-runner-gen scopes");
@@ -476,11 +504,14 @@ interface StageContribRecord {
 }
 
 function pluginContribSidecarPath(plugin: string): string {
-  return join(TOOLS_DIR, "data", `plugin-contrib-${plugin.replace(/[^\w.-]/g, "_")}.json`);
+  return resolveHarnessPath(
+    ["tools", "data", `plugin-contrib-${plugin.replace(/[^\w.-]/g, "_")}.json`],
+    { mutable: true },
+  );
 }
 
 function installedStagesRoot(): string {
-  return join(TOOLS_DIR, "..", "aidlc-common", "stages");
+  return resolveHarnessPath(["aidlc-common", "stages"], { mutable: true });
 }
 
 // Remove recorded values from a `field:` block. An emptied block collapses to
@@ -1320,7 +1351,7 @@ function handleDoctor(projectDir: string): void {
 
     const graphSlugs = new Set(graphAll.map((s) => s.slug));
     const missingEnabled: string[] = [];
-    const stagesRoot = join(TOOLS_DIR, "..", "aidlc-common", "stages");
+    const stagesRoot = resolveHarnessPath(["aidlc-common", "stages"]);
     for (const phase of PHASES) {
       const dir = join(stagesRoot, phase);
       if (!existsSync(dir)) continue;
@@ -2339,7 +2370,7 @@ function handleDoctor(projectDir: string): void {
   // Tracks attempted vs valid separately so the label can't silently say
   // "N/N valid" when files are missing (that's the orphan-files check's job).
   try {
-    const stagesDir = join(TOOLS_DIR, "..", "aidlc-common", "stages");
+    const stagesDir = resolveHarnessPath(["aidlc-common", "stages"]);
     const graph = loadStageGraphAll();
     const agentSlugs = loadAgents().map((a) => a.slug);
     const schemaFails: { slug: string; errors: string[] }[] = [];
@@ -4846,9 +4877,15 @@ export function canonicalScopeTableRegion(table: string): string {
 
 function skillMdPath(): string {
   if (process.env.AIDLC_SKILL_MD_PATH) return process.env.AIDLC_SKILL_MD_PATH;
-  const harnessSkill = join(TOOLS_DIR, "..", "skills", "aidlc", "SKILL.md");
+  const harnessSkill = resolveSkillsPath(["aidlc", "SKILL.md"]);
   if (existsSync(harnessSkill)) return harnessSkill;
-  const agentsSkill = join(TOOLS_DIR, "..", "..", ".agents", "skills", "aidlc", "SKILL.md");
+  const agentsSkill = join(
+    dirname(resolveHarnessPath([])),
+    ".agents",
+    "skills",
+    "aidlc",
+    "SKILL.md",
+  );
   if (existsSync(agentsSkill)) return agentsSkill;
   return harnessSkill;
 }

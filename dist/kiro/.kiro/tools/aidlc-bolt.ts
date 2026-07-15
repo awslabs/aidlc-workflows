@@ -54,6 +54,7 @@ import {
   worktreeStateFilePath,
   writeStateFile,
 } from "./aidlc-lib.js";
+import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 
 function emitAudit(
   pd: string,
@@ -114,17 +115,33 @@ function spawnSibling(
     | "aidlc-runtime.ts",
   subargs: string[]
 ): { ok: boolean; stdout: string; stderr: string; signal: string | null; status: number | null } {
-  const result = spawnSync(
-    "bun",
-    [
-      "run",
+  const executable = compiledExecutable();
+  let command: string[];
+  if (executable) {
+    const noun = toolName.replace(/^aidlc-/, "").replace(/\.ts$/, "");
+    if (noun === "audit") {
+      const [verb, ...rest] = subargs;
+      const publicVerb = verb === "audit-fork"
+        ? "fork"
+        : verb === "audit-merge" ? "merge" : verb;
+      command = [executable, "audit", publicVerb, ...rest, "--project-dir", pd];
+    } else {
+      command = [executable, noun, ...subargs, "--project-dir", pd];
+    }
+  } else {
+    command = [
+      process.execPath,
       fileURLToPath(new URL(`./${toolName}`, import.meta.url)),
       "--project-dir",
       pd,
       ...subargs,
-    ],
-    { encoding: "utf-8", cwd: pd, timeout: 30_000 }
-  );
+    ];
+  }
+  const result = spawnSync(command[0], command.slice(1), {
+    encoding: "utf-8",
+    cwd: pd,
+    timeout: 30_000,
+  });
   return {
     ok: result.status === 0,
     stdout: result.stdout ?? "",

@@ -109,6 +109,9 @@ describe("t238 build-binaries release builder", () => {
     expect(existsSync(native.artifact)).toBe(true);
     expect(relative(REPO_ROOT, native.artifact).replace(/\\/g, "/").startsWith("build/binaries/")).toBe(true);
     expect(native.bytes).toBeGreaterThan(10 * 1024 * 1024);
+    for (const harness of ["claude", "codex", "kiro", "kiro-ide"]) {
+      expect(existsSync(join(dirname(native.artifact), "runtime", harness))).toBe(true);
+    }
 
     const version = gate(native, "version");
     expect(version.ok).toBe(true);
@@ -121,7 +124,24 @@ describe("t238 build-binaries release builder", () => {
     expect(delegatePluginSync.stderr).not.toContain("/$bunfs/");
 
     for (const name of [
+      "runtime-assets",
+      "sensor-list",
+      "sensor-fire",
+      "graph-compile-check",
+      "validate-outputs",
+      "runner-check",
+      "stage-table-check",
+      "scope-table-check",
+      "runtime-codex",
+      "runtime-kiro",
+      "runtime-kiro-ide",
+      "harness-probe-kiro",
+      "plugin-select",
       "real-plugin-sync",
+      "conductor-persona",
+      "workspace-global-flags",
+      "bolt-reentry",
+      "swarm-reentry",
       "pathless-next-env-scope",
       "pathless-park",
       "pathless-single-audit",
@@ -135,6 +155,8 @@ describe("t238 build-binaries release builder", () => {
     const delegateDoctorData = gate(native, "delegate-doctor-data");
     expect(delegateDoctorData.ok).toBe(true);
     expect(delegateDoctorData.stdout).toContain("AI-DLC Health Check");
+    expect(delegateDoctorData.stdout).toMatch(/Schema validation: \d+\/\d+ stages validated/);
+    expect(delegateDoctorData.stdout).not.toContain("Schema validation: 0/0");
     expect(`${delegateDoctorData.stdout ?? ""}${delegateDoctorData.stderr ?? ""}`).not.toMatch(
       /Cannot find module|\/\$bunfs\/|ENOENT/,
     );
