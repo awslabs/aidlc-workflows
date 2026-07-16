@@ -296,14 +296,12 @@ function* walk(dir: string): Generator<string> {
 // built-vs-committed walk shared by checkHarness and checkPlugins so both drift
 // guards stay in lockstep (round-2: the two had drifted into separate copies).
 // `generatedFiles` lets a builder pass its explicit inventory; otherwise this
-// helper inventories `built` itself. `isExempt(rel)` skips a committed-only
-// authored path that the manifest explicitly permits.
+// helper inventories `built` itself.
 function diffTrees(
   built: string,
   committed: string,
   relPrefix: string,
   generatedFiles?: readonly string[],
-  isExempt: (rel: string) => boolean = () => false,
 ): string[] {
   const problems: string[] = [];
   const builtFiles = new Set<string>();
@@ -318,7 +316,7 @@ function diffTrees(
   if (existsSync(committed)) {
     for (const f of walk(committed)) {
       const rel = relative(committed, f);
-      if (builtFiles.has(rel) || isExempt(rel)) continue;
+      if (builtFiles.has(rel)) continue;
       problems.push(`ORPHAN in dist: ${relPrefix}/${rel}`);
     }
   }
@@ -694,11 +692,15 @@ function writeHarness(name: string): void {
   const treeRoot = join(distDir, m.harnessDir);
   // Stash the committed compiled-data seed before the clean sweep so compile
   // can bootstrap its number/name mappings (the seed survives the regenerate).
+  // When a manifest renames its harnessDir, treeRoot does not exist yet. Read
+  // the canonical Claude seed before sweeping dist/<name>/ as a fallback; for
+  // the Claude harness that fallback lives inside the root about to be removed.
   const seedStash = mkdtempSync(join(tmpdir(), `aidlc-seed-${name}-`));
   try {
+    const seedRoots = [treeRoot, join(REPO_ROOT, "dist", "claude", ".claude")];
     for (const rel of COMPILED_DATA) {
-      const src = join(treeRoot, rel);
-      if (existsSync(src)) {
+      const src = seedRoots.map((root) => join(root, rel)).find(existsSync);
+      if (src) {
         const dst = join(seedStash, rel);
         mkdirSync(dirname(dst), { recursive: true });
         cpSync(src, dst);
@@ -732,18 +734,7 @@ function checkHarness(name: string): string[] {
     // Diffing its root makes every generated file part of the same
     // bidirectional contract: missing/modified root onboarding and config are
     // caught, and outputs removed or renamed in a manifest become ORPHANs.
-    const harnessPrefix = `${m.harnessDir}${sep}`;
-    problems = diffTrees(
-      tmp,
-      committedDistRoot,
-      name,
-      generatedFiles,
-      (rel) => {
-        if (!rel.startsWith(harnessPrefix)) return false;
-        const harnessRel = rel.slice(harnessPrefix.length).split(sep).join("/");
-        return m.authoredExempt.some((re) => re.test(harnessRel));
-      },
-    );
+    problems = diffTrees(tmp, committedDistRoot, name, generatedFiles);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

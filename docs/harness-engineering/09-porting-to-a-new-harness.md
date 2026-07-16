@@ -70,8 +70,6 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   seam reads — so a real install resolves the renamed dir with no hardcoded map.
   This is the seam that makes `rulesRename` purely manifest data: set it here and
   every layer (build prose, compiled paths, runtime) follows, with no `core/` edit.
-- `authoredExempt: RegExp[]` — files inside core-copied dirs that are authored,
-  not generated (skip the orphan scan), e.g. `^hooks/aidlc-<name>-adapter\.ts$`.
 - `skipRunnerGen` — set when the harness ships no `<harnessDir>/skills/` (Codex
   emits its skill tree to `.agents/skills/` via `emit`); the packager then skips
   the standard runner-gen step.
@@ -84,7 +82,7 @@ rename + `harnessFiles` (agent JSONs, adapter, the project-root AGENTS.md).
 
 Core hooks consume Claude-shaped stdin as the normal form. A new harness ships
 **one authored adapter** (`harness/<name>/hooks/aidlc-<name>-adapter.ts`,
-listed in `harnessFiles` + `authoredExempt`) that normalizes the harness's hook
+listed in `harnessFiles`) that normalizes the harness's hook
 payloads into that contract and subprocess-pipes to the shared core hook.
 Never split a core hook into logic+adapter — the core bodies stay byte-shared
 across all harnesses (the `--check` proves it: every `.ts` in a dist is

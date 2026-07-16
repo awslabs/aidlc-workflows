@@ -74,11 +74,6 @@ const manifest: HarnessManifest = {
   // rules/ → steering/ (applied after the token substitution, anchored).
   rulesRename: "steering",
 
-  // The authored agent .json configs and the kiro adapter live inside the
-  // otherwise core-copied agents/ and hooks/ dirs — exempt them from the
-  // orphan scan (they are harnessFiles, not core-derived).
-  authoredExempt: [/^agents\/[^/]+\.json$/, /^hooks\/aidlc-kiro-[^/]+\.ts$/, /^hooks\/[^/]+\.kiro\.hook$/],
-
   // Kiro ships no per-shell emissions — all its surfaces are authored files.
   emit: null,
 

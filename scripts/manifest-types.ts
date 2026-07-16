@@ -101,8 +101,6 @@ export type HarnessManifest = {
   onboarding?: OnboardingSpec | null;
   /** Rename core's rules/ dir to this (kiro: "steering", codex: "aidlc-rules", claude: null). */
   rulesRename: string | null;
-  /** Authored files allowed inside generated/copied dirs (skip the orphan scan). */
-  authoredExempt: RegExp[];
   /**
    * Skip the packager's standard runner-gen step (write + scopes into
    * <harnessDir>/skills/). Codex sets this: it ships NO skills inside

@@ -93,8 +93,6 @@ const manifest: HarnessManifest = {
 
   rulesRename: "steering",
 
-  authoredExempt: [/^agents\/[^/]+\.json$/, /^hooks\/aidlc-kiro-[^/]+\.ts$/, /^hooks\/[^/]+\.kiro\.hook$/],
-
   emit: null,
 
   // Folder-drop + .kiro.hook, same as Kiro CLI (both .kiro trees). No host store.

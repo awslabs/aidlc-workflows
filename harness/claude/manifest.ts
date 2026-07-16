@@ -5,8 +5,6 @@
 //   - the harness directory token substitution ({{HARNESS_DIR}} → .claude)
 //   - the per-dir map (core/<src> → <harnessDir>/<dst>); Claude renames nothing
 //   - which authored files live in harness/claude/ and where they land
-//   - authored-file exemptions for the packager's orphan scan (none for Claude —
-//     dist/claude is 100% core + harness-copied + generated)
 //
 // Claude is a peer harness, not the identity transform: its prose carries the
 // same {{HARNESS_DIR}} token as every other harness; the packager substitutes
@@ -74,11 +72,6 @@ const manifest: HarnessManifest = {
 
   // Claude renames no core dir.
   rulesRename: null,
-
-  // The Claude tree carries no authored-in-place files inside generated dirs and
-  // no per-harness emissions — dist/claude is core + harness copies + generated
-  // runners + compiled graph JSON. Nothing is exempt from the orphan scan.
-  authoredExempt: [],
 
   // No emit() plugin: Claude's runners come from the shared runner-gen
   // composition and its compiled data from graph compile, both driven by the

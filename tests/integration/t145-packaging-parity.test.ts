@@ -158,6 +158,29 @@ describe("t145 packager contract regressions", () => {
     }
   }, CHECK_TIMEOUT_MS);
 
+  test("write mode preserves the compile seed when an existing harnessDir is renamed", () => {
+    const root = makeFixture("claude");
+    try {
+      const manifest = join(root, "harness", "claude", "manifest.ts");
+      replaceOnce(manifest, 'harnessDir: ".claude"', 'harnessDir: ".foo"');
+
+      const run = runPackage(root, "claude");
+      expect(output(run)).toContain("[claude] regenerated dist/claude/.foo");
+      expect(run.status).toBe(0);
+      expect(existsSync(join(root, "dist", "claude", ".claude"))).toBe(false);
+
+      const generated = join(root, "dist", "claude", ".foo");
+      expect(
+        readFileSync(join(generated, "tools", "data", "stage-graph.json"), "utf-8"),
+      ).toContain('"path": ".foo/sensors/');
+      expect(
+        readFileSync(join(generated, "skills", "aidlc-init", "SKILL.md"), "utf-8"),
+      ).toContain("bun .foo/tools/aidlc-utility.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, CHECK_TIMEOUT_MS);
+
   test("an explicitly named harness without a manifest exits nonzero", () => {
     const root = makeFixture("kiro");
     try {
@@ -242,6 +265,25 @@ describe("t145 packager contract regressions", () => {
       expect(run.status).not.toBe(0);
       expect(combined).toContain("MISSING in dist: kiro/AGENTS.next.md");
       expect(combined).toContain("ORPHAN in dist: kiro/AGENTS.md");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, CHECK_TIMEOUT_MS);
+
+  test("--check reports an authored harness file removed from the manifest as an orphan", () => {
+    const root = makeFixture("kiro");
+    try {
+      const manifest = join(root, "harness", "kiro", "manifest.ts");
+      replaceOnce(
+        manifest,
+        '    { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },\n',
+        "",
+      );
+      const run = runPackage(root, "kiro", "--check");
+      expect(run.status).not.toBe(0);
+      expect(output(run)).toContain(
+        "ORPHAN in dist: kiro/.kiro/hooks/aidlc-kiro-adapter.ts",
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
