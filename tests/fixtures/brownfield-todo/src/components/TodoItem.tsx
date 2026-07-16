@@ -1,4 +1,4 @@
-import { Todo } from '../types/todo'
+import type { Todo } from '../types/todo'
 
 interface TodoItemProps {
   todo: Todo
@@ -17,7 +17,7 @@ export function TodoItem({ todo, onToggle, onDelete }: TodoItemProps) {
       <span style={{ textDecoration: todo.completed ? 'line-through' : 'none', flex: 1 }}>
         {todo.title}
       </span>
-      <button onClick={onDelete}>Delete</button>
+      <button type="button" onClick={onDelete}>Delete</button>
     </li>
   )
 }

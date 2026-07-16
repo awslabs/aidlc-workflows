@@ -6,7 +6,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.adapters.json",
     "lint": "biome check --error-on-warnings core harness scripts plugins tests",
-    "check": "bun run typecheck && bun run lint"
+    "check": "bun scripts/package.ts --check && bun run typecheck && bun run lint"
   },
   "description": "Dev-only tooling for the AIDLC framework — not part of the distributable. The shipped framework lives at dist/claude/.claude/ and is copied into user projects via `cp -r dist/claude/.claude/ your-project/.claude/` (see README.md). All framework hooks and tools run via bun without requiring this package; bun-types here only powers contributor LSP coverage.",
   "author": "Amazon.com, Inc. or its affiliates",

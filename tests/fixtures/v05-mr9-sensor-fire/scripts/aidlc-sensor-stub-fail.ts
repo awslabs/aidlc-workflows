@@ -61,5 +61,5 @@ const out = {
 		},
 	],
 };
-process.stdout.write(JSON.stringify(out) + "\n");
+process.stdout.write(`${JSON.stringify(out)}\n`);
 process.exit(0);

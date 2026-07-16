@@ -4,5 +4,10 @@
     "tests/**/*.ts",
     "plugins/*/tests/**/*.ts"
   ],
-  "exclude": ["tests/fixtures/**"]
+  "exclude": [
+    // Standalone React/Vite fixture dependencies are not installed at the repository root.
+    "tests/fixtures/brownfield-todo/**",
+    // This fixture must produce a real compiler diagnostic for the sensor test.
+    "tests/fixtures/v05-mr9-sensor-fire/failing-type-check/**"
+  ]
 }

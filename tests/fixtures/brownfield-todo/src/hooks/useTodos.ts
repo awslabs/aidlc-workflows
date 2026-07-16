@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Todo } from '../types/todo'
+import type { Todo } from '../types/todo'
 
 export function useTodos() {
   const [todos, setTodos] = useState<Todo[]>([])

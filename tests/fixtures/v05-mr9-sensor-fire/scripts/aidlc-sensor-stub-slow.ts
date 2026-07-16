@@ -6,5 +6,5 @@
 // Bun.sleepSync blocks the event loop, mimicking a CPU-bound stuck
 // process — the dispatcher's child_process timeout fires regardless.
 Bun.sleepSync(5000);
-process.stdout.write(JSON.stringify({ pass: true }) + "\n");
+process.stdout.write(`${JSON.stringify({ pass: true })}\n`);
 process.exit(0);

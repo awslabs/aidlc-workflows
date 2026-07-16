@@ -14,7 +14,11 @@
     }
   },
   "files": {
-    "includes": ["**", "!tests/fixtures/**", "!dist/**"]
+    "includes": [
+      "**",
+      "!tests/fixtures/v05-mr9-sensor-fire/failing-linter/**",
+      "!dist/**"
+    ]
   },
   "overrides": [
     {

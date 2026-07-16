@@ -1,9 +1,9 @@
 {
   "extends": "./tsconfig.json",
+  // Adapters import sibling tools that exist only in emitted harness trees.
+  // package.ts --check, run by `bun run check`, enforces source/dist parity.
   "include": [
-    "dist/codex/.codex/hooks/aidlc-codex-adapter.ts",
-    "dist/kiro/.kiro/hooks/aidlc-kiro-adapter.ts",
-    "dist/kiro-ide/.kiro/hooks/aidlc-kiro-adapter.ts"
+    "dist/*/.*/hooks/*-adapter.ts"
   ],
   "exclude": []
 }
