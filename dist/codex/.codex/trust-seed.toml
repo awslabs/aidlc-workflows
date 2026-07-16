@@ -1,8 +1,11 @@
 # dist/codex hook-trust pre-seed (S9a) — TEMPLATE.
-# Generate ready-to-paste entries with the TOML serializer:
+# From an AI-DLC source checkout, install the pinned serializer first:
+#   bun install --frozen-lockfile
+# Then generate ready-to-paste entries:
 #   bun scripts/package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]
-# Append the command's complete stdout to the USER config.toml
-# ($CODEX_HOME/config.toml). The hash covers the
+# Paste the complete stdout into the USER config.toml ($CODEX_HOME/config.toml).
+# If entries for that hooks.json path already exist, replace the full set;
+# appending a second set creates invalid TOML. The hash covers the
 # normalized hook identity (event + command + defaults), NOT the path —
 # only the key changes per install. Codex then runs the hooks without a
 # TUI trust pass (the --dangerously-bypass-hook-trust flag does NOT fire

@@ -16,6 +16,13 @@ Contributions to this implementation are welcome. This guide covers prerequisite
 - **Bash** -- Optional for the POSIX compatibility wrapper (`tests/run-tests.sh`). The primary test runner is `bun tests/run-tests.ts`; at runtime, none of the distributable hooks require Bash.
 - **Bedrock access** -- Required for running live integration and e2e tests (L2/L3). Not needed for L1 protocol tests.
 
+After cloning, install the pinned development dependencies used by the
+packager, type checker, and tests:
+
+```bash
+bun install --frozen-lockfile
+```
+
 ## Repository Structure
 
 ```
@@ -34,7 +41,7 @@ For the full architecture, see [reference/01-architecture.md](01-architecture.md
 
 ## Development Workflow
 
-1. **Fork and branch** from `main`
+1. **Fork and branch** from `main`, then run `bun install --frozen-lockfile`
 2. **Read the architecture** -- [reference/01-architecture.md](01-architecture.md) explains the execution model, agent delegation, and hook system
 3. **Understand the entry points** -- the deterministic engine `core/tools/aidlc-orchestrate.ts` (`next` / `report`) owns routing; the conductor `harness/claude/skills/aidlc/SKILL.md` is a thin forwarding loop that acts on its directives. For the normative engine / directive / conductor / swarm contract see [The Skill System](17-skill-system.md)
 4. **Make changes** -- Edit the harness-neutral source in `core/` (tools, stages, agents, hooks, rules, knowledge) or a harness surface in `harness/<name>/` (the orchestrator skill, settings). Then run `bun scripts/package.ts` to regenerate `dist/` — never hand-edit `dist/`, the drift guard (`package.ts --check`) will fail CI
@@ -43,7 +50,7 @@ For the full architecture, see [reference/01-architecture.md](01-architecture.md
 
 ## Testing
 
-The suite is entirely TypeScript (`t*.test.ts`, run via `bun`) across four levels — `smoke`, `unit`, `integration`, `e2e` — that map onto the three-layer pyramid (smoke + unit = L1 Protocol, integration = L2 Stage, e2e = L3 Acceptance). L1 runs locally with no dependencies; the live integration and e2e files require the `claude` CLI tool (and Bedrock creds) and skip cleanly when it is absent.
+The suite is entirely TypeScript (`t*.test.ts`, run via `bun`) across four levels — `smoke`, `unit`, `integration`, `e2e` — that map onto the three-layer pyramid (smoke + unit = L1 Protocol, integration = L2 Stage, e2e = L3 Acceptance). After the pinned development dependencies are installed, L1 runs locally without external services; the live integration and e2e files require the `claude` CLI tool (and Bedrock creds) and skip cleanly when it is absent.
 
 **Quick reference:**
 

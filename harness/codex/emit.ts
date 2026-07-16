@@ -210,10 +210,13 @@ export function trustEntries(
 function emitTrustSeed(harnessDir: string): string {
   return (
     `# dist/codex hook-trust pre-seed (S9a) — TEMPLATE.\n` +
-    `# Generate ready-to-paste entries with the TOML serializer:\n` +
+    `# From an AI-DLC source checkout, install the pinned serializer first:\n` +
+    `#   bun install --frozen-lockfile\n` +
+    `# Then generate ready-to-paste entries:\n` +
     `#   bun scripts/package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]\n` +
-    `# Append the command's complete stdout to the USER config.toml\n` +
-    `# ($CODEX_HOME/config.toml). The hash covers the\n` +
+    `# Paste the complete stdout into the USER config.toml ($CODEX_HOME/config.toml).\n` +
+    `# If entries for that hooks.json path already exist, replace the full set;\n` +
+    `# appending a second set creates invalid TOML. The hash covers the\n` +
     `# normalized hook identity (event + command + defaults), NOT the path —\n` +
     `# only the key changes per install. Codex then runs the hooks without a\n` +
     `# TUI trust pass (the --dangerously-bypass-hook-trust flag does NOT fire\n` +

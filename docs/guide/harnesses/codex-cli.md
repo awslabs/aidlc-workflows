@@ -48,13 +48,17 @@ never hand-edit it (the drift guard fails CI).
 3. Trust the project and pre-seed hook trust. Codex never runs untrusted
    hooks (the `--dangerously-bypass-hook-trust` flag does not run them
    either). Either run one interactive TUI session and choose "Trust all and
-   continue" at the hooks dialog, or pre-seed deterministically:
+   continue" at the hooks dialog, or pre-seed deterministically from the
+   AI-DLC source checkout. Install its pinned development dependencies once,
+   then generate the entries:
 
    ```bash
+   bun install --frozen-lockfile
    bun scripts/package.ts codex trust --project "/abs/path/to/your project"
    ```
 
-   appends ready-to-paste `[hooks.state]` entries for `$CODEX_HOME/config.toml`
+   The command prints ready-to-paste `[hooks.state]` entries for
+   `$CODEX_HOME/config.toml`
    (the hash covers the hook identity, not the path — the printed entries are
    exact for the shipped `hooks.json`). The command serializes the complete
    output as TOML, so quoted paths, spaces, and Windows backslashes are
@@ -69,7 +73,10 @@ never hand-edit it (the drift guard fails CI).
 
    Quote both arguments in the shell. `--hooks-json` is used verbatim as the
    Codex trust identity; do not normalize or replace it after generating the
-   entries.
+   entries. Paste the command's complete stdout into the user config. If
+   entries for the same `hooks.json` path already exist, replace that full set;
+   do not append a second copy because duplicate TOML tables invalidate the
+   entire config.
 
 4. Merge the shipped `.codex/config.toml` into your `~/.codex/config.toml`
    (or keep it project-level — trusted projects read it). Verify with:

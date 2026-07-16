@@ -46,7 +46,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, posix, relative, sep, win32 } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import type { HarnessManifest } from "./manifest-types.ts";
@@ -758,8 +758,13 @@ if (argv[0] === "codex" && argv[1] === "trust") {
     console.error(usage);
     process.exit(1);
   };
-  const absoluteOnEitherPlatform = (path: string): boolean =>
-    posix.isAbsolute(path) || win32.isAbsolute(path);
+  const fullyQualifiedOnEitherPlatform = (path: string): boolean => {
+    const startsAsUnc = path.startsWith("\\\\") || path.startsWith("//");
+    if (startsAsUnc) {
+      return /^[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/]|$)/.test(path);
+    }
+    return posix.isAbsolute(path) || /^[A-Za-z]:[\\/]/.test(path);
+  };
   let project: string | null = null;
   let hooksJson: string | null = null;
   const trustArgs = argv.slice(2);
@@ -772,8 +777,8 @@ if (argv[0] === "codex" && argv[1] === "trust") {
     if (!value || value.startsWith("--")) {
       failTrustArgs(`${flag} requires an absolute path`);
     }
-    if (!absoluteOnEitherPlatform(value)) {
-      failTrustArgs(`${flag} must be an absolute path`);
+    if (!fullyQualifiedOnEitherPlatform(value)) {
+      failTrustArgs(`${flag} must be a fully qualified absolute path`);
     }
     if (flag === "--project") {
       if (project !== null) failTrustArgs("--project may be specified only once");

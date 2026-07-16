@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.3] - 2026-07-17
+
+Codex hook-trust entries are now generated with a standards-compliant TOML serializer, including paths with spaces, quotes, and backslashes on Unix and Windows. **Upgrade:** re-copy `dist/codex/`, run `bun install --frozen-lockfile` in the AI-DLC source checkout, regenerate the entries, and replace the existing entries for that `hooks.json` path in `$CODEX_HOME/config.toml`; appending a second copy creates invalid TOML.
+
+* `bun scripts/package.ts codex trust --project <abs-dir> [--hooks-json <abs-path>]` preserves both native Unix and Windows paths while emitting parseable TOML.
+* Forward-slash UNC project paths such as `//server/share/project` derive a native Windows UNC default for `.codex\hooks.json` instead of collapsing the server prefix.
+* The trust command now rejects relative paths, rootless Windows paths, incomplete UNC paths, missing values, duplicate flags, and unknown arguments instead of printing unusable trust keys.
+
 ## [2.4.2] - 2026-07-16
 
 The multi-harness packager now treats each `dist/<harness>/` directory as one generated root, closing drift gaps for project-root onboarding, configuration, and removed outputs. **Upgrade:** re-copy your `dist/<harness>/` shell into the project after regenerating it with this version.
