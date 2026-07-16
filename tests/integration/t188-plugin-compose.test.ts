@@ -35,6 +35,7 @@ const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
 const KIRO_DIST = join(REPO_ROOT, "dist", "kiro", ".kiro");
+const CODEX_DIST = join(REPO_ROOT, "dist", "codex", ".codex");
 const STAGE_TABLE_BEGIN =
   "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
@@ -504,10 +505,11 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   function composeSynthetic(
     name: string,
     files: Record<string, string>,
-    harnessLeaf: ".claude" | ".kiro" = ".claude",
+    harnessLeaf: ".claude" | ".kiro" | ".codex" = ".claude",
   ): { drops: string; proj: string } {
     const proj = mkdtempSync(join(tmp, `syn-${name}-`));
-    const baseDist = harnessLeaf === ".kiro" ? KIRO_DIST : CLAUDE_DIST;
+    const baseDist =
+      harnessLeaf === ".kiro" ? KIRO_DIST : harnessLeaf === ".codex" ? CODEX_DIST : CLAUDE_DIST;
     cpSync(baseDist, join(proj, harnessLeaf), { recursive: true });
     const root = join(proj, "_plugin");
     // minimal projection: manifest + the one working compose hook + given files
@@ -601,6 +603,9 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(drops).toContain('agent "syn-kiro-collaborator-agent"');
     expect(drops).toContain("agent-v1 JSON + trustedAgents registration");
     expect(drops).toContain("change the stage's mode to inline");
+    // The lead is a CORE persona: its shipped agent-v1 JSON is its dispatch
+    // surface, so it must never be named as undispatchable.
+    expect(drops).not.toContain('agent "aidlc-product-agent"');
   });
 
   test("Kiro rejects a lead-only plugin subagent and retains its inline persona", () => {
@@ -744,6 +749,222 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       },
     );
     expect(compile.status).toBe(0);
+  });
+
+  test("Kiro rejects an inline stage whose plugin-owned REVIEWER has no dispatch surface", () => {
+    // The reviewer dispatches on every gated stage regardless of mode (§12a),
+    // so an inline stage with an undispatchable reviewer must be rejected too.
+    const stage = [
+      "---",
+      "slug: syn-kiro-reviewed",
+      "plugin: syn-kiro-rev",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: aidlc-product-agent",
+      "support_agents: []",
+      "reviewer: syn-kiro-reviewer-agent",
+      "mode: inline",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic Kiro Reviewed",
+      "",
+      "## Steps",
+      "body",
+      "",
+    ].join("\n");
+    const agent = [
+      "---",
+      "name: syn-kiro-reviewer-agent",
+      "display_name: Synthetic Kiro Reviewer",
+      "plugin: syn-kiro-rev",
+      "---",
+      "",
+      "# Synthetic Kiro Reviewer",
+      "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic(
+      "syn-kiro-rev",
+      {
+        "stages/inception/syn-kiro-reviewed.md": stage,
+        "agents/syn-kiro-reviewer-agent.md": agent,
+      },
+      ".kiro",
+    );
+
+    expect(existsSync(join(
+      proj,
+      ".kiro",
+      "aidlc-common",
+      "stages",
+      "inception",
+      "syn-kiro-reviewed.md",
+    ))).toBe(false);
+    expect(drops).toContain('stage "syn-kiro-reviewed"');
+    expect(drops).toContain('agent "syn-kiro-reviewer-agent" as reviewer');
+    expect(drops).toContain("remove the stage's reviewer: field");
+  });
+
+  test("Codex rejects a plugin-owned dispatched agent with a TOML remediation", () => {
+    const stage = [
+      "---",
+      "slug: syn-codex-ensemble",
+      "plugin: syn-codex",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: aidlc-product-agent",
+      "support_agents:",
+      "  - syn-codex-collaborator-agent",
+      "mode: mob",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic Codex Ensemble",
+      "",
+      "## Steps",
+      "body",
+      "",
+    ].join("\n");
+    const agent = [
+      "---",
+      "name: syn-codex-collaborator-agent",
+      "display_name: Synthetic Codex Collaborator",
+      "plugin: syn-codex",
+      "---",
+      "",
+      "# Synthetic Codex Collaborator",
+      "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic(
+      "syn-codex",
+      {
+        "stages/inception/syn-codex-ensemble.md": stage,
+        "agents/syn-codex-collaborator-agent.md": agent,
+      },
+      ".codex",
+    );
+
+    expect(existsSync(join(
+      proj,
+      ".codex",
+      "aidlc-common",
+      "stages",
+      "inception",
+      "syn-codex-ensemble.md",
+    ))).toBe(false);
+    // Core lead has a shipped TOML; only the plugin persona is undispatchable.
+    expect(drops).toContain('agent "syn-codex-collaborator-agent"');
+    expect(drops).not.toContain('agent "aidlc-product-agent"');
+    expect(drops).toContain("syn-codex-collaborator-agent.toml");
+    expect(drops).toContain("change the stage's mode to inline");
+  });
+
+  test("parser-unavailable fallback drops ONLY dispatched-topology stages, composing inline content", () => {
+    // Finding-2 regression guard: with the installed aidlc-lib.ts removed the
+    // guard cannot resolve agent references, but an inline-only plugin must
+    // still compose fully - fail-closed is scoped to dispatched topologies.
+    const inlineStage = [
+      "---",
+      "slug: syn-noparse-inline",
+      "plugin: syn-noparse",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: syn-noparse-agent",
+      "support_agents: []",
+      "mode: inline",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic NoParse Inline",
+      "",
+    ].join("\n");
+    const mobStage = [
+      "---",
+      "slug: syn-noparse-mob",
+      "plugin: syn-noparse",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: aidlc-product-agent",
+      "support_agents:",
+      "  - syn-noparse-agent",
+      "mode: mob",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic NoParse Mob",
+      "",
+    ].join("\n");
+    const agent = [
+      "---",
+      "name: syn-noparse-agent",
+      "display_name: Synthetic NoParse Agent",
+      "plugin: syn-noparse",
+      "---",
+      "",
+      "# Synthetic NoParse Agent",
+      "",
+    ].join("\n");
+
+    // composeSynthetic runs the hook itself, so build the project by hand to
+    // delete the installed lib BEFORE composing.
+    const proj = mkdtempSync(join(tmp, "syn-noparse-"));
+    cpSync(KIRO_DIST, join(proj, ".kiro"), { recursive: true });
+    rmSync(join(proj, ".kiro", "tools", "aidlc-lib.ts"));
+    const root = join(proj, "_plugin");
+    cpSync(join(pluginBuilt, ".claude-plugin"), join(root, ".claude-plugin"), { recursive: true });
+    cpSync(join(pluginBuilt, "hooks"), join(root, "hooks"), { recursive: true });
+    const mf = join(root, ".claude-plugin", "plugin.json");
+    const m = JSON.parse(readFileSync(mf, "utf-8")); m.name = "syn-noparse"; writeFileSync(mf, JSON.stringify(m));
+    for (const [rel, body] of Object.entries({
+      "stages/inception/syn-noparse-inline.md": inlineStage,
+      "stages/inception/syn-noparse-mob.md": mobStage,
+      "agents/syn-noparse-agent.md": agent,
+    })) {
+      const p = join(root, rel);
+      require("node:fs").mkdirSync(dirname(p), { recursive: true });
+      writeFileSync(p, body);
+    }
+    const r = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
+      cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".kiro" },
+    });
+    expect(r.status).toBe(0);
+
+    const stages = join(proj, ".kiro", "aidlc-common", "stages", "inception");
+    expect(existsSync(join(stages, "syn-noparse-inline.md"))).toBe(true);
+    expect(existsSync(join(stages, "syn-noparse-mob.md"))).toBe(false);
+    expect(existsSync(join(proj, ".kiro", "agents", "syn-noparse-agent.md"))).toBe(true);
+
+    let drops = "";
+    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+    if (existsSync(hd)) {
+      for (const f of require("node:fs").readdirSync(hd) as string[]) {
+        if (f.startsWith("plugin-compose") && f.endsWith(".drops")) drops += readFileSync(join(hd, f), "utf-8");
+      }
+    }
+    expect(drops).toContain("syn-noparse-mob.md");
+    expect(drops).toContain("stage parser is unavailable");
+    expect(drops).not.toContain("syn-noparse-inline.md");
   });
 
   test("unresolvable fragment anchor is dropped-with-log, not silent (R4-2)", () => {

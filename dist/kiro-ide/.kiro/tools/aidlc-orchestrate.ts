@@ -1897,21 +1897,30 @@ function eligibleAutonomousSwarmBatches(
   return r.batches;
 }
 
-// Report-side swarm exemptions apply only after every unit in an eligible
-// autonomous swarm has a convergence row. An in-flight or ineligible stage
-// must still satisfy the ordinary disk-backed approval guards.
-function isSettledAutonomousSwarm(
+// Report-side swarm exemption for the disk-backed approval guards (per-unit
+// coverage, ensemble evidence). A swarm's produced artifacts AND its support
+// agents' contribution files live in the units' Bolt worktrees — the referee's
+// `complete --merge` consolidates only state/audit/graph back to the main
+// checkout — so a disk check in the main tree can never be satisfied for a
+// swarm stage, settled or mid-run. Exempt the stage whenever the swarm trigger
+// conditions hold and the DAG either yields batches (eligible, including
+// mid-run) or is MALFORMED: a corrupted units artifact after a converged run
+// must not wedge the settle approve (the old mode+autonomy predicate never
+// consulted the DAG). An ABSENT artifact ('none') is not exempted — no DAG
+// means the stage ran the inline single-iteration path, so the ordinary
+// disk-backed guards apply.
+function autonomousSwarmGuardExemption(
   node: GraphStage,
   scope: string,
   stateContent: string | null,
   projectDir: string,
 ): boolean {
-  const batches = eligibleAutonomousSwarmBatches(node, scope, stateContent, projectDir);
-  if (batches === null) return false;
-  const units = batches.flat();
-  if (units.length === 0) return false;
-  const converged = swarmConvergedUnits(projectDir, node.slug);
-  return units.every((unit) => converged.has(unit));
+  if (node.phase !== "construction") return false;
+  if (node.for_each !== SWARM_FOR_EACH || node.mode !== SWARM_MODE) return false;
+  if (isSkeletonGateStage(node, scope)) return false;
+  if (readAutonomyMode(stateContent) !== "autonomous") return false;
+  const r = resolveBoltBatches(projectDir);
+  return (r.state === "ok" && r.batches.length > 0) || r.state === "malformed";
 }
 
 // Try to handle an eligible autonomous swarm stage, returning true (and emitting)
@@ -2904,6 +2913,7 @@ function checkEnsembleEvidence(
   recordPrefix: string | null,
   scope: string,
   stateContent: string | null,
+  options: { singleRun?: boolean } = {},
 ): EnsembleEvidenceResult {
   const isGated = node.phase !== "initialization";
   const needsEnsembleEvidence =
@@ -2912,14 +2922,19 @@ function checkEnsembleEvidence(
   if (
     !isGated ||
     !needsEnsembleEvidence ||
-    isSettledAutonomousSwarm(node, scope, stateContent, pd) ||
+    autonomousSwarmGuardExemption(node, scope, stateContent, pd) ||
     process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE === "1"
   ) {
     return { ok: true };
   }
 
   const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
-  const perUnit = isPerUnit(node);
+  // A --single run executes ONE iteration outside the main workflow: its
+  // directive never names a real unit (emitSingleRunStage emits the
+  // {unit-name} placeholder with stateContent null), so demanding the MAIN
+  // DAG's per-unit contribution sets would make a per-unit single stage
+  // unapprovable. Evidence for a single run is checked at the stage level.
+  const perUnit = !options.singleRun && isPerUnit(node);
   const units = perUnit ? orderedUnits(pd) : [];
   const usesUnitDirs = units.length > 0;
   const kinds = usesUnitDirs ? readBoltDagUnitKinds(pd) : null;
@@ -3050,6 +3065,7 @@ function handleSingleReport(
     recordPrefix,
     scope,
     stateContent,
+    { singleRun: true },
   );
   if (!evidence.ok) {
     emit(errorDirective(evidence.message));
@@ -3245,13 +3261,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // checkout (a converged unit's produced artifacts stay in its Bolt worktree),
   // so this disk-coverage check would find EVERY swarm unit uncovered and refuse
   // the approve outright even after the whole stage has built. We exclude any
-  // eligible autonomous swarm, including one that is mid-run with later batches
-  // unconverged, using the same eligibility predicate as tryEmitSwarm. The guard
-  // remains for every inline per-unit stage (the four
-  // design stages, and code-generation when it falls back to the inline path off
-  // the swarm).
+  // autonomous swarm — mid-run, settled, or with a post-run-corrupted DAG
+  // (autonomousSwarmGuardExemption's malformed tolerance) — the same exemption
+  // the ensemble-evidence gate uses. The guard remains for every inline
+  // per-unit stage (the four design stages, and code-generation when it falls
+  // back to the inline path off the swarm).
   const isAutonomousSwarm =
-    eligibleAutonomousSwarmBatches(node, scope, stateContent, pd) !== null;
+    autonomousSwarmGuardExemption(node, scope, stateContent, pd);
   if (isGated && isPerUnit(node) && stageCheckbox.state !== "completed" && !isAutonomousSwarm) {
     const r = resolveBoltBatches(pd);
     if (r.state === "malformed") {

@@ -453,47 +453,92 @@ interface KiroPluginAgentPrechecks {
   agent: CopyPrecheck;
 }
 
-// Kiro cannot dispatch a Markdown-only plugin persona. Native dispatch also
-// requires a hand-authored agent-v1 JSON and conductor trustedAgents entry,
-// neither of which can be derived safely from persona prose. Reject only plugin
-// stages that would dispatch plugin-owned agents; inline plugin personas remain
-// composable because the conductor loads them without subagent dispatch.
+// Kiro and Codex cannot dispatch a Markdown-only persona. Kiro's native
+// dispatch requires a hand-authored agent-v1 JSON and a conductor
+// trustedAgents entry; Codex's requires an agent config TOML — and neither
+// can be derived safely from persona prose, so plugin projections ship .md
+// personas only. Reject a plugin stage whose dispatched topology (mode mob/
+// pipeline/subagent) references ANY agent — lead, support, or reviewer;
+// plugin-owned or otherwise — with no dispatch surface in the INSTALLED
+// agents dir. Core personas ship their surfaces, so they pass; hand-authoring
+// the surface is the documented remediation, and this existence check honors
+// it on the next compose. Inline plugin stages and Markdown personas remain
+// composable because the conductor loads persona prose without dispatch.
 async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | null> {
-  if (HARNESS_LEAF !== ".kiro") return null;
+  if (HARNESS_LEAF !== ".kiro" && HARNESS_LEAF !== ".codex") return null;
+  const surfaceExt = HARNESS_LEAF === ".kiro" ? ".json" : ".toml";
+  const remediationFor = (agent: string, isReviewer: boolean): string => {
+    const surface =
+      HARNESS_LEAF === ".kiro"
+        ? `author ${HARNESS_LEAF}/agents/${agent}.json (agent-v1 JSON + trustedAgents registration in aidlc.json)`
+        : `author ${HARNESS_LEAF}/agents/${agent}.toml (the shipped aidlc-*-agent.toml shape)`;
+    const alternative = isReviewer
+      ? "remove the stage's reviewer: field"
+      : "change the stage's mode to inline";
+    return `${surface}, or ${alternative}`;
+  };
 
-  const pluginAgentFiles = walk(join(PLUGIN_ROOT, "agents")).filter((file) => file.endsWith(".md"));
-  const pluginAgents = new Map<string, string>();
-  for (const file of pluginAgentFiles) {
-    const content = readFileSync(file, "utf-8");
-    const rel = relative(join(PLUGIN_ROOT, "agents"), file).replace(/\\/g, "/");
-    const fallback = rel.split("/").pop()!.replace(/\.md$/, "");
-    pluginAgents.set(frontmatterName(content) ?? fallback, file);
-  }
-  if (pluginAgents.size === 0) return null;
+  const stagesRoot = join(PLUGIN_ROOT, "stages");
+  const stageFiles = walk(stagesRoot).filter((path) => path.endsWith(".md"));
+  if (stageFiles.length === 0) return null;
+
+  // A stage that already landed in a prior compose (pre-guard install, or a
+  // remediated re-run) is live: no-clobber will skip it anyway, and recording
+  // a "was not composed" drop for it every session start would be false.
+  const alreadyComposed = (rel: string): boolean => existsSync(join(STAGES_DIR, rel));
+  // The self-heal probe below filters expected graph slugs by FILENAME STEM,
+  // so bookkeeping must record the stem (the frontmatter slug is recorded too
+  // for human-readable drop correlation, but the stem is load-bearing).
+  const recordDroppedStage = (rel: string, slug: string | null): void => {
+    composeDroppedStageSlugs.add(rel.split("/").pop()!.replace(/\.md$/, ""));
+    if (slug) composeDroppedStageSlugs.add(slug);
+  };
 
   let parse: ((raw: string) => Record<string, unknown>) | null = null;
   try {
     const lib = await import(join(HARNESS_DIR, "tools", "aidlc-lib.ts"));
     if (typeof lib.parseStageFrontmatter === "function") parse = lib.parseStageFrontmatter;
   } catch {
-    // The installed parser is required for a safe dispatch-topology decision.
+    // The installed parser is required for a full dispatch-topology decision.
   }
   if (!parse) {
-    recordDrop(
-      `plugin "${PLUGIN_NAME}" Kiro agent composition skipped: the installed stage parser is unavailable, so plugin-owned dispatch safety cannot be validated`,
-    );
-    for (const file of walk(join(PLUGIN_ROOT, "stages")).filter((path) => path.endsWith(".md"))) {
-      composeDroppedStageSlugs.add(file.replace(/\\/g, "/").split("/").pop()!.replace(/\.md$/, ""));
+    // Without the installed parser the agent references cannot be resolved, so
+    // fall back to a conservative mode sniff: drop ONLY stages that declare a
+    // dispatched topology (they might reference an undispatchable persona);
+    // inline stages and every Markdown persona still compose — a persona .md
+    // is inert without a dispatching stage.
+    const dispatching = new Set<string>();
+    for (const file of stageFiles) {
+      let raw = "";
+      try {
+        raw = readFileSync(file, "utf-8");
+      } catch {
+        continue;
+      }
+      // A reviewer dispatches even on an inline stage (§12a fires whenever the
+      // directive carries reviewer), so the sniff covers both fields.
+      if (
+        !/^mode:\s*(?:mob|pipeline|subagent)\b/m.test(raw) &&
+        !/^reviewer:\s*\S/m.test(raw)
+      ) {
+        continue;
+      }
+      const rel = relative(stagesRoot, file).replace(/\\/g, "/");
+      if (alreadyComposed(rel)) continue;
+      dispatching.add(rel);
+      recordDroppedStage(rel, null);
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" stage "${rel}" declares a dispatched topology (mode or reviewer) and was not composed: the installed stage parser is unavailable, so its agent references cannot be validated for ${HARNESS_LEAF} dispatch; re-copy your dist/<harness>/ shell (restoring tools/aidlc-lib.ts) and re-run compose — inline stages and personas composed normally`,
+      );
     }
     return {
-      stage: ({ file }) => !file.endsWith(".md"),
-      agent: ({ file }) => !file.endsWith(".md"),
+      stage: ({ rel }) => !dispatching.has(rel.replace(/\\/g, "/")),
+      agent: () => true,
     };
   }
 
   const rejectedStageFiles = new Set<string>();
-  const stagesRoot = join(PLUGIN_ROOT, "stages");
-  for (const file of walk(stagesRoot).filter((path) => path.endsWith(".md"))) {
+  for (const file of stageFiles) {
     let parsed: Record<string, unknown>;
     try {
       parsed = parse(readFileSync(file, "utf-8"));
@@ -508,22 +553,35 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
       mode === "mob" ||
       mode === "pipeline" ||
       mode === "subagent";
-    if (!dispatches) continue;
 
+    // The reviewer dispatches on EVERY gated stage — the conductor's §12a step
+    // fires whenever directive.reviewer is present, independent of the stage's
+    // body mode — so it is checked even on inline stages. Lead + supports
+    // dispatch only under a dispatched body topology.
     const leadAgent = typeof parsed.lead_agent === "string" ? parsed.lead_agent : "";
-    const referencedPluginAgents = [leadAgent, ...supportAgents]
-      .filter((agent) => pluginAgents.has(agent));
-    if (referencedPluginAgents.length === 0) continue;
+    const reviewer = typeof parsed.reviewer === "string" ? parsed.reviewer : "";
+    const dispatchedAgents = [
+      ...(dispatches ? [leadAgent, ...supportAgents] : []),
+      reviewer,
+    ];
+    const undispatchable = dispatchedAgents
+      .filter((agent) => agent.length > 0)
+      .filter((agent) => !existsSync(join(HARNESS_DIR, "agents", `${agent}${surfaceExt}`)));
+    if (undispatchable.length === 0) continue;
 
     const rel = relative(stagesRoot, file).replace(/\\/g, "/");
+    if (alreadyComposed(rel)) continue;
     const slug = typeof parsed.slug === "string"
       ? parsed.slug
       : rel.split("/").pop()!.replace(/\.md$/, "");
     rejectedStageFiles.add(rel);
-    composeDroppedStageSlugs.add(slug);
-    for (const agent of referencedPluginAgents) {
+    recordDroppedStage(rel, slug);
+    for (const agent of undispatchable) {
+      const isReviewerOnly =
+        agent === reviewer && !(dispatches && (agent === leadAgent || supportAgents.includes(agent)));
+      const role = isReviewerOnly ? "as reviewer" : `with mode "${mode}"`;
       recordDrop(
-        `plugin "${PLUGIN_NAME}" stage "${slug}" uses plugin-owned agent "${agent}" with mode "${mode}" and was not composed: Kiro CLI/IDE cannot dispatch plugin-owned agents without a hand-authored agent-v1 JSON + trustedAgents registration; author harness/kiro/agents/${agent}.json and add it to aidlc.json's trustedAgents, or change the stage's mode to inline`,
+        `plugin "${PLUGIN_NAME}" stage "${slug}" references agent "${agent}" ${role} and was not composed: ${HARNESS_LEAF} cannot dispatch an agent without ${HARNESS_LEAF}/agents/${agent}${surfaceExt}; ${remediationFor(agent, isReviewerOnly)}`,
       );
     }
   }

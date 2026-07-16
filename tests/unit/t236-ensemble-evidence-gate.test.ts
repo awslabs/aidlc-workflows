@@ -433,4 +433,98 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     expect(d.message).toContain("aidlc-design-agent (no contribution file)");
     expect(d.message).toContain("ensemble must convene");
   });
+
+  // The swarm exemption never applies to the scope's FIRST construction stage
+  // (isSkeletonGateStage: the skeleton gate always runs inline, so disk-backed
+  // guards stay correct there). The fixtures below therefore also pivot an
+  // EARLIER stage into construction so the mutated user-stories is not the
+  // skeleton gate - matching the real swarm stage (code-generation, 3.5).
+  function nonSkeletonSwarmGraph(proj: string): string {
+    const path = graphVariant(proj, (node) => {
+      node.phase = "construction";
+      node.for_each = "unit-of-work";
+      node.mode = "subagent";
+      node.support_agents = ["aidlc-design-agent"];
+      node.produces = ["fixture-artifact"];
+      node.optional_produces = [];
+    });
+    const graph = JSON.parse(readFileSync(path, "utf-8")) as Array<Record<string, unknown>>;
+    const earlier = graph.find((entry) => entry.slug === "requirements-analysis");
+    if (!earlier) throw new Error("fixture graph has no requirements-analysis node");
+    earlier.phase = "construction";
+    writeFileSync(path, `${JSON.stringify(graph, null, 2)}\n`);
+    return path;
+  }
+
+  test("MID-RUN autonomous swarm is exempt: contributions live in Bolt worktrees", () => {
+    // A swarm's contribution files stay in the units' Bolt worktrees (complete
+    // --merge consolidates only state/audit/graph), so a batch-boundary approve
+    // must not demand main-tree evidence for units of any batch.
+    const proj = seedProject();
+    setAutonomous(proj);
+    seedBoltDag(proj, ["unit-a", "unit-b"]);
+    const graph = nonSkeletonSwarmGraph(proj);
+    // No convergence rows, no contribution files anywhere: mid-run.
+    const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
+    expect(d.message ?? "").not.toContain("ensemble must convene");
+    expect(d.message ?? "").not.toContain("units are not yet complete");
+  });
+
+  test("a corrupted units artifact after a swarm run does not wedge the settle approve", () => {
+    // Post-run corruption of unit-of-work-dependency.md (with no cached DAG)
+    // resolves as "malformed"; the old mode+autonomy predicate tolerated this,
+    // so the exemption must too - the error remediation loop would otherwise
+    // demand a fix to an artifact the approve no longer needs.
+    const proj = seedProject();
+    setAutonomous(proj);
+    const depDir = join(seededRecordDir(proj), "inception", "units-generation");
+    mkdirSync(depDir, { recursive: true });
+    writeFileSync(
+      join(depDir, "unit-of-work-dependency.md"),
+      "# Corrupted\n\nno fenced units block here\n",
+    );
+    const graph = nonSkeletonSwarmGraph(proj);
+    const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
+    expect(d.message ?? "").not.toContain("ensemble must convene");
+    expect(d.message ?? "").not.toContain("unit list cannot be resolved");
+  });
+
+  test("report --single on a per-unit ensemble stage checks STAGE-level evidence, not the main DAG", () => {
+    // emitSingleRunStage never names a real unit ({unit-name} placeholder), so
+    // --single must not demand per-unit contribution sets from the MAIN
+    // workflow's DAG. Stage-level evidence still applies.
+    const missingProj = seedProject();
+    seedBoltDag(missingProj, ["unit-a", "unit-b"]);
+    const missingGraph = graphVariant(missingProj, (node) => {
+      node.phase = "construction";
+      node.for_each = "unit-of-work";
+      node.mode = "mob";
+      node.support_agents = ["aidlc-design-agent"];
+      node.produces = ["fixture-artifact"];
+      node.optional_produces = [];
+    });
+    const missing = runReport(missingProj, [
+      "--single", "--stage", "user-stories", "--result", "approved",
+    ], { AIDLC_STAGE_GRAPH: missingGraph });
+    expect(missing.kind).toBe("error");
+    // Refused at the STAGE level (no per-unit paths in the remediation).
+    expect(missing.message).toContain("aidlc-design-agent (no contribution file)");
+    expect(missing.message).not.toContain("for unit \"unit-a\"");
+
+    const completeProj = seedProject();
+    seedBoltDag(completeProj, ["unit-a", "unit-b"]);
+    const completeGraph = graphVariant(completeProj, (node) => {
+      node.phase = "construction";
+      node.for_each = "unit-of-work";
+      node.mode = "mob";
+      node.support_agents = ["aidlc-design-agent"];
+      node.produces = ["fixture-artifact"];
+      node.optional_produces = [];
+    });
+    writeFallbackContribution(completeProj, "aidlc-design-agent");
+    const complete = runReport(completeProj, [
+      "--single", "--stage", "user-stories", "--result", "approved",
+    ], { AIDLC_STAGE_GRAPH: completeGraph });
+    expect(complete.message ?? "").not.toContain("ensemble must convene");
+  });
 });

@@ -4,7 +4,7 @@
 
 The aidlc-developer-agent is your senior software developer. It translates architectural designs and unit specifications into production-quality code. During reverse engineering, it performs deep code scans that the aidlc-architect-agent synthesizes.
 
-The aidlc-developer-agent leads two stages across Inception and Construction. One of its stages (Code Generation) runs as a subagent — an autonomous subprocess that operates without user interaction. It has Bash access for running build tools, package managers, and test commands.
+The aidlc-developer-agent leads two stages across Inception and Construction, and collaborates in the User Stories mob ensemble as its implementability voice. One of its stages (Code Generation) runs as a subagent — an autonomous subprocess that operates without user interaction. It has Bash access for running build tools, package managers, and test commands.
 
 Workspace Detection (0.2) used to be led by the aidlc-developer-agent as a subagent; it now runs deterministically inside `aidlc-utility intent-birth` as a rule-based scanner. The aidlc-developer-agent is no longer involved in Initialization.
 
@@ -19,6 +19,7 @@ Workspace Detection (0.2) used to be led by the aidlc-developer-agent as a subag
 
 | Stage | Phase | Contribution |
 |-------|-------|-------------|
+| 2.4 User Stories | Inception | Implementability voice in the mob ensemble |
 | 2.2 Practices Discovery | Inception | Code-pattern evidence scan |
 | 3.1 Functional Design | Construction | API contracts and data model input |
 | 4.3 Deployment Execution | Operation | Database migrations |

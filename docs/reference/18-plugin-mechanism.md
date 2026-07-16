@@ -288,13 +288,17 @@ OpenCode, compose also emits a native `.opencode/agents/` twin with
 `mode: subagent`, `permission.task: deny`, and OpenCode-valid model/memory
 frontmatter.
 
-On Kiro CLI/IDE, a Markdown persona is available only for `mode: inline`.
-Native dispatch also requires a hand-authored agent-v1 JSON and registration in
-the conductor's `trustedAgents` list. Compose therefore rejects a plugin stage
-using `mob`, `pipeline`, or `subagent` when its lead or a support agent is
-plugin-owned, and records the stage, agent, and remediation in the compose drops
-log. The Markdown persona remains composed for any accepted inline stage that
-also uses it.
+On Kiro CLI/IDE and Codex, a Markdown persona is available only for
+`mode: inline`. Native dispatch also requires a per-harness dispatch surface —
+a hand-authored agent-v1 JSON plus registration in the conductor's
+`trustedAgents` list on Kiro, an agent config TOML (the shipped
+`aidlc-*-agent.toml` shape) on Codex. Compose therefore rejects a plugin stage
+whose dispatched topology (`mob`, `pipeline`, or `subagent` for the lead and
+supports; a `reviewer:` on any gated stage regardless of mode) names an agent
+with no dispatch surface in the installed agents directory, and records the
+stage, agent, and remediation in the compose drops log. Hand-authoring the
+surface and re-running compose accepts the stage. The Markdown persona remains
+composed for any accepted inline stage that also uses it.
 
 **Knowledge = methodology only** *(✅ projected + composed).* A plugin ships
 per-agent methodology knowledge into `knowledge/<agent-slug>/`, composed into
