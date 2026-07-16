@@ -2920,8 +2920,23 @@ function checkEnsembleEvidence(
 
   const prefix = recordPrefix ?? relativeSpaceRecordPrefix();
   const perUnit = isPerUnit(node);
-  const contributionDirs: Array<{ path: string; unit: string | null }> = perUnit
-    ? orderedUnits(pd).map((unit) => ({
+  const units = perUnit ? orderedUnits(pd) : [];
+  const usesUnitDirs = units.length > 0;
+  const kinds = usesUnitDirs ? readBoltDagUnitKinds(pd) : null;
+  const requiredProduces = node.produces ?? [];
+  // Match the per-unit coverage ledger: a kind-pruned unit with zero
+  // applicable required artifacts is vacuously covered, so no directive ever
+  // dispatches its collaborators and it cannot owe contribution files.
+  const evidenceUnits = units.filter((unit) =>
+    requiredProduces.length === 0 ||
+    filterProducesByKind(
+      node.produces_kinds,
+      requiredProduces,
+      kinds?.get(unit) ?? null,
+    ).length > 0
+  );
+  const contributionDirs: Array<{ path: string; unit: string | null }> = usesUnitDirs
+    ? evidenceUnits.map((unit) => ({
         path: join(pd, prefix, "construction", unit, slug, "contributions"),
         unit,
       }))
@@ -2948,7 +2963,7 @@ function checkEnsembleEvidence(
   }
   if (missing.length === 0) return { ok: true };
 
-  const contributionPath = perUnit
+  const contributionPath = usesUnitDirs
     ? `${prefix}/construction/<unit>/${slug}/contributions/<agent-slug>.md`
     : `${prefix}/${node.phase}/${slug}/contributions/<agent-slug>.md`;
   return {

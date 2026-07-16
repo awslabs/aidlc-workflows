@@ -291,9 +291,10 @@ frontmatter.
 On Kiro CLI/IDE, a Markdown persona is available only for `mode: inline`.
 Native dispatch also requires a hand-authored agent-v1 JSON and registration in
 the conductor's `trustedAgents` list. Compose therefore rejects a plugin stage
-using `mob`, `pipeline`, or `subagent` with support agents when its lead or a
-support agent is plugin-owned, and records the stage, agent, and remediation in
-the compose drops log.
+using `mob`, `pipeline`, or `subagent` when its lead or a support agent is
+plugin-owned, and records the stage, agent, and remediation in the compose drops
+log. The Markdown persona remains composed for any accepted inline stage that
+also uses it.
 
 **Knowledge = methodology only** *(✅ projected + composed).* A plugin ships
 per-agent methodology knowledge into `knowledge/<agent-slug>/`, composed into

@@ -492,7 +492,6 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
   }
 
   const rejectedStageFiles = new Set<string>();
-  const rejectedAgents = new Set<string>();
   const stagesRoot = join(PLUGIN_ROOT, "stages");
   for (const file of walk(stagesRoot).filter((path) => path.endsWith(".md"))) {
     let parsed: Record<string, unknown>;
@@ -508,7 +507,7 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
     const dispatches =
       mode === "mob" ||
       mode === "pipeline" ||
-      (mode === "subagent" && supportAgents.length > 0);
+      mode === "subagent";
     if (!dispatches) continue;
 
     const leadAgent = typeof parsed.lead_agent === "string" ? parsed.lead_agent : "";
@@ -523,19 +522,17 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
     rejectedStageFiles.add(rel);
     composeDroppedStageSlugs.add(slug);
     for (const agent of referencedPluginAgents) {
-      rejectedAgents.add(agent);
       recordDrop(
-        `plugin "${PLUGIN_NAME}" stage "${slug}" uses plugin-owned agent "${agent}" with mode "${mode}" and was not composed: Kiro CLI/IDE cannot dispatch plugin-owned ensemble collaborators without a hand-authored agent-v1 JSON + trustedAgents registration; author harness/kiro/agents/${agent}.json and add it to aidlc.json's trustedAgents, or change the stage's mode to inline`,
+        `plugin "${PLUGIN_NAME}" stage "${slug}" uses plugin-owned agent "${agent}" with mode "${mode}" and was not composed: Kiro CLI/IDE cannot dispatch plugin-owned agents without a hand-authored agent-v1 JSON + trustedAgents registration; author harness/kiro/agents/${agent}.json and add it to aidlc.json's trustedAgents, or change the stage's mode to inline`,
       );
     }
   }
 
   return {
     stage: ({ rel }) => !rejectedStageFiles.has(rel.replace(/\\/g, "/")),
-    agent: ({ rel, content }) => {
-      const fallback = rel.replace(/\\/g, "/").split("/").pop()!.replace(/\.md$/, "");
-      return !rejectedAgents.has(frontmatterName(content) ?? fallback);
-    },
+    // Markdown personas remain useful to accepted inline stages even when a
+    // different stage that references the same persona was rejected.
+    agent: () => true,
   };
 }
 

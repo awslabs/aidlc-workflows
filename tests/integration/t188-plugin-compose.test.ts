@@ -596,11 +596,154 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       ".kiro",
       "agents",
       "syn-kiro-collaborator-agent.md",
-    ))).toBe(false);
+    ))).toBe(true);
     expect(drops).toContain('stage "syn-kiro-ensemble"');
     expect(drops).toContain('agent "syn-kiro-collaborator-agent"');
     expect(drops).toContain("agent-v1 JSON + trustedAgents registration");
     expect(drops).toContain("change the stage's mode to inline");
+  });
+
+  test("Kiro rejects a lead-only plugin subagent and retains its inline persona", () => {
+    const stage = [
+      "---",
+      "slug: syn-kiro-subagent-stage",
+      "plugin: syn-kiro-subagent",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: syn-kiro-subagent-agent",
+      "support_agents: []",
+      "mode: subagent",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic Kiro Subagent",
+      "",
+    ].join("\n");
+    const agent = [
+      "---",
+      "name: syn-kiro-subagent-agent",
+      "display_name: Synthetic Kiro Subagent",
+      "plugin: syn-kiro-subagent",
+      "---",
+      "",
+      "# Synthetic Kiro Subagent",
+      "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic(
+      "syn-kiro-subagent",
+      {
+        "stages/inception/syn-kiro-subagent-stage.md": stage,
+        "agents/syn-kiro-subagent-agent.md": agent,
+      },
+      ".kiro",
+    );
+
+    expect(existsSync(join(
+      proj,
+      ".kiro",
+      "aidlc-common",
+      "stages",
+      "inception",
+      "syn-kiro-subagent-stage.md",
+    ))).toBe(false);
+    expect(existsSync(join(
+      proj,
+      ".kiro",
+      "agents",
+      "syn-kiro-subagent-agent.md",
+    ))).toBe(true);
+    expect(drops).toContain('stage "syn-kiro-subagent-stage"');
+    expect(drops).toContain('mode "subagent"');
+    expect(drops).toContain("agent-v1 JSON + trustedAgents registration");
+  });
+
+  test("Kiro keeps a plugin persona shared by a rejected mob and accepted inline stage", () => {
+    const mobStage = [
+      "---",
+      "slug: syn-kiro-shared-mob",
+      "plugin: syn-kiro-shared",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: aidlc-product-agent",
+      "support_agents:",
+      "  - syn-kiro-shared-agent",
+      "mode: mob",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic Kiro Shared Mob",
+      "",
+    ].join("\n");
+    const inlineStage = [
+      "---",
+      "slug: syn-kiro-shared-inline",
+      "plugin: syn-kiro-shared",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: syn-kiro-shared-agent",
+      "support_agents: []",
+      "mode: inline",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic Kiro Shared Inline",
+      "",
+    ].join("\n");
+    const agent = [
+      "---",
+      "name: syn-kiro-shared-agent",
+      "display_name: Synthetic Kiro Shared Agent",
+      "plugin: syn-kiro-shared",
+      "---",
+      "",
+      "# Synthetic Kiro Shared Agent",
+      "",
+    ].join("\n");
+    const { proj } = composeSynthetic(
+      "syn-kiro-shared",
+      {
+        "stages/inception/syn-kiro-shared-mob.md": mobStage,
+        "stages/inception/syn-kiro-shared-inline.md": inlineStage,
+        "agents/syn-kiro-shared-agent.md": agent,
+      },
+      ".kiro",
+    );
+    const stages = join(proj, ".kiro", "aidlc-common", "stages", "inception");
+
+    expect(existsSync(join(stages, "syn-kiro-shared-mob.md"))).toBe(false);
+    expect(existsSync(join(stages, "syn-kiro-shared-inline.md"))).toBe(true);
+    expect(existsSync(join(
+      proj,
+      ".kiro",
+      "agents",
+      "syn-kiro-shared-agent.md",
+    ))).toBe(true);
+    const compile = spawnSync(
+      BUN,
+      [join(proj, ".kiro", "tools", "aidlc-graph.ts"), "compile"],
+      {
+        cwd: proj,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+        env: { ...process.env, AIDLC_HARNESS_DIR: ".kiro" },
+      },
+    );
+    expect(compile.status).toBe(0);
   });
 
   test("unresolvable fragment anchor is dropped-with-log, not silent (R4-2)", () => {

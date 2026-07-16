@@ -196,11 +196,44 @@ function seedBoltDag(proj: string, units: string[]): void {
   );
 }
 
+function seedKindBoltDag(
+  proj: string,
+  units: Array<{ name: string; kind?: string }>,
+): void {
+  writeFileSync(
+    join(seededRecordDir(proj), "runtime-graph.json"),
+    `${JSON.stringify({
+      bolt_dag: {
+        units: units.map((unit) => ({
+          name: unit.name,
+          ...(unit.kind ? { kind: unit.kind } : {}),
+          depends_on: [],
+        })),
+        batches: [units.map((unit) => unit.name)],
+      },
+    }, null, 2)}\n`,
+  );
+}
+
 function writeUnitContribution(proj: string, unit: string, agent: string): void {
   const dir = join(
     seededRecordDir(proj),
     "construction",
     unit,
+    "user-stories",
+    "contributions",
+  );
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, `${agent}.md`),
+    `**Collaborator:** ${agent}\n\n## Contribution\n- a point\n\n## Positions\n- None\n`,
+  );
+}
+
+function writeFallbackContribution(proj: string, agent: string): void {
+  const dir = join(
+    seededRecordDir(proj),
+    "construction",
     "user-stories",
     "contributions",
   );
@@ -325,6 +358,64 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     writeUnitContribution(completeProj, "alpha", "aidlc-design-agent");
     writeUnitContribution(completeProj, "beta", "aidlc-design-agent");
     const complete = report(completeProj, { AIDLC_STAGE_GRAPH: completeGraph });
+    expect(complete.message ?? "").not.toContain("ensemble must convene");
+  });
+
+  test("kind-pruned units that never execute do not owe contribution files", () => {
+    const proj = seedProject();
+    const graph = graphVariant(proj, (node) => {
+      node.phase = "construction";
+      node.for_each = "unit-of-work";
+      node.mode = "mob";
+      node.support_agents = ["aidlc-design-agent"];
+      node.produces = ["fixture-artifact"];
+      node.optional_produces = [];
+      node.produces_kinds = {
+        "fixture-artifact": ["service"],
+      };
+    });
+    seedKindBoltDag(proj, [
+      { name: "pack", kind: "packaging" },
+      { name: "svc", kind: "service" },
+    ]);
+    writeUnitArtifact(proj, "svc");
+    writeUnitContribution(proj, "svc", "aidlc-design-agent");
+
+    const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
+    expect(d.message ?? "").not.toContain('aidlc-design-agent for unit "pack"');
+    expect(d.message ?? "").not.toContain("ensemble must convene");
+  });
+
+  test("no-DAG per-unit fallback still requires stage-level ensemble evidence", () => {
+    const missingProj = seedProject();
+    const missingGraph = graphVariant(missingProj, (node) => {
+      node.phase = "construction";
+      node.for_each = "unit-of-work";
+      node.mode = "mob";
+      node.support_agents = ["aidlc-design-agent"];
+      node.produces = ["fixture-artifact"];
+      node.optional_produces = [];
+    });
+    const missing = report(missingProj, { AIDLC_STAGE_GRAPH: missingGraph });
+    expect(missing.kind).toBe("error");
+    expect(missing.message).toContain("aidlc-design-agent (no contribution file)");
+    expect(missing.message).toContain(
+      "construction/user-stories/contributions/<agent-slug>.md",
+    );
+
+    const completeProj = seedProject();
+    const completeGraph = graphVariant(completeProj, (node) => {
+      node.phase = "construction";
+      node.for_each = "unit-of-work";
+      node.mode = "mob";
+      node.support_agents = ["aidlc-design-agent"];
+      node.produces = ["fixture-artifact"];
+      node.optional_produces = [];
+    });
+    writeFallbackContribution(completeProj, "aidlc-design-agent");
+    const complete = report(completeProj, {
+      AIDLC_STAGE_GRAPH: completeGraph,
+    });
     expect(complete.message ?? "").not.toContain("ensemble must convene");
   });
 
