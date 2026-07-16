@@ -44,13 +44,14 @@ const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = 
   { event: "Stop", target: "stop" },
 ];
 
-const ADAPTER_CMD = (target: string) => `bun .codex/hooks/aidlc-codex-adapter.ts ${target}`;
+const adapterCmd = (harnessDir: string, target: string) =>
+  `bun ${harnessDir}/hooks/aidlc-codex-adapter.ts ${target}`;
 
-function emitHooksJson(): string {
+function emitHooksJson(harnessDir: string): string {
   const hooks: Record<string, Array<Record<string, unknown>>> = {};
   for (const { event, matcher, target } of HOOK_WIRING) {
     const group: Record<string, unknown> = {
-      hooks: [{ type: "command", command: ADAPTER_CMD(target) }],
+      hooks: [{ type: "command", command: adapterCmd(harnessDir, target) }],
     };
     if (matcher) group.matcher = matcher;
     hooks[event] ??= [];
@@ -121,14 +122,14 @@ status_line = ["model-with-reasoning", "git-branch", "task-progress", "context-u
 `;
 }
 
-function emitDefaultRules(): string {
-  return `# dist/codex shipped permission rules (Starlark) — .codex/rules/ is
+function emitDefaultRules(harnessDir: string): string {
+  return `# dist/codex shipped permission rules (Starlark) — ${harnessDir}/rules/ is
 # Codex's NATIVE rules dir (this file), distinct from the AIDLC markdown rule
-# layers at .codex/aidlc-rules/ (D-10 rename).
+# layers at ${harnessDir}/aidlc-rules/ (D-10 rename).
 #
 # bun tool allowlist: the deterministic core runs via these exact prefixes.
-prefix_rule(pattern = ["bun", ".codex/tools/"], decision = "allow")
-prefix_rule(pattern = ["bun", ".codex/hooks/"], decision = "allow")
+prefix_rule(pattern = ["bun", "${harnessDir}/tools/"], decision = "allow")
+prefix_rule(pattern = ["bun", "${harnessDir}/hooks/"], decision = "allow")
 
 # Git allow-rules (S9d): workspace-write keeps .git read-only in-sandbox and
 # routes git writes through escalation; these prefix rules pre-approve the
@@ -178,15 +179,19 @@ const SNAKE: Record<string, string> = {
 // Trust entries keyed on "<abs hooks.json path>:<event_snake>:<group>:<idx>".
 // Exported so the `trust` subcommand (aidlc-codex-trust.ts) can print
 // installer-substituted entries.
-export function trustEntries(projectDir: string, hooksJsonPath?: string): string {
-  const path = hooksJsonPath ?? `${projectDir}/.codex/hooks.json`;
+export function trustEntries(
+  projectDir: string,
+  hooksJsonPath?: string,
+  harnessDir = ".codex",
+): string {
+  const path = hooksJsonPath ?? `${projectDir}/${harnessDir}/hooks.json`;
   const counters: Record<string, number> = {};
   const lines: string[] = [];
   for (const { event, target } of HOOK_WIRING) {
     const snake = SNAKE[event];
     const idx = counters[snake] ?? 0;
     counters[snake] = idx + 1;
-    const hash = trustHash(snake, ADAPTER_CMD(target));
+    const hash = trustHash(snake, adapterCmd(harnessDir, target));
     lines.push(`[hooks.state."${path}:${snake}:${idx}:0"]`);
     lines.push(`trusted_hash = "${hash}"`);
     lines.push("");
@@ -194,7 +199,7 @@ export function trustEntries(projectDir: string, hooksJsonPath?: string): string
   return lines.join("\n");
 }
 
-function emitTrustSeed(): string {
+function emitTrustSeed(harnessDir: string): string {
   return (
     `# dist/codex hook-trust pre-seed (S9a) — TEMPLATE.\n` +
     `# Append these entries to the USER config.toml ($CODEX_HOME/config.toml)\n` +
@@ -205,7 +210,7 @@ function emitTrustSeed(): string {
     `# only the key changes per install. Codex then runs the hooks without a\n` +
     `# TUI trust pass (the --dangerously-bypass-hook-trust flag does NOT fire\n` +
     `# untrusted hooks at 0.137-0.139; never rely on it).\n\n` +
-    trustEntries("<PROJECT_DIR>")
+    trustEntries("<PROJECT_DIR>", undefined, harnessDir)
   );
 }
 
@@ -250,15 +255,15 @@ export default function emit(ctx: EmitContext): void {
   // tierCap is the packager's resolved pack-time cap, passed through so the
   // emit-owned TOML projections use the SAME cap as every declarative
   // projection - never re-resolved here.
-  const { coreRoot, harnessRoot, distRoot, substituteToken, tierCap } = ctx;
-  const DCODEX = join(distRoot, ".codex"); // dist/codex/.codex
+  const { coreRoot, harnessRoot, distRoot, harnessDir, substituteToken, tierCap } = ctx;
+  const CODEX_ROOT = join(distRoot, harnessDir);
   const SKILLS_DST = join(distRoot, ".agents", "skills");
 
   // The codex anchored transform: token/prefix substitution (.codex) THEN the
   // aidlc-rules rename — mirrors the packager's transform for prose the emit
   // layer generates from core sources (AGENTS.md, agent bodies, runner prose).
   const rewriteProse = (s: string): string =>
-    substituteToken(s).replaceAll(".codex/rules/", ".codex/aidlc-rules/");
+    substituteToken(s).replaceAll(`${harnessDir}/rules/`, `${harnessDir}/aidlc-rules/`);
 
   // --- AGENTS.md, at the dist ROOT (beside .codex/) -------------------------
   // Rendered from the SHARED onboarding skeleton (core/templates/onboarding.md)
@@ -275,9 +280,13 @@ export default function emit(ctx: EmitContext): void {
     // Rename the markdown rule layers dir → aidlc-rules/, but NOT the native
     // Starlark `.codex/rules/default.rules` (the codex fills reference both, and
     // only the aidlc-* markdown layers move). Negative lookahead on default.rules.
-    s = s.replace(/\.codex\/rules\/(?!default\.rules)/g, ".codex/aidlc-rules/");
+    const escapedHarnessDir = harnessDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    s = s.replace(
+      new RegExp(`${escapedHarnessDir}/rules/(?!default\\.rules)`, "g"),
+      `${harnessDir}/aidlc-rules/`,
+    );
     // Skills ship at .agents/skills/, never .codex/skills/.
-    s = s.replaceAll(".codex/skills/", ".agents/skills/");
+    s = s.replaceAll(`${harnessDir}/skills/`, ".agents/skills/");
     return s;
   }
 
@@ -309,14 +318,14 @@ export default function emit(ctx: EmitContext): void {
   }
 
   // --- Skill packaging into .agents/skills/ ----------------------------------
-  // Compose runner-gen's render fns under AIDLC_HARNESS_DIR=.codex. Load the
-  // module FROM THE ASSEMBLED DIST TREE (.codex/tools/) — the packager's
-  // compile step already wrote .codex/tools/data/stage-graph.json there, and
+  // Compose runner-gen's render fns under the manifest harnessDir. Load the
+  // module FROM THE ASSEMBLED DIST TREE (<harnessDir>/tools/) — the packager's
+  // compile step already wrote tools/data/stage-graph.json there, and
   // runner-gen resolves its graph + scopes relative to its own location. (core/
   // carries no compiled JSON, so requiring it from coreRoot would fail.)
   const IMPLICIT_GUARD = "policy:\n  allow_implicit_invocation: false\n";
-  process.env.AIDLC_HARNESS_DIR = ".codex";
-  const gen = require(join(DCODEX, "tools", "aidlc-runner-gen.ts")) as {
+  process.env.AIDLC_HARNESS_DIR = harnessDir;
+  const gen = require(join(CODEX_ROOT, "tools", "aidlc-runner-gen.ts")) as {
     runnableStages: () => Array<{ slug: string }>;
     renderStageRunner: (node: { slug: string }) => string;
     renderInitRunner: () => string;
@@ -339,17 +348,23 @@ export default function emit(ctx: EmitContext): void {
   const emissions: Array<{ path: string; content: () => string }> = [];
 
   // codex-only config + wiring + trust + AGENTS.md
-  emissions.push({ path: join(DCODEX, "hooks.json"), content: emitHooksJson });
-  emissions.push({ path: join(DCODEX, "config.toml"), content: emitConfigToml });
-  emissions.push({ path: join(DCODEX, "rules", "default.rules"), content: emitDefaultRules });
-  emissions.push({ path: join(DCODEX, "trust-seed.toml"), content: emitTrustSeed });
+  emissions.push({ path: join(CODEX_ROOT, "hooks.json"), content: () => emitHooksJson(harnessDir) });
+  emissions.push({ path: join(CODEX_ROOT, "config.toml"), content: emitConfigToml });
+  emissions.push({
+    path: join(CODEX_ROOT, "rules", "default.rules"),
+    content: () => emitDefaultRules(harnessDir),
+  });
+  emissions.push({
+    path: join(CODEX_ROOT, "trust-seed.toml"),
+    content: () => emitTrustSeed(harnessDir),
+  });
   emissions.push({ path: join(distRoot, "AGENTS.md"), content: emitAgentsMd });
 
   // agent TOMLs from core/agents/*.md (one per shipped persona)
   const agentsDir = join(coreRoot, "agents");
   for (const f of readdirSync(agentsDir).filter((x) => x.endsWith(".md")).sort()) {
     emissions.push({
-      path: join(DCODEX, "agents", f.replace(/\.md$/, ".toml")),
+      path: join(CODEX_ROOT, "agents", f.replace(/\.md$/, ".toml")),
       content: () => emitAgentToml(join(agentsDir, f)),
     });
   }

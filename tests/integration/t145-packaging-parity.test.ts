@@ -1,6 +1,6 @@
 // t145-packaging-parity: the dist-unified keystone drift guard.
 //
-// covers: file:scripts/package.ts, file:harness/claude/manifest.ts
+// covers: file:scripts/package.ts, file:harness/claude/manifest.ts, file:harness/codex/emit.ts
 //
 // WHAT. The one-core-N-harnesses layout (dist-unified MR-1) makes dist/ a
 // GENERATED artifact: `bun scripts/package.ts` projects the harness-neutral
@@ -153,6 +153,56 @@ describe("t145 packager contract regressions", () => {
       expect(graph).not.toContain('"path": ".claude/sensors/');
       expect(runner).toContain("bun .foo/tools/aidlc-utility.ts");
       expect(runner).not.toContain("bun .claude/tools/aidlc-utility.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, CHECK_TIMEOUT_MS);
+
+  test("a codex emitter honors a renamed manifest harnessDir", () => {
+    const root = makeFixture("foo", "codex");
+    try {
+      const manifest = join(root, "harness", "foo", "manifest.ts");
+      replaceOnce(manifest, 'name: "codex"', 'name: "foo"');
+      replaceOnce(manifest, 'harnessDir: ".codex"', 'harnessDir: ".foo"');
+
+      for (const file of ["stage-graph.json", "scope-grid.json"]) {
+        const src = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "data", file);
+        const dst = join(root, "dist", "claude", ".claude", "tools", "data", file);
+        mkdirSync(dirname(dst), { recursive: true });
+        cpSync(src, dst);
+      }
+
+      const run = runPackage(root, "foo");
+      expect(output(run)).toContain("[foo] regenerated dist/foo/.foo");
+      expect(run.status).toBe(0);
+
+      const distRoot = join(root, "dist", "foo");
+      const generated = join(distRoot, ".foo");
+      expect(existsSync(generated)).toBe(true);
+      expect(existsSync(join(distRoot, ".codex"))).toBe(false);
+
+      const hooks = JSON.parse(readFileSync(join(generated, "hooks.json"), "utf-8"));
+      const commands = Object.values(hooks.hooks)
+        .flat()
+        .flatMap((group: any) => group.hooks.map((hook: any) => hook.command));
+      expect(commands.length).toBeGreaterThan(0);
+      expect(commands.every((command: string) => command.startsWith("bun .foo/hooks/"))).toBe(true);
+
+      const rules = readFileSync(join(generated, "rules", "default.rules"), "utf-8");
+      expect(rules).toContain('["bun", ".foo/tools/"]');
+      expect(rules).toContain('["bun", ".foo/hooks/"]');
+      expect(rules).not.toContain('["bun", ".codex/');
+
+      const trustSeed = readFileSync(join(generated, "trust-seed.toml"), "utf-8");
+      expect(trustSeed).toContain("<PROJECT_DIR>/.foo/hooks.json:");
+      expect(trustSeed).not.toContain("<PROJECT_DIR>/.codex/hooks.json:");
+
+      const runner = readFileSync(
+        join(distRoot, ".agents", "skills", "aidlc-init", "SKILL.md"),
+        "utf-8",
+      );
+      expect(runner).toContain("bun .foo/tools/aidlc-utility.ts");
+      expect(runner).not.toContain("bun .codex/tools/aidlc-utility.ts");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

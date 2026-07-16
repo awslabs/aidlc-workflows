@@ -756,6 +756,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t135-invoke-swarm.test.ts",
     "integration/t136.test.ts",
     "integration/t137.test.ts",
+    "integration/t145-packaging-parity.test.ts",
     "integration/t145-state-lock-concurrency.test.ts",
     "integration/t162-per-intent-layout-cli.test.ts",
     "integration/t163-reaper-steal-race.test.ts",
