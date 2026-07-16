@@ -18,6 +18,7 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   resetAidlcEnv,
+  seedBoltDag,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -207,22 +208,6 @@ function seedDanglingDependency(proj: string): void {
       "```",
       "",
     ].join("\n"),
-  );
-}
-
-function seedBoltDag(proj: string, units: string[]): void {
-  writeFileSync(
-    join(seededRecordDir(proj), "runtime-graph.json"),
-    JSON.stringify(
-      {
-        bolt_dag: {
-          units: units.map((name) => ({ name, depends_on: [] })),
-          batches: [units],
-        },
-      },
-      null,
-      2,
-    ),
   );
 }
 

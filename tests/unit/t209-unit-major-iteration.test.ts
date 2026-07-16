@@ -48,6 +48,7 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   resetAidlcEnv,
+  seedBoltDag,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -168,23 +169,6 @@ ${iterationLine}
 - **Current Stage**: functional-design
 - **Status**: Running
 `;
-}
-
-/** Write the bolt_dag runtime graph (one batch of `units`) into the record. */
-function seedBoltDag(proj: string, units: string[]): void {
-  writeFileSync(
-    join(seededRecordDir(proj), "runtime-graph.json"),
-    JSON.stringify(
-      {
-        bolt_dag: {
-          units: units.map((name) => ({ name, depends_on: [] })),
-          batches: [units],
-        },
-      },
-      null,
-      2,
-    ),
-  );
 }
 
 /** Mark `unit` COVERED for `slug` by writing each of its produces artifacts. */

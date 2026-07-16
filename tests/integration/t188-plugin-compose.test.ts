@@ -506,11 +506,14 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     name: string,
     files: Record<string, string>,
     harnessLeaf: ".claude" | ".kiro" | ".codex" = ".claude",
+    mutateInstall?: (proj: string, harnessDir: string) => void,
   ): { drops: string; proj: string } {
     const proj = mkdtempSync(join(tmp, `syn-${name}-`));
     const baseDist =
       harnessLeaf === ".kiro" ? KIRO_DIST : harnessLeaf === ".codex" ? CODEX_DIST : CLAUDE_DIST;
-    cpSync(baseDist, join(proj, harnessLeaf), { recursive: true });
+    const harnessDir = join(proj, harnessLeaf);
+    cpSync(baseDist, harnessDir, { recursive: true });
+    mutateInstall?.(proj, harnessDir);
     const root = join(proj, "_plugin");
     // minimal projection: manifest + the one working compose hook + given files
     cpSync(join(pluginBuilt, ".claude-plugin"), join(root, ".claude-plugin"), { recursive: true });
@@ -601,11 +604,174 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     ))).toBe(true);
     expect(drops).toContain('stage "syn-kiro-ensemble"');
     expect(drops).toContain('agent "syn-kiro-collaborator-agent"');
-    expect(drops).toContain("agent-v1 JSON + trustedAgents registration");
+    expect(drops).toContain("agent-v1 JSON");
+    expect(drops).toContain("toolsSettings.subagent.trustedAgents");
     expect(drops).toContain("change the stage's mode to inline");
     // The lead is a CORE persona: its shipped agent-v1 JSON is its dispatch
     // surface, so it must never be named as undispatchable.
     expect(drops).not.toContain('agent "aidlc-product-agent"');
+  });
+
+  test("Kiro rejects an agent JSON that is missing conductor trust registration", () => {
+    const stage = [
+      "---",
+      "slug: syn-kiro-untrusted",
+      "plugin: syn-kiro-untrusted",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: aidlc-product-agent",
+      "support_agents:",
+      "  - aidlc-design-agent",
+      "mode: mob",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic Kiro Untrusted",
+      "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic(
+      "syn-kiro-untrusted",
+      { "stages/inception/syn-kiro-untrusted.md": stage },
+      ".kiro",
+      (_proj, harnessDir) => {
+        const conductorPath = join(harnessDir, "agents", "aidlc.json");
+        const conductor = JSON.parse(readFileSync(conductorPath, "utf-8"));
+        conductor.toolsSettings.subagent.trustedAgents =
+          conductor.toolsSettings.subagent.trustedAgents.filter(
+            (agent: string) => agent !== "aidlc-design-agent",
+          );
+        writeFileSync(conductorPath, `${JSON.stringify(conductor, null, 2)}\n`);
+      },
+    );
+
+    expect(existsSync(join(
+      proj,
+      ".kiro",
+      "aidlc-common",
+      "stages",
+      "inception",
+      "syn-kiro-untrusted.md",
+    ))).toBe(false);
+    expect(existsSync(join(
+      proj,
+      ".kiro",
+      "agents",
+      "aidlc-design-agent.json",
+    ))).toBe(true);
+    expect(drops).toContain('agent "aidlc-design-agent"');
+    expect(drops).toContain("toolsSettings.subagent.trustedAgents");
+    expect(drops).not.toContain("aidlc-design-agent.json (agent-v1 JSON)");
+  });
+
+  test("all harnesses reject reserved agent-team stages until a runtime consumer exists", () => {
+    const stage = [
+      "---",
+      "slug: syn-kiro-agent-team",
+      "plugin: syn-kiro-agent-team",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: aidlc-product-agent",
+      "support_agents: []",
+      "mode: agent-team",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic Kiro Agent Team",
+      "",
+    ].join("\n");
+    for (const harnessLeaf of [".claude", ".kiro", ".codex"] as const) {
+      const { drops, proj } = composeSynthetic(
+        "syn-kiro-agent-team",
+        { "stages/inception/syn-kiro-agent-team.md": stage },
+        harnessLeaf,
+      );
+
+      expect(existsSync(join(
+        proj,
+        harnessLeaf,
+        "aidlc-common",
+        "stages",
+        "inception",
+        "syn-kiro-agent-team.md",
+      ))).toBe(false);
+      expect(drops).toContain('reserved mode "agent-team"');
+      expect(drops).toContain("has no runtime consumer");
+    }
+  });
+
+  test("Kiro reports an already-composed stage that remains undispatchable", () => {
+    const stage = [
+      "---",
+      "slug: syn-kiro-existing-unsafe",
+      "plugin: syn-kiro-existing-unsafe",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: aidlc-product-agent",
+      "support_agents:",
+      "  - syn-kiro-existing-agent",
+      "mode: mob",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic Existing Unsafe Stage",
+      "",
+    ].join("\n");
+    const agent = [
+      "---",
+      "name: syn-kiro-existing-agent",
+      "display_name: Synthetic Existing Agent",
+      "plugin: syn-kiro-existing-unsafe",
+      "---",
+      "",
+      "# Synthetic Existing Agent",
+      "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic(
+      "syn-kiro-existing-unsafe",
+      {
+        "stages/inception/syn-kiro-existing-unsafe.md": stage,
+        "agents/syn-kiro-existing-agent.md": agent,
+      },
+      ".kiro",
+      (_proj, harnessDir) => {
+        const installed = join(
+          harnessDir,
+          "aidlc-common",
+          "stages",
+          "inception",
+          "syn-kiro-existing-unsafe.md",
+        );
+        mkdirSync(dirname(installed), { recursive: true });
+        writeFileSync(installed, stage);
+      },
+    );
+
+    expect(existsSync(join(
+      proj,
+      ".kiro",
+      "aidlc-common",
+      "stages",
+      "inception",
+      "syn-kiro-existing-unsafe.md",
+    ))).toBe(true);
+    expect(drops).toContain("[degraded]");
+    expect(drops).toContain("is already composed but remains undispatchable");
+    expect(drops).toContain('agent "syn-kiro-existing-agent"');
   });
 
   test("Kiro rejects a lead-only plugin subagent and retains its inline persona", () => {
@@ -664,7 +830,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     ))).toBe(true);
     expect(drops).toContain('stage "syn-kiro-subagent-stage"');
     expect(drops).toContain('mode "subagent"');
-    expect(drops).toContain("agent-v1 JSON + trustedAgents registration");
+    expect(drops).toContain("agent-v1 JSON");
+    expect(drops).toContain("toolsSettings.subagent.trustedAgents");
   });
 
   test("Kiro keeps a plugin persona shared by a rejected mob and accepted inline stage", () => {
@@ -869,7 +1036,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(drops).toContain("change the stage's mode to inline");
   });
 
-  test("parser-unavailable fallback drops ONLY dispatched-topology stages, composing inline content", () => {
+  test("parser-unavailable fallback accepts only explicit inline reviewer-free stages", () => {
     // Finding-2 regression guard: with the installed aidlc-lib.ts removed the
     // guard cannot resolve agent references, but an inline-only plugin must
     // still compose fully - fail-closed is scoped to dispatched topologies.
@@ -903,7 +1070,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "lead_agent: aidlc-product-agent",
       "support_agents:",
       "  - syn-noparse-agent",
-      "mode: mob",
+      'mode: "mob"',
       "produces: []",
       "consumes: []",
       "requires_stage: []",

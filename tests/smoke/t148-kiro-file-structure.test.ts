@@ -26,6 +26,28 @@ function readJson(p: string): Record<string, unknown> {
   return JSON.parse(readFileSync(p, "utf-8")) as Record<string, unknown>;
 }
 
+interface StageNode {
+  mode?: string;
+  support_agents?: string[];
+}
+
+function ensembleSupports(harness: "kiro" | "kiro-ide"): string[] {
+  const graph = JSON.parse(
+    readFileSync(
+      join(REPO_ROOT, "dist", harness, ".kiro", "tools", "data", "stage-graph.json"),
+      "utf-8",
+    ),
+  ) as StageNode[];
+  return [...new Set(
+    graph
+      .filter((stage) =>
+        stage.mode === "mob" ||
+        (stage.mode === "subagent" && (stage.support_agents?.length ?? 0) > 0)
+      )
+      .flatMap((stage) => stage.support_agents ?? []),
+  )].sort();
+}
+
 describe("t148 dist/kiro file structure", () => {
   test("core dirs exist and are populated", () => {
     for (const [dir, min] of [
@@ -110,18 +132,41 @@ describe("t148 dist/kiro file structure", () => {
     ).toBe(true);
   });
 
-  test("developer, design, and quality agents retain space-scoped write grants on Kiro CLI and IDE", () => {
-    for (const harness of ["kiro", "kiro-ide"]) {
+  test("every ensemble support has a space-scoped write grant on Kiro CLI and IDE", () => {
+    for (const harness of ["kiro", "kiro-ide"] as const) {
       const agentsDir = join(REPO_ROOT, "dist", harness, ".kiro", "agents");
-      for (const agent of [
-        "aidlc-developer-agent",
-        "aidlc-design-agent",
-        "aidlc-quality-agent",
-      ]) {
+      const supports = ensembleSupports(harness);
+      expect(supports.length).toBeGreaterThan(0);
+      for (const agent of supports) {
         const config = readJson(join(agentsDir, `${agent}.json`));
+        expect(config.tools as string[]).toContain("fs_write");
         const settings = config.toolsSettings as Record<string, { allowedPaths?: string[] }>;
         expect(settings.fs_write?.allowedPaths).toContain("aidlc/spaces/**");
       }
+    }
+  });
+
+  test("shared Kiro CLI and IDE agent JSON sources remain byte-identical", () => {
+    const cliDir = join(REPO_ROOT, "harness", "kiro", "agents");
+    const ideDir = join(REPO_ROOT, "harness", "kiro-ide", "agents");
+    const intentionalReviewerDifferences = new Set([
+      "aidlc-architecture-reviewer-agent.json",
+      "aidlc-product-lead-agent.json",
+    ]);
+    const shared = readdirSync(cliDir)
+      .filter((name) => name.endsWith("-agent.json"))
+      .filter((name) => !intentionalReviewerDifferences.has(name))
+      .sort();
+    expect(
+      readdirSync(ideDir)
+        .filter((name) => name.endsWith("-agent.json"))
+        .filter((name) => !intentionalReviewerDifferences.has(name))
+        .sort(),
+    ).toEqual(shared);
+    for (const name of shared) {
+      expect(readFileSync(join(ideDir, name), "utf-8")).toBe(
+        readFileSync(join(cliDir, name), "utf-8"),
+      );
     }
   });
 

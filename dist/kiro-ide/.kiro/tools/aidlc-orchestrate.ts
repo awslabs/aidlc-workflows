@@ -728,20 +728,46 @@ function readConstructionIteration(
   return raw.trim() === "unit-major" ? "unit-major" : null;
 }
 
-// Read the compiled batch DAG (the Bolt/unit topological levels) off the
-// runtime graph that `aidlc-runtime compile` materialises. Returns the
-// `batches` array (each inner array is one parallel batch = one topological
-// level) or null when there is no graph file or no bolt_dag node. A pure read:
-// an absent graph is a legitimate branch (the swarm simply does not trigger).
-function readBoltDagBatches(projectDir: string): string[][] | null {
+interface CachedBoltDagSnapshot {
+  batches: string[][];
+  unitKinds: Map<string, string> | null;
+}
+
+// Read the compiled Bolt batches and unit kinds in one runtime-graph snapshot.
+// Returns null when there is no graph file or no bolt_dag node. An absent graph
+// is a legitimate branch (the swarm simply does not trigger).
+function readBoltDagSnapshot(projectDir: string): CachedBoltDagSnapshot | null {
   const path = runtimeGraphPath(projectDir);
   if (!existsSync(path)) return null;
   try {
     const graph: unknown = JSON.parse(readFileSync(path, "utf-8"));
     if (graph !== null && typeof graph === "object" && "bolt_dag" in graph) {
-      const boltDag = (graph as { bolt_dag?: { batches?: unknown } }).bolt_dag;
+      const boltDag = (
+        graph as { bolt_dag?: { batches?: unknown; units?: unknown } }
+      ).bolt_dag;
       const batches = boltDag?.batches;
-      if (Array.isArray(batches)) return batches as string[][];
+      if (Array.isArray(batches)) {
+        const unitKinds = new Map<string, string>();
+        if (Array.isArray(boltDag?.units)) {
+          for (const unit of boltDag.units) {
+            if (
+              unit !== null &&
+              typeof unit === "object" &&
+              typeof (unit as { name?: unknown }).name === "string" &&
+              typeof (unit as { kind?: unknown }).kind === "string"
+            ) {
+              unitKinds.set(
+                (unit as { name: string }).name,
+                (unit as { kind: string }).kind,
+              );
+            }
+          }
+        }
+        return {
+          batches: batches as string[][],
+          unitKinds: unitKinds.size > 0 ? unitKinds : null,
+        };
+      }
     }
   } catch {
     // Malformed runtime graph — fail safe to "no DAG"; the swarm does not fire.
@@ -815,7 +841,12 @@ function swarmConvergedUnits(projectDir: string, slug: string): Set<string> {
 // Pure in-memory: never writes the graph (next stays read-only); the
 // runtime-compile hook repairs the cache on the next transition.
 type BoltBatchesResolution =
-  | { state: "ok"; batches: string[][]; healed: boolean }
+  | {
+      state: "ok";
+      batches: string[][];
+      unitKinds: Map<string, string> | null;
+      healed: boolean;
+    }
   | { state: "none" }
   | { state: "malformed"; reason: string; detail: string };
 
@@ -825,9 +856,14 @@ function resolveBoltBatches(projectDir: string): BoltBatchesResolution {
   // through to the heal guarantees callers see either real batches, "none", or
   // a loud "malformed", never an empty unit list that would strand the settle
   // branch on an undefined unit.
-  const cached = readBoltDagBatches(projectDir);
-  if (cached && cached.flat().length > 0) {
-    return { state: "ok", batches: cached, healed: false };
+  const cached = readBoltDagSnapshot(projectDir);
+  if (cached && cached.batches.flat().length > 0) {
+    return {
+      state: "ok",
+      batches: cached.batches,
+      unitKinds: cached.unitKinds,
+      healed: false,
+    };
   }
   const depPath = unitDependencyPath(projectDir);
   if (!existsSync(depPath)) return { state: "none" };
@@ -844,7 +880,17 @@ function resolveBoltBatches(projectDir: string): BoltBatchesResolution {
   process.stderr.write(
     `aidlc-orchestrate: runtime-graph.json has no bolt_dag; recomputed ${parsed.batches.length} unit batch(es) from unit-of-work-dependency.md (stale runtime graph; check the runtime-compile hook)\n`,
   );
-  return { state: "ok", batches: parsed.batches, healed: true };
+  const unitKinds = new Map(
+    parsed.units
+      .filter((unit) => unit.kind !== undefined)
+      .map((unit) => [unit.name, unit.kind!]),
+  );
+  return {
+    state: "ok",
+    batches: parsed.batches,
+    unitKinds: unitKinds.size > 0 ? unitKinds : null,
+    healed: true,
+  };
 }
 
 // True when `node` is the SKELETON-GATE stage for `scope` — the FIRST
@@ -1157,11 +1203,24 @@ function resolveProduces(
   codekbCtx?: CodekbCtx,
   unitKind: string | null = null,
 ): string[] {
-  return filterProducesByKind(
-    node.produces_kinds,
-    [...(node.produces ?? []), ...(node.optional_produces ?? [])],
-    unitKind,
-  ).map((name) => resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx));
+  return applicableProduceNames(node, unitKind, true)
+    .map((name) => resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx));
+}
+
+// The one applicability rule for a stage's kind-aware produce set. Callers
+// choose whether optional produces belong in their operation: directives name
+// them, while coverage and ensemble execution evidence use required produces
+// only. Keeping the filter here prevents the three paths from drifting on how
+// untagged units and unannotated artifacts behave.
+function applicableProduceNames(
+  node: GraphStage,
+  unitKind: string | null,
+  includeOptional: boolean,
+): string[] {
+  const names = includeOptional
+    ? [...(node.produces ?? []), ...(node.optional_produces ?? [])]
+    : (node.produces ?? []);
+  return filterProducesByKind(node.produces_kinds, names, unitKind);
 }
 
 // Compute the `gate` value for a run-stage directive — the human-judgement
@@ -1880,47 +1939,57 @@ const SWARM_FOR_EACH = "unit-of-work";
 const SWARM_MODE = "subagent";
 
 // Resolve the eligible autonomous swarm's batches, or null when any trigger
-// condition is absent. Both emission and report-side exemptions use this one
-// predicate so a mode/autonomy pair cannot masquerade as a real swarm.
+// condition is absent. Emission and report-side verification share the
+// topology/state predicate below so a mode/autonomy pair cannot masquerade as
+// a real swarm.
 function eligibleAutonomousSwarmBatches(
   node: GraphStage,
   scope: string,
   stateContent: string | null,
   projectDir: string,
 ): string[][] | null {
-  if (node.phase !== "construction") return null;
-  if (node.for_each !== SWARM_FOR_EACH || node.mode !== SWARM_MODE) return null;
-  if (isSkeletonGateStage(node, scope)) return null;
-  if (readAutonomyMode(stateContent) !== "autonomous") return null;
+  if (!isAutonomousSwarmCandidate(node, scope, stateContent)) return null;
   const r = resolveBoltBatches(projectDir);
   if (r.state !== "ok" || r.batches.length === 0) return null;
   return r.batches;
 }
 
-// Report-side swarm exemption for the disk-backed approval guards (per-unit
-// coverage, ensemble evidence). A swarm's produced artifacts AND its support
-// agents' contribution files live in the units' Bolt worktrees — the referee's
-// `complete --merge` consolidates only state/audit/graph back to the main
-// checkout — so a disk check in the main tree can never be satisfied for a
-// swarm stage, settled or mid-run. Exempt the stage whenever the swarm trigger
-// conditions hold and the DAG either yields batches (eligible, including
-// mid-run) or is MALFORMED: a corrupted units artifact after a converged run
-// must not wedge the settle approve (the old mode+autonomy predicate never
-// consulted the DAG). An ABSENT artifact ('none') is not exempted — no DAG
-// means the stage ran the inline single-iteration path, so the ordinary
-// disk-backed guards apply.
-function autonomousSwarmGuardExemption(
+// The topology/state half of swarm eligibility, shared by next-side fan-out and
+// report-side settled-swarm verification. DAG existence and convergence are
+// deliberately separate: a non-empty DAG proves work is planned, not finished.
+function isAutonomousSwarmCandidate(
   node: GraphStage,
   scope: string,
   stateContent: string | null,
-  projectDir: string,
 ): boolean {
   if (node.phase !== "construction") return false;
   if (node.for_each !== SWARM_FOR_EACH || node.mode !== SWARM_MODE) return false;
   if (isSkeletonGateStage(node, scope)) return false;
   if (readAutonomyMode(stateContent) !== "autonomous") return false;
-  const r = resolveBoltBatches(projectDir);
-  return (r.state === "ok" && r.batches.length > 0) || r.state === "malformed";
+  return true;
+}
+
+// Report-side exemption for disk-backed approval guards. Swarm artifacts and
+// collaborator contributions stay in Bolt worktrees, so the main checkout
+// cannot prove them from disk. The audit ledger can: exemption is granted only
+// after EVERY unit in a valid DAG has a current-run convergence row. An active,
+// partially-converged swarm must refuse a stray report --approved, otherwise the
+// state transition would complete the whole stage and skip later batches.
+// Malformed/absent DAGs fail closed because the expected unit set is unknowable.
+function isSettledAutonomousSwarm(
+  node: GraphStage,
+  scope: string,
+  stateContent: string | null,
+  projectDir: string,
+  resolution?: BoltBatchesResolution,
+): boolean {
+  if (!isAutonomousSwarmCandidate(node, scope, stateContent)) return false;
+  const r = resolution ?? resolveBoltBatches(projectDir);
+  if (r.state !== "ok") return false;
+  const units = r.batches.flat();
+  if (units.length === 0) return false;
+  const converged = swarmConvergedUnits(projectDir, node.slug);
+  return units.every((unit) => converged.has(unit));
 }
 
 // Try to handle an eligible autonomous swarm stage, returning true (and emitting)
@@ -2111,7 +2180,7 @@ function unitCovered(
 ): boolean {
   const names = node.produces ?? [];
   if (names.length === 0) return false;
-  const applicable = filterProducesByKind(node.produces_kinds, names, unitKind);
+  const applicable = applicableProduceNames(node, unitKind, false);
   for (const name of applicable) {
     const rel = resolveArtifactPath(name, node, unit, recordPrefix, codekbCtx);
     const abs = join(projectDir, ...rel.split("/"));
@@ -2190,9 +2259,9 @@ function emitPerUnitRunStage(
   }
   const units = r.batches.flat();
 
-  // Read the per-unit kinds map ONCE (matches orderedUnits' single-read
-  // pattern). null = no kinds known = every unit on the full matrix.
-  const kinds = readBoltDagUnitKinds(projectDir);
+  // The resolution carries batches + kinds from one graph snapshot. null =
+  // no kinds known = every unit on the full matrix.
+  const kinds = r.unitKinds;
   const pick = nextUncoveredUnit(projectDir, node, units, recordPrefix, codekbCtx, kinds);
   if (pick === null) {
     // Every unit is already covered, but the checkbox is still in-flight: the
@@ -2902,6 +2971,11 @@ type EnsembleEvidenceResult =
   | { ok: true }
   | { ok: false; message: string };
 
+function requiresEnsembleEvidence(node: GraphStage): boolean {
+  return node.mode === "mob" ||
+    (node.mode === "subagent" && (node.support_agents ?? []).length > 0);
+}
+
 // Validate the structural completion evidence required by mob and
 // subagent-with-supports stages. Per-unit stages carry one contribution set
 // under every unit's stage directory; ordinary stages carry one set under the
@@ -2911,18 +2985,18 @@ function checkEnsembleEvidence(
   slug: string,
   pd: string,
   recordPrefix: string | null,
-  scope: string,
-  stateContent: string | null,
-  options: { singleRun?: boolean } = {},
+  options: {
+    singleRun?: boolean;
+    settledSwarm?: boolean;
+    boltBatches?: BoltBatchesResolution;
+    unitKinds?: Map<string, string> | null;
+  } = {},
 ): EnsembleEvidenceResult {
   const isGated = node.phase !== "initialization";
-  const needsEnsembleEvidence =
-    node.mode === "mob" ||
-    (node.mode === "subagent" && (node.support_agents ?? []).length > 0);
   if (
     !isGated ||
-    !needsEnsembleEvidence ||
-    autonomousSwarmGuardExemption(node, scope, stateContent, pd) ||
+    !requiresEnsembleEvidence(node) ||
+    options.settledSwarm === true ||
     process.env.AIDLC_DISABLE_ENSEMBLE_EVIDENCE === "1"
   ) {
     return { ok: true };
@@ -2935,20 +3009,25 @@ function checkEnsembleEvidence(
   // DAG's per-unit contribution sets would make a per-unit single stage
   // unapprovable. Evidence for a single run is checked at the stage level.
   const perUnit = !options.singleRun && isPerUnit(node);
-  const units = perUnit ? orderedUnits(pd) : [];
+  const resolution = perUnit
+    ? (options.boltBatches ?? resolveBoltBatches(pd))
+    : null;
+  const units = resolution?.state === "ok" ? resolution.batches.flat() : [];
   const usesUnitDirs = units.length > 0;
-  const kinds = usesUnitDirs ? readBoltDagUnitKinds(pd) : null;
+  const kinds = usesUnitDirs
+    ? (
+        options.unitKinds === undefined
+          ? (resolution?.state === "ok" ? resolution.unitKinds : null)
+          : options.unitKinds
+      )
+    : null;
   const requiredProduces = node.produces ?? [];
   // Match the per-unit coverage ledger: a kind-pruned unit with zero
   // applicable required artifacts is vacuously covered, so no directive ever
   // dispatches its collaborators and it cannot owe contribution files.
   const evidenceUnits = units.filter((unit) =>
     requiredProduces.length === 0 ||
-    filterProducesByKind(
-      node.produces_kinds,
-      requiredProduces,
-      kinds?.get(unit) ?? null,
-    ).length > 0
+    applicableProduceNames(node, kinds?.get(unit) ?? null, false).length > 0
   );
   const contributionDirs: Array<{ path: string; unit: string | null }> = usesUnitDirs
     ? evidenceUnits.map((unit) => ({
@@ -3055,16 +3134,15 @@ function handleSingleReport(
   }
 
   const pd = resolveProjectDir(projectDir);
-  const stateContent = loadStateFileIfPresent(pd);
-  const scope = stateContent ? (getField(stateContent, "Scope")?.trim() || DEFAULT_SCOPE) : DEFAULT_SCOPE;
-  const recordPrefix = relativeRecordDir(pd);
+  // Isolated reports never inherit the main workflow's scope, autonomy, or DAG.
+  // Only an ensemble stage needs its record prefix for contribution evidence;
+  // ordinary stages go straight to the synthetic audit pair.
+  const recordPrefix = requiresEnsembleEvidence(node) ? relativeRecordDir(pd) : null;
   const evidence = checkEnsembleEvidence(
     node,
     node.slug,
     pd,
     recordPrefix,
-    scope,
-    stateContent,
     { singleRun: true },
   );
   if (!evidence.ok) {
@@ -3233,6 +3311,23 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     return;
   }
   const isGated = node.phase !== "initialization";
+  const needsApprovalGuards = stageCheckbox.state !== "completed";
+  // Per-unit coverage and ensemble evidence must observe one immutable DAG/kind
+  // snapshot. This also prevents a stale-graph heal from being repeated (and
+  // warned about repeatedly) during one report.
+  const boltResolution =
+    needsApprovalGuards && isPerUnit(node) ? resolveBoltBatches(pd) : null;
+  const unitKinds =
+    boltResolution?.state === "ok" ? boltResolution.unitKinds : null;
+  const isAutonomousSwarm =
+    needsApprovalGuards &&
+    isSettledAutonomousSwarm(
+      node,
+      scope,
+      stateContent,
+      pd,
+      boltResolution ?? undefined,
+    );
 
   // Per-unit coverage gate (issue #368), DETERMINISTIC enforcement on the
   // approve path. The engine only PRESENTS the stage's real gate once every unit
@@ -3260,16 +3355,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
   // `complete --merge` consolidates only the AIDLC metadata back to the main
   // checkout (a converged unit's produced artifacts stay in its Bolt worktree),
   // so this disk-coverage check would find EVERY swarm unit uncovered and refuse
-  // the approve outright even after the whole stage has built. We exclude any
-  // autonomous swarm — mid-run, settled, or with a post-run-corrupted DAG
-  // (autonomousSwarmGuardExemption's malformed tolerance) — the same exemption
-  // the ensemble-evidence gate uses. The guard remains for every inline
-  // per-unit stage (the four design stages, and code-generation when it falls
-  // back to the inline path off the swarm).
-  const isAutonomousSwarm =
-    autonomousSwarmGuardExemption(node, scope, stateContent, pd);
+  // the approve outright even after the whole stage has built. We exclude only
+  // a SETTLED autonomous swarm whose full DAG has current-run convergence rows.
+  // Mid-run and malformed-DAG reports fail closed, preventing an accidental
+  // report from completing the stage before later batches run. The guard remains
+  // for every inline per-unit stage (the four design stages, and code-generation
+  // when it falls back to the inline path off the swarm).
   if (isGated && isPerUnit(node) && stageCheckbox.state !== "completed" && !isAutonomousSwarm) {
-    const r = resolveBoltBatches(pd);
+    const r = boltResolution ?? resolveBoltBatches(pd);
     if (r.state === "malformed") {
       emit({
         kind: "error",
@@ -3282,8 +3375,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     const codekbCtx = codekbCtxFor(pd);
     if (r.state === "ok") {
       const units = r.batches.flat();
-      const kinds = readBoltDagUnitKinds(pd);
-      const pick = nextUncoveredUnit(pd, node, units, recordPrefix, codekbCtx, kinds);
+      const pick = nextUncoveredUnit(pd, node, units, recordPrefix, codekbCtx, unitKinds);
       if (pick !== null) {
         emit({
           kind: "error",
@@ -3324,8 +3416,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       slug,
       pd,
       recordPrefix,
-      scope,
-      stateContent,
+      {
+        settledSwarm: isAutonomousSwarm,
+        boltBatches: boltResolution ?? undefined,
+        unitKinds,
+      },
     );
     if (!evidence.ok) {
       emit(errorDirective(evidence.message));

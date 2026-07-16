@@ -27,6 +27,7 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   resetAidlcEnv,
+  seedBoltDag,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -102,23 +103,6 @@ function constructionState(current: string, skeletonStance = "on"): string {
 `;
 }
 
-/** Write a single-batch bolt_dag whose units carry an optional kind. */
-function seedKindDag(proj: string, units: Array<{ name: string; kind?: string }>): void {
-  writeFileSync(
-    join(seededRecordDir(proj), "runtime-graph.json"),
-    JSON.stringify(
-      {
-        bolt_dag: {
-          units: units.map((u) => (u.kind ? { name: u.name, kind: u.kind, depends_on: [] } : { name: u.name, depends_on: [] })),
-          batches: [units.map((u) => u.name)],
-        },
-      },
-      null,
-      2,
-    ),
-  );
-}
-
 function coverUnit(proj: string, unit: string, slug: string, names: string[]): void {
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
   mkdirSync(dir, { recursive: true });
@@ -171,7 +155,7 @@ describe("t208 engine unit-kind pruning", () => {
   // (all-kinds) artifacts; the three service-gated ones are pruned out.
   test("1: a spec unit's directive prunes the kind-gated produces paths", () => {
     const proj = seedProject("nfr-requirements");
-    seedKindDag(proj, [{ name: "api", kind: "spec" }]);
+    seedBoltDag(proj, [{ name: "api", kind: "spec" }]);
     const d = runNext(proj);
     expect(d.stage).toBe("nfr-requirements");
     expect(d.unit).toBe("api");
@@ -187,7 +171,7 @@ describe("t208 engine unit-kind pruning", () => {
   // applicable artifacts advances iteration past it (to the untagged unit).
   test("2: covering only the pruned set advances iteration off the spec unit", () => {
     const proj = seedProject("nfr-requirements");
-    seedKindDag(proj, [{ name: "api", kind: "spec" }, { name: "svc" }]);
+    seedBoltDag(proj, [{ name: "api", kind: "spec" }, { name: "svc" }]);
     coverUnit(proj, "api", "nfr-requirements", NFR_REQ_SPEC);
     const d = runNext(proj);
     // api is covered by its two-artifact pruned set; the engine moves to svc.
@@ -198,7 +182,7 @@ describe("t208 engine unit-kind pruning", () => {
   // conservatism). svc (no kind) must still produce all five paths.
   test("3: an untagged unit still requires the full matrix", () => {
     const proj = seedProject("nfr-requirements");
-    seedKindDag(proj, [{ name: "svc" }]);
+    seedBoltDag(proj, [{ name: "svc" }]);
     const d = runNext(proj);
     expect(d.unit).toBe("svc");
     for (const name of NFR_REQ_ALL) {
@@ -211,7 +195,7 @@ describe("t208 engine unit-kind pruning", () => {
   // is already covered and `next` presents the real gate on the last unit.
   test("4: a packaging unit on functional-design is vacuously covered", () => {
     const proj = seedProject("functional-design");
-    seedKindDag(proj, [{ name: "pack", kind: "packaging" }]);
+    seedBoltDag(proj, [{ name: "pack", kind: "packaging" }]);
     const d = runNext(proj);
     expect(d.stage).toBe("functional-design");
     // pack owes nothing; every unit is covered -> the all-covered re-entry
@@ -226,7 +210,7 @@ describe("t208 engine unit-kind pruning", () => {
   // declared artifacts exist"). The guard is re-enabled for this case.
   test("5: an all-vacuous per-unit stage approves (guard's vacuous branch)", () => {
     const proj = seedProject("functional-design");
-    seedKindDag(proj, [{ name: "pack1", kind: "packaging" }, { name: "pack2", kind: "packaging" }]);
+    seedBoltDag(proj, [{ name: "pack1", kind: "packaging" }, { name: "pack2", kind: "packaging" }]);
     const d = runReport(proj, ["--stage", "functional-design", "--result", "approved"], true);
     expect(d.kind).toBe("done");
   }, 30000);
@@ -237,7 +221,7 @@ describe("t208 engine unit-kind pruning", () => {
   // not a blanket bypass.
   test("5b: a non-vacuous unit with no artifacts is still refused (guard enabled)", () => {
     const proj = seedProject("functional-design");
-    seedKindDag(proj, [{ name: "svc", kind: "service" }]);
+    seedBoltDag(proj, [{ name: "svc", kind: "service" }]);
     const d = runReport(proj, ["--stage", "functional-design", "--result", "approved"], true);
     // Either the per-unit coverage guard (svc uncovered) or the artifact guard
     // refuses; the point is the approval does NOT commit.
@@ -248,7 +232,7 @@ describe("t208 engine unit-kind pruning", () => {
   // even a spec unit gets the full produces set.
   test("6: a stage without produces_kinds ignores kinds (full produces)", () => {
     const proj = seedProject("code-generation");
-    seedKindDag(proj, [{ name: "api", kind: "spec" }]);
+    seedBoltDag(proj, [{ name: "api", kind: "spec" }]);
     const d = runNext(proj);
     expect(d.stage).toBe("code-generation");
     expect(d.unit).toBe("api");
@@ -260,7 +244,7 @@ describe("t208 engine unit-kind pruning", () => {
   // full matrix, gate suppressed on a non-last unit. Regression anchor.
   test("7: a kindless dag keeps today's full-matrix behaviour", () => {
     const proj = seedProject("functional-design");
-    seedKindDag(proj, [{ name: "alpha" }, { name: "beta" }]);
+    seedBoltDag(proj, [{ name: "alpha" }, { name: "beta" }]);
     const d = runNext(proj);
     expect(d.unit).toBe("alpha");
     expect(d.gate).toBe(false);
@@ -275,7 +259,7 @@ describe("t208 engine unit-kind pruning", () => {
   // optional_produces union, not produces alone), a service unit's must not.
   test("8: a ui unit's directive carries frontend-components; a service unit's omits it", () => {
     const proj = seedProject("functional-design");
-    seedKindDag(proj, [{ name: "web", kind: "ui" }]);
+    seedBoltDag(proj, [{ name: "web", kind: "ui" }]);
     const d = runNext(proj);
     expect(d.unit).toBe("web");
     expect(d.produces).toContain(`${RP}/construction/web/functional-design/frontend-components.md`);
@@ -285,7 +269,7 @@ describe("t208 engine unit-kind pruning", () => {
     expect(d.produces?.some((p) => p.includes("/business-rules.md"))).toBe(false);
 
     const proj2 = seedProject("functional-design");
-    seedKindDag(proj2, [{ name: "api", kind: "service" }]);
+    seedBoltDag(proj2, [{ name: "api", kind: "service" }]);
     const d2 = runNext(proj2);
     expect(d2.unit).toBe("api");
     expect(d2.produces?.some((p) => p.includes("/frontend-components.md"))).toBe(false);
@@ -300,7 +284,7 @@ describe("t208 engine unit-kind pruning", () => {
   // advances to the next unit.
   test("8b: a ui unit is covered without its optional artifact on disk", () => {
     const proj = seedProject("functional-design");
-    seedKindDag(proj, [{ name: "web", kind: "ui" }, { name: "svc" }]);
+    seedBoltDag(proj, [{ name: "web", kind: "ui" }, { name: "svc" }]);
     coverUnit(proj, "web", "functional-design", ["business-logic-model"]);
     const d = runNext(proj);
     expect(d.unit).toBe("svc");

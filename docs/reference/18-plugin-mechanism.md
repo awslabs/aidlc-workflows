@@ -295,10 +295,21 @@ a hand-authored agent-v1 JSON plus registration in the conductor's
 `aidlc-*-agent.toml` shape) on Codex. Compose therefore rejects a plugin stage
 whose dispatched topology (`mob`, `pipeline`, or `subagent` for the lead and
 supports; a `reviewer:` on any gated stage regardless of mode) names an agent
-with no dispatch surface in the installed agents directory, and records the
-stage, agent, and remediation in the compose drops log. Hand-authoring the
-surface and re-running compose accepts the stage. The Markdown persona remains
-composed for any accepted inline stage that also uses it.
+without the complete installed dispatch surface, and records the stage, agent,
+and remediation in the compose drops log. On Kiro, the JSON and `trustedAgents`
+registration are checked independently: having only one still rejects the
+stage. Hand-authoring the missing surface and re-running compose accepts the
+stage. The Markdown persona remains composed for any accepted inline stage that
+also uses it.
+
+`agent-team` is schema-reserved but has no runtime consumer, so compose rejects
+plugin stages that select it on every harness instead of silently treating them
+as inline. If the installed stage parser is unavailable, Kiro/Codex compose
+fails closed: only a stage with an explicit `mode: inline` scalar and no
+`reviewer:` is accepted (quoted scalar forms are recognized). A no-clobber
+upgrade cannot remove a stage composed by an older hook, so an existing stage
+that fails these dispatch checks remains on disk but emits a degraded health row
+naming the remediation.
 
 **Knowledge = methodology only** *(✅ projected + composed).* A plugin ships
 per-agent methodology knowledge into `knowledge/<agent-slug>/`, composed into

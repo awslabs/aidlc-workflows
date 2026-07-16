@@ -51,6 +51,8 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   resetAidlcEnv,
+  seedBoltDag,
+  seedBoltDagBatches,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -133,46 +135,6 @@ ${stanceLine}
 - **Current Stage**: ${current}
 - **Status**: Running
 `;
-}
-
-/** Write the bolt_dag runtime graph (one batch of `units`) into the record. */
-function seedBoltDag(proj: string, units: string[]): void {
-  writeFileSync(
-    join(seededRecordDir(proj), "runtime-graph.json"),
-    JSON.stringify(
-      {
-        bolt_dag: {
-          units: units.map((name) => ({ name, depends_on: [] })),
-          batches: [units],
-        },
-      },
-      null,
-      2,
-    ),
-  );
-}
-
-/**
- * Write a MULTI-batch bolt_dag (each inner array is one topological batch) into
- * the record. Used to exercise the autonomous-swarm carve-out: the swarm advances
- * one batch at a time, so the report-side coverage guard must NOT demand every
- * unit across all batches.
- */
-function seedMultiBatchDag(proj: string, batches: string[][]): void {
-  const names = batches.flat();
-  writeFileSync(
-    join(seededRecordDir(proj), "runtime-graph.json"),
-    JSON.stringify(
-      {
-        bolt_dag: {
-          units: names.map((name) => ({ name, depends_on: [] })),
-          batches,
-        },
-      },
-      null,
-      2,
-    ),
-  );
 }
 
 /** Add the autonomy grant after the Scope line, so code-generation swarms. */
@@ -479,19 +441,11 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     );
   }, 30000);
 
-  // 13: autonomous-swarm carve-out. code-generation under an autonomy grant with a
-  // MULTI-batch DAG [[alpha],[beta]] runs via the swarm (the engine emits the first
-  // unconverged batch as invoke-swarm). The report-side coverage guard must NOT
-  // demand disk artifacts for every unit: a swarm unit builds in its own Bolt
-  // worktree and complete --merge consolidates only the AIDLC metadata back to the
-  // main checkout, so the unit's produced artifacts never land in the main record
-  // tree. An all-units disk-coverage check would therefore find EVERY swarm unit
-  // uncovered and refuse the approve outright. The guard is scoped to exclude the
-  // autonomous swarm, so the report takes the normal forward path, not a per-unit
-  // coverage error (the swarm's own SWARM_UNIT_CONVERGED ledger is its coverage
-  // proof, and the engine advances batches on that signal).
+  // 13: a report arriving at an autonomous swarm's batch boundary must not
+  // complete the whole stage. Only a valid DAG with current-run convergence
+  // rows for every unit can receive the report-side disk-coverage exemption.
   const CG_PRODUCES = ["code-generation-plan", "code-summary"];
-  test("13: autonomous multi-batch code-generation swarm is not blocked by the coverage guard", () => {
+  test("13: autonomous multi-batch swarm refuses approval before every batch converges", () => {
     const proj = seedProject("code-generation", "on");
     // code-generation must be in-flight (not pending) for an approve to be valid;
     // flip its checkbox [-] and mark the upstream construction stages [x] so the
@@ -512,7 +466,7 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
       "- [-] code-generation — EXECUTE",
     );
     writeFileSync(statePath, state);
-    seedMultiBatchDag(proj, [["alpha"], ["beta"]]);
+    seedBoltDagBatches(proj, [["alpha"], ["beta"]]);
     setAutonomous(proj);
     // First batch (alpha) merged its artifacts; beta (batch 2) not yet.
     coverUnit(proj, "alpha", "code-generation", CG_PRODUCES);
@@ -527,15 +481,15 @@ describe("t186 engine-driven per-unit for_each iteration (issue #368)", () => {
     // next emits the swarm directive for the first batch (proves the swarm path).
     const nd = runNext(proj);
     expect(nd.kind).toBe("invoke-swarm");
-    // Reporting the batch-1 approval must NOT trip the all-units per-unit guard
-    // (which would deadlock the multi-batch swarm). The guard is scoped to exclude
-    // the autonomous swarm, so this commits instead of erroring.
+    // A stray report at the first batch boundary must fail closed rather than
+    // marking the stage complete and skipping beta.
     const d = runReport(proj, [
       "--stage",
       "code-generation",
       "--result",
       "approved",
     ]);
-    expect(d.kind).not.toBe("error");
+    expect(d.kind).toBe("error");
+    expect(d.message).toContain("(beta)");
   }, 30000);
 });

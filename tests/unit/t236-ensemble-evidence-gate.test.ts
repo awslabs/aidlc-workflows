@@ -25,14 +25,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
-  DEFAULT_RECORD_DIR,
-  DEFAULT_SPACE,
   resetAidlcEnv,
+  seedBoltDag,
   seededAuditShard,
   seededRecordDir,
   seededStateFile,
@@ -184,35 +183,36 @@ function graphVariant(
   return path;
 }
 
-function seedBoltDag(proj: string, units: string[]): void {
-  writeFileSync(
-    join(seededRecordDir(proj), "runtime-graph.json"),
-    `${JSON.stringify({
-      bolt_dag: {
-        units: units.map((name) => ({ name, depends_on: [] })),
-        batches: [units],
-      },
-    }, null, 2)}\n`,
-  );
+function perUnitEnsembleGraph(
+  proj: string,
+  mutate?: (node: Record<string, unknown>) => void,
+): string {
+  return graphVariant(proj, (node) => {
+    node.phase = "construction";
+    node.for_each = "unit-of-work";
+    node.mode = "mob";
+    node.support_agents = ["aidlc-design-agent"];
+    node.produces = ["fixture-artifact"];
+    node.optional_produces = [];
+    mutate?.(node);
+  });
 }
 
-function seedKindBoltDag(
-  proj: string,
-  units: Array<{ name: string; kind?: string }>,
-): void {
-  writeFileSync(
-    join(seededRecordDir(proj), "runtime-graph.json"),
-    `${JSON.stringify({
-      bolt_dag: {
-        units: units.map((unit) => ({
-          name: unit.name,
-          ...(unit.kind ? { kind: unit.kind } : {}),
-          depends_on: [],
-        })),
-        batches: [units.map((unit) => unit.name)],
-      },
-    }, null, 2)}\n`,
-  );
+function seedSwarmConverged(proj: string, units: string[]): void {
+  const shard = seededAuditShard(proj);
+  mkdirSync(dirname(shard), { recursive: true });
+  const blocks = units.map((unit, index) =>
+    [
+      "## Swarm Unit Converged",
+      `**Timestamp**: 2026-07-15T00:00:${String(index).padStart(2, "0")}.000Z`,
+      "**Event**: SWARM_UNIT_CONVERGED",
+      `**Unit name**: ${unit}`,
+      "",
+      "---",
+      "",
+    ].join("\n")
+  ).join("");
+  writeFileSync(shard, blocks, { flag: "a" });
 }
 
 function writeUnitContribution(proj: string, unit: string, agent: string): void {
@@ -324,14 +324,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
 
   test("per-unit ensemble evidence is required and accepted under every unit stage directory", () => {
     const missingProj = seedProject();
-    const missingGraph = graphVariant(missingProj, (node) => {
-      node.phase = "construction";
-      node.for_each = "unit-of-work";
-      node.mode = "mob";
-      node.support_agents = ["aidlc-design-agent"];
-      node.produces = ["fixture-artifact"];
-      node.optional_produces = [];
-    });
+    const missingGraph = perUnitEnsembleGraph(missingProj);
     seedBoltDag(missingProj, ["alpha", "beta"]);
     writeUnitArtifact(missingProj, "alpha");
     writeUnitArtifact(missingProj, "beta");
@@ -344,14 +337,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     );
 
     const completeProj = seedProject();
-    const completeGraph = graphVariant(completeProj, (node) => {
-      node.phase = "construction";
-      node.for_each = "unit-of-work";
-      node.mode = "mob";
-      node.support_agents = ["aidlc-design-agent"];
-      node.produces = ["fixture-artifact"];
-      node.optional_produces = [];
-    });
+    const completeGraph = perUnitEnsembleGraph(completeProj);
     seedBoltDag(completeProj, ["alpha", "beta"]);
     writeUnitArtifact(completeProj, "alpha");
     writeUnitArtifact(completeProj, "beta");
@@ -363,18 +349,12 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
 
   test("kind-pruned units that never execute do not owe contribution files", () => {
     const proj = seedProject();
-    const graph = graphVariant(proj, (node) => {
-      node.phase = "construction";
-      node.for_each = "unit-of-work";
-      node.mode = "mob";
-      node.support_agents = ["aidlc-design-agent"];
-      node.produces = ["fixture-artifact"];
-      node.optional_produces = [];
+    const graph = perUnitEnsembleGraph(proj, (node) => {
       node.produces_kinds = {
         "fixture-artifact": ["service"],
       };
     });
-    seedKindBoltDag(proj, [
+    seedBoltDag(proj, [
       { name: "pack", kind: "packaging" },
       { name: "svc", kind: "service" },
     ]);
@@ -388,14 +368,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
 
   test("no-DAG per-unit fallback still requires stage-level ensemble evidence", () => {
     const missingProj = seedProject();
-    const missingGraph = graphVariant(missingProj, (node) => {
-      node.phase = "construction";
-      node.for_each = "unit-of-work";
-      node.mode = "mob";
-      node.support_agents = ["aidlc-design-agent"];
-      node.produces = ["fixture-artifact"];
-      node.optional_produces = [];
-    });
+    const missingGraph = perUnitEnsembleGraph(missingProj);
     const missing = report(missingProj, { AIDLC_STAGE_GRAPH: missingGraph });
     expect(missing.kind).toBe("error");
     expect(missing.message).toContain("aidlc-design-agent (no contribution file)");
@@ -404,14 +377,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     );
 
     const completeProj = seedProject();
-    const completeGraph = graphVariant(completeProj, (node) => {
-      node.phase = "construction";
-      node.for_each = "unit-of-work";
-      node.mode = "mob";
-      node.support_agents = ["aidlc-design-agent"];
-      node.produces = ["fixture-artifact"];
-      node.optional_produces = [];
-    });
+    const completeGraph = perUnitEnsembleGraph(completeProj);
     writeFallbackContribution(completeProj, "aidlc-design-agent");
     const complete = report(completeProj, {
       AIDLC_STAGE_GRAPH: completeGraph,
@@ -440,13 +406,8 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
   // EARLIER stage into construction so the mutated user-stories is not the
   // skeleton gate - matching the real swarm stage (code-generation, 3.5).
   function nonSkeletonSwarmGraph(proj: string): string {
-    const path = graphVariant(proj, (node) => {
-      node.phase = "construction";
-      node.for_each = "unit-of-work";
+    const path = perUnitEnsembleGraph(proj, (node) => {
       node.mode = "subagent";
-      node.support_agents = ["aidlc-design-agent"];
-      node.produces = ["fixture-artifact"];
-      node.optional_produces = [];
     });
     const graph = JSON.parse(readFileSync(path, "utf-8")) as Array<Record<string, unknown>>;
     const earlier = graph.find((entry) => entry.slug === "requirements-analysis");
@@ -456,25 +417,19 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     return path;
   }
 
-  test("MID-RUN autonomous swarm is exempt: contributions live in Bolt worktrees", () => {
-    // A swarm's contribution files stay in the units' Bolt worktrees (complete
-    // --merge consolidates only state/audit/graph), so a batch-boundary approve
-    // must not demand main-tree evidence for units of any batch.
+  test("MID-RUN autonomous swarm fails closed until every unit converges", () => {
     const proj = seedProject();
     setAutonomous(proj);
     seedBoltDag(proj, ["unit-a", "unit-b"]);
     const graph = nonSkeletonSwarmGraph(proj);
     // No convergence rows, no contribution files anywhere: mid-run.
     const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
-    expect(d.message ?? "").not.toContain("ensemble must convene");
-    expect(d.message ?? "").not.toContain("units are not yet complete");
+    expect(d.kind).toBe("error");
+    expect(d.message).toContain("(unit-a, unit-b)");
+    expect(d.message).toContain("not yet complete");
   });
 
-  test("a corrupted units artifact after a swarm run does not wedge the settle approve", () => {
-    // Post-run corruption of unit-of-work-dependency.md (with no cached DAG)
-    // resolves as "malformed"; the old mode+autonomy predicate tolerated this,
-    // so the exemption must too - the error remediation loop would otherwise
-    // demand a fix to an artifact the approve no longer needs.
+  test("a malformed swarm DAG fails closed because the expected unit set is unknowable", () => {
     const proj = seedProject();
     setAutonomous(proj);
     const depDir = join(seededRecordDir(proj), "inception", "units-generation");
@@ -485,8 +440,22 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     );
     const graph = nonSkeletonSwarmGraph(proj);
     const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
+    expect(d.kind).toBe("error");
+    expect(d.message).toContain("unit list cannot be resolved");
+  });
+
+  test("a fully converged autonomous swarm is exempt from main-tree evidence", () => {
+    // Swarm artifacts and contributions remain in Bolt worktrees. Once every
+    // valid-DAG unit has a current-run convergence row, the audit ledger is the
+    // completion proof and main-tree disk guards must stand down.
+    const proj = seedProject();
+    setAutonomous(proj);
+    seedBoltDag(proj, ["unit-a", "unit-b"]);
+    seedSwarmConverged(proj, ["unit-a", "unit-b"]);
+    const graph = nonSkeletonSwarmGraph(proj);
+    const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
     expect(d.message ?? "").not.toContain("ensemble must convene");
-    expect(d.message ?? "").not.toContain("unit list cannot be resolved");
+    expect(d.message ?? "").not.toContain("not yet complete");
   });
 
   test("report --single on a per-unit ensemble stage checks STAGE-level evidence, not the main DAG", () => {
@@ -495,14 +464,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     // workflow's DAG. Stage-level evidence still applies.
     const missingProj = seedProject();
     seedBoltDag(missingProj, ["unit-a", "unit-b"]);
-    const missingGraph = graphVariant(missingProj, (node) => {
-      node.phase = "construction";
-      node.for_each = "unit-of-work";
-      node.mode = "mob";
-      node.support_agents = ["aidlc-design-agent"];
-      node.produces = ["fixture-artifact"];
-      node.optional_produces = [];
-    });
+    const missingGraph = perUnitEnsembleGraph(missingProj);
     const missing = runReport(missingProj, [
       "--single", "--stage", "user-stories", "--result", "approved",
     ], { AIDLC_STAGE_GRAPH: missingGraph });
@@ -513,14 +475,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
 
     const completeProj = seedProject();
     seedBoltDag(completeProj, ["unit-a", "unit-b"]);
-    const completeGraph = graphVariant(completeProj, (node) => {
-      node.phase = "construction";
-      node.for_each = "unit-of-work";
-      node.mode = "mob";
-      node.support_agents = ["aidlc-design-agent"];
-      node.produces = ["fixture-artifact"];
-      node.optional_produces = [];
-    });
+    const completeGraph = perUnitEnsembleGraph(completeProj);
     writeFallbackContribution(completeProj, "aidlc-design-agent");
     const complete = runReport(completeProj, [
       "--single", "--stage", "user-stories", "--result", "approved",
