@@ -193,7 +193,6 @@ Utilities:
   space             List spaces (read-only; --json for structured output)
   space <name>      Switch the active space (team)
   space-create <name>  Create a new space (team) seeded from the framework baseline
-  select-plugins [names]  Show or set enabled plugins (comma-separated names)
   --doctor          Run health check on hooks, settings, and directory structure
   --stage <id>      Jump to a specific stage (by slug or number, e.g., code-generation or 3.5)
   --phase <name>    Jump to the first in-scope stage of a phase (e.g., construction or 3)
@@ -211,7 +210,6 @@ Examples:
   /aidlc feature                                Start a feature workflow
   /aidlc Fix the login timeout bug              Auto-detected as bugfix scope
   /aidlc compose "harden the deploy pipeline"   Composer proposes a tailored plan
-  bun ${harnessDir()}/tools/aidlc-utility.ts select-plugins aidlc,test-pro  Enable core + test-pro
   /aidlc                                        Resume or begin
   /aidlc --stage code-generation                Jump to code-generation stage
   /aidlc --phase construction --scope bugfix    Jump to construction with bugfix scope

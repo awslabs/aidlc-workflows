@@ -6,9 +6,10 @@ All notable changes to this project will be documented in this file.
 
 The user guide, harness guides, generated onboarding, and `/aidlc --help` now agree with the implemented command, harness, agent, and audit surfaces. Kiro IDE instructions also distinguish its skill-based conductor from Kiro CLI's agent-v1 defaults. **Upgrade:** re-copy your `dist/<harness>/` shell to refresh the corrected onboarding and help text.
 
-* `/aidlc --help` now lists only commands routed by `/aidlc`; the direct-only `aidlc-utility.ts codekb-path` helper is documented separately.
+* `/aidlc --help` now lists only commands routed by `/aidlc`; the direct-only `aidlc-utility.ts codekb-path` and `select-plugins` helpers are documented separately.
 * Kiro CLI is covered throughout the harness roster, and Kiro IDE setup no longer claims that CLI-only `settings/cli.json` selects an IDE default agent.
-* Kiro IDE's conductor and primitive map now distinguish its prose-only reviewer scope and IDE-native rule and tool surfaces from the unregistered reviewer-scope hook and Kiro CLI-only resources, settings, and headless mode.
+* Kiro IDE's conductor and primitive map now distinguish its prose-only reviewer scope and IDE-native tool surfaces from the unregistered reviewer-scope hook and Kiro CLI-only settings and headless mode; its standing rules use the shared Kiro resource glob, which follows active-space switches.
+* Codex onboarding and the primitive map now point agent roles at `.codex/agents/`, while `.agents/` remains the skill-discovery tree.
 * Agent documentation distinguishes the 14-agent roster (11 domain agents, two reviewers, and the composer), and the audit taxonomy is synchronized with its 72-event registry.
 * Agent tool tables describe expected Bash and WebSearch use rather than access grants; every persona continues to inherit the full session toolset.
 * Documentation parity tests now derive command, harness, agent, and event-count claims from authored implementation surfaces to prevent recurrence.

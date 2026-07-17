@@ -34,7 +34,7 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc --test-strategy <level>` | Override test strategy (minimal, standard, comprehensive) |
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
-| `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Show or set the enabled plugin list for this install |
+| `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct-only: show or set the enabled plugin list for this install |
 
 ---
 
@@ -493,6 +493,7 @@ are never derived by hand.
 
 ### `aidlc-utility select-plugins` - install plugin selection
 
+This is a **direct utility invocation**, not an `/aidlc select-plugins` command.
 `bun .claude/tools/aidlc-utility.ts select-plugins` prints the current selection (`all enabled (no selection)` when the `plugins` key is absent) and the known plugin names. Pass a comma-separated list to set it:
 
 ```bash

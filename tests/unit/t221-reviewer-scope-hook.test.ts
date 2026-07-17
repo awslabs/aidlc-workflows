@@ -623,14 +623,18 @@ describe("t221 (c) harness registration and protocol prose", () => {
     );
     expect(body).toContain(".aidlc-reviewer-dispatch.json");
     // Step 1: the write, per-unit only, exempt list carries the carve-out.
-    expect(body).toMatch(/Dispatch record \(per-unit stages\)/);
+    expect(body).toMatch(/Dispatch record \(per-unit stages; enforcement-capable harnesses only\)/);
     expect(body).toMatch(/append its path to `exempt`/);
+    expect(body).toContain("On a harness without reviewer-scope enforcement");
+    expect(body).toContain("do not write the record");
     // Step 3: the delete on verdict read.
     expect(body).toMatch(/Read verdict.*delete `<record>\/\.aidlc-reviewer-dispatch\.json`/s);
   });
 
   test("harnesses with reviewer-scope enforcement carry the dispatch-record instruction", () => {
-    for (const harness of HARNESS_MATRIX.filter((entry) => entry.name !== "kiro-ide")) {
+    for (const harness of HARNESS_MATRIX.filter(
+      (entry) => entry.capabilities.reviewerScopeRegistration !== "unsupported",
+    )) {
       const body = readFileSync(join(harness.authoredRoot, "skills", "aidlc", "SKILL.md"), "utf-8");
       const labelled = `harness ${harness.name}: ${body}`;
       expect(labelled).toContain(".aidlc-reviewer-dispatch.json");
@@ -645,6 +649,7 @@ describe("t221 (c) harness registration and protocol prose", () => {
     );
     expect(body).toContain("read-scope bound is prose-only on this harness");
     expect(body).toContain("no IDE reviewer-scope hook consumes that record");
+    expect(body).toContain("shared protocol makes its dispatch-record steps conditional");
     expect(body).not.toContain(".aidlc-reviewer-dispatch.json");
     expect(body).not.toContain("reviewer-scope PreToolUse hook enforces");
   });

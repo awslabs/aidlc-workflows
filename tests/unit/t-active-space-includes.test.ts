@@ -30,6 +30,7 @@ import {
   cpSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -186,6 +187,38 @@ describe("t-active-space-includes: Kiro agents/*.json resources glob", () => {
     const written = repointHarnessIncludes(root, "teamB");
     expect(written.some((p) => p.endsWith("broken.json"))).toBe(false);
     expect(readFileSync(bad, "utf-8")).toBe("{ not valid json");
+  });
+});
+
+describe("t-active-space-includes: Kiro IDE resources follow the active space", () => {
+  beforeEach(() => {
+    process.env.AIDLC_HARNESS_DIR = ".kiro";
+  });
+
+  test("re-points every IDE agent JSON memory glob while preserving the remaining config", () => {
+    const root = freshRoot();
+    seedSpaces(root);
+    const agentsSrc = distSurface("kiro-ide", ".kiro", "agents");
+    const agentsDst = join(root, ".kiro", "agents");
+    mkdirSync(agentsDst, { recursive: true });
+    const agentFiles = readdirSync(agentsSrc).filter((name) => name.endsWith(".json")).sort();
+    for (const name of agentFiles) cpSync(join(agentsSrc, name), join(agentsDst, name));
+
+    const conductorPath = join(agentsDst, "aidlc.json");
+    const before = JSON.parse(readFileSync(conductorPath, "utf-8")) as {
+      resources: string[];
+      [key: string]: unknown;
+    };
+    const written = repointHarnessIncludes(root, "teamB");
+    expect(written).toHaveLength(agentFiles.length);
+
+    const after = JSON.parse(readFileSync(conductorPath, "utf-8")) as {
+      resources: string[];
+      [key: string]: unknown;
+    };
+    expect(after.resources).toContain("file://aidlc/spaces/teamB/memory/**/*.md");
+    expect(after.resources.some((resource) => resource.includes("/default/memory/"))).toBe(false);
+    expect({ ...after, resources: before.resources }).toEqual(before);
   });
 });
 

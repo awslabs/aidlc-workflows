@@ -454,6 +454,7 @@ bun .claude/tools/aidlc-utility.ts <subcommand>
 | `space [name]` | List spaces (`--json`) or switch the active-space cursor and harness include. Normally routed from `/aidlc space [name]`. | — |
 | `space-create <name>` | Create a new space from the framework memory baseline. Normally routed from `/aidlc space-create <name>`. | — |
 | `codekb-path [--repo <name>] [--json]` | Direct-only, read-only query that prints the deterministic per-repo codekb directory. There is no `/aidlc codekb-path` route. | — |
+| `select-plugins [names]` | Direct-only query/update for the install's enabled plugin set. There is no `/aidlc select-plugins` route. | `PLUGIN_SELECTION_CHANGED` in set mode |
 | `scope-change` | Atomic scope updates mid-workflow (recalculate stage inclusion). Re-plans which stages are EXECUTE/SKIP. | `SCOPE_CHANGED` |
 | `config-change` | `--depth` / `--test-strategy` updates on an active workflow | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED` |
 | `set-status` | Low-level state-field sync (called by `sync-statusline.ts` hook on TaskUpdate) | — |
@@ -462,13 +463,14 @@ bun .claude/tools/aidlc-utility.ts <subcommand>
 | `recompose` | In-flight plan re-shape: `--skip <slug,...>` / `--add <slug,...>` flips PENDING ahead-of-cursor stages' plan suffixes on the live state file, under the audit lock. Validates strictly (a starved required input, a frozen/behind-cursor stage, a walking-skeleton anchor move, a non-Running workflow, or autonomous Construction all reject) and rebuilds the derived state fields. | `RECOMPOSED` |
 | `resolve-env-scope` | Validate `AWS_AIDLC_DEFAULT_SCOPE` env var and emit its value to stdout | — |
 | `scope-table` | Render or drift-check the compiled scope table in the orchestrator skill. | — |
+| `stage-table` | Render or drift-check the compiled stage table in the orchestrator skill. | — |
 
 The user-facing `intent`, `space`, and `space-create` forms are covered in
 [CLI Commands](../guide/12-cli-commands.md) and
-[Spaces and Intents](../guide/03-spaces-and-intents.md). `codekb-path` is
-intentionally invoked directly as
-`bun <harness-dir>/tools/aidlc-utility.ts codekb-path`; it is stage machinery,
-not an orchestrator command.
+[Spaces and Intents](../guide/03-spaces-and-intents.md). `codekb-path` and
+`select-plugins` are intentionally invoked directly as
+`bun <harness-dir>/tools/aidlc-utility.ts <verb>`; neither is an orchestrator
+command.
 
 ### Design Rationale
 

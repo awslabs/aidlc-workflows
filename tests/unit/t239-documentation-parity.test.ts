@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+import codexOnboardingFills from "../../harness/codex/onboarding.fills.ts";
+import { renderOnboarding } from "../../scripts/onboarding.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const at = (...parts: string[]): string => join(ROOT, ...parts);
@@ -238,10 +240,18 @@ describe("documentation parity derives current behavior from authored implementa
 
     expect(ideCell("Agent personas")).toContain("`tools:` grants");
     expect(ideCell("Agent personas")).not.toContain("agent configs");
-    expect(ideCell("Standing rules")).toContain("`rules_in_context`");
-    expect(ideCell("Standing rules")).not.toContain("resources glob");
+    expect(ideCell("Standing rules")).toContain("resources glob");
+    expect(ideCell("Standing rules")).not.toContain("`rules_in_context`");
     expect(ideCell("Permissions / config")).toContain("`tools:` frontmatter");
     expect(ideCell("Permissions / config")).not.toContain("settings/cli.json");
+
+    const ideAgent = JSON.parse(
+      read("harness", "kiro-ide", "agents", "aidlc.json"),
+    ) as { resources?: string[] };
+    expect(ideAgent.resources).toContain("file://aidlc/spaces/default/memory/**/*.md");
+    const includesSource = read("core", "tools", "aidlc-includes.ts");
+    expect(includesSource).toContain('if (harness === ".kiro")');
+    expect(includesSource).toContain("repointKiroAgentResources");
   });
 
   test("documented agent roster matches agent files and reviewer frontmatter", () => {
@@ -366,7 +376,7 @@ describe("documentation parity derives current behavior from authored implementa
     }
   });
 
-  test("workspace CLI docs follow the implemented router and keep codekb-path direct-only", () => {
+  test("workspace CLI docs follow the implemented router and keep utility-only verbs direct-only", () => {
     const lib = read("core", "tools", "aidlc-lib.ts");
     const workspaceBlock = sliceBetween(
       lib,
@@ -378,16 +388,30 @@ describe("documentation parity derives current behavior from authored implementa
 
     const cliGuide = read("docs", "guide", "12-cli-commands.md");
     for (const verb of workspaceVerbs) expect(cliGuide).toContain(`/aidlc ${verb}`);
-    expect(workspaceVerbs).not.toContain("codekb-path");
-    expect(cliGuide).toContain("direct utility invocation");
-    expect(cliGuide).toContain("not an `/aidlc codekb-path` command");
+    const directOnlyVerbs = ["codekb-path", "select-plugins"];
+    for (const verb of directOnlyVerbs) {
+      expect(workspaceVerbs).not.toContain(verb);
+      expect(cliGuide).toContain("direct utility invocation");
+      expect(cliGuide).toContain(`not an \`/aidlc ${verb}\` command`);
+    }
 
     const helpTail = sliceBetween(
       read("core", "tools", "aidlc-utility.ts"),
       "const HELP_TEXT_TAIL = `",
       "`;",
     );
-    expect(helpTail).not.toContain("codekb-path");
+    for (const verb of directOnlyVerbs) expect(helpTail).not.toContain(verb);
+  });
+
+  test("Codex onboarding fills and rendered output name the emitted agent TOML directory", () => {
+    const rendered = renderOnboarding(
+      read("core", "templates", "onboarding.md"),
+      codexOnboardingFills,
+    );
+    for (const body of [rendered, read("dist", "codex", "AGENTS.md")]) {
+      expect(body).toContain("`.codex/agents/` TOMLs");
+      expect(body).not.toContain("transposed into `.agents/` TOMLs");
+    }
   });
 
   test("private package metadata names the multi-harness repository", () => {
