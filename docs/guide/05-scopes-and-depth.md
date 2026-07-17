@@ -108,6 +108,52 @@ Scopes differ by an order of magnitude in ceremony: `poc` runs 8 stages with 5 a
 
 ---
 
+## Stage-by-Scope Matrix
+
+The routing table above gives the counts; this matrix shows exactly **which** stages execute under each stock scope, so you can see what you will walk through before starting a workflow. A ✓ means the stage is EXECUTE under that scope; an empty cell means SKIP. Stage numbers and names match [Phases and Stages](04-phases-and-stages.md).
+
+<!-- BEGIN scope-stage-matrix: derived from each stage's `scopes:` frontmatter via the compiled scope-grid.json — kept in sync by tests/unit/t238-scope-matrix-doc-sync.test.ts; do not hand-edit cells without re-checking that test -->
+
+| # | Stage | `enterprise` | `feature` | `mvp` | `poc` | `bugfix` | `refactor` | `infra` | `security-patch` | `workshop` |
+|---|-------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| 0.1–0.3 | Initialization (all 3 stages) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 1.1 | Intent Capture & Framing | ✓ | ✓ | ✓ | ✓ |  |  |  |  |  |
+| 1.2 | Market Research | ✓ | ✓ |  |  |  |  |  |  |  |
+| 1.3 | Feasibility & Constraints | ✓ | ✓ | ✓ |  |  |  |  |  |  |
+| 1.4 | Scope Definition | ✓ | ✓ | ✓ |  |  |  |  |  |  |
+| 1.5 | Team Formation | ✓ | ✓ |  |  |  |  |  |  |  |
+| 1.6 | Rough Mockups | ✓ | ✓ | ✓ |  |  |  |  |  |  |
+| 1.7 | Approval & Handoff | ✓ | ✓ |  |  |  |  |  |  |  |
+| 2.1 | Reverse Engineering | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ |
+| 2.2 | Practices Discovery | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ |
+| 2.3 | Requirements Analysis | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 2.4 | User Stories | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |
+| 2.5 | Refined Mockups | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |
+| 2.6 | Application Design | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |
+| 2.7 | Units Generation | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |
+| 2.8 | Delivery Planning | ✓ | ✓ | ✓ |  |  |  |  |  | ✓ |
+| 3.1 | Functional Design | ✓ | ✓ | ✓ |  |  | ✓ |  |  | ✓ |
+| 3.2 | NFR Requirements | ✓ | ✓ | ✓ |  |  |  | ✓ | ✓ | ✓ |
+| 3.3 | NFR Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ |
+| 3.4 | Infrastructure Design | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ |
+| 3.5 | Code Generation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ |
+| 3.6 | Build and Test | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |  | ✓ | ✓ |
+| 3.7 | CI Pipeline | ✓ | ✓ | ✓ |  |  |  | ✓ |  | ✓ |
+| 4.1 | Deployment Pipeline | ✓ | ✓ |  |  |  |  | ✓ | ✓ | ✓ |
+| 4.2 | Environment Provisioning | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ |
+| 4.3 | Deployment Execution | ✓ | ✓ |  |  |  |  | ✓ | ✓ | ✓ |
+| 4.4 | Observability Setup | ✓ | ✓ |  |  |  |  | ✓ |  | ✓ |
+| 4.5 | Incident Response | ✓ | ✓ |  |  |  |  |  |  | ✓ |
+| 4.6 | Performance Validation | ✓ | ✓ |  |  |  |  |  |  | ✓ |
+| 4.7 | Feedback & Optimization | ✓ | ✓ |  |  |  |  |  |  | ✓ |
+| | **Total stages** | **32** | **32** | **22** | **8** | **7** | **8** | **13** | **10** | **25** |
+
+<!-- END scope-stage-matrix -->
+
+A ✓ marks scope membership, not a guarantee of execution: CONDITIONAL stages can still be skipped at runtime when their condition does not hold (for example, Reverse Engineering only runs for brownfield projects), and you can skip any stage at its approval gate or reshape pending stages with [the composer](#the-adaptive-composer). Composed (custom) scopes are not listed here — their grids live in `scope-grid.json` alongside the stock ones.
+
+---
+
 ## Auto-Detection from Freeform Intent
 
 You don't have to specify a scope explicitly. Describe what you want, and the orchestrator detects the appropriate scope from keywords:
