@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.14] - 2026-07-17
+
+Security-scan compliance sweep for the doctor and onboarding output strings. **Upgrade:** re-copy your `dist/<harness>/` shell if you surface these messages to users.
+
+* The bun/uv install guidance in the doctor fix message and every harness's onboarding prerequisites now points to package managers (`npm install -g bun`, `brew install oven-sh/bun/bun`, `brew install uv`, `pipx install uv`) or the tools' official installation guides instead of embedding `curl | bash` pipe-to-shell commands with third-party URLs.
+* The devsecops security guide's SSRF rule now reads "validate against an approved allowlist" (inclusive terminology).
+
 ## [2.3.13] - 2026-07-17
 
 The poc-accelerator plugin's architecture guidance now defaults GenAI, AI agent, and agentic AI workloads to Amazon Bedrock AgentCore. **Upgrade:** re-run `bun scripts/package.ts` and re-compose `dist/plugins/poc-accelerator/<harness>/` into your install.

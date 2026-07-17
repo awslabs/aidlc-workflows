@@ -944,8 +944,8 @@ function handleDoctor(projectDir: string): void {
     pass: bunFound,
     label: "bun installed (required for CLI tools and hooks)",
     fix: isWindows
-      ? "install via `npm install -g bun` or `powershell -c \"irm bun.sh/install.ps1 | iex\"`"
-      : "install via `curl -fsSL https://bun.sh/install | bash`",
+      ? "install via `npm install -g bun` (or see the official bun installation guide)"
+      : "install via a package manager, e.g. `npm install -g bun` or `brew install oven-sh/bun/bun` (or see the official bun installation guide)",
   });
 
   // 2. Hook presence — every framework hook is TypeScript, run via bun (no

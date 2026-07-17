@@ -22,7 +22,7 @@ For every application, verify defenses against each category:
 
 9. **Logging & Monitoring Failures**: Log authentication events (success and failure). Log access control failures. Log input validation failures. Do NOT log sensitive data (passwords, tokens, PII). Ship logs to centralized, tamper-resistant storage. Set up alerts for suspicious patterns.
 
-10. **SSRF (Server-Side Request Forgery)**: Validate and whitelist URLs for server-side requests. Block requests to internal networks (169.254.x.x, 10.x.x.x, 172.16-31.x.x). Disable HTTP redirects for server-initiated requests. Do not expose raw error messages from server-side requests.
+10. **SSRF (Server-Side Request Forgery)**: Validate server-side request URLs against an approved allowlist. Block requests to internal networks (169.254.x.x, 10.x.x.x, 172.16-31.x.x). Disable HTTP redirects for server-initiated requests. Do not expose raw error messages from server-side requests.
 
 ## STRIDE Threat Modeling
 
