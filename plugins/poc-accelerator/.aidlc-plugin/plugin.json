@@ -1,0 +1,14 @@
+{
+  "name": "poc-accelerator",
+  "version": "0.5.0",
+  "description": "Customer-delivery PoC accelerator — an eight-step, CDK-first workflow for validated demos, deployment evidence, and an explicit path to production.",
+  "author": { "name": "AWS AIDLC" },
+  "dependencies": ["core"],
+  "aidlc": {
+    "contributes": {
+      "stages": "stages/",
+      "scopes": "scopes/",
+      "knowledge": "knowledge/"
+    }
+  }
+}

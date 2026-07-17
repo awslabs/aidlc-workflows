@@ -100,6 +100,48 @@ You can override scope at any time during a workflow:
 
 ---
 
+## Customer-Delivery PoC Accelerator
+
+Core `poc` is deliberately a short-lived feasibility spike: it answers whether
+an approach works, then is discarded or re-scoped. For a 3–5 working-day
+**customer delivery** with a runnable demo, TypeScript CDK deployment evidence,
+and a handoff path, install the optional `poc-accelerator` plugin instead. It
+adds the explicit `poc-accelerator-cde` scope with eight steps: requirements
+capture, solution design, environment readiness, walking skeleton, feature
+expansion, test validation, CDK deployment, and demo/handoff.
+
+Build the repository first, then compose and select the plugin on Kiro:
+
+```bash
+bun scripts/package.ts
+PLUGIN_ROOT="$(pwd)/dist/plugins/poc-accelerator/kiro"
+AIDLC_PLUGIN_ROOT="$PLUGIN_ROOT" AIDLC_PROJECT_DIR="<project>" \
+  AIDLC_HARNESS_DIR=.kiro bun "$PLUGIN_ROOT/hooks/compose.ts"
+bun <project>/.kiro/tools/aidlc-utility.ts select-plugins aidlc,poc-accelerator
+```
+
+Start it explicitly so the core spike scope cannot be selected by mistake:
+
+```text
+/aidlc --scope poc-accelerator-cde Build a safe customer demo for <scenario>
+```
+
+Before the first run, create `.kiro/settings/mcp.json` from one of the regional
+examples (Global or China) documented in the plugin's knowledge file
+`knowledge/aidlc-pipeline-deploy-agent/mcp-setup.md` (composed into the install
+at `.kiro/knowledge/aidlc-pipeline-deploy-agent/mcp-setup.md`). For customer
+engagements replace `@latest` with an organization-approved exact version, and
+never commit credentials. Use synthetic/masked data by default; real customer
+production data requires the approved GenAIIC (Generative AI Innovation
+Center) co-creation path. The value-metrics
+register records owners and identifiers for CFN/MRR/SFDC follow-up; it does not
+integrate with or invent those commercial systems.
+
+See [`plugins/poc-accelerator/README.md`](../../plugins/poc-accelerator/README.md)
+for all harness installation routes and the plugin content check.
+
+---
+
 ## Stage Customization
 
 Each stage is a self-contained `.md` file in `.claude/aidlc-common/stages/[phase]/`. Stage files specify:

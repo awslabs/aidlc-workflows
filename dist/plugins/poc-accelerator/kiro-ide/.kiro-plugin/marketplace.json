@@ -1,0 +1,15 @@
+{
+  "name": "aidlc-plugins",
+  "owner": {
+    "name": "AWS AIDLC"
+  },
+  "description": "AIDLC plugin catalogue.",
+  "plugins": [
+    {
+      "name": "aidlc-poc-accelerator",
+      "source": ".",
+      "version": "0.5.0",
+      "description": "Customer-delivery PoC accelerator — an eight-step, CDK-first workflow for validated demos, deployment evidence, and an explicit path to production."
+    }
+  ]
+}

@@ -39,3 +39,5 @@ CLAUDE.local.md
 # directory anywhere in the repo (root, dist/, tools/, etc.) is ignored.
 **/.pi-lens/
 .pi-lens/
+
+.refer

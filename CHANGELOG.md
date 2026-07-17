@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.12] - 2026-07-17
+
+The poc-accelerator plugin's handoff stage now closes the business case with cost estimation. Step 8 (demo and handoff) produces a new `poc-accelerator-cost-projection.md` artifact alongside the demo package, extension recommendations, and value-metrics register. **Upgrade:** re-run `bun scripts/package.ts` and re-compose `dist/plugins/poc-accelerator/<harness>/` into your install.
+
+* New handoff artifact `poc-accelerator-cost-projection`: (1) PoC running cost estimated from the deployed CDK stack's resource inventory with cited pricing sources, and (2) a production-scale monthly cost range driven by explicit, customer-agreed scale assumptions and the costed production additions from the extension recommendations, including the dominant cost levers (savings plans, reserved capacity, serverless tiers, storage classes).
+* All cost figures are labeled estimates with inline assumptions — never quotes or commitments — and pulling billing data from customer accounts still requires the data owner's approval.
+* The value-metrics register's estimated-MRR row may now cite the PoC running cost as its labeled basis; the no-fabrication rule for CFN/MRR/SFDC values is unchanged.
+* Every delivery stage now names the MCP servers it uses at the point of use — documentation checks for regional availability at requirements/design, pricing quotes for the stack plan's cost watchpoints, read-only API discovery before mutation at environment readiness, IaC validation before every deploy at skeleton/expansion/deployment, API-verified resource inventories for test evidence and the stack inventory. The MCP setup knowledge gains a step-by-server overview table.
+* The MCP setup knowledge is now harness-neutral: it maps the configuration to each host's native location (Kiro `.kiro/settings/mcp.json`, Claude Code `.mcp.json`, Codex `~/.codex/config.toml`) instead of hardcoding the Kiro path, and the plugin README documents the Claude Code and Codex install commands alongside the Kiro compose route.
+* The regional MCP setup knowledge adds `awslabs.aws-pricing-mcp-server` to both examples so cost figures come from real-time Price List API quotes instead of manual page lookups: Global config uses the nearest Pricing API endpoint; China config resolves the China partition endpoint (`pricing.cn-northwest-1.amazonaws.com.cn`, CNY catalog). Requires `pricing:*` IAM permissions; calls are free and return only public price data.
+* Terminology fix: the approved co-creation path for real customer data is named GenAIIC (Generative AI Innovation Center) throughout — the previous "GRIC" spelling was a transcription error from meeting notes.
+* Plugin version bumps to 0.5.0.
+
+## [2.3.11] - 2026-07-16
+
+Adds an optional customer-delivery PoC accelerator: an eight-step, CDK-first workflow for a 3–5 working-day customer demo, delivered entirely as an AIDLC plugin. Core `poc` remains the existing throwaway feasibility spike. **Upgrade:** re-run `bun scripts/package.ts`, install/compose `dist/plugins/poc-accelerator/<harness>/`, and select `aidlc,poc-accelerator`.
+
+* New `/aidlc --scope poc-accelerator-cde` stages cover customer-approved requirements, small solution design, environment readiness, a walking skeleton, constrained feature expansion, test evidence, TypeScript CDK deployment, and customer handoff.
+* The plugin uses the existing product, architect, developer, quality, and pipeline/deploy personas; it ships methodology guidance for PoC delivery, regional MCP setup (Global and China `mcp.json` examples in the pipeline-deploy knowledge file), and CDK patterns without changing the core `poc` scope.
+* PoC value tracking records accountable owners and identifiers for CFN/MRR/SFDC/production conversion; it deliberately does not fabricate business metrics, connect to commercial systems, or allow unapproved production data.
+
 ## [2.3.10] - 2026-07-14
 
 The linter sensor now pins the eslint version it runs (`eslint@10`) instead of resolving whatever `eslint` bunx finds first. A bare `bunx eslint` prefers a project-local node_modules copy, then any `eslint` on PATH, before fetching from the registry - and distro packages ship ancient versions (Ubuntu's apt eslint is 6.4.0, installed as a transitive dependency of `apt install npm`). Pre-flat-config eslint cannot read `eslint.config.js`, so on such a box every linter fire silently degraded to a `Note=tool-unavailable` PASS, masking real lint findings. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

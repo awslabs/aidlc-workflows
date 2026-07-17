@@ -83,6 +83,12 @@ Core ships 9 named scopes. Each scope defines a stage set and a default depth le
 
 See [Workshop Mode](workshop-mode.md) for the multi-developer manual recipe and claim semantics.
 
+> **Plugin scopes.** Installed plugins can add scopes beyond the core 9. This
+> repository ships the optional `poc-accelerator` plugin, whose
+> `poc-accelerator-cde` scope runs an eight-step customer-delivery PoC flow —
+> see [Customization § Customer-Delivery PoC Accelerator](13-customization.md#customer-delivery-poc-accelerator)
+> and [`plugins/poc-accelerator/README.md`](../../plugins/poc-accelerator/README.md).
+
 ---
 
 ## Scope Routing Table
