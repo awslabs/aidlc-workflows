@@ -94,6 +94,7 @@ const harnessLabels: Record<string, string> = {
   codex: "Codex CLI",
   kiro: "Kiro CLI",
   "kiro-ide": "Kiro IDE",
+  opencode: "opencode",
 };
 
 const agentNames = readdirSync(at("core", "agents"))
@@ -167,7 +168,7 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("documented harness roster matches every implementation manifest", () => {
-    expect(harnessNames).toEqual(["claude", "codex", "kiro", "kiro-ide"]);
+    expect(harnessNames).toEqual(["claude", "codex", "kiro", "kiro-ide", "opencode"]);
     expect(Object.keys(harnessLabels).sort()).toEqual(harnessNames);
 
     const readmeRoster = sliceBetween(
