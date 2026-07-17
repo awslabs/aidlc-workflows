@@ -41,3 +41,6 @@ CLAUDE.local.md
 .pi-lens/
 
 .refer
+
+# GitFarm/Brazil package build directory
+/build
