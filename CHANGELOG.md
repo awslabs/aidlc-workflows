@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.13] - 2026-07-17
+
+The poc-accelerator plugin's architecture guidance now defaults GenAI, AI agent, and agentic AI workloads to Amazon Bedrock AgentCore. **Upgrade:** re-run `bun scripts/package.ts` and re-compose `dist/plugins/poc-accelerator/<harness>/` into your install.
+
+* New CDK pattern "GenAI / AI agent / agentic AI application": AgentCore Runtime/Gateway/Memory/Identity/Observability as the default agent infrastructure, defined in TypeScript CDK via the AgentCore construct library (alpha) or `AWS::BedrockAgentCore::*` L1 resources; Bedrock Agents Classic is explicitly ruled out for new PoCs (closed to new customers 2026-07-30).
+* The default carries a region gate: AgentCore is not in every region and not yet in the China partition (BJS/ZHY planned) — the solution-design stage requires confirming availability via the documentation MCP server, and where unavailable, falling back to the same agent framework on Lambda/ECS with the deviation recorded and AgentCore named as the production migration path.
+* AgentCore consumption pricing is included in the stack plan's cost watchpoints and the step-8 cost projection; the previous "AI/ML inference workflow" pattern is renamed non-agentic and scoped to single-shot inference.
+* Plugin version bumps to 0.6.0.
+
 ## [2.3.12] - 2026-07-17
 
 The poc-accelerator plugin's handoff stage now closes the business case with cost estimation. Step 8 (demo and handoff) produces a new `poc-accelerator-cost-projection.md` artifact alongside the demo package, extension recommendations, and value-metrics register. **Upgrade:** re-run `bun scripts/package.ts` and re-compose `dist/plugins/poc-accelerator/<harness>/` into your install.

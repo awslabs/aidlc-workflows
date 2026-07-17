@@ -17,9 +17,46 @@ The template's API Gateway + Lambda example is deliberately minimal. Add an
 authorizer, WAF, durable data store, alarms, and lifecycle controls only when
 the accepted use case requires them and the customer approves the extension.
 
-## 2. AI/ML inference workflow
+## 2. GenAI / AI agent / agentic AI application
 
-**Use for:** a bounded prompt, classification, prediction, or retrieval demo.
+**Use for:** any workload where an LLM-driven agent reasons, uses tools, or
+orchestrates steps — a GenAI assistant, a single AI agent, or a multi-agent
+(agentic) system.
+
+**Default: Amazon Bedrock AgentCore.** Unless the customer or the target
+region rules it out, host the agent on AgentCore rather than hand-rolling the
+runtime:
+
+- **AgentCore Runtime** hosts the agent serverlessly; it is framework-agnostic
+  (Strands Agents, LangGraph, CrewAI) and model-agnostic.
+- **AgentCore Gateway** exposes tools and MCP endpoints to the agent;
+  **Memory** and **Identity** replace bespoke session stores and credential
+  plumbing; built-in Code Interpreter/Browser tools and **Observability**
+  cover the common agent needs without extra infrastructure.
+- Define it in TypeScript CDK like everything else: use the Bedrock AgentCore
+  CDK construct library (alpha) or the `AWS::BedrockAgentCore::*` L1
+  resources. Console-only agent setup is not an accepted path.
+- Do not start a new PoC on Bedrock Agents Classic — it is closed to new
+  customers as of 2026-07-30; AgentCore is its successor.
+
+**Region gate (decides the pattern):** AgentCore is available in a subset of
+regions and is **not yet available in the China partition (BJS/ZHY — planned,
+verify current status)**. Confirm availability for the target region at
+step 1–2 via the documentation MCP server. Where AgentCore is unavailable,
+record the deviation in the design and fall back to the same agent framework
+hosted on Lambda or ECS/Fargate against the approved model endpoint, keeping
+the tool/MCP boundary explicit so the extension recommendations can name
+AgentCore as the production migration path once it reaches the region.
+
+**Cost:** AgentCore components are consumption-priced — include them in the
+pricing MCP quotes for the stack plan's cost watchpoints and the step-8 cost
+projection.
+
+## 3. AI/ML inference workflow (non-agentic)
+
+**Use for:** a bounded single-shot prompt, classification, prediction, or
+retrieval demo with no tool use or multi-step orchestration — otherwise use
+pattern 2.
 
 - Keep prompt/model configuration in CDK-managed parameters or approved runtime
   configuration; never commit credentials.
@@ -30,7 +67,7 @@ the accepted use case requires them and the customer approves the extension.
 - Separate a successful demo from production controls such as guardrails,
   evaluation pipelines, quotas, observability, and data governance.
 
-## 3. Data processing workflow
+## 4. Data processing workflow
 
 **Use for:** a small batch or event-driven transformation.
 

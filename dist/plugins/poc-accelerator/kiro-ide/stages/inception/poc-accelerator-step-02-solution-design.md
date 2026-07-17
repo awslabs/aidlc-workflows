@@ -54,7 +54,11 @@ knowledge).
 Create `poc-accelerator-solution-design.md` with the end-to-end request flow,
 trust boundaries, data classification, component responsibilities, and explicit
 non-goals. Prefer managed AWS services that make the walkthrough observable and
-removable after the engagement.
+removable after the engagement. For a GenAI, AI agent, or agentic AI workload,
+default to Amazon Bedrock AgentCore as the agent infrastructure per the CDK
+patterns knowledge — apply its region gate (AgentCore is not in every region
+and not yet in the China partition) and record any fallback as an explicit
+design deviation with AgentCore named as the production migration path.
 
 ### Step 3: Define the CDK Stack Plan
 

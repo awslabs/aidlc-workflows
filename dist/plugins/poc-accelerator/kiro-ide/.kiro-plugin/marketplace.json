@@ -8,7 +8,7 @@
     {
       "name": "aidlc-poc-accelerator",
       "source": ".",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "description": "Customer-delivery PoC accelerator — an eight-step, CDK-first workflow for validated demos, deployment evidence, and an explicit path to production."
     }
   ]
