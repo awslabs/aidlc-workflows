@@ -484,7 +484,10 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
             "--project-dir",
             proj,
           ],
-          { encoding: "utf-8", timeout: HOOK_SPAWN_TIMEOUT_MS },
+          {
+            encoding: "utf-8",
+            timeout: HOOK_SPAWN_TIMEOUT_MS,
+          },
         );
         expect(park.status).toBe(0);
         const parkOut = JSON.parse((park.stdout ?? "").trim()) as {
@@ -553,7 +556,14 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
             "--project-dir",
             proj,
           ],
-          { encoding: "utf-8", timeout: HOOK_SPAWN_TIMEOUT_MS },
+          {
+            encoding: "utf-8",
+            timeout: HOOK_SPAWN_TIMEOUT_MS,
+            env: {
+              ...process.env,
+              AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+            },
+          },
         );
         expect(park.status).not.toBe(0);
         expect((park.stderr ?? "").toLowerCase()).toContain("autonomous");

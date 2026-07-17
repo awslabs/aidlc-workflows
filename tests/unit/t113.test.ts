@@ -46,6 +46,11 @@ function runStage(): Record<string, unknown> {
     lead_agent: "aidlc-architect-agent",
     support_agents: ["aidlc-aws-platform-agent", "aidlc-design-agent"],
     mode: "inline",
+    inline_context_paths: [
+      ".claude/agents/aidlc-architect-agent.md",
+      ".claude/agents/aidlc-aws-platform-agent.md",
+      ".claude/agents/aidlc-design-agent.md",
+    ],
     gate: true,
     memory_path: "aidlc-docs/inception/application-design/memory.md",
     consumes: ["aidlc-docs/inception/requirements/requirements.md"],
@@ -64,6 +69,7 @@ function dispatchSubagent(): Record<string, unknown> {
     lead_agent: "aidlc-developer-agent",
     support_agents: ["aidlc-quality-agent"],
     mode: "subagent",
+    inline_context_paths: [],
     gate: false,
     memory_path: "aidlc-docs/construction/auth/code-generation/memory.md",
     consumes: [
@@ -276,6 +282,22 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   test("run-stage gate 'yes' -> boolean type error", () => {
     expect(errs({ ...runStage(), gate: "yes" })).toContain(
       'run-stage: gate must be boolean or "unresolved", got string',
+    );
+  });
+
+  test("run-stage single true -> VALID", () => {
+    expect(errs({ ...runStage(), single: true, gate: false })).toBe("VALID");
+  });
+
+  test("run-stage single non-boolean -> type error", () => {
+    expect(errs({ ...runStage(), single: "yes" })).toContain(
+      "run-stage: single must be boolean, got string",
+    );
+  });
+
+  test("dispatch-subagent rejects the single-only marker", () => {
+    expect(errs({ ...dispatchSubagent(), single: true })).toContain(
+      "dispatch-subagent: unknown key: single",
     );
   });
 

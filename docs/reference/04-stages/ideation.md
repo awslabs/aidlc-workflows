@@ -83,7 +83,7 @@ as seed context so the stage does not re-ask "what do you want to build?"
 
 - User's project description from `$ARGUMENTS` or the intent's `audit/` shards
 - Existing `<record>/` artifacts from prior sessions (if any)
-- Guardrails from `aidlc/spaces/<space>/memory/`
+- Guardrails from `aidlc/spaces/<active-space>/memory/`
 
 ### Steps
 
@@ -92,7 +92,8 @@ as seed context so the stage does not re-ask "what do you want to build?"
 3. **Generate Clarifying Questions** -- Create `<record>/ideation/intent-capture/intent-capture-questions.md` with questions covering business problem, customer, success metrics, initiative trigger, project type. Uses `[Answer]:` tag format with A-E options plus X (Other). Offers tri-mode question flow.
 4. **Collect and Analyze Answers** -- Confirm all tags filled. Run ambiguity/contradiction analysis.
 5. **Generate Artifacts** -- Produce intent statement and stakeholder map.
-6. **Update State** -- Mark 1.1 as `[x]` completed.
+6. **Prepare Completion** -- Verify both artifacts. Do not edit state; report
+   the gate outcome through `aidlc-orchestrate.ts`.
 7. **Present Completion & Request Approval** -- Standard 2-option gate.
 
 ### Outputs
@@ -331,8 +332,10 @@ All Ideation phase artifacts from stages 1.1-1.6.
 3. Generate approval questions.
 4. Compile initiative brief (one-pager combining all outputs).
 5. Phase boundary verification (Intent -> Scope -> Intent Backlog consistency).
-6. Update state, transition to INCEPTION phase.
-7. Present 3-option approval gate.
+6. Verify the handoff and phase-boundary artifacts; do not edit lifecycle
+   state directly.
+7. Present the 3-option approval gate. On approval, report the outcome so the
+   engine completes the stage and transitions to Inception atomically.
 
 ### Outputs
 

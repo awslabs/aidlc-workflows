@@ -129,11 +129,13 @@ When a stage executes and produces artifacts, the audit trail captures the full 
 ```mermaid
 sequenceDiagram
     participant O as Orchestrator
+    participant E as Engine
     participant S as Stage Execution
     participant H as Audit Hook
     participant A as audit/ shard
 
-    O->>A: Log STAGE_STARTED
+    O->>E: Request next directive
+    E->>A: Emit STAGE_STARTED
     O->>S: Execute stage work
     S->>S: Write artifact to the intent's record dir
     S->>H: PostToolUse hook fires
@@ -141,11 +143,12 @@ sequenceDiagram
     S->>O: Stage work complete
     O->>A: Log approval gate options
     O->>O: Present approval gate to user
-    O->>A: Log GATE_APPROVED / GATE_REJECTED
-    O->>A: Log STAGE_COMPLETED
+    O->>E: Report approved or rejected
+    E->>A: Emit gate outcome
+    E->>A: Emit STAGE_COMPLETED on approval
 ```
 
-<!-- Text fallback: Orchestrator logs STAGE_STARTED to this clone's audit/ shard. Stage execution writes artifacts. PostToolUse hook fires and appends an ARTIFACT_CREATED or ARTIFACT_UPDATED event. Stage completes. Orchestrator logs the approval gate options, then the user's decision, then STAGE_COMPLETED. -->
+<!-- Text fallback: The orchestrator requests the next directive and the engine emits STAGE_STARTED. Stage execution writes artifacts; the PostToolUse hook appends ARTIFACT_CREATED or ARTIFACT_UPDATED. After the stage work and approval gate, the orchestrator reports the outcome. The engine emits the gate result and, on approval, STAGE_COMPLETED while updating state and routing. -->
 
 ---
 

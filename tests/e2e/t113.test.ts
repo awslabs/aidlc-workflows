@@ -84,10 +84,14 @@ function run(
   proj: string,
   extraEnv: Record<string, string> = {},
 ): { status: number; stdout: string; stderr: string } {
+  const env = { ...process.env, ...extraEnv };
+  if (tool === STATE) {
+    env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
+  }
   const res = spawnSync(
     process.execPath,
     [tool, ...args, "--project-dir", proj],
-    { encoding: "utf8", env: { ...process.env, ...extraEnv } },
+    { encoding: "utf8", env },
   );
   return {
     status: res.status ?? -1,

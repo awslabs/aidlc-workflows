@@ -23,7 +23,7 @@ harness parameter. Add a column when you port to a new harness.
 | **Orchestrator entry** (`/aidlc` + runners) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`$aidlc`) | Command → skill (`/aidlc`; skills from `.aidlc/skills` via `skills.paths`) |
 | **Agent personas** (14 total) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | Persona `.md`; delegation targets add IDE `tools:` grants | `.codex/agents/` TOMLs | `.opencode/agents/*.md` (subagents) + persona `.md` |
 | **Automation** (audit, state, tracking) | Hooks via `settings.json` | Hooks via `agents/aidlc.json` | `.kiro/hooks/*.kiro.hook` files | Hooks via `.codex/hooks.json` (one adapter) | Adapter plugin (`.opencode/plugin/`) |
-| **Standing rules** (the layer chain) | `aidlc/spaces/<space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<space>/memory/` (via `instructions` glob) |
+| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<active-space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) |
 | **Project onboarding doc** | `CLAUDE.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` |
 | **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | Agent `.md` `tools:` frontmatter for delegates | `.codex/config.toml` (+ Starlark `rules/`) | `opencode.json` (project root) |
 
@@ -100,15 +100,17 @@ For full agent system documentation, see [Agent System](05-agent-system.md).
 
 The conductor uses two modes of agent activation - persona adoption and Task dispatch - across the four stage topologies:
 
-**Inline execution (29 of 32 stages):**
+**Inline execution (28 of 32 stages):**
 The conductor reads the agent's `.md` file and adopts the persona directly within the main conversation. The user interacts with the agent in real time.
 
-**Dispatched execution (3 stages: 2.1 pipeline, 2.4 mob, 3.5 subagent):**
+**Dispatched execution (4 stages: 2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent):**
 The conductor delegates to separate Claude instances via the Claude Code Task tool. Each dispatched agent runs in isolation, receives context via the prompt, and returns a structured summary; ensemble collaborators additionally write contribution files the lead integrates.
 
 | Stage | Claude Code Subagent Type | Agent | Reason |
 |-------|---------------------------|-------|--------|
 | 2.1 Reverse Engineering | `aidlc-developer-agent` then `aidlc-architect-agent` (pipeline, 2-link chain) | aidlc-developer-agent + aidlc-architect-agent | Deep code analysis produces large intermediate output |
+| 2.2 Practices Discovery | lead, three parallel support spokes, lead integration (subagent hub-and-spoke) | pipeline-deploy + quality + developer + devsecops | Independent practice evidence, human interview, then controlled integration |
+| 2.4 User Stories | product lead plus parallel design/developer/quality mob | 4 participants | Bounded collaborative story elaboration with human judgment |
 | 3.5 Code Generation | `aidlc-developer-agent` | aidlc-developer-agent | Code writing benefits from clean context focused on the unit specification |
 
 Workspace detection (0.2) used to be a subagent; it now runs deterministically inside `aidlc-utility intent-birth`.
@@ -131,10 +133,10 @@ An omitted `effort:` key inherits the session effort, and a pinned one overrides
 
 ### The layered rule files
 
-This implementation reads behavioral rules from the space memory layer at `aidlc/spaces/<space>/memory/`, pulled into Claude's context via the `.claude/rules/aidlc.md` @-import stub. One file per layer of the inheritance chain:
+This implementation reads behavioral rules from the active space memory layer at `aidlc/spaces/<active-space>/memory/`, pulled into Claude's context via the `.claude/rules/aidlc.md` @-import stub. One file per layer of the inheritance chain:
 
 ```
-aidlc/spaces/<space>/memory/
+aidlc/spaces/<active-space>/memory/
 ├── org.md                        # framework defaults (shipped)
 ├── team.md                       # this team's affirmed practices
 ├── project.md                    # this project's specialization
@@ -157,7 +159,7 @@ The rule files are not static — the v0.5.0 learning loop turns an in-workflow 
 2. **Surface (tool).** At the approval gate, `aidlc-learnings.ts surface` reads the diary and emits structured candidates — the LLM does not re-parse or classify.
 3. **Confirm (human).** The conductor renders the candidates; you pick which to keep and, for free-text additions, pick the single heading that derives the destination.
 4. **Admission check (knowledge).** Each kept learning is checked against `org.md`'s matching section; a contradiction is surfaced for you to revise, skip, or escalate.
-5. **Persist (tool).** `aidlc-learnings.ts persist` writes each confirmed learning as a practice to `aidlc/spaces/<space>/memory/{project,team}.md` as dated entries and, for a sensor-binding learning, installs the manifest plus the stage `sensors:` import inside one locked transaction. It emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
+5. **Persist (tool).** `aidlc-learnings.ts persist` writes each confirmed learning as a practice to `aidlc/spaces/<active-space>/memory/{project,team}.md` as dated entries and, for a sensor-binding learning, installs the manifest plus the stage `sensors:` import inside one locked transaction. It emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
 
 The user-facing walk-through (with a worked example) is in [Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md); the harness-engineer authoring angle is in [Rules and the Learning Loop](../harness-engineering/05-rules-and-the-loop.md).
 
@@ -310,7 +312,7 @@ The access model is provisioning followed by inheritance, with no grant step bet
 
 1. **Declare once.** Servers are listed in `.mcp.json` at the project root.
 2. **Provision to the session.** Claude Code starts the declared servers and exposes their tools to the session as `mcp__<server>__<tool>` ids.
-3. **Inherit everywhere.** Subagents inherit all session MCP tools by default. Every AI-DLC agent — whether running inline or as a delegated subagent (the dispatched stages 2.1, 2.4, 3.5 and ensemble collaborators) — reaches every declared server.
+3. **Inherit everywhere.** Subagents inherit all session MCP tools by default. Every AI-DLC agent — whether running inline or as a delegated subagent (the dispatched stages 2.1, 2.2, 2.4, 3.5 and their collaborators) — reaches every declared server.
 
 There is no per-agent grant step, and none is needed: inheritance is the default and it is additive across all agents. A new agent file gains MCP access by existing, not by listing servers in its frontmatter.
 
@@ -342,11 +344,11 @@ An MCP server appearing in the session is a function of `.mcp.json` plus availab
 |---------|---------|---------------|------|
 | CLAUDE.md | `.claude/CLAUDE.md` | Every conversation | Bootstrap: structure, prerequisites, conventions |
 | Settings | `.claude/settings.json` | Every conversation | Pre-approve Claude Code tools |
-| Rules | `aidlc/spaces/<space>/memory/*.md` (via `.claude/rules/aidlc.md` @-stub) | Every conversation | Minimal guardrails; self-learning corrections |
+| Rules | `aidlc/spaces/<active-space>/memory/*.md` (via `.claude/rules/aidlc.md` @-stub) | Every conversation | Minimal guardrails; self-learning corrections |
 | Skill | `.claude/skills/aidlc/SKILL.md` | On `/aidlc` invocation | Orchestrator: session, scope, stage graph, delegation |
 | Workflow-spine hooks | `.claude/settings.json` | Always on; self-gate when no workflow | PostToolUse, PreCompact, SubagentStop, Stop |
-| Agents (inline) | `.claude/agents/*.md` | Persona activation | 29 of 32 stages: conductor adopts agent persona |
-| Agents (dispatched) | `.claude/agents/*.md` | Task tool delegation | 3 stages (2.1 pipeline, 2.4 mob, 3.5 subagent): isolated execution |
+| Agents (inline) | `.claude/agents/*.md` | Persona activation | 28 of 32 stages: conductor adopts agent persona |
+| Agents (dispatched) | `.claude/agents/*.md` | Task tool delegation | 4 stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent): isolated execution |
 | Knowledge (Tier 1) | `.claude/knowledge/` | Persona activation (steps 2-3) | 56 methodology reference files |
 | Knowledge (Tier 2) | space-level `aidlc/knowledge/` (sibling of `intents/`) | Persona activation (steps 4-5) | Team-managed customization |
 | Stage protocol | `stage-protocol.md` | Every stage execution | Mandatory behavioral contract |

@@ -281,17 +281,10 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
         drive(["send", "--session", session, "--keys", "/aidlc", "--literal", "--no-enter"]);
         drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
 
+        // Synchronize through the driver on the stable engine error lead, then
+        // assert the durable no-write contract. Do not inspect the captured pane:
+        // Claude can collapse the remainder of the tool result behind "+N lines".
         expect(waitFor(session, "No workflow state found", 240000, 0)).toBe(true);
-        const pane = drive(["capture", "--session", session]).stdout;
-        expect(pane).toContain("No workflow state found");
-        // The guidance sentence can line-wrap at any word, and Claude may
-        // collapse the tail of a tool result behind "+N lines" in the rendered
-        // pane. Pin the visible recovery lead plus the no-state disk invariant;
-        // the exact full tool string is covered at the engine layer. The engine
-        // emits "…or by naming a scope (/aidlc --scope <scope>)."
-        // (aidlc-orchestrate.ts:1245-1247) — assert a stable substring of that.
-        const flat = pane.replace(/[▎\s]+/g, " ");
-        expect(flat).toContain("naming a scope");
         // No-scope run births no intent, so no per-intent state file resolves
         // (stateFilePathFor falls to the never-created flat fallback path).
         expect(existsSync(stateFilePathFor(proj))).toBe(false);
@@ -417,13 +410,10 @@ describe("t-tui-t29 env-scope (AWS_AIDLC_DEFAULT_SCOPE seeds new-workflow scope 
         drive(["send", "--session", session, "--keys", "/aidlc", "--literal", "--no-enter"]);
         drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
 
-        // Rendered: the canonical error text appears in the pane. The orchestrator
-        // prints `Invalid AWS_AIDLC_DEFAULT_SCOPE "bogus". Valid scopes: ...` and
-        // STOPs (aidlc-utility.ts:2798). The literal substring is the .sh's
-        // assert_contains target (line 58); it must paint VERBATIM.
+        // Synchronize on the stable engine error lead, then assert the durable
+        // no-write behavior. Avoid a second capture/prose assertion: tool output
+        // tails may be collapsed by the TUI even though the command completed.
         expect(waitFor(session, "Invalid AWS_AIDLC_DEFAULT_SCOPE", 240000, 0)).toBe(true);
-        const pane = drive(["capture", "--session", session]).stdout;
-        expect(pane).toContain("Invalid AWS_AIDLC_DEFAULT_SCOPE");
 
         // Deterministic NO-WRITE ON DISK (the .sh's Case C state-absence check,
         // line 59-63): the invalid env scope must not create the state file. The

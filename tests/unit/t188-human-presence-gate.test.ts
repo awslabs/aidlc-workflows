@@ -61,6 +61,7 @@ const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
 function guarded(proj: string, args: string[]): { rc: number; out: string } {
   const env = { ...process.env };
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
+  env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",

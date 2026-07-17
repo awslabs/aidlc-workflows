@@ -4,9 +4,9 @@
     "function": 99,
     "audit": 31,
     "scope": 9,
-    "stage": 8,
-    "hook": 12,
-    "subcommand": 81,
+    "stage": 9,
+    "hook": 13,
+    "subcommand": 82,
     "render-surface": 7
   }
 }

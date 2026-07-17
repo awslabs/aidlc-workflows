@@ -168,7 +168,7 @@ function runAdapter(
   projectDir: string,
   target: string,
   payload: unknown,
-): { stdout: string; code: number } {
+): { stdout: string; stderr: string; code: number } {
   const r = spawnSync(
     "bun",
     [join(projectDir, ".codex", "hooks", "aidlc-codex-adapter.ts"), target],
@@ -180,7 +180,11 @@ function runAdapter(
       timeout: 30_000,
     },
   );
-  return { stdout: r.stdout ?? "", code: r.status ?? -1 };
+  return {
+    stdout: r.stdout ?? "",
+    stderr: r.stderr ?? "",
+    code: r.status ?? -1,
+  };
 }
 
 describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
@@ -205,6 +209,29 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       const r = runAdapter(dir, "stop", withCwd(FIXTURES.stop, dir));
       expect(r.code).toBe(0);
       expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2a: state-transition guard preserves exit 2 and stderr", () => {
+    const dir = scratchProject(false);
+    try {
+      const r = runAdapter(dir, "state-transition-guard", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "Bash",
+        tool_input: {
+          command:
+            "bun .codex/tools/aidlc-state.ts reject feasibility",
+        },
+      });
+      expect(r.code).toBe(2);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain(
+        "Direct aidlc-state.ts reject is blocked",
+      );
+      expect(r.stderr).toContain("aidlc-orchestrate.ts report");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

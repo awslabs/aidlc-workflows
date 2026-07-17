@@ -10,8 +10,8 @@
 // layering (determinism belongs in tools and hooks, knowledge in agents,
 // judgement with humans), this hook is the bound's deterministic twin.
 //
-// This is the framework's SECOND flow-altering hook (the Stop hook is the
-// first). Its contract is the harness-native PreToolUse block: print a reason
+// This is one of the framework's flow-altering hooks. Its contract is the
+// harness-native PreToolUse block: print a reason
 // to stderr and exit 2 to refuse the tool call, exit 0 to allow. The refusal
 // is scoped tightly - one agent, one dispatch window, sibling-unit targets
 // only - and the reason text redirects the reviewer to the contract paths it

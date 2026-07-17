@@ -28,10 +28,12 @@ function readJson(p: string): Record<string, unknown> {
 
 interface StageNode {
   mode?: string;
+  lead_agent?: string;
   support_agents?: string[];
+  reviewer?: string;
 }
 
-function ensembleSupports(harness: "kiro" | "kiro-ide"): string[] {
+function dispatchedSpaceWriters(harness: "kiro" | "kiro-ide"): string[] {
   const graph = JSON.parse(
     readFileSync(
       join(REPO_ROOT, "dist", harness, ".kiro", "tools", "data", "stage-graph.json"),
@@ -40,11 +42,13 @@ function ensembleSupports(harness: "kiro" | "kiro-ide"): string[] {
   ) as StageNode[];
   return [...new Set(
     graph
-      .filter((stage) =>
-        stage.mode === "mob" ||
-        (stage.mode === "subagent" && (stage.support_agents?.length ?? 0) > 0)
-      )
-      .flatMap((stage) => stage.support_agents ?? []),
+      .flatMap((stage) => [
+        ...(stage.mode !== "inline"
+          ? [stage.lead_agent, ...(stage.support_agents ?? [])]
+          : []),
+        stage.reviewer,
+      ])
+      .filter((agent): agent is string => typeof agent === "string"),
   )].sort();
 }
 
@@ -132,12 +136,12 @@ describe("t148 dist/kiro file structure", () => {
     ).toBe(true);
   });
 
-  test("every ensemble support has a space-scoped write grant on Kiro CLI and IDE", () => {
+  test("every dispatched graph writer has a space-scoped write grant on Kiro CLI and IDE", () => {
     for (const harness of ["kiro", "kiro-ide"] as const) {
       const agentsDir = join(REPO_ROOT, "dist", harness, ".kiro", "agents");
-      const supports = ensembleSupports(harness);
-      expect(supports.length).toBeGreaterThan(0);
-      for (const agent of supports) {
+      const writers = dispatchedSpaceWriters(harness);
+      expect(writers.length).toBeGreaterThan(0);
+      for (const agent of writers) {
         const config = readJson(join(agentsDir, `${agent}.json`));
         expect(config.tools as string[]).toContain("fs_write");
         const settings = config.toolsSettings as Record<string, { allowedPaths?: string[] }>;

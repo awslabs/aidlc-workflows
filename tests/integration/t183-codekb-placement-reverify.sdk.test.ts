@@ -15,16 +15,14 @@
 // The spike's two t50 drift runs showed the prose-only approach was unreliable;
 // this is the regression guard that the codekb-path defer fixed it.
 //
-// HARNESS NOTE (proven by the spike probe): a seeded IN-FLIGHT intent makes the
-// conductor render an ORIENTATION gate FIRST ("I found an in-flight intent …
-// Resume Reverse Engineering?"). We answer that (Resume) via a byHeader script,
-// let RE actually run, and CAPTURE placement when the SECOND gate (the RE
-// approval gate) renders — RE steps 3-4 write the 9 artifacts BEFORE step 5
-// presents that gate, so the on-disk surface is complete at that moment (before
-// the finally-block cleanup wipes the fixture). stopAfterAskUserQuestion would
-// stop at the FIRST (orientation) gate, before RE runs, so we do NOT use it;
-// instead the answerScript answers Resume then approves, and onAskUserQuestion
-// captures at gate #2.
+// HARNESS NOTE: `next` resumes the seeded in-flight Reverse Engineering stage
+// directly. Capture placement at the first post-artifact human boundary: RE
+// steps 3-4 write the 9 artifacts before the learnings ritual and approval gate,
+// so the on-disk surface is complete at that moment (before finally-block
+// cleanup wipes the fixture). The driver stops intentionally after that menu's
+// tool_result.
+// Continuing beyond the boundary would enter Code Generation, which is
+// unrelated to this placement test.
 //
 // The fixture (mirrors t72): a brownfield React/Vite/TS Todo stub seeded at
 // init-done with reverse-engineering in-flight, single-repo (NO repos row), so
@@ -50,6 +48,7 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 import { driveAidlc } from "../harness/sdk-drive.ts";
+import { compileFixtureRuntimeGraph } from "../harness/tui-fixtures.ts";
 import {
   activeSpace,
   codekbRepoName,
@@ -113,8 +112,8 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
         withBrownfieldStub: true,
         withAudit: true,
       });
-      // Captured the instant the RE approval gate (gate #2) renders — the 9
-      // artifacts are on disk by then, before any advance/cleanup.
+      // Captured at the first post-artifact human boundary. The 9 artifacts are
+      // on disk by then, before any advance/cleanup.
       let capturedMarkdown: string[] | null = null;
       let gateCount = 0;
       try {
@@ -123,32 +122,39 @@ describe("t183 codekb placement re-verify (sdk) — RE artifacts land at the eng
           "- **Project Root**: /tmp/aidlc-test",
           `- **Project Root**: ${proj}`,
         );
+        compileFixtureRuntimeGraph(proj);
 
         const r = await driveAidlc("/aidlc", {
           projectDir: proj,
-          // Resume on the orientation gate; approve (optionIndex 0) on every later
-          // gate. The RE approval gate is the moment the 9 artifacts have landed.
+          // Answer the first post-artifact menu. The 9 artifacts have landed.
           answerScript: {
             kind: "byHeader",
-            map: { Resume: { labelContains: "Resume" } },
+            map: {},
             fallback: { optionIndex: 0 },
           },
           timeoutMs: DRIVE_TIMEOUT_MS,
+          stopAfterAskUserQuestionAt: 1,
           onAskUserQuestion: () => {
             gateCount++;
-            // Gate #2 is the RE approval gate (gate #1 = orientation/Resume).
-            if (gateCount >= 2 && capturedMarkdown === null) {
+            if (gateCount >= 1 && capturedMarkdown === null) {
               capturedMarkdown = allAidlcMarkdown(proj);
             }
           },
         });
 
-        // Fallback capture (the run ended without a distinct 2nd gate — e.g. the
-        // model approved in one combined turn), so placement is always asserted.
+        // The test intentionally aborts after the second menu's tool_result,
+        // before the SDK emits a terminal result. Distinguish that boundary
+        // from the timeout that previously false-failed after RE had completed.
+        expect(r.timedOut).toBe(false);
+        expect(r.stoppedAfterAskUserQuestion).toBe(true);
+        expect(r.stoppedAfterToolResult).toBe(false);
+
+        // Fallback capture if the run ended without a distinct human boundary,
+        // so placement is always asserted.
         if (capturedMarkdown === null) capturedMarkdown = allAidlcMarkdown(proj);
 
-        // The stage reached a gate at all — proof RE ran (no vacuous pass).
-        expect(r.askedQuestions.length).toBeGreaterThan(0);
+        // The stage reached a post-artifact menu — proof RE ran (no vacuous pass).
+        expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
 
         // The engine-resolved space-level codekb dir, computed from the SAME lib
         // helpers the engine uses (single-repo fixture → repo == basename(proj)).

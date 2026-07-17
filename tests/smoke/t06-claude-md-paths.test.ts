@@ -90,11 +90,14 @@ describe("distributable CLAUDE.md describes the post-Wave-1 .claude/ layout", ()
     // Positive anchor: the method/rules layer must appear, so a regression that
     // deleted the whole Rules bullet can't pass tests 2-5 silently. The workspace
     // refactor relocated the rule files off `.claude/rules/` to the space memory
-    // layer `aidlc/spaces/<space>/memory/` (neutral names org.md/team.md/project.md),
+    // layer `aidlc/spaces/<active-space>/memory/` (neutral names
+    // org.md/team.md/project.md),
     // read via the `.claude/rules/aidlc.md` @-import stub — so the positive anchor
     // is the relocated path + the neutral `org.md` filename, not the old `aidlc-org`.
     const body = readClaudeMd();
-    expect(countOccurrences(body, "aidlc/spaces/<space>/memory/")).toBeGreaterThanOrEqual(1);
+    expect(
+      countOccurrences(body, "aidlc/spaces/<active-space>/memory/"),
+    ).toBeGreaterThanOrEqual(1);
     expect(body.includes("org.md")).toBe(true);
   });
 });

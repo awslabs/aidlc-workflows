@@ -21,7 +21,7 @@ flowchart TD
     end
 
     subgraph RULES["Rules"]
-        GR["aidlc/spaces/<space>/memory/\n(org → team → project →\nphase → stage chain)"]
+        GR["aidlc/spaces/<active-space>/memory/\n(org → team → project →\nphase → stage chain)"]
     end
 
     subgraph CONTEXT["Agent Context"]
@@ -265,7 +265,7 @@ Both knowledge files and rules customize agent behavior, but they are not interc
 | Can be long-form prose, diagrams, or tables | Should be short, imperative, one line each |
 | Example: API Gateway standards, coding conventions, domain glossary | Example: "Never log PII", "All data access must go through the repository layer", "Reject any design that uses DynamoDB with scan operations" |
 
-A useful rule of thumb: **if a human reviewer would reject a stage's output when the rule is violated, it belongs in the space memory layer (`aidlc/spaces/<space>/memory/`).** If they would use the rule as background context when reviewing, it is knowledge.
+A useful rule of thumb: **if a human reviewer would reject a stage's output when the rule is violated, it belongs in the space memory layer (`aidlc/spaces/<active-space>/memory/`).** If they would use the rule as background context when reviewing, it is knowledge.
 
 Rules and knowledge sit on different planes, and that is why their loading behaves differently. Knowledge files are reference material that agents weigh during a stage. Rules resolve through a strict-additive chain — org, then team, then project, then phase, then stage — that the framework compiles ahead of the workflow; every applicable rule reaches the agent, and nothing is silently dropped. Conflicts between layers are caught at admission time, when a team or project rule is first written, rather than reconciled mid-stage.
 
@@ -287,7 +287,7 @@ sequenceDiagram
     participant TAK as Team Agent Knowledge
     participant PA as Prior Artifacts
 
-    O->>G: Step 1: Load aidlc/spaces/<space>/memory/
+    O->>G: Step 1: Load aidlc/spaces/<active-space>/memory/
     Note over G: resolved org → team → project → phase → stage chain
     G-->>O: Rules loaded (resolved chain)
 
@@ -318,7 +318,7 @@ sequenceDiagram
 
 | Step | Source | What Loads | Priority |
 |------|--------|-----------|----------|
-| 1 | `aidlc/spaces/<space>/memory/` | The resolved org → team → project → phase → stage rule chain | Behavioral rules — every applicable rule loads (strict-additive) |
+| 1 | `aidlc/spaces/<active-space>/memory/` | The resolved org → team → project → phase → stage rule chain | Behavioral rules — every applicable rule loads (strict-additive) |
 | 2 | `.claude/knowledge/aidlc-shared/` | Shared methodology principles | Framework-level defaults |
 | 3 | `.claude/knowledge/<agent>/` | Agent-specific methodology | Agent expertise |
 | 4 | `aidlc/knowledge/aidlc-shared/` | Team-wide standards | Your company defaults |

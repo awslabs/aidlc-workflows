@@ -126,6 +126,7 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
     "hooks/aidlc-sensor-fire.ts",
     "hooks/aidlc-session-end.ts",
     "hooks/aidlc-session-start.ts",
+    "hooks/aidlc-state-transition-guard.ts",
     "hooks/aidlc-statusline.ts",
     "hooks/aidlc-stop.ts",
     "hooks/aidlc-sync-statusline.ts",

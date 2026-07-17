@@ -68,7 +68,7 @@
 //   answer-gate --session <name> --project-dir <dir>
 //          [--per-gate-timeout-ms N] [--overall-timeout-ms N]
 //          [--until-file <relpath>] [--until-state-field <name=regex>]
-//          [--reject-first-gate]
+//          [--reject-first-gate] [--stop-at-approval-gate]
 //          Answer an AI-DLC AskUserQuestion gate sequence by taking the
 //          Recommended default on each tab/menu (Enter per tab; Enter again on
 //          the Submit screen), terminating on an ON-DISK signal — never on the
@@ -84,6 +84,10 @@
 //                                          "Request changes" label distinguishes the
 //                                          gate from the clarifying-question menus
 //                                          that precede it.
+//            --stop-at-approval-gate       Answer preparatory menus, then return
+//                                          with the first numbered Approve /
+//                                          Request Changes gate still painted
+//                                          and unanswered.
 //          The TERMINATOR is pluggable so the SAME keystroke loop drives ANY gated
 //          journey, not just the workshop:
 //            --until-file <relpath>        STOP when this file (relative to
@@ -1129,6 +1133,16 @@ function parseMenuOptions(grid: string): { num: number; label: string }[] {
   return out;
 }
 
+/** True only for a numbered approval menu carrying both canonical choices. */
+export function gridIsApprovalGate(grid: string): boolean {
+  if (!gridHasMenu(grid)) return false;
+  const labels = parseMenuOptions(grid).map((option) => option.label);
+  return (
+    labels.some((label) => /\bApprove(?:\s+Plan)?\b/i.test(label)) &&
+    labels.some((label) => /\bRequest Changes\b/i.test(label))
+  );
+}
+
 function pickMenuOption(grid: string, label: RegExp): number | null {
   for (const opt of parseMenuOptions(grid)) {
     if (label.test(opt.label)) return opt.num;
@@ -1314,6 +1328,8 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   // --literal / --no-enter / --ansi are read). Reading a.flags here was the bug
   // that left this always-false (the t128 third-red finding, 2026-06-07).
   let rejectFirstGate = a.bools["reject-first-gate"] === true;
+  const stopAtApprovalGate =
+    a.bools["stop-at-approval-gate"] === true;
   let revisionFeedbackPending = false;
 
   const overallDeadline = Date.now() + overallMs;
@@ -1326,6 +1342,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     perGateMs,
     terminator: term.describe,
     rejectFirstGate,
+    stopAtApprovalGate,
   });
 
   const maybeTracePoll = (grid: string, gateDeadline: number): void => {
@@ -1345,7 +1362,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
   for (;;) {
     // Disk is the terminator — check it FIRST so we exit the instant the
     // journey's completion signal lands, even if a stale menu lingers on screen.
-    if (term.done()) {
+    if (!stopAtApprovalGate && term.done()) {
       writeTuiTrace(session, "answer_gate_done", {
         answered,
         terminator: term.describe,
@@ -1377,7 +1394,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     const gateDeadline = Math.min(Date.now() + perGateMs, overallDeadline);
     let sawMenu = false;
     while (Date.now() < gateDeadline) {
-      if (term.done()) {
+      if (!stopAtApprovalGate && term.done()) {
         writeTuiTrace(session, "answer_gate_done", {
           answered,
           terminator: term.describe,
@@ -1434,6 +1451,16 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
     // SINGLE-SELECT question (no checkbox): Enter SELECTS the highlighted/Recommended
     // option and auto-advances to the next tab (or approves a lone-question gate).
     const grid = backend.capture(session, false);
+    if (stopAtApprovalGate && gridIsApprovalGate(grid)) {
+      writeTuiTrace(session, "answer_gate_stopped_at_approval", {
+        answered,
+        screen: grid,
+      });
+      process.stdout.write(
+        `answer-gate: stopped at approval gate after ${answered} preparatory answer(s)\n`,
+      );
+      return;
+    }
     if (gridIsSubmitScreen(grid)) {
       writeTuiTrace(session, "answer_gate_action", {
         answered,
@@ -1458,7 +1485,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       } else {
         backend.send(session, "Enter", false, true); // lone multi-select: commit it
       }
-    } else if (rejectFirstGate && /\bRequest changes\b/i.test(grid)) {
+    } else if (rejectFirstGate && gridIsApprovalGate(grid)) {
       const requestChangesNeedsSubmit = gridIsMultiTabForm(grid);
       writeTuiTrace(session, "answer_gate_action", {
         answered,

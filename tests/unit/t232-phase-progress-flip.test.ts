@@ -75,6 +75,10 @@ function run(tool: string, proj: string, args: string[]): RunResult {
   const res = spawnSync(BUN, [tool, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     cwd: proj,
+    env: {
+      ...process.env,
+      AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    },
   });
   return {
     rc: res.status ?? -1,

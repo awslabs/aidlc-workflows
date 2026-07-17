@@ -184,6 +184,15 @@ export function seededRecordDir(proj: string, space = DEFAULT_SPACE): string {
   return join(intentsDirOf(proj, space), DEFAULT_RECORD_DIR);
 }
 
+/** The seeded space-level codekb directory for a repository. */
+export function seededCodekbDir(
+  proj: string,
+  repo = basename(proj),
+  space = DEFAULT_SPACE,
+): string {
+  return join(proj, "aidlc", "spaces", space, "codekb", repo);
+}
+
 /** The seeded state file path: `<record>/aidlc-state.md`. */
 export function seededStateFile(proj: string, space = DEFAULT_SPACE): string {
   return join(seededRecordDir(proj, space), "aidlc-state.md");
@@ -273,6 +282,7 @@ function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
         {
           uuid: DEFAULT_INTENT_UUID,
           slug: DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, ""),
+          dirName: DEFAULT_RECORD_DIR,
           status: "in-flight",
         },
       ],
@@ -552,7 +562,7 @@ export function setupIntegrationProject(
   }
 
   if (opts.withReArtifacts) {
-    const dest = join(seededRecordDir(proj), "inception", "reverse-engineering");
+    const dest = seededCodekbDir(proj);
     mkdirSync(dest, { recursive: true });
     cpSync(join(FIXTURES_DIR, "re-artifacts"), dest, { recursive: true });
   }

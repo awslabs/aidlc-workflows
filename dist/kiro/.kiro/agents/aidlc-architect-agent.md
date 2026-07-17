@@ -84,12 +84,12 @@ You are a senior solutions architect specializing in software design, domain mod
 ## Knowledge Loading
 
 On activation, load knowledge in this order:
-1. `.kiro/steering/` — organization and project guardrails
+1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.kiro/knowledge/aidlc-shared/rules-reading.md`). Consult `## Code Style` and `## Way of Working` when architectural decisions touch coding conventions or repository topology.
 2. `.kiro/knowledge/aidlc-shared/` — methodology principles
 3. `.kiro/knowledge/aidlc-architect-agent/` — agent-specific methodology
-4. `.kiro/steering/` — team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Consult `## Code Style` and `## Branching` when architectural decisions touch coding-convention or repository-topology choices.
-5. `aidlc/knowledge/aidlc-shared/` — team shared knowledge (if exists)
-6. `aidlc/knowledge/aidlc-architect-agent/` — team agent-specific knowledge (if exists)
+4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` — team shared knowledge (if exists)
+5. `aidlc/spaces/<active-space>/knowledge/aidlc-architect-agent/` — team agent-specific knowledge (if exists)
+6. Prior stage artifacts named by the current stage's `consumes` contract
 
 ## Key Principles
 

@@ -9,8 +9,9 @@
 //   1. tool_name arrives as the ALIAS: `shell` (execute_bash), `write`
 //      (fs_write).
 //   2. the write payload's file path field is `path`, not `file_path`.
-//   3. `todo_list` input is command-shaped ({command: "create", tasks:
-//      [{task_description}]}) — there is no status/activeForm transition.
+//   3. `todo_list` input is command-shaped ({command: "create",
+//      task_list_description: "...", tasks: [{task_description}]}) — there is
+//      no status/activeForm transition.
 //
 // This shim normalizes a Kiro payload into the ClaudeCodeHookInput shape the
 // core hooks parse, then pipes it into the named core hook (same directory)
@@ -26,9 +27,15 @@
 //   bun .kiro/hooks/aidlc-kiro-adapter.ts <target>
 // where <target> ∈ session-start | audit-and-sensors | runtime-compile |
 //                  state-sync | log-subagent | stop | verb-intercept |
-//                  pretool-block | reviewer-scope
+//                  pretool-block | state-transition-guard | reviewer-scope
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -37,7 +44,6 @@ import {
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
-  splitDoubleQuotedArgs,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
@@ -105,20 +111,88 @@ const childCwd = process.env.AIDLC_PROJECT_DIR ? projectDir : process.cwd();
 // gone), but it SUBSTITUTES the user's post-/aidlc text ($ARGUMENTS) into the
 // forwarding-loop anchor `aidlc-orchestrate.ts next <ARGS>`. We read the args
 // back from that anchor — the same text the conductor would forward.
-function extractNextArgs(expandedPrompt: string): string[] {
+function shellWords(input: string): string[] {
+  const words: string[] = [];
+  let word = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  let started = false;
+  for (const ch of input) {
+    if (escaped) {
+      word += ch;
+      escaped = false;
+      started = true;
+      continue;
+    }
+    if (ch === "\\" && quote !== "'") {
+      escaped = true;
+      started = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      else word += ch;
+      started = true;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      started = true;
+    } else if (/\s/.test(ch)) {
+      if (started) {
+        words.push(word);
+        word = "";
+        started = false;
+      }
+    } else {
+      word += ch;
+      started = true;
+    }
+  }
+  if (escaped) word += "\\";
+  if (started) words.push(word);
+  return words;
+}
+
+function extractNextInvocation(
+  expandedPrompt: string,
+): { raw: string; args: string[] } {
   // Match the FIRST `… aidlc-orchestrate.ts next <ARGS>` occurrence (the loop's
   // step-1 anchor) and take the tokens up to the closing backtick. The anchor is
   // inside a markdown code span, so the args end at the backtick.
   const m = expandedPrompt.match(/aidlc-orchestrate\.ts next ([^`\n]*)`/);
-  if (!m) return [];
-  return splitDoubleQuotedArgs(m[1].trim());
+  if (!m) return { raw: "", args: [] };
+  const raw = m[1].trim();
+  return { raw, args: shellWords(raw) };
+}
+
+const PRE_DISPATCH_FLAGS = new Set([
+  "--stage",
+  "--phase",
+  "--resume",
+  "--depth",
+  "--test-strategy",
+  "--single",
+  "--new-intent",
+  "--new-scope",
+  "--report",
+]);
+
+function shouldPreDispatchNext(args: string[], cwd: string): boolean {
+  if (args[0] === "compose") return true;
+  if (args.some((arg) => PRE_DISPATCH_FLAGS.has(arg))) return true;
+  // A scope choice is unambiguous only before a workflow exists. Over an
+  // active intent, scope + freeform text may be new work and must stay with
+  // the conductor's offer/confirm classification.
+  return args.includes("--scope") && !existsSync(stateFilePath(cwd));
 }
 
 if (target === "verb-intercept") {
   // The whole turn's only job here is to deterministically handle a terminal
   // command; anything else falls through to the conductor untouched (exit 0, no
   // output → Kiro proceeds to the LLM normally). Advisory: any failure fails open.
-  const args = extractNextArgs(kiro.prompt ?? "");
+  const invocation = extractNextInvocation(kiro.prompt ?? "");
+  const args = invocation.args;
   const cmd = classifyTerminalCommand(args);
   // Turn-clock: bump a per-turn counter EVERY time this seam fires (it fires
   // once per turn, BEFORE the cmd===null exit so a bare-next turn still advances
@@ -150,7 +224,72 @@ if (target === "verb-intercept") {
       appendAuditEntry("HUMAN_TURN", {}, cwd);
     }
   } catch { /* presence best-effort - mint never blocks the turn */ }
-  if (cmd === null) return 0; // not a terminal command — conductor handles it
+  if (cmd === null) {
+    // Pure, explicit engine reads do not need the model to reconstruct the
+    // first tool call. Dispatch them here with the exact recovered argv and
+    // inject the returned directive. This removes the observed fail-then-retry
+    // path where Kiro changed or dropped compose/routing arguments. Ambiguous
+    // active-workflow freeform remains conductor-owned and uses the forwarding
+    // latch below.
+    const cwd = projectDir;
+    if (invocation.raw.length > 0 && shouldPreDispatchNext(args, cwd)) {
+      try {
+        const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+        const command = executable
+          ? [executable, "next", ...args]
+          : [
+              process.execPath,
+              join(".kiro", "tools", "aidlc-orchestrate.ts"),
+              "next",
+              ...args,
+            ];
+        const run = Bun.spawnSync(
+          command,
+          { cwd, stdout: "pipe", stderr: "pipe", env: projectEnv },
+        );
+        const directive = run.stdout?.toString().trim() ?? "";
+        if (run.exitCode === 0 && directive.length > 0) {
+          rmSync(join(cwd, "aidlc", ".aidlc-forwarding-latch"), {
+            force: true,
+          });
+          process.stdout.write(
+            "SYSTEM (deterministic engine pre-dispatch): The harness has ALREADY " +
+              "run the exact first `aidlc-orchestrate.ts next` invocation with " +
+              "every user argument preserved. Treat the JSON below as the " +
+              "authoritative directive and act on it now. Do NOT call `next` " +
+              "again for this invocation.\n\n" +
+              `--- DIRECTIVE ---\n${directive}\n--- END DIRECTIVE ---\n`,
+          );
+          return 0;
+        }
+      } catch { /* pre-dispatch is advisory; forwarding latch remains the floor */ }
+    }
+
+    // Kiro occasionally drops the entire expanded $ARGUMENTS vector and runs a
+    // bare next even though both the agent prompt and skill say verbatim. Keep
+    // the intended first call in a turn-bound latch; pretool-block compares the
+    // shell-normalized argv and rejects a lossy call. A correct first next
+    // consumes the latch, so subsequent loop iterations in this turn are bare.
+    if (invocation.raw.length > 0) {
+      try {
+        writeFileSync(
+          join(cwd, "aidlc", ".aidlc-forwarding-latch"),
+          JSON.stringify({
+            turn,
+            raw: invocation.raw,
+            args,
+          }) + "\n",
+          "utf-8",
+        );
+      } catch { /* forwarding backstop best-effort */ }
+      process.stdout.write(
+        "SYSTEM (deterministic argument forwarding): Your immediate first tool call " +
+          "must be exactly the engine call below. Preserve every argument; do not run a bare `next`.\n\n" +
+          `bun .kiro/tools/aidlc-orchestrate.ts next ${invocation.raw}\n`,
+      );
+    }
+    return 0; // non-terminal command — conductor handles the directive
+  }
 
   const cwd = projectDir;
   const forwarded = cmd.args ?? (cmd.arg !== undefined ? [cmd.arg] : []);
@@ -225,7 +364,7 @@ if (target === "pretool-block") {
   const cmdStr = String(kiro.tool_input?.command ?? "");
   const cwd = projectDir;
   const m = cmdStr.match(/aidlc-orchestrate\.ts\s+next\b([^\n]*)/);
-  const nextArgs = m ? splitDoubleQuotedArgs(m[1].trim()) : [];
+  const nextArgs = m ? shellWords(m[1].trim()) : [];
   // A next carrying ANY advancing/config flag is a DELIBERATE move — only a truly
   // bare next is the spurious roll-forward. Mirrors the engine done-guard's
   // exemptions (the engine doesn't parse --init/--force — retired P4 — so listing
@@ -256,6 +395,35 @@ if (target === "pretool-block") {
     if (existsSync(lp)) {
       const r = JSON.parse(readFileSync(lp, "utf-8")) as { turn?: number };
       if (typeof r.turn === "number") latchTurn = r.turn;
+    }
+  } catch { /* fail open */ }
+
+  // First-next argument fidelity. The userPromptSubmit hook records the exact
+  // expanded argv for a non-terminal /aidlc command. Reject any altered first
+  // next in the same turn, including the observed total-drop `next` call. Shell
+  // quoting and backslash escapes normalize through shellWords before compare.
+  try {
+    const forwardingPath = join(cwd, "aidlc", ".aidlc-forwarding-latch");
+    if (m !== null && existsSync(forwardingPath)) {
+      const forwarding = JSON.parse(
+        readFileSync(forwardingPath, "utf-8"),
+      ) as { turn?: number; raw?: string; args?: string[] };
+      if (
+        forwarding.turn === counter &&
+        Array.isArray(forwarding.args)
+      ) {
+        const matches =
+          forwarding.args.length === nextArgs.length &&
+          forwarding.args.every((arg, index) => arg === nextArgs[index]);
+        if (!matches) {
+          process.stderr.write(
+            "The first aidlc-orchestrate next call dropped or changed the user's arguments. " +
+              `Run exactly: bun .kiro/tools/aidlc-orchestrate.ts next ${forwarding.raw ?? ""}\n`,
+          );
+          process.exit(2);
+        }
+        rmSync(forwardingPath, { force: true });
+      }
     }
   } catch { /* fail open */ }
 
@@ -296,6 +464,34 @@ if (target === "pretool-block") {
   } catch { /* fail open: advisory presence floor */ }
 
   return 0;
+}
+
+// --- state-transition-guard: engine ownership of lifecycle mutations -------
+if (target === "state-transition-guard") {
+  const tool = kiro.tool_name ?? "";
+  if (tool !== "shell" && tool !== "execute_bash") process.exit(0);
+  const command = String(kiro.tool_input?.command ?? "");
+  const r = Bun.spawnSync(
+    [process.execPath, join(HOOKS_DIR, "aidlc-state-transition-guard.ts")],
+    {
+      stdin: Buffer.from(
+        JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command },
+        }),
+        "utf-8",
+      ),
+      cwd: kiro.cwd ?? process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  if (r.exitCode === 2) {
+    process.stderr.write(r.stderr?.toString() ?? "");
+    process.exit(2);
+  }
+  process.exit(0);
 }
 
 // --- reviewer-scope: the per-unit reviewer read-scope bound (preToolUse) ---

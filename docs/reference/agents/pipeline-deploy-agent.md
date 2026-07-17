@@ -17,7 +17,7 @@
 
 | Stage | Name | What This Agent Does |
 |-------|------|----------------------|
-| practices-discovery | Practices Discovery | Discovers existing engineering practices and candidate rules; on affirmation, content is promoted to team and project rule layers |
+| practices-discovery | Practices Discovery | Leads the hub-and-spoke draft, human interview, and integration; after approval, promotes content to active-space team/project memory |
 | ci-pipeline | CI Pipeline | Designs and configures CI pipelines with quality gates, artifact generation, and security scanning |
 | deployment-pipeline | Deployment Pipeline | Designs CD pipelines with promotion gates, deployment strategies, and feature flag integration |
 | deployment-execution | Deployment Execution | Executes deployments, runs smoke tests, monitors health metrics, handles rollback |

@@ -89,6 +89,7 @@ interface Aggregate {
   forEachNonConstruction: string[];
   forEachValue: string[];
   usesSubagent: boolean;
+  subagentStages: string[];
   usesAgentTeam: boolean;
   mobStages: string[];
   pipelineStages: string[];
@@ -170,6 +171,10 @@ beforeAll(() => {
 
   const forEach = parsed.filter((p) => typeof p.obj.for_each === "string");
   const usesSubagent = parsed.some((p) => p.obj.mode === "subagent");
+  const subagentStages = parsed
+    .filter((p) => p.obj.mode === "subagent")
+    .map((p) => p.slug)
+    .sort();
   const usesAgentTeam = parsed.some((p) => p.obj.mode === "agent-team");
   // 2.5.0 ensemble census: the mob showcase is exactly user-stories; every
   // pipeline/mob stage must carry support agents (schema coupling, asserted
@@ -381,6 +386,7 @@ beforeAll(() => {
     forEachNonConstruction: forEach.filter((p) => p.phase !== "construction").map((p) => p.slug),
     forEachValue: [...new Set(forEach.map((p) => p.obj.for_each as string))],
     usesSubagent,
+    subagentStages,
     usesAgentTeam,
     mobStages,
     pipelineStages,
@@ -461,6 +467,13 @@ describe("t65 for_each + mode (in-process)", () => {
   // .sh #10: "mode 'subagent' used at least once"
   test("mode 'subagent' used at least once", () => {
     expect(agg.usesSubagent).toBe(true);
+  });
+
+  test("mode 'subagent' used by exactly code-generation and practices-discovery", () => {
+    expect(agg.subagentStages).toEqual([
+      "code-generation",
+      "practices-discovery",
+    ]);
   });
 
   // .sh #11: "mode 'agent-team' reserved — used zero times"

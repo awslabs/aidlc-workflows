@@ -7,10 +7,15 @@
 //     aidlc/.aidlc-turn-counter EVERY turn, and on a TERMINAL command
 //     (read-only flag / workspace verb) stamps aidlc/.aidlc-readonly-latch
 //     {turn,flag,source,ts} + writes the SYSTEM dispatch relay to stdout.
+//     Unambiguous compose/routing invocations are pre-dispatched with the exact
+//     argv and their directive is injected; ambiguous freeform invocations
+//     stamp the exact argv in aidlc/.aidlc-forwarding-latch.
 //   pretool-block (preToolUse) — the hard floor: a TRULY BARE advancing
 //     `aidlc-orchestrate.ts next` while the latch is fresh-for-this-turn
 //     (latch.turn === counter) → exit 2 (Kiro BLOCK). Any deliberate move
-//     (advancing flag), a stale latch, or no latch at all → exit 0 (inert).
+//     (advancing flag), a stale latch, or no latch at all → exit 0 (inert). A
+//     fresh forwarding latch rejects changed/dropped first-next arguments and
+//     is consumed only by an exact shell-normalized match.
 //
 // covers: file:harness/kiro/hooks/aidlc-kiro-adapter.ts
 //
@@ -65,6 +70,8 @@ function promptWithNext(args: string): string {
 
 const counterPath = (dir: string) => join(dir, "aidlc", ".aidlc-turn-counter");
 const latchPath = (dir: string) => join(dir, "aidlc", ".aidlc-readonly-latch");
+const forwardingPath = (dir: string) =>
+  join(dir, "aidlc", ".aidlc-forwarding-latch");
 
 describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
   test("1: read-only flag (--status) bumps counter to 1 and stamps the read-only-flag latch", () => {
@@ -113,17 +120,109 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
-  test("3: non-terminal freeform next bumps the counter but stamps NO latch", () => {
+  test("3: non-terminal freeform input stamps a turn-bound forwarding latch", () => {
     const dir = scratchProject();
     try {
-      const r = runAdapter(dir, "verb-intercept", { prompt: promptWithNext("build an auth service"), cwd: dir });
-      // cmd === null → silent exit 0, conductor handles it; clock still advanced.
+      const raw = "build an auth service";
+      const r = runAdapter(dir, "verb-intercept", {
+        prompt: promptWithNext(raw),
+        cwd: dir,
+      });
       expect(r.code).toBe(0);
-      expect(r.stdout.trim()).toBe("");
+      expect(r.stdout).toContain("SYSTEM (deterministic argument forwarding)");
+      expect(r.stdout).toContain(
+        `bun .kiro/tools/aidlc-orchestrate.ts next ${raw}`,
+      );
       expect(existsSync(counterPath(dir))).toBe(true);
       expect(readFileSync(counterPath(dir), "utf-8").trim()).toBe("1");
-      // No terminal command this turn → no latch.
       expect(existsSync(latchPath(dir))).toBe(false);
+      const forwarding = JSON.parse(
+        readFileSync(forwardingPath(dir), "utf-8"),
+      ) as { turn?: number; raw?: string; args?: string[] };
+      expect(forwarding.turn).toBe(1);
+      expect(forwarding.raw).toBe(raw);
+      expect(forwarding.args).toEqual(["build", "an", "auth", "service"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("3b: positional scope input stamps the complete forwarding vector", () => {
+    const dir = scratchProject();
+    try {
+      const raw = 'bugfix "Fix duplicate todos"';
+      const r = runAdapter(dir, "verb-intercept", {
+        prompt: promptWithNext(raw),
+        cwd: dir,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("SYSTEM (deterministic argument forwarding)");
+      const forwarding = JSON.parse(
+        readFileSync(forwardingPath(dir), "utf-8"),
+      ) as { turn?: number; raw?: string; args?: string[] };
+      expect(forwarding.turn).toBe(1);
+      expect(forwarding.raw).toBe(raw);
+      expect(forwarding.args).toEqual(["bugfix", "Fix duplicate todos"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("3c: fresh-workspace --scope input is pre-dispatched with exact argv", () => {
+    const dir = scratchProject();
+    try {
+      const raw = '--scope feature "build auth across both repos"';
+      const r = runAdapter(dir, "verb-intercept", {
+        prompt: promptWithNext(raw),
+        cwd: dir,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
+      expect(r.stdout).toContain('"kind":"print"');
+      expect(r.stdout).toContain(
+        "aidlc-utility.ts intent-birth --scope feature",
+      );
+      expect(existsSync(counterPath(dir))).toBe(true);
+      expect(readFileSync(counterPath(dir), "utf-8").trim()).toBe("1");
+      expect(existsSync(latchPath(dir))).toBe(false);
+      expect(existsSync(forwardingPath(dir))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("3d: compose is pre-dispatched instead of relying on a guarded retry", () => {
+    const dir = scratchProject();
+    try {
+      const r = runAdapter(dir, "verb-intercept", {
+        prompt: promptWithNext(
+          'compose "drop market research from this workflow"',
+        ),
+        cwd: dir,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
+      expect(r.stdout).toContain("Dispatch the composer agent");
+      expect(existsSync(forwardingPath(dir))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("3e: explicit stage runner flags are pre-dispatched", () => {
+    const dir = scratchProject();
+    try {
+      const r = runAdapter(dir, "verb-intercept", {
+        prompt: promptWithNext(
+          "--scope poc --stage requirements-analysis --single",
+        ),
+        cwd: dir,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
+      expect(r.stdout).toContain('"kind":"run-stage"');
+      expect(r.stdout).toContain('"stage":"requirements-analysis"');
+      expect(existsSync(forwardingPath(dir))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -143,6 +242,20 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
     }
   }
   const BARE_NEXT = "bun .kiro/tools/aidlc-orchestrate.ts next";
+
+  function seedForwarding(
+    dir: string,
+    counter: number,
+    raw: string,
+    args: string[],
+  ): void {
+    writeFileSync(counterPath(dir), `${counter}\n`, "utf-8");
+    writeFileSync(
+      forwardingPath(dir),
+      `${JSON.stringify({ turn: counter, raw, args })}\n`,
+      "utf-8",
+    );
+  }
 
   test("4: fresh latch (turn===counter) + bare advancing next → exit 2 (BLOCK)", () => {
     const dir = scratchProject();
@@ -186,6 +299,72 @@ describe("t180 pretool-block roll-forward backstop (exit-code contract)", () => 
       // aidlc/ exists but no counter and no latch were ever written.
       const r = runAdapter(dir, "pretool-block", { tool_input: { command: BARE_NEXT }, cwd: dir });
       expect(r.code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("8: same-turn forwarding latch rejects a bare first next", () => {
+    const dir = scratchProject();
+    try {
+      seedForwarding(
+        dir,
+        4,
+        '--scope feature "build auth across both repos"',
+        ["--scope", "feature", "build auth across both repos"],
+      );
+      const r = runAdapter(dir, "pretool-block", {
+        tool_input: { command: BARE_NEXT },
+        cwd: dir,
+      });
+      expect(r.code).toBe(2);
+      expect(existsSync(forwardingPath(dir))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("9: exact first next consumes the forwarding latch", () => {
+    const dir = scratchProject();
+    try {
+      const raw = '--scope feature "build auth across both repos"';
+      seedForwarding(
+        dir,
+        4,
+        raw,
+        ["--scope", "feature", "build auth across both repos"],
+      );
+      const r = runAdapter(dir, "pretool-block", {
+        tool_input: { command: `${BARE_NEXT} ${raw}` },
+        cwd: dir,
+      });
+      expect(r.code).toBe(0);
+      expect(existsSync(forwardingPath(dir))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("10: shell escaping normalizes before forwarding comparison", () => {
+    const dir = scratchProject();
+    try {
+      const raw =
+        '--scope poc "answer the question; continue without waiting"';
+      seedForwarding(
+        dir,
+        4,
+        raw,
+        ["--scope", "poc", "answer the question; continue without waiting"],
+      );
+      const r = runAdapter(dir, "pretool-block", {
+        tool_input: {
+          command:
+            `${BARE_NEXT} --scope poc answer\\ the\\ question\\;\\ continue\\ without\\ waiting`,
+        },
+        cwd: dir,
+      });
+      expect(r.code).toBe(0);
+      expect(existsSync(forwardingPath(dir))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -255,6 +255,10 @@ function midIdeationProject(): string {
 function runState(proj: string, args: string[]): { out: string; status: number } {
   const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", proj], {
     encoding: "utf-8",
+    env: {
+      ...process.env,
+      AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    },
   });
   return {
     out: `${res.stdout ?? ""}${res.stderr ?? ""}`,

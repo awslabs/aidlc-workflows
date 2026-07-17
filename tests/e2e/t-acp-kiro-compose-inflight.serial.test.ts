@@ -133,7 +133,7 @@ describe("t-acp-kiro compose in-flight recompose journey (live Kiro ACP)", () =>
         // --- turn 1: compose -> proposal -> marker + gate (turn ends there) ---
         // No stop condition: the marker's Stop-hook carve-out lets the turn end
         // AT the gate on its own (the same turn-end bet the front twin makes).
-        await driveKiroAcp({
+        const r1 = await driveKiroAcp({
           projectDir: root,
           session,
           prompt: `/aidlc compose "${TASK}"`,
@@ -159,7 +159,7 @@ describe("t-acp-kiro compose in-flight recompose journey (live Kiro ACP)", () =>
           }
         }, 500);
         try {
-          await driveKiroAcp({
+          const r2 = await driveKiroAcp({
             projectDir: root,
             session,
             prompt:
@@ -167,6 +167,7 @@ describe("t-acp-kiro compose in-flight recompose journey (live Kiro ACP)", () =>
             timeoutMs: TURN_MS,
             keepAlive: true,
           });
+          expect([...r1.toolCallIssues, ...r2.toolCallIssues]).toEqual([]);
         } finally {
           clearInterval(poll);
         }

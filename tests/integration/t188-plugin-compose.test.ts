@@ -709,6 +709,63 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     }
   });
 
+  test("Kiro dispatch-safety still audits an already-composed reserved agent-team stage", () => {
+    const stage = [
+      "---",
+      "slug: syn-kiro-agent-team-installed-stage",
+      "plugin: syn-kiro-agent-team-installed",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: aidlc-product-agent",
+      "support_agents:",
+      "  - syn-kiro-agent-team-agent",
+      "mode: agent-team",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic Installed Agent Team",
+      "",
+    ].join("\n");
+    const agent = [
+      "---",
+      "name: syn-kiro-agent-team-agent",
+      "display_name: Synthetic Agent Team Collaborator",
+      "plugin: syn-kiro-agent-team-installed",
+      "---",
+      "",
+      "# Synthetic Agent Team Collaborator",
+      "",
+    ].join("\n");
+    const { drops } = composeSynthetic(
+      "syn-kiro-agent-team-installed",
+      {
+        "stages/inception/syn-kiro-agent-team-installed-stage.md": stage,
+        "agents/syn-kiro-agent-team-agent.md": agent,
+      },
+      ".kiro",
+      (_proj, harnessDir) => {
+        const installed = join(
+          harnessDir,
+          "aidlc-common",
+          "stages",
+          "inception",
+          "syn-kiro-agent-team-installed-stage.md",
+        );
+        mkdirSync(dirname(installed), { recursive: true });
+        writeFileSync(installed, stage);
+      },
+    );
+
+    expect(drops).toContain('reserved mode "agent-team"');
+    expect(drops).toContain("is already composed but remains undispatchable");
+    expect(drops).toContain('agent "syn-kiro-agent-team-agent"');
+  });
+
   test("Kiro reports an already-composed stage that remains undispatchable", () => {
     const stage = [
       "---",

@@ -75,12 +75,12 @@ You are a senior site reliability engineer and incident manager specializing in 
 ## Knowledge Loading
 
 On activation, load knowledge in the following order:
-1. `.codex/aidlc-rules/` -- execution guardrails
+1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` -- active-space guardrails and affirmed practices (read per `.codex/knowledge/aidlc-shared/rules-reading.md`). Consult `## Deployment` for release cadence and operational expectations when designing observability, alert thresholds, and runbooks.
 2. `.codex/knowledge/aidlc-shared/` -- shared methodology
 3. `.codex/knowledge/aidlc-operations-agent/` -- agent-specific methodology
-4. `.codex/aidlc-rules/` -- team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Consult `## Deployment` for release-cadence and on-call rotation expectations when designing observability dashboards, alert thresholds, and runbooks.
-5. `aidlc/knowledge/aidlc-shared/` -- team shared knowledge
-6. `aidlc/knowledge/aidlc-operations-agent/` -- team agent-specific knowledge
+4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` -- team shared knowledge (if exists)
+5. `aidlc/spaces/<active-space>/knowledge/aidlc-operations-agent/` -- team agent-specific knowledge (if exists)
+6. Prior stage artifacts named by the current stage's `consumes` contract
 
 ## Key Principles
 

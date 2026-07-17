@@ -191,6 +191,10 @@ The engine's `--single` mode runs that one stage in isolation. It emits a single
 `run-stage` directive for the stage (with its lead agent, resolved
 consumes/produces paths, rules, and sensors), the conductor runs it, and a
 synthetic-id `STAGE_STARTED`/`STAGE_COMPLETED` pair is committed to the audit log.
+The directive carries `single: true`, so the conductor runs the configured body,
+topology, reviewer, and completion checks, reports once with
+`report --single --stage <slug> --result completed`, and stops on `done`. It does
+not run workflow learnings or open a workflow approval gate.
 A `--single` run is deliberately isolated: it **never touches the main workflow's
 `Current Stage`** — the tool refuses to advance the main workflow from a single
 run, so running one stage on its own can never derail an in-flight workflow.

@@ -160,12 +160,12 @@ The aidlc-devsecops-agent reviews designs for security, defines security require
 
 ### [aidlc-developer-agent](agents/developer-agent.md)
 
-**Domain:** Code implementation, code analysis, workspace detection
+**Domain:** Code implementation, code analysis, data modelling
 
 The aidlc-developer-agent spans three phases — from reverse engineering in Inception through deployment support in Operation. It runs code scans of existing codebases and generates implementation code.
 
 - **Leads:** reverse-engineering (code scan), code-generation
-- **Supports:** practices-discovery, functional-design, deployment-execution
+- **Supports:** practices-discovery, user-stories, functional-design, deployment-execution
 
 Workspace detection (workspace-detection) used to be a subagent of the aidlc-developer-agent; it now runs deterministically inside `aidlc-utility intent-birth` using rule-based file and manifest detection.
 - **Special tools:** Bash (for build and run commands)
@@ -177,7 +177,7 @@ Workspace detection (workspace-detection) used to be a subagent of the aidlc-dev
 The aidlc-quality-agent defines test strategy, generates test suites, validates quality gates, and runs performance testing.
 
 - **Leads:** build-and-test, performance-validation
-- **Supports:** practices-discovery, nfr-requirements
+- **Supports:** practices-discovery, user-stories, nfr-requirements
 - **Special tools:** Bash (for test execution)
 
 ### [aidlc-pipeline-deploy-agent](agents/pipeline-deploy-agent.md)
@@ -215,8 +215,8 @@ This table shows which agents are active in which phases, and whether they serve
 | aidlc-aws-platform-agent | — | S (feasibility) | S (application-design) | L (infrastructure-design), S (nfr-design) | L (environment-provisioning), S (feedback-optimization) |
 | aidlc-compliance-agent | — | S (feasibility) | — | S (nfr-requirements, infrastructure-design) | S (environment-provisioning) |
 | aidlc-devsecops-agent | — | — | S (practices-discovery) | S (nfr-requirements, infrastructure-design, build-and-test) | S (environment-provisioning) |
-| aidlc-developer-agent | — | — | L (reverse-engineering), S (practices-discovery) | L (code-generation), S (functional-design) | S (deployment-execution) |
-| aidlc-quality-agent | — | — | S (practices-discovery) | L (build-and-test), S (nfr-requirements) | L (performance-validation) |
+| aidlc-developer-agent | — | — | L (reverse-engineering), S (practices-discovery, user-stories) | L (code-generation), S (functional-design) | S (deployment-execution) |
+| aidlc-quality-agent | — | — | S (practices-discovery, user-stories) | L (build-and-test), S (nfr-requirements) | L (performance-validation) |
 | aidlc-pipeline-deploy-agent | — | — | L (practices-discovery) | L (ci-pipeline) | L (deployment-pipeline, deployment-execution) |
 | aidlc-operations-agent | — | — | — | — | L (observability-setup, incident-response, feedback-optimization) |
 

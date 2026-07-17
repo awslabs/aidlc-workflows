@@ -117,6 +117,10 @@ function readAudit(p: string): string {
 function state(args: string[]): void {
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",
+    env: {
+      ...process.env,
+      AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    },
   });
   expect(
     r.status,

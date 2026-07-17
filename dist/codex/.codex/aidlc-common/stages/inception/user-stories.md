@@ -48,7 +48,9 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ### Step 1: Load the Lead Persona (mob stage)
 
-Load aidlc-product-agent persona from `agents/aidlc-product-agent.md` and knowledge from `.codex/knowledge/aidlc-product-agent/` — the product manager owns this stage.
+Read every path in `directive.inline_context_paths`. For this mob the roster
+contains the aidlc-product-agent persona and its shared/role knowledge only; the
+product manager owns the inline draft and integration work.
 
 This stage runs `mode: mob` (stage-protocol.md §5 "Multi-agent stages"): the support agents (aidlc-design-agent for user experience, aidlc-developer-agent for implementability, aidlc-quality-agent for testability) are NOT voices to adopt — they are dispatched as independent participants during PART 2. Do not load their personas into your own context.
 
@@ -65,7 +67,9 @@ Create `<record>/inception/user-stories/user-stories-assessment.md` documenting 
 - If executing: key areas where stories will add the most value
 - If skipping: what alternative coverage exists (e.g., requirements alone are sufficient)
 
-If skipping, update aidlc-state.md with skip reason and proceed to next stage.
+If skipping, run
+`bun .codex/tools/aidlc-orchestrate.ts report --stage user-stories --result skipped --reason "<reason>"`.
+The engine records the skip and advances to the next in-scope stage.
 
 ### Step 3: Load Prior Context
 
@@ -145,18 +149,30 @@ contribution files). Maintained dissent is quoted verbatim in the Step 10
 completion summary. The three contribution files are this stage's ensemble
 evidence — the engine refuses approval while any is missing.
 
-### Step 9: Update State
+### Step 9: Open the Approval Gate
 
-Update `<record>/aidlc-state.md`:
-- Mark User Stories as `[x]` completed
-- Update current stage and next stage
+After verifying the three lead artifacts and all three contribution files, run:
+
+```bash
+bun .codex/tools/aidlc-orchestrate.ts report \
+  --stage user-stories --result awaiting-approval
+```
+
+If the engine refuses missing or malformed ensemble evidence, restore that
+evidence before presenting the human gate.
 
 ### Step 10: Present Completion & Request Approval
 
 Use stage-protocol.md completion template with completion emoji: :books:
 - Summary of personas and stories produced
 - Review path: `<record>/inception/user-stories/`
-- Structured approval question with options: Approve (continue to Delivery Planning) / Request Changes
+- Structured approval question with options: Approve (continue to `directive.next_stage`) / Request Changes
+
+STOP for the human response. Report **Approve** with
+`--result approved --user-input "<exact choice>"`; report
+**Request Changes** with `--result rejected --user-input "<feedback>"`, run the
+revision loop, and report `--result revised` before re-presenting. The engine
+owns every lifecycle transition and advancement.
 
 ## Sensors
 
@@ -185,13 +201,13 @@ Before the approval gate, read memory.md and surface candidates as a
 structured question. For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
-- Prescriptive rule → `.codex/aidlc-rules/aidlc-phase-<phase>.md` (phase-scoped)
-  or `.codex/aidlc-rules/aidlc-<org|team|project>.md` (cross-cutting)
+- Prescriptive rule → `aidlc/spaces/<active-space>/memory/phases/<phase>.md` (phase-scoped)
+  or `aidlc/spaces/<active-space>/memory/<org|team|project>.md` (cross-cutting)
 - Verification check → new manifest at `.codex/sensors/aidlc-<id>.md`
   (capability descriptor only — no `applies_to`); add the new id to
   the relevant stage's `sensors: [...]` frontmatter list to wire it
 
-If nothing surfaces or the user skips all, proceed to the gate. The memory.md
+Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
 file stays in the artefact directory as part of the stage's permanent record.
 
 Stage files are immutable framework artefacts — the ritual writes into the

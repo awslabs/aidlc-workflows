@@ -89,7 +89,11 @@ import * as os from "node:os";
 import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
+import {
+  seededCodekbDir,
+  seededRecordDir,
+  seededStateFile,
+} from "../harness/fixtures.ts";
 import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
@@ -176,6 +180,7 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         brownfieldStub: true,
         reArtifacts: true,
         withAudit: true,
+        runtimeGraph: true,
       });
       // The render value-add: tail the grid during the run to prove a waiting
       // AskUserQuestion menu (caret + footer) painted at least once — what the
@@ -355,9 +360,9 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         const completedCount = (stateMd.match(/^- \[x\]/gm) ?? []).length;
         expect(completedCount).toBeGreaterThan(4);
 
-        // .sh test 12: the 4 pre-seeded RE artefacts are still intact (not
-        // overwritten) — `find .../reverse-engineering -name "*.md" | wc -l` > 3.
-        const reDir = join(seededRecordDir(sandbox), "inception", "reverse-engineering");
+        // .sh test 12: the pre-seeded RE artifacts are still intact (not
+        // overwritten) in the canonical space-level codekb directory.
+        const reDir = seededCodekbDir(sandbox);
         expect(existsSync(reDir)).toBe(true);
         const reCount = readdirSync(reDir).filter((f) => f.endsWith(".md")).length;
         expect(reCount).toBeGreaterThan(3);

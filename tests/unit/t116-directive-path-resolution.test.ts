@@ -78,9 +78,10 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
+  AIDLC_MEMORY_SRC,
   cleanupTestProject,
   createTestProject,
   DEFAULT_RECORD_DIR,
@@ -131,6 +132,11 @@ afterAll(() => {
 interface RunStageDirective {
   kind: string;
   stage: string;
+  lead_agent: string;
+  support_agents: string[];
+  mode: string;
+  inline_context_paths: string[];
+  rules_in_context: string[];
   consumes: string[];
   consumes_absent?: Array<{ path: string; expected: boolean }>;
   produces: string[];
@@ -146,11 +152,11 @@ interface RunStageDirective {
  * sed_i). The bare `next` lands on Branch 10 and emits the run-stage for the
  * in-flight stage with produces/consumes RESOLVED.
  */
-function emitFor(
+function emitForWithProject(
   fixture: string,
   slug: string,
   seedArtifacts?: (proj: string) => void,
-): RunStageDirective {
+): { directive: RunStageDirective; projectDir: string } {
   const proj = createTestProject();
   tempDirs.push(proj);
   seedStateFile(proj, join(FIXTURES_DIR, fixture));
@@ -189,7 +195,15 @@ function emitFor(
   // arrays below assert against the wrong directive kind — fail loudly).
   expect(dir.kind).toBe("run-stage");
   expect(dir.stage).toBe(slug);
-  return dir;
+  return { directive: dir, projectDir: proj };
+}
+
+function emitFor(
+  fixture: string,
+  slug: string,
+  seedArtifacts?: (proj: string) => void,
+): RunStageDirective {
+  return emitForWithProject(fixture, slug, seedArtifacts).directive;
 }
 
 // The union of a directive's PRESENT and ABSENT consume paths. This suite
@@ -462,5 +476,105 @@ describe("t116 consumes presence split (consumes_absent)", () => {
     expect((dir.consumes_absent ?? []).map((e) => e.path)).toContain(
       `${RP}/inception/requirements-analysis/requirements.md`,
     );
+  });
+});
+
+describe("t116 inline context roster", () => {
+  test("17: inline directives enumerate lead, every support, shipped knowledge, and active-space knowledge", () => {
+    const customPaths = [
+      `aidlc/spaces/${DEFAULT_SPACE}/knowledge/aidlc-shared/team-context.md`,
+      `aidlc/spaces/${DEFAULT_SPACE}/knowledge/aidlc-architect-agent/architecture-context.md`,
+      `aidlc/spaces/${DEFAULT_SPACE}/knowledge/aidlc-aws-platform-agent/platform-context.md`,
+      `aidlc/spaces/${DEFAULT_SPACE}/knowledge/aidlc-design-agent/design-context.md`,
+    ];
+    const { directive, projectDir } = emitForWithProject(
+      "state-construction.md",
+      "application-design",
+      (proj) => {
+        cpSync(AIDLC_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
+        for (const relative of customPaths) {
+          const absolute = join(proj, ...relative.split("/"));
+          mkdirSync(dirname(absolute), { recursive: true });
+          writeFileSync(absolute, "# Custom knowledge\n", "utf-8");
+        }
+      },
+    );
+
+    expect(directive.mode).toBe("inline");
+    expect(directive.lead_agent).toBe("aidlc-architect-agent");
+    expect(directive.support_agents).toEqual([
+      "aidlc-aws-platform-agent",
+      "aidlc-design-agent",
+    ]);
+    expect(directive.rules_in_context).toEqual([
+      `aidlc/spaces/${DEFAULT_SPACE}/memory/org.md`,
+      `aidlc/spaces/${DEFAULT_SPACE}/memory/team.md`,
+      `aidlc/spaces/${DEFAULT_SPACE}/memory/project.md`,
+      `aidlc/spaces/${DEFAULT_SPACE}/memory/phases/inception.md`,
+    ]);
+    for (const path of directive.rules_in_context) {
+      expect(existsSync(join(projectDir, ...path.split("/"))), path).toBe(true);
+    }
+    for (const agent of [
+      directive.lead_agent,
+      ...directive.support_agents,
+    ]) {
+      expect(directive.inline_context_paths).toContain(
+        `.claude/agents/${agent}.md`,
+      );
+      expect(
+        directive.inline_context_paths.some((path) =>
+          path.startsWith(`.claude/knowledge/${agent}/`)
+        ),
+        `missing shipped knowledge for ${agent}`,
+      ).toBe(true);
+    }
+    expect(
+      directive.inline_context_paths.some((path) =>
+        path.startsWith(".claude/knowledge/aidlc-shared/")
+      ),
+    ).toBe(true);
+    for (const path of customPaths) {
+      expect(directive.inline_context_paths).toContain(path);
+    }
+    expect(new Set(directive.inline_context_paths).size).toBe(
+      directive.inline_context_paths.length,
+    );
+    for (const path of directive.inline_context_paths) {
+      const root = path.startsWith(".claude/")
+        ? join(REPO_ROOT, "dist", "claude")
+        : projectDir;
+      expect(existsSync(join(root, ...path.split("/"))), path).toBe(true);
+    }
+  });
+
+  test("18: mob directives carry lead-only inline context", () => {
+    const directive = emitFor("state-construction.md", "user-stories");
+    expect(directive.mode).toBe("mob");
+    expect(directive.lead_agent).toBe("aidlc-product-agent");
+    expect(directive.inline_context_paths).toContain(
+      ".claude/agents/aidlc-product-agent.md",
+    );
+    expect(
+      directive.inline_context_paths.some((path) =>
+        path.startsWith(".claude/knowledge/aidlc-product-agent/")
+      ),
+    ).toBe(true);
+    for (const support of directive.support_agents) {
+      expect(directive.inline_context_paths).not.toContain(
+        `.claude/agents/${support}.md`,
+      );
+      expect(
+        directive.inline_context_paths.some((path) =>
+          path.startsWith(`.claude/knowledge/${support}/`)
+        ),
+      ).toBe(false);
+    }
+  });
+
+  test("19: fully-dispatched modes carry no inline context", () => {
+    const directive = emitFor("state-construction.md", "code-generation");
+    expect(directive.mode).toBe("subagent");
+    expect(directive.inline_context_paths).toEqual([]);
   });
 });

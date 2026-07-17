@@ -86,6 +86,7 @@ describe("t-acp-kiro-status (structured ACP round-trip on the shipped dist/kiro)
         // assertable). The deterministic surfaces are the clean turn end and
         // the on-disk no-op. The verbatim status bytes are covered by the SDK
         // twin t20 + the CLI twin t27 (see header).
+        expect(r.toolCallIssues).toEqual([]);
         expect(r.stopReason).toBe("end_turn");
 
         // Read-only: no state scaffolded by a status run. The seeded record was

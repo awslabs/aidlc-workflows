@@ -70,6 +70,7 @@ describe("t-acp-kiro-jump (backward phase jump over ACP; t26-class flake policy 
           stopAfterToolTitle: /aidlc-jump\.ts/,
         });
 
+        expect(r.toolCallIssues).toEqual([]);
         // The jump tool ran and its verbatim stdout carries the known-answer
         // resolution fields. Match the stable title stem — titles are
         // display-truncated (probe-verified), so 'execute' may be cut.

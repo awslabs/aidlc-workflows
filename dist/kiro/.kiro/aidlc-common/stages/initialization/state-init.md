@@ -114,19 +114,8 @@ Append entries under four standard headings:
 Format each entry with an ISO 8601 timestamp:
 `- 2026-05-20T10:14:32Z — <summary>; <context>`
 
-Before the approval gate, read memory.md and surface candidates as a
-structured question. For each entry the user keeps, write to the appropriate
-harness destination per `stage-protocol.md` §13 — never to this stage file:
-
-- Prescriptive rule → `.kiro/steering/aidlc-phase-<phase>.md` (phase-scoped)
-  or `.kiro/steering/aidlc-<org|team|project>.md` (cross-cutting)
-- Verification check → new manifest at `.kiro/sensors/aidlc-<id>.md`
-  (capability descriptor only — no `applies_to`); add the new id to
-  the relevant stage's `sensors: [...]` frontmatter list to wire it
-
-If nothing surfaces or the user skips all, proceed to the gate. The memory.md
-file stays in the artefact directory as part of the stage's permanent record.
-
-Stage files are immutable framework artefacts — the ritual writes into the
-harness, not into this file. Next time this stage runs, the new rules and
-sensors load automatically.
+This is an auto-proceeding bootstrap stage (`gate: false`), so it has no
+approval gate. Keep `memory.md` as the stage's permanent execution record, but
+do not surface or persist §13 learnings and do not ask the mandatory
+"Anything to add for next time?" question here. The gate-bound learnings ritual
+begins with the first post-initialization stage.

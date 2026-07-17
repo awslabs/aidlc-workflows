@@ -109,6 +109,10 @@ writeFileSync(join(healthDir, "sync-statusline.last"), isoTimestamp(), "utf-8");
 const toolPath = join(projectDir, harnessDir(), "tools", "aidlc-utility.ts");
 hookDebug(projectDir, "sync-statusline", "set-status", { slug });
 Bun.spawnSync(["bun", toolPath, "set-status", "--stage", slug, "--project-dir", projectDir], {
+  env: {
+    ...process.env,
+    AIDLC_STATUSLINE_OWNER: `statusline:${process.pid}`,
+  },
   stdout: "ignore",
   stderr: "ignore",
 });

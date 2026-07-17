@@ -1,42 +1,37 @@
 # Project-Level Rules
 
-> Project-specific overrides and corrections. Overrides aidlc-team.md
-> and aidlc-org.md. Populated by practices-discovery and the
-> self-learning loop.
+> Project-specific specialisation and corrections. Loaded after `org.md` and
+> `team.md` as strict-additive guidance; contradictions with broader policy
+> are rejected. Populated by practices-discovery and the self-learning loop.
 >
 > Use sparingly: most teams don't need a project layer. Reach for it
-> only when this specific project deviates from team-wide practice in a
-> stable, durable way (e.g., "this monorepo project rebases even though
-> our team default is squash"; "this legacy project skips the test
-> floor because the existing suite is unsalvageable and we accept
-> that").
+> only when this specific project needs stable, durable guidance beyond the
+> team practice (for example, package-specific release checks or an additional
+> regression suite for a legacy component).
 
 ## Way of Working
 
-<!-- Project-specific override. Example: -->
-<!-- This monorepo project rebases instead of squash-merging because -->
-<!-- the per-package commit history is the audit trail we depend on -->
-<!-- for partial-rollback decisions. Override applies to this project -->
-<!-- only. -->
+<!-- Project-specific specialisation. Example: -->
+<!-- This monorepo requires package-scoped branch names and a package owner -->
+<!-- review in addition to the team's normal merge policy. -->
 
 ## Walking Skeleton
 
-<!-- Project-specific override. Example: -->
-<!-- This project skips the walking skeleton because we're rewriting -->
-<!-- an existing service in-place — there's no greenfield bootstrap -->
-<!-- to gate. -->
+<!-- Project-specific specialisation. Example: -->
+<!-- The walking skeleton must exercise the legacy service adapter as well -->
+<!-- as the new service boundary. -->
 
 ## Testing Posture
 
-<!-- Project-specific override. -->
+<!-- Project-specific specialisation. -->
 
 ## Deployment
 
-<!-- Project-specific override. -->
+<!-- Project-specific specialisation. -->
 
 ## Code Style
 
-<!-- Project-specific override. -->
+<!-- Project-specific specialisation. -->
 
 ## Tech Stack
 

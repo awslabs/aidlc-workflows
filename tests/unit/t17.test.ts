@@ -83,6 +83,10 @@ function runState(proj: string, args: string[]): RunResult {
   const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     cwd: proj,
+    env: {
+      ...process.env,
+      AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    },
   });
   const stdout = res.stdout ?? "";
   const stderr = res.stderr ?? "";
@@ -1125,6 +1129,7 @@ describe("t17 approve artifact guard (#366)", () => {
   function guarded(args: string[]): RunResult {
     const env = { ...process.env };
     delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+    env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
     const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", proj], {
       encoding: "utf-8",
       cwd: proj,
@@ -1136,8 +1141,8 @@ describe("t17 approve artifact guard (#366)", () => {
   }
 
   test("approve REFUSES feasibility with no produced artifacts", () => {
-    guarded(["checkbox", "feasibility=in-progress"]);
-    guarded(["gate-start", "feasibility"]);
+    runState(proj, ["checkbox", "feasibility=in-progress"]);
+    runState(proj, ["gate-start", "feasibility"]);
     const r = guarded(["approve", "feasibility", "--user-input", "ok"]);
     expect(r.rc).not.toBe(0);
     expect(r.combined).toContain("Refusing to complete");

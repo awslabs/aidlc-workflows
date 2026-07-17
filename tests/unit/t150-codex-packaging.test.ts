@@ -33,6 +33,7 @@ const TRUST_SUFFIXES = [
   "session_start:0:0",
   "user_prompt_submit:0:0",
   "pre_tool_use:0:0",
+  "pre_tool_use:1:0",
   "post_tool_use:0:0",
   "post_tool_use:1:0",
   "post_tool_use:2:0",

@@ -146,11 +146,20 @@ describe("t138 scope-exclusion counts (metamorphic invariant, sdk)", () => {
         assertToolResultContains(init, "Bash", "State initialized:");
         expect(init.stateFile).toContain(`- **Scope**: ${SCOPE}`);
 
-        const r = await driveAidlc(`/aidlc ${SCOPE}`, {
-          projectDir: proj,
-          timeoutMs: DRIVE_TIMEOUT_MS,
-        });
+        const r = await driveAidlc(
+          `/aidlc ${SCOPE} This is a synthetic test fixture. Remediate CVE-2021-23337 ` +
+            "by scaffolding the smallest sensible Node.js CLI with lodash 4.17.20, then upgrade " +
+            "lodash to 4.17.21 and add a regression check. Choose recommended answers, approve " +
+            "each gate, and continue through workflow completion.",
+          {
+            projectDir: proj,
+            timeoutMs: DRIVE_TIMEOUT_MS,
+          },
+        );
         assertResultOk(r);
+        // Whole-run invariant means whole run: a parked or partially completed
+        // journey cannot prove that a later SKIP stage never starts.
+        assertAuditEvent(r, "WORKFLOW_COMPLETED");
 
         // Scope recorded correctly (the run actually ran THIS scope).
         const scope = (r.stateFile ?? "").match(/^- \*\*Scope\*\*: (\S+)$/m)?.[1];

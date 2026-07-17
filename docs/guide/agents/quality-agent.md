@@ -4,7 +4,7 @@
 
 The aidlc-quality-agent is your QA engineer and performance specialist. It defines test strategy, generates test suites (unit, integration, contract, security), validates coverage against acceptance criteria, designs and executes load tests, and validates non-functional requirement targets. It ensures every implemented unit meets its acceptance criteria and the overall system meets quality gates.
 
-The aidlc-quality-agent leads two stages — one in Construction and one in Operation — and supports two additional stages. It has Bash access for running build tools, test commands, and performance testing utilities.
+The aidlc-quality-agent leads two stages — one in Construction and one in Operation — and supports three additional stages. It has Bash access for running build tools, test commands, and performance testing utilities.
 
 ## Stages Led
 
@@ -17,7 +17,8 @@ The aidlc-quality-agent leads two stages — one in Construction and one in Oper
 
 | Stage | Phase | Contribution |
 |-------|-------|-------------|
-| 2.2 Practices Discovery | Inception | Surfaces testing posture and quality practices from existing code |
+| 2.2 Practices Discovery | Inception | Mutually blind testing-posture spoke; writes its own contribution file |
+| 2.4 User Stories | Inception | Testability and acceptance-criteria voice in the mob; writes its own contribution file |
 | 3.2 NFR Requirements | Construction | Defines testable quality attribute scenarios |
 
 ## What to Expect

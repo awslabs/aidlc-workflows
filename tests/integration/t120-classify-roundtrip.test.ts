@@ -86,7 +86,7 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   cleanupTestProject,
@@ -101,7 +101,6 @@ const BUN = process.execPath; // the bun running this test
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const ORCHESTRATE = join(TOOLS, "aidlc-orchestrate.ts");
-const STATE = join(TOOLS, "aidlc-state.ts");
 
 // The skeleton-gate stage for the fixture's scope (feature): the first
 // Construction EXECUTE stage. Frozen here; matches firstInScopeStageOfPhase(
@@ -278,13 +277,15 @@ describe("t120 walking-skeleton classify round-trip (migrated from t120-classify
   // ===========================================================================
   test("negative: stance off the skeleton-gate stage (nfr-design) → error explaining it is not the skeleton-gate stage", () => {
     const p = projWithState("state-construction.md");
-    const set = run(STATE, [
-      "set",
-      "Current Stage=nfr-design",
-      "--project-dir",
-      p,
-    ]);
-    expect(set.status).toBe(0);
+    const state = readFileSync(statePath(p), "utf-8");
+    writeFileSync(
+      statePath(p),
+      state.replace(
+        /^- \*\*Current Stage\*\*:.*$/m,
+        "- **Current Stage**: nfr-design",
+      ),
+      "utf-8",
+    );
     const d = directive(
       run(ORCHESTRATE, [
         "report",
@@ -319,6 +320,6 @@ describe("t120 walking-skeleton classify round-trip (migrated from t120-classify
       ]),
     );
     expect(d.kind).toBe("error");
-    expect(d.message).toContain("No workflow state found");
+    expect(d.message).toContain("No active intent workflow state found");
   }, 30000);
 });

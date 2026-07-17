@@ -8,10 +8,10 @@ This chapter is the user-facing tour. It covers where rules live, how the five l
 
 ## Rules at a glance
 
-Rules live as Markdown files in the space memory layer at `aidlc/spaces/<space>/memory/` — a single hand-editable set at the workspace root, read by every harness via its native include (Claude `@`-import stub, Kiro resources glob, Codex `AIDLC_RULES_DIR`). Each file is named for its scope:
+Rules live as Markdown files in the active space memory layer at `aidlc/spaces/<active-space>/memory/` — a single hand-editable set at the workspace root, read by every harness via its native include (Claude `@`-import stub, Kiro resources glob, Codex `AIDLC_RULES_DIR`). Each file is named for its scope:
 
 ```
-aidlc/spaces/<space>/memory/
+aidlc/spaces/<active-space>/memory/
 ├── org.md                 # framework + organization-wide defaults
 ├── team.md                # your team's affirmed practices
 ├── project.md             # this project's specialization
@@ -76,12 +76,12 @@ You tick the candidates you want to keep. If `memory.md` was empty for the stage
 
 You never pick a file path. The heading determines the destination:
 
-- Interpretations, Deviations, and Tradeoffs land as practices in `aidlc/spaces/<space>/memory/project.md` (a confirmed learning *is* a practice) under topical headings.
+- Interpretations, Deviations, and Tradeoffs land as practices in `aidlc/spaces/<active-space>/memory/project.md` (a confirmed learning *is* a practice) under topical headings.
 - Open questions don't promote — they're research items, not rules to install.
 
 The default scope is **project**. A one-click "promote to team" affordance widens a kept learning from `memory/project.md` to `memory/team.md` when the lesson applies beyond this one project. There is no widen-to-org path: org rules are framework-shipped or organization-authored through a separate process, so the learning loop never writes at org scope. Defaulting to the narrowest scope keeps one project's surprise from becoming an organization-wide rule by accident.
 
-A confirmed learning *is* a practice: it lands in the same space memory files (`aidlc/spaces/<space>/memory/project.md`, `memory/team.md`) that practices-discovery affirms — there is no separate rolling `*-learnings.md` surface. The two paths into those files differ by lifecycle: practices-discovery affirms a whole section deterministically, while the learning loop appends one dated, topically-headed entry at a time through the gate.
+A confirmed learning *is* a practice: it lands in the same active-space memory files (`aidlc/spaces/<active-space>/memory/project.md`, `team.md`) that practices-discovery affirms — there is no separate rolling `*-learnings.md` surface. The two paths into those files differ by lifecycle: practices-discovery affirms a whole section deterministically, while the learning loop appends one dated, topically-headed entry at a time through the gate.
 
 When a kept learning is a **sensor binding** rather than a rule (you want a new deterministic check to fire on a stage's output), the framework does a two-write install atomically: it scaffolds the sensor manifest and appends the new sensor's id to the originating stage's import list. The diary, the gate confirmation, and the resulting file write each leave an audit row (`RULE_LEARNED` or `SENSOR_PROPOSED`), so no rule is ever installed silently.
 

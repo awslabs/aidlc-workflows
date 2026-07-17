@@ -1,5 +1,10 @@
 # Automatic Verification — Phase Boundary Traceability Checks
 
+`<record>` below is the active workflow record:
+`aidlc/spaces/<active-space>/intents/<active-intent>`, selected by
+`aidlc/active-space` (default `default`) and
+`aidlc/spaces/<active-space>/intents/active-intent`.
+
 ## When Verification Runs
 
 | Trigger | What's Checked |
@@ -12,7 +17,7 @@
 
 ## Traceability Matrix
 
-The verification system produces `aidlc-docs/verification/traceability.md` mapping:
+The verification system produces `<record>/verification/traceability.md` mapping:
 - Intent → Requirement → Story → Architecture Component → Code Module → Test Suite
 
 Status indicators:
@@ -22,7 +27,7 @@ Status indicators:
 
 ## Phase Check Output
 
-Each phase boundary check produces `aidlc-docs/verification/phase-check-[phase].md`:
+Each phase boundary check produces `<record>/verification/phase-check-<phase>.md`:
 - Coverage percentages (requirements with stories, stories with components, etc.)
 - Warnings (incomplete mappings)
 - Consistency checks (no contradictions between phases)
@@ -35,4 +40,5 @@ Each phase boundary check produces `aidlc-docs/verification/phase-check-[phase].
 3. Identify gaps, orphans, and contradictions
 4. Generate the verification report
 5. Present to the user for review
-6. Log `PHASE_VERIFIED` to audit
+6. Let the engine record `PHASE_VERIFIED` in the active record's
+   `audit/<host>-<clone-id>.md` shard; do not append it manually

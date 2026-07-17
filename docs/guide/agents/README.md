@@ -21,8 +21,8 @@ Reference's [Agent Reference](../../reference/agents/README.md).
 | 5 | [aidlc-aws-platform-agent](aws-platform-agent.md) | AWS infrastructure, IaC, FinOps, environment provisioning |
 | 6 | [aidlc-compliance-agent](compliance-agent.md) | GRC, regulatory mapping, data classification, risk |
 | 7 | [aidlc-devsecops-agent](devsecops-agent.md) | Threat modelling, security pipeline, secure design review |
-| 8 | [aidlc-developer-agent](developer-agent.md) | Code generation, workspace detection, reverse engineering |
-| 9 | [aidlc-quality-agent](quality-agent.md) | Test strategy, test generation, performance validation |
+| 8 | [aidlc-developer-agent](developer-agent.md) | Code generation, reverse engineering, implementation guidance |
+| 9 | [aidlc-quality-agent](quality-agent.md) | Test strategy, acceptance criteria, performance validation |
 | 10 | [aidlc-pipeline-deploy-agent](pipeline-deploy-agent.md) | CI/CD pipelines, deployment strategy, release execution |
 | 11 | [aidlc-operations-agent](operations-agent.md) | Observability, incident response, feedback loops |
 

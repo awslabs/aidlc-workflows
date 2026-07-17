@@ -46,8 +46,6 @@ const SCOPE_TABLE_END = "<!-- END: compiled scope grid -->";
 const STAGE_TABLE_BEGIN =
   "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
 const STAGE_TABLE_END = "<!-- END: compiled stage graph -->";
-const ACTIVE_DISPATCH_MODES = new Set(["mob", "pipeline", "subagent"]);
-
 type ParseStageFrontmatter = (raw: string) => Record<string, unknown>;
 interface InstalledAidlcLib {
   hooksHealthDir?: (projectDir: string) => string;
@@ -513,8 +511,10 @@ async function unsupportedRuntimeModePrecheck(): Promise<CopyPrecheck> {
   const parse = typeof lib?.parseStageFrontmatter === "function"
     ? lib.parseStageFrontmatter
     : null;
-  return ({ file, rel, dest, content }) => {
-    if (!file.endsWith(".md")) return true;
+  const parsedModeAndSlug = (
+    content: string,
+    rel: string,
+  ): { mode: string | null; slug: string } => {
     let parsed: Record<string, unknown> | null = null;
     if (parse) {
       try {
@@ -523,13 +523,40 @@ async function unsupportedRuntimeModePrecheck(): Promise<CopyPrecheck> {
         // The installed schema precheck owns malformed-stage diagnostics.
       }
     }
-    const mode = typeof parsed?.mode === "string"
-      ? parsed.mode
-      : frontmatterScalar(content, "mode");
+    return {
+      mode: typeof parsed?.mode === "string"
+        ? parsed.mode
+        : frontmatterScalar(content, "mode"),
+      slug: typeof parsed?.slug === "string"
+        ? parsed.slug
+        : slugFromPath(rel),
+    };
+  };
+
+  // copyTreeNoClobber skips prechecks when the destination exists. Audit
+  // installed reserved modes up front so upgrades cannot leave one silently.
+  const stagesRoot = join(PLUGIN_ROOT, "stages");
+  for (const file of walk(stagesRoot).filter((path) => path.endsWith(".md"))) {
+    const rel = relative(stagesRoot, file).replace(/\\/g, "/");
+    const dest = join(STAGES_DIR, rel);
+    if (!existsSync(dest)) continue;
+    let installed = "";
+    try {
+      installed = readFileSync(dest, "utf-8");
+    } catch {
+      continue;
+    }
+    const { mode, slug } = parsedModeAndSlug(installed, rel);
+    if (mode !== "agent-team") continue;
+    recordDrop(
+      `plugin "${PLUGIN_NAME}" stage "${slug}" is already composed with reserved mode "agent-team", which has no runtime consumer; change it to inline, subagent, pipeline, or mob, then remove/re-compose the installed stage`,
+    );
+  }
+
+  return ({ file, rel, dest, content }) => {
+    if (!file.endsWith(".md")) return true;
+    const { mode, slug } = parsedModeAndSlug(content, rel);
     if (mode !== "agent-team") return true;
-    const slug = typeof parsed?.slug === "string"
-      ? parsed.slug
-      : slugFromPath(rel);
     if (existsSync(dest)) {
       recordDrop(
         `plugin "${PLUGIN_NAME}" stage "${slug}" is already composed with reserved mode "agent-team", which has no runtime consumer; change it to inline, subagent, pipeline, or mob, then remove/re-compose the installed stage`,
@@ -671,7 +698,10 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
     const supportAgents = Array.isArray(parsed.support_agents)
       ? parsed.support_agents.filter((agent): agent is string => typeof agent === "string")
       : [];
-    const dispatches = ACTIVE_DISPATCH_MODES.has(mode);
+    // Inline is the only topology that does not dispatch the stage body.
+    // Treat every other parsed mode as dispatched so future schema modes
+    // inherit agent surface/trust validation automatically.
+    const dispatches = mode !== "inline";
 
     // The reviewer dispatches on EVERY gated stage — the conductor's §12a step
     // fires whenever directive.reviewer is present, independent of the stage's

@@ -49,6 +49,11 @@ first line, per `stage-protocol.md` §11); the lead alone edits the stage's
   brief; they are mutually blind — no spoke's brief contains another's
   contribution); each spoke writes its contribution file; then dispatch the
   lead once more to integrate the contributions into the artifacts.
+  Practices Discovery is the shipped hub-and-spoke example on both greenfield
+  and brownfield work: the pipeline-deploy lead drafts first; quality,
+  developer, and devsecops inspect that draft as mutually blind spokes; the
+  human interview follows; then the lead integrates the answers and all three
+  contributions.
 - **`mode: pipeline`** — chain. The chain collectively authors the
   artifacts: dispatch the lead first, then each support agent one at a time
   in declared `support_agents` order, each link seeing everything upstream
@@ -78,6 +83,18 @@ final-batch gate; it never halts the run (halt-and-ask stays reserved for
 failure). The contribution files are the ensemble's completion evidence —
 the engine refuses the stage's approval while a declared collaborator's
 file is missing (stage-protocol.md §5).
+
+On resume, preserve work already returned by a dispatched topology. In
+particular, Practices Discovery resumes by dispatching only support spokes
+whose contribution files are missing; it does not repeat the lead draft or a
+completed quality, developer, or devsecops spoke. Once all three contributions
+exist, continue with the human interview and lead integration.
+
+The engine owns lifecycle bookkeeping. Open, reject, revise, approve, complete,
+or skip a stage only through `aidlc-orchestrate.ts report`; never call lifecycle
+verbs on `aidlc-state.ts` directly or hand-edit stage checkboxes. A conditional
+stage that does not apply reports
+`--stage <slug> --result skipped --reason "<reason>"`.
 
 ## Asking good questions
 
@@ -122,7 +139,8 @@ vs *within* a stage (you loop on your own). Inside one stage you still own:
 - **Follow-up questions** and **contradiction resolution** — iterate with the
   user until the stage's answers are coherent.
 - **The §13 conflict-check** — before a learning reaches disk, compare it
-  section-by-section against `aidlc-org.md`; a narrower rule that contradicts
+  section-by-section against
+  `aidlc/spaces/<active-space>/memory/org.md`; a narrower rule that contradicts
   broader policy is rejected at the memory gate.
 - **Keep / Modify / Redo** — when the user requests changes at a gate, decide
   with them whether to keep the artifact as-is, modify it in place, or redo the
@@ -142,7 +160,7 @@ When you see `gate: "unresolved"`, the classification is your knowledge-work,
 fed back to the engine — the engine still owns the transition:
 
 1. Read the team's `## Walking Skeleton` section (resolution order
-   `rules/aidlc-org.md` → `aidlc-team.md` → `aidlc-project.md`; the most
+   `aidlc/spaces/<active-space>/memory/org.md` → `team.md` → `project.md`; the most
    specific non-empty statement wins).
 2. Classify the stance:
    - prose says **"always"** / **"every greenfield feature"** → `on`

@@ -134,7 +134,11 @@ import {
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { driveAidlc, recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
 import { resolveWinNode } from "../harness/tui-drive.ts";
-import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  cleanupTuiProject,
+  compileTuiRuntimeGraph,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const IS_WIN = os.platform() === "win32";
@@ -342,7 +346,13 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
   test.skipIf(SKIP_REASON !== null)(
     `[sdk] the custom scope initializes and routes to the custom workflow in a real run${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
-      const sdkProj = setupTuiProject({ customHarness: true });
+      // This journey proves workflow birth, so start without the fixture
+      // registry-only intent. A registry row whose record has no state is an
+      // intentional "pick/repair an existing intent" path, not a fresh init.
+      const sdkProj = setupTuiProject({
+        customHarness: true,
+        noAidlcDocs: true,
+      });
       try {
         const r = await driveAidlc(`/aidlc --init --scope ${CUSTOM_SCOPE}`, {
           projectDir: sdkProj,
@@ -449,6 +459,10 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
           { cwd: tuiProj, encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: tuiProj } },
         );
         expect(init.status).toBe(0);
+        // Direct CLI setup bypasses the PostToolUse runtime-compile hook that a
+        // normal /aidlc turn fires. Materialize and verify the same
+        // production-shaped graph the shared seeded journeys use.
+        compileTuiRuntimeGraph(tuiProj);
         const state = readFileSync(stateFilePathFor(tuiProj), "utf8");
         expect(stateField(state, "Current Stage")).toBe(SNAPSHOT_STAGE_SLUG);
 

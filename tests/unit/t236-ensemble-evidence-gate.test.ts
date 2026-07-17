@@ -24,7 +24,13 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -32,6 +38,7 @@ import {
   createTestProject,
   resetAidlcEnv,
   seedBoltDag,
+  seededAuditDir,
   seededAuditShard,
   seededRecordDir,
   seededStateFile,
@@ -48,6 +55,11 @@ const MOB_SUPPORTS = [
   "aidlc-design-agent",
   "aidlc-developer-agent",
   "aidlc-quality-agent",
+];
+const PRACTICES_SUPPORTS = [
+  "aidlc-quality-agent",
+  "aidlc-developer-agent",
+  "aidlc-devsecops-agent",
 ];
 
 const tempDirs: string[] = [];
@@ -91,6 +103,39 @@ function inceptionState(checkbox = "[?]"): string {
 `;
 }
 
+function practicesState(
+  checkbox = "[?]",
+  affirmedTimestamp = "",
+): string {
+  return `# AI-DLC State Tracking
+
+## Project Information
+- **Project**: practices ensemble evidence test
+- **Project Type**: Greenfield
+- **Scope**: feature
+- **State Version**: 7
+- **Practices Affirmed Timestamp**: ${affirmedTimestamp}
+
+## Scope Configuration
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Depth**: Standard
+- **Test Strategy**: Standard
+
+## Stage Progress
+
+### INCEPTION PHASE
+- [S] reverse-engineering — SKIP
+- ${checkbox} practices-discovery — EXECUTE
+- [ ] requirements-analysis — EXECUTE
+
+## Current Status
+- **Current Stage**: practices-discovery
+- **Lifecycle Phase**: INCEPTION
+- **Status**: In Progress
+`;
+}
+
 function seedProject(checkbox = "[?]"): string {
   const proj = createTestProject();
   tempDirs.push(proj);
@@ -98,12 +143,35 @@ function seedProject(checkbox = "[?]"): string {
   return proj;
 }
 
-function contribDir(proj: string): string {
-  return join(seededRecordDir(proj), "inception", "user-stories", "contributions");
+function seedPracticesProject(
+  checkbox = "[?]",
+  affirmedTimestamp = "",
+): string {
+  const proj = createTestProject();
+  tempDirs.push(proj);
+  writeFileSync(
+    seededStateFile(proj),
+    practicesState(checkbox, affirmedTimestamp),
+  );
+  return proj;
 }
 
-function writeContribution(proj: string, agent: string, firstLine?: string): void {
-  const dir = contribDir(proj);
+function contribDir(
+  proj: string,
+  phase = "inception",
+  stage = "user-stories",
+): string {
+  return join(seededRecordDir(proj), phase, stage, "contributions");
+}
+
+function writeContribution(
+  proj: string,
+  agent: string,
+  firstLine?: string,
+  phase = "inception",
+  stage = "user-stories",
+): void {
+  const dir = contribDir(proj, phase, stage);
   mkdirSync(dir, { recursive: true });
   const marker = firstLine ?? `**Collaborator:** ${agent}`;
   writeFileSync(
@@ -166,8 +234,70 @@ function reportSingle(proj: string): Directive {
 }
 
 function auditText(proj: string): string {
-  const path = seededAuditShard(proj);
-  return existsSync(path) ? readFileSync(path, "utf-8") : "";
+  const dir = seededAuditDir(proj);
+  if (!existsSync(dir)) return "";
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".md"))
+    .sort()
+    .map((name) => readFileSync(join(dir, name), "utf-8"))
+    .join("\n");
+}
+
+interface MutationSnapshot {
+  state: string;
+  audit: string;
+}
+
+function mutationSnapshot(proj: string): MutationSnapshot {
+  return {
+    state: readFileSync(seededStateFile(proj), "utf-8"),
+    audit: auditText(proj),
+  };
+}
+
+function eventCount(text: string, event: string): number {
+  return text.split(`**Event**: ${event}`).length - 1;
+}
+
+function appendAuditEvent(
+  proj: string,
+  event: string,
+  timestamp: string,
+  fields: Record<string, string> = {},
+): void {
+  const shard = seededAuditShard(proj);
+  mkdirSync(dirname(shard), { recursive: true });
+  const lines = [
+    "",
+    `## ${event}`,
+    `**Timestamp**: ${timestamp}`,
+    `**Event**: ${event}`,
+    ...Object.entries(fields).map(([key, value]) => `**${key}**: ${value}`),
+    "",
+    "---",
+    "",
+  ];
+  writeFileSync(shard, lines.join("\n"), { flag: "a" });
+}
+
+function expectApprovalCommitted(
+  proj: string,
+  directive: Directive,
+  before: MutationSnapshot,
+  stage = "user-stories",
+): void {
+  expect(directive.kind, directive.message).toBe("done");
+  const state = readFileSync(seededStateFile(proj), "utf-8");
+  const audit = auditText(proj);
+  expect(state).not.toBe(before.state);
+  expect(state).toContain(`- [x] ${stage} — EXECUTE`);
+  expect(audit).not.toBe(before.audit);
+  expect(eventCount(audit, "GATE_APPROVED")).toBe(
+    eventCount(before.audit, "GATE_APPROVED") + 1,
+  );
+  expect(eventCount(audit, "STAGE_COMPLETED")).toBe(
+    eventCount(before.audit, "STAGE_COMPLETED") + 1,
+  );
 }
 
 function graphVariant(
@@ -260,6 +390,67 @@ function setAutonomous(proj: string): void {
 }
 
 describe("t236 ensemble evidence gate — mob approval requires contribution files", () => {
+  test("awaiting-approval and revised refuse before [?] when ensemble evidence is incomplete", () => {
+    for (const [checkbox, result] of [
+      ["[-]", "awaiting-approval"],
+      ["[R]", "revised"],
+    ] as const) {
+      const proj = seedProject(checkbox);
+      const before = mutationSnapshot(proj);
+      const d = runReport(proj, [
+        "--stage",
+        "user-stories",
+        "--result",
+        result,
+      ]);
+      expect(d.kind, result).toBe("error");
+      expect(d.message, result).toContain("ensemble must convene");
+      expect(readFileSync(seededStateFile(proj), "utf-8"), result).toBe(
+        before.state,
+      );
+      expect(auditText(proj), result).toBe(before.audit);
+    }
+  });
+
+  test("awaiting-approval opens only after all contribution evidence exists", () => {
+    const proj = seedProject("[-]");
+    for (const agent of MOB_SUPPORTS) writeContribution(proj, agent);
+    const d = runReport(proj, [
+      "--stage",
+      "user-stories",
+      "--result",
+      "awaiting-approval",
+    ]);
+    expect(d.kind, d.message).toBe("print");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
+      "- [?] user-stories — EXECUTE",
+    );
+  });
+
+  test("awaiting-approval refuses while any per-unit artifact is uncovered", () => {
+    const proj = seedProject("[-]");
+    const graph = perUnitEnsembleGraph(proj);
+    seedBoltDag(proj, ["alpha", "beta"]);
+    writeUnitArtifact(proj, "alpha");
+    writeUnitContribution(proj, "alpha", "aidlc-design-agent");
+    writeUnitContribution(proj, "beta", "aidlc-design-agent");
+    const d = runReport(
+      proj,
+      [
+        "--stage",
+        "user-stories",
+        "--result",
+        "awaiting-approval",
+      ],
+      { AIDLC_STAGE_GRAPH: graph },
+    );
+    expect(d.kind).toBe("error");
+    expect(d.message).toContain("1 of 2 units are not yet complete (beta)");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
+      "- [-] user-stories — EXECUTE",
+    );
+  });
+
   test("no contribution files -> approve refused, every missing agent named", () => {
     const proj = seedProject();
     const d = report(proj);
@@ -291,25 +482,34 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     expect(d.message).toContain("aidlc-quality-agent (missing identity-marker first line)");
   });
 
-  test("all three contribution files well-formed -> approve proceeds past the guard", () => {
+  test("all three contribution files well-formed -> approval commits state and audit", () => {
     const proj = seedProject();
     for (const agent of MOB_SUPPORTS) writeContribution(proj, agent);
+    const before = mutationSnapshot(proj);
     const d = report(proj);
-    // The guard passed; whatever the engine emits next, it is NOT the
-    // ensemble-evidence refusal.
-    expect(d.message ?? "").not.toContain("ensemble must convene");
+    expectApprovalCommitted(proj, d, before);
   });
 
-  test("escape hatch AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 bypasses the guard", () => {
+  test("escape hatch AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 commits approval", () => {
     const proj = seedProject();
+    const before = mutationSnapshot(proj);
     const d = report(proj, { AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1" });
-    expect(d.message ?? "").not.toContain("ensemble must convene");
+    expectApprovalCommitted(proj, d, before);
   });
 
-  test("already-completed stage is an idempotent replay, never blocked", () => {
+  test("already-completed current stage recovers forward without evidence", () => {
     const proj = seedProject("[x]");
+    const before = mutationSnapshot(proj);
     const d = report(proj);
-    expect(d.message ?? "").not.toContain("ensemble must convene");
+    expect(d.kind).toBe("done");
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    const audit = auditText(proj);
+    expect(state).not.toBe(before.state);
+    expect(state).not.toContain("- **Current Stage**: user-stories");
+    expect(audit).not.toBe(before.audit);
+    expect(eventCount(audit, "STAGE_STARTED")).toBe(
+      eventCount(before.audit, "STAGE_STARTED") + 1,
+    );
   });
 
   test("report --single refuses missing mob evidence without writing synthetic audit rows", () => {
@@ -320,6 +520,57 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     expect(d.message).toContain("aidlc-developer-agent");
     expect(d.message).toContain("ensemble must convene");
     expect(auditText(proj)).toBe(before);
+  });
+
+  test("report --result skipped commits before ensemble evidence is checked", () => {
+    const proj = seedProject("[-]");
+    const before = mutationSnapshot(proj);
+    const d = runReport(proj, [
+      "--stage",
+      "user-stories",
+      "--result",
+      "skipped",
+      "--reason",
+      "No user-facing workflow in this intent",
+    ]);
+
+    expect(d.kind).toBe("done");
+    expect(d.message ?? "").not.toContain("ensemble must convene");
+    const state = readFileSync(seededStateFile(proj), "utf-8");
+    const audit = auditText(proj);
+    expect(state).not.toBe(before.state);
+    expect(state).toContain("- [S] user-stories — EXECUTE");
+    expect(state).toContain("- **Current Stage**: refined-mockups");
+    expect(eventCount(audit, "STAGE_SKIPPED")).toBe(
+      eventCount(before.audit, "STAGE_SKIPPED") + 1,
+    );
+    expect(eventCount(audit, "STAGE_STARTED")).toBe(
+      eventCount(before.audit, "STAGE_STARTED") + 1,
+    );
+    expect(eventCount(audit, "STAGE_COMPLETED")).toBe(
+      eventCount(before.audit, "STAGE_COMPLETED"),
+    );
+    expect(eventCount(audit, "GATE_APPROVED")).toBe(
+      eventCount(before.audit, "GATE_APPROVED"),
+    );
+  });
+
+  test("report --single --result skipped remains rejected without mutation", () => {
+    const proj = seedProject("[-]");
+    const before = mutationSnapshot(proj);
+    const d = runReport(proj, [
+      "--single",
+      "--stage",
+      "user-stories",
+      "--result",
+      "skipped",
+      "--reason",
+      "single-stage runners cannot route workflow skips",
+    ]);
+
+    expect(d.kind).toBe("error");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before.state);
+    expect(auditText(proj)).toBe(before.audit);
   });
 
   test("per-unit ensemble evidence is required and accepted under every unit stage directory", () => {
@@ -343,8 +594,9 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     writeUnitArtifact(completeProj, "beta");
     writeUnitContribution(completeProj, "alpha", "aidlc-design-agent");
     writeUnitContribution(completeProj, "beta", "aidlc-design-agent");
+    const before = mutationSnapshot(completeProj);
     const complete = report(completeProj, { AIDLC_STAGE_GRAPH: completeGraph });
-    expect(complete.message ?? "").not.toContain("ensemble must convene");
+    expectApprovalCommitted(completeProj, complete, before);
   });
 
   test("kind-pruned units that never execute do not owe contribution files", () => {
@@ -361,9 +613,10 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     writeUnitArtifact(proj, "svc");
     writeUnitContribution(proj, "svc", "aidlc-design-agent");
 
+    const before = mutationSnapshot(proj);
     const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
     expect(d.message ?? "").not.toContain('aidlc-design-agent for unit "pack"');
-    expect(d.message ?? "").not.toContain("ensemble must convene");
+    expectApprovalCommitted(proj, d, before);
   });
 
   test("no-DAG per-unit fallback still requires stage-level ensemble evidence", () => {
@@ -379,10 +632,11 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     const completeProj = seedProject();
     const completeGraph = perUnitEnsembleGraph(completeProj);
     writeFallbackContribution(completeProj, "aidlc-design-agent");
+    const before = mutationSnapshot(completeProj);
     const complete = report(completeProj, {
       AIDLC_STAGE_GRAPH: completeGraph,
     });
-    expect(complete.message ?? "").not.toContain("ensemble must convene");
+    expectApprovalCommitted(completeProj, complete, before);
   });
 
   test("autonomous subagent mode without real swarm eligibility still requires evidence", () => {
@@ -398,6 +652,199 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     expect(d.kind).toBe("error");
     expect(d.message).toContain("aidlc-design-agent (no contribution file)");
     expect(d.message).toContain("ensemble must convene");
+  });
+
+  test("Practices Discovery subagent spokes require all three contribution files", () => {
+    const proj = seedPracticesProject();
+    const d = runReport(proj, [
+      "--stage",
+      "practices-discovery",
+      "--result",
+      "approved",
+      "--user-input",
+      "Approve",
+    ]);
+    expect(d.kind).toBe("error");
+    for (const agent of PRACTICES_SUPPORTS) {
+      expect(d.message).toContain(`${agent} (no contribution file)`);
+    }
+    expect(d.message).toContain(
+      "inception/practices-discovery/contributions/<agent-slug>.md",
+    );
+  });
+
+  test("Practices Discovery cannot open its gate before all spoke evidence exists", () => {
+    const missingProj = seedPracticesProject("[-]");
+    const missingBefore = mutationSnapshot(missingProj);
+    const missing = runReport(missingProj, [
+      "--stage",
+      "practices-discovery",
+      "--result",
+      "awaiting-approval",
+    ]);
+    expect(missing.kind).toBe("error");
+    expect(missing.message).toContain("ensemble must convene");
+    expect(readFileSync(seededStateFile(missingProj), "utf-8")).toBe(
+      missingBefore.state,
+    );
+    expect(auditText(missingProj)).toBe(missingBefore.audit);
+
+    const completeProj = seedPracticesProject("[-]");
+    for (const agent of PRACTICES_SUPPORTS) {
+      writeContribution(
+        completeProj,
+        agent,
+        undefined,
+        "inception",
+        "practices-discovery",
+      );
+    }
+    const completeBefore = mutationSnapshot(completeProj);
+    const complete = runReport(completeProj, [
+      "--stage",
+      "practices-discovery",
+      "--result",
+      "awaiting-approval",
+    ]);
+    expect(complete.kind, complete.message).toBe("print");
+    expect(readFileSync(seededStateFile(completeProj), "utf-8")).toContain(
+      "- [?] practices-discovery — EXECUTE",
+    );
+    expect(eventCount(auditText(completeProj), "STAGE_AWAITING_APPROVAL")).toBe(
+      eventCount(completeBefore.audit, "STAGE_AWAITING_APPROVAL") + 1,
+    );
+  });
+
+  test("Practices Discovery approval requires a fresh promotion receipt after all spoke evidence exists", () => {
+    const proj = seedPracticesProject();
+    for (const agent of PRACTICES_SUPPORTS) {
+      writeContribution(
+        proj,
+        agent,
+        undefined,
+        "inception",
+        "practices-discovery",
+      );
+    }
+
+    const unpromotedBefore = mutationSnapshot(proj);
+    const unpromoted = runReport(proj, [
+      "--stage",
+      "practices-discovery",
+      "--result",
+      "approved",
+      "--user-input",
+      "Approve",
+    ]);
+    expect(unpromoted.kind).toBe("error");
+    expect(unpromoted.message).toContain(
+      "before practices-promote succeeds",
+    );
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
+      unpromotedBefore.state,
+    );
+    expect(auditText(proj)).toBe(unpromotedBefore.audit);
+
+    writeFileSync(
+      seededStateFile(proj),
+      practicesState("[?]", "not-an-iso-instant"),
+    );
+    const malformedBefore = mutationSnapshot(proj);
+    const malformed = runReport(proj, [
+      "--stage",
+      "practices-discovery",
+      "--result",
+      "approved",
+      "--user-input",
+      "Approve",
+    ]);
+    expect(malformed.kind).toBe("error");
+    expect(malformed.message).toContain(
+      "before practices-promote succeeds",
+    );
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
+      malformedBefore.state,
+    );
+    expect(auditText(proj)).toBe(malformedBefore.audit);
+
+    writeFileSync(
+      seededStateFile(proj),
+      practicesState("[?]", "2026-07-17T14:00:00Z"),
+    );
+    const forgedBefore = mutationSnapshot(proj);
+    const forged = runReport(proj, [
+      "--stage",
+      "practices-discovery",
+      "--result",
+      "approved",
+      "--user-input",
+      "Approve",
+    ]);
+    expect(forged.kind).toBe("error");
+    expect(forged.message).toContain("before practices-promote succeeds");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
+      forgedBefore.state,
+    );
+    expect(auditText(proj)).toBe(forgedBefore.audit);
+
+    appendAuditEvent(proj, "PRACTICES_AFFIRMED", "2026-07-17T14:00:00Z");
+    appendAuditEvent(
+      proj,
+      "STAGE_STARTED",
+      "2026-07-17T14:01:00Z",
+      { Stage: "practices-discovery", Agent: "aidlc-pipeline-deploy-agent" },
+    );
+    const staleBefore = mutationSnapshot(proj);
+    const stale = runReport(proj, [
+      "--stage",
+      "practices-discovery",
+      "--result",
+      "approved",
+      "--user-input",
+      "Approve",
+    ]);
+    expect(stale.kind).toBe("error");
+    expect(stale.message).toContain("fresh PRACTICES_AFFIRMED receipt");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
+      staleBefore.state,
+    );
+    expect(auditText(proj)).toBe(staleBefore.audit);
+
+    writeFileSync(
+      seededStateFile(proj),
+      practicesState("[?]", "2026-07-17T14:03:00Z"),
+    );
+    appendAuditEvent(proj, "PRACTICES_AFFIRMED", "2026-07-17T14:02:00Z");
+    const mismatchedBefore = mutationSnapshot(proj);
+    const mismatched = runReport(proj, [
+      "--stage",
+      "practices-discovery",
+      "--result",
+      "approved",
+      "--user-input",
+      "Approve",
+    ]);
+    expect(mismatched.kind).toBe("error");
+    expect(mismatched.message).toContain("fresh PRACTICES_AFFIRMED receipt");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
+      mismatchedBefore.state,
+    );
+    expect(auditText(proj)).toBe(mismatchedBefore.audit);
+
+    writeFileSync(
+      seededStateFile(proj),
+      practicesState("[?]", "2026-07-17T14:02:00Z"),
+    );
+    const before = mutationSnapshot(proj);
+    const fresh = runReport(proj, [
+      "--stage",
+      "practices-discovery",
+      "--result",
+      "approved",
+      "--user-input",
+      "Approve",
+    ]);
+    expectApprovalCommitted(proj, fresh, before, "practices-discovery");
   });
 
   // The swarm exemption never applies to the scope's FIRST construction stage
@@ -453,9 +900,9 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     seedBoltDag(proj, ["unit-a", "unit-b"]);
     seedSwarmConverged(proj, ["unit-a", "unit-b"]);
     const graph = nonSkeletonSwarmGraph(proj);
+    const before = mutationSnapshot(proj);
     const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
-    expect(d.message ?? "").not.toContain("ensemble must convene");
-    expect(d.message ?? "").not.toContain("not yet complete");
+    expectApprovalCommitted(proj, d, before);
   });
 
   test("report --single on a per-unit ensemble stage checks STAGE-level evidence, not the main DAG", () => {
@@ -477,9 +924,19 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     seedBoltDag(completeProj, ["unit-a", "unit-b"]);
     const completeGraph = perUnitEnsembleGraph(completeProj);
     writeFallbackContribution(completeProj, "aidlc-design-agent");
+    const before = mutationSnapshot(completeProj);
     const complete = runReport(completeProj, [
       "--single", "--stage", "user-stories", "--result", "approved",
     ], { AIDLC_STAGE_GRAPH: completeGraph });
-    expect(complete.message ?? "").not.toContain("ensemble must convene");
+    expect(complete.kind).toBe("done");
+    expect(readFileSync(seededStateFile(completeProj), "utf-8")).toBe(before.state);
+    const afterAudit = auditText(completeProj);
+    expect(afterAudit).not.toBe(before.audit);
+    expect(eventCount(afterAudit, "STAGE_STARTED")).toBe(
+      eventCount(before.audit, "STAGE_STARTED") + 1,
+    );
+    expect(eventCount(afterAudit, "STAGE_COMPLETED")).toBe(
+      eventCount(before.audit, "STAGE_COMPLETED") + 1,
+    );
   });
 });

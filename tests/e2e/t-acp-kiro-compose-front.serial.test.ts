@@ -89,7 +89,7 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
         expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(9);
 
         // --- turn 1: compose -> proposal -> gate (turn ends at the ask) -----
-        await driveKiroAcp({
+        const r1 = await driveKiroAcp({
           projectDir: root,
           session,
           prompt: `/aidlc compose "${TASK}"`,
@@ -109,6 +109,7 @@ describe("t-acp-kiro compose front journey (live Kiro ACP)", () => {
           stopAfterToolTitle: /aidlc-utility\.ts intent-birth/,
           keepAlive: true,
         });
+        expect([...r1.toolCallIssues, ...r2.toolCallIssues]).toEqual([]);
         const birthOut = r2.toolCalls
           .filter((t) => t.title.includes("intent-birth"))
           .map((t) => t.output.join(""))

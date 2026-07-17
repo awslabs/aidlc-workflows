@@ -153,7 +153,7 @@ describe("t-exec-codex-memory-include — Codex resolves the relocated method tr
           home,
           `Read @aidlc/spaces/default/memory/org.md and tell me the project secret codeword stated in its Probe Sentinel section. Answer with just the codeword.`,
         );
-        expect(r.rc).toBe(0);
+        expect(r.rc, r.out).toBe(0);
         // The sentinel's only on-disk home is the relocated org.md — its
         // presence proves Codex resolved the @-path to the workspace-root
         // method tree and pulled the file's content into context.

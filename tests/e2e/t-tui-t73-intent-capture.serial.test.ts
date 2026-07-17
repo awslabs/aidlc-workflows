@@ -179,6 +179,7 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         withState: "state-initialization-done.md",
         greenfieldStub: true,
         withAudit: true,
+        runtimeGraph: true,
       });
       // The render value-add: tail the grid during the run to prove the AUQ menu
       // painted at least once (the SDK path can't see it).

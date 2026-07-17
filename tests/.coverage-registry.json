@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 469,
+    "total": 471,
     "enumeratedByClass": {
       "function": 243,
       "audit": 72,
       "scope": 9,
       "stage": 32,
-      "hook": 12,
-      "subcommand": 94,
+      "hook": 13,
+      "subcommand": 95,
       "render-surface": 7
     },
     "coveredByClass": {
       "function": 99,
       "audit": 31,
       "scope": 9,
-      "stage": 8,
-      "hook": 12,
-      "subcommand": 81,
+      "stage": 9,
+      "hook": 13,
+      "subcommand": 82,
       "render-surface": 7
     }
   },
@@ -3342,6 +3342,18 @@
     },
     {
       "unitClass": "hook",
+      "unitId": "aidlc-state-transition-guard",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t240-state-transition-guard.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
       "unitId": "aidlc-statusline",
       "minMechanism": "none",
       "coveredBy": [
@@ -3909,8 +3921,13 @@
       "unitClass": "stage",
       "unitId": "inception/user-stories",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t238-user-stories-mob.sdk.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
@@ -4006,6 +4023,18 @@
       "minMechanism": "cli",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-audit append-batch",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t127-single-stage-invariant.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",

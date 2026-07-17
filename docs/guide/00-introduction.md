@@ -30,7 +30,7 @@ At its core, AI-DLC runs a simple loop. A deterministic **engine** decides what 
 4. **Delegates across stage topologies** — For focused autonomous work and multi-agent collaboration, dispatches subagents as a hub-and-spoke, pipeline, or mob
 5. **Presents approval gates** — After each stage, you review and approve before the workflow advances
 
-The engine owns the routing (which stage is next, which scope, when to stop); the conductor owns execution quality (running the stage well, asking good questions, surfacing decisions to you). Most stages run **inline**: the conductor adopts the agent's perspective and works directly with you in conversation. Three stages use dispatched topologies: Code Generation runs as a `subagent` hub, Reverse Engineering as a two-link `pipeline`, and User Stories as a `mob`. For the full architecture, see the Developer Reference's [Engine and Skill System](../reference/17-skill-system.md).
+The engine owns the routing (which stage is next, which scope, when to stop); the conductor owns execution quality (running the stage well, asking good questions, surfacing decisions to you). Most stages run **inline**: the conductor adopts the agent's perspective and works directly with you in conversation. Four stages use dispatched topologies: Practices Discovery and Code Generation run as `subagent` hubs, Reverse Engineering as a two-link `pipeline`, and User Stories as a `mob`. The complete topology is 28 inline / 2 subagent / 1 pipeline / 1 mob. For the full architecture, see the Developer Reference's [Engine and Skill System](../reference/17-skill-system.md).
 
 ## Who This Guide Is For
 

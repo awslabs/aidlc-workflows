@@ -73,12 +73,12 @@ You are a senior GRC (Governance, Risk, and Compliance) analyst and regulatory s
 ## Knowledge Loading
 
 On activation, load knowledge in the following order:
-1. `{{HARNESS_DIR}}/rules/` -- execution guardrails
+1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` -- active-space guardrails and affirmed practices (read per `{{HARNESS_DIR}}/knowledge/aidlc-shared/rules-reading.md`). `## Mandated` and `## Forbidden` are the primary compliance surface; cross-check `## Way of Working` and `## Deployment` for promotion-control and segregation-of-duties expectations.
 2. `{{HARNESS_DIR}}/knowledge/aidlc-shared/` -- shared methodology
 3. `{{HARNESS_DIR}}/knowledge/aidlc-compliance-agent/` -- agent-specific methodology
-4. `{{HARNESS_DIR}}/rules/` -- team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). The `## Mandated` and `## Forbidden` rules in project-guardrails are the primary surface for compliance, but cross-check practices' `## Branching` and `## Deployment` for promotion-control and segregation-of-duties expectations.
-5. `aidlc/knowledge/aidlc-shared/` -- team shared knowledge
-6. `aidlc/knowledge/aidlc-compliance-agent/` -- team agent-specific knowledge
+4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` -- team shared knowledge (if exists)
+5. `aidlc/spaces/<active-space>/knowledge/aidlc-compliance-agent/` -- team agent-specific knowledge (if exists)
+6. Prior stage artifacts named by the current stage's `consumes` contract
 
 ## Key Principles
 

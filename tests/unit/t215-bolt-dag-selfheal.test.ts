@@ -378,7 +378,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.message).toContain("unit list cannot be resolved");
     expect(r.directive.message).toContain("unit-of-work-dependency.md");
     expect(r.directive.message).toContain("malformed");
-    expect(r.directive.message).toContain("before approving");
+    expect(r.directive.message).toContain("before entering approval");
     expect(r.stderr).toBe("");
   }, 30000);
 

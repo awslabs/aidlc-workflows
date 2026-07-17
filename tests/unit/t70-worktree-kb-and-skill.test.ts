@@ -38,8 +38,8 @@
 //     :213 "## Response contract" (top-level section)
 //     :5   cites "shared/rules-reading.md" (the new shared KB)
 //   dist/claude/.claude/agents/aidlc-pipeline-deploy-agent.md
-//     :83-91 "## Knowledge Loading" numbered list; position 4 (:89) is
-//            ".claude/rules/ -- team-affirmed practices ..."
+//     :83-91 "## Knowledge Loading" numbered list; position 1 (:86) is the
+//            active-space memory layer carrying guardrails and practices
 //
 // Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
 //   .sh 1 (assert_file_exists $PR)                        -> "rules-reading.md exists"
@@ -50,7 +50,7 @@
 //   .sh 6 (grep -c "^### Failure modes" == 5)             -> "branching-strategies.md has exactly 5 Failure modes sub-sections"
 //   .sh 7 (^## Response contract)                         -> "branching-strategies.md has the top-level Response contract section"
 //   .sh 8 (references shared/rules-reading.md)            -> "branching-strategies.md references shared/rules-reading.md"
-//   .sh 9 (awk Knowledge-Loading pos 4 contains .claude/rules/) -> "pipeline-deploy agent loads .claude/rules/ at Knowledge-Loading position 4"
+//   .sh 9 (retired rules-dir position) -> "pipeline-deploy agent loads active-space memory first"
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
@@ -160,15 +160,15 @@ describe("t70 branching-strategies.md — per-strategy runbook/failure-mode cove
 });
 
 describe("t70 aidlc-pipeline-deploy-agent.md — Knowledge-Loading wiring", () => {
-  test("pipeline-deploy agent loads .claude/rules/ at Knowledge-Loading position 4 [.sh 9]", () => {
-    // .sh: awk-extract the `## Knowledge Loading` numbered list, take the 4th
-    // numbered item (`sed -n '4p'`), assert_contains ".claude/rules/".
-    // Position 4 is the team-affirmed-practices load step. STRONGER than the
-    // .sh: also assert the region yields at least 4 numbered items (so the
+  test("pipeline-deploy agent loads active-space memory first [.sh 9]", () => {
+    // The relocated memory layer replaces the retired dotted rules directory.
+    // Keep the positional invariant: guardrails and affirmed practices load
+    // before methodology knowledge. Also assert the region is non-empty so the
     // positional check isn't silently matching an empty extraction).
     const items = knowledgeLoadingNumberedItems(agentLines);
-    expect(items.length).toBeGreaterThanOrEqual(4);
-    const pos4 = items[3]; // 1-based position 4 == zero-based index 3
-    expect(pos4).toContain(".claude/rules/");
+    expect(items.length).toBeGreaterThanOrEqual(1);
+    expect(items[0]).toContain(
+      "aidlc/spaces/<active-space>/memory/{org,team,project}.md",
+    );
   });
 });

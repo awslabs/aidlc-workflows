@@ -148,7 +148,13 @@ function runState(proj: string, args: string[]): number {
   const r = spawnSync(
     BUN,
     [TOOL, ...args, "--project-dir", proj],
-    { encoding: "utf-8" }
+    {
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      },
+    },
   );
   // spawnSync sets status to null only on signal kill; treat that as failure.
   return r.status === null ? -1 : r.status;

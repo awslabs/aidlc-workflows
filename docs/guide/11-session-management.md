@@ -60,6 +60,12 @@ flowchart TD
 | **Jump to stage** | Skip to a specific stage. Warns about skipped stages and potential downstream artifact invalidation. | All existing artifacts | Stages between current and target are marked `[S]` (skipped) |
 | **Start fresh** | Archive the active intent's record dir under `aidlc/spaces/<space>/intents/` (requires your confirmation), then birth a new intent. | Archived copy of all prior artifacts | Active workflow state (a new intent + state file is created) |
 
+Dispatched ensemble work resumes from evidence on disk. For Practices
+Discovery, the conductor preserves the lead draft and every existing
+contribution file, dispatches only the missing quality/developer/devsecops
+spokes, then continues with the human interview and lead integration. It does
+not repeat completed spokes.
+
 ---
 
 ## Recovery Breadcrumb

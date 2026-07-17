@@ -64,5 +64,7 @@ present, the output keeps the generic ≥2-H2 floor.
 ## Failure mode
 
 When required headings are missing, emits `SENSOR_FAILED` and writes detail
-to `aidlc-docs/.aidlc-sensors/<stage-slug>/required-sections-<fire-id>.md` (Fire id is the 8-hex correlator from the SENSOR_FIRED audit row)
-listing the missing headings.
+to `aidlc/spaces/<active-space>/intents/<active-intent>/.aidlc-sensors/<stage-slug>/required-sections-<fire-id>.md`,
+where the space and intent come from the active cursors. The fire id is the
+8-hex correlator from the `SENSOR_FIRED` row in the active record's
+`audit/<host>-<clone-id>.md` shard. The detail lists the missing headings.

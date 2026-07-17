@@ -112,12 +112,20 @@ function runInit(proj: string): void {
 
 /** gate-start <slug> then approve <slug> (mirrors the .sh walk_stage helper, L88-92). */
 function walkStage(proj: string, slug: string): void {
-  const gs = spawnSync(BUN, [STATE, "gate-start", slug, "--project-dir", proj], { encoding: "utf-8" });
+  const env = {
+    ...process.env,
+    AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+  };
+  const gs = spawnSync(BUN, [STATE, "gate-start", slug, "--project-dir", proj], {
+    encoding: "utf-8",
+    env,
+  });
   if ((gs.status ?? -1) !== 0) {
     throw new Error(`gate-start ${slug} failed (status ${gs.status}): ${gs.stdout ?? ""}${gs.stderr ?? ""}`);
   }
   const ap = spawnSync(BUN, [STATE, "approve", slug, "--user-input", "approve", "--project-dir", proj], {
     encoding: "utf-8",
+    env,
   });
   if ((ap.status ?? -1) !== 0) {
     throw new Error(`approve ${slug} failed (status ${ap.status}): ${ap.stdout ?? ""}${ap.stderr ?? ""}`);

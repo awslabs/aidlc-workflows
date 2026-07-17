@@ -10,7 +10,7 @@ The aidlc-pipeline-deploy-agent leads four stages spanning Inception, Constructi
 
 | Stage | Phase | Description |
 |-------|-------|-------------|
-| 2.2 Practices Discovery | Inception | Discover team practices and engineering rules, promoted to team and project rules on affirmation |
+| 2.2 Practices Discovery | Inception | Draft, interview, and integrate the hub-and-spoke findings; promote approved practices to active-space team/project memory |
 | 3.7 CI Pipeline | Construction | CI pipeline configuration with quality gates |
 | 4.1 Deployment Pipeline | Operation | CD pipeline with deployment strategy and rollback procedures |
 | 4.3 Deployment Execution | Operation | Execute deployments, run smoke tests, monitor health |
@@ -21,7 +21,7 @@ The aidlc-pipeline-deploy-agent does not support any stages in an advisory capac
 
 ## What to Expect
 
-When the aidlc-pipeline-deploy-agent is active, it asks about your existing CI/CD infrastructure, deployment targets, branching strategy, and rollback requirements. It produces pipeline configurations (CI config files, quality gate definitions), deployment strategies (blue-green, canary, rolling), and rollback runbooks. During Deployment Execution, it orchestrates the actual deployment, runs smoke tests, and monitors health metrics.
+In Practices Discovery, the aidlc-pipeline-deploy-agent drafts first, then integrates mutually blind quality, developer, and devsecops contributions after the human interview. In its delivery stages, it asks about CI/CD infrastructure, deployment targets, branching strategy, and rollback requirements; produces pipeline configurations, deployment strategies, and rollback runbooks; and monitors Deployment Execution.
 
 ## How It Collaborates
 

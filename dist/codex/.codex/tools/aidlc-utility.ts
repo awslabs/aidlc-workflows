@@ -4789,6 +4789,13 @@ function handleConfigChange(projectDir: string, flags: Record<string, string>): 
 // ---------------------------------------------------------------------------
 
 function handleSetStatus(projectDir: string, flags: Record<string, string>): void {
+  if (
+    process.env.AIDLC_STATUSLINE_OWNER !== `statusline:${process.ppid}`
+  ) {
+    die(
+      "Direct aidlc-utility set-status is blocked: status synchronization is owned by the sync-statusline hook.",
+    );
+  }
   const sp = stateFilePath(projectDir, flags.intent, flags.space);
   if (!existsSync(sp)) die("No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").");
 
@@ -5229,6 +5236,18 @@ export async function main(argv: string[]): Promise<void> {
   const { positional, flags } = parseArgs(rawArgs);
   const subcommand = positional[0];
   errorProjectDirArg = flags["project-dir"];
+  if (
+    (subcommand === "intent-birth" || subcommand === "init") &&
+    (flags.help === "true" || rawArgs.includes("-h"))
+  ) {
+    process.stdout.write(
+      "Usage: aidlc-utility intent-birth --scope <scope> " +
+        '[--arguments "<description>"] [--label "<short label>"] ' +
+        "[--depth <level>] [--test-strategy <level>] [--repos <name,...>] " +
+        "[--project-dir <path>]\n",
+    );
+    return;
+  }
   const projectDir = resolveProjectDir(flags["project-dir"]);
 
   switch (subcommand) {

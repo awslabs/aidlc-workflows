@@ -108,6 +108,9 @@ describe("t235 ensemble modes — directive enum carry-through", () => {
       lead_agent: "aidlc-architect-agent",
       support_agents: ["aidlc-developer-agent"],
       mode,
+      inline_context_paths: mode === "inline"
+        ? ["agents/aidlc-architect-agent.md", "agents/aidlc-developer-agent.md"]
+        : [],
       gate: true,
       memory_path: "aidlc-docs/construction/fixture-stage/memory.md",
       consumes: [],
@@ -140,6 +143,9 @@ describe("t235 ensemble modes — compile advisory for the swarm-trigger trap", 
   function compileWith(mode: string, workspaceRequires: boolean): { status: number | null; stderr: string } {
     const root = mkdtempSync(join(tmpdir(), "t235-"));
     try {
+      const installedTools = join(root, ".claude", "tools");
+      mkdirSync(installedTools, { recursive: true });
+      writeFileSync(join(installedTools, "aidlc-lib.ts"), "");
       const stagesRoot = join(root, "stages");
       mkdirSync(join(stagesRoot, "construction"), { recursive: true });
       const fm = [
@@ -191,20 +197,20 @@ describe("t235 ensemble modes — compile advisory for the swarm-trigger trap", 
 
   test("per-unit build stage with mode: mob compiles with the advisory", () => {
     const r = compileWith("mob", true);
-    expect(r.status).toBe(0);
+    expect(r.status, r.stderr).toBe(0);
     expect(r.stderr).toContain("[advisory]");
     expect(r.stderr).toContain("swarm will NOT fire");
   });
 
   test("per-unit build stage with mode: subagent compiles silently", () => {
     const r = compileWith("subagent", true);
-    expect(r.status).toBe(0);
+    expect(r.status, r.stderr).toBe(0);
     expect(r.stderr).not.toContain("[advisory]");
   });
 
   test("per-unit DESIGN stage (no workspace_requires) with mode: mob compiles silently", () => {
     const r = compileWith("mob", false);
-    expect(r.status).toBe(0);
+    expect(r.status, r.stderr).toBe(0);
     expect(r.stderr).not.toContain("[advisory]");
   });
 });

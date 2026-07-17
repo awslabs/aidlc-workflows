@@ -67,7 +67,8 @@ The default approval gate presents two options:
 
 `[next stage]` shows the actual next stage the workflow will run (for example "Continue to NFR Requirements"), or "Complete workflow" on the final stage; the engine computes it, so it is always correct rather than a guess.
 
-- **Approve** marks the stage as completed, updates `aidlc-state.md`, shows a progress line, and advances to the next stage
+- **Approve** reports the outcome; the engine marks the stage completed, updates
+  `aidlc-state.md`, shows a progress line, and advances to the next stage
 - **Request Changes** lets you provide specific feedback; the agent revises its work and re-presents the approval gate
 
 The gate requires a real human acknowledgement: typing a prompt or answering an `AskUserQuestion` widget records a human turn (a `HUMAN_TURN` event) in the audit ledger, and the approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution, so a model running on autopilot cannot fabricate an approval with no human having acted since. On a harness whose gate widget does not record a human turn, type a short message once (for example "approve") so one is on record. (On a harness whose ledger has no human turn yet, the gate fails open and does not require this.)
@@ -93,7 +94,7 @@ flowchart TD
     REVISION_COUNT{"Revision\ncycle >= 3?"}
     NOTE_2ND["After 2nd revision:\nnote that escape hatch\nactivates next cycle"]
 
-    UPDATE_STATE["Update aidlc-state.md:\nmark stage as completed"]
+    REPORT_APPROVED["Report approved:\nengine completes + routes"]
     PROGRESS["Display progress line:\nN/total overall"]
     NEXT_STAGE["Proceed to next stage"]
 
@@ -108,8 +109,8 @@ flowchart TD
     ASK --> ACCEPT
     ASK --> ADD_STAGE
 
-    APPROVE --> AUDIT_POST_A --> UPDATE_STATE --> PROGRESS --> NEXT_STAGE
-    ACCEPT --> AUDIT_POST_ACC --> UPDATE_STATE
+    APPROVE --> AUDIT_POST_A --> REPORT_APPROVED --> PROGRESS --> NEXT_STAGE
+    ACCEPT --> AUDIT_POST_ACC --> REPORT_APPROVED
 
     CHANGES --> AUDIT_POST_C --> REVISION_COUNT
     REVISION_COUNT -->|"< 3"| NOTE_2ND --> REVISE --> RE_PRESENT --> AUDIT_PRE
@@ -126,7 +127,7 @@ flowchart TD
     style NEXT_STAGE fill:#c8e6c9,stroke:#388e3c
 ```
 
-<!-- Text fallback: Stage completes, audit log records the options. AskUserQuestion presents the approval gate. Approve: log response, update state, show progress, proceed. Request Changes: log response, check revision count (if <3, note escape hatch coming, revise and re-present; if >=3, Accept-as-is option becomes available). Accept as-is: log and mark complete. Add Skipped Stage (Ideation/Inception only): log and insert stage. -->
+<!-- Text fallback: Stage work completes, the audit log records the options, and AskUserQuestion presents the approval gate. Approve: log the response, report approval so the engine completes and routes, show progress, proceed. Request Changes: log the response, check revision count (if <3, note escape hatch coming, revise and re-present; if >=3, Accept-as-is becomes available). Accept as-is: log and report approval. Add Skipped Stage (Ideation/Inception only): log and recompose the plan. -->
 
 ---
 

@@ -132,11 +132,15 @@ interface CliResult {
 /** Spawn `bun aidlc-utility.ts <args...> --project-dir <p>`. Mirrors `bun "$TOOL" ...`. */
 function util(args: string[], p?: string, env?: Record<string, string>): CliResult {
   const finalArgs = p ? [TOOL, ...args, "--project-dir", p] : [TOOL, ...args];
+  const childEnv = stripScope(env);
+  if (args[0] === "set-status") {
+    childEnv.AIDLC_STATUSLINE_OWNER = `statusline:${process.pid}`;
+  }
   const res = spawnSync(BUN, finalArgs, {
     encoding: "utf-8",
     // reset_aidlc_env: strip AWS_AIDLC_DEFAULT_SCOPE from the parent env so a
     // developer's shell default cannot shadow the tests (fixtures.sh:28-30).
-    env: stripScope(env),
+    env: childEnv,
   });
   const stdout = res.stdout ?? "";
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
@@ -146,7 +150,10 @@ function util(args: string[], p?: string, env?: Record<string, string>): CliResu
 function state(args: string[], p: string): CliResult {
   const res = spawnSync(BUN, [STATE_TOOL, ...args, "--project-dir", p], {
     encoding: "utf-8",
-    env: stripScope(),
+    env: {
+      ...stripScope(),
+      AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    },
   });
   const stdout = res.stdout ?? "";
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };

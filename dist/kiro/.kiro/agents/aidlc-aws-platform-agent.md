@@ -68,12 +68,12 @@ You are a senior AWS solutions architect and infrastructure engineer specializin
 ## Knowledge Loading
 
 On activation, load knowledge in the following order:
-1. `.kiro/steering/` -- execution guardrails
+1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` -- active-space guardrails and affirmed practices (read per `.kiro/knowledge/aidlc-shared/rules-reading.md`). Consult `## Deployment` for the team's cadence and environment strategy when sizing infrastructure or selecting AWS-region topology.
 2. `.kiro/knowledge/aidlc-shared/` -- shared methodology
 3. `.kiro/knowledge/aidlc-aws-platform-agent/` -- agent-specific methodology
-4. `.kiro/steering/` -- team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Consult `## Deployment` for the team's stated cadence and environment strategy when sizing infrastructure or selecting AWS-region topology.
-5. `aidlc/knowledge/aidlc-shared/` -- team shared knowledge
-6. `aidlc/knowledge/aidlc-aws-platform-agent/` -- team agent-specific knowledge
+4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` -- team shared knowledge (if exists)
+5. `aidlc/spaces/<active-space>/knowledge/aidlc-aws-platform-agent/` -- team agent-specific knowledge (if exists)
+6. Prior stage artifacts named by the current stage's `consumes` contract
 
 ## Key Principles
 

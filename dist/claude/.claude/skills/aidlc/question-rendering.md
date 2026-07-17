@@ -55,9 +55,10 @@ AskUserQuestion({
   `next_stage` field verbatim (e.g. `Continue to NFR Requirements`); render
   `Complete workflow` when `next_stage` is null. Never guess the next stage.
 - **Batching limits**: max 4 questions per `AskUserQuestion` call, max 4
-  options per question. For 5+ options, split across multiple calls (options
-  A-D, then E+); the questions file retains the full option set as the
-  authoritative record.
+  options per question, and **at least 2 options per question**. For 5+
+  options, split across multiple calls (options A-D, then E+); the questions
+  file retains the full option set as the authoritative record. Never send a
+  one-option call: the tool rejects it before the user can answer.
 - **"Other" escape**: `AskUserQuestion` has a built-in "Other" option, always
   available — do NOT add an explicit Other option to the spec's options list
   for interactive batches. (Questions *files* still end every question with

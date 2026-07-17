@@ -454,7 +454,7 @@ sequenceDiagram
     participant TAK as Team Agent Knowledge
     participant PA as Prior Artifacts
 
-    O->>G: Step 1: Load aidlc/spaces/<space>/memory/
+    O->>G: Step 1: Load aidlc/spaces/<active-space>/memory/
     Note over G: org.md + team.md + project.md + phases/<phase>.md
     G-->>O: Rules loaded (strict-additive — all layers present)
 
@@ -506,7 +506,7 @@ flowchart TD
     REVISION_COUNT{"Revision\ncycle >= 3?"}
     NOTE_2ND["After 2nd revision:\nnote that escape hatch\nactivates next cycle"]
 
-    UPDATE_STATE["Update aidlc-state.md:\nmark stage as completed"]
+    REPORT_APPROVED["Report approved:\nengine completes + routes"]
     PROGRESS["Display progress line:\nN/total overall"]
     NEXT_STAGE["Proceed to next stage"]
 
@@ -521,8 +521,8 @@ flowchart TD
     ASK --> ACCEPT
     ASK --> ADD_STAGE
 
-    APPROVE --> AUDIT_POST_A --> UPDATE_STATE --> PROGRESS --> NEXT_STAGE
-    ACCEPT --> AUDIT_POST_ACC --> UPDATE_STATE
+    APPROVE --> AUDIT_POST_A --> REPORT_APPROVED --> PROGRESS --> NEXT_STAGE
+    ACCEPT --> AUDIT_POST_ACC --> REPORT_APPROVED
 
     CHANGES --> AUDIT_POST_C --> REVISION_COUNT
     REVISION_COUNT -->|"< 3"| NOTE_2ND --> REVISE --> RE_PRESENT --> AUDIT_PRE
@@ -543,7 +543,11 @@ flowchart TD
 
 ## 12. State Tracking
 
-The `aidlc-state.md` file tracks each stage with checkbox notation: `[ ]` (not started), `[-]` (in progress), `[x]` (completed). Stages always transition through the intermediate `[-]` state -- they never jump from `[ ]` directly to `[x]`. The diagram also shows the side flows for skip, redo, and jump operations.
+The `aidlc-state.md` file tracks each stage with checkbox notation: `[ ]` (not
+started), `[-]` (in progress), `[?]` (awaiting approval), `[R]` (revising),
+`[x]` (completed), and `[S]` (skipped). The engine owns these transitions;
+conductors report outcomes rather than editing checkbox state. The diagram also
+shows the side flows for skip, redo, and jump operations.
 
 ```mermaid
 stateDiagram-v2
@@ -551,14 +555,20 @@ stateDiagram-v2
 
     state "[ ] Not Started" as NotStarted
     state "[-] In Progress" as InProgress
+    state "[?] Awaiting Approval" as Awaiting
+    state "[R] Revising" as Revising
     state "[x] Completed" as Completed
-    state "Skipped" as Skipped
+    state "[S] Skipped" as Skipped
 
-    NotStarted --> InProgress : Stage begins\n(mark [-] in state file)
-    InProgress --> Completed : User approves\n(mark [x] in state file)
-    InProgress --> InProgress : Request Changes\n(revision loop)
+    NotStarted --> InProgress : engine route
+    InProgress --> Awaiting : report awaiting-approval
+    Awaiting --> Completed : report approved
+    Awaiting --> Revising : report rejected
+    Revising --> Awaiting : report revised
 
-    NotStarted --> Skipped : Not in scope\nor execution plan
+    NotStarted --> Skipped : scope composition
+    InProgress --> Skipped : report skipped
+    Revising --> Skipped : report skipped
 
     note right of Skipped
         Task created but immediately
@@ -573,16 +583,18 @@ flowchart TD
         direction LR
         NS1["[ ] Not Started"]
         IP1["[-] In Progress"]
+        AW1["[?] Awaiting Approval"]
         CO1["[x] Completed"]
-        NS1 -->|"stage begins"| IP1
-        IP1 -->|"user approves"| CO1
+        NS1 -->|"engine route"| IP1
+        IP1 -->|"report gate open"| AW1
+        AW1 -->|"report approved"| CO1
     end
 
     subgraph SKIP["Skip Flow"]
         direction LR
         NS2["[ ] Not Started"]
-        SK2["[x] Completed\n(Skipped: reason)"]
-        NS2 -->|"not in scope"| SK2
+        SK2["[S] Skipped"]
+        NS2 -->|"scope composition"| SK2
     end
 
     subgraph REDO["Redo Flow"]
@@ -628,7 +640,7 @@ This reference table maps every stage to its execution mode and lead agent for q
 | 1.6 | Rough Mockups | inline | aidlc-design-agent |
 | 1.7 | Approval & Handoff | inline | aidlc-delivery-agent |
 | 2.1 | Reverse Engineering | pipeline (2-link) | aidlc-developer-agent + aidlc-architect-agent |
-| 2.2 | Practices Discovery | inline | aidlc-pipeline-deploy-agent |
+| 2.2 | Practices Discovery | subagent | aidlc-pipeline-deploy-agent |
 | 2.3 | Requirements Analysis | inline | aidlc-product-agent |
 | 2.4 | User Stories | mob | aidlc-product-agent |
 | 2.5 | Refined Mockups | inline | aidlc-design-agent |

@@ -74,6 +74,11 @@
     "preToolUse": [
       {
         "matcher": "execute_bash",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard",
+        "timeout_ms": 15000
+      },
+      {
+        "matcher": "execute_bash",
         "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts pretool-block",
         "timeout_ms": 15000
       }

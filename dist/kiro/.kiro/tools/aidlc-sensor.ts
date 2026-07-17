@@ -430,7 +430,7 @@ function handleFire(args: string[]): void {
 	}
 
 	// --- 3. Pre-compute detail-file path (used only on FAILED) ---
-	// aidlc-docs/.aidlc-sensors/<stage-slug>/<sensor-id>-<fire-id>.md
+		// <record>/.aidlc-sensors/<stage-slug>/<sensor-id>-<fire-id>.md
 
 	// required-sections additionally takes the TPL template seam: the
 	// templates source-of-truth dir + the stage's template-eligible artifact
@@ -785,7 +785,7 @@ function emitTerminal(
 	if (outcome.kind === "failed") {
 		// detailPath is absolute; emit it as the project-relative path for
 		// human readability. The audit-format spec calls for a relative
-		// path under aidlc-docs/.aidlc-sensors/.
+			// path under the active record's .aidlc-sensors/ directory.
 		const fields: Record<string, string> = {
 			...baseFields,
 			"Detail path": relativizePath(detailPath, projectDir),

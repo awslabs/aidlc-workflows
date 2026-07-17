@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, function:emitSingleRunStage, function:handleSingleReport
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, subcommand:aidlc-audit:append-batch, function:emitSingleRunStage, function:handleSingleReport
 //
 // t127 — the `--single` stage-runner invariant (v0.6.0 Wave 3 milestone 14).
 // Migrated from tests/integration/t127-single-stage-invariant.sh (TAP plan 16).
@@ -23,10 +23,10 @@
 //   :1741 handleSingleReport(flags, projectDir): requires --result (:1745),
 //          and the EXPLICIT half of the pointer rule — refuses a --single report
 //          with NO --stage as an attempt to advance the main workflow (:1762).
-//          On success spawns the atomic aidlc-audit append TWICE — STAGE_STARTED
-//          (Stage+Agent+Workflow) then STAGE_COMPLETED (Stage+Details+Workflow)
-//          (:1784,:1797) under the synthetic id syntheticWorkflowId(slug) =
-//          `single-stage:<slug>` (:1715), then emits a `done` directive (:1811).
+//          On success spawns one atomic aidlc-audit append-batch containing
+//          STAGE_STARTED (Stage+Agent+Workflow) then STAGE_COMPLETED
+//          (Stage+Details+Workflow), under the synthetic id
+//          `single-stage:<slug>`, then emits a `done` directive.
 //          report Branch -1 (:1833) routes here before any main-workflow branch.
 //   The companion never dispatches advance/approve/complete-workflow, so the
 //   main pointer is structurally untouchable from a single-stage run.
@@ -76,6 +76,7 @@ import {
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const AUDIT_TOOL = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const STATE_FIXTURE = "state-mid-ideation.md";
 
 const projects: string[] = [];
@@ -139,6 +140,18 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       "next", "--stage", "code-generation", "--single", "--project-dir", proj,
     ]);
     expect(r.out).toContain('"kind":"run-stage"');
+  });
+
+  test("2b: next --single marks the isolated non-gated conductor branch", () => {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    const r = run(TOOL, [
+      "next", "--stage", "code-generation", "--single", "--project-dir", proj,
+    ]);
+    const directive = JSON.parse(r.out.trim()) as Record<string, unknown>;
+    expect(directive.single).toBe(true);
+    expect(directive.gate).toBe(false);
+    expect(directive.next_stage).toBeNull();
   });
 
   test("3: next --single targets the requested stage, not Current Stage [.sh 3]", () => {
@@ -235,6 +248,40 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     expect(tagged).toBe(2);
   });
 
+  test("10b: append-batch validates the complete pair before writing either row", () => {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    seedAuditFile(proj);
+    const before = readFileSync(seededAuditShard(proj), "utf-8");
+    const entries = JSON.stringify([
+      {
+        eventType: "STAGE_STARTED",
+        fields: {
+          Stage: "code-generation",
+          Workflow: "single-stage:code-generation",
+        },
+      },
+      {
+        eventType: "NOT_A_REAL_EVENT",
+        fields: {
+          Stage: "code-generation",
+          Workflow: "single-stage:code-generation",
+        },
+      },
+    ]);
+
+    const result = run(AUDIT_TOOL, [
+      "append-batch",
+      entries,
+      "--project-dir",
+      proj,
+    ]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.out).toContain("Invalid event type: NOT_A_REAL_EVENT");
+    expect(readFileSync(seededAuditShard(proj), "utf-8")).toBe(before);
+  });
+
   // =========================================================================
   // Tests 11-12: report --single with NO --stage is an attempt to advance the
   // main workflow -> error (tool-enforced refusal), committing nothing.
@@ -257,6 +304,30 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     seedAuditFile(proj);
     run(TOOL, ["report", "--single", "--result", "completed", "--project-dir", proj]);
     expect(countEvent(proj, "STAGE_COMPLETED")).toBe(0);
+  });
+
+  test("12b: report --single rejects skipped because it is a main-workflow routing outcome", () => {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    seedAuditFile(proj);
+    const r = run(TOOL, [
+      "report",
+      "--single",
+      "--stage",
+      "code-generation",
+      "--result",
+      "skipped",
+      "--reason",
+      "not applicable",
+      "--project-dir",
+      proj,
+    ]);
+    expect(r.out).toContain('"kind":"error"');
+    expect(r.out).toContain("commits forward outcomes only");
+    expect(currentStage(proj)).toBe("feasibility");
+    expect(countEvent(proj, "STAGE_STARTED")).toBe(0);
+    expect(countEvent(proj, "STAGE_COMPLETED")).toBe(0);
+    expect(countEvent(proj, "STAGE_SKIPPED")).toBe(0);
   });
 
   // =========================================================================

@@ -19,6 +19,11 @@
         "bun \\.kiro/tools/.*",
         "date -u .*"
       ]
+    },
+    "fs_write": {
+      "allowedPaths": [
+        "aidlc/spaces/**"
+      ]
     }
   },
   "resources": [

@@ -6,7 +6,7 @@ examples:
   - deployment-gates.md
 description: >
   CI/CD engineer and release manager responsible for pipeline configuration, deployment strategy, and release execution.
-  Leads CI Pipeline, Deployment Pipeline, and Deployment Execution stages.
+  Leads Practices Discovery, CI Pipeline, Deployment Pipeline, and Deployment Execution stages.
 disallowedTools: Task
 model: openai.gpt-5.4
 effort: medium
@@ -57,7 +57,7 @@ You are a senior CI/CD engineer and release manager specializing in continuous i
 
 ### Worktree Branch Lifecycle (orchestrator-dispatched at Bolt boundaries)
 - Receive create / merge / discard dispatches from the orchestrator at Bolt boundaries (SKILL.md per-Bolt execution: pre-`BOLT_STARTED` create, post-`BOLT_COMPLETED` merge)
-- Read team practices via `.codex/aidlc-rules/aidlc-team.md` (fall back to `org.md` per `knowledge/aidlc-shared/rules-reading.md`); match the affirmed branching strategy to one of the five in `branching-strategies.md`
+- Read `## Way of Working` from `aidlc/spaces/<active-space>/memory/{project,team,org}.md` per `.codex/knowledge/aidlc-shared/rules-reading.md`; match the affirmed branching strategy to one of the five in `branching-strategies.md`
 - Resolve `aidlc-worktree` flags (`--slug`, `--base`, `--target`, `--strategy`, optional `--message`) per the chosen strategy's runbook
 - Invoke `bun .codex/tools/aidlc-worktree.ts` from the main repo checkout; `aidlc-worktree` itself emits the audit event audit-first before invoking git
 - Return the JSON envelope per `branching-strategies.md` § Response contract; the orchestrator then runs `aidlc-worktree verify` as a deterministic post-dispatch backstop
@@ -84,12 +84,12 @@ You are a senior CI/CD engineer and release manager specializing in continuous i
 ## Knowledge Loading
 
 On activation, load knowledge in the following order:
-1. `.codex/aidlc-rules/` -- execution guardrails
+1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` -- active-space guardrails and affirmed practices (read per `.codex/knowledge/aidlc-shared/rules-reading.md`). Consult `## Way of Working`, `## Deployment`, and `## Testing Posture` when selecting branch, release, and gate behavior.
 2. `.codex/knowledge/aidlc-shared/` -- shared methodology
 3. `.codex/knowledge/aidlc-pipeline-deploy-agent/` -- agent-specific methodology
-4. `.codex/aidlc-rules/` -- team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md`)
-5. `aidlc/knowledge/aidlc-shared/` -- team shared knowledge
-6. `aidlc/knowledge/aidlc-pipeline-deploy-agent/` -- team agent-specific knowledge
+4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` -- team shared knowledge (if exists)
+5. `aidlc/spaces/<active-space>/knowledge/aidlc-pipeline-deploy-agent/` -- team agent-specific knowledge (if exists)
+6. Prior stage artifacts named by the current stage's `consumes` contract
 
 ## Key Principles
 

@@ -314,31 +314,23 @@ describe("t-tui-t27 depth override (config-change lands + renders)", () => {
         // type the invalid override
         sendSlash(session, "/aidlc --depth extreme");
 
-        // --- RENDERED: the invalid-depth recovery menu surfaces. v0.6.1 now
-        // offers valid alternatives rather than printing the older "Unknown
-        // depth" text directly. --stable-ms 0: streaming.
-        const sawError = waitFor(
+        // --- DRIVER: a recovery menu surfaces. Synchronize on the structural
+        // AskUserQuestion footer, not rewordable/possibly-collapsed pane prose.
+        // The disk assertions below own the actual refusal contract.
+        const recoveryMenuRendered = waitFor(
           session,
-          "(isn't valid|not valid|Which depth level)",
+          "Enter to select|Submit answers",
           120000,
           0,
         );
-        const pane = drive(["capture", "--session", session]).stdout;
-        if (!sawError) {
-          throw new Error(
-            `Invalid-depth recovery never appeared in the TUI for --depth extreme.\n` +
-              `---- last pane ----\n${pane}\n-------------------`,
-          );
-        }
-        expect(/isn't valid|not valid|Which depth level/.test(pane)).toBe(true);
-        // The workflow row is untouched by a refused override.
-        expect(pane).toContain("· IDEATION");
+        expect(recoveryMenuRendered).toBe(true);
 
         // --- ON DISK: state must be BYTE-IDENTICAL (the .sh's md5 equality). The
         // refusal short-circuits before writeStateFile, so nothing — not even Last
         // Updated — should have changed.
         const after = readFileSync(statePath, "utf8");
         expect(after).toBe(before);
+        expect(readAllAuditShards(proj)).not.toMatch(/^\*\*Event\*\*: DEPTH_CHANGED$/m);
       } finally {
         drive(["kill", "--session", session]);
         cleanupTuiProject(proj);

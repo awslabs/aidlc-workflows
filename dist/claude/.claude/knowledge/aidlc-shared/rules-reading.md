@@ -1,22 +1,19 @@
-# Reading Rule Files
+# Reading Active-Space Rule Files
 
 > **Audience**: any agent that needs to read team-affirmed practices from
-> `.claude/rules/`.
+> `aidlc/spaces/<active-space>/memory/`.
 > **Owner of this file**: framework. Cited by
 > `aidlc-pipeline-deploy-agent/branching-strategies.md` and by other agents
 > that adopt practices-aware behaviour.
 
 The rules namespace resolves through a strict-additive five-layer chain
-at workflow start: `org → team → project → phase → stage`. `aidlc-org.md`
-holds framework defaults; `aidlc-team.md` carries this team's affirmed
-practices (populated by practices-discovery); `aidlc-project.md` adds
-project-scoped specialisation; `aidlc-phase-<phase>.md` attaches because
-the stage's frontmatter `phase: <name>` field is the pull import for the
-matching phase-rule filename. Stage rules (`aidlc-stage-<slug>.md`) are
-reserved-for-future-use. The compile bakes the resolved chain into each
-stage node's `rules_in_context`; every applicable rule appears in the
-chain — nothing drops at runtime. This file documents how to read those
-layers safely.
+at workflow start: `org → team → project → phase → stage`. The first three
+files are `aidlc/spaces/<active-space>/memory/{org,team,project}.md`;
+`phases/<phase>.md` attaches because the stage's frontmatter `phase: <name>`
+selects it. Stage rules are reserved for future use. The compile bakes the
+resolved chain into each stage node's `rules_in_context`; every applicable
+rule appears in the chain — nothing drops at runtime. This file documents how
+to read those layers safely.
 
 ---
 
@@ -55,7 +52,7 @@ being prose is the populated signal.
 
 ## 2. Semantic-topic matching
 
-Heading shapes can drift between `aidlc-team.md`, `aidlc-org.md`, and the
+Heading shapes can drift between `team.md`, `org.md`, `project.md`, and the
 per-agent KB that consumes them. Match by **topic**, not by exact-string
 heading.
 
@@ -89,16 +86,22 @@ occurrence in document order.
 
 ## 3. Fallback chain
 
-For each topic, walk the layers in order and return the first non-empty
-section found:
+For a decision that needs one operative practice statement, inspect the
+active-space descriptive layers from narrowest to broadest and return the
+first non-empty, non-conflicting section:
 
-1. **`.claude/rules/aidlc-team.md`** — team-affirmed practices. The
-   primary source.
-2. **`.claude/rules/aidlc-org.md`** — framework defaults written in team
-   voice. Always populated.
-3. **Hardcoded defaults** — used only when both layers are empty
+1. **`aidlc/spaces/<active-space>/memory/project.md`** — project-specific
+   specialisation.
+2. **`aidlc/spaces/<active-space>/memory/team.md`** — team-affirmed practices.
+3. **`aidlc/spaces/<active-space>/memory/org.md`** — framework defaults written
+   in team voice.
+4. **Hardcoded defaults** — used only when all three layers are empty
    (greenfield first run before practices-discovery has run, or when the
    project SKIPs practices-discovery).
+
+This topic selection does not erase broader rules: the runtime still loads all
+applicable layers. A narrower statement that contradicts broader policy is an
+admission error, not an override.
 
 Hardcoded defaults are:
 
@@ -110,7 +113,7 @@ Hardcoded defaults are:
 | Deployment | trunk-based with on-merge staging deploy; production gate is human-approved |
 | Code Style | defer to project linter/formatter configuration |
 
-When the fallback chain has to descend to layer 3, emit
+When the fallback chain has to descend to layer 4, emit
 `PRACTICES_SECTION_EMPTY` (advisory-only) so doctor and downstream
 observability can flag projects running on framework defaults vs affirmed
 team practices.
@@ -121,7 +124,11 @@ team practices.
 
 ```
 def read_practice(topic):
-  for layer in [aidlc-team.md, aidlc-org.md]:
+  for layer in [
+    aidlc/spaces/<active-space>/memory/project.md,
+    aidlc/spaces/<active-space>/memory/team.md,
+    aidlc/spaces/<active-space>/memory/org.md,
+  ]:
     section = match_section(layer, topic)  # § 2
     if section and not is_empty(section):  # § 1
       return section
@@ -141,17 +148,18 @@ The orchestrator dispatches `aidlc-pipeline-deploy-agent` at Bolt-create time.
 The agent's job is to map team intent to `aidlc-worktree create --slug
 <slug> --base <branch>`. It reads:
 
-1. `aidlc-team.md` `## Way of Working` → empty (fresh template).
-2. `aidlc-org.md` `## Way of Working` → "trunk-based; base `main`, target
+1. `project.md` `## Way of Working` → empty (fresh template).
+2. `team.md` `## Way of Working` → empty (fresh template).
+3. `org.md` `## Way of Working` → "trunk-based; base `main`, target
    `main`; squash-merge".
-3. Returns `{base: "main", strategy: "squash"}` to the orchestrator
+4. Returns `{base: "main", strategy: "squash"}` to the orchestrator
    alongside the agent's invocation of `aidlc-worktree`.
 
-If `aidlc-team.md` `## Way of Working` had read "We use GitFlow with
+If `team.md` `## Way of Working` had read "We use GitFlow with
 `develop` as the integration branch", the agent would map that to
 `--base develop` instead — same fallback chain, populated layer wins.
 
-If both layers were empty (a project that SKIPped practices-discovery),
+If all three layers were empty (a project that SKIPped practices-discovery),
 the agent would emit `PRACTICES_SECTION_EMPTY` and apply the hardcoded
 default — `{base: "main", strategy: "squash"}`. Doctor surfaces this so
 the team can run practices-discovery later if they want their own
