@@ -42,6 +42,18 @@ const CHECK_TIMEOUT_MS = 60_000;
 
 type Run = ReturnType<typeof spawnSync>;
 
+interface HookEntry {
+  command: string;
+}
+
+interface HookGroup {
+  hooks: HookEntry[];
+}
+
+interface HooksConfig {
+  hooks: Record<string, HookGroup[]>;
+}
+
 function copyDir(src: string, dst: string): void {
   cpSync(src, dst, { recursive: true });
 }
@@ -181,10 +193,12 @@ describe("t145 packager contract regressions", () => {
       expect(existsSync(generated)).toBe(true);
       expect(existsSync(join(distRoot, ".codex"))).toBe(false);
 
-      const hooks = JSON.parse(readFileSync(join(generated, "hooks.json"), "utf-8"));
+      const hooks = JSON.parse(
+        readFileSync(join(generated, "hooks.json"), "utf-8"),
+      ) as HooksConfig;
       const commands = Object.values(hooks.hooks)
         .flat()
-        .flatMap((group: any) => group.hooks.map((hook: any) => hook.command));
+        .flatMap((group) => group.hooks.map((hook) => hook.command));
       expect(commands.length).toBeGreaterThan(0);
       expect(commands.every((command: string) => command.startsWith("bun .foo/hooks/"))).toBe(true);
 
