@@ -154,6 +154,15 @@ describe("t144 codex harness seam — harnessDir + resolveProjectDir ladder ×3 
     expect(
       evalLib(CLAUDE_LIB, "resolveProjectDir()", { env: { CLAUDE_PROJECT_DIR: "/from/env" } }),
     ).toBe("/from/env");
+    expect(
+      evalLib(CLAUDE_LIB, 'resolveProjectDir("relative/project")', { cwd: "/tmp" }),
+    ).toBe("/tmp/relative/project");
+    expect(
+      evalLib(CLAUDE_LIB, "resolveProjectDir()", {
+        cwd: "/tmp",
+        env: { AIDLC_PROJECT_DIR: "relative/project" },
+      }),
+    ).toBe("/tmp/relative/project");
   });
 
   // rulesSubdir() is the companion seam: the AIDLC markdown rule layers live

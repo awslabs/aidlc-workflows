@@ -747,6 +747,16 @@ describe("detector corpus", () => {
         'aidlc state approve application-design --user-input "aidlc runtime notes"',
       ),
     ).toBe("fire");
+    expect(
+      classifyRuntimeCompileCommand(
+        'aidlc state approve application-design --user-input "notes; aidlc runtime compile"',
+      ),
+    ).toBe("fire");
+    expect(
+      classifyRuntimeCompileCommand(
+        "aidlc state approve application-design --user-input 'notes && aidlc runtime compile'",
+      ),
+    ).toBe("fire");
   });
 
   test("new top-level park is intentional engagement", () => {

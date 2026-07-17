@@ -29,7 +29,7 @@
 //                  pretool-block | reviewer-scope
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   classifyTerminalCommand,
@@ -68,6 +68,20 @@ if (!process.stdin.isTTY) {
     return 0; // malformed stdin — advisory hooks fail open
   }
 }
+
+const projectDirRaw =
+  process.env.AIDLC_PROJECT_DIR ?? kiro.cwd ?? process.cwd();
+const projectDir = isAbsolute(projectDirRaw)
+  ? projectDirRaw
+  : resolve(process.cwd(), projectDirRaw);
+const projectEnv = process.env.AIDLC_PROJECT_DIR
+  ? {
+      ...process.env,
+      AIDLC_PROJECT_DIR: projectDir,
+      CLAUDE_PROJECT_DIR: projectDir,
+    }
+  : process.env;
+const childCwd = process.env.AIDLC_PROJECT_DIR ? projectDir : process.cwd();
 
 // --- verb-intercept: the deterministic terminal-command seam (userPromptSubmit) ---
 //
@@ -114,7 +128,7 @@ if (target === "verb-intercept") {
   // turn-scoped, no time window, no wedge. Best-effort; failure fails open.
   let turn = 0;
   try {
-    const cwd = kiro.cwd ?? process.cwd();
+    const cwd = projectDir;
     mkdirSync(join(cwd, "aidlc"), { recursive: true });
     const cp = join(cwd, "aidlc", ".aidlc-turn-counter");
     turn = existsSync(cp)
@@ -131,14 +145,14 @@ if (target === "verb-intercept") {
   // workflow state existing (same self-gate as the core mint hook) so a prompt in
   // a project that never ran the framework does not scaffold audit shards.
   try {
-    const cwd = kiro.cwd ?? process.cwd();
+    const cwd = projectDir;
     if (existsSync(stateFilePath(cwd))) {
       appendAuditEntry("HUMAN_TURN", {}, cwd);
     }
   } catch { /* presence best-effort - mint never blocks the turn */ }
   if (cmd === null) return 0; // not a terminal command — conductor handles it
 
-  const cwd = kiro.cwd ?? process.cwd();
+  const cwd = projectDir;
   const forwarded = cmd.args ?? (cmd.arg !== undefined ? [cmd.arg] : []);
   let out: string;
   if (cmd.error !== undefined) {
@@ -155,7 +169,7 @@ if (target === "verb-intercept") {
     // PATH containing bun (the hook environment often lacks the bun install dir).
     const run = Bun.spawnSync(
       executable ? [executable, ...compiledArgs] : [process.execPath, ...utilArgs],
-      { cwd, stdout: "pipe", stderr: "pipe" },
+      { cwd, stdout: "pipe", stderr: "pipe", env: projectEnv },
     );
     out = ((run.stdout?.toString() ?? "") + (run.stderr?.toString() ?? "")).trim();
   }
@@ -169,7 +183,7 @@ if (target === "verb-intercept") {
   // catches the read-only AND the nav roll-forward. Best-effort; fails open.
   if (cmd.source === "read-only-flag" || cmd.source === "workspace-verb") {
     try {
-      const cwd = kiro.cwd ?? process.cwd();
+      const cwd = projectDir;
       mkdirSync(join(cwd, "aidlc"), { recursive: true });
       const flag = cmd.source === "read-only-flag"
         ? cmd.subcommand
@@ -209,7 +223,7 @@ if (target === "verb-intercept") {
 // parse/read failure exits 0 and never blocks a real next.
 if (target === "pretool-block") {
   const cmdStr = String(kiro.tool_input?.command ?? "");
-  const cwd = kiro.cwd ?? process.cwd();
+  const cwd = projectDir;
   const m = cmdStr.match(/aidlc-orchestrate\.ts\s+next\b([^\n]*)/);
   const nextArgs = m ? splitDoubleQuotedArgs(m[1].trim()) : [];
   // A next carrying ANY advancing/config flag is a DELIBERATE move — only a truly
@@ -342,9 +356,10 @@ if (target === "reviewer-scope") {
       }),
       "utf-8",
     ),
-    cwd: kiro.cwd ?? process.cwd(),
+    cwd: projectDir,
     stdout: "pipe",
     stderr: "pipe",
+    env: projectEnv,
   });
   const stderrText = r.stderr?.toString() ?? "";
   if (r.exitCode === 2) {
@@ -476,6 +491,8 @@ function runCore(hookFile: string, input: Record<string, unknown>): { stdout: st
     stdin: Buffer.from(JSON.stringify(input), "utf-8"),
     stdout: "pipe",
     stderr: "ignore",
+    cwd: childCwd,
+    env: projectEnv,
   });
   return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
 }

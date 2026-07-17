@@ -23,7 +23,7 @@ export function compiledExecutable(): string | null {
   return isCompiledExecutable() ? process.execPath : null;
 }
 
-export function runtimeProjectDir(): string {
+function explicitRuntimeProjectDir(): string | null {
   const argv = process.argv.slice(1);
   const index = argv.indexOf("--project-dir");
   if (index >= 0 && argv[index + 1] && !argv[index + 1].startsWith("--")) {
@@ -34,7 +34,11 @@ export function runtimeProjectDir(): string {
   const explicit = process.env.AIDLC_PROJECT_DIR ?? process.env.CLAUDE_PROJECT_DIR;
   return explicit
     ? isAbsolute(explicit) ? explicit : resolve(process.cwd(), explicit)
-    : process.cwd();
+    : null;
+}
+
+export function runtimeProjectDir(): string {
+  return explicitRuntimeProjectDir() ?? process.cwd();
 }
 
 export function runtimeHarnessDir(projectDir = runtimeProjectDir()): string {
@@ -99,18 +103,27 @@ export function resolveHarnessRoot(location: HarnessLocation = {}): string {
   const projectDir = location.projectDir ?? runtimeProjectDir();
   const harnessDir = location.harnessDir ?? runtimeHarnessDir(projectDir);
   const distribution = location.distribution ?? distributionFor(harnessDir);
+  const projectRoot =
+    basename(projectDir) === harnessDir &&
+    existsSync(join(projectDir, "tools"))
+      ? projectDir
+      : join(projectDir, harnessDir);
+
+  // Mutation is project-owned. Explicit/module/packaged roots are read
+  // fallbacks only and must never become a write target.
+  if (location.mutable) {
+    if (location.projectDir !== undefined || explicitRuntimeProjectDir()) {
+      return projectRoot;
+    }
+    const moduleRoot = moduleHarnessRoot(harnessDir);
+    return moduleRoot ?? projectRoot;
+  }
+
   const explicit = explicitHarnessRoot(harnessDir, distribution);
   if (explicit) return explicit;
 
   const moduleRoot = moduleHarnessRoot(harnessDir);
-  const projectRoot = join(projectDir, harnessDir);
   const packagedRoot = join(packagedDistributionRoot(harnessDir, distribution), harnessDir);
-
-  if (location.mutable) {
-    if (existsSync(projectRoot)) return projectRoot;
-    if (moduleRoot) return moduleRoot;
-    return projectRoot;
-  }
 
   if (moduleRoot) return moduleRoot;
   if (isAidlcHarnessRoot(projectRoot)) return projectRoot;
@@ -133,12 +146,11 @@ export function resolveSkillsPath(
   const harnessDir = location.harnessDir ?? runtimeHarnessDir(projectDir);
   const harnessSkills = resolveHarnessPath(["skills", ...segments], {
     ...location,
-    projectDir,
     harnessDir,
   });
   if (harnessDir !== ".codex" || existsSync(harnessSkills)) return harnessSkills;
   return join(
-    dirname(resolveHarnessRoot({ ...location, projectDir, harnessDir })),
+    dirname(resolveHarnessRoot({ ...location, harnessDir })),
     ".agents",
     "skills",
     ...segments,

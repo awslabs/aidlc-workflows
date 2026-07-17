@@ -307,8 +307,37 @@ function resetSelectionSensitiveCaches(): void {
   _resetScopeMappingForTests();
 }
 
-function stageGraphDataPath(): string {
-  return resolveHarnessPath(["tools", "data", "stage-graph.json"], { mutable: true });
+function mutableHarnessDataPath(projectDir: string): string {
+  return resolveHarnessPath(
+    ["tools", "data", "harness.json"],
+    { mutable: true, projectDir },
+  );
+}
+
+function stageGraphDataPath(projectDir: string): string {
+  return resolveHarnessPath(
+    ["tools", "data", "stage-graph.json"],
+    { mutable: true, projectDir },
+  );
+}
+
+function scopeGridDataPath(projectDir: string): string {
+  return resolveHarnessPath(
+    ["tools", "data", "scope-grid.json"],
+    { mutable: true, projectDir },
+  );
+}
+
+function requireInstalledHarness(projectDir: string): void {
+  const installedLib = resolveHarnessPath(
+    ["tools", "aidlc-lib.ts"],
+    { mutable: true, projectDir },
+  );
+  if (!existsSync(installedLib)) {
+    die(
+      `select-plugins requires an installed project harness at ${dirname(dirname(installedLib))}.`,
+    );
+  }
 }
 
 function knownPluginNames(): string[] {
@@ -362,11 +391,12 @@ function readHarnessDataObject(): Record<string, unknown> {
   return { harnessDir: harnessDir(), rulesSubdir: rulesSubdir() };
 }
 
-function writePluginSelection(names: string[]): void {
+function writePluginSelection(projectDir: string, names: string[]): void {
   const data = readHarnessDataObject();
   data.plugins = names;
-  mkdirSync(dirname(harnessDataPath()), { recursive: true });
-  writeFileSync(harnessDataPath(), `${JSON.stringify(data, null, 2)}\n`, "utf-8");
+  const path = mutableHarnessDataPath(projectDir);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
   resetSelectionSensitiveCaches();
 }
 
@@ -701,6 +731,7 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
     die(`Unknown plugin name(s): ${unknown.join(", ")}. Valid plugins: ${known.join(", ")}.`);
   }
   const names = [...new Set(parsedSelection.names)].sort();
+  requireInstalledHarness(projectDir);
 
   const violations = activeWorkflowDependencyViolations(projectDir, new Set(names));
   if (violations.length > 0) {
@@ -719,9 +750,9 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
   const disabling = known.filter((n) => n !== "aidlc" && !nameSet.has(n));
 
   const snapshots = [
-    snapshotFile(harnessDataPath()),
-    snapshotFile(stageGraphDataPath()),
-    snapshotFile(scopeGridPath()),
+    snapshotFile(mutableHarnessDataPath(projectDir)),
+    snapshotFile(stageGraphDataPath(projectDir)),
+    snapshotFile(scopeGridDataPath(projectDir)),
   ];
 
   try {
@@ -731,7 +762,7 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
     // rollback restores them too. Re-enabling restores contributions on the
     // next session start (the plugin's own compose hook re-merges).
     const strippedPlugins = stripDisabledPluginContributions(disabling, snapshots);
-    writePluginSelection(names);
+    writePluginSelection(projectDir, names);
     regenerateSelectionSurfaces(projectDir);
     appendAuditEvent(projectDir, "PLUGIN_SELECTION_CHANGED", {
       "Previous Selection": previousSelection,

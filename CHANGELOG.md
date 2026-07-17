@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.5] - 2026-07-17
+
+AI-DLC now ships a native dispatcher and release binaries, adds explicit workspace, config, and plugin command families, and makes the packaged runtime self-contained without allowing mutations beside an executable. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; binary users should replace the executable and its packaged runtime together.
+
+* New `/aidlc config get <key>` command for `depth` and `test-strategy`.
+* New `/aidlc config list` command, with `/aidlc config list --json` emitting `{"depth":...,"test-strategy":...}`.
+* Existing `/aidlc config set <key> <value>` now routes to the legacy `config-change` handler for `depth` and `test-strategy`; `config-change` remains accepted.
+* New `/aidlc plugin list` command, with `/aidlc plugin list --json` emitting installed plugin names, enabled state, and `selectionActive`.
+* New `/aidlc plugin sync` command composes installed plugin roots by running each plugin's `hooks/compose.ts`; with no installed plugin trees it exits 0 with `no installed plugins; nothing to sync`.
+* `/aidlc init` now errors with `init now lays down the project data tree and is not yet available in this release. To start work, describe what to build: /aidlc "build the auth service".`
+* Plugin SessionStart hooks now probe for `aidlc` on `PATH` first and run `aidlc plugin sync`; a nonzero result falls back to the existing bun plus `hooks/compose.ts` command, and the hook still skips cleanly when neither executable is available.
+* Native `aidlc` binaries now statically embed all 15 dispatcher delegate modules, so routed commands reach their handlers instead of failing with a missing module error.
+* Native `aidlc` binaries now resolve data, sensors, scopes, agents, stages, skills, hooks, and conductor prose from the active project install or the executable's packaged harness runtime.
+* Packaged harness runtimes are read-only fallbacks: mutating `plugin select` and `graph compile` commands now require an installed project harness and refuse to write beside the executable.
+* Native `aidlc` binaries detect the project's harness directory (`.claude`, `.kiro`, or `.codex`, by probing for `tools/data/harness.json`) when `AIDLC_HARNESS_DIR` is unset, instead of assuming `.claude`; the env var still overrides, and `.claude` remains the fallback outside any install.
+* Native orchestration, plugin selection, Bolt, Swarm, and sensor workers re-enter the compiled dispatcher for sibling-tool work, so these paths do not require a separate `bun` executable on `PATH`.
+* Native plugin sync imports each plugin composer and routes graph, generated-table, and runner refreshes through the compiled dispatcher; hook, statusline, and harness-adapter routes resolve installed or packaged runtime assets and honor global `--project-dir` even when the current directory or hook payload names another project.
+* Relative `--project-dir` values are normalized before Bolt/Swarm self-reentry, and non-bundled sensor workers resolve by registered sensor ID instead of accepting an arbitrary TypeScript path.
+* `aidlc doctor` now reports a missing or unreadable stage graph as a failing advisory row instead of crashing before the health report is printed.
+* Workspace terminal directives preserve multi-word names and labels as one shell argument, so quoted `space create`, `space switch`, and `intent birth --label` values reach the utility unchanged.
+* Native binary builds now gate sensors, graph compilation, packaged-runtime immutability, output validation, generated runners/tables, plugin selection/composition, conductor persona delivery, workspace aliases/flags, relative-path Bolt/Swarm self-reentry, orchestration, hooks, statusline, Codex adapters, and explicit project routing.
+* Every target now ships under `build/binaries/<target>/` with complete Claude, Codex, Kiro, and Kiro IDE distributions under `runtime/<harness>/`; `doctor` must report a non-zero complete schema count without missing-module, Bun virtual-filesystem, or missing-file crash signatures.
+* Migration note for stale `init` callers: describe what to build instead, for example `/aidlc "build the auth service"`.
+* `/aidlc space create teamB` now creates space `teamB`; previously it attempted to switch to a space named `create`. The legacy `/aidlc space-create teamB` spelling still works.
+* `/aidlc space list` now lists spaces, and `/aidlc space list --json` or `/aidlc space --json` emits the existing structured space listing.
+* `/aidlc space switch teamB` now explicitly switches to `teamB` through both the engine and dispatcher without reinterpreting a verb-shaped name; bare `/aidlc space teamB` still switches as before. `/aidlc space create` and `/aidlc space switch` now return usage errors instead of treating the verb as a name.
+* `/aidlc intent list` now lists intents, and `/aidlc intent list --json` or `/aidlc intent --json` emits the existing structured intent listing.
+* `/aidlc intent switch list` now preserves the explicit `switch` token through both the engine and dispatcher, so existing intents named `list` or `birth` are selected instead of listing or creating records; bare `/aidlc intent <name>` still switches as before. `/aidlc intent switch` now returns a usage error instead of switching to `switch`.
+* `/aidlc intent birth --scope poc --label x` now forwards the remaining flags to `intent-birth`; previously the terminal workspace branch collapsed the command to `intent birth` and lost the flags.
+* `/aidlc intent archive foo`, `/aidlc intent rename foo`, `/aidlc intent show foo`, and the matching `space` forms now return "reserved for a future workspace verb and is not implemented yet" with guidance to use explicit `switch` to reach an existing record with that name.
+* New intent labels and space names may not be `help`, current workspace verbs, or reserved future verbs; creation fails with a reserved-name message asking for a descriptive label or team name. Existing records with those names remain reachable via explicit `intent switch <name>` or `space switch <name>`, and doctor reports them as an advisory.
+* Kiro CLI `/aidlc` verb interception now keeps double-quoted names as one argv token, so `/aidlc space create "My Space"` reaches the utility as one name.
+* The runtime compile recursion guard now rejects `aidlc runtime` only at the start of an unquoted shell command segment; prose such as `--user-input "notes; aidlc runtime compile"` no longer suppresses recompilation after a real state transition.
+
 ## [2.4.4] - 2026-07-17
 
 The user guide, harness guides, generated onboarding, and `/aidlc --help` now agree with the implemented command, harness, agent, and audit surfaces. Kiro IDE instructions also distinguish its skill-based conductor from Kiro CLI's agent-v1 defaults. **Upgrade:** re-copy your `dist/<harness>/` shell to refresh the corrected onboarding and help text.
@@ -46,43 +80,6 @@ Reviewers are now verifiers: every declared review runs under an explicit **adve
 * Both reviewer personas restate the contract in their own domain voice - the Product Lead hunts untestable acceptance criteria, uncovered requirements, and orphan stories; the Architecture Reviewer hunts broken references, circular dependencies, and cross-unit claims the passed contracts do not back. Identity-marker and read-scope contracts are unchanged.
 * The four harness orchestrator skills' reviewer steps carry a one-line restatement of the adversarial framing, following the read-scope precedent.
 * No behavior change to the review loop mechanics: verdict flow, `reviewer_max_iterations`, HITL escalation, dispatch records, and the read-scope hook are all as in 2.3.4.
-
-## [2.3.16] - 2026-07-14
-
-New config get/list and plugin list/sync commands land in the dispatcher grammar, `init` changes meaning for a transition release by returning a loud error instead of silently creating an intent, and the future `init` will scaffold the project from the installed harness dist. Native binaries now embed dispatcher delegates, and the plugin hook safely falls back to direct bun compose.
-
-* New `/aidlc config get <key>` command for `depth` and `test-strategy`.
-* New `/aidlc config list` command, with `/aidlc config list --json` emitting `{"depth":...,"test-strategy":...}`.
-* Existing `/aidlc config set <key> <value>` now routes to the legacy `config-change` handler for `depth` and `test-strategy`; `config-change` remains accepted.
-* New `/aidlc plugin list` command, with `/aidlc plugin list --json` emitting installed plugin names, enabled state, and `selectionActive`.
-* New `/aidlc plugin sync` command composes installed plugin roots by running each plugin's `hooks/compose.ts`; with no installed plugin trees it exits 0 with `no installed plugins; nothing to sync`.
-* `/aidlc init` now errors with `init now lays down the project data tree and is not yet available in this release. To start work, describe what to build: /aidlc "build the auth service".`
-* Plugin SessionStart hooks now probe for `aidlc` on `PATH` first and run `aidlc plugin sync`; a nonzero result falls back to the existing bun plus `hooks/compose.ts` command, and the hook still skips cleanly when neither executable is available.
-* Native `aidlc` binaries now statically embed all 15 dispatcher delegate modules, so routed commands reach their handlers instead of failing with a missing module error.
-* Native `aidlc` binaries now resolve data, sensors, scopes, agents, stages, skills, hooks, and conductor prose from the active project install or the executable's packaged harness runtime.
-* Native `aidlc` binaries detect the project's harness directory (`.claude`, `.kiro`, or `.codex`, by probing for `tools/data/harness.json`) when `AIDLC_HARNESS_DIR` is unset, instead of assuming `.claude`; the env var still overrides, and `.claude` remains the fallback outside any install.
-* Native orchestration, plugin selection, Bolt, Swarm, and sensor workers re-enter the compiled dispatcher for sibling-tool work, so these paths do not require a separate `bun` executable on `PATH`.
-* Native plugin sync imports each plugin composer and routes graph, generated-table, and runner refreshes through the compiled dispatcher; hook, statusline, and harness-adapter routes resolve installed or packaged runtime assets.
-* `aidlc doctor` now reports a missing or unreadable stage graph as a failing advisory row instead of crashing before the health report is printed.
-* Workspace terminal directives preserve multi-word names and labels as one shell argument, so quoted `space create`, `space switch`, and `intent birth --label` values reach the utility unchanged.
-* Native binary builds now gate sensors, graph compilation, output validation, generated runners/tables, plugin selection/composition, conductor persona delivery, workspace aliases/flags, Bolt/Swarm self-reentry, orchestration, hooks, statusline, and Codex adapters.
-* Every target now ships under `build/binaries/<target>/` with complete Claude, Codex, Kiro, and Kiro IDE distributions under `runtime/<harness>/`; `doctor` must report a non-zero complete schema count without missing-module, Bun virtual-filesystem, or missing-file crash signatures.
-* Migration note for stale `init` callers: describe what to build instead, for example `/aidlc "build the auth service"`.
-
-## [2.3.15] - 2026-07-14
-
-Workspace nouns gained real verbs (`list`, `switch`, `create`, and `birth`) while preserving bare-name switch sugar. Verb-shaped names are now reserved at intent and space creation, `/aidlc --doctor` flags pre-existing verb-named records as an advisory, and the Kiro CLI adapter preserves quoted multi-word workspace names. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
-
-* `/aidlc space create teamB` now creates space `teamB`; previously it attempted to switch to a space named `create`. The legacy `/aidlc space-create teamB` spelling still works.
-* `/aidlc space list` now lists spaces, and `/aidlc space list --json` or `/aidlc space --json` emits the existing structured space listing.
-* `/aidlc space switch teamB` now explicitly switches to `teamB` through both the engine and dispatcher without reinterpreting a verb-shaped name; bare `/aidlc space teamB` still switches as before. `/aidlc space create` and `/aidlc space switch` now return usage errors instead of treating the verb as a name.
-* `/aidlc intent list` now lists intents, and `/aidlc intent list --json` or `/aidlc intent --json` emits the existing structured intent listing.
-* `/aidlc intent switch list` now preserves the explicit `switch` token through both the engine and dispatcher, so existing intents named `list` or `birth` are selected instead of listing or creating records; bare `/aidlc intent <name>` still switches as before. `/aidlc intent switch` now returns a usage error instead of switching to `switch`.
-* `/aidlc intent birth --scope poc --label x` now forwards the remaining flags to `intent-birth`; previously the terminal workspace branch collapsed the command to `intent birth` and lost the flags.
-* `/aidlc intent archive foo`, `/aidlc intent rename foo`, `/aidlc intent show foo`, and the matching `space` forms now return "reserved for a future workspace verb and is not implemented yet" with guidance to use explicit `switch` to reach an existing record with that name.
-* New intent labels and space names may not be `help`, current workspace verbs, or reserved future verbs; creation fails with a reserved-name message asking for a descriptive label or team name. Existing records with those names remain reachable via explicit `intent switch <name>` or `space switch <name>`, and doctor reports them as an advisory.
-* Kiro CLI `/aidlc` verb interception now keeps double-quoted names as one argv token, so `/aidlc space create "My Space"` reaches the utility as one name.
-* The runtime compile recursion guard now rejects `aidlc runtime` only at the start of a shell command segment; prose such as `--user-input "aidlc runtime notes"` no longer suppresses recompilation after a real state transition.
 
 ## [2.3.10] - 2026-07-14
 

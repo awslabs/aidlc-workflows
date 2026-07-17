@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { accessSync, appendFileSync, constants as fsConstants, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   resolveHarnessPath,
@@ -308,13 +308,23 @@ export function rulesSubdir(): string {
 
 export function resolveProjectDir(explicitDir?: string): string {
   // 1. Explicit --project-dir argument
-  if (explicitDir) return explicitDir;
+  if (explicitDir) {
+    return isAbsolute(explicitDir) ? explicitDir : resolvePath(process.cwd(), explicitDir);
+  }
 
   // 2. Dispatcher/plugin explicit project environment
-  if (process.env.AIDLC_PROJECT_DIR) return process.env.AIDLC_PROJECT_DIR;
+  if (process.env.AIDLC_PROJECT_DIR) {
+    return isAbsolute(process.env.AIDLC_PROJECT_DIR)
+      ? process.env.AIDLC_PROJECT_DIR
+      : resolvePath(process.cwd(), process.env.AIDLC_PROJECT_DIR);
+  }
 
   // 3. CLAUDE_PROJECT_DIR env var
-  if (process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
+  if (process.env.CLAUDE_PROJECT_DIR) {
+    return isAbsolute(process.env.CLAUDE_PROJECT_DIR)
+      ? process.env.CLAUDE_PROJECT_DIR
+      : resolvePath(process.cwd(), process.env.CLAUDE_PROJECT_DIR);
+  }
 
   // 4. Script path derivation (open-set): this module ships at
   //    <project>/<harness>/tools/, so strip "<harness>/tools" for ANY harness
@@ -349,16 +359,27 @@ function stripHarnessLeaf(dir: string, leaf: string): string | null {
 // --- Hook project dir resolution ---
 
 export function resolveProjectDirFromHook(importMetaUrl: string): string {
-  // 1. CLAUDE_PROJECT_DIR env var
-  if (process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
+  // 1. Dispatcher/plugin explicit project environment
+  if (process.env.AIDLC_PROJECT_DIR) {
+    return isAbsolute(process.env.AIDLC_PROJECT_DIR)
+      ? process.env.AIDLC_PROJECT_DIR
+      : resolvePath(process.cwd(), process.env.AIDLC_PROJECT_DIR);
+  }
 
-  // 2. Script path derivation (open-set): hooks ship at
+  // 2. CLAUDE_PROJECT_DIR env var
+  if (process.env.CLAUDE_PROJECT_DIR) {
+    return isAbsolute(process.env.CLAUDE_PROJECT_DIR)
+      ? process.env.CLAUDE_PROJECT_DIR
+      : resolvePath(process.cwd(), process.env.CLAUDE_PROJECT_DIR);
+  }
+
+  // 3. Script path derivation (open-set): hooks ship at
   //    <project>/<harness>/hooks/, so strip "<harness>/hooks" for ANY harness.
   const scriptDir = dirname(fileURLToPath(importMetaUrl));
   const fromScript = stripHarnessLeaf(scriptDir, "hooks");
   if (fromScript) return fromScript;
 
-  // 3. CWD has a known harness directory (dev repo).
+  // 4. CWD has a known harness directory (dev repo).
   const cwd = process.cwd();
   for (const h of KNOWN_HARNESS_DIRS) {
     if (existsSync(join(cwd, h))) {
@@ -837,16 +858,52 @@ export function isEngineEngagementSegment(seg: string): boolean {
   return false;
 }
 
-// Classify commands for the runtime-compile hook's cheap PostToolUse gate. This
-// is a raw detector, not a shell parser: prose and quoted command echoes can
-// match just as they did in the legacy regexes. For this hook that fails closed
-// by over-firing the audit-tail check; it never bypasses the transition event
-// gate below the command filter.
+function shellCommandSegments(command: string): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+
+    const separatorWidth =
+      char === "&" && command[i + 1] === "&"
+        ? 2
+        : char === "|" || char === ";" || char === "\n" ? 1 : 0;
+    if (separatorWidth === 0) continue;
+    segments.push(command.slice(start, i));
+    i += separatorWidth - 1;
+    start = i + 1;
+  }
+
+  segments.push(command.slice(start));
+  return segments;
+}
+
+// Classify commands for the runtime-compile hook's cheap PostToolUse gate.
+// Transition matching stays intentionally lexical, but the recursion guard
+// only examines real unquoted shell-command segments.
 export function classifyRuntimeCompileCommand(
   command: string,
 ): "reject" | "fire" | "pass" {
-  const invokesRuntime = command
-    .split(/&&|\|\||[;|\n]/)
+  const invokesRuntime = shellCommandSegments(command)
     .some((segment) => /^\s*aidlc\s+runtime\b/.test(segment));
   if (
     /\bbun\b.*\.(?:claude|kiro|codex)\/tools\/aidlc-runtime\.ts\b/.test(command) ||

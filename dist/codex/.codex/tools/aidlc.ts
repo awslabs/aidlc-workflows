@@ -409,10 +409,10 @@ export const ROUTES: readonly Route[] = [
 
 export type Action =
   | { type: "delegate"; tool: string; args: string[] }
-  | { type: "hook"; name: string; path: string }
-  | { type: "statusline"; path: string }
-  | { type: "adapter"; harness: AdapterHarness; target: string; extraArgs: string[]; path: string }
-  | { type: "sensor-script-file"; path: string; args: string[] }
+  | { type: "hook"; name: string; path: string; projectDir?: string }
+  | { type: "statusline"; path: string; projectDir?: string }
+  | { type: "adapter"; harness: AdapterHarness; target: string; extraArgs: string[]; path: string; projectDir?: string }
+  | { type: "sensor-script-file"; id: string; args: string[]; projectDir?: string }
   | { type: "version" }
   | { type: "stub"; message: string; code: number }
   | { type: "help"; all: boolean }
@@ -448,12 +448,18 @@ const ADAPTER_HARNESS_LEAF: Record<AdapterHarness, string> = {
 };
 
 function isAdapterHarness(value: string): value is AdapterHarness {
-  return Object.prototype.hasOwnProperty.call(ADAPTER_HARNESS_LEAF, value);
+  return Object.hasOwn(ADAPTER_HARNESS_LEAF, value);
 }
 
-function resolveHookPath(file: string, harness?: AdapterHarness): string {
+function resolveHookPath(
+  file: string,
+  harness?: AdapterHarness,
+  projectDir = process.cwd(),
+): string {
   const moduleRelative = join(dispatcherDir(), "..", "hooks", file);
-  const runtimeLeaf = harness ? ADAPTER_HARNESS_LEAF[harness] : runtimeHarnessDir();
+  const runtimeLeaf = harness
+    ? ADAPTER_HARNESS_LEAF[harness]
+    : runtimeHarnessDir(projectDir);
   const leaves = harness
     ? [ADAPTER_HARNESS_LEAF[harness]]
     : [
@@ -464,7 +470,7 @@ function resolveHookPath(file: string, harness?: AdapterHarness): string {
       ].filter((value, index, values): value is string =>
         typeof value === "string" && value.length > 0 && values.indexOf(value) === index
       );
-  const installed = leaves.map((leaf) => join(process.cwd(), leaf, "hooks", file));
+  const installed = leaves.map((leaf) => join(projectDir, leaf, "hooks", file));
   const executableRelative = join(
     packagedDistributionRoot(runtimeLeaf, harness),
     runtimeLeaf,
@@ -654,17 +660,13 @@ function resolveAlias(argv: string[]): Action | undefined {
   const head = argv[0];
   if (head === "space-create") return handleWorkspace(argv);
   if (head === "__sensor-script-file") {
-    const path = argv[1];
-    if (
-      !path ||
-      !basename(path).startsWith("aidlc-sensor-") ||
-      !basename(path).endsWith(".ts")
-    ) {
+    const id = argv[1];
+    if (!id || !isSafeName(id)) {
       return topLevelError(argv.slice(0, 2).join(" "));
     }
     return {
       type: "sensor-script-file",
-      path: isAbsolute(path) ? path : resolve(process.cwd(), path),
+      id,
       args: argv.slice(2),
     };
   }
@@ -780,8 +782,27 @@ export function resolveAction(argv: string[]): Action {
   }
 
   const action = resolveActionWithoutGlobalFlags(clean);
-  if (projectDir && action.type === "delegate") {
-    action.args.push("--project-dir", projectDir);
+  if (projectDir) {
+    const absoluteProjectDir = isAbsolute(projectDir)
+      ? projectDir
+      : resolve(process.cwd(), projectDir);
+    if (action.type === "delegate") {
+      action.args.push("--project-dir", absoluteProjectDir);
+    } else if (action.type === "hook") {
+      action.projectDir = absoluteProjectDir;
+      action.path = resolveHookPath(`aidlc-${action.name}.ts`, undefined, absoluteProjectDir);
+    } else if (action.type === "statusline") {
+      action.projectDir = absoluteProjectDir;
+      action.path = resolveHookPath("aidlc-statusline.ts", undefined, absoluteProjectDir);
+    } else if (action.type === "adapter") {
+      action.projectDir = absoluteProjectDir;
+      const file = action.harness === "codex"
+        ? "aidlc-codex-adapter.ts"
+        : "aidlc-kiro-adapter.ts";
+      action.path = resolveHookPath(file, action.harness, absoluteProjectDir);
+    } else if (action.type === "sensor-script-file") {
+      action.projectDir = absoluteProjectDir;
+    }
   }
   return action;
 }
@@ -896,6 +917,25 @@ async function readStdin(): Promise<string> {
   return await Bun.stdin.text();
 }
 
+async function withProjectDir(
+  projectDir: string | undefined,
+  run: () => Promise<number>,
+): Promise<number> {
+  if (!projectDir) return await run();
+  const previousAidlc = process.env.AIDLC_PROJECT_DIR;
+  const previousClaude = process.env.CLAUDE_PROJECT_DIR;
+  process.env.AIDLC_PROJECT_DIR = projectDir;
+  process.env.CLAUDE_PROJECT_DIR = projectDir;
+  try {
+    return await run();
+  } finally {
+    if (previousAidlc === undefined) delete process.env.AIDLC_PROJECT_DIR;
+    else process.env.AIDLC_PROJECT_DIR = previousAidlc;
+    if (previousClaude === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = previousClaude;
+  }
+}
+
 async function runHook(action: Extract<Action, { type: "hook" }>): Promise<number> {
   if (!existsSync(action.path)) {
     text(2, `aidlc hook ${action.name}: not available in this install\n`);
@@ -951,15 +991,29 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
 async function runSensorScriptFile(
   action: Extract<Action, { type: "sensor-script-file" }>,
 ): Promise<number> {
-  if (!existsSync(action.path)) {
-    text(2, `aidlc sensor worker: not found: ${action.path}\n`);
+  const sensorModule = await import("./aidlc-sensor.ts") as {
+    resolveSensorScriptPath?: (id: string) => string;
+  };
+  if (typeof sensorModule.resolveSensorScriptPath !== "function") {
+    text(2, "aidlc sensor worker: resolver unavailable\n");
     return 1;
   }
-  const mod = await import(pathToFileURL(action.path).href) as {
+  let path: string;
+  try {
+    path = sensorModule.resolveSensorScriptPath(action.id);
+  } catch (error) {
+    text(2, `aidlc sensor worker: ${errorMessage(error)}\n`);
+    return 1;
+  }
+  if (!existsSync(path)) {
+    text(2, `aidlc sensor worker: not found: ${path}\n`);
+    return 1;
+  }
+  const mod = await import(pathToFileURL(path).href) as {
     main?: (argv: string[]) => void | Promise<void>;
   };
   if (typeof mod.main !== "function") {
-    text(2, `aidlc sensor worker: ${action.path} does not export main(argv)\n`);
+    text(2, `aidlc sensor worker: ${path} does not export main(argv)\n`);
     return 1;
   }
   await mod.main(action.args);
@@ -983,10 +1037,18 @@ async function execute(action: Action): Promise<number> {
     text(1, `aidlc ${AIDLC_VERSION}\n`);
     return 0;
   }
-  if (action.type === "hook") return await runHook(action);
-  if (action.type === "statusline") return await runStatusline(action);
-  if (action.type === "adapter") return await runAdapter(action);
-  if (action.type === "sensor-script-file") return await runSensorScriptFile(action);
+  if (action.type === "hook") {
+    return await withProjectDir(action.projectDir, () => runHook(action));
+  }
+  if (action.type === "statusline") {
+    return await withProjectDir(action.projectDir, () => runStatusline(action));
+  }
+  if (action.type === "adapter") {
+    return await withProjectDir(action.projectDir, () => runAdapter(action));
+  }
+  if (action.type === "sensor-script-file") {
+    return await withProjectDir(action.projectDir, () => runSensorScriptFile(action));
+  }
   if (action.type === "stub" || action.type === "error") {
     text(2, action.message);
     return action.code;

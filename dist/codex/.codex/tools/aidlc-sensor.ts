@@ -157,6 +157,21 @@ function resolveScriptPath(command: string): string {
 	return join(scriptDir, basename);
 }
 
+export function resolveSensorScriptPath(id: string): string {
+	const sensor = loadSensors().get(id);
+	if (!sensor) {
+		throw new Error(`unknown sensor id: "${id}"`);
+	}
+	const path = resolveScriptPath(sensor.manifest.command);
+	const expected = `aidlc-sensor-${id}.ts`;
+	if (path.split(/[\\/]/).pop() !== expected) {
+		throw new Error(
+			`sensor "${id}" command must resolve to ${expected}`,
+		);
+	}
+	return path;
+}
+
 const BUNDLED_SENSOR_IDS = new Set([
 	"linter",
 	"required-sections",
@@ -499,8 +514,8 @@ function handleFire(args: string[]): void {
 	const command = useBundledWorker
 		? [executable, "__sensor-script", ctx.sensor.id, ...ctx.scriptArgs]
 		: executable
-			? [executable, "__sensor-script-file", ctx.scriptAbsPath, ...ctx.scriptArgs]
-		: [process.execPath, ctx.scriptAbsPath, ...ctx.scriptArgs];
+			? [executable, "__sensor-script-file", ctx.sensor.id, ...ctx.scriptArgs]
+			: [process.execPath, ctx.scriptAbsPath, ...ctx.scriptArgs];
 	const result = spawnSync(command[0], command.slice(1), {
 		encoding: "utf-8",
 		timeout: timeoutMs,

@@ -204,6 +204,22 @@ function resolveDataDir(): string {
   return resolveHarnessPath(["tools", "data"]);
 }
 
+function mutableDataDir(projectDir: string): string {
+  return resolveHarnessPath(["tools", "data"], { mutable: true, projectDir });
+}
+
+function requireInstalledHarness(projectDir: string): void {
+  const installedLib = resolveHarnessPath(
+    ["tools", "aidlc-lib.ts"],
+    { mutable: true, projectDir },
+  );
+  if (!existsSync(installedLib)) {
+    throw new Error(
+      `compile requires an installed project harness at ${dirname(dirname(installedLib))}`,
+    );
+  }
+}
+
 /** Resolve the stages directory. AIDLC_STAGES_DIR env-var seam mirrors
  *  AIDLC_RULES_DIR + AIDLC_SENSORS_DIR so t89's fixture-driven import
  *  tests can isolate from the real stages tree (e.g., zero-sensors
@@ -220,6 +236,11 @@ function stagesDir(): string {
  *  that set/unset the env mid-process see the change. */
 function stageGraphPath(): string {
   return process.env.AIDLC_STAGE_GRAPH ?? join(resolveDataDir(), "stage-graph.json");
+}
+
+function mutableStageGraphPath(projectDir: string): string {
+  return process.env.AIDLC_STAGE_GRAPH
+    ?? join(mutableDataDir(projectDir), "stage-graph.json");
 }
 
 // The relocated method ("memory") is harness-neutral and lives at the
@@ -344,6 +365,11 @@ function sensorsDir(): string {
  *  Evaluated at call time so tests that set/unset mid-process see it. */
 function scopeGridPath(): string {
   return process.env.AIDLC_SCOPE_GRID ?? join(resolveDataDir(), "scope-grid.json");
+}
+
+function mutableScopeGridPath(projectDir: string): string {
+  return process.env.AIDLC_SCOPE_GRID
+    ?? join(mutableDataDir(projectDir), "scope-grid.json");
 }
 
 let _graph: GraphStage[] | null = null;
@@ -2030,10 +2056,11 @@ const COMMANDS: Record<string, Handler> = {
     // scope-grid.json) are derived from the same in-memory stages and
     // written under the one lock so they never diverge.
     const pd = resolveProjectDir();
+    requireInstalledHarness(pd);
     withAuditLock(pd, () => {
       const { json, gridJson } = compileStageGraph();
-      writeFileAtomic(stageGraphPath(), json);
-      writeFileAtomic(scopeGridPath(), gridJson);
+      writeFileAtomic(mutableStageGraphPath(pd), json);
+      writeFileAtomic(mutableScopeGridPath(pd), gridJson);
     });
   },
   resolve: (args) => {

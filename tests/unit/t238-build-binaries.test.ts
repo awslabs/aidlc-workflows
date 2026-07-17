@@ -128,6 +128,7 @@ describe("t238 build-binaries release builder", () => {
       "sensor-list",
       "sensor-fire",
       "graph-compile-check",
+      "packaged-runtime-immutable",
       "validate-outputs",
       "runner-check",
       "stage-table-check",
@@ -148,6 +149,7 @@ describe("t238 build-binaries release builder", () => {
       "hook-validate-state",
       "statusline",
       "adapter-codex-validate-state",
+      "routed-project-dir",
     ]) {
       expect(gate(native, name).ok, name).toBe(true);
     }

@@ -53,7 +53,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import { stateFilePath } from "../tools/aidlc-lib.ts";
@@ -91,7 +91,16 @@ if (!process.stdin.isTTY) {
   }
 }
 
-const projectDir = codex.cwd ?? process.cwd();
+const projectDirRaw =
+  process.env.AIDLC_PROJECT_DIR ?? codex.cwd ?? process.cwd();
+const projectDir = isAbsolute(projectDirRaw)
+  ? projectDirRaw
+  : resolve(process.cwd(), projectDirRaw);
+const projectEnv = {
+  ...process.env,
+  AIDLC_PROJECT_DIR: projectDir,
+  CLAUDE_PROJECT_DIR: projectDir,
+};
 
 // --- Duplicate-delivery replay cache ---------------------------------------
 //
@@ -180,6 +189,7 @@ function runCore(hookFile: string, input: string): { stdout: string; code: numbe
     stdout: "pipe",
     stderr: "ignore",
     cwd: projectDir,
+    env: projectEnv,
   });
   return { stdout: r.stdout?.toString() ?? "", code: r.exitCode ?? 0 };
 }
@@ -199,6 +209,7 @@ function runCoreWithStderr(
     stdout: "pipe",
     stderr: "pipe",
     cwd: projectDir,
+    env: projectEnv,
   });
   return {
     stdout: r.stdout?.toString() ?? "",

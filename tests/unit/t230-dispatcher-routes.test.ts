@@ -4,7 +4,6 @@ import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
-  mkdirSync,
   mkdtempSync,
   readdirSync,
   rmSync,
@@ -12,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import {
   ROUTES,
@@ -168,21 +167,21 @@ function parseAllHelp(): Map<string, string[]> {
     lines.slice(topStart + 1, plumbingStart - 2).map((line) => line.trim()),
   );
   for (const line of lines.slice(plumbingStart + 1, aliasStart - 1)) {
-    const m = /^  ([a-z-]+): (.*)$/.exec(line);
+    const m = /^ {2}([a-z-]+): (.*)$/.exec(line);
     if (!m) continue;
     groups.set(m[1], m[2].split(", "));
   }
   return groups;
 }
 
-function writeMinimalState(projectDir: string): void {
+function writeMinimalState(projectDir: string, stage = "intent-capture"): void {
   writeFileSync(
     seededStateFile(projectDir),
     [
       "# AI-DLC State Tracking",
       "## Current Status",
       "- **Lifecycle Phase**: IDEATION",
-      "- **Current Stage**: intent-capture",
+      `- **Current Stage**: ${stage}`,
       "- **Status**: Running",
       "- **Active Agent**: aidlc-product-agent",
       "- **Depth**: Standard",
@@ -474,6 +473,31 @@ describe("t230 dispatcher global flag translation", () => {
       tool: "aidlc-utility.ts",
       args: ["space-create", "teamC", "--project-dir", "/tmp/example"],
     });
+    expect(resolveAction(["bolt", "start", "--project-dir", "relative/project"])).toEqual({
+      type: "delegate",
+      tool: "aidlc-bolt.ts",
+      args: ["start", "--project-dir", resolve(process.cwd(), "relative/project")],
+    });
+  });
+
+  test("carries --project-dir into routing-only actions", () => {
+    const projectDir = "/tmp/routed-project";
+    for (const action of [
+      resolveAction(["hook", "validate-state", "--project-dir", projectDir]),
+      resolveAction(["statusline", "--project-dir", projectDir]),
+      resolveAction(["adapter", "codex", "validate-state", "--project-dir", projectDir]),
+    ]) {
+      expect("projectDir" in action ? action.projectDir : undefined).toBe(projectDir);
+    }
+  });
+
+  test("sensor worker routes by registered id, never by caller-supplied path", () => {
+    expect(resolveAction(["__sensor-script-file", "linter"])).toEqual({
+      type: "sensor-script-file",
+      id: "linter",
+      args: [],
+    });
+    expect(resolveAction(["__sensor-script-file", "/tmp/aidlc-sensor-evil.ts"]).type).toBe("error");
   });
 });
 
@@ -615,6 +639,26 @@ describe("t230 dispatcher help and errors", () => {
       expect(res.exitCode, args.join(" ")).not.toBe(3);
     }
   });
+
+  test("mutable commands reject a project with no installed harness", () => {
+    const projectDir = mkdtempSync(join(tmpdir(), "aidlc-t230-no-harness-"));
+    tempProjects.add(projectDir);
+
+    const plugin = viaDispatcher(
+      ["plugin", "select", "aidlc", "--project-dir", projectDir],
+      REPO_ROOT,
+    );
+    expect(plugin.exitCode).not.toBe(0);
+    expect(plugin.stderr.toString("utf-8")).toContain("requires an installed project harness");
+
+    const graph = viaDispatcher(
+      ["graph", "compile", "--project-dir", projectDir],
+      REPO_ROOT,
+    );
+    expect(graph.exitCode).not.toBe(0);
+    expect(graph.stderr.toString("utf-8")).toContain("requires an installed project harness");
+    expect(existsSync(join(projectDir, ".claude"))).toBe(false);
+  });
 });
 
 describe("t230 dispatcher hook routing", () => {
@@ -694,6 +738,70 @@ describe("t230 dispatcher hook routing", () => {
     expect(
       existsSync(join(seededRecordDir(projectDir), ".aidlc-hooks-health", "validate-state.last")) ||
         existsSync(join(dirname(seededRecordDir(projectDir)), ".aidlc-hooks-health", "validate-state.last")),
+    ).toBe(true);
+  });
+
+  test("--project-dir overrides cwd and payload project for hook, statusline, and adapter", () => {
+    const cwdProject = makeProject();
+    const targetProject = makeProject();
+    writeMinimalState(cwdProject, "intent-capture");
+    writeMinimalState(targetProject, "application-design");
+
+    const hook = viaDispatcher(
+      ["hook", "validate-state", "--project-dir", targetProject],
+      cwdProject,
+      {},
+      "{}",
+    );
+    expect(hook.exitCode).toBe(0);
+    expect(
+      existsSync(join(seededRecordDir(targetProject), ".aidlc-hooks-health", "validate-state.last")) ||
+        existsSync(join(dirname(seededRecordDir(targetProject)), ".aidlc-hooks-health", "validate-state.last")),
+    ).toBe(true);
+    expect(
+      existsSync(join(seededRecordDir(cwdProject), ".aidlc-hooks-health", "validate-state.last")) ||
+        existsSync(join(dirname(seededRecordDir(cwdProject)), ".aidlc-hooks-health", "validate-state.last")),
+    ).toBe(false);
+
+    const statusline = viaDispatcher(
+      ["statusline", "--project-dir", targetProject],
+      cwdProject,
+      {},
+      JSON.stringify({
+        workspace: { project_dir: cwdProject },
+        model: { id: "claude-test" },
+        context_window: { used_percentage: 12 },
+      }),
+    );
+    expect(statusline.exitCode).toBe(0);
+    expect(statusline.stdout.toString("utf-8")).toContain("Application Design");
+    expect(statusline.stdout.toString("utf-8")).not.toContain("Intent Capture");
+
+    rmSync(
+      join(seededRecordDir(targetProject), ".aidlc-hooks-health", "validate-state.last"),
+      { force: true },
+    );
+    rmSync(
+      join(dirname(seededRecordDir(targetProject)), ".aidlc-hooks-health", "validate-state.last"),
+      { force: true },
+    );
+    cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), join(targetProject, ".codex"), {
+      recursive: true,
+    });
+    const adapter = viaDispatcher(
+      ["adapter", "codex", "validate-state", "--project-dir", targetProject],
+      cwdProject,
+      {},
+      JSON.stringify({
+        hook_event_name: "PreCompact",
+        cwd: cwdProject,
+        session_id: "t230-project-dir",
+      }),
+    );
+    expect(adapter.exitCode).toBe(0);
+    expect(
+      existsSync(join(seededRecordDir(targetProject), ".aidlc-hooks-health", "validate-state.last")) ||
+        existsSync(join(dirname(seededRecordDir(targetProject)), ".aidlc-hooks-health", "validate-state.last")),
     ).toBe(true);
   });
 });

@@ -25,7 +25,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AIDLC_VERSION } from "../dist/claude/.claude/tools/aidlc-version.ts";
 
@@ -327,6 +327,58 @@ function graphCompileGate(artifact: string): GateResult {
   }
 }
 
+function packagedRuntimeImmutableGate(artifact: string): GateResult {
+  const project = mkdtempSync(join(tmpdir(), "aidlc-binary-no-harness-"));
+  const dataDir = join(
+    dirname(artifact),
+    "runtime",
+    "claude",
+    ".claude",
+    "tools",
+    "data",
+  );
+  const paths = [
+    join(dataDir, "harness.json"),
+    join(dataDir, "stage-graph.json"),
+    join(dataDir, "scope-grid.json"),
+  ];
+  const before = paths.map((path) => readFileSync(path, "utf-8"));
+  try {
+    const plugin = run(
+      artifact,
+      ["plugin", "select", "aidlc", "--project-dir", project],
+      { cwd: project, env: pathlessEnv(), timeoutMs: 30_000 },
+    );
+    const graph = run(
+      artifact,
+      ["graph", "compile", "--project-dir", project],
+      { cwd: project, env: pathlessEnv(), timeoutMs: 60_000 },
+    );
+    const unchanged = paths.every(
+      (path, index) => readFileSync(path, "utf-8") === before[index],
+    );
+    const projectHarnessAbsent = !existsSync(join(project, ".claude"));
+    const output = `${plugin.stdout}\n${plugin.stderr}\n${graph.stdout}\n${graph.stderr}`;
+    return commandGate(
+      "packaged-runtime-immutable",
+      plugin,
+      plugin.status !== 0 &&
+        graph.status !== 0 &&
+        unchanged &&
+        projectHarnessAbsent &&
+        output.includes("requires an installed project harness"),
+      {
+        expected: "mutable commands reject an uninstalled project without changing packaged assets",
+        actual:
+          `pluginStatus=${plugin.status}; graphStatus=${graph.status}; ` +
+          `unchanged=${unchanged}; projectHarnessAbsent=${projectHarnessAbsent}`,
+      },
+    );
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
 function validateOutputsGate(artifact: string): GateResult {
   const result = run(artifact, ["validate", "outputs", "inception"], {
     cwd: tmpdir(),
@@ -619,16 +671,18 @@ function boltReentryGate(artifact: string): GateResult {
   const project = installedProject("aidlc-binary-bolt-");
   try {
     const { git, branch } = initializeGitProject(project);
-    const env = { ...pathlessEnv(project), PATH: dirname(git) };
+    const invocationCwd = dirname(project);
+    const projectArg = relative(invocationCwd, project);
+    const env = { ...pathlessEnv(), PATH: dirname(git) };
     const birth = run(
       artifact,
-      ["intent", "birth", "--scope", "poc", "--label", "bolt-gate", "--project-dir", project],
-      { cwd: project, env, timeoutMs: 30_000 },
+      ["intent", "birth", "--scope", "poc", "--label", "bolt-gate", "--project-dir", projectArg],
+      { cwd: invocationCwd, env, timeoutMs: 30_000 },
     );
     const worktree = run(
       artifact,
-      ["worktree", "create", "--slug", "binary-bolt", "--base", branch, "--project-dir", project],
-      { cwd: project, env, timeoutMs: 30_000 },
+      ["worktree", "create", "--slug", "binary-bolt", "--base", branch, "--project-dir", projectArg],
+      { cwd: invocationCwd, env, timeoutMs: 30_000 },
     );
     const result = run(
       artifact,
@@ -643,9 +697,9 @@ function boltReentryGate(artifact: string): GateResult {
         "--slug",
         "binary-bolt",
         "--project-dir",
-        project,
+        projectArg,
       ],
-      { cwd: project, env: pathlessEnv(project), timeoutMs: 60_000 },
+      { cwd: invocationCwd, env: pathlessEnv(), timeoutMs: 60_000 },
     );
     const output = `${result.stdout}\n${result.stderr}`;
     return commandGate(
@@ -675,11 +729,13 @@ function swarmReentryGate(artifact: string): GateResult {
   const project = installedProject("aidlc-binary-swarm-");
   try {
     const { git, branch } = initializeGitProject(project);
-    const env = { ...pathlessEnv(project), PATH: dirname(git) };
+    const invocationCwd = dirname(project);
+    const projectArg = relative(invocationCwd, project);
+    const env = { ...pathlessEnv(), PATH: dirname(git) };
     const birth = run(
       artifact,
-      ["intent", "birth", "--scope", "poc", "--label", "swarm-gate", "--project-dir", project],
-      { cwd: project, env, timeoutMs: 30_000 },
+      ["intent", "birth", "--scope", "poc", "--label", "swarm-gate", "--project-dir", projectArg],
+      { cwd: invocationCwd, env, timeoutMs: 30_000 },
     );
     const result = run(
       artifact,
@@ -693,9 +749,9 @@ function swarmReentryGate(artifact: string): GateResult {
         "--base",
         branch,
         "--project-dir",
-        project,
+        projectArg,
       ],
-      { cwd: project, env, timeoutMs: 90_000 },
+      { cwd: invocationCwd, env, timeoutMs: 90_000 },
     );
     let prepared = false;
     try {
@@ -960,6 +1016,147 @@ function codexAdapterGate(artifact: string): GateResult {
   }
 }
 
+function routedProjectDirGate(artifact: string): GateResult {
+  const cwdProject = mkdtempSync(join(tmpdir(), "aidlc-binary-route-cwd-"));
+  const targetProject = installedProject("aidlc-binary-route-target-");
+  try {
+    cpSync(
+      join(REPO_ROOT, "dist", "codex", ".codex"),
+      join(targetProject, ".codex"),
+      { recursive: true },
+    );
+    const env = { ...pathlessEnv(), CLAUDE_PROJECT_DIR: cwdProject };
+    const hook = run(
+      artifact,
+      ["hook", "validate-state", "--project-dir", targetProject],
+      { cwd: cwdProject, env, input: "{}", timeoutMs: 30_000 },
+    );
+    const targetGenericHeartbeat = join(
+      targetProject,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      ".aidlc-hooks-health",
+      "validate-state.last",
+    );
+    const cwdGenericHeartbeat = join(
+      cwdProject,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      ".aidlc-hooks-health",
+      "validate-state.last",
+    );
+
+    const birth = run(
+      artifact,
+      [
+        "intent",
+        "birth",
+        "--scope",
+        "poc",
+        "--label",
+        "route-target",
+        "--project-dir",
+        targetProject,
+      ],
+      { cwd: cwdProject, env, timeoutMs: 30_000 },
+    );
+    const statusline = run(
+      artifact,
+      ["statusline", "--project-dir", targetProject],
+      {
+        cwd: cwdProject,
+        env,
+        input: JSON.stringify({
+          workspace: { project_dir: cwdProject },
+          model: { id: "claude-test" },
+          context_window: { used_percentage: 5 },
+        }),
+        timeoutMs: 30_000,
+      },
+    );
+
+    const activeIntent = readFileSync(
+      join(
+        targetProject,
+        "aidlc",
+        "spaces",
+        "default",
+        "intents",
+        "active-intent",
+      ),
+      "utf-8",
+    ).trim();
+    const adapterHeartbeat = join(
+      targetProject,
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      activeIntent,
+      ".aidlc-hooks-health",
+      "validate-state.last",
+    );
+    const adapter = run(
+      artifact,
+      ["adapter", "codex", "validate-state", "--project-dir", targetProject],
+      {
+        cwd: cwdProject,
+        env,
+        input: JSON.stringify({
+          hook_event_name: "PreCompact",
+          cwd: cwdProject,
+          session_id: `binary-route-${Date.now()}`,
+        }),
+        timeoutMs: 30_000,
+      },
+    );
+    const output = [
+      hook.stdout,
+      hook.stderr,
+      birth.stdout,
+      birth.stderr,
+      statusline.stdout,
+      statusline.stderr,
+      adapter.stdout,
+      adapter.stderr,
+    ].join("\n");
+    return commandGate(
+      "routed-project-dir",
+      hook,
+      hook.status === 0 &&
+        existsSync(targetGenericHeartbeat) &&
+        !existsSync(cwdGenericHeartbeat) &&
+        birth.status === 0 &&
+        statusline.status === 0 &&
+        statusline.stdout.includes("Intent Capture") &&
+        adapter.status === 0 &&
+        existsSync(adapterHeartbeat) &&
+        !runtimeCrash(output),
+      {
+        expected: "hook, statusline, and adapter honor explicit --project-dir",
+        actual:
+          `hook=${hook.status}; birth=${birth.status}; statusline=${statusline.status}; ` +
+          `adapter=${adapter.status}; targetHeartbeat=${existsSync(adapterHeartbeat)}`,
+      },
+    );
+  } catch (error) {
+    return {
+      name: "routed-project-dir",
+      ok: false,
+      kind: "inspection",
+      expected: "routing-only commands honor explicit --project-dir",
+      actual: String(error),
+    };
+  } finally {
+    rmSync(cwdProject, { recursive: true, force: true });
+    rmSync(targetProject, { recursive: true, force: true });
+  }
+}
+
 function delegateDoctorDataGate(artifact: string): GateResult {
   const result = run(artifact, ["doctor"], { cwd: tmpdir(), timeoutMs: 30_000 });
   const output = `${result.stdout}\n${result.stderr}`;
@@ -1150,6 +1347,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(sensorListGate(actual.artifact));
     result.gates.push(sensorFireGate(actual.artifact));
     result.gates.push(graphCompileGate(actual.artifact));
+    result.gates.push(packagedRuntimeImmutableGate(actual.artifact));
     result.gates.push(validateOutputsGate(actual.artifact));
     result.gates.push(generatedSurfaceGate(
       actual.artifact,
@@ -1208,6 +1406,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(hookGate(actual.artifact));
     result.gates.push(statuslineGate(actual.artifact));
     result.gates.push(codexAdapterGate(actual.artifact));
+    result.gates.push(routedProjectDirGate(actual.artifact));
   } else {
     result.gates.push(sizeGate(result.bytes));
     result.gates.push(fileGate(actual.artifact, target.fileNeedle ?? ""));
