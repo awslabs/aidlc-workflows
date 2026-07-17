@@ -115,7 +115,11 @@ const domainNames = agentNames.filter(
 );
 
 const engineSource = read("core", "tools", "aidlc-orchestrate.ts");
-const engineMain = sliceBetween(engineSource, "function main(): void {", "if (import.meta.main)");
+const engineMain = sliceBetween(
+  engineSource,
+  "export function main(argv: string[]): void {",
+  "if (import.meta.main)",
+);
 const engineCommands = [...engineMain.matchAll(/case "([^"]+)":/g)].map((match) => match[1]);
 
 describe("documentation parity derives current behavior from authored implementation", () => {

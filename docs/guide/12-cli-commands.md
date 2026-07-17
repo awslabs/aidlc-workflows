@@ -499,11 +499,10 @@ are never derived by hand.
 ### `aidlc-utility select-plugins` - install plugin selection
 
 `/aidlc plugin list` prints installed plugin names and whether each is enabled.
-`select-plugins` is a **direct utility invocation**, not an
-`/aidlc select-plugins` command. `bun .claude/tools/aidlc-utility.ts
-select-plugins` prints the current selection (`all enabled (no selection)` when
-the `plugins` key is absent) and the known plugin names. Pass a comma-separated
-list to set it:
+`select-plugins` is a **direct utility invocation**, not an `/aidlc select-plugins` command.
+`bun .claude/tools/aidlc-utility.ts select-plugins` prints the current selection
+(`all enabled (no selection)` when the `plugins` key is absent) and the known
+plugin names. Pass a comma-separated list to set it:
 
 ```bash
 bun .claude/tools/aidlc-utility.ts select-plugins test-pro
