@@ -8,6 +8,7 @@ import {
   appendSlug,
   appendUnderHeading,
   type CheckboxState,
+  auditBlockField,
   codekbDir,
   countCheckboxes,
   emitError,
@@ -913,6 +914,48 @@ function artifactGuardDisabled(): boolean {
   return process.env.AIDLC_SKIP_ARTIFACT_GUARD === "1";
 }
 
+// Settled-autonomous-swarm exemption, mirroring isSettledAutonomousSwarm in
+// aidlc-orchestrate.ts (the report path's disk-backed-guard exemption). A
+// swarm's per-unit artifacts live in Bolt worktrees, not the main checkout, so
+// the produces-existence walk below cannot see them; the audit ledger can. The
+// exemption is granted only when EVERY unit of a valid DAG has a convergence
+// row from the CURRENT stage attempt (rows before the latest main-workflow
+// STAGE_STARTED for this slug are a prior run's). Anything ambiguous - not the
+// swarm build stage, autonomy not granted, DAG absent/malformed, any
+// unconverged unit - fails closed and leaves the guard exactly as strict as
+// before. Duplicated rather than imported: state.ts is the dependency floor
+// (orchestrate imports nothing from it and it must not import orchestrate).
+function isSettledSwarmForArtifactGuard(
+  pd: string,
+  stage: { slug: string; phase: string; for_each?: string; mode?: string },
+  stateContent: string,
+): boolean {
+  if (stage.phase !== "construction") return false;
+  if (stage.for_each !== "unit-of-work" || stage.mode !== "subagent") return false;
+  if (!isAutonomousMode(stateContent)) return false;
+  const scope = getField(stateContent, "Scope");
+  if (!scope) return false;
+  const first = firstInScopeStageOfPhase("construction", scope);
+  if (first !== null && first.slug === stage.slug) return false; // skeleton gate
+  const units = readBoltDagUnits(pd);
+  if (units === null || units.length === 0) return false;
+  const audit = readAllAuditShards(pd);
+  if (!audit) return false;
+  let since = "";
+  for (const ev of findAllEvents(audit, "STAGE_STARTED")) {
+    if (auditBlockField(ev.block, "Workflow")?.startsWith("single-stage:")) continue;
+    if (auditBlockField(ev.block, "Stage") !== stage.slug) continue;
+    since = ev.timestamp; // chronological order; keep the latest
+  }
+  const converged = new Set<string>();
+  for (const { timestamp, block } of findAllEvents(audit, "SWARM_UNIT_CONVERGED")) {
+    if (since && timestamp < since) continue;
+    const unit = auditBlockField(block, "Unit name");
+    if (unit) converged.add(unit);
+  }
+  return units.every((unit) => converged.has(unit));
+}
+
 // Deterministic off-switch for the approve-time gate-revision backstop (mirrors
 // artifactGuardDisabled above). The suite sets this globally so no existing
 // approve/reject test changes behaviour; the dedicated backstop test clears it
@@ -1148,9 +1191,20 @@ function workspaceHasWork(pd: string): boolean {
 // untouched. `stage` is the StageEntry being completed. No-op when bypass active.
 function verifyStageArtifacts(
   pd: string,
-  stage: { slug: string; name: string; phase: string; for_each?: string; produces?: string[]; produces_kinds?: Record<string, string[]>; workspace_requires?: boolean }
+  stage: { slug: string; name: string; phase: string; for_each?: string; mode?: string; produces?: string[]; produces_kinds?: Record<string, string[]>; workspace_requires?: boolean }
 ): void {
   if (artifactGuardDisabled()) return;
+
+  // A settled autonomous swarm proved its work through the referee's per-unit
+  // convergence ledger; its artifacts live in Bolt worktrees this walk cannot
+  // see. Same exemption the engine's report-side evidence gate applies.
+  let settledSwarm = false;
+  try {
+    settledSwarm = isSettledSwarmForArtifactGuard(pd, stage, readStateFile(pd));
+  } catch {
+    // No readable state file: not a swarm settle; stay strict.
+  }
+  if (settledSwarm) return;
 
   if (!producesArtifactsExist(pd, stage)) {
     error(

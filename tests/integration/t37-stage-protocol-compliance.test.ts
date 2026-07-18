@@ -322,9 +322,13 @@ describe("protocol §5 + conductor forbid dispatching inline support agents", ()
     ).toBe(true);
   });
   test("conductor keeps agents from invoking each other [.sh conductor 2]", () => {
-    expect(
-      conductor.includes("Agents never invoke each\nother — only you, the conductor, delegate") ||
-        conductor.includes("Agents never invoke each other"),
-    ).toBe(true);
+    // Normalize the source's hard wraps so the assertion pins the whole
+    // sentence — the delegation clause included — regardless of where the
+    // line breaks fall (the pre-fix || fallback silently dropped the
+    // "only you, the conductor, delegate" pin when the wrap moved).
+    const flowed = conductor.replace(/\s+/g, " ");
+    expect(flowed).toContain(
+      "Agents never invoke each other — only you, the conductor, delegate.",
+    );
   });
 });

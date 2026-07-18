@@ -45,6 +45,7 @@ import {
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
+  seededAuditShard,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
@@ -371,5 +372,73 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       const r = approveCodeGen();
       expect(r.rc).toBe(0);
     }, 30000);
+  });
+
+  // --- Settled-swarm exemption (code-generation under autonomous swarm) ------
+  //
+  // A swarm's per-unit artifacts and source live in Bolt WORKTREES; the main
+  // checkout has neither, so both guard layers would refuse the settle
+  // approval the engine just presented. The referee's per-unit convergence
+  // ledger is the evidence instead: with a valid DAG whose EVERY unit has a
+  // current-run SWARM_UNIT_CONVERGED row, the guard exempts. Any unconverged
+  // unit keeps the guard strict (fails closed).
+  describe("settled-swarm exemption (autonomous code-generation)", () => {
+    const UNITS = ["user-auth", "billing"];
+
+    function seedSwarm(converged: string[]): void {
+      guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "code-generation=in-progress"]);
+      // Autonomy grant: append the field beside Scope (fixture ships without it).
+      const statePath = seededStateFile(proj);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace(
+          /^(- \*\*Scope\*\*: .*)$/m,
+          "$1\n- **Construction Autonomy Mode**: autonomous",
+        ),
+      );
+      // A valid two-unit DAG in the compiled runtime graph.
+      writeFileSync(
+        join(seededRecordDir(proj), "runtime-graph.json"),
+        `${JSON.stringify({
+          bolt_dag: {
+            units: UNITS.map((name) => ({ name, depends_on: [] })),
+            batches: [UNITS],
+          },
+        })}\n`,
+      );
+      // Referee convergence rows for the converged subset.
+      const shard = seededAuditShard(proj);
+      mkdirSync(join(shard, ".."), { recursive: true });
+      const rows = converged
+        .map((unit, i) =>
+          [
+            "## Swarm Unit Converged",
+            `**Timestamp**: 2026-07-18T00:00:0${i}.000Z`,
+            "**Event**: SWARM_UNIT_CONVERGED",
+            `**Unit name**: ${unit}`,
+            "",
+            "---",
+            "",
+          ].join("\n")
+        )
+        .join("");
+      writeFileSync(shard, rows, { flag: "a" });
+    }
+
+    test("PASSES with zero on-disk artifacts once every DAG unit converged", () => {
+      seedSwarm(UNITS); // all converged; nothing written to the record dir
+      bypassed(proj, ["gate-start", "code-generation"]);
+      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      expect(r.rc).toBe(0);
+    });
+
+    test("REFUSES while any DAG unit is unconverged (fails closed)", () => {
+      seedSwarm([UNITS[0]]); // one of two converged
+      bypassed(proj, ["gate-start", "code-generation"]);
+      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("Refusing to complete");
+    });
   });
 });

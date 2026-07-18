@@ -145,6 +145,40 @@ describe("t242 state-transition ownership guard", () => {
     }
   });
 
+  test("large heredoc writes stay fast (whitespace-quadratic regression pin)", () => {
+    // The hook fires on EVERY Bash call; masked heredoc bodies become long
+    // whitespace runs, and a cross-line \s* after the parser's line anchors
+    // once made this quadratic (a 5000-line generated-file write cost ~3s per
+    // call, enough to trip Kiro's 15s hook timeout on larger files). Pin the
+    // linear behaviour with a generous ceiling: the fixed parser runs these in
+    // tens of milliseconds; the quadratic one takes seconds.
+    const body = Array.from(
+      { length: 5000 },
+      (_, i) => `  const line${i} = compute(${i}); // generated filler`,
+    ).join("\n");
+    const closed = `cat > generated.ts <<'EOF'\n${body}\nEOF`;
+    const unterminated = `cat > generated.ts <<'EOF'\n${
+      Array.from({ length: 50000 }, () => "x".repeat(60)).join("\n")
+    }\n`;
+    for (const [label, command, verdict] of [
+      ["closed-5000-line", closed, null],
+      ["unterminated-50k-line", unterminated, null],
+      [
+        "closed-5000-line-then-real-call",
+        `${closed}\nbun .claude/tools/aidlc-state.ts approve feasibility`,
+        "approve",
+      ],
+    ] as const) {
+      const start = performance.now();
+      const result = directStateTransition(command);
+      const elapsed = performance.now() - start;
+      expect(result, label).toBe(verdict);
+      expect(elapsed, `${label} took ${elapsed.toFixed(0)}ms`).toBeLessThan(
+        2000,
+      );
+    }
+  });
+
   test("the Claude hook exits 2 with a redirecting stderr reason", () => {
     const r = spawnSync(process.execPath, [HOOK], {
       input: JSON.stringify({
