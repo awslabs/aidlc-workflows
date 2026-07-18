@@ -134,7 +134,7 @@ jobs:
 
       - name: Check cache
         id: cache-check
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.CODEBUILD_PROJECT_NAME }}.zip
           key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}
@@ -143,7 +143,7 @@ jobs:
       - name: Configure AWS credentials
         # env.ACT is set by the 'act' CLI tool for local testing
         if: ${{ !env.ACT && steps.cache-check.outputs.cache-hit != 'true' }}
-        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6.2.2
         with:
           role-to-assume: ${{ secrets.AWS_CODEBUILD_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -389,7 +389,7 @@ jobs:
 
       - name: Save report to cache
         if: steps.cache-check.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ github.workspace }}/.codebuild/downloads/${{ env.CODEBUILD_PROJECT_NAME }}.zip
           key: ${{ env.CODEBUILD_PROJECT_NAME }}-${{ github.ref_name }}-${{ github.sha }}
