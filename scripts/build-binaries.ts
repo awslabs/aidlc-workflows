@@ -530,21 +530,34 @@ function conductorPersonaGate(artifact: string): GateResult {
   );
   let kind = "";
   let personaBytes = 0;
+  let inlineContextCount = 0;
   try {
     const parsed = JSON.parse(result.stdout) as {
       kind?: string;
       conductor_persona?: string;
+      inline_context_paths?: string[];
     };
     kind = parsed.kind ?? "";
     personaBytes = parsed.conductor_persona?.length ?? 0;
+    inlineContextCount = Array.isArray(parsed.inline_context_paths)
+      ? parsed.inline_context_paths.length
+      : 0;
   } catch {
     kind = "";
   }
+  // requirements-analysis is mode:inline with a lead agent, so its directive
+  // must carry a non-empty inline context roster. An empty roster from the
+  // binary means the asset resolution regressed to a bundle-internal path
+  // (the legit-empty case is dispatched topologies, never this stage).
   return commandGate(
     "conductor-persona",
     result,
-    result.status === 0 && kind === "run-stage" && personaBytes > 100,
-    { expected: "run-stage with conductor_persona", actual: `${kind}; personaBytes=${personaBytes}` },
+    result.status === 0 && kind === "run-stage" && personaBytes > 100 &&
+      inlineContextCount > 0,
+    {
+      expected: "run-stage with conductor_persona and inline_context_paths",
+      actual: `${kind}; personaBytes=${personaBytes}; inlineContextPaths=${inlineContextCount}`,
+    },
   );
 }
 

@@ -97,7 +97,7 @@ function unownedEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-describe("t240 state-transition ownership guard", () => {
+describe("t242 state-transition ownership guard", () => {
   test("the hook blocks every lifecycle verb at an actual shell command position", () => {
     expect([...BLOCKED_STATE_TRANSITIONS]).toEqual([...BLOCKED]);
     for (const verb of BLOCKED) {
@@ -323,12 +323,14 @@ describe("t240 state-transition ownership guard", () => {
       expect(body, label).not.toMatch(DIRECT_PHASE_BOOKKEEPING);
 
       if (slug === "practices-discovery") continue;
+      // The Learn routing must match what §13 and aidlc-learnings.ts actually
+      // write: project.md (default) / team.md (promoted). No phases/ tier, no
+      // org tier — the tool has no write path for either.
       expect(body, label).toContain(
-        "`aidlc/spaces/<active-space>/memory/phases/<phase>.md` (phase-scoped)",
+        "`aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)",
       );
-      expect(body, label).toContain(
-        "`aidlc/spaces/<active-space>/memory/<org|team|project>.md` (cross-cutting)",
-      );
+      expect(body, label).not.toContain("memory/phases/<phase>.md");
+      expect(body, label).not.toContain("memory/<org|team|project>.md");
       expect(body, label).not.toContain(
         "{{HARNESS_DIR}}/rules/aidlc-phase-<phase>.md",
       );

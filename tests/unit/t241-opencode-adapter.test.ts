@@ -243,6 +243,40 @@ describe("t241 OpenCode adapter reviewer scope", () => {
   });
 });
 
+describe("t241 OpenCode adapter state-transition guard", () => {
+  test("blocks direct lifecycle verbs and allows read-only state queries", async () => {
+    const root = freshProject();
+    copyCore(root, "hooks/aidlc-state-transition-guard.ts");
+    copyCore(root, "tools/aidlc-lib.ts");
+    copyCore(root, "tools/aidlc-runtime-paths.ts");
+
+    const { client } = fakeClient();
+    const adapter = await createAdapter({
+      client,
+      directory: root,
+      aidlcEntrypoints: new Set([
+        ...TEST_ENTRYPOINTS,
+        "tools/aidlc-orchestrate.ts",
+      ]),
+    });
+    const before = adapter["tool.execute.before"];
+    const invoke = (callID: string, command: string) =>
+      before(
+        { tool: "bash", sessionID: "main", callID },
+        { args: { command } },
+      );
+    await expect(
+      invoke("blocked", "bun .aidlc/tools/aidlc-state.ts approve user-stories"),
+    ).rejects.toThrow(/engine-owned/i);
+    await expect(
+      invoke("readonly", "bun .aidlc/tools/aidlc-state.ts show"),
+    ).resolves.toBeUndefined();
+    await expect(
+      invoke("engine", "bun .aidlc/tools/aidlc-orchestrate.ts next"),
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe("t241 OpenCode adapter write and session lifecycle", () => {
   test("apply_patch emits audit then sensor calls for every affected path", async () => {
     const root = freshProject();

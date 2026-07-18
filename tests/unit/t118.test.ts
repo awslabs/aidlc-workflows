@@ -558,7 +558,11 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
     // (4) Conflicting explicit namings: `next bugfix --scope mvp` names TWO
     // scopes at once. The precedence ladder's top rung is the explicit --scope
     // flag, so the birth must name the FLAG's scope — a positional that silently
-    // outranked the flag would birth a workflow the user didn't ask for.
+    // outranked the flag would birth a workflow the user didn't ask for. And
+    // with --scope routing explicitly, the positional text is pure description:
+    // the parser must NOT peel its leading word, or an intent that happens to
+    // OPEN with a scope word (`--scope feature "feature flags for billing"`)
+    // silently loses it.
     test("no-state positional+flag conflict -> birth print names the FLAG's scope", () => {
       const r = emitNextNoState(
         "bugfix",
@@ -572,7 +576,27 @@ describe("t118 engine differential corpus — aidlc-orchestrate next (migrated f
       expect(r.directive.message ?? "").toContain("intent-birth --scope mvp");
       expect(r.directive.message ?? "").not.toContain("intent-birth --scope bugfix");
       expect(r.directive.message ?? "").toContain(
-        '--arguments "Fix duplicate todo"',
+        '--arguments "bugfix Fix duplicate todo"',
+      );
+    });
+
+    // (4b) The description keeps its leading scope word under explicit routing:
+    // `--scope feature "feature flags for billing"` describes feature flags —
+    // "feature" is prose, not positional-scope syntax, because --scope already
+    // named the route (the pre-fix peel truncated this to "flags for billing").
+    test("no-state --scope + description opening with a scope word -> description intact", () => {
+      const r = emitNextNoState(
+        "--scope",
+        "feature",
+        "feature",
+        "flags",
+        "for",
+        "billing",
+      );
+      expect(r.directive.kind).toBe("print");
+      expect(r.directive.message ?? "").toContain("intent-birth --scope feature");
+      expect(r.directive.message ?? "").toContain(
+        '--arguments "feature flags for billing"',
       );
     });
 

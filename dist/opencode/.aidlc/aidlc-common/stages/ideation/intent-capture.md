@@ -116,8 +116,8 @@ Before the approval gate, read memory.md and surface candidates as a
 structured question. For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
-- Prescriptive rule → `aidlc/spaces/<active-space>/memory/phases/<phase>.md` (phase-scoped)
-  or `aidlc/spaces/<active-space>/memory/<org|team|project>.md` (cross-cutting)
+- Prescriptive rule → a practice line under the routed heading in
+  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
 - Verification check → new manifest at `.aidlc/sensors/aidlc-<id>.md`
   (capability descriptor only — no `applies_to`); add the new id to
   the relevant stage's `sensors: [...]` frontmatter list to wire it

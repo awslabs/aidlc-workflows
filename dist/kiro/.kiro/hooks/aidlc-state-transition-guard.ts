@@ -76,10 +76,19 @@ function maskHeredocBodies(command: string): string {
 }
 
 function maskFunctionDefinitions(command: string): string {
+  // No brace, no function body to mask. Heredoc/quote masking has already
+  // blanked embedded documents, so this bail covers the common large-write
+  // command whose only real shell text is the first line.
+  if (!command.includes("{")) return command;
   const chars = [...command];
   const source = () => chars.join("");
+  // [ \t]* (not \s*) after the anchor: \s* spans newlines, so on a command
+  // whose masked heredoc body is thousands of blank-ish lines every anchor
+  // rescans the remaining whitespace run — quadratic, and slow enough to trip
+  // harness hook timeouts. Same-line whitespace keeps identical coverage (a
+  // definition preceded by blank lines anchors at the nearest newline).
   const definition =
-    /(?:^|[;\n])\s*(?:(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)|function\s+[A-Za-z_][A-Za-z0-9_]*)\s*\{/g;
+    /(?:^|[;\n])[ \t]*(?:(?:function[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*\([ \t]*\)|function[ \t]+[A-Za-z_][A-Za-z0-9_]*)[ \t\n]*\{/g;
   let match = definition.exec(source());
   while (match !== null) {
     const open = match.index + match[0].lastIndexOf("{");
@@ -130,8 +139,11 @@ export function directStateTransition(command: string): string | null {
   // a command separator. Matching arbitrary whitespace would mistake
   // `echo bun ... aidlc-state.ts approve` and similar search strings for an
   // invocation. The state CLI repeats this ownership check as the hard floor.
+  // [ \t]* after the anchor, not \s*: \n is already in the anchor class, and a
+  // cross-line \s* rescans masked heredoc whitespace quadratically (see
+  // maskFunctionDefinitions).
   const invocation =
-    /(?:^|&&|\|\||[;|(\n{])\s*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|]+\/)?bun(?:\.exe)?(?:\s+run)?\s+(?:"[^"\n]*aidlc-state\.ts"|'[^'\n]*aidlc-state\.ts'|[^\s;&|]*aidlc-state\.ts)\s+([a-z][a-z0-9-]*)\b/g;
+    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|]+\/)?bun(?:\.exe)?(?:\s+run)?\s+(?:"[^"\n]*aidlc-state\.ts"|'[^'\n]*aidlc-state\.ts'|[^\s;&|]*aidlc-state\.ts)\s+([a-z][a-z0-9-]*)\b/g;
   for (const match of executableShellText(command).matchAll(invocation)) {
     const verb = match[1];
     if (BLOCKED_STATE_TRANSITIONS.has(verb)) return verb;

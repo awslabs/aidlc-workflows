@@ -165,6 +165,16 @@ failure writes nothing. Optional outputs do not participate. For
 artifact; any applicable unit remains strict. Bypass with
 `AIDLC_SKIP_ARTIFACT_GUARD=1`.
 
+**Ensemble evidence gate.** On a `mob` or `subagent`-with-supports stage, the
+report path refuses `awaiting-approval`, `revised`, and `approved` while a
+declared support agent's contribution file
+(`<stage>/contributions/<agent-slug>.md`) is missing or lacks its
+`**Collaborator:**` identity-marker first line — the deterministic proof the
+ensemble actually convened. A settled autonomous swarm is exempt (its per-unit
+convergence ledger is the evidence); `report --single` checks stage-level
+evidence only. Bypass with `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`, intended only
+for recovering a legitimately-run stage whose contribution files were lost.
+
 **Gate-revision backstop.** If the conductor revises an artifact at an open
 gate without first reporting rejection, the `approved` report reconciles the
 missing `GATE_REJECTED` + `STAGE_REVISING` pair before completion when audit

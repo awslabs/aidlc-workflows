@@ -505,14 +505,20 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   function composeSynthetic(
     name: string,
     files: Record<string, string>,
-    harnessLeaf: ".claude" | ".kiro" | ".codex" = ".claude",
+    harnessLeaf: ".claude" | ".kiro" | ".codex" | ".aidlc" = ".claude",
     mutateInstall?: (proj: string, harnessDir: string) => void,
   ): { drops: string; proj: string } {
     const proj = mkdtempSync(join(tmp, `syn-${name}-`));
-    const baseDist =
-      harnessLeaf === ".kiro" ? KIRO_DIST : harnessLeaf === ".codex" ? CODEX_DIST : CLAUDE_DIST;
+    if (harnessLeaf === ".aidlc") {
+      // OpenCode's dist is a whole-project shape (.aidlc + .opencode +
+      // opencode.json), unlike the single-dir harness dists.
+      cpSync(OPENCODE_DIST, proj, { recursive: true });
+    } else {
+      const baseDist =
+        harnessLeaf === ".kiro" ? KIRO_DIST : harnessLeaf === ".codex" ? CODEX_DIST : CLAUDE_DIST;
+      cpSync(baseDist, join(proj, harnessLeaf), { recursive: true });
+    }
     const harnessDir = join(proj, harnessLeaf);
-    cpSync(baseDist, harnessDir, { recursive: true });
     mutateInstall?.(proj, harnessDir);
     const root = join(proj, "_plugin");
     // minimal projection: manifest + the one working compose hook + given files
@@ -666,6 +672,108 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(drops).toContain('agent "aidlc-design-agent"');
     expect(drops).toContain("toolsSettings.subagent.trustedAgents");
     expect(drops).not.toContain("aidlc-design-agent.json (agent-v1 JSON)");
+  });
+
+  // OpenCode dispatches from the native roster .opencode/agents/<a>.md. A
+  // dispatched stage naming an agent with no native file AND no viable plugin
+  // twin must drop (the native emitter would leave a dangling dispatch target);
+  // one whose collaborator ships with the plugin (viable frontmatter) composes.
+  test("OpenCode rejects a dispatched stage whose agent lacks a native subagent file", () => {
+    const stage = [
+      "---",
+      "slug: syn-oc-missing",
+      "plugin: syn-oc",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: aidlc-product-agent",
+      "support_agents:",
+      "  - syn-oc-ghost-agent",
+      "mode: mob",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic OpenCode Missing Agent",
+      "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic(
+      "syn-oc",
+      { "stages/inception/syn-oc-missing.md": stage },
+      ".aidlc",
+    );
+    expect(existsSync(join(
+      proj,
+      ".aidlc",
+      "aidlc-common",
+      "stages",
+      "inception",
+      "syn-oc-missing.md",
+    ))).toBe(false);
+    expect(drops).toContain('agent "syn-oc-ghost-agent"');
+    expect(drops).toContain(".opencode/agents/syn-oc-ghost-agent.md");
+  });
+
+  test("OpenCode composes a dispatched stage whose collaborator ships with the plugin", () => {
+    const agent = [
+      "---",
+      "name: syn-oc-collab-agent",
+      "display_name: Synthetic Collaborator",
+      "plugin: syn-oc",
+      "description: synthetic collaborator",
+      "---",
+      "",
+      "# Synthetic Collaborator",
+      "",
+    ].join("\n");
+    const stage = [
+      "---",
+      "slug: syn-oc-shipped",
+      "plugin: syn-oc",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: aidlc-product-agent",
+      "support_agents:",
+      "  - syn-oc-collab-agent",
+      "mode: mob",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic OpenCode Shipped Agent",
+      "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic(
+      "syn-oc",
+      {
+        "stages/inception/syn-oc-shipped.md": stage,
+        "agents/syn-oc-collab-agent.md": agent,
+      },
+      ".aidlc",
+    );
+    expect(existsSync(join(
+      proj,
+      ".aidlc",
+      "aidlc-common",
+      "stages",
+      "inception",
+      "syn-oc-shipped.md",
+    ))).toBe(true);
+    // The native twin landed, so the dispatch target is real.
+    expect(existsSync(join(
+      proj,
+      ".opencode",
+      "agents",
+      "syn-oc-collab-agent.md",
+    ))).toBe(true);
+    expect(drops).not.toContain('agent "syn-oc-collab-agent"');
   });
 
   test("all harnesses reject reserved agent-team stages until a runtime consumer exists", () => {

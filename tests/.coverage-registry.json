@@ -3346,7 +3346,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t240-state-transition-guard.test.ts",
+          "file": "tests/unit/t242-state-transition-guard.test.ts",
           "mechanism": "cli"
         }
       ],

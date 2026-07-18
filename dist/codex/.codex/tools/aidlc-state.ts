@@ -2683,7 +2683,16 @@ function handlePracticesPromote(args: string[]): void {
         "Mandated Rules Appended": String(rulesAppended.mandated),
         "Forbidden Rules Appended": String(rulesAppended.forbidden),
       });
-      state = setField(state, "Practices Affirmed Timestamp", affirmedAt);
+      // setOrInsertField, not setField: on a state file missing the row (a
+      // hand-edited or pre-field file) setField silently no-ops, and the
+      // approve gate that requires this timestamp would then refuse forever
+      // while its remediation ("run practices-promote") keeps no-opping.
+      state = setOrInsertField(
+        state,
+        "## Project Information",
+        "Practices Affirmed Timestamp",
+        affirmedAt,
+      );
       state = setField(state, "Last Updated", affirmedAt);
       writeStateFile(pd, state);
     });

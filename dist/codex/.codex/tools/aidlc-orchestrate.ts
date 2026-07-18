@@ -134,7 +134,7 @@ import {
 // import is safe (aidlc-utility.ts main() runs only under import.meta.main,
 // and utility never imports this module - no cycle).
 import { inferScopeFromText } from "./aidlc-utility.ts";
-import { resolveHarnessPath } from "./aidlc-runtime-paths.ts";
+import { resolveHarnessPath, resolveHarnessRoot } from "./aidlc-runtime-paths.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
 // a pure read: an absent state file is a legitimate branch (no workflow yet),
@@ -395,11 +395,15 @@ function parseNextFlags(args: string[]): ParsedFlags {
   // A leading valid scope token is positional scope syntax, even when a
   // description follows it (`/aidlc bugfix Fix duplicate todos`). Peel only
   // after parsing all flags so explicit routing modes can keep their complete
-  // trailing arguments. An explicit --scope remains a separate, higher-
-  // precedence value; Branch 9 handles that conflict.
+  // trailing arguments. When --scope or --new-intent already names the routing
+  // explicitly, the positional text is pure description — peeling there
+  // truncates an intent that happens to OPEN with a scope word
+  // (`--new-intent --scope feature "feature flags for billing"`).
   if (
     intentWords.length > 0 &&
     validScopes().has(intentWords[0]) &&
+    !flags.scope &&
+    !flags.newIntent &&
     !flags.compose &&
     !flags.newScope &&
     !flags.report &&
@@ -1316,7 +1320,12 @@ function inlineContextPaths(node: GraphStage, codekbCtx?: CodekbCtx): string[] {
 
   const agents = [...new Set(inlineAgents)]
     .filter((agent) => agent !== "orchestrator");
-  const harnessRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+  // The resolver ladder, not raw import.meta.url: in a compiled binary this
+  // module's URL is inside the bundle (/$bunfs), where no markdown ships —
+  // a raw derivation returns [] and inline stages silently lose persona +
+  // knowledge context. The ladder falls back to the on-disk packaged
+  // distribution the same way readConductorPersona resolves conductor.md.
+  const harnessRoot = resolveHarnessRoot();
   const harnessPrefix = harnessDir();
   const paths: string[] = [];
 

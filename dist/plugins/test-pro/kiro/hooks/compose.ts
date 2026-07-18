@@ -577,14 +577,51 @@ interface KiroPluginAgentPrechecks {
   agent: CopyPrecheck;
 }
 
-// Kiro and Codex cannot dispatch a Markdown-only persona. Kiro requires BOTH a
-// hand-authored agent-v1 JSON and conductor trustedAgents registration; Codex
-// requires an agent config TOML. Reject any dispatched stage whose lead,
-// support, or reviewer lacks that complete installed surface. Markdown personas
-// remain composable for accepted inline stages.
+// OpenCode's dispatch surface is the native roster `.opencode/agents/<a>.md`.
+// Unlike Kiro/Codex surfaces (which a plugin can never ship), a plugin's own
+// Markdown persona IS the source of the native twin compose emits later in
+// this same pass — so a stage may reference an agent whose surface arrives
+// with the plugin. Accept that only when the shipped file would survive
+// emitOpencodeNativeAgent's shape checks (closed frontmatter, no
+// un-projectable disallowedTools); a name-collision drop still surfaces
+// through opencodeNativeAgentPrecheck's own drop log.
+function pluginShipsViableOpencodeAgent(agent: string): boolean {
+  const file = join(PLUGIN_ROOT, "agents", `${agent}.md`);
+  if (!existsSync(file)) return false;
+  let content = "";
+  try {
+    content = readFileSync(file, "utf-8");
+  } catch {
+    return false;
+  }
+  if (!content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/)) return false;
+  const disallowed = frontmatter(content).match(/^disallowedTools:\s*(.*?)\s*$/m)?.[1];
+  return !disallowed || /^\s*Task\s*$/i.test(disallowed);
+}
+
+// Kiro, Codex, and OpenCode cannot dispatch a Markdown-only persona from the
+// engine roster. Kiro requires BOTH a hand-authored agent-v1 JSON and conductor
+// trustedAgents registration; Codex requires an agent config TOML; OpenCode
+// requires a native `.opencode/agents/<a>.md` subagent (installed, or viably
+// shipped by this plugin — see pluginShipsViableOpencodeAgent). Reject any
+// dispatched stage whose lead, support, or reviewer lacks that complete
+// surface. Markdown personas remain composable for accepted inline stages.
 async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | null> {
-  if (HARNESS_LEAF !== ".kiro" && HARNESS_LEAF !== ".codex") return null;
-  const surfaceExt = HARNESS_LEAF === ".kiro" ? ".json" : ".toml";
+  if (
+    HARNESS_LEAF !== ".kiro" &&
+    HARNESS_LEAF !== ".codex" &&
+    HARNESS_LEAF !== ".aidlc"
+  ) {
+    return null;
+  }
+  const surfaceExt = HARNESS_LEAF === ".kiro"
+    ? ".json"
+    : HARNESS_LEAF === ".codex"
+      ? ".toml"
+      : ".md";
+  const surfaceDir = HARNESS_LEAF === ".aidlc"
+    ? join(PROJECT_DIR, ".opencode", "agents")
+    : join(HARNESS_DIR, "agents");
   const trustedAgents = new Set<string>();
   if (HARNESS_LEAF === ".kiro") {
     try {
@@ -614,7 +651,9 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
       requirements.push(
         HARNESS_LEAF === ".kiro"
           ? `author ${HARNESS_LEAF}/agents/${gap.agent}.json (agent-v1 JSON)`
-          : `author ${HARNESS_LEAF}/agents/${gap.agent}.toml (the shipped aidlc-*-agent.toml shape)`,
+          : HARNESS_LEAF === ".codex"
+            ? `author ${HARNESS_LEAF}/agents/${gap.agent}.toml (the shipped aidlc-*-agent.toml shape)`
+            : `author .opencode/agents/${gap.agent}.md (an OpenCode subagent with closed frontmatter)`,
       );
     }
     if (gap.missingTrust) {
@@ -718,7 +757,8 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
       if (!agent || gaps.has(agent)) continue;
       const gap = {
         agent,
-        missingSurface: !existsSync(join(HARNESS_DIR, "agents", `${agent}${surfaceExt}`)),
+        missingSurface: !existsSync(join(surfaceDir, `${agent}${surfaceExt}`)) &&
+          !(HARNESS_LEAF === ".aidlc" && pluginShipsViableOpencodeAgent(agent)),
         missingTrust: HARNESS_LEAF === ".kiro" && !trustedAgents.has(agent),
       };
       if (gap.missingSurface || gap.missingTrust) gaps.set(agent, gap);
