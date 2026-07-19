@@ -77,10 +77,12 @@ When resuming, load context appropriate to the current phase and stage type:
   completed spokes remain valid and mutually blind. If all three exist, resume
   at the interview or final lead integration rather than repeating discovery.
 - Reconcile the open gate with audit: after a current-attempt
-  `PRACTICES_AFFIRMED`, verify that its timestamp matches the
-  promotion-recorded state timestamp, then report approval; after
-  `PRACTICES_OVERRIDE`, retry promotion only after its cause is fixed. Never
-  commit approval before promotion succeeds.
+  `PRACTICES_AFFIRMED` with no `GATE_REJECTED`/`STAGE_REVISING` for this stage
+  after it, verify that its timestamp matches the promotion-recorded state
+  timestamp, then report approval; a rejection after the receipt invalidates
+  it — re-promote the revised drafts first. After `PRACTICES_OVERRIDE`, retry
+  promotion only after its cause is fixed. Never commit approval before
+  promotion succeeds.
 
 **INCEPTION — Requirements stages:**
 - Load RE artifacts (if RE was performed)

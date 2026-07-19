@@ -88,7 +88,6 @@ import {
   codekbRepoName,
   errorMessage,
   filterProducesByKind,
-  findAllEvents,
   firstInScopeStageOfPhase,
   getField,
   intentRepos,
@@ -114,6 +113,7 @@ import {
   selectionAwareDefaultScope,
   type StageEntry,
   stateFilePath,
+  swarmConvergedUnits,
   toPosix,
   unitDependencyPath,
   validScopes,
@@ -813,38 +813,18 @@ function readBoltDagSnapshot(projectDir: string): CachedBoltDagSnapshot | null {
 // Composes the same shard-concat + block-parse the other audit readers use; an
 // absent/empty audit yields the empty set (no batch has converged yet).
 //
-// The read is FLOORED at the stage's latest STAGE_STARTED row. The audit is
-// append-only and per-intent, and the stage CAN legitimately re-run within the
-// same intent with the same unit names: a backward/redo jump resets completed
-// stages to pending without touching the ledger (and without clearing the
-// autonomy grant), and a re-init appends a second WORKFLOW_STARTED to the same
-// shards. Without the floor, the prior run's converged rows would make the
-// fresh run's batches look already built and the rebuild would be silently
-// skipped. Every (re-)entry into the stage lands a fresh STAGE_STARTED naming
-// the slug (advance and jump both emit it), and no STAGE_STARTED fires between
-// batches of one run, so the floor admits exactly the current run's rows.
-// Mirrors hasStageAuditEvent's boundary idiom (aidlc-state.ts): rows from a
-// `--single` stage-runner carry `Workflow: single-stage:<slug>` and never move
-// the floor; with no qualifying STAGE_STARTED the floor degrades to "count all
-// rows", never to "exclude all".
-function swarmConvergedUnits(projectDir: string, slug: string): Set<string> {
-  const audit = readAllAuditShards(projectDir);
-  if (!audit) return new Set();
-  let since = "";
-  for (const ev of findAllEvents(audit, "STAGE_STARTED")) {
-    if (auditBlockField(ev.block, "Workflow")?.startsWith("single-stage:")) continue;
-    if (auditBlockField(ev.block, "Stage") !== slug) continue;
-    // findAllEvents returns chronological order; keep the latest.
-    since = ev.timestamp;
-  }
-  const converged = new Set<string>();
-  for (const { timestamp, block } of findAllEvents(audit, "SWARM_UNIT_CONVERGED")) {
-    if (since && timestamp < since) continue;
-    const unit = auditBlockField(block, "Unit name");
-    if (unit) converged.add(unit);
-  }
-  return converged;
-}
+// The read lives in aidlc-lib.ts (swarmConvergedUnits), shared with the
+// state-tool consumer and the emitter: a row counts only when its Stage names
+// this slug AND its Run floor equals the stage's current attempt floor (the
+// latest main-workflow STAGE_STARTED), so a prior attempt's late finalize
+// retry or another swarm stage's rows can never satisfy the current run. The
+// audit is append-only and per-intent, and the stage CAN legitimately re-run
+// within the same intent with the same unit names: a backward/redo jump
+// resets completed stages to pending without touching the ledger (and without
+// clearing the autonomy grant), and a re-init appends a second
+// WORKFLOW_STARTED to the same shards. Without the attempt scoping, the prior
+// run's converged rows would make the fresh run's batches look already built
+// and the rebuild would be silently skipped.
 
 // The resolved unit batch DAG for the active intent, cache-first with a
 // self-heal: the compiled runtime graph's bolt_dag is authoritative when
@@ -2907,10 +2887,12 @@ function isConcreteIsoInstant(value: string | null): boolean {
 }
 
 // Promotion owns a two-part receipt: the concrete state timestamp and a
-// PRACTICES_AFFIRMED audit row in the current stage attempt. The timestamp alone
-// is stale across a backward jump/re-run. Order the two relevant event classes
-// together so same-second rows preserve append order, then require affirmation
-// after the latest main-workflow STAGE_STARTED for practices-discovery.
+// PRACTICES_AFFIRMED audit row in the current stage attempt AND after the
+// stage's latest rejection/revision boundary. The timestamp alone is stale
+// across a backward jump/re-run, and a receipt minted before a GATE_REJECTED
+// authorizes drafts the human then revised — those revisions were never
+// promoted. Order the relevant event classes together so same-second rows
+// preserve append order, then require affirmation after the floor.
 function hasFreshPracticesAffirmationReceipt(
   projectDir: string,
   stateContent: string,
@@ -2922,6 +2904,11 @@ function hasFreshPracticesAffirmationReceipt(
   if (!isConcreteIsoInstant(affirmedTimestamp)) return false;
   const audit = readAllAuditShards(projectDir);
   if (!audit) return false;
+  const FLOOR_EVENTS = new Set([
+    "STAGE_STARTED",
+    "GATE_REJECTED",
+    "STAGE_REVISING",
+  ]);
   const events = audit
     .replace(/\r\n/g, "\n")
     .split(/\n---\n/)
@@ -2933,7 +2920,8 @@ function hasFreshPracticesAffirmationReceipt(
       timestampMs: Date.parse(auditBlockField(block, "Timestamp") ?? ""),
     }))
     .filter(({ event }) =>
-      event === "STAGE_STARTED" || event === "PRACTICES_AFFIRMED"
+      (event !== null && FLOOR_EVENTS.has(event)) ||
+      event === "PRACTICES_AFFIRMED"
     )
     .sort((a, b) => {
       if (a.timestampMs !== b.timestampMs) {
@@ -2942,23 +2930,24 @@ function hasFreshPracticesAffirmationReceipt(
       return a.position - b.position;
     });
 
-  let latestAttemptStart = -1;
+  let floor = -1;
   for (let i = 0; i < events.length; i++) {
     const event = events[i];
-    if (event.event !== "STAGE_STARTED") continue;
+    if (event.event === null || !FLOOR_EVENTS.has(event.event)) continue;
     if (auditBlockField(event.block, "Stage") !== "practices-discovery") {
       continue;
     }
     if (
+      event.event === "STAGE_STARTED" &&
       auditBlockField(event.block, "Workflow")?.startsWith("single-stage:")
     ) {
       continue;
     }
-    latestAttemptStart = i;
+    floor = i;
   }
-  return latestAttemptStart >= 0 &&
+  return floor >= 0 &&
     events
-      .slice(latestAttemptStart + 1)
+      .slice(floor + 1)
       .some((event) =>
         event.event === "PRACTICES_AFFIRMED" &&
         event.timestamp === affirmedTimestamp
@@ -3463,9 +3452,13 @@ function approveArgs(slug: string, flags: ReportFlags): string[] {
   return args;
 }
 
-// Complete the non-stage resume-choice round-trip. Resuming from the current
-// checkpoint is read-only: state already points at the stage to continue, so
-// report validates the answer and hands control back to next.
+// Complete the non-stage resume-choice round-trip by ROUTING the choice, not
+// just accepting it. Resuming from the current checkpoint is read-only; the
+// other three choices are mutations, so the directive NAMES the move (the
+// existing verbs: jump execute --direction redo, next --stage, next
+// --new-intent) and the conductor runs it — report itself never mutates. The
+// keywords are matched against the engine's own Branch-6 question wording, so
+// they are stable even though the rendered option labels are LLM-authored.
 function handleResumeReport(
   flags: ReportFlags,
   projectDir: string | undefined,
@@ -3497,8 +3490,38 @@ function handleResumeReport(
     ));
     return;
   }
-  emit(printDirective(
-    `Resume choice accepted at "${slug}". Re-run \`next\` to continue from the last checkpoint.`,
+  const choice = flags.userInput.toLowerCase();
+  if (choice.includes("redo")) {
+    const scope = getField(stateContent, "Scope")?.trim() ?? "";
+    emit(printDirective(
+      `Redo accepted at "${slug}". Run \`bun ${harnessDir()}/tools/aidlc-jump.ts execute --target ${slug} --direction redo --scope ${scope}\` to reset the current stage, then re-run \`next\` to start it over.`,
+    ));
+    return;
+  }
+  if (choice.includes("jump")) {
+    emit(printDirective(
+      `Jump accepted. Ask the human which stage to jump to, then re-run \`next --stage <slug>\` — the engine resolves the direction and validates the target.`,
+    ));
+    return;
+  }
+  if (choice.includes("fresh") || choice.includes("start over")) {
+    emit(printDirective(
+      "Start-fresh accepted. Confirm the new work's scope and description with the human, then run `next --new-intent --scope <scope> \"<description>\"` — the existing workflow stays in place and the new intent starts alongside it.",
+    ));
+    return;
+  }
+  if (
+    choice.includes("resume") ||
+    choice.includes("checkpoint") ||
+    choice.includes("continue")
+  ) {
+    emit(printDirective(
+      `Resume choice accepted at "${slug}". Re-run \`next\` to continue from the last checkpoint.`,
+    ));
+    return;
+  }
+  emit(errorDirective(
+    `Unrecognized resume choice "${flags.userInput}". Accepted choices: resume from last checkpoint, redo the current stage, jump to a stage, or start fresh.`,
   ));
 }
 

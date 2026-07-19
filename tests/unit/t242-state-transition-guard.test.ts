@@ -168,6 +168,20 @@ describe("t242 state-transition ownership guard", () => {
         `${closed}\nbun .claude/tools/aidlc-state.ts approve feasibility`,
         "approve",
       ],
+      // Runs of { or ( are runs of invocation-anchor positions; a path-prefix
+      // class that can consume them rescans the remainder from every anchor -
+      // quadratic even with the heredoc fix in place (a 160k brace argument
+      // once cost ~42s, past Kiro's 15s hook cap).
+      [
+        "160k-brace-run-single-line",
+        `git commit -m ${"{".repeat(160000)}`,
+        null,
+      ],
+      [
+        "160k-paren-run-then-real-call",
+        `${"(".repeat(160000)}\nbun .claude/tools/aidlc-state.ts approve feasibility`,
+        "approve",
+      ],
     ] as const) {
       const start = performance.now();
       const result = directStateTransition(command);

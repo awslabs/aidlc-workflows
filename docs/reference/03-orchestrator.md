@@ -232,15 +232,15 @@ On session resume, the orchestrator compares the breadcrumb's "Current stage" wi
 
 ### Resume Options
 
-When a state file is detected, the orchestrator presents four options:
+When a state file is detected, the orchestrator presents four options. The conductor reports the human's answer via `report --result resumed --user-input "<answer>"`; the engine matches the choice and returns a per-choice directive naming the exact move (an unrecognized answer errors with the accepted choices):
 
-**1. Resume from last checkpoint** -- Continues from the in-progress stage. Reads `aidlc-state.md` to determine completed/in-progress/not-started stages. Recreates stage tasks matching current state.
+**1. Resume from last checkpoint** -- Continues from the in-progress stage: re-run `next`, which reads `aidlc-state.md` to determine completed/in-progress/not-started stages.
 
-**2. Redo current stage** -- Discards partial artifacts for the current stage and re-runs it. Deletes the artifact directory entirely, resets the state checkbox to `[ ]`, and re-executes from scratch.
+**2. Redo current stage** -- The directive names `aidlc-jump.ts execute --target <current> --direction redo --scope <scope>`, which resets the current stage's checkbox; the next `next` re-runs it from scratch.
 
-**3. Jump to stage** -- Presents the full stage list for the user to select. Warns about invalidation of downstream artifacts.
+**3. Jump to stage** -- The directive instructs the conductor to ask for the target, then route through `next --stage <slug>` (the engine resolves the direction and validates the target).
 
-**4. Start fresh** -- Archives the active intent's record dir under `aidlc/spaces/<space>/intents/` after explicit confirmation, then births a new intent.
+**4. Start fresh** -- The directive routes through the second-intent flow: confirm scope and description, then `next --new-intent --scope <scope> "<description>"`; the existing workflow stays in place alongside the new intent.
 
 ### Session Resume Context Loading
 

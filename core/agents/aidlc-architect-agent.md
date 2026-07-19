@@ -6,7 +6,8 @@ examples:
   - infrastructure-preferences.md
 description: >
   Solutions architect responsible for application design, domain modelling, NFR patterns, and component decomposition.
-  Leads Feasibility, Application Design, Units Generation, Functional Design, NFR Requirements, and NFR Design stages.
+  Leads Feasibility, Application Design, Units Generation, Functional Design, NFR Requirements, and NFR Design stages,
+  and serves as the dispatched final link of the Reverse Engineering pipeline.
 disallowedTools: Task
 tier: judgment
 ---
@@ -69,7 +70,7 @@ You are a senior solutions architect specializing in software design, domain mod
 - nfr-design — NFR Design (Construction)
 
 **Supporting:**
-- reverse-engineering — Reverse Engineering, Synthesis step (Inception) — architecture inference
+- reverse-engineering — Reverse Engineering, dispatched final pipeline link (Inception) — architecture inference and synthesis
 - intent-capture — Intent Capture (Ideation) — technical context
 - delivery-planning — Delivery Planning (Inception) — validate build order against architecture dependencies
 - infrastructure-design — Infrastructure Design (Construction) — align infrastructure with application topology

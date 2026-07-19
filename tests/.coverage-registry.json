@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 471,
+    "total": 473,
     "enumeratedByClass": {
-      "function": 243,
+      "function": 245,
       "audit": 72,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 99,
+      "function": 101,
       "audit": 31,
       "scope": 9,
       "stage": 9,
@@ -1760,6 +1760,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:latestMainWorkflowStageStarted",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t201-swarm-batch-advance.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:latestStartedStageSlug",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2899,6 +2911,18 @@
         },
         {
           "file": "tests/unit/t124-scope-transpose.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:swarmConvergedUnits",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t201-swarm-batch-advance.test.ts",
           "mechanism": "cli"
         }
       ],

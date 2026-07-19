@@ -3440,6 +3440,59 @@ export function findAllEvents(
   return results.map(({ timestamp, block }) => ({ timestamp, block }));
 }
 
+// The freshness floor for one stage's swarm evidence: the timestamp of the
+// stage's latest MAIN-WORKFLOW STAGE_STARTED row ("" when none). Rows from a
+// `--single` stage-runner carry `Workflow: single-stage:<slug>` and never move
+// the floor. Every (re-)entry into a stage lands a fresh STAGE_STARTED naming
+// the slug (advance and jump both emit it), so the floor identifies the
+// current attempt. Shared by the emitter (aidlc-swarm.ts stamps it into each
+// SWARM_UNIT_CONVERGED row) and every consumer, so both sides compute the
+// attempt identity with one function.
+export function latestMainWorkflowStageStarted(
+  audit: string,
+  slug: string,
+): string {
+  let since = "";
+  for (const ev of findAllEvents(audit, "STAGE_STARTED")) {
+    if (auditBlockField(ev.block, "Workflow")?.startsWith("single-stage:")) {
+      continue;
+    }
+    if (auditBlockField(ev.block, "Stage") !== slug) continue;
+    // findAllEvents returns chronological order; keep the latest.
+    since = ev.timestamp;
+  }
+  return since;
+}
+
+// The set of units the CURRENT attempt of `slug` has genuinely converged and
+// merged, from the `SWARM_UNIT_CONVERGED` rows `aidlc-swarm.ts finalize`
+// writes. A row counts only when its `Stage` names this slug AND its
+// `Run floor` equals the stage's current attempt floor (exact field match) —
+// a row minted by a late finalize retry against a PRIOR attempt's preserved
+// worktree carries the prior floor and is rejected regardless of its emission
+// timestamp, and another swarm stage's rows fail the Stage match even when
+// the floor degrades to "" (no STAGE_STARTED yet). Rows without the two
+// fields (pre-2.5.0 audit logs) fail closed: the affected units re-fan on the
+// next swarm pass, which finalize's re-verify makes safe. The timestamp check
+// stays as belt-and-braces.
+export function swarmConvergedUnits(
+  projectDir: string,
+  slug: string,
+): Set<string> {
+  const audit = readAllAuditShards(projectDir);
+  if (!audit) return new Set();
+  const floor = latestMainWorkflowStageStarted(audit, slug);
+  const converged = new Set<string>();
+  for (const { timestamp, block } of findAllEvents(audit, "SWARM_UNIT_CONVERGED")) {
+    if (auditBlockField(block, "Stage") !== slug) continue;
+    if ((auditBlockField(block, "Run floor") ?? "") !== floor) continue;
+    if (floor && timestamp < floor) continue;
+    const unit = auditBlockField(block, "Unit name");
+    if (unit) converged.add(unit);
+  }
+  return converged;
+}
+
 // Latest STAGE_STARTED slug in an audit buffer, or null if none. findAllEvents
 // returns events in chronological order (timestamp, then buffer position), so
 // the last STAGE_STARTED block is the most recent transition. The slug lives in

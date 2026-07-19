@@ -8,7 +8,6 @@ import {
   appendSlug,
   appendUnderHeading,
   type CheckboxState,
-  auditBlockField,
   codekbDir,
   countCheckboxes,
   emitError,
@@ -50,6 +49,7 @@ import {
   setOrInsertField,
   setPhaseProgress,
   stagesInScope,
+  swarmConvergedUnits,
   updateIntentStatus,
   validScopes,
   withAuditLock,
@@ -939,20 +939,10 @@ function isSettledSwarmForArtifactGuard(
   if (first !== null && first.slug === stage.slug) return false; // skeleton gate
   const units = readBoltDagUnits(pd);
   if (units === null || units.length === 0) return false;
-  const audit = readAllAuditShards(pd);
-  if (!audit) return false;
-  let since = "";
-  for (const ev of findAllEvents(audit, "STAGE_STARTED")) {
-    if (auditBlockField(ev.block, "Workflow")?.startsWith("single-stage:")) continue;
-    if (auditBlockField(ev.block, "Stage") !== stage.slug) continue;
-    since = ev.timestamp; // chronological order; keep the latest
-  }
-  const converged = new Set<string>();
-  for (const { timestamp, block } of findAllEvents(audit, "SWARM_UNIT_CONVERGED")) {
-    if (since && timestamp < since) continue;
-    const unit = auditBlockField(block, "Unit name");
-    if (unit) converged.add(unit);
-  }
+  // Shared attempt-scoped read (aidlc-lib.ts): a row counts only when its
+  // Stage names this slug AND its Run floor equals the current attempt's
+  // floor, so stale-attempt and cross-stage rows never satisfy the guard.
+  const converged = swarmConvergedUnits(pd, stage.slug);
   return units.every((unit) => converged.has(unit));
 }
 

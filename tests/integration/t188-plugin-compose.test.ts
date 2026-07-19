@@ -715,6 +715,107 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     ))).toBe(false);
     expect(drops).toContain('agent "syn-oc-ghost-agent"');
     expect(drops).toContain(".opencode/agents/syn-oc-ghost-agent.md");
+    // The lead is a CORE persona with an installed native subagent file: it
+    // must never be named as undispatchable.
+    expect(drops).not.toContain('agent "aidlc-product-agent"');
+  });
+
+  test("OpenCode drops a dispatched stage whose shipped agent name collides with an installed native agent", () => {
+    // The shipped persona's file would be collision-dropped from the native
+    // roster, so accepting the stage would leave a dangling dispatch target.
+    const agent = [
+      "---",
+      "name: syn-oc-taken-agent",
+      "display_name: Synthetic Colliding Collaborator",
+      "plugin: syn-oc",
+      "description: synthetic colliding collaborator",
+      "---",
+      "",
+      "# Synthetic Colliding Collaborator",
+      "",
+    ].join("\n");
+    const stage = [
+      "---",
+      "slug: syn-oc-colliding",
+      "plugin: syn-oc",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: aidlc-product-agent",
+      "support_agents:",
+      "  - syn-oc-taken-agent",
+      "mode: mob",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic OpenCode Colliding Agent",
+      "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic(
+      "syn-oc",
+      {
+        "stages/inception/syn-oc-colliding.md": stage,
+        "agents/syn-oc-taken-agent.md": agent,
+      },
+      ".aidlc",
+      (proj) => {
+        // A DIFFERENT installed native agent already owns the name.
+        writeFileSync(
+          join(proj, ".opencode", "agents", "other-owner-agent.md"),
+          [
+            "---",
+            "name: syn-oc-taken-agent",
+            "description: pre-installed owner of the name",
+            "---",
+            "",
+            "# Other Owner",
+            "",
+          ].join("\n"),
+        );
+      },
+    );
+    expect(existsSync(join(
+      proj,
+      ".aidlc",
+      "aidlc-common",
+      "stages",
+      "inception",
+      "syn-oc-colliding.md",
+    ))).toBe(false);
+    expect(drops).toContain('agent "syn-oc-taken-agent"');
+  });
+
+  test("a malformed plugin agent drops alone without aborting the rest of the compose", () => {
+    // The native-roster transform throws on a frontmatter-less persona; the
+    // precheck must reject the file FIRST so the drop stays per-file and the
+    // remaining trees (knowledge here) still compose.
+    const { drops, proj } = composeSynthetic(
+      "syn-oc",
+      {
+        "agents/syn-oc-broken-agent.md": "# No frontmatter at all\n",
+        "knowledge/syn-oc-note.md": "# Synthetic knowledge survives\n",
+      },
+      ".aidlc",
+    );
+    expect(drops).toContain("syn-oc-broken-agent.md");
+    expect(drops).not.toContain("compose threw");
+    expect(existsSync(join(
+      proj,
+      ".opencode",
+      "agents",
+      "syn-oc-broken-agent.md",
+    ))).toBe(false);
+    // The compose completed past the agent copy: later trees landed.
+    expect(existsSync(join(
+      proj,
+      ".aidlc",
+      "knowledge",
+      "syn-oc-note.md",
+    ))).toBe(true);
   });
 
   test("OpenCode composes a dispatched stage whose collaborator ships with the plugin", () => {

@@ -141,9 +141,14 @@ export function directStateTransition(command: string): string | null {
   // invocation. The state CLI repeats this ownership check as the hard floor.
   // [ \t]* after the anchor, not \s*: \n is already in the anchor class, and a
   // cross-line \s* rescans masked heredoc whitespace quadratically (see
-  // maskFunctionDefinitions).
+  // maskFunctionDefinitions). The path-prefix class likewise excludes the
+  // anchor characters { and ( : a long run of either is a run of anchor
+  // positions, and a prefix class that can consume the run makes every anchor
+  // rescan the remainder - the same quadratic through a different door.
+  // Unquoted { and ( are shell metacharacters, not path text, so coverage is
+  // unchanged.
   const invocation =
-    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|]+\/)?bun(?:\.exe)?(?:\s+run)?\s+(?:"[^"\n]*aidlc-state\.ts"|'[^'\n]*aidlc-state\.ts'|[^\s;&|]*aidlc-state\.ts)\s+([a-z][a-z0-9-]*)\b/g;
+    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|({]+\/)?bun(?:\.exe)?(?:\s+run)?\s+(?:"[^"\n]*aidlc-state\.ts"|'[^'\n]*aidlc-state\.ts'|[^\s;&|]*aidlc-state\.ts)\s+([a-z][a-z0-9-]*)\b/g;
   for (const match of executableShellText(command).matchAll(invocation)) {
     const verb = match[1];
     if (BLOCKED_STATE_TRANSITIONS.has(verb)) return verb;

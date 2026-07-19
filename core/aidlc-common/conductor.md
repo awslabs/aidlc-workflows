@@ -145,8 +145,11 @@ vs *within* a stage (you loop on your own). Inside one stage you still own:
 - **Keep / Modify / Redo** — when the user requests changes at a gate, decide
   with them whether to keep the artifact as-is, modify it in place, or redo the
   stage from scratch (discard partial artifacts), then re-run the relevant part
-  and re-present the gate. This loop is entirely within the current stage — you
-  do not consult the engine until the gate approves and you `report`.
+  and re-present the gate. The loop stays within the current stage but reports
+  through the engine at each turn: `report --result rejected` records the
+  feedback, and after the revision (re-running the §12a reviewer first when a
+  `produces[]` artifact changed and the directive carries a reviewer)
+  `report --result revised` reopens the gate — never route around those calls.
 
 ## Classifying a practices-derived gate (`gate: "unresolved"`)
 

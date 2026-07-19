@@ -198,6 +198,12 @@ report awaiting-approval  →  [?] AwaitingApproval
 report. The conductor uses this to detect the revision-loop escape hatch
 (default is 3 cycles before offering to skip).
 
+When a revision changes a `produces[]` artifact on a stage whose directive
+carries a reviewer, the conductor re-runs the §12a reviewer step before
+reporting `revised` (stage-protocol Part 0) — the engine's own checks on the
+`revised` report remain structural (completion evidence + artifact existence);
+the reviewer re-run is conductor prose, not an engine gate.
+
 ---
 
 ## Session stream (hook-owned, independent)

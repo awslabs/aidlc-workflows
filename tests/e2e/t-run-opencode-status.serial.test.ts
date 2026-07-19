@@ -66,9 +66,11 @@ function skipReason(): string | null {
   // opencode's Bedrock provider needs static credentials in the environment or
   // ~/.aws/ — unlike Claude Code it does not walk the EC2 instance-role (IMDS)
   // chain, so a role-only box hard-fails at the provider instead of skipping.
-  // Only guard the Bedrock case; other providers authenticate their own way.
+  // Key on the MODEL actually in use (it defaults to Bedrock regardless of
+  // CLAUDE_CODE_USE_BEDROCK, which configures Claude Code, not opencode).
+  // Other providers authenticate their own way.
   if (
-    process.env.CLAUDE_CODE_USE_BEDROCK === "1" &&
+    MODEL.startsWith("amazon-bedrock/") &&
     !process.env.AWS_ACCESS_KEY_ID &&
     !process.env.AWS_PROFILE &&
     !existsSync(join(homedir(), ".aws", "credentials"))

@@ -581,10 +581,11 @@ interface KiroPluginAgentPrechecks {
 // Unlike Kiro/Codex surfaces (which a plugin can never ship), a plugin's own
 // Markdown persona IS the source of the native twin compose emits later in
 // this same pass — so a stage may reference an agent whose surface arrives
-// with the plugin. Accept that only when the shipped file would survive
-// emitOpencodeNativeAgent's shape checks (closed frontmatter, no
-// un-projectable disallowedTools); a name-collision drop still surfaces
-// through opencodeNativeAgentPrecheck's own drop log.
+// with the plugin. Accept that only when the shipped file would survive the
+// full opencodeNativeAgentPrecheck: closed frontmatter, no un-projectable
+// disallowedTools, AND no name collision with a different installed native
+// agent — a collision-dropped twin would leave the accepted stage without its
+// dispatch target.
 function pluginShipsViableOpencodeAgent(agent: string): boolean {
   const file = join(PLUGIN_ROOT, "agents", `${agent}.md`);
   if (!existsSync(file)) return false;
@@ -595,8 +596,15 @@ function pluginShipsViableOpencodeAgent(agent: string): boolean {
     return false;
   }
   if (!content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/)) return false;
+  const declaredPlugin = frontmatter(content).match(/^plugin:\s*(.+)$/m)?.[1].trim();
+  if (declaredPlugin?.startsWith("aidlc-")) return false;
   const disallowed = frontmatter(content).match(/^disallowedTools:\s*(.*?)\s*$/m)?.[1];
-  return !disallowed || /^\s*Task\s*$/i.test(disallowed);
+  if (disallowed && !/^\s*Task\s*$/i.test(disallowed)) return false;
+  const nativeAgentsDir = join(PROJECT_DIR, ".opencode", "agents");
+  const name = frontmatterName(content);
+  if (!name) return true;
+  const collidingFile = installedNameRoster(nativeAgentsDir).get(name);
+  return !collidingFile || collidingFile === join(nativeAgentsDir, `${agent}.md`);
 }
 
 // Kiro, Codex, and OpenCode cannot dispatch a Markdown-only persona from the
@@ -881,18 +889,34 @@ function copyTreeNoClobber(
     if (file.endsWith(".md")) {
       buf = Buffer.from(buf.toString("utf-8").replaceAll("{{HARNESS_DIR}}", HARNESS_LEAF));
     }
-    if (transform) {
-      buf = Buffer.from(transform({ file, rel, content: buf.toString("utf-8") }));
-    }
     if (existsSync(dest)) {
       // no-clobber — never replace core/another plugin. Log only a genuine
-      // content collision, not an identical idempotent re-copy.
-      if (!readFileSync(dest).equals(buf)) {
+      // content collision, not an identical idempotent re-copy. The installed
+      // copy was written transformed, so transform before comparing; a source
+      // the transform rejects cannot equal any installed copy.
+      let current: Buffer | null = buf;
+      if (transform) {
+        try {
+          current = Buffer.from(transform({ file, rel, content: buf.toString("utf-8") }));
+        } catch {
+          current = null;
+        }
+      }
+      if (current === null || !readFileSync(dest).equals(current)) {
         recordDrop(`${kind} "${rel}" collides with an existing file (core or another plugin); not overwritten — rename it to a plugin-namespaced path`);
       }
       continue;
     }
+    // Precheck BEFORE transform, on the pre-transform text: the precheck is
+    // the skip-and-drop gate for exactly the shapes a transform throws on
+    // (emitOpencodeNativeAgent on a frontmatter-less persona), so transforming
+    // first turns a one-file drop into an aborted compose. It also keeps the
+    // precheck's shape checks live — the emitter strips disallowedTools, so a
+    // post-transform precheck could never reject an un-projectable value.
     if (precheck && !precheck({ file, rel, dest, content: buf.toString("utf-8") })) continue;
+    if (transform) {
+      buf = Buffer.from(transform({ file, rel, content: buf.toString("utf-8") }));
+    }
     mkdirSync(join(dest, ".."), { recursive: true });
     writeFileSync(dest, buf);
     wrote = true;

@@ -154,13 +154,14 @@ options:
 
 Every stage ends with this 5-part structure:
 
-### Part 0: Enter the approval gate (mandatory — before presenting completion)
-Before showing the completion message:
-1. Before the human prompt: `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval` — the engine marks `[-]` → `[?]` and emits `STAGE_AWAITING_APPROVAL`. `/aidlc --status` now truthfully shows the held gate.
-2. Present Parts 1-3 (announcement, summary, approval question).
-3. Based on the user response:
+### Part 0: Enter the approval gate (mandatory — the engine records the held gate before the human answers it)
+Entering the gate:
+1. Render Parts 1-2 (announcement, summary), then run the §13 learnings ritual as its own human turn — END YOUR TURN at its question. Its logged `QUESTION_ANSWERED` row must precede the gate's `STAGE_AWAITING_APPROVAL` (§13 step 3 is the contract; the gate is never opened in the same message as the learnings question).
+2. After the learnings answer is logged: `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval` — the engine marks `[-]` → `[?]` and emits `STAGE_AWAITING_APPROVAL`. `/aidlc --status` now truthfully shows the held gate.
+3. Present Part 3 (the approval question).
+4. Based on the user response:
    - **Approve** → `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"`. The engine emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
-   - **Request Changes** → `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "<feedback>"`. The engine emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt — a driver or scripted session that answers only structured questions must be able to progress the revision loop). After re-running the stage work, call `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` — always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
+   - **Request Changes** → `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "<feedback>"`. The engine emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt — a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the §12a reviewer step before reporting revised — fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (The §13 learnings ritual runs once per stage and is not re-run.) Then call `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` — always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
    - **Accept as-is** (after 3 rejection cycles) → same as Approve; include `--user-input "Accept as-is after N cycles"`.
 
 ### Part 1: Announcement (mandatory)
@@ -976,6 +977,12 @@ If the `run-stage` directive includes a `reviewer` field (non-null), the orchest
    - **NOT-READY** and iterations exhausted:
      - Proceed to approval gate with unresolved findings noted:
        "Reviewer found issues after N iterations. Presenting with unresolved findings for your decision."
+
+The reviewer also re-runs on the Part 0 revision path: when a human rejection
+leads to a revision that changes a `produces[]` artifact, re-run this step
+before reporting `revised` — the stale `## Review` verdict predates the
+revised content and must be replaced, with the same lead-alone loop and
+iteration budget as at first entry.
 
 ### What the reviewer does NOT do
 

@@ -396,6 +396,17 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         );
         expect(questionAnsweredAt).toBeGreaterThan(-1);
         expect(gateOpenedAt).toBeGreaterThan(questionAnsweredAt);
+        // Interview answers also emit QUESTION_ANSWERED, so the ordering pin
+        // alone passes when the ritual is skipped outright. Require a
+        // learnings-flavored answer (§13 pins the option labels verbatim)
+        // before the last gate open.
+        const learningsAnswers = [
+          ...auditMd.matchAll(
+            /\*\*Event\*\*: QUESTION_ANSWERED\n(?:\*\*[^\n]+\n)*?\*\*Details\*\*: [^\n]*(?:Nothing to add|Add a note)/g,
+          ),
+        ];
+        expect(learningsAnswers.length).toBeGreaterThanOrEqual(1);
+        expect(gateOpenedAt).toBeGreaterThan(learningsAnswers.at(-1)!.index);
 
         // --- render assertion (the tui-only value-add) ------------------------
         // The captured grid showed a waiting AskUserQuestion menu (the `❯` caret +

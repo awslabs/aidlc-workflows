@@ -318,6 +318,41 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   });
 
+  test("SP4c: every resume-menu choice routes to its own move; garbage errors; state untouched", () => {
+    const p = projWithState("state-jumped.md");
+    const before = readFileSync(statePath(p), "utf-8");
+    const report = (answer: string) =>
+      directive(run(ORCHESTRATE, [
+        "report",
+        "--result",
+        "resumed",
+        "--user-input",
+        answer,
+        "--project-dir",
+        p,
+      ]));
+
+    const redo = report("Redo the current stage");
+    expect(redo.kind).toBe("print");
+    expect(redo.message).toContain("aidlc-jump.ts execute");
+    expect(redo.message).toContain("--direction redo");
+
+    const jump = report("Jump to a stage");
+    expect(jump.kind).toBe("print");
+    expect(jump.message).toContain("next --stage");
+
+    const fresh = report("Start fresh");
+    expect(fresh.kind).toBe("print");
+    expect(fresh.message).toContain("--new-intent");
+
+    const garbage = report("something unrecognizable");
+    expect(garbage.kind).toBe("error");
+    expect(garbage.message).toContain("Unrecognized resume choice");
+
+    // Every round-trip above is read-only: report routes, the conductor acts.
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
+  });
+
   // ============================================================
   // Special path 5: BIRTH (P4: --init retired) — (a) named scope on a clean
   // workspace prints the intent-birth move + creates NO state; (b) a named scope

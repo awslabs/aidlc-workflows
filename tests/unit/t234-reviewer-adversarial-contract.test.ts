@@ -68,6 +68,38 @@ describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
     expect(src).toContain("machine-checkable evidence");
   });
 
+  test("the revision path re-runs the reviewer on changed artifacts (Part 0 + §12a)", () => {
+    // A rejection-driven revision edits produces[] AFTER the reviewer's
+    // verdict landed; without this binding the gate reopens on a stale READY.
+    // The learnings ritual, by contrast, runs once per stage - pin both so
+    // neither drifts.
+    for (const path of [CORE_PROTOCOL, DIST_PROTOCOL]) {
+      const src = readFileSync(path, "utf-8");
+      expect(src).toContain(
+        "re-run the §12a reviewer step before reporting revised",
+      );
+      expect(src).toContain(
+        "fresh `## Review` verdict replacing the stale one",
+      );
+      expect(src).toContain(
+        "The §13 learnings ritual runs once per stage and is not re-run",
+      );
+      // Part 0 orders the gate open AFTER the logged learnings answer - the
+      // QUESTION_ANSWERED-before-STAGE_AWAITING_APPROVAL audit proof.
+      expect(src).toContain(
+        "After the learnings answer is logged: `bun",
+      );
+      expect(src).not.toContain(
+        "Before showing the completion message",
+      );
+    }
+    const skill = readFileSync(
+      join(REPO_ROOT, "harness", "claude", "skills", "aidlc", "SKILL.md"),
+      "utf-8",
+    );
+    expect(skill).toContain("re-running the §12a reviewer step");
+  });
+
   test("product-lead persona restates the contract in domain voice", () => {
     const src = readFileSync(PRODUCT_LEAD, "utf-8");
     expect(src).toContain("## Adversarial Posture");

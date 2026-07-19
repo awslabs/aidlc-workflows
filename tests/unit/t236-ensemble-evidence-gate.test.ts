@@ -329,6 +329,9 @@ function perUnitEnsembleGraph(
 }
 
 function seedSwarmConverged(proj: string, units: string[]): void {
+  // Rows carry the attempt-identity stamp (Stage + Run floor) the consumers
+  // require; the fixture audit has no STAGE_STARTED for the stage, so the
+  // matching floor is "".
   const shard = seededAuditShard(proj);
   mkdirSync(dirname(shard), { recursive: true });
   const blocks = units.map((unit, index) =>
@@ -337,6 +340,8 @@ function seedSwarmConverged(proj: string, units: string[]): void {
       `**Timestamp**: 2026-07-15T00:00:${String(index).padStart(2, "0")}.000Z`,
       "**Event**: SWARM_UNIT_CONVERGED",
       `**Unit name**: ${unit}`,
+      "**Stage**: user-stories",
+      "**Run floor**: ",
       "",
       "---",
       "",
@@ -845,6 +850,113 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
       "Approve",
     ]);
     expectApprovalCommitted(proj, fresh, before, "practices-discovery");
+  });
+
+  test("a rejection after promotion invalidates the receipt until the drafts are re-promoted", () => {
+    const proj = seedPracticesProject();
+    for (const agent of PRACTICES_SUPPORTS) {
+      writeContribution(
+        proj,
+        agent,
+        undefined,
+        "inception",
+        "practices-discovery",
+      );
+    }
+    writeFileSync(
+      seededStateFile(proj),
+      practicesState("[?]", "2026-07-17T14:02:00Z"),
+    );
+    appendAuditEvent(proj, "PRACTICES_AFFIRMED", "2026-07-17T14:02:00Z");
+    // The human rejects AFTER promotion: the drafts change, the receipt
+    // authorizes content that no longer exists.
+    appendAuditEvent(proj, "GATE_REJECTED", "2026-07-17T14:05:00Z", {
+      Stage: "practices-discovery",
+      Feedback: "tighten the testing posture",
+    });
+    appendAuditEvent(proj, "STAGE_REVISING", "2026-07-17T14:05:00Z", {
+      Stage: "practices-discovery",
+      "Revision count": "1",
+    });
+    appendAuditEvent(proj, "STAGE_AWAITING_APPROVAL", "2026-07-17T14:08:00Z", {
+      Stage: "practices-discovery",
+    });
+
+    const staleBefore = mutationSnapshot(proj);
+    const stale = runReport(proj, [
+      "--stage",
+      "practices-discovery",
+      "--result",
+      "approved",
+      "--user-input",
+      "Approve",
+    ]);
+    expect(stale.kind).toBe("error");
+    expect(stale.message).toContain("fresh PRACTICES_AFFIRMED receipt");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(
+      staleBefore.state,
+    );
+    expect(auditText(proj)).toBe(staleBefore.audit);
+
+    // Re-promotion after the rejection restores approval.
+    writeFileSync(
+      seededStateFile(proj),
+      practicesState("[?]", "2026-07-17T14:09:00Z"),
+    );
+    appendAuditEvent(proj, "PRACTICES_AFFIRMED", "2026-07-17T14:09:00Z");
+    const before = mutationSnapshot(proj);
+    const repromoted = runReport(proj, [
+      "--stage",
+      "practices-discovery",
+      "--result",
+      "approved",
+      "--user-input",
+      "Approve",
+    ]);
+    expectApprovalCommitted(proj, repromoted, before, "practices-discovery");
+  });
+
+  test("an unrelated stage's rejection does not invalidate the practices receipt", () => {
+    const proj = seedPracticesProject();
+    for (const agent of PRACTICES_SUPPORTS) {
+      writeContribution(
+        proj,
+        agent,
+        undefined,
+        "inception",
+        "practices-discovery",
+      );
+    }
+    writeFileSync(
+      seededStateFile(proj),
+      practicesState("[?]", "2026-07-17T14:02:00Z"),
+    );
+    appendAuditEvent(
+      proj,
+      "STAGE_STARTED",
+      "2026-07-17T14:01:00Z",
+      { Stage: "practices-discovery", Agent: "aidlc-pipeline-deploy-agent" },
+    );
+    appendAuditEvent(proj, "PRACTICES_AFFIRMED", "2026-07-17T14:02:00Z");
+    appendAuditEvent(proj, "GATE_REJECTED", "2026-07-17T14:05:00Z", {
+      Stage: "user-stories",
+      Feedback: "different stage entirely",
+    });
+    appendAuditEvent(proj, "STAGE_REVISING", "2026-07-17T14:05:00Z", {
+      Stage: "user-stories",
+      "Revision count": "1",
+    });
+
+    const before = mutationSnapshot(proj);
+    const approved = runReport(proj, [
+      "--stage",
+      "practices-discovery",
+      "--result",
+      "approved",
+      "--user-input",
+      "Approve",
+    ]);
+    expectApprovalCommitted(proj, approved, before, "practices-discovery");
   });
 
   // The swarm exemption never applies to the scope's FIRST construction stage

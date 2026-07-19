@@ -75,7 +75,16 @@ import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
-import { parseArgs, resolveConstructionRepo, resolveProjectDir, worktreePath } from "./aidlc-lib.ts";
+import {
+  getField,
+  latestMainWorkflowStageStarted,
+  parseArgs,
+  readAllAuditShards,
+  readStateFile,
+  resolveConstructionRepo,
+  resolveProjectDir,
+  worktreePath,
+} from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 
 const TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -263,10 +272,32 @@ function emitSwarmDegraded(pd: string, batch: string, requested: DriverName): vo
   );
 }
 
+// Each converged row is stamped with the stage it belongs to and the current
+// attempt's floor (the stage's latest main-workflow STAGE_STARTED timestamp).
+// The consumers require BOTH to match before counting a row, so a late
+// finalize retry against a prior attempt's preserved worktree, or another
+// swarm stage reusing the same unit names, can never satisfy the current
+// attempt's coverage. While a swarm is live the workflow cannot leave the
+// stage (the guards fail closed on unconverged units), so Current Stage is
+// reliable at finalize time.
 function emitUnitConverged(pd: string, batch: string, unit: string): void {
+  let stage = "";
+  let floor = "";
+  try {
+    stage = getField(readStateFile(pd), "Current Stage")?.trim() ?? "";
+    floor = latestMainWorkflowStageStarted(readAllAuditShards(pd), stage);
+  } catch {
+    // Absent state degrades to unstamped rows, which every consumer rejects —
+    // fail closed, never fail open.
+  }
   appendAuditEntry(
     "SWARM_UNIT_CONVERGED",
-    { "Batch number": batch, "Unit name": unit },
+    {
+      "Batch number": batch,
+      "Unit name": unit,
+      Stage: stage,
+      "Run floor": floor,
+    },
     pd
   );
 }
