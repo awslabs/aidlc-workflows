@@ -383,6 +383,20 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         ).length;
         expect(gateApproved).toBeGreaterThanOrEqual(1);
 
+        // --- learnings-before-gate ordering (guards the §13 turn binding) ------
+        // The last QUESTION_ANSWERED (the learnings "anything to add?" answer)
+        // must precede the last STAGE_AWAITING_APPROVAL: the ritual is its own
+        // logged turn BEFORE the gate opens. Mirrors the kiro bugfix-scope pin;
+        // without it a gate-before-learnings regression passes this test.
+        const questionAnsweredAt = auditMd.lastIndexOf(
+          "**Event**: QUESTION_ANSWERED",
+        );
+        const gateOpenedAt = auditMd.lastIndexOf(
+          "**Event**: STAGE_AWAITING_APPROVAL",
+        );
+        expect(questionAnsweredAt).toBeGreaterThan(-1);
+        expect(gateOpenedAt).toBeGreaterThan(questionAnsweredAt);
+
         // --- render assertion (the tui-only value-add) ------------------------
         // The captured grid showed a waiting AskUserQuestion menu (the `❯` caret +
         // the select / submit footer) at least once during the run — exactly what

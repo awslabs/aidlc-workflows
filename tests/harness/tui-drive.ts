@@ -1266,9 +1266,15 @@ async function handleRevisionRecovery(
     }
     // No recovery menu painted yet. If the turn has gone quiet without a menu
     // for long enough, treat it as the free-text shape and supply feedback.
+    // The quiet threshold must outlast a structured question's paint time: a
+    // conductor that (correctly, per stage-protocol Part 0) answers the reject
+    // with a structured clarifying menu takes ~13s to render it, and a 10s
+    // hedge races that paint and injects free text a structured-only driver
+    // would never send. 30s of quiet before hedging leaves the positive
+    // free-text detection above instant and keeps the 60s hang-backstop.
     if (
       gridLooksLikeRevisionFreeTextPrompt(after) ||
-      (!gridHasMenu(after) && Date.now() > recoveryDeadline - 50_000)
+      (!gridHasMenu(after) && Date.now() > recoveryDeadline - 30_000)
     ) {
       backend.send(session, REVISION_FEEDBACK, true, true);
       await sleep(300);

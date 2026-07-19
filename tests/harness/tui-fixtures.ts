@@ -73,6 +73,8 @@ export interface KiroNumberedProseAnswerState {
   answeredQuestions: Set<number>;
   confirmedQuestions: Set<number>;
   answeredFollowUps: Set<number>;
+  /** Ad-hoc lettered clarification menus already answered, keyed by option text. */
+  answeredClarifications: Set<string>;
   summaryConfirmed: boolean;
   learningsAnswered: number;
   approvalsAnswered: number;
@@ -84,6 +86,7 @@ export function createKiroNumberedProseAnswerState(): KiroNumberedProseAnswerSta
     answeredQuestions: new Set(),
     confirmedQuestions: new Set(),
     answeredFollowUps: new Set(),
+    answeredClarifications: new Set(),
     summaryConfirmed: false,
     learningsAnswered: 0,
     approvalsAnswered: 0,
@@ -176,6 +179,23 @@ export function nextKiroNumberedProseAnswer(
     }
     state.approvalsAnswered += 1;
     return "Approve";
+  }
+
+  // Ad-hoc lettered clarification: a live hub that spots a contradiction
+  // between two recorded answers may invent a mid-stage lettered menu
+  // (`- A. ...` ... `- X. Other`) asking which is correct — a legitimate
+  // conductor move (§3 structured question) the fixed Q<n>/F<n> shapes above
+  // don't cover (observed live: intent-capture Q3-vs-Q5 feature-set
+  // contradiction). Answer the first lettered option once per distinct menu;
+  // the answered-set keys on the option text so a repaint of the same menu is
+  // not re-answered while a different clarification still gets a response.
+  const letteredOptions = [...screen.matchAll(/^\s*-\s([A-W])\.\s(.{1,60})/gm)];
+  if (letteredOptions.length >= 2) {
+    const menuKey = letteredOptions.map((m) => m[1] + m[2]).join("|");
+    if (!state.answeredClarifications.has(menuKey)) {
+      state.answeredClarifications.add(menuKey);
+      return letteredOptions[0][1];
+    }
   }
   return null;
 }

@@ -355,6 +355,21 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         expect(auditMd).toMatch(/STAGE_COMPLETED/);
         expect(auditMd.toLowerCase()).toContain("intent-capture");
 
+        // --- learnings-before-gate ordering (guards the §13 turn binding) ------
+        // The learnings ritual is its own logged human interaction BEFORE the
+        // gate opens: its QUESTION_ANSWERED row must precede the stage's
+        // STAGE_AWAITING_APPROVAL row in the audit ledger. Without this pin a
+        // conductor that reopens the gate ahead of the learnings turn (the
+        // pre-fix live failure mode on Kiro) would still pass this test.
+        const questionAnsweredAt = auditMd.lastIndexOf(
+          "**Event**: QUESTION_ANSWERED",
+        );
+        const gateOpenedAt = auditMd.lastIndexOf(
+          "**Event**: STAGE_AWAITING_APPROVAL",
+        );
+        expect(questionAnsweredAt).toBeGreaterThan(-1);
+        expect(gateOpenedAt).toBeGreaterThan(questionAnsweredAt);
+
         // --- render assertion (the tui-only value-add) -----------------------
         // The captured grid showed the AUQ select footer and/or the multi-tab
         // Submit strip at least once during the run — what the SDK path is blind

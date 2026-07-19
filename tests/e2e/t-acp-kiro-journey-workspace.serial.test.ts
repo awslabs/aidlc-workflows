@@ -335,6 +335,17 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           keepAlive: true,
         });
         expect(offerR1.toolCallIssues).toEqual([]);
+        // PIN the compare-read itself: the offer flow's documented first move is
+        // `intent --json` (SKILL.md; the spike-verified offer-render boundary).
+        // A live run was observed reaching a natural end_turn via --help /
+        // `intent list` exploration WITHOUT ever running the compare-read, and
+        // nothing failed — the offer path was silently not exercised. Assert the
+        // tool actually ran so that divergence reds instead of passing dark.
+        expect(
+          offerR1.toolCalls.some((tc) =>
+            /aidlc-utility\.ts intent --json/.test(tc.title),
+          ),
+        ).toBe(true);
         // Turn 3b: confirm. The conductor routes through `next --new-intent`,
         // then acts on the engine's intent-birth print. The inferred scope is
         // non-deterministic; assert only the registry shape and A's integrity.

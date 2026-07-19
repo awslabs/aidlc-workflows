@@ -320,6 +320,28 @@ describe("Kiro numbered-prose answer classification", () => {
     expect(state.approvalsAnswered).toBe(1);
   });
 
+  test("answers an ad-hoc lettered clarification menu once, and a distinct one after it", () => {
+    // A live hub that spots a contradiction between two recorded answers may
+    // invent a mid-stage lettered menu (observed live: intent-capture Q3-vs-Q5
+    // feature-set contradiction). The classifier answers the first option once
+    // per distinct menu; a repaint of the SAME menu is not re-answered (null),
+    // while a DIFFERENT clarification still gets a response.
+    const state = createKiroNumberedProseAnswerState();
+    const contradiction =
+      "Which is correct for the first version?\n" +
+      "- A. Include Add + Toggle complete + Delete (recommended)\n" +
+      "- B. Include Add + Toggle complete + Delete + Edit\n" +
+      "- D. Truly Add-only for the first version\n" +
+      "- X. Other (please specify)";
+    expect(nextKiroNumberedProseAnswer(contradiction, state)).toBe("A");
+    expect(nextKiroNumberedProseAnswer(contradiction, state)).toBeNull();
+    const second =
+      "Which persistence approach?\n" +
+      "- A. Browser localStorage\n" +
+      "- B. A server with accounts";
+    expect(nextKiroNumberedProseAnswer(second, state)).toBe("A");
+  });
+
   test("answers a new learning prompt when an older approval remains visible", () => {
     const state = createKiroNumberedProseAnswerState();
     state.learningsAnswered = 1;
