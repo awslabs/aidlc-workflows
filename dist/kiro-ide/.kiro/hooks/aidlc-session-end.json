@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-session-end",
+      "description": "Emits SESSION_ENDED when agent execution stops.",
+      "trigger": "Stop",
+      "action": {
+        "type": "command",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts session-end"
+      },
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-sync-statusline",
+      "description": "Syncs aidlc-state.md Current Stage from the audit tail after shell commands.",
+      "trigger": "PostToolUse",
+      "matcher": "^execute_bash$",
+      "action": {
+        "type": "command",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-sync"
+      },
+      "enabled": true
+    }
+  ]
+}

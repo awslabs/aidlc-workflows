@@ -57,6 +57,16 @@ const manifest: HarnessManifest = {
     { src: "hooks/aidlc-session-start.kiro.hook", dst: "hooks/aidlc-session-start.kiro.hook" },
     { src: "hooks/aidlc-stop.kiro.hook", dst: "hooks/aidlc-stop.kiro.hook" },
     { src: "hooks/aidlc-sync-statusline.kiro.hook", dst: "hooks/aidlc-sync-statusline.kiro.hook" },
+    // v1 format (Kiro IDE 1.0+) — new JSON hook files alongside the legacy .kiro.hook files
+    { src: "hooks/aidlc-audit-logger.json", dst: "hooks/aidlc-audit-logger.json" },
+    { src: "hooks/aidlc-mint.json", dst: "hooks/aidlc-mint.json" },
+    { src: "hooks/aidlc-block.json", dst: "hooks/aidlc-block.json" },
+    { src: "hooks/aidlc-log-subagent.json", dst: "hooks/aidlc-log-subagent.json" },
+    { src: "hooks/aidlc-runtime-compile.json", dst: "hooks/aidlc-runtime-compile.json" },
+    { src: "hooks/aidlc-session-end.json", dst: "hooks/aidlc-session-end.json" },
+    { src: "hooks/aidlc-session-start.json", dst: "hooks/aidlc-session-start.json" },
+    { src: "hooks/aidlc-stop.json", dst: "hooks/aidlc-stop.json" },
+    { src: "hooks/aidlc-sync-statusline.json", dst: "hooks/aidlc-sync-statusline.json" },
     { src: "settings/cli.json", dst: "settings/cli.json" },
     // Project-root .gitignore (beside .kiro/, not inside it) — same workspace-layout
     // committed-vs-ignored split as the Kiro CLI tree: per-user cursors + machine-local

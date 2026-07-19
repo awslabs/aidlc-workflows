@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-audit-logger",
+      "description": "Logs artifact create/update events on file writes to aidlc-docs/.",
+      "trigger": "PostToolUse",
+      "matcher": "^(fs_write|fs_append|str_replace|delete_file|code)$",
+      "action": {
+        "type": "command",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts audit-and-sensors"
+      },
+      "enabled": true
+    }
+  ]
+}

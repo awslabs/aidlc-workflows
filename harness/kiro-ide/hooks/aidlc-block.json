@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-block",
+      "description": "Hard-blocks tool calls while an approval gate is open and no human acted since (human-presence floor).",
+      "trigger": "PreToolUse",
+      "action": {
+        "type": "command",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts block"
+      },
+      "enabled": true
+    }
+  ]
+}

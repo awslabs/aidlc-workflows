@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-runtime-compile",
+      "description": "Dispatches runtime graph compile after transition-class tool calls.",
+      "trigger": "PostToolUse",
+      "matcher": "^execute_bash$",
+      "action": {
+        "type": "command",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts runtime-compile"
+      },
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-log-subagent",
+      "description": "Logs sub-agent completion to audit trail.",
+      "trigger": "PostToolUse",
+      "matcher": "^invoke_sub_agent$",
+      "action": {
+        "type": "command",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts log-subagent"
+      },
+      "enabled": true
+    }
+  ]
+}
