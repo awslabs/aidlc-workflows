@@ -1,96 +1,91 @@
-# Kiro IDE hook payload - empirical reference
+# Kiro IDE hook payload — empirical reference
 
-How Kiro IDE delivers context to a `runCommand` hook. The channel differs by
-IDE generation:
+How Kiro IDE delivers context to a command hook, captured live on TWO IDE
+generations: 0.12-main (probe `.kiro.hook` files that dumped stdin, argv, and
+the full environment) and 1.0.165 (probe v2 hook JSON files; upstream
+#543/#555). This is the evidence base for the `harness/kiro-ide/` adapter; the
+CLI harness (`harness/kiro/`) uses a different, kiro-cli-shaped stdin
+mechanism.
 
-- **Pre-1.0 (0.12-main):** context arrives through the **`USER_PROMPT`
-  environment variable** (camelCase JSON). Stdin is opened but never written or
-  closed - reading it hangs.
-- **IDE >= 1.0 (1.x):** context arrives as **JSON on stdin** (snake_case:
-  `{ tool_name, tool_input, tool_response }`). `USER_PROMPT` is empty.
+## The channel changed across IDE generations
 
-**Current adapter behavior:** the shipped adapter reads ONLY the `USER_PROMPT`
-environment variable (the pre-1.0 channel). It never reads stdin. On IDE 1.x,
-where `USER_PROMPT` is empty, the two payload-dependent targets
-(`audit-and-sensors`, `log-subagent`) fire but no-op with a visible hook drop.
-The remaining hooks are payload-independent and work on both generations. The
-stdin context channel is planned as a follow-up enhancement.
+| | Kiro IDE 0.12 | Kiro IDE 1.x (≥1.0.1xx) |
+|---|---|---|
+| Hook registration | `.kiro/hooks/*.kiro.hook` (`{"version":"1.0.0","when":{...},"then":{...}}`) | `.kiro/hooks/*.json` v2 schema (`{"version":"v1","hooks":[{name,trigger,matcher,action}]}`, PascalCase triggers). Legacy `.kiro.hook` files are **silently inert** — never executed. |
+| Context channel | `USER_PROMPT` env var (JSON string) | **stdin** (JSON, written and closed). `USER_PROMPT` arrives empty. |
+| stdin behavior | Opened but NEVER written/closed — a bare read hangs | Written and closed — a read resolves promptly |
+| Field naming | camelCase: `{ toolName, toolArgs, toolResult, toolSuccess }` | snake_case: `{ session_id, hook_event_name, cwd, tool_name, tool_input, tool_response }` — **no success flag** |
 
-## Pre-1.0 channel: `USER_PROMPT` env var
-
-Captured live on Kiro IDE 0.12-main by registering probe `.kiro.hook` files
-that dumped stdin, argv, and the full environment.
-
-- **stdin** is opened but never written or closed, so `Bun.stdin.text()` hangs.
-- **`USER_PROMPT`** is a JSON string of the shape:
-  ```json
-  { "toolName": "fs_write", "toolArgs": {}, "toolResult": "Created the /abs/path/file.md file.", "toolSuccess": true }
-  ```
-
-## IDE 1.x channel: stdin (snake_case)
-
-Captured live on Kiro IDE 1.0.165. The stdin payload shape (field-verbatim from
-the probe):
+A live 1.0.165 PostToolUse capture, field-verbatim:
 
 ```json
-{ "session_id": "sess_...", "hook_event_name": "PostToolUse", "cwd": "/path/to/project", "tool_name": "execute_bash", "tool_input": {}, "tool_response": "Output:\n...\nExit Code: 0" }
+{"session_id":"sess_…","hook_event_name":"PostToolUse","cwd":"/path/to/project","tool_name":"execute_bash","tool_input":{},"tool_response":"Output:\n…\nExit Code: 0"}
 ```
 
-- `USER_PROMPT` is empty on 1.x.
-- No `toolSuccess` / `tool_success` field - only an explicit `false` (which 1.x
-  never sends) triggers the #417 failed-write guard; absence falls through.
-- `tool_input` is always `{}` on both generations - the IDE never passes tool
-  inputs.
+The adapter uses a non-empty `USER_PROMPT` immediately (the 0.12 channel,
+whose stdin never closes). When that variable is empty, it reads stdin for the
+1.x channel, raced against a 2s broken-channel timeout. Both field spellings
+are accepted. Acquisition is gated to the two payload-dependent targets
+(`audit-and-sensors`, `log-subagent`); every other target (including the
+per-tool-call `block` floor) touches neither channel and keeps its zero-latency
+path.
 
-> **Note:** The adapter does not yet consume the 1.x stdin channel. This section
-> documents the observed payload shape for the follow-up implementation.
-
-`VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE (absent on the CLI),
-but the adapter keys off `USER_PROMPT` as the context channel.
+`VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE (absent on the
+CLI), but the adapter keys off the payload channels above.
 
 ## Per-event captures
 
-| Event | `toolName` | `toolArgs` | `toolResult` | recoverable? |
-|-------|-----------|-----------|-------------|--------------|
-| postToolUse(write) - create | `fs_write` | `{}` (empty) | `Created the <ABS_PATH> file.` | path: from `toolResult` prose only |
-| postToolUse(write) - edit | `str_replace` | `{}` (empty) | `Replaced text in <ABS_PATH>` | path: from `toolResult` prose only |
-| postToolUse(write) - append | `fs_append` | `{}` (empty) | `Appended the text to the <ABS_PATH> file.` | path: from `toolResult` prose only |
-| postToolUse(shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
+Result prose is identical on both channels (`toolResult` on 0.12,
+`tool_response` on 1.x):
+
+| Event | tool name | tool inputs | result prose | recoverable? |
+|-------|-----------|-------------|--------------|--------------|
+| PostToolUse (write) — create | `fs_write` | `{}` (empty) | `Created the <PATH> file.` | path: from the result prose only |
+| PostToolUse (write) — edit | `str_replace` | `{}` (empty) | `Replaced text in <PATH>` | path: from the result prose only |
+| PostToolUse (write) — append | `fs_append` | `{}` (empty) | `Appended the text to the <PATH> file.` | path: from the result prose only |
+| PostToolUse (shell) | `execute_bash` | `{}` (empty) | `Output:\n<stdout>\n\nExit Code: 0` | command: **not** recoverable (only stdout) |
 
 ### Critical limitations
 
-1. **`toolArgs` is always `{}`.** The IDE never passes tool inputs. So the
-   written file path must be parsed out of the `toolResult` prose, and the shell
-   command is not present at all (only its stdout + exit code).
-2. **Stdin is not read by the current adapter.** On pre-1.0 it hangs (never
-   written/closed); on 1.x it carries the payload but the adapter does not
-   consume it yet. The adapter reads `process.env.USER_PROMPT` only.
-3. **Paths in `toolResult` are workspace-RELATIVE**, but the core hooks compare
-   against an absolute record root - so the adapter resolves them to absolute
-   before forwarding.
+1. **PostToolUse write/shell captures have empty tool inputs** on both
+   channels. Their written path must therefore be parsed from the result prose,
+   and the shell command is absent (only stdout + exit code is present). This is
+   not a universal IDE rule: later 1.x builds populate some PreToolUse inputs
+   and delegation inputs (#543).
+2. **1.x carries no success flag.** Only the 0.12 channel's explicit
+   `toolSuccess: false` drops a write from the audit (#417); a 1.x payload
+   falls through to the path check, and error prose that matches no known
+   pattern records a visible hook-drop.
+3. **Paths in the result prose are workspace-RELATIVE**, but the core hooks
+   compare against an absolute record root — so the adapter resolves them to
+   absolute before forwarding.
 
 ## Consequences for each hook
 
-- **audit-logger / sensor-fire** - recoverable on pre-1.0: scrape the file path
-  from `toolResult`, resolve to absolute, feed the core hooks the Claude-shaped
+- **audit-logger / sensor-fire** — recoverable: scrape the file path from
+  the result prose, resolve to absolute, feed the core hooks the Claude-shaped
   `{tool_input:{file_path}}`. A write-class tool whose wording does not match a
-  known pattern records a visible hook-drop (never a silent no-op). On IDE 1.x
-  these targets no-op (USER_PROMPT is empty, stdin not read).
-- **runtime-compile** - the shell command is unrecoverable, so the IDE path
+  known pattern records a visible hook-drop (never a silent no-op).
+- **runtime-compile** — the shell command is unrecoverable, so the IDE path
   drops the command filter and gates purely on the audit tail (with an mtime
-  idempotency guard so a lingering transition - e.g. after `WORKFLOW_COMPLETED`
-  - does not recompile on every subsequent shell command).
-- **sync-statusline** - the IDE gives no task payload, so it derives the current
+  idempotency guard so a lingering transition — e.g. after `WORKFLOW_COMPLETED`
+  — does not recompile on every subsequent shell command).
+- **sync-statusline** — the IDE gives no task payload, so it derives the current
   stage from the latest `STAGE_STARTED` in the audit tail. This is a
   **forward-only** mirror: it never rewinds `Current Stage` to a completed or
   skipped stage, and never fires when the workflow is not `Running` (guards
-  against resurrecting a finished workflow). Wired to the `shell` event - the
-  `spec` event never fires in the IDE.
-- **session-start / stop** - need no payload; unchanged. (`session-end` has no
-  v2 registration - see the harness guide for the rationale.)
-- **log-subagent** - on pre-1.0, recovers the delegate identity from
-  `toolResult`. On IDE 1.x, no-ops with a visible hook drop (USER_PROMPT is
-  empty, stdin not read).
+  against resurrecting a finished workflow). Matched to `execute_bash` — the
+  IDE surfaces no task event the sync could parse.
+- **log-subagent** — payload-dependent. IDE 0.12 sent `invoke_sub_agent`; 1.x
+  (1.0.89-1.0.138) sent `subagent_<agent>` instead, each preceded by an empty
+  `subagent_response` shell (`"Response recorded."`). The registration matcher
+  is therefore broad (`^(subagent_.+|invoke_sub_agent)$`) so every delegate name
+  reaches the adapter, and the adapter drops `subagent_response` — that shell
+  carries prose but no identity, so forwarding it would fabricate a
+  `SUBAGENT_COMPLETED` row with `Agent Type: unknown`. Identity is recovered
+  from the result prose (#459/#543).
+- **session-start / session-end / stop / mint / block** — need no payload;
+  they never read stdin.
 
 ## toolResult path-extraction patterns
 
@@ -99,3 +94,8 @@ but the adapter keys off `USER_PROMPT` as the context channel.
 | `fs_write` | `Created the <PATH> file.` | Write |
 | `str_replace` | `Replaced text in <PATH>` (may carry a trailing ` (N occurrences)`) | Edit |
 | `fs_append` | `Appended the text to the <PATH> file.` | Edit |
+
+The extractor trims trailing whitespace/newlines before matching and strips a
+trailing parenthetical from the `str_replace` form. `fs_write` maps to `Write`;
+`str_replace`/`fs_append` map to `Edit` (both target an existing file → the core
+audit-logger records `ARTIFACT_UPDATED`).

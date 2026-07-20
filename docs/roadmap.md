@@ -100,5 +100,5 @@ delivered (`reviewer_max_iterations` + HITL escalation, reading
 - Stage-level rules layer (`aidlc-stage-<slug>.md`): reserved, unbuilt (Goal 2).
 - Plugin deferred surfaces: agents/scopes/memory/knowledge projection, `when:` evaluation, marketplace (Goal 2).
 - Sensor blocking severity (#431): sensors are advisory-only; a gate cannot be halted by a machine check (adjacent to Goal 4, deliberately out of 2.4.0).
-- Conductor health cluster (#547, #548, #551) and Kiro IDE 1.0 regressions (#543, #555): pre-GA quality, not goal-mapped.
+- Conductor health cluster (#547, #548, #551) and the Kiro IDE 1.0 cluster (#543, #555): pre-GA quality, not goal-mapped. Both IDE issues remain OPEN: 2.5.10 shipped #555's hook-registration half (the v2 schema), 2.5.12 shipped #543's context channel, and #555's agent/settings surfaces are still unaddressed. These issues need manual closing — a `Fixes` trailer on a PR targeting `v2` does not auto-close them.
 - Cross-unit discovery propagation (Goal 6): still a real v2 gap, but the only open PR (#300) targets the retired v1 tree (`aidlc-rules/`, base main, 2026-05); it needs a fresh v2 implementation, not a rebase.

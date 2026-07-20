@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.12] - 2026-07-24
+
+Closes the payload boundary 2.5.10 left open on Kiro IDE 1.x: the hook adapter now reads the IDE's stdin context channel, so the two payload-dependent hooks (`audit-and-sensors`, `log-subagent`) are fully functional there - artifact audit rows, sensor firing, and subagent tracking all work again. Verified live on Kiro IDE 1.0.165 (same session, no restart). **Upgrade:** copy the tree CONTENTS - `mkdir -p your-project/.kiro && cp -R dist/kiro-ide/.kiro/. your-project/.kiro/` into your project.
+
+* `aidlc-kiro-adapter.ts` (kiro-ide) accepts both context channels and field spellings: a non-empty 0.12 `USER_PROMPT` payload (camelCase) is consumed immediately without probing that generation's never-closing stdin; otherwise the 1.x stdin payload (snake_case `{tool_name, tool_input, tool_response}`, no success flag) is read with a 2s broken-channel ceiling. The public `aidlc adapter kiro-ide` dispatcher follows the same contract. Only an explicit `toolSuccess: false` drops a write from the audit (the #417 guard); the 1.x channel carries no success flag and falls through to the path check.
+* Payload acquisition is gated to `audit-and-sensors` and `log-subagent`; every other target - including the per-tool-call `block` floor - touches neither channel. `SUBAGENT_COMPLETED` is recorded again on IDE 1.x: that generation sends `subagent_<agent>` rather than the 0.12 `invoke_sub_agent`, so the registration matcher is now broad enough to reach any delegate name and the adapter drops the empty `subagent_response` shell that would otherwise be logged with `Agent Type: unknown` (#459/#543).
+* `audit-and-sensors` now records a visible hook drop when neither channel yields a payload, so a broken context channel surfaces in `/aidlc --doctor` instead of exiting as a silent no-op.
+* Docs updated (`docs/reference/kiro-ide-hook-payload.md` documents both context channels and scopes empty inputs to captured PostToolUse events; `docs/guide/harnesses/kiro-ide.md`; `docs/reference/06-hooks-and-tools.md`; `docs/roadmap.md` marks only #555's hook-registration portion resolved). No command or flag changes; no breaking change for CI or scripts.
+
 ## [2.5.11] - 2026-07-24
 
 Intent Capture now keeps generated intent and stakeholder claims grounded in the user's description, confirmed answers, workflow-selected scope, or explicitly registered memory. Unsupported content is omitted, elicited, or surfaced as a human-owned assumption instead of being presented as fact. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated stage, Product Lead reviewer contract, and `claim-sources` sensor are installed.
