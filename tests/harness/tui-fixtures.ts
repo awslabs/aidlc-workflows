@@ -56,9 +56,9 @@ const HARNESS_DIR = import.meta.dir;
 const REPO_ROOT = join(HARNESS_DIR, "..", "..");
 export const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 export const KIRO_SRC = join(REPO_ROOT, "dist", "kiro", ".kiro");
-// The Kiro IDE distributable ships the .kiro.hook files the IDE actually reads
-// (the human-presence mint + block); dist/kiro/.kiro/hooks has none. Seed this tree
-// for IDE-shaped tests.
+// The Kiro IDE distributable ships the v2 hook JSON files (hooks/aidlc-*.json)
+// the IDE actually reads (the human-presence mint + block); dist/kiro/.kiro/hooks
+// has none. Seed this tree for IDE-shaped tests.
 export const KIRO_IDE_SRC = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
 const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures");
 // The per-harness memory shell (aidlc/spaces/default/memory) ships beside the
@@ -234,7 +234,7 @@ export interface TuiProjectOptions {
    *  Kiro install shape — workspace default agent + steering ride along);
    *  "kiro-ide" copies dist/kiro-ide/.kiro → <proj>/.kiro plus
    *  dist/kiro-ide/AGENTS.md → <proj>/AGENTS.md (the IDE install shape, which
-   *  carries the .kiro.hook files the IDE reads - the human-presence mint + block).
+   *  carries the v2 hook JSON files the IDE reads - the human-presence mint + block).
    *  Everything else (state, audit, stubs) is harness-neutral. */
   harness?: "claude" | "kiro" | "kiro-ide";
   /** Seed aidlc-docs/aidlc-state.md from tests/fixtures/<withState> (a filename like
@@ -325,8 +325,8 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
     if (existsSync(KIRO_MEMORY_SRC)) cpSync(KIRO_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
   } else if (opts.harness === "kiro-ide") {
     // The Kiro IDE install shape — same .kiro + AGENTS.md + aidlc/ as Kiro CLI,
-    // but from dist/kiro-ide/ so the .kiro.hook files the IDE reads (mint + block)
-    // ride along (dist/kiro/.kiro/hooks ships none).
+    // but from dist/kiro-ide/ so the v2 hook JSON files the IDE reads (mint +
+    // block) ride along (dist/kiro/.kiro/hooks ships none).
     cpSync(KIRO_IDE_SRC, join(proj, ".kiro"), { recursive: true });
     cpSync(join(KIRO_IDE_SRC, "..", "AGENTS.md"), join(proj, "AGENTS.md"));
     if (existsSync(KIRO_IDE_MEMORY_SRC)) cpSync(KIRO_IDE_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });

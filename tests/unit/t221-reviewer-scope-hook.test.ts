@@ -588,7 +588,11 @@ describe("t221 (c) harness registration and protocol prose", () => {
     );
     expect(harnesses.length).toBeGreaterThan(0);
     for (const harness of harnesses) {
+      // Both wiring generations: the legacy .kiro.hook and the v2 hook JSON.
       expect(existsSync(join(harness.engineRoot, "hooks", "aidlc-reviewer-scope.kiro.hook"))).toBe(
+        false,
+      );
+      expect(existsSync(join(harness.engineRoot, "hooks", "aidlc-reviewer-scope.json"))).toBe(
         false,
       );
     }

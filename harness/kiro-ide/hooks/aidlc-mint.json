@@ -1,0 +1,11 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-mint",
+      "trigger": "UserPromptSubmit",
+      "description": "Records a human-turn event on prompt submit (human-presence gate).",
+      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts mint" }
+    }
+  ]
+}

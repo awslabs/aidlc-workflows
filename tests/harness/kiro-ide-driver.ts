@@ -204,11 +204,11 @@ const SEED_SETTINGS = {
   "telemetry.telemetryLevel": "off",
   "security.workspace.trust.enabled": false,
   "update.showReleaseNotes": false,
-  // LOAD-BEARING for the human-presence test: a `.kiro.hook` whose action is
-  // runCommand does NOT auto-execute in the IDE - Kiro renders a manual "Hook
+  // LOAD-BEARING for the human-presence test: a hook whose action runs a
+  // command does NOT auto-execute in the IDE - Kiro renders a manual "Hook
   // Command" approval card (Run / Reject) and the command only fires once the Run
-  // control is clicked. The MINT hook (promptSubmit) and the BLOCK hook (preToolUse)
-  // are both runCommand hooks. Without this setting the mint command sits behind that
+  // control is clicked. The MINT hook (UserPromptSubmit) and the BLOCK hook
+  // (PreToolUse) are both command hooks. Without this setting the mint command sits behind that
   // card: the test's autoApprove() loop CAN click it through (its label list includes
   // "run command"), but only on its next ~1.5s tick and only if it wins focus, so the
   // mint firing becomes a RACE - under load the click can lag the watch budget and the
@@ -250,7 +250,7 @@ export function generateKiroIdeSeed(dir: string): string {
 // ---------------------------------------------------------------------------
 
 export interface LaunchOptions {
-  /** The scratch workspace dir Kiro opens (carries .kiro/hooks/*.kiro.hook). */
+  /** The scratch workspace dir Kiro opens (carries the .kiro/hooks/aidlc-*.json v2 hooks). */
   workspace: string;
   /** A DISTILLED seed user-data-dir so onboarding + sign-in are skipped. NOT a clone
    *  of a real profile (see header / README open items). */

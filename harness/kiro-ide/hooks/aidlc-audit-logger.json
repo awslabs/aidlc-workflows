@@ -1,0 +1,12 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "aidlc-audit-logger",
+      "trigger": "PostToolUse",
+      "matcher": "fs_write|str_replace|fs_append",
+      "description": "Logs artifact create/update events on file writes to the record dir, then fires applicable sensors.",
+      "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts audit-and-sensors" }
+    }
+  ]
+}
