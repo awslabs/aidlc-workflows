@@ -55,13 +55,16 @@ const EXPECTED: Record<
   balanced: {
     claude: { model: "sonnet", effort: null },
     codex: { model: "openai.gpt-5.4", effort: null },
-    kiro: { model: "claude-sonnet-4.5" },
+    // Kiro never pins a model (#601): shipped IDs resolve only when that
+    // model is enabled on the user's install, so every Kiro tier inherits
+    // the session model.
+    kiro: { model: null },
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: null },
   },
   templated: {
     claude: { model: "sonnet", effort: "medium" },
     codex: { model: "openai.gpt-5.4", effort: "medium" },
-    kiro: { model: "claude-sonnet-4.5" },
+    kiro: { model: null },
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
   },
 };
@@ -234,23 +237,21 @@ describe("t220 tier projection module", () => {
     }
   });
 
-  // --- the Kiro collapse rule -------------------------------------------------
-  test("kiroModelDefaults: one entry per distinct pinned model, higher tier's effort wins", () => {
-    // balanced and templated share claude-sonnet-4.5; balanced (higher) wins
-    // with "high". judgment pins no model, so it contributes no entry.
-    expect(kiroModelDefaults()).toEqual({ "claude-sonnet-4.5": "high" });
+  // --- the Kiro collapse rule (dormant: no tier pins a Kiro model, #601) ------
+  test("kiroModelDefaults: empty while no tier pins a Kiro model (agents inherit the session model)", () => {
+    // #601: shipped Kiro model IDs resolve only when that model is enabled on
+    // the user's install, so no tier pins one and no tier-derived
+    // chat.modelDefaults entry ships. Only authored cli.json entries remain.
+    expect(kiroModelDefaults()).toEqual({});
   });
 
-  test("kiroModelDefaults: a templated cap collapses everything onto templated's effort", () => {
-    // Under a templated cap every tier projects as templated, so the single
-    // shared model entry carries templated's effort.
-    expect(kiroModelDefaults("templated")).toEqual({ "claude-sonnet-4.5": "medium" });
+  test("kiroModelDefaults: empty under any cap too (the collapse has nothing to collapse)", () => {
+    expect(kiroModelDefaults("templated")).toEqual({});
+    expect(kiroModelDefaults("balanced")).toEqual({});
   });
 
-  test("KIRO_TIER_EFFORT deliberately omits judgment (no pinned model to ride on)", () => {
-    expect(KIRO_TIER_EFFORT.judgment).toBeUndefined();
-    expect(KIRO_TIER_EFFORT.balanced).toBe("high");
-    expect(KIRO_TIER_EFFORT.templated).toBe("medium");
+  test("KIRO_TIER_EFFORT is deliberately empty (no pinned model for an effort to ride on)", () => {
+    expect(Object.keys(KIRO_TIER_EFFORT)).toEqual([]);
   });
 
   // --- structural invariant: the kiro slot can never carry an effort ----------
@@ -285,15 +286,6 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     expect(delivery).toContain('model_reasoning_effort = "medium"');
   });
 
-  // The five delegation-target agents shipped as Kiro JSONs, per tier.
-  const KIRO_JSON: Array<{ file: string; model: string | null }> = [
-    { file: "aidlc-architect-agent.json", model: null }, // judgment
-    { file: "aidlc-composer-agent.json", model: null }, // judgment
-    { file: "aidlc-developer-agent.json", model: null }, // judgment
-    { file: "aidlc-product-lead-agent.json", model: "claude-sonnet-4.5" }, // balanced
-    { file: "aidlc-architecture-reviewer-agent.json", model: "claude-sonnet-4.5" }, // balanced
-  ];
-
   const kiroHarnesses = HARNESS_MATRIX.filter(
     (harness) => harness.capabilities.kiroAgentJson,
   );
@@ -301,18 +293,19 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     expect(kiroHarnesses.length).toBeGreaterThan(0);
   });
   for (const harness of kiroHarnesses) {
-    test(`${harness.name} agent JSONs: judgment omits "model", balanced pins sonnet-4.5, NO effort-like keys anywhere`, () => {
-      for (const { file, model } of KIRO_JSON) {
+    test(`${harness.name} agent JSONs: NO "model" pin on any agent (inherit the session model, #601), NO effort-like keys anywhere`, () => {
+      // The full shipped roster, not a sample: a single pinned ID rejects
+      // every spawn on installs where that model isn't enabled.
+      const agentsDir = join(harness.engineRoot, "agents");
+      const jsons = readdirSync(agentsDir).filter((f) => f.endsWith(".json"));
+      expect(jsons.length).toBeGreaterThanOrEqual(15); // conductor + 14 personas
+      for (const file of jsons) {
         const parsed = JSON.parse(
-          readFileSync(join(harness.engineRoot, "agents", file), "utf-8"),
+          readFileSync(join(agentsDir, file), "utf-8"),
         ) as Record<string, unknown>;
-        if (model === null) {
-          expect("model" in parsed, `${harness.name}/${file}: judgment must omit "model"`).toBe(
-            false,
-          );
-        } else {
-          expect(parsed.model, `${harness.name}/${file}: model`).toBe(model);
-        }
+        expect("model" in parsed, `${harness.name}/${file}: must omit "model" (#601)`).toBe(
+          false,
+        );
         // kiro-cli fail-closes on unknown agent-JSON fields: any effort-like
         // key would break agent validation at install.
         for (const key of Object.keys(parsed)) {
@@ -325,34 +318,36 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     });
   }
 
-  test("Kiro-family agent .md frontmatter projects model and never effort", () => {
+  test("Kiro-family agent .md frontmatter never carries model: or effort: (inherit, #601)", () => {
     const fmOf = (raw: string): string => {
       const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
       if (!m) throw new Error("no frontmatter");
       return m[1];
     };
     for (const harness of kiroHarnesses) {
-      const arch = fmOf(
-        readFileSync(join(harness.engineRoot, "agents", "aidlc-architect-agent.md"), "utf-8"),
-      );
-      expect(/^model:/m.test(arch), `${harness.name}: judgment must omit model:`).toBe(false);
-      const delivery = fmOf(
-        readFileSync(join(harness.engineRoot, "agents", "aidlc-delivery-agent.md"), "utf-8"),
-      );
-      expect(delivery).toMatch(/^model: claude-sonnet-4\.5$/m);
-      for (const fm of [arch, delivery]) {
-        expect(/^effort:/m.test(fm), `${harness.name}: .md must never carry effort:`).toBe(false);
+      const dir = join(harness.engineRoot, "agents");
+      for (const f of readdirSync(dir).filter((n) => n.endsWith("-agent.md"))) {
+        const fm = fmOf(readFileSync(join(dir, f), "utf-8"));
+        expect(/^model:/m.test(fm), `${harness.name}/${f}: model: pin leaked (#601)`).toBe(false);
+        expect(/^effort:/m.test(fm), `${harness.name}/${f}: .md must never carry effort:`).toBe(
+          false,
+        );
       }
     }
   });
 
-  test("kiro-ide cli.json carries the same tier-projected modelDefaults as kiro's (t148 pins kiro)", () => {
-    const s = JSON.parse(
-      readFileSync(dist("kiro-ide", ".kiro", "settings", "cli.json"), "utf-8"),
-    ) as Record<string, Record<string, { output_config?: { effort?: string } }>>;
-    const defaults = s["chat.modelDefaults"];
-    expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
-    expect(defaults?.["claude-sonnet-4.5"]?.output_config?.effort).toBe("high");
+  test("kiro cli.json modelDefaults: authored conditional entries only, no tier-derived pins", () => {
+    for (const harness of ["kiro", "kiro-ide"]) {
+      const s = JSON.parse(
+        readFileSync(dist(harness, ".kiro", "settings", "cli.json"), "utf-8"),
+      ) as Record<string, Record<string, { output_config?: { effort?: string } }>>;
+      const defaults = s["chat.modelDefaults"];
+      // The authored orchestrator entry survives: conditional (applies only
+      // when the session runs that model), inert for spawns.
+      expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
+      // No tier-derived entry ships while no tier pins a Kiro model.
+      expect(Object.keys(defaults ?? {}).sort()).toEqual(["claude-opus-4.8"]);
+    }
   });
 
   // Full-roster completeness: raw `tier:` must never leak into ANY shipped

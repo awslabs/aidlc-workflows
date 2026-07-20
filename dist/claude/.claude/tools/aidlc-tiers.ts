@@ -28,20 +28,27 @@
 //                   doctor floor - AND 0.142.5: a role TOML without `model`
 //                   spawns on the config.toml model + effort). `judgment`
 //                   omits both keys.
-//   - Kiro CLI/IDE  agent surfaces carry a `"model"` value ONLY - kiro-cli
-//                   fail-closes on any effort-like key in agent JSON, so no
-//                   Kiro agent surface may EVER carry an effort key. Effort
-//                   rides on the MODEL via cli.json chat.modelDefaults (see
-//                   KIRO_TIER_EFFORT + kiroModelDefaults below). `judgment`
-//                   omits `"model"`; the schema-documented fallback is the
-//                   user's default model at that model's default effort.
+//   - Kiro CLI/IDE  every tier omits `"model"` — Kiro agents INHERIT the
+//                   session model (#601: a shipped model ID resolves only
+//                   when that model is enabled on the user's install; a
+//                   session on another model rejects every delegated spawn
+//                   with "Invalid model ID", and Kiro also rejects the
+//                   Claude-dialect aliases outright, so there is no safe
+//                   pinnable value). The agent-v1 schema documents the
+//                   fallback: "If not specified, uses the default model" —
+//                   the session model at its own default effort. kiro-cli
+//                   also fail-closes on any effort-like key in agent JSON,
+//                   so no Kiro agent surface may EVER carry one; a per-model
+//                   effort default can only ride on cli.json
+//                   chat.modelDefaults (see kiroModelDefaults below).
 //
-// Kiro collapse rule: two tiers whose Kiro model IDs are equal are the same
-// tier on Kiro (there is no per-agent effort surface to tell them apart).
-// When tiers share a model, the cli.json chat.modelDefaults entry for that
-// model takes the HIGHER tier's effort - kiroModelDefaults() computes this.
-// Today `balanced` and `templated` both land on claude-sonnet-4.5, so the
-// shipped entry is sonnet-4.5 -> "high" (balanced wins the collapse).
+// Kiro collapse rule (dormant while no tier pins a Kiro model): two tiers
+// whose Kiro model IDs are equal are the same tier on Kiro (there is no
+// per-agent effort surface to tell them apart). When tiers share a model,
+// the cli.json chat.modelDefaults entry for that model takes the HIGHER
+// tier's effort - kiroModelDefaults() computes this. Today no tier pins a
+// Kiro model, so kiroModelDefaults() contributes no entries and only the
+// authored cli.json entries ship.
 //
 // Cost-cap override, resolved at PACK time (runtime composition is out of
 // scope): the space-memory `tier_cap:` frontmatter key on the layered method
@@ -104,7 +111,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
   balanced: {
     claude: { model: "sonnet", effort: null },
     codex: { model: "openai.gpt-5.4", effort: null },
-    kiro: { model: "claude-sonnet-4.5" },
+    kiro: { model: null },
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: null },
   },
   templated: {
@@ -112,21 +119,19 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     // pattern-following output.
     claude: { model: "sonnet", effort: "medium" },
     codex: { model: "openai.gpt-5.4", effort: "medium" },
-    kiro: { model: "claude-sonnet-4.5" },
+    kiro: { model: null },
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
   },
 };
 
 /** Kiro effort per tier - used ONLY to derive cli.json chat.modelDefaults
  *  entries (effort rides on the model on Kiro, never on the agent). Kept out
- *  of TierProjection so no agent-surface writer can reach it. `judgment` is
- *  absent deliberately: it pins no Kiro model, so there is no model entry to
- *  carry its effort - judgment agents run at the user's default model's own
- *  default effort. */
-export const KIRO_TIER_EFFORT: Partial<Record<Tier, KiroEffort>> = {
-  balanced: "high",
-  templated: "medium",
-};
+ *  of TierProjection so no agent-surface writer can reach it. EMPTY today:
+ *  no tier pins a Kiro model (#601 - Kiro agents inherit the session model),
+ *  so there is no model entry to carry a tier effort - every agent runs at
+ *  the session model's own default effort. If a tier ever pins a Kiro model
+ *  again, add its effort here and kiroModelDefaults() resumes emitting. */
+export const KIRO_TIER_EFFORT: Partial<Record<Tier, KiroEffort>> = {};
 
 export function isTier(v: string): v is Tier {
   return (TIERS as readonly string[]).includes(v);

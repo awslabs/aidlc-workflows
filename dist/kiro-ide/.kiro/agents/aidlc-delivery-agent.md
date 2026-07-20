@@ -9,7 +9,6 @@ description: >
   Leads Team Formation, Initiative Approval & Handoff, and Delivery Planning stages.
   Supports Scope Definition and Units Generation.
 disallowedTools: Task
-model: claude-sonnet-4.5
 tools: ["read", "write", "shell"]
 ---
 

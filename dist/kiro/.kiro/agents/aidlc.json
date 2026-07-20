@@ -109,6 +109,5 @@
         "timeout_ms": 30000
       }
     ]
-  },
-  "model": "claude-opus-4.8"
+  }
 }

@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.6] - 2026-07-22
+
+Unblocks agent delegation on the Kiro harnesses (#601): every shipped model pin is removed from the Kiro agent surfaces, so the conductor and all 14 personas inherit the session model. Previously every `invoke_sub_agent` spawn failed with `Invalid model ID` whenever the pinned IDs (`claude-opus-4.8` on the conductor JSON, `claude-sonnet-4.5` on the tier-projected persona JSONs and `.md` frontmatter) were not enabled on the user's Kiro install - blocking the subagent stages, every `reviewer:`-bound gate, the 2.5.0 ensemble dispatches, and any manual delegation. Verified fix shape (live on Kiro IDE): with both pin layers stripped, all 14 agents spawn and respond on a session model the pins never named. **Upgrade:** re-copy the entire `.kiro/` tree from `dist/kiro/` or `dist/kiro-ide/` into your project (agents, settings, tools, and knowledge all carry changes).
+
+* The tier projection's kiro flavor no longer pins a model for any tier (`core/tools/aidlc-tiers.ts`): balanced/templated drop `claude-sonnet-4.5`, so the packager omits `"model"` from every projected agent JSON and every `model:` frontmatter line on both Kiro trees. The agent-v1 schema's documented fallback applies: agents run on the session's default model.
+* The authored conductor pin (`"model": "claude-opus-4.8"` in `agents/aidlc.json`, both Kiro harnesses) is removed - the conductor inherits the session model too.
+* `settings/cli.json` keeps ONLY the authored conditional effort default (`chat.modelDefaults["claude-opus-4.8"] -> xhigh`, applied when the session actually runs that model; inert otherwise and inert for spawns). The tier-derived `claude-sonnet-4.5 -> high` entry no longer ships.
+* The kiro projection machinery (`TIER_PROJECTIONS[].kiro`, `KIRO_TIER_EFFORT`, `kiroModelDefaults()`) stays in place, dormant, should a per-install-resolvable pinning mechanism appear.
+* Docs updated (`docs/reference/05-agent-system.md` tier table, `docs/guide/harnesses/kiro-cli.md`, `docs/guide/13-customization.md`). Claude Code, Codex, and opencode projections are unchanged. No command or flag changes; no breaking change for CI or scripts.
+
 ## [2.5.5] - 2026-07-22
 
 Reviewer-bearing stages now have an engine-enforced, auditable verification boundary on every completion route. Interactive, per-unit, unit-major, and autonomous Construction runs record reviewer dispatch and verdict events, and stale or incomplete reviews refuse completion without adding another human checkpoint. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.

@@ -9,7 +9,6 @@ description: >
   Leads Observability Setup, Incident Response, and Feedback & Optimization stages.
   Supports Performance Validation.
 disallowedTools: Task
-model: claude-sonnet-4.5
 tools: ["read", "write", "shell"]
 ---
 

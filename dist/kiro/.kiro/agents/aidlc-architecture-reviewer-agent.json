@@ -51,6 +51,5 @@
         "timeout_ms": 15000
       }
     ]
-  },
-  "model": "claude-sonnet-4.5"
+  }
 }

@@ -249,26 +249,28 @@ describe("t148 dist/kiro file structure", () => {
     expect(s["chat.defaultAgent"]).toBe("aidlc");
   });
 
-  test("workspace pins per-model efforts via chat.modelDefaults (orchestrator + tier models)", () => {
-    // The shipped cli.json carries one entry per model AIDLC pins: the
-    // authored orchestrator entry (claude-opus-4.8 -> xhigh, exactly as
-    // agents/aidlc.json pins it) plus one tier-projected entry per distinct
-    // model the tier table names (claude-sonnet-4.5 -> high — balanced's
-    // effort wins the balanced/templated collapse; judgment pins no model so
-    // it has no entry). Kiro's per-model default sub-path is
-    // output_config.effort (per kiro.dev/docs/cli/chat/effort). Pin the whole
-    // map so neither the authored default nor the projection can regress.
+  test("workspace pins per-model efforts via chat.modelDefaults (authored conditional entries only)", () => {
+    // The shipped cli.json carries ONLY the authored orchestrator entry
+    // (claude-opus-4.8 -> xhigh): a CONDITIONAL per-model effort default that
+    // applies only when the session actually runs that model — inert for
+    // spawns and harmless when the model isn't enabled. No agent surface
+    // pins a model anymore (#601: shipped IDs resolve only when enabled on
+    // the user's install), and no tier pins a Kiro model, so no tier-derived
+    // entry ships. Kiro's per-model default sub-path is output_config.effort
+    // (per kiro.dev/docs/cli/chat/effort). Pin the whole map so neither the
+    // authored default nor a resurrected projection pin can regress.
     const s = readJson(join(K, "settings", "cli.json"));
     const defaults = s["chat.modelDefaults"] as Record<
       string,
       { output_config?: { effort?: string } }
     >;
     expect(defaults?.["claude-opus-4.8"]?.output_config?.effort).toBe("xhigh");
-    expect(defaults?.["claude-sonnet-4.5"]?.output_config?.effort).toBe("high");
-    expect(Object.keys(defaults ?? {}).sort()).toEqual([
-      "claude-opus-4.8",
-      "claude-sonnet-4.5",
-    ]);
+    expect(Object.keys(defaults ?? {}).sort()).toEqual(["claude-opus-4.8"]);
+  });
+
+  test("no shipped Kiro agent surface pins a model (#601: agents inherit the session model)", () => {
+    const a = readJson(join(K, "agents", "aidlc.json"));
+    expect("model" in a).toBe(false);
   });
 
   test("kiro skills carry the kiro tool prefix, never the claude one", () => {

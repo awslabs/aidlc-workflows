@@ -57,6 +57,5 @@
     "skill://.kiro/skills/*/SKILL.md",
     "file://aidlc/spaces/default/memory/**/*.md",
     "file://AGENTS.md"
-  ],
-  "model": "claude-opus-4.8"
+  ]
 }

@@ -152,7 +152,7 @@ describe("t-active-space-includes: Kiro agents/*.json resources glob", () => {
     return root;
   }
 
-  test("re-points the resources glob in every agent JSON; preserves hooks/prompt/model + other resources", () => {
+  test("re-points the resources glob in every agent JSON; preserves hooks/prompt + other resources", () => {
     const root = setup();
     const written = repointHarnessIncludes(root, "teamB");
     // All 5 agent JSONs carry a memory glob → all 5 rewritten.
@@ -169,7 +169,9 @@ describe("t-active-space-includes: Kiro agents/*.json resources glob", () => {
     expect(conductor.hooks?.postToolUse).toBeDefined();
     expect(typeof conductor.prompt).toBe("string");
     expect(conductor.prompt.length).toBeGreaterThan(50);
-    expect(conductor.model).toBeDefined();
+    // No model pin to preserve — and the rewrite must not resurrect one
+    // (#601: Kiro agents inherit the session model).
+    expect("model" in conductor).toBe(false);
     expect(conductor.tools).toBeDefined();
   });
 
