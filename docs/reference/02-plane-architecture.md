@@ -123,7 +123,7 @@ recompile at the next workflow start.
 | State | Lifecycle | Source on disk | Compiled into | Read by |
 |---|---|---|---|---|
 | Stage DAG, scope routing, artifact production | Framework-versioned (changes via framework PR) | Stage frontmatter (`.claude/aidlc-common/stages/*.md`) | `stage-graph.json` | Orchestrator, doctor, designer |
-| **Rules** (prose, prescriptive) | Mutable; framework PR or learning-loop writes | `aidlc/spaces/<space>/memory/<scope>.md` (filename-derived; org/team/project attach to every stage) | `stage-graph.json` per-node `rules_in_context` | Orchestrator (resolved view); Claude Code auto-load reads source for in-context prose |
+| **Rules** (prose, prescriptive) | Mutable; framework PR or learning-loop writes | `aidlc/spaces/<active-space>/memory/<scope>.md` (filename-derived; org/team/project attach to every stage) | `stage-graph.json` per-node `rules_in_context` | Orchestrator (resolved view); Claude Code auto-load reads source for in-context prose |
 | **Sensors** (manifests, verification checks) | Mutable; framework PR or learning-loop writes (manifest authored once; stages import by id) | `.claude/sensors/aidlc-<id>.md` | `stage-graph.json` per-node `sensors_applicable` | Dispatcher reads resolved list at stage entry; PostToolUse fires from it |
 | Workflow execution telemetry | Per-workflow, accumulating | `audit/` shards · `memory.md` · Bolt forks | `<record>/runtime-graph.json` | Doctor, gate ritual, future cross-workflow observer |
 | Per-stage observation log | Per-stage-run | `<record>/<phase>/<stage>/memory.md` | (no compile — read directly) | Gate ritual at this stage's gate |
@@ -137,7 +137,7 @@ authoring surface; compiled graphs are what runtime reads.
 
 ### One compile, at workflow start
 
-The compile reads stage frontmatter, walks `aidlc/spaces/<space>/memory/` and
+The compile reads stage frontmatter, walks `aidlc/spaces/<active-space>/memory/` and
 `.claude/sensors/`, attaches universal-default rules by filename
 (`org.md`, `team.md`, `project.md` apply to every
 stage), then looks up each stage's pull imports against the source

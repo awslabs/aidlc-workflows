@@ -3,13 +3,16 @@
 // t-tui-kiro-bugfix-scope.serial.test.ts — the Kiro twin of
 // t-tui-t50-bugfix-scope: drive the BUGFIX-scope workflow through a REAL
 // keystroke-driven `kiro-cli chat` on the shipped dist/kiro tree, answering
-// every numbered-prose gate with "1" (the recommended option per the Kiro
-// question-rendering annex), and TERMINATE on the on-disk Completed counter
-// crossing the post-init milestone — the same milestone the Claude twin (and
-// its .sh ancestor) pinned: init=3 + >=2 Inception stages = Completed >= 5.
+// the known Q1-Q4 guide batch with explicit per-question numbers, confirming
+// the consolidated summary, and answering the mandatory learnings prompt before
+// each separate approval prompt. It then TERMINATES on the
+// on-disk Completed counter crossing the post-init milestone — the same
+// milestone the Claude twin (and its .sh ancestor) pinned: init=3 + >=2
+// Inception stages = Completed >= 5.
 //
-// The gate loop is the kiro-intent-capture pattern (idle footer → send "1" →
-// re-check disk): disk is the terminator, never the screen (§1.1).
+// The gate loop is the kiro-intent-capture pattern (idle footer → classify and
+// answer the visible prompt → re-check disk): disk is the terminator, never the
+// screen. The shared classifier rejects a learning+approval combined prompt.
 //
 // What it proves on the SHIPPED tree:
 //   - `/aidlc bugfix <description>` on a fresh BROWNFIELD workspace detects
@@ -29,8 +32,14 @@ import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { stateFilePathFor } from "../harness/sdk-drive.ts";
-import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
+import { recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
+import {
+  cleanupTuiProject,
+  createKiroNumberedProseAnswerState,
+  KIRO_SRC,
+  nextKiroNumberedProseAnswer,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const IS_WIN = os.platform() === "win32";
@@ -63,7 +72,6 @@ function send(session: string, keys: string): void {
 }
 
 const IDLE_PATTERN = "ask a question or describe a task";
-
 function skipReason(): string | null {
   if (process.env.AIDLC_KIRO_TUI_LIVE !== "1") {
     return "set AIDLC_KIRO_TUI_LIVE=1 to run the live Kiro bugfix journey (uses Kiro credits)";
@@ -130,19 +138,42 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
           "/aidlc bugfix Fix the duplicate-todo bug when adding items quickly",
         );
 
-        // Gate loop: idle ⇒ answer "1" ⇒ re-check disk, until Completed >= 5
-        // (init 3 + >=2 Inception — the Claude twin's milestone).
+        // Gate loop: idle => answer the next menu/batch => re-check disk, until
+        // Completed >= 5 (init 3 + >=2 Inception).
         const deadline = Date.now() + Math.max(120000, TEST_TIMEOUT_MS - 120000);
         let answers = 0;
-        const MAX_ANSWERS = 60;
-        while (Date.now() < deadline && answers < MAX_ANSWERS) {
+        const answerState = createKiroNumberedProseAnswerState();
+        while (Date.now() < deadline) {
           if (completedCount(sandbox) >= 5) break;
           if (!waitFor(session, IDLE_PATTERN, 300000, 1500)) continue;
           if (completedCount(sandbox) >= 5) break;
-          send(session, "1");
+          const screen = drive(["capture", "--session", session]).stdout;
+          const answer = nextKiroNumberedProseAnswer(screen, answerState);
+          if (answer === null) {
+            throw new Error(
+              `Kiro stopped at an unrecognized bugfix prompt:\n${screen.slice(-4000)}`,
+            );
+          }
+          send(session, answer);
           answers += 1;
         }
+        expect(answers).toBeGreaterThan(0);
+        expect(answerState.summaryConfirmed).toBe(true);
+        expect(answerState.learningsAnswered).toBeGreaterThanOrEqual(2);
+        expect(answerState.approvalsAnswered).toBeGreaterThanOrEqual(2);
         expect(completedCount(sandbox)).toBeGreaterThanOrEqual(5);
+
+        const questionsPath = join(
+          recordDirFor(sandbox),
+          "inception",
+          "requirements-analysis",
+          "requirements-analysis-questions.md",
+        );
+        expect(existsSync(questionsPath)).toBe(true);
+        const questions = readFileSync(questionsPath, "utf-8");
+        expect(questions).toMatch(
+          /## Consolidated Summary Confirmation[\s\S]*\[Answer\]:[^\r\n]*Looks correct/i,
+        );
 
         // State surface — the Claude twin's assertion shapes (t50:309-330):
         // loose scope/brownfield matches (live init writes vary the field
@@ -158,6 +189,10 @@ describe("t-tui-kiro-bugfix-scope (brownfield bugfix journey, numbered-prose gat
         const audit = readAllAuditShards(sandbox);
         expect(audit).toContain("WORKFLOW_STARTED");
         expect(audit).toContain("GATE_APPROVED");
+        const questionAnsweredAt = audit.lastIndexOf("**Event**: QUESTION_ANSWERED");
+        const gateOpenedAt = audit.lastIndexOf("**Event**: STAGE_AWAITING_APPROVAL");
+        expect(questionAnsweredAt).toBeGreaterThan(-1);
+        expect(gateOpenedAt).toBeGreaterThan(questionAnsweredAt);
       } finally {
         drive(["kill", "--session", session]);
         cleanupTuiProject(sandbox);

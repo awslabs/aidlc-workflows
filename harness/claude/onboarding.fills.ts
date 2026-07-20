@@ -29,7 +29,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
     prereq_bullets_tail: `- **Settings**: \`.claude/settings.json\` pre-approves tools (Read, Edit, Write, Bash, Glob, Grep, Task, WebSearch) so workflows run without per-call permission prompts.
 - **Personal overrides**: Copy \`.claude/settings.local.json.example\` to \`.claude/settings.local.json\` (gitignored) to override the model or set environment variables without affecting shared settings.`,
 
-    agents_note: `Each is a flat \`.md\` file prefixed \`aidlc-<role>-agent.md\`; the conductor adopts domain personas inline where the stage mode calls for it and delegates the two subagent stages, reviewer passes, and composer requests via the \`Task\` tool.`,
+    agents_note: `Each is a flat \`.md\` file prefixed \`aidlc-<role>-agent.md\`; the conductor adopts domain personas inline where the stage mode calls for it and delegates workers for the four dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests via the \`Task\` tool.`,
 
     structure_extra: "",
 
@@ -37,7 +37,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 
     sections_before_resumption: `## AI-DLC Method (imported)
 
-The AI-DLC method — the layered practice files (\`org.md\`, \`team.md\`, \`project.md\`, and the per-phase \`phases/<phase>.md\`) — is authored once at the workspace root under \`aidlc/spaces/default/memory/\` and imported into Claude's ambient context by reference (the \`@{{HARNESS_DIR}}/rules/aidlc.md\` import at the top of this file), never copied. That stub \`@\`-imports each method file from \`aidlc/spaces/default/memory/\`; Claude resolves the nested chain. Edit the method there — it is the single hand-editable source of truth, identical on every harness. (AI-DLC's own stage resolver reads the same tree directly, so each stage is method-correct without this ambient import.)
+The AI-DLC method — the layered practice files (\`org.md\`, \`team.md\`, \`project.md\`, and the per-phase \`phases/<phase>.md\`) — is authored once at the workspace root under \`aidlc/spaces/<active-space>/memory/\` and imported into Claude's ambient context by reference (the \`@{{HARNESS_DIR}}/rules/aidlc.md\` import at the top of this file), never copied. The shipped shell starts on \`default\`; switching spaces repoints that stub to the selected space. Edit the active space's memory files — they are the single hand-editable source of truth, identical on every harness. (AI-DLC's own stage resolver reads the same tree directly, so each stage is method-correct without this ambient import.)
 `,
 
     sections_after_resumption: "",

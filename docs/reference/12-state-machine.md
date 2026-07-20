@@ -2,7 +2,7 @@
 
 This chapter is the canonical reference for AI-DLC's state machines, the audit-event taxonomy, and the rule that connects them — **every state transition has exactly one tool-owned emitter**. Keeping this chapter's tables in sync with the code is enforced by the drift test at `tests/integration/t48-audit-event-emitters.test.ts`. If the doc and the code disagree, t48 fails.
 
-Three nested state machines drive AI-DLC: **workflow**, **phase**, and **stage**. A fourth, independent stream records **session** events emitted by Claude Code hooks. These four streams share the intent's audit trail (the `audit/` shard dir under its record dir, `<record>/` = `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`) but are owned by different code paths, so it's easiest to read them as separate concerns and remember that their timelines interleave.
+Three nested state machines drive AI-DLC: **workflow**, **phase**, and **stage**. A fourth, independent stream records **session** events emitted by Claude Code hooks. These four streams share the intent's audit trail (the `audit/` shard dir under its record dir, `<record>/` = `aidlc/spaces/<active-space>/intents/<YYMMDD>-<label>/`) but are owned by different code paths, so it's easiest to read them as separate concerns and remember that their timelines interleave.
 
 > **North-star invariant:** TypeScript owns deterministic bookkeeping; the LLM owns judgment. Every audit emission originates in a tool or hook, keeping LLM prose out of the emit path. If you're reading an MD file and see `aidlc-audit.ts append <EVENT>` as a prose instruction, that is a bug.
 >
@@ -42,7 +42,7 @@ A workflow's `Running` state persists across Claude Code sessions. You start a w
 | Transition | Trigger | Emitter |
 |---|---|---|
 | `[*] -> Running` | `aidlc-utility intent-birth` | `tools/aidlc-utility.ts` |
-| `Running -> Completed` | `aidlc-state complete-workflow` | `tools/aidlc-state.ts` |
+| `Running -> Completed` | Final stage outcome reported through `aidlc-orchestrate.ts report` | `tools/aidlc-state.ts` (internal emitter) |
 
 ---
 
@@ -73,8 +73,8 @@ Phase state is tracked in the `## Phase Progress` section of `aidlc-state.md`. I
 | Transition | Trigger | Emitter |
 |---|---|---|
 | seed (`Verified`/`Active`/`Pending`/`Skipped`) | `aidlc-utility intent-birth` | `tools/aidlc-utility.ts` |
-| `Active -> Verified` | `aidlc-state advance`, `finalize`, or `complete-workflow` at phase boundary; forward `aidlc-jump execute` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` |
-| `Pending -> Active` (boundary) | `aidlc-state advance` or `finalize` at phase boundary, or `aidlc-jump execute` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` |
+| `Active -> Verified` | Stage completion/skip reported through `aidlc-orchestrate.ts` at a phase boundary; forward `aidlc-jump execute` | `tools/aidlc-state.ts` (internal emitter), `tools/aidlc-jump.ts` |
+| `Pending -> Active` (boundary) | Engine routes after a reported outcome, or `aidlc-jump execute` | `tools/aidlc-state.ts` (internal emitter), `tools/aidlc-jump.ts` |
 | `Pending -> Skipped` (jumped over) | forward `aidlc-jump execute` past a whole phase | `tools/aidlc-jump.ts` |
 | `Verified/Active -> Pending` reset | backward `aidlc-jump execute` (reset phases with EXECUTE stages) | `tools/aidlc-jump.ts` |
 | `Pending <-> Skipped` re-derivation | `aidlc-utility scope-change` / `recompose` (not-yet-reached rows only) | `tools/aidlc-utility.ts` |
@@ -124,33 +124,85 @@ stateDiagram-v2
 
 | Transition | Trigger | Emitter |
 |---|---|---|
-| `Pending → Active` | `aidlc-state advance <slug>` | `tools/aidlc-state.ts` |
-| `Active → AwaitingApproval` | `aidlc-state gate-start <slug>` | `tools/aidlc-state.ts` |
-| `AwaitingApproval → Completed` | `aidlc-state approve <slug>` | `tools/aidlc-state.ts` |
-| `AwaitingApproval → Revising` | `aidlc-state reject <slug> --feedback <text>` | `tools/aidlc-state.ts` |
-| `Active → Revising` | `aidlc-state reject <slug>` when gate-start was skipped — reject backfills the missing `STAGE_AWAITING_APPROVAL` (tagged `Recovered=true`) before the rejection pair | `tools/aidlc-state.ts` |
-| `Revising → AwaitingApproval` | `aidlc-state revise <slug>` (re-enter gate) | `tools/aidlc-state.ts` |
-| `{Pending,Active,Revising} → Skipped` | `aidlc-state skip <slug> --reason <text>`, or `aidlc-jump execute` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` |
+| `Pending → Active` | Engine routes after the previous reported outcome | `tools/aidlc-state.ts` (internal emitter) |
+| `Active → AwaitingApproval` | `aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval` | `tools/aidlc-state.ts` (internal emitter) |
+| `AwaitingApproval → Completed` | `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` | `tools/aidlc-state.ts` (internal emitter) |
+| `AwaitingApproval → Revising` | `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input <text>` | `tools/aidlc-state.ts` (internal emitter) |
+| `Active → Revising` | The same rejected report when gate-open recovery is needed | `tools/aidlc-state.ts` (internal emitter) |
+| `Revising → AwaitingApproval` | `aidlc-orchestrate.ts report --stage <slug> --result revised` | `tools/aidlc-state.ts` (internal emitter) |
+| `{Active,Revising} → Skipped` | `aidlc-orchestrate.ts report --stage <slug> --result skipped --reason <text>` | `tools/aidlc-state.ts` (internal routed-skip emitter) |
+| `Pending → Skipped` | Scope composition or `aidlc-jump execute` | `tools/aidlc-utility.ts`, `tools/aidlc-jump.ts` |
 
-The `approve` command owns the full post-gate transition: it emits `GATE_APPROVED + STAGE_COMPLETED`, then auto-advances to the next in-scope stage (delegating to `handleAdvance`) emitting `STAGE_STARTED` plus any `PHASE_*` events at phase boundaries. On the final in-scope stage, approve delegates to `complete-workflow` instead, emitting `PHASE_COMPLETED + PHASE_VERIFIED + WORKFLOW_COMPLETED` and setting Status=Completed. The conductor does NOT call `advance` after `approve` — approve owns everything from gate-response through to the next stage's `[-]`. The `advance` command remains for non-gated transitions (Initialization stages, construction bolts) and is idempotent on an already-`[x]` slug (suppresses the duplicate `STAGE_COMPLETED`).
+The `approved` report owns the full post-gate transition: it emits
+`GATE_APPROVED + STAGE_COMPLETED`, then routes to the next in-scope stage,
+emitting `STAGE_STARTED` plus any `PHASE_*` events at boundaries. On the final
+in-scope stage it emits `PHASE_COMPLETED + PHASE_VERIFIED +
+WORKFLOW_COMPLETED` and sets Status=Completed. The conductor does not call
+state lifecycle verbs before or after reporting.
 
-**Artifact guard (issue #366).** Every transition that marks a stage `[x]` (`approve`, `advance`, `finalize`, and `complete-workflow`) runs a deterministic artifact check before completing it, so a stage cannot be marked `[x]` without evidence of work on disk (no completing subcommand is an unguarded backdoor). A stage that declares `produces[]` must have at least one of those artifacts present (under the active intent's record dir `aidlc/spaces/<space>/intents/<slug>-<id8>/<phase>/<slug>/`, or that record's `construction/<unit>/<slug>/` for per-unit Construction stages, or `aidlc/spaces/<space>/codekb/<repo>/` for codekb stages); a stage with `workspace_requires: true` must additionally show evidence of real source work outside the `aidlc/` workspace tree and the harness dir. In a git workspace that means an uncommitted/untracked non-doc change or a non-doc path in the last commit (so it distinguishes this session's code from a brownfield baseline and still passes commit-then-approve); otherwise a shell-free filesystem-existence check. If the check fails the command exits non-zero and writes nothing: the transition is refused (`Refusing to complete "<slug>": ...`). Stages that declare no `produces[]` (the Initialization phase) pass vacuously. Artifacts a stage lists under `optional_produces[]` (conditionally-written per-unit outputs, see `15-stage-definition.md`) do NOT participate in either this guard or the per-unit coverage check the orchestrator runs before advancing `for_each` iterations - coverage keys off the required `produces[]` only, so a unit that legitimately skipped a conditional artifact still counts covered. One further exemption: a per-unit Construction stage that carries a `produces_kinds` map can prune to zero required artifacts across every unit (for example, a workflow of only `packaging` units on functional-design). No unit ever wrote a per-unit dir, so the presence check would refuse the approval the engine just presented; when the compiled `bolt_dag`'s unit kinds make every unit's required set empty, the guard passes (the stage does not apply to any unit). Any unit owing any artifact keeps the check exactly as strict. Bypass with `AIDLC_SKIP_ARTIFACT_GUARD=1`.
+**Routed skip.** `report --result skipped` is accepted only on the main
+workflow with an explicit nonblank `--stage` and `--reason`, when the named
+stage is declared `execution: CONDITIONAL`, equals `Current Stage`, and is
+Active or Revising. It runs before
+artifact, per-unit, and ensemble-evidence guards because a justified skip owes
+no completion evidence. The engine invokes the internal skip transition with
+its routing marker: the transaction preserves `[S]`, emits exactly one
+`STAGE_SKIPPED`, never emits `STAGE_COMPLETED`, and either starts the next
+stage (including boundary events) or completes the workflow. If onward routing
+fails, recovery leaves the skipped marker and cursor at the same stage so the
+route can be retried without duplicating the skip event. `report --single
+--result skipped` is rejected.
 
-**Gate-revision backstop.** The conductor sometimes revises an artifact at an open gate but forgets to run `reject`, leaving `Revision Count: 0` and no `GATE_REJECTED`/`STAGE_REVISING` pair for a revision the user actually saw happen. To reconcile this, `approve` runs a deterministic predicate (`unrecordedRevisionSinceGateOpen`) before it commits: ordering all shard events chronologically, it is true when a `STAGE_AWAITING_APPROVAL` for the slug is open (no `GATE_REJECTED` after it), a `HUMAN_TURN` follows that gate open, and a declared `produces[]` artifact was written *after* that first post-gate human turn. When true, `approve` backfills the missing `GATE_REJECTED` + `STAGE_REVISING` pair (both tagged `Recovered: true`) plus a re-entry `STAGE_AWAITING_APPROVAL`, increments `Revision Count`, and then completes the approval normally: it reconciles the record rather than refusing the approval the human already gave (a retroactive refusal would consume the human-presence freshness boundary). The `HUMAN_TURN` pivot is what excludes the reviewer's legitimate `## Review` append, which lands before the human responds at the gate. Codekb stages participate through their `codekb/<repo>/<name>.md` path shape. When the active intent records one or more repos, only writes under those repo segments count as revision evidence; when it records none, the matcher accepts any repo segment for compatibility with legacy and project-root intents whose ownership is not present in the registry. Fail-open on an empty ledger, a missing gate open, or no post-gate human turn. Bypass with `AIDLC_SKIP_REVISION_BACKSTOP=1`.
+**Artifact guard (issue #366).** Every report outcome that marks a stage `[x]`
+runs a deterministic artifact check before completing it, so a stage cannot be
+marked complete without evidence of work on disk. A stage that declares
+`produces[]` must have at least one of those artifacts present (under the
+active intent's record dir, its per-unit Construction directories, or the
+active space's `codekb/<repo>/` for codekb stages); `workspace_requires: true`
+also requires source-work evidence outside `aidlc/` and the harness dir. A
+failure writes nothing. Optional outputs do not participate. For
+`produces_kinds`, units whose kind prunes the required set to zero owe no
+artifact; any applicable unit remains strict. Bypass with
+`AIDLC_SKIP_ARTIFACT_GUARD=1`.
+
+**Ensemble evidence gate.** On a `mob` or `subagent`-with-supports stage, the
+report path refuses `awaiting-approval`, `revised`, and `approved` while a
+declared support agent's contribution file
+(`<stage>/contributions/<agent-slug>.md`) is missing or lacks its
+`**Collaborator:**` identity-marker first line — the deterministic proof the
+ensemble actually convened. A settled autonomous swarm is exempt (its per-unit
+convergence ledger is the evidence); `report --single` checks stage-level
+evidence only. Bypass with `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`, intended only
+for recovering a legitimately-run stage whose contribution files were lost.
+
+**Gate-revision backstop.** If the conductor revises an artifact at an open
+gate without first reporting rejection, the `approved` report reconciles the
+missing `GATE_REJECTED` + `STAGE_REVISING` pair before completion when audit
+evidence proves a post-gate human turn followed by an artifact write. The
+backfilled rows carry `Recovered: true`; reviewer writes before the human turn
+do not count. Bypass with `AIDLC_SKIP_REVISION_BACKSTOP=1`.
 
 **Park (issue #365/#367).** `aidlc-orchestrate park` writes a `Parked` / `Parked At Stage` runtime marker (via `aidlc-state.ts park`, which emits `WORKFLOW_PARKED`) without advancing any stage; a subsequent plain `next` re-emits a terminal `parked` directive and the Stop hook lets the turn end, so a long workflow can pause across sessions instead of rubber-stamping the remaining stages to reach `done`. `/aidlc --resume` clears the marker (`unpark` emits `WORKFLOW_UNPARKED`) before continuing. An unattended autonomous Construction run (`Construction Autonomy Mode: autonomous`) refuses to park: both the tool and the Stop hook's `parked` allow decline under autonomous mode, so the loop keeps moving with no human to resume it.
 
 ### Revision loop
 
 ```
-gate-start  →  [?] AwaitingApproval
-          ↘ reject  →  [R] Revising  (Revision Count += 1)
-                   ↓ revise
+report awaiting-approval  →  [?] AwaitingApproval
+          ↘ report rejected  →  [R] Revising  (Revision Count += 1)
+                   ↓ report revised
                    [?] AwaitingApproval
-                   ↘ approve  →  [x] Completed
+                   ↘ report approved  →  [x] Completed
 ```
 
-`Revision Count` lives in the state file and increments on each `reject`. The conductor uses this to detect the revision-loop escape hatch (default is 3 cycles before offering to skip).
+`Revision Count` lives in the state file and increments on each rejected
+report. The conductor uses this to detect the revision-loop escape hatch
+(default is 3 cycles before offering to skip).
+
+When a revision changes a `produces[]` artifact on a stage whose directive
+carries a reviewer, the conductor re-runs the §12a reviewer step before
+reporting `revised` (stage-protocol Part 0) — the engine's own checks on the
+`revised` report remain structural (completion evidence + artifact existence);
+the reviewer re-run is conductor prose, not an engine gate.
 
 ---
 
@@ -199,11 +251,11 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 | Event | Emitter | Notes |
 |---|---|---|
-| `STAGE_STARTED` | `tools/aidlc-state.ts`, `tools/aidlc-utility.ts`, `tools/aidlc-jump.ts` | Marks `[ ]` → `[-]` |
-| `STAGE_AWAITING_APPROVAL` | `tools/aidlc-state.ts` | `gate-start` (first entry), `revise` (re-entry after rejection), and `reject` (backfill when gate-start was skipped). Backfilled rows — `gate-start --recovered` (report's explicit-stage recovery) and reject's self-heal — carry `Recovered=true`; organic gate-start and revise re-entry do not |
-| `STAGE_COMPLETED` | `tools/aidlc-state.ts`, `tools/aidlc-utility.ts` | Emitted atomically with `GATE_APPROVED` by `approve`; also emitted by `advance` if approve didn't pre-mark `[x]` |
-| `STAGE_REVISING` | `tools/aidlc-state.ts` | Paired with `GATE_REJECTED` |
-| `STAGE_SKIPPED` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | One per `[S]` transition |
+| `STAGE_STARTED` | `tools/aidlc-state.ts`, `tools/aidlc-utility.ts`, `tools/aidlc-jump.ts` | Internal route marks `[ ]` → `[-]` |
+| `STAGE_AWAITING_APPROVAL` | `tools/aidlc-state.ts` | Internal emitter for `report --result awaiting-approval` / `revised`; recovered rows carry `Recovered=true` |
+| `STAGE_COMPLETED` | `tools/aidlc-state.ts`, `tools/aidlc-utility.ts` | Internal emitter for a completed/approved report; never paired with a skipped report |
+| `STAGE_REVISING` | `tools/aidlc-state.ts` | Internal emitter paired with `GATE_REJECTED` after a rejected report |
+| `STAGE_SKIPPED` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts` | Exactly one per `[S]` transition; the main-workflow report path routes onward atomically |
 | `STAGE_JUMPED` | `tools/aidlc-jump.ts` | Records the destination slug on `--stage`/`--phase` jump |
 
 ### Gate decisions
@@ -296,9 +348,9 @@ Pre-registered for v0.4.0; emitters land in milestone 8 (stage 2.2 practices-dis
 
 | Event | Emitter | Trigger |
 |---|---|---|
-| `PRACTICES_DISCOVERED` | `tools/aidlc-state.ts` `practices-event --type discovered` | Brownfield discovery + draft completion; team-practices draft awaiting affirmation at the stage 2.2 gate |
-| `PRACTICES_AFFIRMED` | `tools/aidlc-state.ts` `practices-promote` | Team approved practices; content promoted from the intent's `inception/practices-discovery/` to the space memory layer (`aidlc/spaces/<space>/memory/team.md` and `memory/project.md`) |
-| `PRACTICES_OVERRIDE` | `tools/aidlc-state.ts` `practices-promote` (milestone 8 write-failure path) and `tools/aidlc-state.ts` `practices-event --type override` (milestone 13 bolt-plan-marker-conflict path — discriminator-field disambiguation via `Reason` field, no separate event) | Either: cross-row promotion failed during stage 2.2 affirmation (Reason: `write-failure-*`); or walking-skeleton stance from `aidlc/spaces/<space>/memory/team.md` overrode bolt-plan's marker for the current Bolt (Reason: `bolt-plan-marker-conflict`) |
+| `PRACTICES_DISCOVERED` | `tools/aidlc-state.ts` `practices-event --type discovered` | Greenfield or brownfield lead draft + three spokes + human interview + lead integration completed; drafts await affirmation |
+| `PRACTICES_AFFIRMED` | `tools/aidlc-state.ts` `practices-promote` | Team approved practices; content promoted from the intent's `inception/practices-discovery/` to `aidlc/spaces/<active-space>/memory/team.md` and `project.md` |
+| `PRACTICES_OVERRIDE` | `tools/aidlc-state.ts` `practices-promote` (write-failure path) and `tools/aidlc-state.ts` `practices-event --type override` (bolt-plan-marker-conflict path) | Either promotion failed and the stage remains awaiting approval, or the active-space walking-skeleton stance overrode the current Bolt's marker |
 | `PRACTICES_SECTION_EMPTY` | `tools/aidlc-state.ts` `practices-event --type empty` | Conductor read a practices section that returned empty; advisory-only, falls back to org defaults |
 
 ### Merge dispatch
@@ -325,12 +377,12 @@ Pre-registered for v0.5.0 in milestone 1; emitters land in milestone 9 (sensor d
 
 ### Learning loop
 
-Pre-registered for v0.5.0 in milestone 4; `MEMORY_EMPTY` emitter lands in milestone 8 (`aidlc-runtime.ts compile`). The §13 Learnings Ritual writes a per-stage memory.md during execution; on stage approval, the runtime-graph compile reads memory.md and emits `MEMORY_EMPTY` for any stage with zero non-blank entries under the four standard headings. milestone 12's learning-gate tool (`aidlc-learnings.ts persist`) emits `RULE_LEARNED` when a kept learning lands as a dated practice entry in `aidlc/spaces/<space>/memory/{project,team}.md`, and `SENSOR_PROPOSED` when a learning installs a sensor binding (manifest + originating stage `sensors:` frontmatter). Doctor reads these rows for diary-discipline observability.
+Pre-registered for v0.5.0 in milestone 4; `MEMORY_EMPTY` emitter lands in milestone 8 (`aidlc-runtime.ts compile`). The §13 Learnings Ritual writes a per-stage memory.md during execution; on stage approval, the runtime-graph compile reads memory.md and emits `MEMORY_EMPTY` for any stage with zero non-blank entries under the four standard headings. milestone 12's learning-gate tool (`aidlc-learnings.ts persist`) emits `RULE_LEARNED` when a kept learning lands as a dated practice entry in `aidlc/spaces/<active-space>/memory/{project,team}.md`, and `SENSOR_PROPOSED` when a learning installs a sensor binding (manifest + originating stage `sensors:` frontmatter). Doctor reads these rows for diary-discipline observability.
 
 | Event | Emitter | Trigger |
 |---|---|---|
 | `MEMORY_EMPTY` | `tools/aidlc-runtime.ts` | Stage approval's runtime-graph compile found memory.md missing or with zero non-blank entries under §13's four headings |
-| `RULE_LEARNED` | `tools/aidlc-learnings.ts` | The learning gate persisted a kept learning as a dated practice entry to `aidlc/spaces/<space>/memory/{project,team}.md` |
+| `RULE_LEARNED` | `tools/aidlc-learnings.ts` | The learning gate persisted a kept learning as a dated practice entry to `aidlc/spaces/<active-space>/memory/{project,team}.md` |
 | `SENSOR_PROPOSED` | `tools/aidlc-learnings.ts` | The learning gate scaffolded a project-tier sensor manifest and bound it to the originating stage's `sensors:` frontmatter |
 
 ### Swarm

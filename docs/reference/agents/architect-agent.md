@@ -35,7 +35,7 @@ produce dominantly templated planning, CI/CD, and runbook output.
 | Stage | Name | What This Agent Contributes |
 |-------|------|-----------------------------|
 | intent-capture | Intent Capture and Framing | Provides technical context and feasibility perspective on the captured intent |
-| reverse-engineering | Reverse Engineering (Synthesis step) | Receives code scan results from aidlc-developer-agent and synthesizes into a coherent architectural model |
+| reverse-engineering | Reverse Engineering (dispatched final pipeline link) | Receives code scan results from aidlc-developer-agent and synthesizes into a coherent architectural model |
 | delivery-planning | Delivery Planning | Validates build order against architecture dependencies and component coupling |
 
 ---

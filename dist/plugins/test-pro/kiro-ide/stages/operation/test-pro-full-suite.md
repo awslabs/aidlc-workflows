@@ -64,15 +64,19 @@ Write `test-pro-full-suite-results.md` (regression results, per-category
 summary) and `test-pro-edge-api-report.md` (edge + API positive/negative detail,
 with any failures and the requirement each touches).
 
-### Step 5: Update State
+### Step 5: Open the Approval Gate
 
-Update `<record>/aidlc-state.md`: mark test-pro-full-suite as `[x]` completed and update "Current Status".
+Run `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage test-pro-full-suite --result awaiting-approval`.
 
 ### Step 6: Present Completion & Request Approval
 
 Completion emoji: :test_tube:
 Review path: this stage's engine-resolved record dir.
 Standard 2-option approval (Approve / Request Changes).
+STOP for the human response. Report Approve with
+`--result approved --user-input "<exact choice>"`; report
+Request Changes with `--result rejected --user-input "<feedback>"`, revise the
+artifacts, then report `--result revised` before re-presenting.
 
 ## Sensors
 

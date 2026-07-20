@@ -20,7 +20,7 @@
 // STRONGER than the .sh, which only existence-checked each path individually):
 //   .sh L12  SKILL.md exists                          -> "ships skills/aidlc/SKILL.md"
 //   .sh L15-17  3 stage-protocol files                -> "ships the 3 stage-protocol spine files" (each asserted)
-//   .sh L20-29  11 hooks (each)                        -> "ships each of the 12 framework hooks" + "ships EXACTLY the 12 expected aidlc-*.ts hooks" (count strengthening; grew to 11 with the human-turn mint hook, 12 with the reviewer-scope hook)
+//   .sh L20-29  11 hooks (each)                        -> "ships each of the 13 framework hooks" + exact-set strengthening
 //   .sh L32-34  11 agents (loop)                       -> "ships each of the 14 agent personas" + "ships EXACTLY 14 aidlc-*-agent.md files" (count strengthening; roster grew to 13 with the two reviewer personas, then 14 with the composer)
 //   .sh L38-40  3 initialization stages (loop)         -> "ships the 3 initialization stages"
 //   .sh L43-45  7 ideation stages (loop)               -> "ships the 7 ideation stages"
@@ -79,6 +79,7 @@ const HOOKS = [
   "aidlc-validate-state.ts",
   "aidlc-log-subagent.ts",
   "aidlc-mint-presence.ts",
+  "aidlc-state-transition-guard.ts",
   "aidlc-reviewer-scope.ts",
   "aidlc-session-start.ts",
   "aidlc-session-end.ts",
@@ -144,16 +145,16 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
     }
   });
 
-  test("ships each of the 12 framework hooks [.sh L20-29]", () => {
+  test("ships each of the 13 framework hooks [.sh L20-29]", () => {
     for (const h of HOOKS) {
       expect(existsSync(at("hooks", h))).toBe(true);
     }
   });
 
-  // STRONGER than the .sh: not just "each of these 12 exists" but "the hooks
-  // dir contains EXACTLY 12 aidlc-*.ts hooks" — catches a 13th hook sneaking
+  // STRONGER than the .sh: not just "each of these 13 exists" but "the hooks
+  // dir contains EXACTLY 13 aidlc-*.ts hooks" — catches a 14th hook sneaking
   // in or a rename that drops one while another covers the count.
-  test("ships EXACTLY the 12 expected aidlc-*.ts hooks [.sh L20-29 — count strengthening]", () => {
+  test("ships EXACTLY the 13 expected aidlc-*.ts hooks [.sh L20-29 — count strengthening]", () => {
     const shipped = readdirSync(at("hooks"))
       .filter((f) => f.startsWith("aidlc-") && f.endsWith(".ts"))
       .sort();
@@ -254,16 +255,16 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
   // assert_file_exists calls. The roster later grew by two reviewer agent
   // personas (product-lead, architecture-reviewer) to 65, then by the
   // human-turn mint hook to 66, then by the composer persona to 67, then by
-  // the reviewer-scope hook to 68. Re-derive the full path list from the same
+  // the reviewer-scope hook to 68, then the state-transition guard to 69.
   // data the loops drove and pin its length, so the migrated suite cannot
   // silently shrink the structural surface the .sh enforced.
-  test("asserts EXACTLY 68 shipped paths (TAP plan 63 + 2 reviewer agents + 2 hooks + the composer) [.sh L9]", () => {
+  test("asserts EXACTLY 69 shipped paths (TAP plan 63 + 2 reviewer agents + 3 hooks + the composer) [.sh L9]", () => {
     const paths: string[] = [
       at("skills", "aidlc", "SKILL.md"), // 1
       at("aidlc-common", "protocols", "stage-protocol.md"), // 2
       at("aidlc-common", "protocols", "stage-protocol-recovery.md"), // 3
       at("aidlc-common", "protocols", "stage-protocol-governance.md"), // 4
-      ...HOOKS.map((h) => at("hooks", h)), // 5-16 (12)
+      ...HOOKS.map((h) => at("hooks", h)), // 5-17 (13)
       ...AGENTS.map((a) => at("agents", `aidlc-${a}-agent.md`)), // 16-29 (14)
       ...Object.entries(STAGES).flatMap(([phase, stages]) =>
         stages.map((s) => at("aidlc-common", "stages", phase, `${s}.md`)),
@@ -275,8 +276,8 @@ describe("t01 — shipped-tree file-structure invariant (mechanism: none)", () =
       mem("project.md"), // 66
       at("CLAUDE.md"), // 67
     ];
-    expect(paths.length).toBe(68);
-    // Every one of the 68 must exist — the .sh's full TAP plan, re-proven as a
+    expect(paths.length).toBe(69);
+    // Every one of the 69 must exist — the .sh's full TAP plan, re-proven as a
     // single set so the count and the existence checks cannot drift apart.
     for (const p of paths) {
       expect(existsSync(p)).toBe(true);

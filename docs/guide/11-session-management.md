@@ -26,7 +26,7 @@ flowchart TD
     OPT_RESUME["Resume from\nlast checkpoint"]
     OPT_REDO["Redo\ncurrent stage"]
     OPT_JUMP["Jump to\nspecific stage"]
-    OPT_FRESH["Start fresh\n(archive existing)"]
+    OPT_FRESH["Start fresh\n(new intent alongside)"]
 
     SCOPE_DETECT["Detect scope,\nstart new workflow"]
 
@@ -56,9 +56,15 @@ flowchart TD
 | Option | What happens | What is preserved | What is lost |
 |--------|-------------|-------------------|-------------|
 | **Resume from last checkpoint** | Continue from the in-progress or next pending stage. Task sidebar is rebuilt from the state file. | All artifacts, state, audit trail | In-memory conversation context from the prior session |
-| **Redo current stage** | Delete the current stage's artifact directory, reset its checkbox to `[ ]`, and re-execute from scratch. | All other artifacts and state | Current stage's artifacts and partial work |
-| **Jump to stage** | Skip to a specific stage. Warns about skipped stages and potential downstream artifact invalidation. | All existing artifacts | Stages between current and target are marked `[S]` (skipped) |
-| **Start fresh** | Archive the active intent's record dir under `aidlc/spaces/<space>/intents/` (requires your confirmation), then birth a new intent. | Archived copy of all prior artifacts | Active workflow state (a new intent + state file is created) |
+| **Redo current stage** | Reset the current stage's checkbox (via `aidlc-jump.ts execute --direction redo`) and re-execute it from scratch. | All other artifacts and state | Current stage's completion status and partial work |
+| **Jump to stage** | Skip to a specific stage (via `next --stage <slug>`). Warns about skipped stages and potential downstream artifact invalidation. | All existing artifacts | Stages between current and target are marked `[S]` (skipped) |
+| **Start fresh** | Start a new intent alongside the existing one (via `next --new-intent`, after confirming scope and description). | The existing workflow's artifacts, state, and audit trail (it stays in place) | Nothing - the prior intent remains resumable |
+
+Dispatched ensemble work resumes from evidence on disk. For Practices
+Discovery, the conductor preserves the lead draft and every existing
+contribution file, dispatches only the missing quality/developer/devsecops
+spokes, then continues with the human interview and lead integration. It does
+not repeat completed spokes.
 
 ---
 

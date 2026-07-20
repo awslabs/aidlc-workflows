@@ -49,7 +49,7 @@ scopes:
   - security-patch
   - workshop
 inputs: ALL prior design artifacts for this unit
-outputs: application code + code-generation-plan.md, code-summary.md (under this stage's per-unit record dir, engine-resolved)
+outputs: application code + code-generation-plan.md, code-generation-questions.md, code-summary.md (under this stage's per-unit record dir, engine-resolved)
 ---
 
 # Code Generation
@@ -129,9 +129,20 @@ Present a summary of the plan to the user.
 
 ### Step 3: Plan Approval
 
-Present a structured question to get plan approval before proceeding to generation:
+Before presenting the approval, create or update
+`<record>/construction/{unit-name}/code-generation/code-generation-questions.md`
+with a **Plan Approval** question, both options below, and a blank `[Answer]:`
+tag:
+
 - "Approve Plan" — proceed to code generation
 - "Request Changes" — revise the plan
+
+Then present that question as a structured question and STOP the turn. Fill the
+`[Answer]:` tag only after the human explicitly responds. On "Request Changes",
+record that answer, revise the plan, reset the Plan Approval `[Answer]:` to
+blank, and present the question again. Do not begin Step 4, dispatch the
+developer agent, or infer approval from a forwarding-loop continuation. Only an
+explicit "Approve Plan" response authorizes generation.
 
 ### Step 4: PART 2 — Generation
 
@@ -159,9 +170,11 @@ After subagent completes, create `<record>/construction/{unit-name}/code-generat
 - Test coverage summary
 - Any deviations from the plan
 
-### Step 6: Update State
+### Step 6: Completion Handoff
 
-Update `<record>/aidlc-state.md`: mark Code Generation for {unit-name} as `[x]` completed and update "Current Status".
+Hand completion to `stage-protocol.md` via
+`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage code-generation --result <outcome>`.
+The engine owns all lifecycle transitions and advancement.
 
 ### Step 7: Completion
 
@@ -179,14 +192,15 @@ Summary of code produced (files, tests, key decisions), then:
 
 Approval gate: strictly 2-option (Approve / Request Changes).
 
-> **Note — orchestrator-managed gating.** When this stage is invoked by the orchestrator as part of a Bolt (the normal Construction flow), the per-Unit approval gate described above is **suppressed by the orchestrator**. A single Bolt-level gate (or batch-level gate for parallel Bolt batches) covers all Units in the Bolt. The per-Unit gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke this gate themselves — the orchestrator owns gate presentation across the batch.
+> **Note — orchestrator-managed completion gating.** Step 3 Plan Approval is a mandatory hard stop in every execution mode, including Bolt execution: generation must never begin before the human chooses "Approve Plan". Only the Step 7 completion approval gate is suppressed by the orchestrator during normal Bolt execution. A single Bolt-level gate (or batch-level gate for parallel Bolt batches) covers completion for all Units in the Bolt. The completion gate still exists here for direct-invocation use (e.g., `/aidlc --stage code-generation` re-running a single Unit), and subagents invoked via Task must NOT invoke that completion gate themselves — the orchestrator owns completion-gate presentation across the batch.
 
 ## Sensors
 
 This stage produces TypeScript/JavaScript code in the active Bolt
 worktree. Generated code lives at the workspace root (NEVER under
-the record dir); the planning + summary artefacts (`code-generation-plan.md`,
-`code-summary.md`) live under `<record>/construction/{unit-name}/code-generation/`.
+the record dir); the planning, plan-approval, and summary artefacts
+(`code-generation-plan.md`, `code-generation-questions.md`, `code-summary.md`)
+live under `<record>/construction/{unit-name}/code-generation/`.
 
 The imported sensors check the code outputs:
 
@@ -221,13 +235,13 @@ Before the approval gate, read memory.md and surface candidates as a
 structured question. For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
-- Prescriptive rule → `{{HARNESS_DIR}}/rules/aidlc-phase-<phase>.md` (phase-scoped)
-  or `{{HARNESS_DIR}}/rules/aidlc-<org|team|project>.md` (cross-cutting)
+- Prescriptive rule → a practice line under the routed heading in
+  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
 - Verification check → new manifest at `{{HARNESS_DIR}}/sensors/aidlc-<id>.md`
   (capability descriptor only — no `applies_to`); add the new id to
   the relevant stage's `sensors: [...]` frontmatter list to wire it
 
-If nothing surfaces or the user skips all, proceed to the gate. The memory.md
+Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
 file stays in the artefact directory as part of the stage's permanent record.
 
 Stage files are immutable framework artefacts — the ritual writes into the

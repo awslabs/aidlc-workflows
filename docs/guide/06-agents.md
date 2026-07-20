@@ -16,7 +16,7 @@ In human software teams, a mob of 3-5 people covers an entire feature from requi
 
 - **Fewer agents means fewer handoffs.** Every agent boundary is a potential information loss point. When the same aidlc-architect-agent leads both Application Design and Functional Design, it retains context naturally instead of requiring an explicit handoff artifact.
 
-- **Support roles enable collaboration without proliferation.** Rather than creating a "security-reviewer-agent" and a "compliance-reviewer-agent" and a "cost-reviewer-agent," the aidlc-devsecops-agent and aidlc-compliance-agent participate as support agents in stages led by others. On an inline stage (every multi-agent stage in the shipped graph) the conductor adopts each support agent as a persona in its own context rather than dispatching it as a `Task`; `Task` is reserved for `mode: subagent` stages. Either way the conductor performs every delegation — agents never invoke each other.
+- **Support roles enable collaboration without proliferation.** Rather than creating a "security-reviewer-agent" and a "compliance-reviewer-agent" and a "cost-reviewer-agent," the aidlc-devsecops-agent and aidlc-compliance-agent participate as support agents in stages led by others. HOW they participate is the stage's `mode` — its communication topology: on an `inline` stage the conductor adopts each support agent as a persona in its own context; on `subagent` (hub-and-spoke) and `mob` (mesh) stages each support agent is dispatched as a real, independent collaborator that writes its own contribution file for the lead to integrate (everyone writes, the lead owns the final artifacts; user-stories ships as the mob showcase), and on `pipeline` (chain) stages the links advance the artifacts directly in sequence (reverse-engineering is the shipped chain). On every topology the conductor performs every delegation — agents never invoke each other.
 
 - **Knowledge loading is per-agent.** Each agent loads methodology knowledge from `.claude/knowledge/<agent-name>/` and team knowledge from the space-level `aidlc/knowledge/<agent-name>/` (if the team created it). Fewer agents means fewer knowledge directories to manage and fewer opportunities for contradictory guidance.
 
@@ -160,12 +160,12 @@ The aidlc-devsecops-agent reviews designs for security, defines security require
 
 ### [aidlc-developer-agent](agents/developer-agent.md)
 
-**Domain:** Code implementation, code analysis, workspace detection
+**Domain:** Code implementation, code analysis, data modelling
 
 The aidlc-developer-agent spans three phases — from reverse engineering in Inception through deployment support in Operation. It runs code scans of existing codebases and generates implementation code.
 
 - **Leads:** reverse-engineering (code scan), code-generation
-- **Supports:** practices-discovery, functional-design, deployment-execution
+- **Supports:** practices-discovery, user-stories, functional-design, deployment-execution
 
 Workspace detection (workspace-detection) used to be a subagent of the aidlc-developer-agent; it now runs deterministically inside `aidlc-utility intent-birth` using rule-based file and manifest detection.
 - **Special tools:** Bash (for build and run commands)
@@ -177,7 +177,7 @@ Workspace detection (workspace-detection) used to be a subagent of the aidlc-dev
 The aidlc-quality-agent defines test strategy, generates test suites, validates quality gates, and runs performance testing.
 
 - **Leads:** build-and-test, performance-validation
-- **Supports:** practices-discovery, nfr-requirements
+- **Supports:** practices-discovery, user-stories, nfr-requirements
 - **Special tools:** Bash (for test execution)
 
 ### [aidlc-pipeline-deploy-agent](agents/pipeline-deploy-agent.md)
@@ -215,8 +215,8 @@ This table shows which agents are active in which phases, and whether they serve
 | aidlc-aws-platform-agent | — | S (feasibility) | S (application-design) | L (infrastructure-design), S (nfr-design) | L (environment-provisioning), S (feedback-optimization) |
 | aidlc-compliance-agent | — | S (feasibility) | — | S (nfr-requirements, infrastructure-design) | S (environment-provisioning) |
 | aidlc-devsecops-agent | — | — | S (practices-discovery) | S (nfr-requirements, infrastructure-design, build-and-test) | S (environment-provisioning) |
-| aidlc-developer-agent | — | — | L (reverse-engineering), S (practices-discovery) | L (code-generation), S (functional-design) | S (deployment-execution) |
-| aidlc-quality-agent | — | — | S (practices-discovery) | L (build-and-test), S (nfr-requirements) | L (performance-validation) |
+| aidlc-developer-agent | — | — | L (reverse-engineering), S (practices-discovery, user-stories) | L (code-generation), S (functional-design) | S (deployment-execution) |
+| aidlc-quality-agent | — | — | S (practices-discovery, user-stories) | L (build-and-test), S (nfr-requirements) | L (performance-validation) |
 | aidlc-pipeline-deploy-agent | — | — | L (practices-discovery) | L (ci-pipeline) | L (deployment-pipeline, deployment-execution) |
 | aidlc-operations-agent | — | — | — | — | L (observability-setup, incident-response, feedback-optimization) |
 

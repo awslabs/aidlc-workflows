@@ -185,7 +185,7 @@ async function driveCodekbUntilBothRepos(
   root: string,
   recordDir: string,
   timeoutMs: number,
-): Promise<void> {
+): Promise<Awaited<ReturnType<typeof driveKiroAcp>>> {
   let done = false;
   const poll = setInterval(() => {
     if (done || !session.sessionId) return;
@@ -197,7 +197,7 @@ async function driveCodekbUntilBothRepos(
     }
   }, 2000);
   try {
-    await driveKiroAcp({
+    return await driveKiroAcp({
       projectDir: root,
       session,
       prompt: `/aidlc --stage reverse-engineering --single`,
@@ -226,6 +226,10 @@ function workflowStartedCount(recordDir: string): number {
     /* no audit dir → 0 */
   }
   return n;
+}
+
+function withoutLastUpdated(state: string): string {
+  return state.replace(/^- \*\*Last Updated\*\*:.*$/m, "- **Last Updated**: <volatile>");
 }
 
 describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journey)", () => {
@@ -287,7 +291,13 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         // driveCodekbUntilBothRepos for why a tool-title stop flakes here). The
         // poller also fast-cancels on a legitimate greenfield RE-skip so a skip does
         // not burn the codekb budget. The on-disk assertions below are the proof.
-        await driveCodekbUntilBothRepos(conductor, root, recordADir, CODEKB_DRIVE_MS);
+        const codekbRun = await driveCodekbUntilBothRepos(
+          conductor,
+          root,
+          recordADir,
+          CODEKB_DRIVE_MS,
+        );
+        expect([...r1.toolCallIssues, ...codekbRun.toolCallIssues]).toEqual([]);
         if (greenfieldReSkip(recordADir)) {
           // Greenfield: reverse-engineering was stamped SKIP at birth, so no per-repo
           // codekb is expected. The recorded skip is the correct outcome; accept it
@@ -314,7 +324,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         // runs `intent --json` to compare against the active intent (the offer's
         // compare-read, SKILL.md), then renders the offer as numbered prose. Stop at
         // the compare-read — the dependable offer-render boundary (spike-verified).
-        await driveKiroAcp({
+        const offerR1 = await driveKiroAcp({
           projectDir: root,
           session: offer,
           prompt:
@@ -324,11 +334,22 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           stopAfterToolTitle: /aidlc-utility\.ts intent --json/,
           keepAlive: true,
         });
-        // Turn 3b: confirm. The conductor runs `intent-birth` DIRECTLY (the
-        // SKILL.md "On CONFIRM: run intent-birth" prose — authorized routing, so it
-        // does not fight the forwarding override). The inferred scope is
-        // non-deterministic; we assert ONLY the registry shape and A's integrity.
-        await driveKiroAcp({
+        expect(offerR1.toolCallIssues).toEqual([]);
+        // PIN the compare-read itself: the offer flow's documented first move is
+        // `intent --json` (SKILL.md; the spike-verified offer-render boundary).
+        // A live run was observed reaching a natural end_turn via --help /
+        // `intent list` exploration WITHOUT ever running the compare-read, and
+        // nothing failed — the offer path was silently not exercised. Assert the
+        // tool actually ran so that divergence reds instead of passing dark.
+        expect(
+          offerR1.toolCalls.some((tc) =>
+            /aidlc-utility\.ts intent --json/.test(tc.title),
+          ),
+        ).toBe(true);
+        // Turn 3b: confirm. The conductor routes through `next --new-intent`,
+        // then acts on the engine's intent-birth print. The inferred scope is
+        // non-deterministic; assert only the registry shape and A's integrity.
+        const offerR2 = await driveKiroAcp({
           projectDir: root,
           session: offer,
           prompt: "Yes — start a second intent for the metrics dashboard.",
@@ -336,12 +357,17 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           stopAfterToolTitle: /aidlc-utility\.ts intent-birth/,
           keepAlive: true,
         });
+        expect(offerR2.toolCallIssues).toEqual([]);
         const reg3 = readIntentRegistry(root);
         expect(reg3.length).toBe(2);
         expect(new Set(reg3.map((e) => e.uuid)).size).toBe(2);
         for (const e of reg3) expect(e.uuid).toMatch(UUIDV7_RE);
-        // A's workflow state untouched + B's birth did not bleed into A's shard.
-        expect(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")).toBe(stateABefore);
+        // A's substantive workflow state is untouched + B's birth did not
+        // bleed into A's shard. The conductor may park A while handling the
+        // new-work offer, which legitimately refreshes only Last Updated.
+        expect(
+          withoutLastUpdated(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")),
+        ).toBe(withoutLastUpdated(stateABefore));
         expect(workflowStartedCount(recordADir)).toBe(1);
 
         // --- Beat 4: non-default space — create, switch, birth there; no leak --
@@ -361,13 +387,14 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         // verb turn cleanly so reuse is safe.
         // 4a: create teamB; assert org.md byte-copied from default, fresh empty
         // team/project stubs, knowledge/ ABSENT at create time.
-        await driveKiroAcp({
+        const createSpace = await driveKiroAcp({
           projectDir: root,
           session: space,
           prompt: `/aidlc space-create teamB`,
           timeoutMs: VERB_DRIVE_MS,
           keepAlive: true,
         });
+        expect(createSpace.toolCallIssues).toEqual([]);
         const teamBMemory = join(root, "aidlc", "spaces", TEAM_B_SLUG, "memory");
         const defaultOrg = readFileSync(
           join(root, "aidlc", "spaces", "default", "memory", "org.md"),
@@ -382,13 +409,14 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "codekb"))).toBe(true);
 
         // 4b: switch to teamB (terminal verb — seam-dispatched, drive to end_turn).
-        await driveKiroAcp({
+        const switchSpace = await driveKiroAcp({
           projectDir: root,
           session: space,
           prompt: `/aidlc space teamB`,
           timeoutMs: VERB_DRIVE_MS,
           keepAlive: true,
         });
+        expect(switchSpace.toolCallIssues).toEqual([]);
         expect(activeSpace(root)).toBe(TEAM_B_SLUG);
 
         // 4c: birth into teamB via the conductor's birth gate — in teamB (zero
@@ -396,7 +424,7 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
         // → the conductor runs `intent-birth …` directly. knowledge/ now PRESENT
         // (lazy ensure on first birth); teamB holds its 1 intent, default still holds
         // its 2 (no cross-space leak).
-        await driveKiroAcp({
+        const birthTeamB = await driveKiroAcp({
           projectDir: root,
           session: space,
           prompt: `/aidlc --scope poc "teamB onboarding flow"`,
@@ -404,19 +432,21 @@ describe("t-acp-kiro-journey-workspace (live ACP multi-repo·intent·space journ
           stopAfterToolTitle: /aidlc-utility\.ts intent-birth/,
           keepAlive: true,
         });
+        expect(birthTeamB.toolCallIssues).toEqual([]);
         expect(listIntents(root, TEAM_B_SLUG).length).toBe(1);
         expect(listIntents(root, "default").length).toBe(2);
         expect(existsSync(join(root, "aidlc", "spaces", TEAM_B_SLUG, "knowledge"))).toBe(true);
 
         // --- Beat 5: back to default; A still resumable ----------------------
         // `space default` is a terminal verb — seam-dispatched, drive to end_turn.
-        await driveKiroAcp({
+        const backToDefault = await driveKiroAcp({
           projectDir: root,
           session: space,
           prompt: `/aidlc space default`,
           timeoutMs: VERB_DRIVE_MS,
           keepAlive: true,
         });
+        expect(backToDefault.toolCallIssues).toEqual([]);
         expect(activeSpace(root)).toBe("default");
         // A's workflow state survived the round trip; no foreign birth bled in.
         expect(readFileSync(join(recordADir, "aidlc-state.md"), "utf-8")).toBe(stateABefore);

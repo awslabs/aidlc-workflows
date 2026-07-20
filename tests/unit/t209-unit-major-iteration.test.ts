@@ -48,6 +48,7 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   resetAidlcEnv,
+  seedBoltDag,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -110,6 +111,7 @@ interface Directive {
   stage?: string;
   unit?: string;
   gate?: unknown;
+  produces?: string[];
   message?: string;
   [k: string]: unknown;
 }
@@ -170,23 +172,6 @@ ${iterationLine}
 `;
 }
 
-/** Write the bolt_dag runtime graph (one batch of `units`) into the record. */
-function seedBoltDag(proj: string, units: string[]): void {
-  writeFileSync(
-    join(seededRecordDir(proj), "runtime-graph.json"),
-    JSON.stringify(
-      {
-        bolt_dag: {
-          units: units.map((name) => ({ name, depends_on: [] })),
-          batches: [units],
-        },
-      },
-      null,
-      2,
-    ),
-  );
-}
-
 /** Mark `unit` COVERED for `slug` by writing each of its produces artifacts. */
 function coverUnit(proj: string, unit: string, slug: string): void {
   const dir = join(seededRecordDir(proj), "construction", unit, slug);
@@ -212,8 +197,13 @@ function seedProject(iteration?: string): string {
   return proj;
 }
 
-/** Run `aidlc-orchestrate.ts next` and parse the emitted directive. */
-function runNext(proj: string): Directive {
+interface NextRun {
+  directive: Directive;
+  stderr: string;
+}
+
+/** Run `aidlc-orchestrate.ts next`, capturing both its directive and diagnostics. */
+function runNextWithStderr(proj: string): NextRun {
   const r = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], {
     encoding: "utf-8",
     env: (() => {
@@ -223,12 +213,19 @@ function runNext(proj: string): Directive {
     })(),
   });
   try {
-    return JSON.parse((r.stdout ?? "").trim()) as Directive;
+    return {
+      directive: JSON.parse((r.stdout ?? "").trim()) as Directive,
+      stderr: r.stderr ?? "",
+    };
   } catch {
     throw new Error(
       `runNext did not emit parseable JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`,
     );
   }
+}
+
+function runNext(proj: string): Directive {
+  return runNextWithStderr(proj).directive;
 }
 
 /** Run `aidlc-orchestrate.ts report ...` and parse the emitted directive. */
@@ -258,6 +255,29 @@ function setIteration(proj: string, value: string): { rc: number; out: string } 
     { encoding: "utf-8", env: process.env },
   );
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
+
+function seedStaleKindDependency(proj: string): void {
+  writeFileSync(
+    join(seededRecordDir(proj), "runtime-graph.json"),
+    `${JSON.stringify({ stages: [] }, null, 2)}\n`,
+  );
+  const dir = join(seededRecordDir(proj), "inception", "units-generation");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "unit-of-work-dependency.md"),
+    [
+      "# Unit of Work Dependency",
+      "",
+      "```yaml",
+      "units:",
+      "  - name: contract",
+      "    kind: spec",
+      "    depends_on: []",
+      "```",
+      "",
+    ].join("\n"),
+  );
 }
 
 describe("t209 opt-in unit-major construction design iteration", () => {
@@ -380,5 +400,33 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     const d = runNext(proj);
     expect(d.stage).toBe("nfr-requirements");
     expect(d.unit).toBe("alpha");
+  }, 30000);
+
+  test("8: stale DAG healing preserves unit kinds and warns exactly once per next", () => {
+    const proj = seedProject("unit-major");
+    seedStaleKindDependency(proj);
+
+    const run = runNextWithStderr(proj);
+    const d = run.directive;
+    expect(d.kind).toBe("run-stage");
+    expect(d.stage).toBe("functional-design");
+    expect(d.unit).toBe("contract");
+    expect(d.gate).toBe(false);
+
+    // A spec unit owes business rules and domain entities, but not the
+    // service/ui-only functional-design artifacts. The kind comes from the
+    // dependency artifact because the cached graph deliberately has no DAG.
+    expect(d.produces).toContain(
+      `${RP}/construction/contract/functional-design/business-rules.md`,
+    );
+    expect(d.produces).toContain(
+      `${RP}/construction/contract/functional-design/domain-entities.md`,
+    );
+    expect(d.produces?.some((path) => path.endsWith("/business-logic-model.md"))).toBe(false);
+    expect(d.produces?.some((path) => path.endsWith("/frontend-components.md"))).toBe(false);
+
+    const warning =
+      "runtime-graph.json has no bolt_dag; recomputed 1 unit batch(es)";
+    expect(run.stderr.split(warning).length - 1).toBe(1);
   }, 30000);
 });

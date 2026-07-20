@@ -24,7 +24,8 @@
 
 | Stage | Name | What This Agent Contributes |
 |-------|------|-----------------------------|
-| practices-discovery | Practices Discovery | Scans testing posture (TDD vs after-the-fact), coverage floor, and CI block-or-warn behaviour to surface team testing practices |
+| practices-discovery | Practices Discovery | Mutually blind spoke that records testing posture, coverage floor, and CI block-or-warn behaviour in its contribution file |
+| user-stories | User Stories | Testability and acceptance-criteria voice in the mob ensemble; writes its own contribution file |
 | nfr-requirements | NFR Requirements | Defines testable quality attribute scenarios and measurable NFR targets |
 
 ---

@@ -95,7 +95,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
-import { auditFilePathFor, recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
+import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { recordDirFor, stateFilePathFor } from "../harness/sdk-drive.ts";
 import { resolveWinNode } from "../harness/tui-drive.ts";
 import { cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
 
@@ -338,7 +339,6 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
 
         // ===================== ON DISK (the .sh's 14 assertions) =================
         const statePath = stateFilePathFor(proj);
-        const auditPath = auditFilePathFor(proj);
 
         // #1 state file created.
         expect(existsSync(statePath)).toBe(true);
@@ -396,9 +396,10 @@ describe("t-tui-t58 workshop-scope (skips Ideation, runs Inception+ at Standard/
 
         // #15 audit log exists with substantial content (> 200 bytes), and the
         //     deterministic state-init emission landed (stronger than the .sh's
-        //     byte-size-only check).
-        expect(existsSync(auditPath)).toBe(true);
-        const auditMd = readFileSync(auditPath, "utf8");
+        //     byte-size-only check). Initialization and later stage activity can
+        //     be written by different clone/process shards, so inspect the
+        //     canonical all-shard view rather than whichever shard sorts first.
+        const auditMd = readAllAuditShards(proj);
         expect(auditMd.length).toBeGreaterThan(200);
         expect(auditMd).toContain("WORKSPACE_INITIALISED");
         const wiIdx = auditMd.indexOf("WORKSPACE_INITIALISED");

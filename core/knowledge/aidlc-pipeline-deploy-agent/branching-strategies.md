@@ -2,7 +2,7 @@
 
 A menu of common branching strategies, what they look like, when to use them, and how AIDLC's Construction worktrees map onto each. When the orchestrator dispatches aidlc-pipeline-deploy-agent at Bolt boundaries, this file is the menu the agent surveys to map a team's affirmed branching strategy onto the `aidlc-worktree` tool's flags.
 
-> **Reading practices:** see `knowledge/aidlc-shared/rules-reading.md` for empty-template detection, semantic-topic matching, and the `team.md → org.md → hardcoded defaults` fallback chain. This file does not duplicate that protocol.
+> **Reading practices:** see `knowledge/aidlc-shared/rules-reading.md` for empty-template detection, semantic-topic matching, and the active-space `project.md → team.md → org.md → hardcoded defaults` fallback chain. In the runbooks below, those files live under `aidlc/spaces/<active-space>/memory/`.
 >
 > See also `cicd-patterns.md` § "Branch Strategies" for the higher-level CI-flow context.
 
@@ -35,7 +35,7 @@ main ─────────────────────────
 
 When dispatched for trunk-based:
 
-1. Read `team.md` `## Branching` per `shared/rules-reading.md`. If empty, fall back to `org.md`, then to hardcoded defaults.
+1. Read `## Way of Working` from the active space's `project.md`, `team.md`, then `org.md` per `shared/rules-reading.md`; use hardcoded defaults only if all three are empty.
 2. Resolve flags: `--base main --target main --strategy squash` for the default; deviate only if `team.md` explicitly says otherwise.
 3. **Create**: invoke `bun {{HARNESS_DIR}}/tools/aidlc-worktree.ts create --slug <bolt-slug> --base main`.
 4. **Merge** (after Bolt gate approval): caller must be on `main` at the main checkout. Invoke `bun {{HARNESS_DIR}}/tools/aidlc-worktree.ts merge --slug <bolt-slug> --target main --strategy squash --message "<commit message>"`.
@@ -73,7 +73,7 @@ main ─────────────────────────
 
 When dispatched for GitHub Flow:
 
-1. Read `team.md` `## Branching` (and `## Merge style` if present). The merge-strategy choice (squash vs merge) is what differs from trunk-based.
+1. Read `## Way of Working` from the active space's `project.md`, `team.md`, then `org.md` (including any merge-style statement). The merge-strategy choice (squash vs merge) is what differs from trunk-based.
 2. Resolve flags: `--base main --target main --strategy <squash|merge>` per affirmation; default to `squash`.
 3. **Create**: `bun {{HARNESS_DIR}}/tools/aidlc-worktree.ts create --slug <bolt-slug> --base main`.
 4. **Merge**: `bun {{HARNESS_DIR}}/tools/aidlc-worktree.ts merge --slug <bolt-slug> --target main --strategy <squash|merge> [--message "<msg>"]`. With `--strategy merge`, a no-fast-forward merge commit preserves the bolt branch's individual commits.
@@ -115,7 +115,7 @@ develop ─────┴───────────┴──────
 
 When dispatched for GitFlow:
 
-1. Read `team.md` `## Branching`. Look for the integration-branch name (`develop` is the convention; teams sometimes use `integration` or `next`).
+1. Read the active space's `## Way of Working`. Look for the integration-branch name (`develop` is the convention; teams sometimes use `integration` or `next`).
 2. For feature Bolts: `--base <integration> --target <integration> --strategy <merge|squash>`. Default to `merge`.
 3. For hotfix Bolts (rare in Construction; usually triggered by an out-of-band stage): `--base main --target main --strategy merge`. The operator separately merges the hotfix back to `<integration>` after `aidlc-worktree merge` succeeds. Out of scope for the tool.
 4. **Create**: `bun {{HARNESS_DIR}}/tools/aidlc-worktree.ts create --slug <bolt-slug> --base <integration>`.
@@ -159,7 +159,7 @@ release/v1.0 ┴──── (frozen for stabilisation) ──────►
 
 When dispatched for Release Branches:
 
-1. Read `team.md` `## Branching`. Look for the release-branch pattern (`release/vX.Y` is the convention).
+1. Read the active space's `## Way of Working`. Look for the release-branch pattern (`release/vX.Y` is the convention).
 2. Determine which line the Bolt belongs to from the Bolt's metadata (the orchestrator passes a `target_line: main | release/vX.Y` hint). Default to `main` when ambiguous.
 3. **Create**: `bun {{HARNESS_DIR}}/tools/aidlc-worktree.ts create --slug <bolt-slug> --base <line>`.
 4. **Merge**: caller on `<line>` at the main checkout. `bun {{HARNESS_DIR}}/tools/aidlc-worktree.ts merge --slug <bolt-slug> --target <line> --strategy merge`.
@@ -279,14 +279,14 @@ The dispatch protocol described in this section is implemented by **SKILL.md Ste
 
 When a Bolt starts (Step 0) or completes (Step 6.5), the orchestrator dispatches a Task call to **aidlc-pipeline-deploy-agent** with two inputs:
 
-1. The contents of `{{HARNESS_DIR}}/rules/aidlc-team.md`'s `## Way of Working` section (or `aidlc-org.md` if `aidlc-team.md` is empty — fallback chain in `shared/rules-reading.md`).
+1. The resolved `## Way of Working` statement from `aidlc/spaces/<active-space>/memory/{project,team,org}.md` (fallback chain in `shared/rules-reading.md`).
 2. The Bolt's metadata (slug, source branch, optional target-line hint for release-branch teams).
 
 The agent reads this file (`branching-strategies.md`) as the menu, matches the team's stated strategy to one of the five above, picks the right `aidlc-worktree` flags, invokes the tool, and returns the response envelope per § Response contract.
 
 If the team's stated strategy doesn't map cleanly to the menu (e.g. "we use a hybrid"), the agent picks the closest fit and notes the deviation in the response's `notes` field; the orchestrator surfaces it in the audit log.
 
-If neither `aidlc-team.md` nor `aidlc-org.md` provides branching practice, the agent applies hardcoded defaults — trunk-based with squash, base `main`, target `main` — and emits `PRACTICES_SECTION_EMPTY` (advisory-only).
+If none of `project.md`, `team.md`, or `org.md` provides a branching practice, the agent applies hardcoded defaults — trunk-based with squash, base `main`, target `main` — and emits `PRACTICES_SECTION_EMPTY` (advisory-only).
 
 ---
 

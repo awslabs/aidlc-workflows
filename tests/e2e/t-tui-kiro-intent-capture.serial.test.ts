@@ -14,21 +14,23 @@
 // arrow-navigates menus), this test runs a simple driver-side loop:
 //   while terminator-not-on-disk:
 //     wait for the TUI to go idle at the input prompt (the "ask a question or
-//     describe a task" / "type to queue" footer), then send "1" + Enter
-//     (= the recommended option / Approve, per the annex's recommended-first
-//     rule and the protocol's Approve-first approval template).
+//     describe a task" / "type to queue" footer), then send the next scripted
+//     answer. Numbered menus use "1", each visible guide batch gets explicit
+//     per-question selections, and prose/approval gates get labeled
+//     responses.
 // Disk is the terminator, never the screen (§1.1) — identical discipline to the
 // Claude twin: `Last Completed Stage == intent-capture` in aidlc-state.md, the
 // field the approve tool writes atomically with GATE_APPROVED+STAGE_COMPLETED.
 //
-// "1" IS ALWAYS A SAFE ANSWER: every rendering this loop can meet is either the
-// tri-mode question (1 = Guide me), a stage question batch (1 = option A), the
-// consolidated-summary confirm (1 = looks correct / proceed), or the approval
-// gate (1 = Approve — the protocol's templates put Approve first, and the annex
-// mandates recommended-first ordering). Free-text asks accept "1" poorly BUT the
-// stage receives its build description via $ARGUMENTS up front (same trailing-
-// freeform trick the Claude twin uses), which was verified live (Wave 4 smoke)
-// to skip the "what would you like to build?" free-text ask entirely.
+// WHY THE GUIDE ANSWERS ARE EXPLICIT: the source file retains Q1..Qn with A..X
+// storage labels, but the Kiro annex requires the interactive presentation to
+// remap every choice to numbered prose. A bare "1" does not identify which
+// batched question it answers, so the driver extracts the currently rendered,
+// unanswered Q<n> IDs and sends an explicit per-question number vector. Each
+// response answers only the batch currently on screen so future answers cannot be
+// mistaken for an edit-mode choice or create a false contradiction. The stage
+// receives its build description via $ARGUMENTS up front, so no open-ended
+// "what would you like to build?" answer is needed.
 //
 // WHAT IT PROVES (equal to the Claude twin's disk surface):
 //   - the shipped dist/kiro tree drives a real workflow from a seeded
@@ -58,7 +60,13 @@ import * as os from "node:os";
 import { join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
-import { cleanupTuiProject, KIRO_SRC, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  cleanupTuiProject,
+  createKiroNumberedProseAnswerState,
+  KIRO_SRC,
+  nextKiroNumberedProseAnswer,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const IS_WIN = os.platform() === "win32";
@@ -161,6 +169,7 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         withState: "state-initialization-done.md",
         greenfieldStub: true,
         withAudit: true,
+        runtimeGraph: true,
       });
       try {
         // --- launch kiro-cli chat in the seeded sandbox -----------------------
@@ -205,18 +214,18 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
           true,
         );
 
-        // --- the Kiro gate loop: idle ⇒ answer "1", terminate on disk ---------
-        // Every structured question renders numbered with the recommended
-        // option first (the annex contract), so "1" advances tri-mode choice,
-        // question batches, the summary confirm, and the Approve gate alike.
+        // --- the Kiro gate loop: idle ⇒ scripted answer, terminate on disk ----
+        // The guide-mode choice is numbered; its Q1..Qn source questions keep
+        // letter labels on disk but are presented and answered with numbers.
+        // Later prompts receive explicit summary, learnings, and approval
+        // responses so a bare numeric answer cannot be mistaken for prose.
         // Per-iteration: wait up to 240s for the idle footer (a long LLM turn),
         // then check disk BEFORE answering so we stop the instant the approve
         // lands (and never answer the auto-advanced next stage's gate).
         const deadline = Date.now() + Math.max(120000, TEST_TIMEOUT_MS - 60000);
         let terminated = false;
-        let answers = 0;
-        const MAX_ANSWERS = 40; // runaway backstop, mirrors answer-gate's caps
-        while (Date.now() < deadline && answers < MAX_ANSWERS) {
+        const answerState = createKiroNumberedProseAnswerState();
+        while (Date.now() < deadline) {
           if (lastCompletedIsIntentCapture(sandbox)) {
             terminated = true;
             break;
@@ -227,11 +236,22 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
             terminated = true;
             break;
           }
-          send(session, "1", true);
-          answers += 1;
+          const screen = drive(["capture", "--session", session]).stdout;
+          const answer = nextKiroNumberedProseAnswer(screen, answerState);
+          if (answer === null) {
+            throw new Error(
+              `Kiro stopped at an unrecognized intent-capture prompt:\n${screen.slice(-4000)}`,
+            );
+          }
+          send(session, answer, true);
         }
         if (!terminated) terminated = lastCompletedIsIntentCapture(sandbox);
         expect(terminated).toBe(true);
+        expect(answerState.guideModeChosen).toBe(true);
+        expect(answerState.answeredQuestions.size).toBeGreaterThan(0);
+        expect(answerState.summaryConfirmed).toBe(true);
+        expect(answerState.learningsAnswered).toBeGreaterThanOrEqual(1);
+        expect(answerState.approvalsAnswered).toBeGreaterThanOrEqual(1);
 
         // --- assert ON DISK (the Claude twin's surface, verbatim) -------------
         const icDir = join(seededRecordDir(sandbox), "ideation", "intent-capture");
@@ -241,6 +261,9 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         expect(questionsFile).not.toBeNull();
         const questionsBody = readFileSync(questionsFile as string, "utf8");
         expect((questionsBody.match(/\[Answer\]:/g) ?? []).length).toBeGreaterThan(0);
+        expect(questionsBody).toMatch(
+          /## Consolidated Summary Confirmation[\s\S]*\[Answer\]:[^\r\n]*Looks correct/i,
+        );
 
         const intentFile = findArtifact(icDir, ["intent", "statement"]);
         expect(intentFile).not.toBeNull();
@@ -267,6 +290,10 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         const auditMd = readAllAuditShards(sandbox);
         expect(auditMd).toMatch(/STAGE_COMPLETED/);
         expect(auditMd.toLowerCase()).toContain("intent-capture");
+        const questionAnsweredAt = auditMd.lastIndexOf("**Event**: QUESTION_ANSWERED");
+        const gateOpenedAt = auditMd.lastIndexOf("**Event**: STAGE_AWAITING_APPROVAL");
+        expect(questionAnsweredAt).toBeGreaterThan(-1);
+        expect(gateOpenedAt).toBeGreaterThan(questionAnsweredAt);
       } finally {
         drive(["kill", "--session", session]);
         cleanupTuiProject(sandbox);

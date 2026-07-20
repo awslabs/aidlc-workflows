@@ -89,6 +89,14 @@ export interface AcpPermissionRequest {
   answered: string;
 }
 
+export interface AcpToolCallIssue {
+  toolCallId: string;
+  status: string;
+  output: string[];
+  /** True when Kiro emitted an update without a preceding tool_call event. */
+  orphan: boolean;
+}
+
 export interface AcpDriveResult {
   sessionId: string;
   stopReason: string | undefined;
@@ -97,6 +105,8 @@ export interface AcpDriveResult {
   /** Concatenated assistant prose. Debugging only — never assert on this. */
   assistantText: string;
   permissionRequests: AcpPermissionRequest[];
+  /** Failed or orphaned tool updates; a later retry does not erase them. */
+  toolCallIssues: AcpToolCallIssue[];
   /** aidlc-docs/aidlc-state.md after the turn, if present. */
   stateFile?: string;
   /** Audit **Event**: types parsed from aidlc-docs/audit.md, in file order. */
@@ -252,10 +262,18 @@ export class AcpSession {
     if (!this.tracePath) return;
     const kind = u.sessionUpdate as string;
     if (kind === "tool_call") {
+      const rawInput = u.rawInput;
+      const inputKeys =
+        rawInput !== null &&
+          typeof rawInput === "object" &&
+          !Array.isArray(rawInput)
+          ? Object.keys(rawInput).sort()
+          : [];
       writeAcpTrace(this.tracePath, "tool_call", {
         toolCallId: u.toolCallId,
         title: u.title,
         toolKind: u.kind,
+        inputKeys,
       });
     } else if (kind === "tool_call_update") {
       const content = (u.content ?? []) as Array<{ content?: { type?: string; text?: string } }>;
@@ -386,6 +404,7 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
 
   const toolCalls: AcpToolCall[] = [];
   const byId = new Map<string, AcpToolCall>();
+  const toolCallIssues: AcpToolCallIssue[] = [];
   const permissionRequests: AcpPermissionRequest[] = [];
   let assistantText = "";
   let cancelled = false;
@@ -407,12 +426,26 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
       toolCalls.push(tc);
       byId.set(tc.toolCallId, tc);
     } else if (kind === "tool_call_update") {
-      const tc = byId.get(String(u.toolCallId ?? ""));
-      if (!tc) return;
+      const toolCallId = String(u.toolCallId ?? "");
+      const tc = byId.get(toolCallId);
       const content = (u.content ?? []) as Array<{ content?: { type?: string; text?: string } }>;
+      const output: string[] = [];
       for (const item of content) {
-        if (item.content?.type === "text" && item.content.text) tc.output.push(item.content.text);
+        if (item.content?.type === "text" && item.content.text) {
+          output.push(item.content.text);
+        }
       }
+      const status = String(u.status ?? "");
+      if (!tc || status === "failed") {
+        toolCallIssues.push({
+          toolCallId,
+          status,
+          output,
+          orphan: !tc,
+        });
+      }
+      if (!tc) return;
+      tc.output.push(...output);
       if (u.status) tc.status = String(u.status);
       // Cancel as soon as the matched tool's OUTPUT BYTES are captured — the
       // contract surface is in hand; waiting for status:"completed" raced the
@@ -494,6 +527,7 @@ export async function driveKiroAcp(opts: AcpDriveOptions): Promise<AcpDriveResul
       toolCalls,
       assistantText,
       permissionRequests,
+      toolCallIssues,
       stateFile: existsSync(statePath) ? readFileSync(statePath, "utf-8") : undefined,
       auditEvents: parseAuditEvents(opts.projectDir),
     };

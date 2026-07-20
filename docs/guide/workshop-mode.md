@@ -75,9 +75,9 @@ The contract:
 1. **Always `git fetch --all` immediately before claiming.** Stale local refs hide concurrent claims.
 2. **Claiming a Bolt named `foo` means pushing `bolt-foo` to the shared remote first.** First push wins.
 3. **Late claimants see a non-fast-forward push rejection** when the remote already has `bolt-foo`. That's the signal to pick a different Bolt.
-4. **Practices govern the branching shape — read them, don't guess.** `aidlc/spaces/<space>/memory/team.md`'s `## Branching` section is what `aidlc-pipeline-deploy-agent` reads at merge dispatch to pick the merge target and strategy. The base branch you create the worktree from must match that affirmed shape: trunk-based teams base off `main`, gitflow teams base off `develop`, release-branch teams base off the active release branch. Participants don't pick this — the facilitator's affirmed practices already chose it. See [the branching-strategies knowledge file](../../core/knowledge/aidlc-pipeline-deploy-agent/branching-strategies.md) for the contract aidlc-pipeline-deploy-agent honours (it ships into your harness's `knowledge/` dir).
+4. **Practices govern the branching shape — read them, don't guess.** The resolved `## Way of Working` statement in `aidlc/spaces/<active-space>/memory/{project,team,org}.md` is what `aidlc-pipeline-deploy-agent` reads at merge dispatch to pick the merge target and strategy. The base branch you create the worktree from must match that affirmed shape: trunk-based teams base off `main`, gitflow teams base off `develop`, release-branch teams base off the active release branch. Participants don't pick this — the facilitator's affirmed practices already chose it. See [the branching-strategies knowledge file](../../core/knowledge/aidlc-pipeline-deploy-agent/branching-strategies.md) for the contract aidlc-pipeline-deploy-agent honours (it ships into your harness's `knowledge/` dir).
 
-> **Why the participant supplies `--base` manually here.** In the standard (single-engineer) Construction flow, the conductor dispatches `aidlc-pipeline-deploy-agent` to read `aidlc/spaces/<space>/memory/team.md` and resolve `--base` for you. The workshop recipe is a *manual* multi-clone variant — there is no conductor-driven workshop dispatcher today, so each participant copies the same `--base` value derived from the same `aidlc/spaces/<space>/memory/team.md` they all pulled. This is why the facilitator's affirmation of `## Branching` at stage 2.2 is load-bearing: it's the single source of truth every participant reads.
+> **Why the participant supplies `--base` manually here.** In the standard (single-engineer) Construction flow, the conductor dispatches `aidlc-pipeline-deploy-agent` to read the active space's `## Way of Working` and resolve `--base` for you. The workshop recipe is a *manual* multi-clone variant — there is no conductor-driven workshop dispatcher today, so each participant copies the same `--base` value from the active-space memory files they all pulled. This is why the facilitator's affirmation at stage 2.2 is load-bearing: it is the single source of truth every participant reads.
 
 The actual `aidlc-worktree create` subcommand creates the local worktree and the local branch but does **not** push. Pushing is what publishes the claim. This separation is intentional: a participant on a poor connection can do all their local work first and push the claim atomically when ready.
 
@@ -105,7 +105,7 @@ git ls-remote --heads origin "bolt-*"
 
 # Pick an unclaimed Bolt from bolt-plan.md (e.g. user-profile-api)
 # and create the worktree + branch locally. The --base value MUST match
-# the team's affirmed branching strategy (read from aidlc/spaces/<space>/memory/team.md):
+# the team's affirmed branching strategy (read from the active-space memory files):
 #   trunk-based  → --base main
 #   gitflow      → --base develop
 #   release-branch → --base release/<version>
@@ -136,7 +136,7 @@ The orchestrator picks up at the per-Bolt loop. Because the worktree already exi
 
 ### 4. Merge and push
 
-When the gate approves, the standard `aidlc-bolt complete --merge --slug user-profile-api` flow merges the worktree state and audit back into the participant's local main. **Push the updated state file to origin** (`git push origin main`) — the participant's local merge updates `aidlc-state.md` (e.g., setting `Construction Autonomy Mode: autonomous` after the ladder prompt fires for the first claimant), and other participants must pull that file before they resume to inherit the workflow's mode. The conductor dispatches `aidlc-pipeline-deploy-agent` to read the team's branching strategy from `aidlc/spaces/<space>/memory/team.md` and pick the merge target + strategy. The audit log brackets each dispatch with `MERGE_DISPATCH_INVOKED` → `MERGE_DISPATCH_RETURNED` (or `MERGE_DISPATCH_FALLBACK` if the agent timed out and the conductor fell back to `org.md` defaults). Inspecting these rows after the workshop is the quickest way to confirm the team's affirmed branching was actually honoured.
+When the gate approves, the standard `aidlc-bolt complete --merge --slug user-profile-api` flow merges the worktree state and audit back into the participant's local main. **Push the updated state file to origin** (`git push origin main`) — the participant's local merge updates `aidlc-state.md` (e.g., setting `Construction Autonomy Mode: autonomous` after the ladder prompt fires for the first claimant), and other participants must pull that file before they resume to inherit the workflow's mode. The conductor dispatches `aidlc-pipeline-deploy-agent` to read `## Way of Working` from `aidlc/spaces/<active-space>/memory/{project,team,org}.md` and pick the merge target + strategy. The audit log brackets each dispatch with `MERGE_DISPATCH_INVOKED` → `MERGE_DISPATCH_RETURNED` (or `MERGE_DISPATCH_FALLBACK` if the agent timed out and the conductor fell back to `org.md` defaults). Inspecting these rows after the workshop is the quickest way to confirm the team's affirmed branching was actually honoured.
 
 ```bash
 # After aidlc-bolt complete --merge succeeds — push the merged target branch
@@ -166,7 +166,7 @@ The audit trail in each clone records the local lifecycle (`WORKTREE_CREATED` / 
 
 The shared remote holds `bolt-plan.md` with three Bolts: `user-profile-api`, `billing-service`, `notifications-worker`.
 
-Alice and Bob have each cloned the workshop repo. During Inception's stage 2.2 the team affirmed `## Walking Skeleton: always-skeleton` in `aidlc/spaces/<space>/memory/team.md`, so the orchestrator picks the walking-skeleton-marked Bolt (`user-profile-api`) and runs it solo before opening parallel claiming. **The skeleton-merges-first rule is orchestrator-enforced** — Bob doesn't have to remember to wait, the orchestrator simply doesn't dispatch the parallel batch until the skeleton lands on the shared remote.
+Alice and Bob have each cloned the workshop repo. During Inception's stage 2.2 the team affirmed an always-skeleton stance under `## Walking Skeleton` in `aidlc/spaces/<active-space>/memory/team.md`, so the orchestrator picks the walking-skeleton-marked Bolt (`user-profile-api`) and runs it solo before opening parallel claiming. **The skeleton-merges-first rule is orchestrator-enforced** — Bob doesn't have to remember to wait, the orchestrator simply doesn't dispatch the parallel batch until the skeleton lands on the shared remote.
 
 ### Walking-skeleton Bolt — Alice solo
 
@@ -174,7 +174,7 @@ Alice and Bob have each cloned the workshop repo. During Inception's stage 2.2 t
 # Alice's clone
 # (Worked example assumes a trunk-based team — substitute --base develop for
 # gitflow teams or --base release/<version> for release-branch teams, per
-# aidlc/spaces/<space>/memory/team.md.)
+# aidlc/spaces/<active-space>/memory/team.md.)
 git fetch --all
 bun .claude/tools/aidlc-worktree.ts create --slug user-profile-api --base main
 git push origin bolt-user-profile-api    # claim succeeds — first claimant
@@ -271,7 +271,7 @@ Once every Bolt has merged and `bolt-*` branches are deleted, the facilitator sh
 1. **Verify `Bolt Refs` is empty** — `bun .claude/tools/aidlc-utility.ts status` (or read `aidlc-state.md`) should show `Bolt Refs: [empty list]`. Any leftover slug indicates a Bolt that didn't merge cleanly; investigate before closing the workshop.
 2. **Inspect any preserved worktrees** — `bun .claude/tools/aidlc-worktree.ts list` shows every preserved `.aidlc/worktrees/bolt-*/` directory. These survived because a participant chose Skip or Abort during halt-and-ask. Decide whether to discard them (`aidlc-worktree discard --slug <slug>`) or keep them for post-workshop debrief.
 3. **Skim the audit log** — the intent's `audit/` shards carry the audit entries from every participant's worktree (each clone's shard merges in cleanly, no conflicts). `MERGE_DISPATCH_FALLBACK` rows are the breadcrumb for "we silently used trunk defaults instead of the team's affirmed branching" — surface these in debrief.
-4. **Tag a release if appropriate** — workshop scope completes with all Construction Bolts merged; if the workshop's project is going further, this is a natural tag point. Per the team's affirmed deployment cadence in `aidlc/spaces/<space>/memory/team.md`, this may auto-trigger a staging deploy.
+4. **Tag a release if appropriate** — workshop scope completes with all Construction Bolts merged; if the workshop's project is going further, this is a natural tag point. Per the team's affirmed deployment cadence in `aidlc/spaces/<active-space>/memory/team.md`, this may auto-trigger a staging deploy.
 
 The framework handles each participant's per-session resume case — see [Resuming a workshop session](#resuming-a-workshop-session) below — useful when a participant's session was killed mid-batch and they're rejoining the workshop late.
 
@@ -317,7 +317,7 @@ If you see this, the orchestrator is mid-AUQ-sequence. Resolve every failed-sibl
 
 ### Resuming a workshop session
 
-Workshop participants will lose sessions — laptop sleeps, network drops, lunch breaks. The framework handles resume cleanly because every load-bearing decision lives in committed artifacts (`aidlc-state.md`, the `audit/` shards, `aidlc/spaces/<space>/memory/team.md`) the resuming session can re-read.
+Workshop participants will lose sessions — laptop sleeps, network drops, lunch breaks. The framework handles resume cleanly because every load-bearing decision lives in committed artifacts (`aidlc-state.md`, the `audit/` shards, `aidlc/spaces/<active-space>/memory/team.md`) the resuming session can re-read.
 
 The contract:
 
@@ -337,7 +337,7 @@ Practices and autonomy mode are explicit committed artifacts in the shared repo 
 - **A dedicated `--claim-bolt` CLI utility.** That utility may ship in a future release once a real workshop dogfood surfaces a concrete requirement (better error messages on race, audit-only offline mode, automated stale-claim detection). Until then, the recipe above using `aidlc-worktree create` + `git push` is the contract.
 - **Stale-claim detection.** A participant who claims a Bolt and then drops off without releasing leaves an orphan `bolt-<slug>` branch on origin. The facilitator manually deletes it (`git push origin :bolt-<slug>`). Future `--doctor` extensions in v0.4.0 milestone 15 may flag stale branches automatically.
 - **Audit-only / offline mode.** Without a shared remote, claim coordination falls back to verbal agreement among facilitator and participants. Workshop mode is fundamentally a multi-clone pattern; single-laptop runs of the workshop scope are possible but lose the parallel-claim benefit.
-- **Practices freshness during a multi-clone workshop.** Practices are read **once at Construction start** — the conductor loads `## Walking Skeleton` and `## Branching` from `aidlc/spaces/<space>/memory/team.md` (via `extractMarkdownSection` from `aidlc-lib.ts`), and that single read services the entire Construction phase for that participant's session. If the facilitator re-runs practices-discovery while participants have Bolts in flight, in-flight participants will not re-read live `aidlc/spaces/<space>/memory/team.md` until they restart their `/aidlc` session (and `git pull` the new affirmation). **Rule for the facilitator:** do not re-run practices-discovery while any Bolt is in flight. Finish every in-flight Bolt's gate first. **Rule for participants:** always run `git fetch --all && git pull` immediately before resuming a session — this catches any practices change that landed while you were away. The same rule covers the `--base` value in step 2 of the participant flow: the value you copy from `aidlc/spaces/<space>/memory/team.md` is only fresh as of your last pull.
+- **Practices freshness during a multi-clone workshop.** Practices are read **once at Construction start** — the conductor loads `## Walking Skeleton` and `## Way of Working` from `aidlc/spaces/<active-space>/memory/{project,team,org}.md`, and that single read services the entire Construction phase for that participant's session. If the facilitator re-runs practices-discovery while participants have Bolts in flight, in-flight participants will not re-read live active-space memory until they restart their `/aidlc` session (and `git pull` the new affirmation). **Rule for the facilitator:** do not re-run practices-discovery while any Bolt is in flight. Finish every in-flight Bolt's gate first. **Rule for participants:** always run `git fetch --all && git pull` immediately before resuming a session — this catches any practices change that landed while you were away. The same rule covers the `--base` value in step 2 of the participant flow: the value you copy from active-space memory is only fresh as of your last pull.
 
 ---
 

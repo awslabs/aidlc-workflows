@@ -684,7 +684,7 @@
       "support_agents": [
         "aidlc-architect-agent"
       ],
-      "mode": "subagent",
+      "mode": "pipeline",
       "produces": [
         "business-overview",
         "architecture",
@@ -760,7 +760,7 @@
         "aidlc-developer-agent",
         "aidlc-devsecops-agent"
       ],
-      "mode": "inline",
+      "mode": "subagent",
       "produces": [
         "team-practices",
         "discovered-rules",
@@ -814,8 +814,8 @@
         "infra",
         "workshop"
       ],
-      "inputs": "<record>/aidlc-state.md + (brownfield) reverse-engineering's 8 artifacts",
-      "outputs": "team-practices.md, discovered-rules.md, evidence.md, practices-discovery-timestamp.md (4 artifacts under this stage's record dir, engine-resolved). On affirmation, content is promoted to the harness rule layer's aidlc-team.md and aidlc-project.md.",
+      "inputs": "<record>/aidlc-state.md + (brownfield) reverse-engineering evidence",
+      "outputs": "team-practices.md, discovered-rules.md, evidence.md, practices-discovery-timestamp.md, plus one contribution file per support agent. On affirmation, content is promoted to aidlc/spaces/<active-space>/memory/team.md and project.md.",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -953,9 +953,11 @@
       "condition": "Execute when user-facing features, multiple personas, complex business logic, or cross-team work is involved. Skip for pure refactoring, isolated bug fixes, infrastructure-only changes, or developer tooling.",
       "lead_agent": "aidlc-product-agent",
       "support_agents": [
-        "aidlc-design-agent"
+        "aidlc-design-agent",
+        "aidlc-developer-agent",
+        "aidlc-quality-agent"
       ],
-      "mode": "inline",
+      "mode": "mob",
       "produces": [
         "stories",
         "personas",
@@ -1988,7 +1990,7 @@
       "reviewer": "aidlc-architecture-reviewer-agent",
       "reviewer_max_iterations": 2,
       "inputs": "ALL prior design artifacts for this unit",
-      "outputs": "application code + code-generation-plan.md, code-summary.md (under this stage's per-unit record dir, engine-resolved)",
+      "outputs": "application code + code-generation-plan.md, code-generation-questions.md, code-summary.md (under this stage's per-unit record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",

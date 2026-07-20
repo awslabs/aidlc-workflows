@@ -27,10 +27,10 @@ At its core, AI-DLC runs a simple loop. A deterministic **engine** decides what 
 1. **Reads stage files** — 32 stage definitions across 5 phases, each specifying inputs, steps, outputs, and the lead agent
 2. **Loads agent personas** — Activates domain-expert perspectives (architect, developer, product manager, etc.) with specialized knowledge
 3. **Manages state and audit** — Tracks progress in `aidlc-state.md` and logs every decision to the intent's `audit/` shards for traceability
-4. **Delegates to subagents** — For stages requiring focused, autonomous work (reverse engineering, code generation), spawns a subprocess
+4. **Delegates across stage topologies** — For focused autonomous work and multi-agent collaboration, dispatches subagents as a hub-and-spoke, pipeline, or mob
 5. **Presents approval gates** — After each stage, you review and approve before the workflow advances
 
-The engine owns the routing (which stage is next, which scope, when to stop); the conductor owns execution quality (running the stage well, asking good questions, surfacing decisions to you). Most stages run **inline**: the conductor adopts the agent's perspective and works directly with you in conversation. Two stages run as **subagents**: the work is delegated to a background subprocess and results are presented when done. For the full architecture, see the Developer Reference's [Engine and Skill System](../reference/17-skill-system.md).
+The engine owns the routing (which stage is next, which scope, when to stop); the conductor owns execution quality (running the stage well, asking good questions, surfacing decisions to you). Most stages run **inline**: the conductor adopts the agent's perspective and works directly with you in conversation. Four stages use dispatched topologies: Practices Discovery and Code Generation run as `subagent` hubs, Reverse Engineering as a two-link `pipeline`, and User Stories as a `mob`. The complete topology is 28 inline / 2 subagent / 1 pipeline / 1 mob. For the full architecture, see the Developer Reference's [Engine and Skill System](../reference/17-skill-system.md).
 
 ## Who This Guide Is For
 

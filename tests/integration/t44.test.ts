@@ -205,13 +205,16 @@ describe("t44 stage-instruction completeness — parseStageFrontmatter (migrated
   }
 
   // ============================================================
-  // Tests 18-23: STATE_UPDATE_STAGES mention aidlc-state / Update State
+  // Tests 18-23: initialization owns its state writes; all later stages report
+  // outcomes through the orchestration engine.
   // ============================================================
 
   const STATE_UPDATE_STAGES = [
     "workspace-scaffold",
     "workspace-detection",
     "state-init",
+  ] as const;
+  const ENGINE_REPORT_STAGES = [
     "intent-capture",
     "requirements-analysis",
     "reverse-engineering",
@@ -221,6 +224,14 @@ describe("t44 stage-instruction completeness — parseStageFrontmatter (migrated
   for (const slug of STATE_UPDATE_STAGES) {
     test(`state update: ${slug} steps mention state update`, () => {
       expect(fileMatches(findStageFile(slug), STATE_RE)).toBe(true);
+    });
+  }
+  const ENGINE_REPORT_RE =
+    /aidlc-orchestrate\.ts\s+report\s+--stage|engine-owned.*report/i;
+
+  for (const slug of ENGINE_REPORT_STAGES) {
+    test(`engine-owned transition: ${slug} steps report the stage outcome`, () => {
+      expect(fileMatches(findStageFile(slug), ENGINE_REPORT_RE)).toBe(true);
     });
   }
 

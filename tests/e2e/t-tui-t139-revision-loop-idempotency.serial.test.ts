@@ -85,6 +85,8 @@ const IS_WIN = os.platform() === "win32";
 const WIN_NODE = IS_WIN ? resolveWinNode() : null;
 const DRIVE_BIN = IS_WIN ? (WIN_NODE as string) : process.execPath;
 const DRIVE_PREFIX = IS_WIN ? ["--experimental-strip-types", DRIVER] : [DRIVER];
+const LIVE_CHILD_ENV = { ...process.env };
+delete LIVE_CHILD_ENV.AIDLC_SKIP_REVISION_BACKSTOP;
 
 // Two full run-throughs back-to-back. The bun:test cap is the hard ceiling; each
 // run's pass condition is its on-disk Completed milestone, not the clock.
@@ -113,7 +115,10 @@ interface Run {
   stderr: string;
 }
 function drive(args: string[]): Run {
-  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], { encoding: "utf-8" });
+  const res = spawnSync(DRIVE_BIN, [...DRIVE_PREFIX, ...args], {
+    encoding: "utf-8",
+    env: LIVE_CHILD_ENV,
+  });
   return { rc: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 function waitFor(session: string, pattern: string, timeoutMs: number, stableMs: number): boolean {
@@ -156,9 +161,9 @@ const SKIP_REASON = skipReason();
 /** Run the answer-gate primitive to the Completed milestone. Approve-only by
  *  default (Enter = Recommended per menu); when rejectFirstGate is true it selects
  *  "Request changes" on the FIRST approval gate once, then approves the rest —
- *  driving one reject→revise→approve cycle (the gate is identified by its "Request
- *  Changes" option, so the clarifying-question menus that precede it are NOT
- *  mistaken for it; that mis-targeting was the first-attempt finding). Long-lived
+ *  driving one reject→revise→approve cycle (the gate is identified by the canonical
+ *  Approve + Request Changes pair, so the Looks correct + Request changes summary
+ *  confirmation is NOT mistaken for it). Long-lived
  *  subprocess; its own backstops error loud, so a hang exits nonzero (never a
  *  manufactured pass — IRON RULE). */
 function runAnswerGateToMilestone(
@@ -183,7 +188,7 @@ function runAnswerGateToMilestone(
         String(overallMs),
         ...(rejectFirstGate ? ["--reject-first-gate"] : []),
       ],
-      { stdio: "inherit" },
+      { stdio: "inherit", env: LIVE_CHILD_ENV },
     );
     child.on("exit", (code) => resolve(code ?? -1));
     child.on("error", () => resolve(-1));
@@ -232,6 +237,23 @@ function readTerminal(sandbox: string): Terminal {
 /** Launch claude on a fresh brownfield bugfix project, clear modals, submit the
  *  bugfix command. Returns the session name (caller drives gates + reads disk). */
 function launchBugfix(session: string, sandbox: string): void {
+  // run-tests.ts disables the approve-time revision backstop globally because
+  // most fixtures intentionally omit revision evidence. This test is the live
+  // reject/revise proof, so its Claude child must not inherit that bypass. On
+  // POSIX the private tmux server can retain the suite environment from an
+  // earlier test, hence the explicit `env -u` wrapper at the actual PTY child.
+  // Windows has no `env`; its daemon inherits LIVE_CHILD_ENV directly.
+  const claudeCommand = IS_WIN
+    ? ["claude", "--dangerously-skip-permissions"]
+    : [
+        "env",
+        "-u",
+        "AIDLC_SKIP_REVISION_BACKSTOP",
+        "claude",
+        "--setting-sources",
+        "project",
+        "--dangerously-skip-permissions",
+      ];
   expect(
     drive([
       "start",
@@ -244,8 +266,7 @@ function launchBugfix(session: string, sandbox: string): void {
       "--height",
       "45",
       "--",
-      "claude",
-      "--dangerously-skip-permissions",
+      ...claudeCommand,
     ]).rc,
   ).toBe(0);
   if (waitFor(session, "trust this folder", 60000, 600)) {

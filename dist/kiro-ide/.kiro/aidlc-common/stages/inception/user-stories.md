@@ -6,7 +6,9 @@ condition: Execute when user-facing features, multiple personas, complex busines
 lead_agent: aidlc-product-agent
 support_agents:
   - aidlc-design-agent
-mode: inline
+  - aidlc-developer-agent
+  - aidlc-quality-agent
+mode: mob
 reviewer: aidlc-product-lead-agent
 reviewer_max_iterations: 2
 produces:
@@ -44,10 +46,13 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ## Steps
 
-### Step 1: Load Agent Personas
+### Step 1: Load the Lead Persona (mob stage)
 
-Load aidlc-product-agent persona from `agents/aidlc-product-agent.md` and knowledge from `.kiro/knowledge/aidlc-product-agent/`.
-Load aidlc-design-agent persona from `agents/aidlc-design-agent.md` and knowledge from `.kiro/knowledge/aidlc-design-agent/` for supporting perspective on user experience.
+Read every path in `directive.inline_context_paths`. For this mob the roster
+contains the aidlc-product-agent persona and its shared/role knowledge only; the
+product manager owns the inline draft and integration work.
+
+This stage runs `mode: mob` (stage-protocol.md §5 "Multi-agent stages"): the support agents (aidlc-design-agent for user experience, aidlc-developer-agent for implementability, aidlc-quality-agent for testability) are NOT voices to adopt — they are dispatched as independent participants during PART 2. Do not load their personas into your own context.
 
 ### Step 2: Validate User Stories Are Needed
 
@@ -62,7 +67,9 @@ Create `<record>/inception/user-stories/user-stories-assessment.md` documenting 
 - If executing: key areas where stories will add the most value
 - If skipping: what alternative coverage exists (e.g., requirements alone are sufficient)
 
-If skipping, update aidlc-state.md with skip reason and proceed to next stage.
+If skipping, run
+`bun .kiro/tools/aidlc-orchestrate.ts report --stage user-stories --result skipped --reason "<reason>"`.
+The engine records the skip and advances to the next in-scope stage.
 
 ### Step 3: Load Prior Context
 
@@ -102,11 +109,15 @@ If the user interjects with feedback before generation completes, treat it as a 
 
 ---
 
-## PART 2: Generation
+## PART 2: Generation (mob elaboration)
 
-### Step 8: Execute Plan — Generate Stories and Personas
+### Step 8: Execute Plan — Generate Stories and Personas via the Mob
 
-Based on the approved plan, generate:
+This is the mob-elaboration ritual: the Product Manager (lead) owns the
+draft, Developers and QA (and Design) collaborate as independent
+participants, and the Product Leader reviews afterwards (§12a).
+
+**Round 0 — lead drafts.** As the lead, based on the approved plan, draft:
 
 **`<record>/inception/user-stories/personas.md`:**
 - User persona definitions (name, role, goals, pain points, context)
@@ -119,18 +130,49 @@ Based on the approved plan, generate:
 - Story dependencies and relationships
 - INVEST compliance notes
 
-### Step 9: Update State
+**Round 1 — dispatch the mob.** Per stage-protocol.md §5 `mode: mob`,
+dispatch all three support agents in parallel against the draft (paths-only
+briefs: the two draft artifacts, the Q&A file, requirements.md), mutually
+blind. Each WRITES its contribution file at
+`<record>/inception/user-stories/contributions/<agent-slug>.md` (§11 format:
+identity-marker first line, Contribution, Positions): design on UX and
+persona fidelity, developer on implementability and story sizing, quality on
+testability of the acceptance criteria.
 
-Update `<record>/aidlc-state.md`:
-- Mark User Stories as `[x]` completed
-- Update current stage and next stage
+**Integrate and triage.** As the lead, fold the contributions into the two
+artifacts, then triage unresolved objections per §5: a judgment call (both
+positions legitimate) goes to the user NOW as a structured question (add it
+to the questions file first, blank `[Answer]:` tag); a knowledge dispute
+goes to **round 2** — re-dispatch only the objecting agent(s) with the
+revised draft and the other participants' positions (they update their own
+contribution files). Maintained dissent is quoted verbatim in the Step 10
+completion summary. The three contribution files are this stage's ensemble
+evidence — the engine refuses approval while any is missing.
+
+### Step 9: Open the Approval Gate
+
+After verifying the three lead artifacts and all three contribution files, run:
+
+```bash
+bun .kiro/tools/aidlc-orchestrate.ts report \
+  --stage user-stories --result awaiting-approval
+```
+
+If the engine refuses missing or malformed ensemble evidence, restore that
+evidence before presenting the human gate.
 
 ### Step 10: Present Completion & Request Approval
 
 Use stage-protocol.md completion template with completion emoji: :books:
 - Summary of personas and stories produced
 - Review path: `<record>/inception/user-stories/`
-- Structured approval question with options: Approve (continue to Delivery Planning) / Request Changes
+- Structured approval question with options: Approve (continue to `directive.next_stage`) / Request Changes
+
+STOP for the human response. Report **Approve** with
+`--result approved --user-input "<exact choice>"`; report
+**Request Changes** with `--result rejected --user-input "<feedback>"`, run the
+revision loop, and report `--result revised` before re-presenting. The engine
+owns every lifecycle transition and advancement.
 
 ## Sensors
 
@@ -159,13 +201,13 @@ Before the approval gate, read memory.md and surface candidates as a
 structured question. For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
-- Prescriptive rule → `.kiro/steering/aidlc-phase-<phase>.md` (phase-scoped)
-  or `.kiro/steering/aidlc-<org|team|project>.md` (cross-cutting)
+- Prescriptive rule → a practice line under the routed heading in
+  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
 - Verification check → new manifest at `.kiro/sensors/aidlc-<id>.md`
   (capability descriptor only — no `applies_to`); add the new id to
   the relevant stage's `sensors: [...]` frontmatter list to wire it
 
-If nothing surfaces or the user skips all, proceed to the gate. The memory.md
+Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
 file stays in the artefact directory as part of the stage's permanent record.
 
 Stage files are immutable framework artefacts — the ritual writes into the

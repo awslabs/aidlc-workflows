@@ -52,6 +52,17 @@ const manifest: HarnessManifest = {
     { src: "agents/aidlc-product-lead-agent.json", dst: "agents/aidlc-product-lead-agent.json" },
     { src: "agents/aidlc-architecture-reviewer-agent.json", dst: "agents/aidlc-architecture-reviewer-agent.json" },
     { src: "agents/aidlc-composer-agent.json", dst: "agents/aidlc-composer-agent.json" },
+    // Ensemble collaborator configs (2.5.0 roster closure): lean read+shell
+    // delegation targets so any stage can flip to an ensemble topology here.
+    { src: "agents/aidlc-product-agent.json", dst: "agents/aidlc-product-agent.json" },
+    { src: "agents/aidlc-design-agent.json", dst: "agents/aidlc-design-agent.json" },
+    { src: "agents/aidlc-delivery-agent.json", dst: "agents/aidlc-delivery-agent.json" },
+    { src: "agents/aidlc-aws-platform-agent.json", dst: "agents/aidlc-aws-platform-agent.json" },
+    { src: "agents/aidlc-compliance-agent.json", dst: "agents/aidlc-compliance-agent.json" },
+    { src: "agents/aidlc-devsecops-agent.json", dst: "agents/aidlc-devsecops-agent.json" },
+    { src: "agents/aidlc-quality-agent.json", dst: "agents/aidlc-quality-agent.json" },
+    { src: "agents/aidlc-pipeline-deploy-agent.json", dst: "agents/aidlc-pipeline-deploy-agent.json" },
+    { src: "agents/aidlc-operations-agent.json", dst: "agents/aidlc-operations-agent.json" },
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
     { src: "settings/cli.json", dst: "settings/cli.json" },
     // Project-root .gitignore (beside .kiro/, not inside it) — re-rooted under

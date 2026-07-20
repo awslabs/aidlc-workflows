@@ -5,13 +5,13 @@
 // next/report sequences across the v0.6.0 engine (aidlc-orchestrate.ts) for the
 // 7 SPECIAL PATHS the prose orchestrator handles today, plus 3 true
 // cross-component WALKS — with NO MODEL IN THE LOOP. Every step SPAWNS the real
-// engine binary `bun aidlc-orchestrate.ts next|report` (and the sibling tools
-// `bun aidlc-jump.ts resolve` / `bun aidlc-state.ts gate-start`) over a seeded
+// engine binary `bun aidlc-orchestrate.ts next|report` (and the sibling tool
+// `bun aidlc-jump.ts resolve`) over a seeded
 // fixture and diffs the emitted directive / the audit.md the tool writes against
 // a frozen golden — the PROCESS boundary (exit codes, stdout JSON, file effects),
 // never an in-process call.
 //
-// Why spawn (not in-process): the .sh shells out to FOUR binaries per walk and
+// Why spawn (not in-process): the .sh shells out to the engine and jump tool and
 // asserts on (a) the directive JSON each emits on stdout, (b) the STAGE_STARTED
 // rows aidlc-state.ts appends to audit.md through report's
 // dispatcher, and (c) the no-state-created side effect of --init. The contract is
@@ -100,7 +100,6 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const ORCHESTRATE = join(TOOLS, "aidlc-orchestrate.ts");
 const JUMP = join(TOOLS, "aidlc-jump.ts");
-const STATE = join(TOOLS, "aidlc-state.ts");
 
 // Clear leaked AWS_AIDLC_DEFAULT_SCOPE so scope resolves from the state file
 // (mirrors the .sh's reset_aidlc_env at line 54).
@@ -301,6 +300,59 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(r.out).toContain("existing workflow was found");
   });
 
+  test("SP4b: resume answer -> read-only print that continues through next", () => {
+    const p = projWithState("state-jumped.md");
+    const before = readFileSync(statePath(p), "utf-8");
+    const r = run(ORCHESTRATE, [
+      "report",
+      "--result",
+      "resumed",
+      "--user-input",
+      "Resume from last checkpoint",
+      "--project-dir",
+      p,
+    ]);
+    const d = directive(r);
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain("Re-run `next`");
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
+  });
+
+  test("SP4c: every resume-menu choice routes to its own move; garbage errors; state untouched", () => {
+    const p = projWithState("state-jumped.md");
+    const before = readFileSync(statePath(p), "utf-8");
+    const report = (answer: string) =>
+      directive(run(ORCHESTRATE, [
+        "report",
+        "--result",
+        "resumed",
+        "--user-input",
+        answer,
+        "--project-dir",
+        p,
+      ]));
+
+    const redo = report("Redo the current stage");
+    expect(redo.kind).toBe("print");
+    expect(redo.message).toContain("aidlc-jump.ts execute");
+    expect(redo.message).toContain("--direction redo");
+
+    const jump = report("Jump to a stage");
+    expect(jump.kind).toBe("print");
+    expect(jump.message).toContain("next --stage");
+
+    const fresh = report("Start fresh");
+    expect(fresh.kind).toBe("print");
+    expect(fresh.message).toContain("--new-intent");
+
+    const garbage = report("something unrecognizable");
+    expect(garbage.kind).toBe("error");
+    expect(garbage.message).toContain("Unrecognized resume choice");
+
+    // Every round-trip above is read-only: report routes, the conductor acts.
+    expect(readFileSync(statePath(p), "utf-8")).toBe(before);
+  });
+
   // ============================================================
   // Special path 5: BIRTH (P4: --init retired) — (a) named scope on a clean
   // workspace prints the intent-birth move + creates NO state; (b) a named scope
@@ -318,6 +370,28 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(directive(r).kind).toBe("print");
     expect(directive(r).message).toContain("intent-birth");
     // Mutation stays conductor-side: next must not have birthed/scaffolded state.
+    expect(existsSync(statePath(p))).toBe(false);
+  });
+
+  test("SP5a positional scope + description -> birth preserves --arguments and does not ask", () => {
+    const p = cleanProj();
+    const r = run(ORCHESTRATE, [
+      "next",
+      "bugfix",
+      "Fix",
+      "duplicate",
+      "todo",
+      "persistence",
+      "--project-dir",
+      p,
+    ]);
+    const d = directive(r);
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain("intent-birth --scope bugfix");
+    expect(d.message).toContain(
+      '--arguments "Fix duplicate todo persistence"',
+    );
+    expect(d.kind).not.toBe("ask");
     expect(existsSync(statePath(p))).toBe(false);
   });
 
@@ -346,7 +420,15 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   // ============================================================
   test("SP7-control: report --result approved --user-input -> done", () => {
     const p = projWithState("state-mid-ideation.md");
-    run(STATE, ["gate-start", "feasibility", "--project-dir", p]);
+    run(ORCHESTRATE, [
+      "report",
+      "--stage",
+      "feasibility",
+      "--result",
+      "awaiting-approval",
+      "--project-dir",
+      p,
+    ]);
     const r = run(ORCHESTRATE, [
       "report",
       "--result",
@@ -392,7 +474,15 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const n1 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
     expect(n1.stage).toBe("feasibility");
     expect(n1.gate).toBe(true);
-    run(STATE, ["gate-start", "feasibility", "--project-dir", p]);
+    run(ORCHESTRATE, [
+      "report",
+      "--stage",
+      "feasibility",
+      "--result",
+      "awaiting-approval",
+      "--project-dir",
+      p,
+    ]);
     run(ORCHESTRATE, [
       "report",
       "--result",

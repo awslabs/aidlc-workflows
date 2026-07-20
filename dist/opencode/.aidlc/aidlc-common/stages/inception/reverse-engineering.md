@@ -6,7 +6,7 @@ condition: Execute when project is brownfield. Always rerun for freshness. Skip 
 lead_agent: aidlc-developer-agent
 support_agents:
   - aidlc-architect-agent
-mode: subagent
+mode: pipeline
 produces:
   - business-overview
   - architecture
@@ -40,6 +40,13 @@ outputs: "aidlc/spaces/<active-space>/codekb/<repo>/ (9 artifacts: business-over
 
 MANDATORY: Follow stage-protocol.md for approval gates, question format, and completion messages.
 
+This stage runs `mode: pipeline` (stage-protocol.md §5): a two-link chain in
+which each link advances the work product directly. The developer lead (link
+1) scans and returns structured results; the architect (link 2, the final
+link) synthesizes those results and writes the 9 artifacts. The final link
+leaving the `produces[]` artifacts complete is the pipeline contract working
+as designed — no contribution files on pipeline stages.
+
 ## Steps
 
 ### Step 1: Check Conditions
@@ -47,7 +54,9 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 Read `<record>/aidlc-state.md` to confirm:
 - Project type is brownfield
 
-If project is not brownfield, skip this stage and update aidlc-state.md with skip reason.
+If the project is not brownfield, run
+`bun .aidlc/tools/aidlc-orchestrate.ts report --stage reverse-engineering --result skipped --reason "<reason>"`.
+The engine records the skip and advances to the next in-scope stage.
 
 #### Resolve the intent's repo set (multi-repo)
 
@@ -88,7 +97,9 @@ single-repo intent this is the whole codebase) for:
 - Code quality indicators (linting, CI/CD, documentation)
 - Technical debt signals
 
-Developer returns structured scan results following the Developer Code Scan Template in `templates/re-artifacts.md`.
+Developer returns structured scan results following the Developer Code Scan
+Template in
+`.aidlc/knowledge/aidlc-developer-agent/re-artifacts.md`.
 
 ### Step 3: Architect Synthesis
 
@@ -123,11 +134,11 @@ absent. This is the durable per-repo code knowledge base, a space-level store sh
 across every intent in the space. Never substitute the intent slug, the record dir, or
 a hand-composed path for what the tool prints.
 
-### Step 4: Update State
+### Step 4: Completion Handoff
 
-Update `<record>/aidlc-state.md`:
-- Mark Reverse Engineering as `[x]` completed
-- Update current stage and next stage
+Hand completion to `stage-protocol.md` via
+`bun .aidlc/tools/aidlc-orchestrate.ts report --stage reverse-engineering --result <outcome>`.
+The engine owns all lifecycle transitions and advancement.
 
 ### Step 5: Present Completion & Request Approval
 
@@ -166,13 +177,13 @@ Before the approval gate, read memory.md and surface candidates as a
 structured question. For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
-- Prescriptive rule → `.aidlc/rules/aidlc-phase-<phase>.md` (phase-scoped)
-  or `.aidlc/rules/aidlc-<org|team|project>.md` (cross-cutting)
+- Prescriptive rule → a practice line under the routed heading in
+  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
 - Verification check → new manifest at `.aidlc/sensors/aidlc-<id>.md`
   (capability descriptor only — no `applies_to`); add the new id to
   the relevant stage's `sensors: [...]` frontmatter list to wire it
 
-If nothing surfaces or the user skips all, proceed to the gate. The memory.md
+Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
 file stays in the artefact directory as part of the stage's permanent record.
 
 Stage files are immutable framework artefacts — the ritual writes into the

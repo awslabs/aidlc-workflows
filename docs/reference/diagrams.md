@@ -105,13 +105,13 @@ flowchart TD
 
 ## 3. Inception Flow
 
-The Inception phase analyzes the codebase (for brownfield projects), discovers team practices, elicits requirements, produces user stories and mockups, designs the application architecture, decomposes into implementation units, and plans delivery. Stage 2.1 (Reverse Engineering) runs as a subagent and is shown in a hexagonal shape. It uses a two-step RE pattern: first a developer subagent scans the code, then an architect subagent synthesizes the results.
+The Inception phase analyzes the codebase (for brownfield projects), discovers team practices, elicits requirements, produces user stories and mockups, designs the application architecture, decomposes into implementation units, and plans delivery. Stage 2.1 (Reverse Engineering) runs as a pipeline (2-link chain) and is shown in a hexagonal shape: first a developer subagent scans the code, then an architect subagent synthesizes the results and writes the artifacts.
 
 ```mermaid
 flowchart TD
     S21{{"`**2.1 Reverse Engineering**
     (aidlc-developer-agent + aidlc-architect-agent)
-    subagent: two-step`"}}
+    pipeline: 2-link`"}}
     S22a["2.2 Practices Discovery\n(aidlc-pipeline-deploy-agent)"]
     S22["2.3 Requirements Analysis\n(aidlc-product-agent)"]
     S23["2.4 User Stories\n(aidlc-product-agent)"]
@@ -127,7 +127,7 @@ flowchart TD
     S21 -.->|CONDITIONAL| S22a
     S22a -.->|CONDITIONAL| S22
 
-    subgraph RE_DETAIL["Two-Step RE Pattern"]
+    subgraph RE_DETAIL["Two-Link RE Pipeline"]
         direction LR
         DEV_SCAN["Step 1: Developer\nCode Scan"]
         ARCH_SYNTH["Step 2: Architect\nSynthesis"]
@@ -316,7 +316,7 @@ flowchart TD
 
 ## 7. Execution Model
 
-This implementation uses three execution modes for stages. **Inline** stages execute directly within the orchestrator conversation (user can interact). **Subagent (simple)** stages delegate to a single agent via the Claude Code Task tool. **Subagent (two-step RE)** is a specialized pattern for Reverse Engineering that delegates to two agents sequentially.
+This implementation uses four active execution modes for stages. **Inline** stages execute directly within the orchestrator conversation (user can interact). **Subagent** stages delegate to a single agent via the Claude Code Task tool (hub-and-spoke when the stage declares support agents). **Pipeline** stages chain agents sequentially, each link advancing the work product (Reverse Engineering is the shipped example). **Mob** stages convene all support agents in parallel rounds (User Stories is the shipped example).
 
 ```mermaid
 flowchart LR
@@ -341,7 +341,7 @@ flowchart LR
         SA1 --> SA2 --> SA3 --> SA4 --> SA5 --> SA6
     end
 
-    subgraph TWOSTEP["Mode 3: Subagent (two-step RE)"]
+    subgraph TWOSTEP["Mode 3: Pipeline (2-link RE chain)"]
         direction TB
         TS1["Orchestrator reads\nRE stage file"]
         TS2["Task: aidlc-developer-agent\ncode scan"]
@@ -352,9 +352,21 @@ flowchart LR
         TS1 --> TS2 --> TS3 --> TS4 --> TS5 --> TS6
     end
 
+    subgraph MOB["Mode 4: Mob (parallel rounds)"]
+        direction TB
+        MB1["Orchestrator reads\nstage file"]
+        MB2["Lead drafts the\nartifacts inline"]
+        MB3["Parallel Tasks: all\nsupport agents, blind"]
+        MB4["Each writes its\ncontribution file"]
+        MB5["Lead integrates;\nobjection triage\n(judgment -> human,\nknowledge -> round 2)"]
+        MB6["Orchestrator presents\ncompletion + approval"]
+        MB1 --> MB2 --> MB3 --> MB4 --> MB5 --> MB6
+    end
+
     style INLINE fill:#e8f5e9,stroke:#4caf50
     style SUBAGENT fill:#e3f2fd,stroke:#2196f3
     style TWOSTEP fill:#fff3e0,stroke:#ff9800
+    style MOB fill:#f3e5f5,stroke:#9c27b0
 ```
 
 ---
@@ -442,7 +454,7 @@ sequenceDiagram
     participant TAK as Team Agent Knowledge
     participant PA as Prior Artifacts
 
-    O->>G: Step 1: Load aidlc/spaces/<space>/memory/
+    O->>G: Step 1: Load aidlc/spaces/<active-space>/memory/
     Note over G: org.md + team.md + project.md + phases/<phase>.md
     G-->>O: Rules loaded (strict-additive — all layers present)
 
@@ -494,7 +506,7 @@ flowchart TD
     REVISION_COUNT{"Revision\ncycle >= 3?"}
     NOTE_2ND["After 2nd revision:\nnote that escape hatch\nactivates next cycle"]
 
-    UPDATE_STATE["Update aidlc-state.md:\nmark stage as completed"]
+    REPORT_APPROVED["Report approved:\nengine completes + routes"]
     PROGRESS["Display progress line:\nN/total overall"]
     NEXT_STAGE["Proceed to next stage"]
 
@@ -509,8 +521,8 @@ flowchart TD
     ASK --> ACCEPT
     ASK --> ADD_STAGE
 
-    APPROVE --> AUDIT_POST_A --> UPDATE_STATE --> PROGRESS --> NEXT_STAGE
-    ACCEPT --> AUDIT_POST_ACC --> UPDATE_STATE
+    APPROVE --> AUDIT_POST_A --> REPORT_APPROVED --> PROGRESS --> NEXT_STAGE
+    ACCEPT --> AUDIT_POST_ACC --> REPORT_APPROVED
 
     CHANGES --> AUDIT_POST_C --> REVISION_COUNT
     REVISION_COUNT -->|"< 3"| NOTE_2ND --> REVISE --> RE_PRESENT --> AUDIT_PRE
@@ -531,7 +543,11 @@ flowchart TD
 
 ## 12. State Tracking
 
-The `aidlc-state.md` file tracks each stage with checkbox notation: `[ ]` (not started), `[-]` (in progress), `[x]` (completed). Stages always transition through the intermediate `[-]` state -- they never jump from `[ ]` directly to `[x]`. The diagram also shows the side flows for skip, redo, and jump operations.
+The `aidlc-state.md` file tracks each stage with checkbox notation: `[ ]` (not
+started), `[-]` (in progress), `[?]` (awaiting approval), `[R]` (revising),
+`[x]` (completed), and `[S]` (skipped). The engine owns these transitions;
+conductors report outcomes rather than editing checkbox state. The diagram also
+shows the side flows for skip, redo, and jump operations.
 
 ```mermaid
 stateDiagram-v2
@@ -539,14 +555,20 @@ stateDiagram-v2
 
     state "[ ] Not Started" as NotStarted
     state "[-] In Progress" as InProgress
+    state "[?] Awaiting Approval" as Awaiting
+    state "[R] Revising" as Revising
     state "[x] Completed" as Completed
-    state "Skipped" as Skipped
+    state "[S] Skipped" as Skipped
 
-    NotStarted --> InProgress : Stage begins\n(mark [-] in state file)
-    InProgress --> Completed : User approves\n(mark [x] in state file)
-    InProgress --> InProgress : Request Changes\n(revision loop)
+    NotStarted --> InProgress : engine route
+    InProgress --> Awaiting : report awaiting-approval
+    Awaiting --> Completed : report approved
+    Awaiting --> Revising : report rejected
+    Revising --> Awaiting : report revised
 
-    NotStarted --> Skipped : Not in scope\nor execution plan
+    NotStarted --> Skipped : scope composition
+    InProgress --> Skipped : report skipped
+    Revising --> Skipped : report skipped
 
     note right of Skipped
         Task created but immediately
@@ -561,16 +583,18 @@ flowchart TD
         direction LR
         NS1["[ ] Not Started"]
         IP1["[-] In Progress"]
+        AW1["[?] Awaiting Approval"]
         CO1["[x] Completed"]
-        NS1 -->|"stage begins"| IP1
-        IP1 -->|"user approves"| CO1
+        NS1 -->|"engine route"| IP1
+        IP1 -->|"report gate open"| AW1
+        AW1 -->|"report approved"| CO1
     end
 
     subgraph SKIP["Skip Flow"]
         direction LR
         NS2["[ ] Not Started"]
-        SK2["[x] Completed\n(Skipped: reason)"]
-        NS2 -->|"not in scope"| SK2
+        SK2["[S] Skipped"]
+        NS2 -->|"scope composition"| SK2
     end
 
     subgraph REDO["Redo Flow"]
@@ -615,10 +639,10 @@ This reference table maps every stage to its execution mode and lead agent for q
 | 1.5 | Team Formation | inline | aidlc-delivery-agent |
 | 1.6 | Rough Mockups | inline | aidlc-design-agent |
 | 1.7 | Approval & Handoff | inline | aidlc-delivery-agent |
-| 2.1 | Reverse Engineering | subagent (two-step) | aidlc-developer-agent + aidlc-architect-agent |
-| 2.2 | Practices Discovery | inline | aidlc-pipeline-deploy-agent |
+| 2.1 | Reverse Engineering | pipeline (2-link) | aidlc-developer-agent + aidlc-architect-agent |
+| 2.2 | Practices Discovery | subagent | aidlc-pipeline-deploy-agent |
 | 2.3 | Requirements Analysis | inline | aidlc-product-agent |
-| 2.4 | User Stories | inline | aidlc-product-agent |
+| 2.4 | User Stories | mob | aidlc-product-agent |
 | 2.5 | Refined Mockups | inline | aidlc-design-agent |
 | 2.6 | Application Design | inline | aidlc-architect-agent |
 | 2.7 | Units Generation | inline | aidlc-architect-agent |

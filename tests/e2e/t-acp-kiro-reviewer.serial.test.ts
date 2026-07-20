@@ -26,7 +26,7 @@
 // TURN SHAPE (the ACP hazards, both live-verified by the workspace journey):
 //   1. The conductor's forwarding loop runs IN-TURN on ACP and does not
 //      voluntarily end after stage work — so the stop is a DISK-CONDITION
-//      cancel (poll for `## Review` in the artifact, then session/cancel),
+//      cancel (poll for a verdict under `## Review`, then session/cancel),
 //      the same pattern as driveCodekbUntilBothRepos, NOT a tool-title stop.
 //   2. The stage's clarifying questions render as numbered PROSE in the
 //      agent's text (question-rendering annex), not a protocol gate the driver
@@ -87,15 +87,19 @@ function requirementsPath(proj: string): string {
   return join(seededRecordDir(proj), "inception", "requirements-analysis", "requirements.md");
 }
 
+function hasReviewerVerdict(artifact: string): boolean {
+  return /^## Review\b[\s\S]*?\b(?:NOT-READY|READY)\b/m.test(artifact);
+}
+
 function reviewLanded(proj: string): boolean {
   try {
-    return /^## Review\b/m.test(readFileSync(requirementsPath(proj), "utf-8"));
+    return hasReviewerVerdict(readFileSync(requirementsPath(proj), "utf-8"));
   } catch {
     return false;
   }
 }
 
-/** Drive one ACP turn and cancel it the moment the `## Review` verdict is on
+/** Drive one ACP turn and cancel it the moment a `## Review` verdict is on
  *  disk (the conductor's in-turn forwarding loop never voluntarily ends — the
  *  same hazard + pattern as the workspace journey's codekb turn). Resolves
  *  with the drive result either way; the caller asserts on disk. */
@@ -180,7 +184,7 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
         expect(existsSync(requirementsPath(proj))).toBe(true);
         const artifact = readFileSync(requirementsPath(proj), "utf-8");
         expect(artifact).toMatch(/^## Review\b/m);
-        expect(artifact).toMatch(/\bNOT-READY\b|\bREADY\b/);
+        expect(hasReviewerVerdict(artifact)).toBe(true);
 
         // The retired flat layout must not reappear: a reviewer (or conductor)
         // still pointed at the dead root path would recreate it here.
@@ -190,6 +194,10 @@ describe("t-acp-kiro-reviewer (live §12a reviewer fires on the shipped dist/kir
         // references the reviewer slug (title, input, or output — tolerant of
         // how kiro-cli surfaces the subagent invocation in its tool stream).
         const allCalls = [...r1.toolCalls, ...(r2?.toolCalls ?? [])];
+        expect([
+          ...r1.toolCallIssues,
+          ...(r2?.toolCallIssues ?? []),
+        ]).toEqual([]);
         const reviewerInvoked = allCalls.some((tc) =>
           [tc.title, JSON.stringify(tc.rawInput ?? ""), tc.output.join("")]
             .join("\n")

@@ -127,6 +127,12 @@ export interface DriveResult {
   auditEvents?: string[];
   /** Every AskUserQuestion menu seen + how it was answered. */
   askedQuestions: CapturedAskUserQuestion[];
+  /** True only when the wall-clock timeout aborted the SDK stream. */
+  timedOut: boolean;
+  /** True when an intentional AskUserQuestion boundary aborted the stream. */
+  stoppedAfterAskUserQuestion: boolean;
+  /** True when an intentional matching tool_result boundary aborted the stream. */
+  stoppedAfterToolResult: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -282,6 +288,12 @@ export interface DriveOptions {
    */
   stopAfterAskUserQuestion?: boolean;
   /**
+   * Return after the Nth AskUserQuestion has been answered and its tool_result
+   * has crossed the SDK boundary. One-based; unlike stopAfterAskUserQuestion,
+   * this can skip preparatory/orientation menus.
+   */
+  stopAfterAskUserQuestionAt?: number;
+  /**
    * Calibration/debug escape hatch: return as soon as a tool_result matching
    * the requested tool name/text arrives. Useful when the deterministic proof
    * is the tool output itself and continuing would spend tokens on an unrelated
@@ -431,8 +443,21 @@ export async function driveAidlc(
   let assistantText = "";
   let resultEvent: ResultEvent | undefined;
   let askMenuIndex = 0;
+  let askUserQuestionToolUseIndex = 0;
   const tracePath = sdkTracePath();
   let stopAfterAskUserQuestionToolUseId: string | undefined;
+  const stopAfterAskUserQuestionAt =
+    opts.stopAfterAskUserQuestionAt ??
+    (opts.stopAfterAskUserQuestion ? 1 : undefined);
+  if (
+    stopAfterAskUserQuestionAt !== undefined &&
+    (!Number.isInteger(stopAfterAskUserQuestionAt) ||
+      stopAfterAskUserQuestionAt < 1)
+  ) {
+    throw new Error(
+      `stopAfterAskUserQuestionAt must be a positive integer, got ${stopAfterAskUserQuestionAt}`,
+    );
+  }
   writeSdkTrace(tracePath, "start", {
     prompt,
     projectDir,
@@ -441,6 +466,7 @@ export async function driveAidlc(
     model: sdkSettings.model,
     modelSource: sdkSettings.modelSource,
     timeoutMs: opts.timeoutMs,
+    stopAfterAskUserQuestionAt,
   });
 
   const abortController = new AbortController();
@@ -482,7 +508,7 @@ export async function driveAidlc(
             answers,
           });
           opts.onAskUserQuestion?.(captured);
-          if (opts.stopAfterAskUserQuestion) {
+          if (askMenuIndex === stopAfterAskUserQuestionAt) {
             // Record the INTENT to stop, but do NOT abort here. Aborting inside
             // canUseTool tears down the SDK permission transport before this
             // `{ behavior: "allow" }` response can be delivered, so the gate's
@@ -531,11 +557,16 @@ export async function driveAidlc(
                 input: block.input && typeof block.input === "object" ? block.input : {},
               });
               if (
-                opts.stopAfterAskUserQuestion &&
-                block.name === "AskUserQuestion" &&
-                stopAfterAskUserQuestionToolUseId === undefined
+                block.name === "AskUserQuestion"
               ) {
-                stopAfterAskUserQuestionToolUseId = block.id;
+                askUserQuestionToolUseIndex++;
+                if (
+                  askUserQuestionToolUseIndex ===
+                    stopAfterAskUserQuestionAt &&
+                  stopAfterAskUserQuestionToolUseId === undefined
+                ) {
+                  stopAfterAskUserQuestionToolUseId = block.id;
+                }
               }
               pendingTools.set(block.id, {
                 toolName: typeof block.name === "string" ? block.name : "",
@@ -575,7 +606,6 @@ export async function driveAidlc(
                 preview: resultText.slice(0, 240),
               });
               if (
-                opts.stopAfterAskUserQuestion &&
                 toolUseId === stopAfterAskUserQuestionToolUseId
               ) {
                 stoppedAfterAskUserQuestion = true;
@@ -655,6 +685,9 @@ export async function driveAidlc(
     assistantText,
     resultEvent,
     askedQuestions,
+    timedOut,
+    stoppedAfterAskUserQuestion,
+    stoppedAfterToolResult,
   };
 
   // Attach post-run file reads when they exist (read straight off disk so the

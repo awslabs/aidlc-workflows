@@ -18,6 +18,7 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   resetAidlcEnv,
+  seedBoltDag,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -210,22 +211,6 @@ function seedDanglingDependency(proj: string): void {
   );
 }
 
-function seedBoltDag(proj: string, units: string[]): void {
-  writeFileSync(
-    join(seededRecordDir(proj), "runtime-graph.json"),
-    JSON.stringify(
-      {
-        bolt_dag: {
-          units: units.map((name) => ({ name, depends_on: [] })),
-          batches: [units],
-        },
-      },
-      null,
-      2,
-    ),
-  );
-}
-
 function seedGraphWithoutBoltDag(proj: string): void {
   writeFileSync(
     join(seededRecordDir(proj), "runtime-graph.json"),
@@ -393,7 +378,7 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.directive.message).toContain("unit list cannot be resolved");
     expect(r.directive.message).toContain("unit-of-work-dependency.md");
     expect(r.directive.message).toContain("malformed");
-    expect(r.directive.message).toContain("before approving");
+    expect(r.directive.message).toContain("before entering approval");
     expect(r.stderr).toBe("");
   }, 30000);
 

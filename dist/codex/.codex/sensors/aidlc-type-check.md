@@ -29,8 +29,11 @@ Echoes Fowler's "type checkers" example from the harness-engineering article.
 ## Failure mode
 
 Emits `SENSOR_FAILED` and writes detail to
-`aidlc-docs/.aidlc-sensors/<stage-slug>/type-check-<fire-id>.md` (Fire id is the 8-hex correlator from the SENSOR_FIRED audit row) containing
-the type-checker's structured output.
+`aidlc/spaces/<active-space>/intents/<active-intent>/.aidlc-sensors/<stage-slug>/type-check-<fire-id>.md`,
+where the space and intent come from the active cursors. The fire id is the
+8-hex correlator from the `SENSOR_FIRED` row in the active record's
+`audit/<host>-<clone-id>.md` shard. The detail contains the type-checker's
+structured output.
 
 ## v0.6.0 carry-forward
 

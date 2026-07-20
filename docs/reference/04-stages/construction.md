@@ -60,11 +60,12 @@ After all Bolts:
 ```
 
 Each design stage file (3.1–3.4) supports QUESTION-ONLY and ARTIFACT-ONLY
-execution modes — see the individual stage files for details. The per-Unit
-approval gate inside `code-generation.md` is **suppressed by the
-engine** during normal Bolt execution; a single Bolt-level (or
-batch-level) gate replaces it. The per-Unit gate remains for direct-
-invocation use (e.g., `/aidlc --stage code-generation`).
+execution modes — see the individual stage files for details. Code Generation's
+Step 3 **Plan Approval always hard-stops before generation**, including during
+Bolt execution. Only its Step 7 per-Unit completion approval gate is
+**suppressed by the engine** during normal Bolt execution; a single Bolt-level
+(or batch-level) completion gate replaces it. The per-Unit completion gate
+remains for direct-invocation use (e.g., `/aidlc --stage code-generation`).
 
 **Design-stage iteration order (opt-in).** By default the engine iterates the
 four inline design stages (3.1 through 3.4) stage-major: it runs 3.1 for every Unit,
@@ -186,8 +187,8 @@ feasibility input.
      frontend/UI): Component hierarchy, props/state design, interaction flows,
      form validation rules, API integration points
 
-6. **Update State** -- Update `<record>/aidlc-state.md`: mark Functional
-   Design for {unit-name} as `[x]` completed and update "Current Status".
+6. **Prepare Completion** -- Verify the unit's Functional Design artifacts.
+   Do not edit state; report the gate outcome through `aidlc-orchestrate.ts`.
 
 7. **Completion** -- Present completion message and approval gate.
 
@@ -246,7 +247,7 @@ providing testability and measurability input.
   `<record>/construction/{unit-name}/functional-design/` (if they exist)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md`
 - Reverse engineering artifacts from
-  `<record>/inception/reverse-engineering/` (if they exist)
+  `aidlc/spaces/<active-space>/codekb/<repo>/` (if they exist)
 
 ### Steps
 
@@ -295,8 +296,8 @@ providing testability and measurability input.
      languages, frameworks, databases, infrastructure tools, and justification
      for each choice
 
-7. **Update State** -- Update `<record>/aidlc-state.md`: mark NFR
-   Requirements for {unit-name} as `[x]` completed and update "Current Status".
+7. **Prepare Completion** -- Verify the unit's NFR Requirements artifacts.
+   Do not edit state; report the gate outcome through `aidlc-orchestrate.ts`.
 
 8. **Completion** -- Present completion message and approval gate.
 
@@ -416,8 +417,8 @@ infrastructure and platform input.
      decisions with Infrastructure Design by providing a component-level view
      of where NFR patterns apply.
 
-7. **Update State** -- Update `<record>/aidlc-state.md`: mark NFR Design
-   for {unit-name} as `[x]` completed and update "Current Status".
+7. **Prepare Completion** -- Verify the unit's NFR Design artifacts. Do not
+   edit state; report the gate outcome through `aidlc-orchestrate.ts`.
 
 8. **Completion** -- Present completion message and approval gate.
 
@@ -537,9 +538,9 @@ aidlc-compliance-agent checking data residency and regulatory constraints.
      message queues, shared networking, cross-unit service discovery, resource
      ownership and access boundaries
 
-7. **Update State** -- Update `<record>/aidlc-state.md`: mark
-   Infrastructure Design for {unit-name} as `[x]` completed and update
-   "Current Status".
+7. **Prepare Completion** -- Verify the unit's Infrastructure Design
+   artifacts. Do not edit state; report the gate outcome through
+   `aidlc-orchestrate.ts`.
 
 8. **Completion** -- Present completion message and approval gate.
 
@@ -583,7 +584,7 @@ share infrastructure resources.
 | support_agents    | (none -- focused implementation)                                                                  |
 | mode              | subagent (Task tool subagent_type: aidlc-developer-agent)                                               |
 | Inputs            | ALL prior design artifacts for this unit                                                          |
-| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-summary.md |
+| Outputs           | application code (workspace root) + `<record>/construction/{unit-name}/code-generation/` -- code-generation-plan.md, code-generation-questions.md, code-summary.md |
 
 ### Purpose
 
@@ -664,9 +665,16 @@ This stage has a **two-part structure**: planning followed by generation.
    execution ordering and traceability.
 
 3. **Plan Approval** -- Present the plan summary to the user and request
-   approval:
+   approval. First create or reset
+   `<record>/construction/{unit-name}/code-generation/code-generation-questions.md`
+   with a **Plan Approval** question and blank `[Answer]:`, then render it as a
+   structured question and stop the turn:
    - "Approve Plan" -- proceed to code generation
    - "Request Changes" -- revise the plan
+
+   Fill the tag only after the human responds. A request for changes is
+   recorded, the plan is revised, and the Plan Approval tag is reset to blank
+   before re-prompting. A forwarding-loop continuation is never approval.
 
 #### PART 2 -- Generation (Steps 4-7)
 
@@ -704,8 +712,8 @@ This stage has a **two-part structure**: planning followed by generation.
    - Test coverage summary
    - Any deviations from the plan
 
-6. **Update State** -- Update `<record>/aidlc-state.md`: mark Code
-   Generation for {unit-name} as `[x]` completed and update "Current Status".
+6. **Prepare Completion** -- Verify the unit's code and summary artifacts.
+   Do not edit state; report the gate outcome through `aidlc-orchestrate.ts`.
 
 7. **Completion** -- Present completion message and approval gate.
 
@@ -714,6 +722,7 @@ This stage has a **two-part structure**: planning followed by generation.
 | Artifact                  | Description                                                         |
 |---------------------------|---------------------------------------------------------------------|
 | code-generation-plan.md   | Detailed plan with checkboxes, story traceability, step sequencing  |
+| code-generation-questions.md | Persisted Plan Approval question and explicit human answer       |
 | code-summary.md           | Files created/modified, decisions, test coverage, plan deviations   |
 | (application code)        | All source code, tests, and config written to workspace root        |
 
@@ -873,9 +882,8 @@ testing expertise.
     **On success:** Update the Build and Test Summary with actual results (not
     just instructions).
 
-11. **Update State** -- Update `<record>/aidlc-state.md`: mark Build and
-    Test as `[x]` completed and update "Current Status". Mark CONSTRUCTION
-    phase as complete.
+11. **Prepare Completion** -- Verify the build/test evidence. Do not edit
+    stage or phase state; the reported gate outcome owns the transition.
 
 12. **Completion** -- Present completion message and approval gate.
 
@@ -916,8 +924,8 @@ Strictly 2-option: Approve / Request Changes.
   Test runs once across all code produced by all units. It validates the
   integrated codebase, not individual units.
 - **Phase completion**: This stage (along with 3.7 if applicable) marks the
-  end of the Construction phase. The state file is updated to mark
-  CONSTRUCTION as complete.
+  end of the Construction phase. The final approved report makes the engine
+  mark Construction complete and route to Operation atomically.
 
 ---
 
@@ -984,8 +992,8 @@ leads with no support agents.
    - Test coverage against acceptance criteria
    - Write results to `<record>/verification/phase-check-construction.md`
 
-7. **Update State** -- Mark 3.7 CI Pipeline as `[x]` completed in
-   `<record>/aidlc-state.md`.
+7. **Prepare Completion** -- Verify the CI and boundary artifacts. Do not
+   edit stage or phase state; the reported gate outcome owns the transition.
 
 8. **Completion** -- Present completion message and approval gate.
 

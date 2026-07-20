@@ -64,12 +64,16 @@ Read all Inception phase artifacts:
 - Units from `<record>/inception/units-generation/`
 - Team formation from `<record>/ideation/team-formation/` (if exists)
 
-**If practices-discovery executed**, read `{{HARNESS_DIR}}/rules/aidlc-team.md` via `extractMarkdownSection` for three sections that influence Bolt planning:
-- `## Branching` — base/target branch and merge strategy for Construction worktrees
+**If practices-discovery executed**, resolve three sections from
+`aidlc/spaces/<active-space>/memory/{project,team,org}.md` using the
+most-specific non-empty statement:
+- `## Way of Working` — base/target branch and merge strategy for Construction worktrees
 - `## Walking Skeleton` — whether the first Bolt should be a minimal end-to-end slice (gated, separate user approval) or a regular Bolt
 - `## Deployment` — parallel-vs-serial Bolt execution stance and approval-gate preferences
 
-Use these affirmed practices when populating `bolt-plan.md`. If `aidlc-team.md` is empty (practices-discovery skipped), fall back to scope defaults from `rules/aidlc-org.md`.
+Use these affirmed practices when populating `bolt-plan.md`. If no narrower
+statement exists (including when practices-discovery was skipped), use the
+active space's `memory/org.md` defaults.
 
 ### Step 3: Generate Clarifying Questions
 
@@ -125,10 +129,11 @@ Run Inception → Construction verification check:
 - Architecture covers all stories
 - Write results to `<record>/verification/phase-check-inception.md`
 
-### Step 7: Update State
+### Step 7: Completion Handoff
 
-Mark delivery-planning as `[x]` completed in `<record>/aidlc-state.md`.
-Update Lifecycle Phase to CONSTRUCTION.
+Hand completion to `stage-protocol.md` via
+`bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage delivery-planning --result <outcome>`.
+The engine owns all lifecycle transitions and advancement.
 
 **Construction iteration.** Classify how the approved `bolt-plan.md` wants the
 inline construction DESIGN stages (functional-design, nfr-requirements,
@@ -177,13 +182,13 @@ Before the approval gate, read memory.md and surface candidates as a
 structured question. For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
-- Prescriptive rule → `{{HARNESS_DIR}}/rules/aidlc-phase-<phase>.md` (phase-scoped)
-  or `{{HARNESS_DIR}}/rules/aidlc-<org|team|project>.md` (cross-cutting)
+- Prescriptive rule → a practice line under the routed heading in
+  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
 - Verification check → new manifest at `{{HARNESS_DIR}}/sensors/aidlc-<id>.md`
   (capability descriptor only — no `applies_to`); add the new id to
   the relevant stage's `sensors: [...]` frontmatter list to wire it
 
-If nothing surfaces or the user skips all, proceed to the gate. The memory.md
+Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
 file stays in the artefact directory as part of the stage's permanent record.
 
 Stage files are immutable framework artefacts — the ritual writes into the

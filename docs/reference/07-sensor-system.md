@@ -306,7 +306,7 @@ step between them:
    (gitignored) and calls `bun .claude/tools/aidlc-learnings.ts persist
    --slug <slug> --selections-json <path>`. The tool is the deterministic
    writer — it never judges conflicts; it routes each learning as a practice to
-   `aidlc/spaces/<space>/memory/{project,team}.md` and, for a sensor selection, does the
+   `aidlc/spaces/<active-space>/memory/{project,team}.md` and, for a sensor selection, does the
    two-write install (manifest + originating stage `sensors:` frontmatter)
    inside one `withAuditLock`, then emits `RULE_LEARNED` / `SENSOR_PROPOSED`.
 

@@ -59,6 +59,8 @@ const HOOKS = [
   "aidlc-stop.ts",
   // Records a HUMAN_TURN on UserPromptSubmit.
   "aidlc-mint-presence.ts",
+  // Blocks direct lifecycle mutations that bypass orchestrate report.
+  "aidlc-state-transition-guard.ts",
   // Enforces the per-unit reviewer read-scope bound on PreToolUse.
   "aidlc-reviewer-scope.ts",
 ] as const;

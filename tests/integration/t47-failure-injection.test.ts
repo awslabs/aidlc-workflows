@@ -247,6 +247,10 @@ function init(p: string): CliResult {
 function state(args: string[], p: string): CliResult {
   const res = spawnSync(BUN, [STATE, ...args, "--project-dir", p], {
     encoding: "utf-8",
+    env: {
+      ...process.env,
+      AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    },
   });
   return {
     status: res.status ?? -1,

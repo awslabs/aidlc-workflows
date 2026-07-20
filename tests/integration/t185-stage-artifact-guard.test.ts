@@ -38,14 +38,16 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
+  seededAuditShard,
   seededRecordDir,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -58,6 +60,7 @@ const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
 function guarded(proj: string, args: string[]): { rc: number; out: string } {
   const env = { ...process.env };
   delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+  env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
@@ -67,7 +70,11 @@ function guarded(proj: string, args: string[]): { rc: number; out: string } {
 
 // Same but with the bypass var set - proves the escape hatch.
 function bypassed(proj: string, args: string[]): { rc: number; out: string } {
-  const env = { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1" };
+  const env = {
+    ...process.env,
+    AIDLC_SKIP_ARTIFACT_GUARD: "1",
+    AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+  };
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,
@@ -110,13 +117,34 @@ describe("t185: stage-completion artifact guard (#366)", () => {
 
   test("approve REFUSES when the stage produced no artifacts", () => {
     const slug = field(proj, "Current Stage"); // feasibility
-    guarded(proj, ["checkbox", `${slug}=in-progress`]);
-    guarded(proj, ["gate-start", slug]);
+    bypassed(proj, ["checkbox", `${slug}=in-progress`]);
+    bypassed(proj, ["gate-start", slug]);
     const r = guarded(proj, ["approve", slug, "--user-input", "ok"]);
     expect(r.rc).not.toBe(0);
     expect(r.out).toContain("Refusing to complete");
     // State untouched: the stage is NOT marked completed.
     expect(field(proj, "Current Stage")).toBe(slug);
+  });
+
+  test("gate-start REFUSES before [?] when the stage produced no artifacts", () => {
+    const slug = field(proj, "Current Stage");
+    const r = guarded(proj, ["gate-start", slug]);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("Refusing to complete");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
+      `- [-] ${slug}`,
+    );
+  });
+
+  test("revise REFUSES before [?] when revised artifacts are absent", () => {
+    const slug = field(proj, "Current Stage");
+    bypassed(proj, ["checkbox", `${slug}=revising`]);
+    const r = guarded(proj, ["revise", slug]);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("Refusing to complete");
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
+      `- [R] ${slug}`,
+    );
   });
 
   test("direct advance (gate-skipping path) REFUSES when no artifacts", () => {
@@ -171,7 +199,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
   test("approve bypasses the guard under AIDLC_SKIP_ARTIFACT_GUARD (no artifacts)", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
-    guarded(proj, ["gate-start", slug]);
+    bypassed(proj, ["gate-start", slug]);
     const r = bypassed(proj, ["approve", slug, "--user-input", "ok"]);
     expect(r.rc).toBe(0);
   });
@@ -199,7 +227,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
 
     test("REFUSES code-generation with planning docs but no source code", () => {
       stageCodeGenDocsOnly();
-      guarded(proj, ["gate-start", "code-generation"]);
+      bypassed(proj, ["gate-start", "code-generation"]);
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("workspace_requires");
@@ -234,7 +262,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     test("REFUSES reverse-engineering with no codekb artifacts", () => {
       guarded(proj, ["set", "Current Stage=reverse-engineering"]);
       guarded(proj, ["checkbox", "reverse-engineering=in-progress"]);
-      guarded(proj, ["gate-start", "reverse-engineering"]);
+      bypassed(proj, ["gate-start", "reverse-engineering"]);
       const r = guarded(proj, ["approve", "reverse-engineering", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("Refusing to complete");
@@ -279,7 +307,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-summary.md`);
     }
     function approveCodeGen(): { rc: number; out: string } {
-      guarded(proj, ["gate-start", "code-generation"]);
+      bypassed(proj, ["gate-start", "code-generation"]);
       return guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
     }
 
@@ -344,5 +372,77 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       const r = approveCodeGen();
       expect(r.rc).toBe(0);
     }, 30000);
+  });
+
+  // --- Settled-swarm exemption (code-generation under autonomous swarm) ------
+  //
+  // A swarm's per-unit artifacts and source live in Bolt WORKTREES; the main
+  // checkout has neither, so both guard layers would refuse the settle
+  // approval the engine just presented. The referee's per-unit convergence
+  // ledger is the evidence instead: with a valid DAG whose EVERY unit has a
+  // current-run SWARM_UNIT_CONVERGED row, the guard exempts. Any unconverged
+  // unit keeps the guard strict (fails closed).
+  describe("settled-swarm exemption (autonomous code-generation)", () => {
+    const UNITS = ["user-auth", "billing"];
+
+    function seedSwarm(converged: string[]): void {
+      guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "code-generation=in-progress"]);
+      // Autonomy grant: append the field beside Scope (fixture ships without it).
+      const statePath = seededStateFile(proj);
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace(
+          /^(- \*\*Scope\*\*: .*)$/m,
+          "$1\n- **Construction Autonomy Mode**: autonomous",
+        ),
+      );
+      // A valid two-unit DAG in the compiled runtime graph.
+      writeFileSync(
+        join(seededRecordDir(proj), "runtime-graph.json"),
+        `${JSON.stringify({
+          bolt_dag: {
+            units: UNITS.map((name) => ({ name, depends_on: [] })),
+            batches: [UNITS],
+          },
+        })}\n`,
+      );
+      // Referee convergence rows for the converged subset, carrying the
+      // attempt-identity stamp (Stage + Run floor) the consumers require; the
+      // fixture has no STAGE_STARTED row, so the matching floor is "".
+      const shard = seededAuditShard(proj);
+      mkdirSync(join(shard, ".."), { recursive: true });
+      const rows = converged
+        .map((unit, i) =>
+          [
+            "## Swarm Unit Converged",
+            `**Timestamp**: 2026-07-18T00:00:0${i}.000Z`,
+            "**Event**: SWARM_UNIT_CONVERGED",
+            `**Unit name**: ${unit}`,
+            "**Stage**: code-generation",
+            "**Run floor**: ",
+            "",
+            "---",
+            "",
+          ].join("\n")
+        )
+        .join("");
+      writeFileSync(shard, rows, { flag: "a" });
+    }
+
+    test("PASSES with zero on-disk artifacts once every DAG unit converged", () => {
+      seedSwarm(UNITS); // all converged; nothing written to the record dir
+      bypassed(proj, ["gate-start", "code-generation"]);
+      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      expect(r.rc).toBe(0);
+    });
+
+    test("REFUSES while any DAG unit is unconverged (fails closed)", () => {
+      seedSwarm([UNITS[0]]); // one of two converged
+      bypassed(proj, ["gate-start", "code-generation"]);
+      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      expect(r.rc).not.toBe(0);
+      expect(r.out).toContain("Refusing to complete");
+    });
   });
 });

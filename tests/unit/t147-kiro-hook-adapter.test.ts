@@ -128,7 +128,7 @@ function runAdapter(
   projectDir: string,
   target: string,
   payload: unknown,
-): { stdout: string; code: number } {
+): { stdout: string; stderr: string; code: number } {
   const r = spawnSync(
     "bun",
     [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target],
@@ -140,7 +140,11 @@ function runAdapter(
       timeout: 30_000,
     },
   );
-  return { stdout: r.stdout ?? "", code: r.status ?? -1 };
+  return {
+    stdout: r.stdout ?? "",
+    stderr: r.stderr ?? "",
+    code: r.status ?? -1,
+  };
 }
 
 describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
@@ -203,6 +207,28 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const r = runAdapter(dir, "state-sync", FIXTURES.postToolUse_todo_complete);
       expect(r.code).toBe(0);
       expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5a: state-transition guard preserves exit 2 and stderr", () => {
+    const dir = scratchProject(false);
+    try {
+      const r = runAdapter(dir, "state-transition-guard", {
+        cwd: dir,
+        tool_name: "execute_bash",
+        tool_input: {
+          command:
+            "bun .kiro/tools/aidlc-state.ts approve feasibility",
+        },
+      });
+      expect(r.code).toBe(2);
+      expect(r.stdout).toBe("");
+      expect(r.stderr).toContain(
+        "Direct aidlc-state.ts approve is blocked",
+      );
+      expect(r.stderr).toContain("aidlc-orchestrate.ts report");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

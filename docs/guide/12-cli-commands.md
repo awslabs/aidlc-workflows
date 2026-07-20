@@ -256,7 +256,7 @@ Validate that all of this implementation's prerequisites, configuration, and sta
 | Check | What it validates |
 |-------|-------------------|
 | Prerequisites | `bun` is installed and on PATH |
-| Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 12 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
+| Hook presence | Every hook `settings.json` wires (its `hooks` blocks + the `statusLine` command — all 13 framework hooks) exists in `.claude/hooks/`; a wired-but-missing hook fails loudly. Sourcing the expected roster from `settings.json` means adding a hook there auto-checks it |
 | Project structure | `.claude/settings.json` exists (file presence only, no content validation) |
 | Workspace shell | `.claude/` + `aidlc/spaces/default/memory/` are present (the shipped shell) |
 | Submodules | If a `.gitmodules` is present, reports how many submodule paths are declared and how many are uninitialized, naming `git submodule update --init --recursive` when any are (advisory - never fails) |
@@ -335,6 +335,9 @@ workflow. The stage runs, writes its artifact, and stops; your workflow's
 `Current Stage` is never advanced — the isolation is enforced by the engine, not
 by convention. Use it to apply one piece of methodology (a requirements
 analysis, a reverse-engineering scan) without committing to a full lifecycle.
+The isolated run still uses the stage's configured agents and reviewer, but it
+does not run workflow learnings or ask for a workflow approval. Its synthetic
+completion is recorded in the audit log, then the command stops.
 
 ```
 /aidlc --stage requirements-analysis --single
@@ -549,7 +552,7 @@ This is the deterministic half of the §13 learning gate. After a stage is appro
 | Subcommand | What it does |
 |------------|--------------|
 | `surface --slug <stage-slug>` | Read the just-approved stage's `memory.md` and print structured candidates (Interpretations, Deviations, Tradeoffs) plus any parked open questions. Read-only |
-| `persist --slug <stage-slug> --selections-json <path>` | Write the confirmed learnings (a confirmed learning is a practice) to the space memory layer — `aidlc/spaces/<space>/memory/project.md` / `memory/team.md` (and, for a Sensor-binding learning, scaffold and bind a project-tier Sensor), emitting `RULE_LEARNED` / `SENSOR_PROPOSED` |
+| `persist --slug <stage-slug> --selections-json <path>` | Write the confirmed learnings (a confirmed learning is a practice) to `aidlc/spaces/<active-space>/memory/project.md` / `team.md` (and, for a Sensor-binding learning, scaffold and bind a project-tier Sensor), emitting `RULE_LEARNED` / `SENSOR_PROPOSED` |
 
 Confirmed learnings apply on the next workflow, not the current one.
 

@@ -38,6 +38,8 @@ import {
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
+  seedBoltDag,
+  seedBoltDagBatches,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -116,41 +118,6 @@ ${autonomyLine}## Scope Configuration
 - **Current Stage**: ${opts.current}
 - **Status**: Running
 ${runtimeSection}`;
-}
-
-/** Write a single-batch bolt_dag runtime graph into the record. */
-function seedBoltDag(proj: string, units: string[]): void {
-  writeFileSync(
-    join(seededRecordDir(proj), "runtime-graph.json"),
-    JSON.stringify(
-      {
-        bolt_dag: {
-          units: units.map((name) => ({ name, depends_on: [] })),
-          batches: [units],
-        },
-      },
-      null,
-      2,
-    ),
-  );
-}
-
-/** Write a MULTI-batch bolt_dag (each inner array is one topological batch). */
-function seedMultiBatchDag(proj: string, batches: string[][]): void {
-  const names = batches.flat();
-  writeFileSync(
-    join(seededRecordDir(proj), "runtime-graph.json"),
-    JSON.stringify(
-      {
-        bolt_dag: {
-          units: names.map((name) => ({ name, depends_on: [] })),
-          batches,
-        },
-      },
-      null,
-      2,
-    ),
-  );
 }
 
 /** Mark `unit` COVERED for `slug` by writing each artifact in `producesNames`. */
@@ -314,7 +281,7 @@ describe("t210 construction-iteration knob default (off / non-activating)", () =
       "- [-] code-generation — EXECUTE",
     );
     writeFileSync(statePath, state);
-    seedMultiBatchDag(proj, [["alpha"], ["beta"]]);
+    seedBoltDagBatches(proj, [["alpha"], ["beta"]]);
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["alpha"]);

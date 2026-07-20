@@ -128,11 +128,11 @@ decisions.md.
 
 When only one option is viable, state why and skip the block.
 
-### Step 6: Update State
+### Step 6: Completion Handoff
 
-Update `<record>/aidlc-state.md`:
-- Mark Application Design as `[x]` completed
-- Update current stage and next stage
+Hand completion to `stage-protocol.md` via
+`bun .kiro/tools/aidlc-orchestrate.ts report --stage application-design --result <outcome>`.
+The engine owns all lifecycle transitions and advancement.
 
 ### Step 7: Present Completion & Request Approval
 
@@ -144,6 +144,10 @@ Use stage-protocol.md completion template with completion emoji: :building_const
   - Approve (continue to next stage)
   - Request Changes (provide revision feedback)
   - Add Units Generation (if it was skipped in execution plan)
+
+If "Add Units Generation" is selected, run
+`bun .kiro/tools/aidlc-utility.ts recompose --add units-generation`
+before re-entering the approval flow.
 
 ## Sensors
 
@@ -172,13 +176,13 @@ Before the approval gate, read memory.md and surface candidates as a
 structured question. For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
-- Prescriptive rule → `.kiro/steering/aidlc-phase-<phase>.md` (phase-scoped)
-  or `.kiro/steering/aidlc-<org|team|project>.md` (cross-cutting)
+- Prescriptive rule → a practice line under the routed heading in
+  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
 - Verification check → new manifest at `.kiro/sensors/aidlc-<id>.md`
   (capability descriptor only — no `applies_to`); add the new id to
   the relevant stage's `sensors: [...]` frontmatter list to wire it
 
-If nothing surfaces or the user skips all, proceed to the gate. The memory.md
+Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
 file stays in the artefact directory as part of the stage's permanent record.
 
 Stage files are immutable framework artefacts — the ritual writes into the

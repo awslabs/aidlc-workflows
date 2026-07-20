@@ -158,7 +158,7 @@ The welcome message is rendered at session start via `companyAnnouncements` in `
 | Stage | Key Artifacts | Condition |
 |-------|--------------|-----------|
 | 2.1 Reverse Engineering | 9 files including `architecture.md`, `code-structure.md`, `technology-stack.md` | Brownfield only |
-| 2.2 Practices Discovery | `team-practices.md`, `discovered-rules.md`, `evidence.md`, `practices-discovery-timestamp.md` (promoted to the space memory layer — `aidlc/spaces/<space>/memory/team.md` and `memory/project.md` — on affirmation) | Conditional |
+| 2.2 Practices Discovery | `team-practices.md`, `discovered-rules.md`, `evidence.md`, `practices-discovery-timestamp.md`, plus quality/developer/devsecops contribution files (promoted to `aidlc/spaces/<active-space>/memory/team.md` and `project.md` after approval) | Conditional |
 | 2.3 Requirements Analysis | `requirements.md` | Always |
 | 2.4 User Stories | `stories.md`, `personas.md` | User-facing features |
 | 2.5 Refined Mockups | `mockups.md`, `interaction-spec.md`, `accessibility-checklist.md` | UI projects |
@@ -178,7 +178,7 @@ The four design stages (3.1-3.4) prune their artifacts to each unit's **kind** (
 | 3.2 NFR Requirements | `security-requirements.md`, `performance-requirements.md` | Per plan, per unit (by kind) |
 | 3.3 NFR Design | `security-design.md`, `performance-design.md` | Per plan, per unit (by kind) |
 | 3.4 Infrastructure Design | `deployment-architecture.md`, `infrastructure-services.md` | Per plan, per unit (by kind) |
-| 3.5 Code Generation | `code-generation-plan.md`, `code-summary.md` (code goes to workspace root) | Always, per unit |
+| 3.5 Code Generation | `code-generation-plan.md`, `code-generation-questions.md`, `code-summary.md` (code goes to workspace root) | Always, per unit |
 | 3.6 Build and Test | `build-instructions.md`, `test-results.md` | Always, after all units |
 | 3.7 CI Pipeline | `ci-config.md`, `quality-gates.md` | Conditional, after all units |
 

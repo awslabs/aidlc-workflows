@@ -389,7 +389,7 @@ load-bearing tenet documented in
 Runtime-graph compile is data-plane substrate that must be observable
 from outside any specific session. Coupling it to LLM-invoked tools
 means LLM omission breaks the determinism guarantee — if the
-conductor forgets to call `aidlc-orchestrate.ts report --stage <slug> --result approved` after a human
+conductor forgets to call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` after a human
 clicks Approve, the audit row never appends AND the compile never
 fires; runtime-graph silently lags, recovery substrate is corrupt.
 

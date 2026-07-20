@@ -263,7 +263,7 @@ describe("t-tui-t51-poc-scope (answering gates advances poc Ideation on disk)", 
               "Completed=^([7-9]|[1-9][0-9])$",
               // NO per-gate timeout. The pass condition is the on-disk terminator
               // (Completed>=7); the loop returns the instant it lands. poc's EXECUTE
-              // chain includes the reverse-engineering `mode: subagent` stage, which
+              // chain includes the reverse-engineering `mode: pipeline` stage, which
               // legitimately runs minutes with no menu and runs slower on the Windows
               // box — a fixed per-gate value is a budget masquerading as a backstop and
               // false-fires on a working run. Omitting it defaults per-gate to the

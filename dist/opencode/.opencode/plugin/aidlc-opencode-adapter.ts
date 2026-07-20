@@ -126,6 +126,7 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
     "hooks/aidlc-sensor-fire.ts",
     "hooks/aidlc-session-end.ts",
     "hooks/aidlc-session-start.ts",
+    "hooks/aidlc-state-transition-guard.ts",
     "hooks/aidlc-statusline.ts",
     "hooks/aidlc-stop.ts",
     "hooks/aidlc-sync-statusline.ts",
@@ -404,6 +405,26 @@ export default async ({
         const command = (args.command as string) ?? "";
         const violation = aidlcBashBoundaryViolation(command, aidlcEntrypoints);
         if (violation) throw new Error(violation);
+        // State-transition guard, parallel to the Claude/Kiro/Codex PreToolUse
+        // wiring. The state CLI's ownership check remains the hard floor; this
+        // gives the conductor the same immediate redirect the other harnesses
+        // get instead of a late CLI error.
+        const guard = await runCore(
+          "aidlc-state-transition-guard.ts",
+          {
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command },
+            cwd: directory,
+          },
+          directory,
+        );
+        if (guard.code === 2) {
+          throw new Error(
+            guard.stderr.trim() ||
+              "direct aidlc-state.ts lifecycle transitions are engine-owned",
+          );
+        }
       }
 
       const calls = reviewerCalls(input.tool, args);

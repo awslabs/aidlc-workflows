@@ -24,7 +24,7 @@
 // (which toPortablePath-converts on Windows so the audit.md the tool writes
 // through toPosix path helpers round-trips when read back). make_fixture's
 // .claude/rules/{aidlc-team.md,aidlc-project.md} live targets + the two
-// aidlc-docs/inception/practices-discovery/ drafts are reproduced byte-for-byte
+// active-record inception/practices-discovery/ drafts are reproduced byte-for-byte
 // from the .sh heredocs. NOTHING is written under tests/fixtures/**. All temp
 // dirs cleaned in afterAll.
 //
@@ -61,6 +61,7 @@
 //     - Walking Skeleton / Deployment untouched          -> D: file contains both OLD.
 //   Case E (idempotency) — .sh test 24:
 //     - team.md identical across two runs                -> E: byte-equal reads.
+//     - project.md identical across two runs             -> E: stronger retry guard.
 //
 // 24 .sh asserts -> 24+ expect()-bearing checks here, grouped into 5
 // describe-blocks mirroring the .sh's Cases A-E.
@@ -79,6 +80,7 @@ import {
   cleanupTestProject,
   createTestProject,
   seededAuditShard,
+  seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
@@ -176,11 +178,11 @@ NEVER throw exceptions across service boundaries
 NEVER skip CI gates
 `;
 
-const PRACTICES_DISCOVERY_REL = join(
-  "aidlc-docs",
-  "inception",
-  "practices-discovery",
-);
+const PRACTICES_SUPPORTS = [
+  "aidlc-quality-agent",
+  "aidlc-developer-agent",
+  "aidlc-devsecops-agent",
+] as const;
 
 interface Fixture {
   proj: string;
@@ -198,7 +200,11 @@ function makeFixture(): Fixture {
   // (aidlc/spaces/<space>/memory/{team,project}.md, neutral names) — NOT the old
   // .claude/rules/aidlc-{team,project}.md. memoryDirFor() is the default target.
   const memDir = memoryDirFor(proj);
-  const draftDir = join(proj, PRACTICES_DISCOVERY_REL);
+  const draftDir = join(
+    seededRecordDir(proj),
+    "inception",
+    "practices-discovery",
+  );
   mkdirSync(memDir, { recursive: true });
   mkdirSync(draftDir, { recursive: true });
 
@@ -211,6 +217,15 @@ function makeFixture(): Fixture {
   writeFileSync(projectMd, PROJECT_MD_LIVE, "utf-8");
   writeFileSync(teamPracticesPath, TEAM_PRACTICES_DRAFT, "utf-8");
   writeFileSync(discoveredRulesPath, DISCOVERED_RULES_DRAFT, "utf-8");
+  const contributionsDir = join(draftDir, "contributions");
+  mkdirSync(contributionsDir, { recursive: true });
+  for (const agent of PRACTICES_SUPPORTS) {
+    writeFileSync(
+      join(contributionsDir, `${agent}.md`),
+      `**Collaborator:** ${agent}\n\n## Contribution\n\nFixture evidence.\n`,
+      "utf-8",
+    );
+  }
 
   // P9: practices-promote emits PRACTICES_AFFIRMED/OVERRIDE into the ACTIVE
   // INTENT's audit shard (appendAuditEvent → resolved record). Seed a state file
@@ -218,7 +233,11 @@ function makeFixture(): Fixture {
   // falls back to the bare space root and seededAuditShard reads nothing.
   writeFileSync(
     seededStateFile(proj),
-    "# AI-DLC State Tracking\n## Current Status\n- **Scope**: feature\n",
+    "# AI-DLC State Tracking\n\n" +
+      "## Project Information\n" +
+      "- **Practices Affirmed Timestamp**: [ISO 8601 timestamp on affirmation]\n\n" +
+      "## Current Status\n" +
+      "- **Scope**: feature\n",
     "utf-8",
   );
 
@@ -312,6 +331,20 @@ function auditField(file: string, ev: string, key: string): string {
   return "";
 }
 
+function auditTimestamp(file: string, ev: string): string {
+  if (!existsSync(file)) return "";
+  const block = readFileSync(file, "utf-8")
+    .split(/\n---\n/)
+    .find((candidate) =>
+      candidate.split("\n").includes(`**Event**: ${ev}`)
+    );
+  if (!block) return "";
+  const line = block.split("\n").find((candidate) =>
+    candidate.startsWith("**Timestamp**: ")
+  );
+  return line?.slice("**Timestamp**: ".length) ?? "";
+}
+
 /** Today in UTC, YYYY-MM-DD. Mirrors the .sh's `date -u +%Y-%m-%d`; the tool
  *  stamps rules via isoTimestamp().slice(0,10) (aidlc-state.ts:1127), the same
  *  UTC calendar day, so the literal-date assertions stay deterministic. */
@@ -333,6 +366,10 @@ describe("t75 practices-promote — happy path (migrated from t75-practices-prom
 
     // .sh test 2: stdout JSON reports PRACTICES_AFFIRMED.
     expect(r.stdout).toContain('"emitted":"PRACTICES_AFFIRMED"');
+    const state = readFileSync(seededStateFile(fx.proj), "utf-8");
+    expect(state).toMatch(
+      /^- \*\*Practices Affirmed Timestamp\*\*: \d{4}-\d{2}-\d{2}T/m,
+    );
 
     // .sh test 3: aidlc-team.md got new content for the asserted sections.
     const teamContent = readFileSync(fx.teamMd, "utf-8");
@@ -372,6 +409,10 @@ describe("t75 practices-promote — happy path (migrated from t75-practices-prom
     expect(sectionsWritten).toBe(
       "Way of Working, Walking Skeleton, Testing Posture, Deployment, Code Style",
     );
+    const stateTimestamp = state.match(
+      /^- \*\*Practices Affirmed Timestamp\*\*: (.+)$/m,
+    )?.[1];
+    expect(stateTimestamp).toBe(auditTimestamp(audit, "PRACTICES_AFFIRMED"));
   });
 });
 
@@ -400,6 +441,33 @@ describe("t75 practices-promote — missing draft fails closed", () => {
 
     // .sh test 19: targets must be untouched.
     expect(readFileSync(fx.teamMd, "utf-8")).toContain("OLD_WAY_OF_WORKING_TEXT");
+  });
+});
+
+describe("t75 practices-promote — ensemble evidence fails closed", () => {
+  test("missing support contribution leaves both memory targets untouched", () => {
+    const fx = makeFixture();
+    unlinkSync(
+      join(
+        fx.teamPracticesPath,
+        "..",
+        "contributions",
+        "aidlc-quality-agent.md",
+      ),
+    );
+    const teamBefore = readFileSync(fx.teamMd, "utf-8");
+    const projectBefore = readFileSync(fx.projectMd, "utf-8");
+
+    const r = runPromote(fx);
+
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain("ensemble evidence is incomplete");
+    expect(r.out).toContain("aidlc-quality-agent");
+    expect(readFileSync(fx.teamMd, "utf-8")).toBe(teamBefore);
+    expect(readFileSync(fx.projectMd, "utf-8")).toBe(projectBefore);
+    expect(
+      auditEventCount(auditPath(fx.proj), "PRACTICES_OVERRIDE"),
+    ).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -469,22 +537,25 @@ PARTIAL_NEW_TESTING
 });
 
 // ============================================================
-// Case E — idempotency of replaceSection on team.md (t75:239-252, .sh test 24)
+// Case E — idempotency of both promotion targets (t75:239-252, .sh test 24)
 // ============================================================
 
-describe("t75 practices-promote — idempotency on team.md", () => {
-  test("E: re-running the same promote produces an identical aidlc-team.md", () => {
+describe("t75 practices-promote — idempotency on both memory targets", () => {
+  test("E: re-running the same promote leaves team.md and project.md byte-identical", () => {
     const fx = makeFixture();
     const r1 = runPromote(fx);
     expect(r1.status).toBe(0); // STRONGER: .sh discarded stdout; pin clean exit
     const teamFirst = readFileSync(fx.teamMd, "utf-8");
+    const projectFirst = readFileSync(fx.projectMd, "utf-8");
 
     const r2 = runPromote(fx);
     expect(r2.status).toBe(0);
     const teamSecond = readFileSync(fx.teamMd, "utf-8");
+    const projectSecond = readFileSync(fx.projectMd, "utf-8");
 
-    // .sh test 24: byte-equal team.md (no duplicate sections, no accumulation).
+    // .sh test 24 plus a stronger project-rule retry guard.
     expect(teamSecond).toBe(teamFirst);
+    expect(projectSecond).toBe(projectFirst);
   });
 });
 

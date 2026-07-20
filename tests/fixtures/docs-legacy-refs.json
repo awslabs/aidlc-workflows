@@ -4,12 +4,12 @@
   "allowed": [
     {
       "file": "docs/reference/14-claude-features.md",
-      "text": "| **Standing rules** (the layer chain) | `aidlc/spaces/<space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<space>/memory/` (via `instructions` glob) |",
+      "text": "| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<active-space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) |",
       "why": "native-include mapping: names the .claude/rules/aidlc.md @-import stub that pulls the relocated memory tree (correct, not stale)"
     },
     {
       "file": "docs/reference/14-claude-features.md",
-      "text": "This implementation reads behavioral rules from the space memory layer at `aidlc/spaces/<space>/memory/`, pulled into Claude's context via the `.claude/rules/aidlc.md` @-import stub. One file per layer of the inheritance chain:",
+      "text": "This implementation reads behavioral rules from the active space memory layer at `aidlc/spaces/<active-space>/memory/`, pulled into Claude's context via the `.claude/rules/aidlc.md` @-import stub. One file per layer of the inheritance chain:",
       "why": "names the .claude/rules/aidlc.md @-import stub (the native include, correct)"
     },
     {
@@ -19,12 +19,12 @@
     },
     {
       "file": "docs/reference/14-claude-features.md",
-      "text": "| Rules | `aidlc/spaces/<space>/memory/*.md` (via `.claude/rules/aidlc.md` @-stub) | Every conversation | Minimal guardrails; self-learning corrections |",
+      "text": "| Rules | `aidlc/spaces/<active-space>/memory/*.md` (via `.claude/rules/aidlc.md` @-stub) | Every conversation | Minimal guardrails; self-learning corrections |",
       "why": "names the .claude/rules/aidlc.md @-import stub (the native include, correct)"
     },
     {
       "file": "docs/reference/01-architecture.md",
-      "text": "9. **Minimal rules** -- Only guardrails (~35 lines total) live in the space memory layer (`aidlc/spaces/<space>/memory/`, pulled in via the `.claude/rules/aidlc.md` @-import stub). Everything else (verification, brownfield safeguards, audit format, adaptive patterns) lives in `knowledge/aidlc-shared/` or is embedded in SKILL.md/stage-protocol.md. This prevents context bloat in non-AI-DLC conversations since rules are always loaded.",
+      "text": "9. **Minimal rules** -- Only guardrails (~35 lines total) live in the active space memory layer (`aidlc/spaces/<active-space>/memory/`, pulled in via the `.claude/rules/aidlc.md` @-import stub). Everything else (verification, brownfield safeguards, audit format, adaptive patterns) lives in `knowledge/aidlc-shared/` or is embedded in SKILL.md/stage-protocol.md. This prevents context bloat in non-AI-DLC conversations since rules are always loaded.",
       "why": "names the .claude/rules/aidlc.md @-import stub (the native include, correct)"
     },
     {

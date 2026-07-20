@@ -5,8 +5,9 @@
 // workspace-detection and reverse-engineering — those are fixture-DIRECTORY copies
 // (fixtures.sh:168-173), too much to re-inline per file. This is the one helper.
 //
-// It is import-safe (no top-level side effects) and used ONLY by tui tests, which
-// SPAWN tui-drive.ts as a subprocess — this module never loads node-pty, so it is
+// It is import-safe (no top-level side effects) and primarily used by TUI tests,
+// which SPAWN tui-drive.ts as a subprocess. The runtime-graph fixture compiler
+// is also shared by seeded SDK tests; this module never loads node-pty, so it is
 // safe to import under bun on every platform.
 //
 // Mirrors the bash flags faithfully:
@@ -16,7 +17,7 @@
 //   greenfieldStub   -> --with-greenfield-stub (fixtures.sh:168)  cp greenfield-todo/.
 //   brownfieldStub   -> --with-brownfield-stub (fixtures.sh:169)  cp brownfield-todo/.
 //   reArtifacts      -> --with-re-artifacts     (fixtures.sh:170)  cp re-artifacts/*.md
-//                                                                  -> inception/reverse-engineering/
+//                                                                  -> spaces/default/codekb/<repo>/
 
 import {
   cpSync,
@@ -29,8 +30,15 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  findAllEvents,
+  getField,
+  readAllAuditShards,
+  stateFilePath,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seedCustomHarness } from "./custom-harness.ts";
 import {
   DEFAULT_INTENT_UUID,
@@ -39,6 +47,7 @@ import {
   FIXTURE_CLONE_ID,
   intentsDirOf,
   seededAuditShard,
+  seededCodekbDir,
   seededRecordDir,
 } from "./fixtures.ts";
 
@@ -59,6 +68,138 @@ const CLAUDE_MEMORY_SRC = join(REPO_ROOT, "dist", "claude", "aidlc");
 const KIRO_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro", "aidlc");
 const KIRO_IDE_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro-ide", "aidlc");
 
+export interface KiroNumberedProseAnswerState {
+  guideModeChosen: boolean;
+  answeredQuestions: Set<number>;
+  confirmedQuestions: Set<number>;
+  answeredFollowUps: Set<number>;
+  /** Ad-hoc lettered clarification menus already answered, keyed by option text. */
+  answeredClarifications: Set<string>;
+  summaryConfirmed: boolean;
+  learningsAnswered: number;
+  approvalsAnswered: number;
+}
+
+export function createKiroNumberedProseAnswerState(): KiroNumberedProseAnswerState {
+  return {
+    guideModeChosen: false,
+    answeredQuestions: new Set(),
+    confirmedQuestions: new Set(),
+    answeredFollowUps: new Set(),
+    answeredClarifications: new Set(),
+    summaryConfirmed: false,
+    learningsAnswered: 0,
+    approvalsAnswered: 0,
+  };
+}
+
+function lastMatchIndex(input: string, pattern: RegExp): number {
+  let index = -1;
+  for (const match of input.matchAll(pattern)) {
+    if (match.index !== undefined) index = match.index;
+  }
+  return index;
+}
+
+/**
+ * Choose the next human-shaped response for Kiro's numbered-prose protocol.
+ * A stage may combine candidate selection with the free-text learning channel,
+ * but approval must be a later turn after the human answers that channel.
+ */
+export function nextKiroNumberedProseAnswer(
+  screen: string,
+  state: KiroNumberedProseAnswerState,
+): string | null {
+  // Kiro retains prior turns in the captured viewport. Compare the last
+  // learning/approval markers instead of treating any historical co-occurrence
+  // as one combined prompt.
+  const learningPromptIndex = lastMatchIndex(
+    screen,
+    /(?:Anything to add for next time|Nothing to add[\s\S]{0,500}?Add a note)/gi,
+  );
+  const approvalPromptIndex = lastMatchIndex(
+    screen,
+    /\bApprove(?:\s+Plan)?\b[\s\S]{0,800}?\bRequest Changes\b/gi,
+  );
+
+  if (
+    !state.guideModeChosen &&
+    /How would you like to answer[\s\S]*Guide me/i.test(screen)
+  ) {
+    state.guideModeChosen = true;
+    return "1";
+  }
+
+  const confirmationQuestions = [
+    ...screen.matchAll(/\bQ(\d+):\s*1 confirmed\b/gi),
+  ]
+    .map((match) => Number.parseInt(match[1], 10))
+    .filter((id) => Number.isFinite(id) && !state.confirmedQuestions.has(id));
+  const visibleQuestions = [...screen.matchAll(/\bQ(\d+)(?:[.:]|\s*[—-])/g)]
+    .map((match) => Number.parseInt(match[1], 10))
+    .filter((id) => Number.isFinite(id) && !state.answeredQuestions.has(id));
+  const confirmations = [...new Set(confirmationQuestions)].sort((a, b) => a - b);
+  const pendingQuestions = [...new Set(visibleQuestions)].sort((a, b) => a - b);
+  if (confirmations.length > 0 || pendingQuestions.length > 0) {
+    for (const id of confirmations) state.confirmedQuestions.add(id);
+    for (const id of pendingQuestions) state.answeredQuestions.add(id);
+    return [
+      ...confirmations.map((id) => `Q${id}: 1 confirmed`),
+      ...pendingQuestions.map((id) => `Q${id}: 1`),
+    ].join(", ");
+  }
+
+  const visibleFollowUps = [...screen.matchAll(/\bF(\d+)\./g)]
+    .map((match) => Number.parseInt(match[1], 10))
+    .filter((id) => Number.isFinite(id) && !state.answeredFollowUps.has(id));
+  const pendingFollowUps = [...new Set(visibleFollowUps)].sort((a, b) => a - b);
+  if (pendingFollowUps.length > 0) {
+    for (const id of pendingFollowUps) state.answeredFollowUps.add(id);
+    return pendingFollowUps.map((id) => `F${id}: 1`).join(", ");
+  }
+
+  if (
+    !state.summaryConfirmed &&
+    /Looks correct[\s\S]*Request changes/i.test(screen)
+  ) {
+    state.summaryConfirmed = true;
+    return "Looks correct";
+  }
+  if (learningPromptIndex > approvalPromptIndex) {
+    state.learningsAnswered += 1;
+    return /(?:Keep c\d+|Nothing to keep|discard (?:all|both))/i.test(screen)
+      ? "Nothing to keep. Nothing to add."
+      : "Nothing to add";
+  }
+  if (approvalPromptIndex > learningPromptIndex) {
+    if (state.learningsAnswered <= state.approvalsAnswered) {
+      throw new Error(
+        "Kiro presented approval before the mandatory learning response completed",
+      );
+    }
+    state.approvalsAnswered += 1;
+    return "Approve";
+  }
+
+  // Ad-hoc lettered clarification: a live hub that spots a contradiction
+  // between two recorded answers may invent a mid-stage lettered menu
+  // (`- A. ...` ... `- X. Other`) asking which is correct — a legitimate
+  // conductor move (§3 structured question) the fixed Q<n>/F<n> shapes above
+  // don't cover (observed live: intent-capture Q3-vs-Q5 feature-set
+  // contradiction). Answer the first lettered option once per distinct menu;
+  // the answered-set keys on the option text so a repaint of the same menu is
+  // not re-answered while a different clarification still gets a response.
+  const letteredOptions = [...screen.matchAll(/^\s*-\s([A-W])\.\s(.{1,60})/gm)];
+  if (letteredOptions.length >= 2) {
+    const menuKey = letteredOptions.map((m) => m[1] + m[2]).join("|");
+    if (!state.answeredClarifications.has(menuKey)) {
+      state.answeredClarifications.add(menuKey);
+      return letteredOptions[0][1];
+    }
+  }
+  return null;
+}
+
 /** Seed the per-intent workspace shell into a TUI fixture project: the default
  *  intent record + cursors + registry + pinned clone-id (mirrors fixtures.ts
  *  seedWorkspaceShell). Idempotent; the dist copy already brings the memory tree. */
@@ -71,7 +212,14 @@ function seedTuiWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
   writeFileSync(
     join(intentsDir, "intents.json"),
     `${JSON.stringify(
-      [{ uuid: DEFAULT_INTENT_UUID, slug: DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, ""), status: "in-flight" }],
+      [
+        {
+          uuid: DEFAULT_INTENT_UUID,
+          slug: DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, ""),
+          dirName: DEFAULT_RECORD_DIR,
+          status: "in-flight",
+        },
+      ],
       null,
       2,
     )}\n`,
@@ -103,9 +251,9 @@ export interface TuiProjectOptions {
   /** Copy the brownfield-todo stub (a full React/Vite/TS Todo app) into the
    *  project root — drives workspace-detection to Brownfield + reverse-engineering. */
   brownfieldStub?: boolean;
-  /** Pre-seed the 4 reverse-engineering artifacts under
-   *  aidlc-docs/inception/reverse-engineering/ (so a requirements-analysis journey
-   *  has its upstream present). */
+  /** Pre-seed the reverse-engineering artifacts under the active space's
+   *  codekb/<repo>/ directory so a requirements-analysis journey has its
+   *  canonical upstream present. */
   reArtifacts?: boolean;
   /** Pre-seed the 3 REQUIRED ideation artifacts (intent-statement,
    *  scope-document, intent-backlog) at their canonical producing-stage paths
@@ -125,6 +273,12 @@ export interface TuiProjectOptions {
    * tests/harness/custom-harness.ts.
    */
   customHarness?: boolean;
+  /**
+   * Materialize a production-shaped runtime graph for the seeded current
+   * stage. Direct state fixtures bypass lifecycle emitters, so the helper uses
+   * the copied harness's audit/runtime CLIs to repair missing start rows.
+   */
+  runtimeGraph?: true;
   /**
    * Seed a NON-default second space (a sibling dir under aidlc/spaces/) so the
    * statusline orientation prefix paints its `<space> ·` segment. The prefix
@@ -205,8 +359,9 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
     }
   }
 
-  // 3. Stubs (fixture-directory copies). greenfield/brownfield land in the project
-  //    ROOT; re-artifacts + ideation artifacts land under the intent record.
+  // 3. Stubs (fixture-directory copies). greenfield/brownfield land in the
+  //    project root; RE artifacts land in the space-level per-repo codekb;
+  //    ideation artifacts land under the intent record.
   if (opts.greenfieldStub) {
     copyDirContents(join(FIXTURES_DIR, "greenfield-todo"), proj);
   }
@@ -214,7 +369,7 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
     copyDirContents(join(FIXTURES_DIR, "brownfield-todo"), proj);
   }
   if (opts.reArtifacts) {
-    const reDir = join(record, "inception", "reverse-engineering");
+    const reDir = seededCodekbDir(proj);
     mkdirSync(reDir, { recursive: true });
     const src = join(FIXTURES_DIR, "re-artifacts");
     for (const f of readdirSync(src)) {
@@ -261,9 +416,132 @@ export function setupTuiProject(opts: TuiProjectOptions = {}): string {
     const name = typeof opts.secondSpace === "string" ? opts.secondSpace : "teamB";
     seedSecondSpace(proj, name);
   }
+  if (opts.runtimeGraph) compileFixtureRuntimeGraph(proj);
 
   return proj;
 }
+
+/**
+ * Compile the copied harness's runtime graph and ensure it contains the state
+ * file's current stage. Seeded state fixtures bypass intent-birth and stage
+ * transitions, so append only the missing production audit rows, recompile,
+ * and verify through the shipped `aidlc-runtime.ts read` command.
+ */
+export function compileFixtureRuntimeGraph(proj: string): void {
+  const statePath = stateFilePath(proj);
+  if (!existsSync(statePath)) {
+    throw new Error(
+      `compileFixtureRuntimeGraph: seeded state missing: ${statePath}`,
+    );
+  }
+  const state = readFileSync(statePath, "utf8");
+  const currentStage = getField(state, "Current Stage")?.trim() ?? "";
+  if (!currentStage) {
+    throw new Error(
+      "compileFixtureRuntimeGraph: state has no Current Stage field",
+    );
+  }
+
+  const harnessDir = existsSync(join(proj, ".claude"))
+    ? join(proj, ".claude")
+    : join(proj, ".kiro");
+  const runTool = (tool: string, args: string[]) =>
+    spawnSync(
+      process.execPath,
+      [
+        join(harnessDir, "tools", tool),
+        ...args,
+        "--project-dir",
+        proj,
+      ],
+      {
+        cwd: proj,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: proj,
+          KIRO_PROJECT_DIR: proj,
+        },
+      },
+    );
+  const requireOk = (
+    label: string,
+    result: ReturnType<typeof runTool>,
+  ): void => {
+    if (result.status === 0) return;
+    throw new Error(
+      `compileFixtureRuntimeGraph: ${label} failed (${result.status}): ` +
+        `${result.stderr || result.stdout}`,
+    );
+  };
+
+  requireOk(
+    "initial compile",
+    runTool("aidlc-runtime.ts", ["compile"]),
+  );
+  if (
+    runTool("aidlc-runtime.ts", ["read", currentStage]).status === 0
+  ) {
+    return;
+  }
+
+  let audit = readAllAuditShards(proj);
+  let workflowStarts = findAllEvents(audit, "WORKFLOW_STARTED");
+  if (workflowStarts.length === 0) {
+    const scope = getField(state, "Scope")?.trim() || "feature";
+    requireOk(
+      "WORKFLOW_STARTED append",
+      runTool("aidlc-audit.ts", [
+        "append",
+        "WORKFLOW_STARTED",
+        "--field",
+        `Scope=${scope}`,
+        "--field",
+        "Request=seeded TUI fixture",
+      ]),
+    );
+    audit = readAllAuditShards(proj);
+    workflowStarts = findAllEvents(audit, "WORKFLOW_STARTED");
+  }
+
+  const latestWorkflowStart =
+    workflowStarts[workflowStarts.length - 1]?.timestamp ?? "";
+  const currentStageStarted = findAllEvents(
+    audit,
+    "STAGE_STARTED",
+  ).some((event) => {
+    const stage =
+      /^\*\*Stage\*\*:\s*(.+)$/m.exec(event.block)?.[1].trim() ?? "";
+    return stage === currentStage &&
+      event.timestamp >= latestWorkflowStart;
+  });
+  if (!currentStageStarted) {
+    const agent = getField(state, "Active Agent")?.trim();
+    const fields = [
+      "append",
+      "STAGE_STARTED",
+      "--field",
+      `Stage=${currentStage}`,
+    ];
+    if (agent) fields.push("--field", `Agent=${agent}`);
+    requireOk(
+      "STAGE_STARTED append",
+      runTool("aidlc-audit.ts", fields),
+    );
+  }
+
+  requireOk(
+    "recompile",
+    runTool("aidlc-runtime.ts", ["compile"]),
+  );
+  requireOk(
+    `runtime read ${currentStage}`,
+    runTool("aidlc-runtime.ts", ["read", currentStage]),
+  );
+}
+
+/** Backward-compatible name for existing TUI fixture callers. */
+export const compileTuiRuntimeGraph = compileFixtureRuntimeGraph;
 
 /** Seed a NON-default space as an additive sibling of identical shape: copy the
  *  default space's memory shell into aidlc/spaces/<name>/ so listSpaces() reports

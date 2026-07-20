@@ -90,6 +90,7 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
           prompt: "/aidlc --status",
           timeoutMs: DRIVE_TIMEOUT_MS,
         });
+        expect(r.toolCallIssues).toEqual([]);
         expect(r.stopReason).toBe("end_turn");
         // Read-only contract, byte-compared.
         expect(readFileSync(statePath, "utf-8")).toBe(stateBefore);
@@ -127,6 +128,7 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
           prompt: "/aidlc --doctor",
           timeoutMs: DRIVE_TIMEOUT_MS,
         });
+        expect(r.toolCallIssues).toEqual([]);
         expect(r.stopReason).toBe("end_turn");
         // Read-only contract (state), byte-compared.
         expect(readFileSync(statePath, "utf-8")).toBe(stateBefore);
@@ -155,6 +157,7 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
           prompt: "/aidlc --help",
           timeoutMs: DRIVE_TIMEOUT_MS,
         });
+        expect(r.toolCallIssues).toEqual([]);
         expect(r.stopReason).toBe("end_turn");
         // Read-only: help births nothing, so the per-intent state file never
         // appears (noAidlcDocs stripped the seeded record).
@@ -185,6 +188,7 @@ describe("t-acp-kiro-utilities (single-turn utility contracts over ACP)", () => 
           // completes (run-then-continue would otherwise re-enter the loop).
           stopAfterToolTitle: /aidlc-utility\.ts config-change/,
         });
+        expect(r.toolCallIssues).toEqual([]);
         // Disk is the contract: the state field flipped and the audit row
         // landed (tool-owned emission).
         expect(r.stateFile ?? readFileSync(seededStateFile(proj), "utf-8")).toMatch(

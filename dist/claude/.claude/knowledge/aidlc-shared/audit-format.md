@@ -2,6 +2,11 @@
 
 **Event names MUST match this table exactly.** Do not invent new event types. For stage completions, ALWAYS use `STAGE_COMPLETED` — do not substitute stage-specific names like "Requirements Analysis Complete" or "Code Generated".
 
+Stage lifecycle is report-owned: the conductor requests gate, revision,
+completion, and skip outcomes through `tools/aidlc-orchestrate.ts report`.
+The state tool entries below are the engine's internal atomic emitters, not
+commands a stage or conductor invokes directly.
+
 > See [`docs/reference/12-state-machine.md`](../../../../docs/reference/12-state-machine.md) for the state transitions that emit each event. Events marked `✓` are MANDATORY and asserted by `tests/feature/t48-audit-event-emitters.sh`.
 
 ## Naming Convention
@@ -37,7 +42,7 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 | `STAGE_REVISING` | Stage enters `[R]` (user rejected gate) | Timestamp, Stage, Revision count, Feedback, optional `Recovered=true` (backfilled by the approve-time revision backstop) | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill) |
 | ✓ `STAGE_COMPLETED` | Stage finishes (`[x]`) | Timestamp, Stage, Details, Artifacts | `tools/aidlc-state.ts approve` (gated stages; also auto-advances to next), `tools/aidlc-state.ts advance` (non-gated stages), `tools/aidlc-utility.ts intent-birth` (init stages) |
 | `STAGE_JUMPED` | Forward/backward/redo jump target reached | Timestamp, Direction, Source, Target, Scope | `tools/aidlc-jump.ts execute` |
-| `STAGE_SKIPPED` | Stage skipped during jump (`[S]`) | Timestamp, Stage, Reason | `tools/aidlc-jump.ts execute`, `tools/aidlc-state.ts skip` |
+| `STAGE_SKIPPED` | Current stage reports a justified skip, or a jump skips it (`[S]`) | Timestamp, Stage, Reason | `tools/aidlc-state.ts skip` (internally routed by `aidlc-orchestrate.ts report --result skipped`), `tools/aidlc-jump.ts execute` |
 
 ### Session Events (5 events — hook-owned, independent of workflow lifecycle)
 
@@ -144,9 +149,9 @@ Emitted by the Inception stage `practices-discovery` and by the Construction orc
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `PRACTICES_DISCOVERED` | Brownfield discovery dispatch + drafting completed; team-practices draft awaiting affirmation | Timestamp, sources scanned, drafts produced | `tools/aidlc-state.ts` `practices-event --type discovered` |
-| `PRACTICES_AFFIRMED` | Team approved practices at the practices-discovery affirmation gate; content promoted to `.claude/rules/aidlc-team.md` and `.claude/rules/aidlc-project.md` | Timestamp, affirming user, sections written, mandated/forbidden rules appended | `tools/aidlc-state.ts` `practices-promote` |
-| `PRACTICES_OVERRIDE` | Cross-row promotion failed during practices-discovery affirmation, OR walking-skeleton stance from `aidlc-team.md` overrode bolt-plan's marker for the current Bolt | Timestamp, Reason (discriminator); per-path field set: write-failure path emits Reason + Failure detail only (no Bolt fields); bolt-plan-marker-conflict path emits Reason + Bolt slug + Practices Stance + Bolt-Plan Marker. The two field sets do not overlap, so doctor filters by `Reason` and routes by either name family — `write-failure-*` for the affirmation promotion path, `bolt-plan-marker-conflict` for the orchestrator runtime path | `tools/aidlc-state.ts` `practices-promote` (write-failure path); `tools/aidlc-state.ts` `practices-event --type override` (bolt-plan-marker-conflict path — discriminator-field disambiguation, no separate event) |
+| `PRACTICES_DISCOVERED` | Greenfield or brownfield lead draft, three support contributions, human interview, and lead integration completed; drafts await affirmation | Timestamp, sources scanned, drafts produced | `tools/aidlc-state.ts` `practices-event --type discovered` |
+| `PRACTICES_AFFIRMED` | Team approved practices at the practices-discovery affirmation gate; content promoted to `aidlc/spaces/<active-space>/memory/team.md` and `project.md` | Timestamp, affirming user, sections written, mandated/forbidden rules appended | `tools/aidlc-state.ts` `practices-promote` |
+| `PRACTICES_OVERRIDE` | Cross-row promotion failed during practices-discovery affirmation, OR walking-skeleton stance from active-space `team.md` overrode bolt-plan's marker for the current Bolt | Timestamp, Reason (discriminator); per-path field set: write-failure path emits Reason + Failure detail only (no Bolt fields); bolt-plan-marker-conflict path emits Reason + Bolt slug + Practices Stance + Bolt-Plan Marker. The two field sets do not overlap, so doctor filters by `Reason` and routes by either name family — `write-failure-*` for the affirmation promotion path, `bolt-plan-marker-conflict` for the orchestrator runtime path | `tools/aidlc-state.ts` `practices-promote` (write-failure path); `tools/aidlc-state.ts` `practices-event --type override` (bolt-plan-marker-conflict path — discriminator-field disambiguation, no separate event) |
 | `PRACTICES_SECTION_EMPTY` | Orchestrator read a practices section that returned empty; falling back to org defaults (advisory-only) | Timestamp, Section name, Fallback source | `tools/aidlc-state.ts` `practices-event --type empty` |
 
 ### Merge Dispatch (3 events)
@@ -167,7 +172,7 @@ Emitted by the deterministic-sensor system. The sensor dispatcher emits the four
 |-------|------|-----------------|---------|
 | `SENSOR_FIRED` | Dispatcher invoked a sensor against a stage output (per PostToolUse Write/Edit match on the sensor's `matches` filter) | Timestamp, Fire id, Sensor ID, Stage slug, Output path | `tools/aidlc-sensor.ts` `fire` |
 | `SENSOR_PASSED` | Sensor completed and reported no findings (also: tool-unavailable, script-error fall-through — see Note footnote) | Timestamp, Fire id, Sensor ID, Stage slug, Output path, Duration ms | `tools/aidlc-sensor.ts` `fire` |
-| `SENSOR_FAILED` | Sensor completed and reported findings; detail file written at `aidlc-docs/.aidlc-sensors/<stage-slug>/<sensor-id>-<fire-id>.md` | Timestamp, Fire id, Sensor ID, Stage slug, Output path, Detail path, Findings count | `tools/aidlc-sensor.ts` `fire` |
+| `SENSOR_FAILED` | Sensor completed and reported findings; detail file written at `<record>/.aidlc-sensors/<stage-slug>/<sensor-id>-<fire-id>.md` | Timestamp, Fire id, Sensor ID, Stage slug, Output path, Detail path, Findings count | `tools/aidlc-sensor.ts` `fire` |
 | `SENSOR_BUDGET_OVERRIDE` | Sensor exceeded its configured cap (registry / binding / depth-derived per the three-layer cap model) and was terminated or skipped | Timestamp, Fire id, Sensor ID, Stage slug, Output path, Cap layer, Cap value, Observed value | `tools/aidlc-sensor.ts` `fire` |
 | `GUARDRAIL_LOADED` | Guardrail loader resolved the scope-hierarchical guardrail set for the active workflow (org → project → phase → stage); doctor's paired-coverage check reads from this event | Timestamp, Scope, Path, Rule count | `tools/aidlc-utility.ts` |
 
@@ -192,7 +197,7 @@ All six swarm events emit from the swarm referee `aidlc-swarm.ts` — the determ
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
 | `SWARM_STARTED` | Swarm referee `prepare` forked a batch of dependency-linked Units | Timestamp, Batch number, Unit names, Concurrency cap | `tools/aidlc-swarm.ts` |
-| `SWARM_UNIT_CONVERGED` | A swarm Unit re-verified green (and untampered) at the `finalize` gate AND its merge-back landed (a converged unit in `merge_failures` gets no row until a finalize retry merges it) | Timestamp, Batch number, Unit name | `tools/aidlc-swarm.ts` |
+| `SWARM_UNIT_CONVERGED` | A swarm Unit re-verified green (and untampered) at the `finalize` gate AND its merge-back landed (a converged unit in `merge_failures` gets no row until a finalize retry merges it) | Timestamp, Batch number, Unit name, Stage, Run floor (the stage's latest main-workflow `STAGE_STARTED` timestamp — consumers count a row only when both match the current attempt) | `tools/aidlc-swarm.ts` |
 | `SWARM_UNIT_FAILED` | A swarm Unit failed the `finalize` re-verify (not claimed, claimed-but-red, or tampered) | Timestamp, Batch number, Unit name, Reason | `tools/aidlc-swarm.ts` |
 <!-- Reason for a CLAIMED-but-red / tampered unit is always the tool's own verdict (`error`); for a DECLINED (unclaimed) unit it is the conductor's typed attribution via `finalize --reasons` (`unsatisfiable` / `budget-exhausted` / `cap-exhausted`, defaulting to `cap-exhausted`) — the tool records the conductor's knowledge call, it does not judge unsatisfiability itself (D-I). -->
 | `SWARM_BATON_RETURNED` | A swarm Unit returned the baton to the conductor for orchestrator-mediated coordination | Timestamp, Batch number, Unit name, Reason | `tools/aidlc-swarm.ts` |

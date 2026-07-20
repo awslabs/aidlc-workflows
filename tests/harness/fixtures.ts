@@ -184,6 +184,15 @@ export function seededRecordDir(proj: string, space = DEFAULT_SPACE): string {
   return join(intentsDirOf(proj, space), DEFAULT_RECORD_DIR);
 }
 
+/** The seeded space-level codekb directory for a repository. */
+export function seededCodekbDir(
+  proj: string,
+  repo = basename(proj),
+  space = DEFAULT_SPACE,
+): string {
+  return join(proj, "aidlc", "spaces", space, "codekb", repo);
+}
+
 /** The seeded state file path: `<record>/aidlc-state.md`. */
 export function seededStateFile(proj: string, space = DEFAULT_SPACE): string {
   return join(seededRecordDir(proj, space), "aidlc-state.md");
@@ -211,6 +220,44 @@ export function seededAuditShard(proj: string, space = DEFAULT_SPACE): string {
   return join(seededAuditDir(proj, space), `${host}-${FIXTURE_CLONE_ID}.md`);
 }
 
+export interface BoltDagUnit {
+  name: string;
+  kind?: string;
+  depends_on?: string[];
+}
+
+/** Seed the active intent's cached Bolt DAG. */
+export function seedBoltDag(
+  proj: string,
+  units: Array<string | BoltDagUnit>,
+  batches?: string[][],
+): void {
+  const normalized = units.map((unit) =>
+    typeof unit === "string"
+      ? { name: unit, depends_on: [] }
+      : { ...unit, depends_on: unit.depends_on ?? [] }
+  );
+  writeFileSync(
+    join(seededRecordDir(proj), "runtime-graph.json"),
+    `${JSON.stringify(
+      {
+        bolt_dag: {
+          units: normalized,
+          batches: batches ?? [normalized.map((unit) => unit.name)],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+}
+
+/** Seed a Bolt DAG whose topological batches are already known. */
+export function seedBoltDagBatches(proj: string, batches: string[][]): void {
+  seedBoltDag(proj, batches.flat(), batches);
+}
+
 /**
  * Seed a SEED-style workspace shell plus ONE default intent record + cursors +
  * registry, so the path helpers resolve the per-intent record. This is the
@@ -235,6 +282,7 @@ function seedWorkspaceShell(proj: string, space = DEFAULT_SPACE): void {
         {
           uuid: DEFAULT_INTENT_UUID,
           slug: DEFAULT_RECORD_DIR.replace(/-[0-9a-f]+$/, ""),
+          dirName: DEFAULT_RECORD_DIR,
           status: "in-flight",
         },
       ],
@@ -514,7 +562,7 @@ export function setupIntegrationProject(
   }
 
   if (opts.withReArtifacts) {
-    const dest = join(seededRecordDir(proj), "inception", "reverse-engineering");
+    const dest = seededCodekbDir(proj);
     mkdirSync(dest, { recursive: true });
     cpSync(join(FIXTURES_DIR, "re-artifacts"), dest, { recursive: true });
   }

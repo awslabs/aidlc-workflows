@@ -37,7 +37,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
@@ -63,6 +63,20 @@ function skipReason(): string | null {
   }
   if (!opencodeVersionOk()) return `opencode >= 1.17 not found (AIDLC_OPENCODE_BIN=${OPENCODE_BIN})`;
   if (!existsSync(OPENCODE_DIST)) return `distributable missing: ${OPENCODE_DIST}`;
+  // opencode's Bedrock provider needs static credentials in the environment or
+  // ~/.aws/ — unlike Claude Code it does not walk the EC2 instance-role (IMDS)
+  // chain, so a role-only box hard-fails at the provider instead of skipping.
+  // Key on the MODEL actually in use (it defaults to Bedrock regardless of
+  // CLAUDE_CODE_USE_BEDROCK, which configures Claude Code, not opencode).
+  // Other providers authenticate their own way.
+  if (
+    MODEL.startsWith("amazon-bedrock/") &&
+    !process.env.AWS_ACCESS_KEY_ID &&
+    !process.env.AWS_PROFILE &&
+    !existsSync(join(homedir(), ".aws", "credentials"))
+  ) {
+    return "Bedrock is the provider but no static AWS credentials are visible to opencode (env keys, AWS_PROFILE, or ~/.aws/credentials); materialize instance-role creds into AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN to run live";
+  }
   return null;
 }
 const SKIP_REASON = skipReason();

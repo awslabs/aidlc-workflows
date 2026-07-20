@@ -434,8 +434,17 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
 // stale marker (Current Stage moved past Parked At Stage) is ignored.
 // ===========================================================================
 describe("t114 parked branch (#367)", () => {
+  const directStateEnv = {
+    ...process.env,
+    AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+  };
+
   function park(p: string): void {
-    spawnSync(BUN, [STATE, "park", "--project-dir", p], { encoding: "utf-8", cwd: p });
+    spawnSync(BUN, [STATE, "park", "--project-dir", p], {
+      encoding: "utf-8",
+      cwd: p,
+      env: directStateEnv,
+    });
   }
 
   test("plain next on a parked workflow -> parked directive", () => {
@@ -464,6 +473,7 @@ describe("t114 parked branch (#367)", () => {
     spawnSync(BUN, [STATE, "set", "Current Stage=scope-definition", "--project-dir", proj], {
       encoding: "utf-8",
       cwd: proj,
+      env: directStateEnv,
     });
     const out = runNext(proj, []).out;
     expect(out).not.toContain('"kind":"parked"');
@@ -474,7 +484,11 @@ describe("t114 parked branch (#367)", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     park(proj);
-    spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], { encoding: "utf-8", cwd: proj });
+    spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], {
+      encoding: "utf-8",
+      cwd: proj,
+      env: directStateEnv,
+    });
     const out = runNext(proj, []).out;
     expect(out).not.toContain('"kind":"parked"');
     expect(out).toContain('"kind":"run-stage"');

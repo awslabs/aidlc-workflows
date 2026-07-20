@@ -188,7 +188,7 @@ Only add tools to the allow list if you create custom stages that need additiona
 
 ### Narrowing permissions
 
-Remove tools from the allow list to require manual approval for each use. Note that removing `Task` causes subagent stages (2.1 Reverse Engineering, 3.5 Code Generation) to prompt for permission on each delegation. Workspace detection (0.2) runs deterministically inside `aidlc-utility intent-birth`; it does not use `Task`.
+Remove tools from the allow list to require manual approval for each use. Note that removing `Task` causes the four dispatched stages (2.1 Reverse Engineering pipeline, 2.2 Practices Discovery subagent, 2.4 User Stories mob, 3.5 Code Generation subagent) to prompt for permission on each delegation. Workspace detection (0.2) runs deterministically inside `aidlc-utility intent-birth` — it does not use `Task`.
 
 ---
 

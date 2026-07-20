@@ -182,17 +182,22 @@ describe("t47 Construction Bolt vocabulary (migrated from t47-construction-bolts
   });
 
   // =========================================================================
-  // Test 12 — code-generation.md notes orchestrator-managed gating in the Bolt
-  // flow. The .sh used a case-insensitive alternation:
-  //   grep -qi "orchestrator-managed gating\|suppressed by the orchestrator"
-  // i.e. EITHER phrase satisfies it. Reproduce the alternation; the shipped
-  // file carries both (see :176).
+  // Test 12 — only Code Generation's completion gate is orchestrator-managed.
+  // The pre-generation plan approval remains a mandatory human hard stop in
+  // Bolt flow; broad "the approval gate is suppressed" prose regresses that
+  // safety boundary.
   // =========================================================================
   test("code-generation.md notes orchestrator-managed gating in Bolt flow", () => {
     expect(
-      /orchestrator-managed gating|suppressed by the orchestrator/i.test(
+      /orchestrator-managed completion gating/i.test(
         CODE_GEN,
       ),
     ).toBe(true);
+    expect(CODE_GEN).toContain(
+      "Step 3 Plan Approval is a mandatory hard stop in every execution mode",
+    );
+    expect(CODE_GEN).toContain(
+      "Only the Step 7 completion approval gate is suppressed",
+    );
   });
 });

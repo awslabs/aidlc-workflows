@@ -36,7 +36,7 @@ never overwrites it; the engine just creates the empty `aidlc/knowledge/`
 directory on the first `/aidlc` and leaves the contents to you. This is the
 directory you populate. (Standing practices the framework should *enforce* —
 rather than reference material an agent weighs — live in the space's memory
-layer at `aidlc/spaces/<space>/memory/` instead.)
+layer at `aidlc/spaces/<active-space>/memory/` instead.)
 
 The two-tier split is the same data-versus-code line the rest of this guide
 rests on, applied to knowledge: the framework owns its methodology, you own
@@ -84,7 +84,7 @@ right directory is the registration. When a stage begins, the conductor
 loads context in a fixed six-step order, and your Tier 2 files come in at steps
 4 and 5:
 
-1. Rules — the resolved `aidlc/spaces/<space>/memory/` chain (loaded first)
+1. Rules — the resolved `aidlc/spaces/<active-space>/memory/` chain (loaded first)
 2. Tier 1 shared methodology — `.claude/knowledge/aidlc-shared/`
 3. Tier 1 agent methodology — `.claude/knowledge/<agent>-agent/`
 4. **Tier 2 team shared** — `aidlc/knowledge/aidlc-shared/`
@@ -132,7 +132,7 @@ when reviewing, it's knowledge.
 So a document describing how your team designs APIs is knowledge: drop it in
 `aidlc/knowledge/aidlc-architect-agent/`. A non-negotiable like "every
 architecture decision must record at least two alternatives" is a rule: it
-belongs in the space memory layer (`aidlc/spaces/<space>/memory/`), where the framework will hold the agent to it. For
+belongs in the space memory layer (`aidlc/spaces/<active-space>/memory/`), where the framework will hold the agent to it. For
 authoring rules across the layer chain and letting the learning loop promote
 corrections into them, see
 [Rules and the Learning Loop](05-rules-and-the-loop.md). The User Guide's
@@ -187,7 +187,7 @@ What this means for the knowledge and rules you author:
   files you populate live inside one space. A second team gets its own empty
   `knowledge/` tree to fill — your files do not leak across the boundary, and
   theirs do not dilute your agents' context.
-- **The method layer is per-space too.** The rules in `aidlc/spaces/<space>/memory/`
+- **The method layer is per-space too.** The rules in `aidlc/spaces/<active-space>/memory/`
   (`org.md` → `team.md` → `project.md`) resolve within the active space. A new
   space is seeded from the framework baseline — `org.md` copied in, fresh empty
   `team.md` / `project.md` — so a new team starts from the framework's defaults

@@ -69,7 +69,10 @@ import {
   cleanupWorkspaceJourney,
   setupWorkspaceJourney,
 } from "../harness/fixtures.ts";
-import { driveAidlc } from "../harness/sdk-drive.ts";
+import {
+  type CapturedToolResult,
+  driveAidlc,
+} from "../harness/sdk-drive.ts";
 import {
   activeSpace,
   getField,
@@ -92,6 +95,7 @@ const CODEKB_DRIVE_MS = Math.max(600_000, TEST_TIMEOUT_MS - 6 * VERB_DRIVE_MS);
 
 const INIT_STATE_SUMMARY = "State initialized:";
 const STOP_AFTER_BIRTH = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
+const SINGLE_RE_DONE = "single-stage:reverse-engineering";
 
 // A UUIDv7 has version nibble 7 and variant nibble in {8,9,a,b}.
 const UUIDV7_RE =
@@ -147,6 +151,13 @@ function codekbFiles(root: string, repo: string): string[] {
 function activeRecordDir(root: string): string | undefined {
   const sp = activeSpace(root);
   return listIntents(root, sp).find((i) => i.active)?.dirName ?? undefined;
+}
+
+function shellCommand(result: CapturedToolResult): string | undefined {
+  if (result.toolName !== "Bash" && result.toolName !== "Shell") return undefined;
+  return typeof result.input.command === "string"
+    ? result.input.command
+    : undefined;
 }
 
 /** The RE codekb beat has TWO valid outcomes, and both keep the multi-repo journey
@@ -235,14 +246,61 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         // (aidlc/spaces/<space>/codekb/<repo>/ — RE stage prose defers the dir to
         // the codekb-path tool). We drive only as far as the per-repo codekb
         // landing — NOT the swarm.
-        await driveAidlc(
+        const r2 = await driveAidlc(
           `/aidlc --stage reverse-engineering --single`,
           {
             projectDir: root,
             answerScript: "default",
             timeoutMs: CODEKB_DRIVE_MS,
+            stopAfterToolResult: {
+              toolName: "Bash",
+              resultIncludes: SINGLE_RE_DONE,
+            },
           },
         );
+        expect(r2.timedOut).toBe(false);
+        expect(r2.stoppedAfterToolResult).toBe(true);
+
+        const r2Commands = r2.toolResults
+          .map(shellCommand)
+          .filter((command): command is string => command !== undefined);
+        const r2Next = r2Commands.filter((command) =>
+          /aidlc-orchestrate\.ts["']?\s+next\b/.test(command)
+        );
+        expect(r2Next.length).toBeGreaterThan(0);
+        for (const command of r2Next) {
+          expect(command).toMatch(/--single\b/);
+          expect(command).toMatch(/--stage(?:=|\s+)(?:["'])?reverse-engineering\b/);
+        }
+        const r2Reports = r2Commands.filter((command) =>
+          /aidlc-orchestrate\.ts["']?\s+report\b/.test(command)
+        );
+        expect(
+          r2Reports,
+          `expected exactly one isolated completion report: ${JSON.stringify(r2Commands)}`,
+        ).toHaveLength(1);
+        expect(r2Reports[0]).toMatch(/--single\b/);
+        expect(r2Reports[0]).toMatch(
+          /--stage(?:=|\s+)(?:["'])?reverse-engineering\b/,
+        );
+        expect(r2Reports[0]).toMatch(
+          /--result(?:=|\s+)(?:["'])?completed\b/,
+        );
+        expect(
+          r2Commands.some((command) =>
+            /--result(?:=|\s+)(?:["'])?awaiting-approval\b/.test(command)
+          ),
+        ).toBe(false);
+        expect(
+          r2Commands.some((command) =>
+            /aidlc-learnings\.ts["']?\s+(?:surface|persist)\b/.test(command)
+          ),
+        ).toBe(false);
+        expect(
+          r2Commands.some((command) =>
+            /aidlc-orchestrate\.ts["']?\s+park\b/.test(command)
+          ),
+        ).toBe(false);
         // Resolve A's record dir up front (hoisted above the codekb asserts) so we
         // can read its state-file and tell which of the two valid RE outcomes applies.
         const recordADir = join(root, "aidlc", "spaces", "default", "intents", recordA as string);

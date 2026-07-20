@@ -213,6 +213,17 @@ const MILESTONE13_FIELDS = [
 ];
 
 describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override (migrated from t81-bolt-plan-override.sh, plan 4)", () => {
+  test("PRACTICES_AFFIRMED cannot be minted outside practices-promote", () => {
+    const p = proj();
+    const before = readAudit(p);
+    const r = practicesEvent(["--type", "affirmed"], p);
+    expect(r.status).toBe(1);
+    expect(r.out).toContain(
+      "PRACTICES_AFFIRMED is reserved for practices-promote",
+    );
+    expect(readAudit(p)).toBe(before);
+  });
+
   // --- Test 1: --type override accepts the milestone 13 field set ---
   test("1: practices-event --type override accepts milestone 13 field set (emits PRACTICES_OVERRIDE)", () => {
     const p = proj();

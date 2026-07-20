@@ -130,8 +130,8 @@ access grant.
 | aidlc-aws-platform-agent | Yes | No | judgment | 2 | 4 | 6 |
 | aidlc-compliance-agent | No | Yes | judgment | 0 | 4 | 4 |
 | aidlc-devsecops-agent | Yes | No | judgment | 0 | 5 | 5 |
-| aidlc-developer-agent | Yes | No | judgment | 2 | 3 | 5 |
-| aidlc-quality-agent | Yes | No | judgment | 2 | 2 | 4 |
+| aidlc-developer-agent | Yes | No | judgment | 2 | 4 | 6 |
+| aidlc-quality-agent | Yes | No | judgment | 2 | 3 | 5 |
 | aidlc-pipeline-deploy-agent | Yes | No | templated | 4 | 0 | 4 |
 | aidlc-operations-agent | Yes | No | templated | 3 | 0 | 3 |
 
@@ -155,8 +155,8 @@ access grant.
 | aidlc-aws-platform-agent | -- | S (feasibility) | S (application-design) | L (infrastructure-design), S (nfr-design) | L (environment-provisioning), S (feedback-optimization) |
 | aidlc-compliance-agent | -- | S (feasibility) | -- | S (nfr-requirements, infrastructure-design) | S (environment-provisioning) |
 | aidlc-devsecops-agent | -- | -- | S (practices-discovery) | S (nfr-requirements, infrastructure-design, build-and-test) | S (environment-provisioning) |
-| aidlc-developer-agent | -- | -- | L (reverse-engineering), S (practices-discovery) | L (code-generation), S (functional-design) | S (deployment-execution) |
-| aidlc-quality-agent | -- | -- | S (practices-discovery) | L (build-and-test), S (nfr-requirements) | L (performance-validation) |
+| aidlc-developer-agent | -- | -- | L (reverse-engineering), S (practices-discovery, user-stories) | L (code-generation), S (functional-design) | S (deployment-execution) |
+| aidlc-quality-agent | -- | -- | S (practices-discovery, user-stories) | L (build-and-test), S (nfr-requirements) | L (performance-validation) |
 | aidlc-pipeline-deploy-agent | -- | -- | L (practices-discovery) | L (ci-pipeline) | L (deployment-pipeline, deployment-execution) |
 | aidlc-operations-agent | -- | -- | -- | -- | L (observability-setup, incident-response, feedback-optimization) |
 

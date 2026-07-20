@@ -228,7 +228,7 @@ Contents:
 
 ### RE Artifacts Fixture: `tests/fixtures/re-artifacts/`
 
-Pre-seeded reverse-engineering output for downstream stage tests. Copied into the test project's intent record dir at `$PROJ/aidlc/spaces/default/intents/<record>/inception/reverse-engineering/` during setup.
+Pre-seeded reverse-engineering output for downstream stage tests. Copied into the test project's space-level repository store at `$PROJ/aidlc/spaces/default/codekb/<repo>/` during setup.
 
 Contents: 4 minimal .md files (architecture-overview, technology-stack, codebase-analysis, integration-points) describing the brownfield-todo app.
 

@@ -288,30 +288,56 @@ quietly relax coverage for an artifact a stage should always write per unit.
 
 ### `mode`
 
-Dispatch mechanism, three values:
+The stage's **communication topology** — who talks to whom while the body
+runs. Five values, four active:
 
-- `inline` — the conductor runs the stage in its own context. Short stages,
-  fast to execute, no context pressure.
-- `subagent` — delegates via the Task tool to a fresh subagent context.
-  Long stages (Construction code generation) that would blow out the main
-  conductor context.
-- `agent-team` — **reserved**. For when Anthropic's experimental
-  `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` primitive stabilises and we need
-  direct agent-to-agent messaging. Likely first consumer is v0.8.0's Ralph
-  loop driver. No stage declares `agent-team` in v0.3.0.
+- `inline` — the conductor runs the stage in its own context; support agents
+  are perspectives it adopts (voices). Zero dispatches. Short stages, fast to
+  execute, no context pressure.
+- `subagent` — hub-and-spoke. The lead is dispatched to a fresh subagent
+  context (long stages, e.g. Construction code generation, that would blow
+  out the conductor's context). When the stage also declares
+  `support_agents`, each one is dispatched as a real spoke against the
+  lead's returned draft — mutually blind, paths-only briefs — and the lead
+  is dispatched once more to integrate.
+- `pipeline` — chain. The lead drafts; each support agent enriches in
+  declared order, every link seeing the draft plus all earlier
+  contributions. Order is the point. Requires non-empty `support_agents`.
+- `mob` — mesh, run as bounded rounds: all support agents contribute in
+  parallel against the lead's draft (mutually blind), the lead integrates,
+  and unresolved objectors get one confirm-or-maintain round with the other
+  participants' positions. Maintained dissent is quoted verbatim at the
+  gate. Requires non-empty `support_agents`. The shipped showcase is
+  `user-stories` (Product Manager lead; Design, Developer, Quality
+  collaborators; Product Lead reviewer — the mob-elaboration ritual).
+- `agent-team` — **reserved**. The future native-bus transport for mesh
+  collaboration: when Anthropic's experimental
+  `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` primitive stabilises, a live
+  peer-messaging room can carry `mob`'s semantics without conductor-carried
+  rounds. `mob` is the portable mode; no stage declares `agent-team`.
 
-Note: multi-agent execution today is expressed via `support_agents`. The
-conductor invokes the lead agent first, then each supporter in turn with
-the lead's output as context (see
-`dist/claude/.claude/aidlc-common/protocols/stage-protocol.md:611`). Agents do
-not invoke each other — only the conductor delegates. `agent-team` is
-specifically for the future case where direct inter-agent messaging is
-needed, not the general "multiple agents touch the stage" case.
+On every topology the conductor is the bus: agents never invoke each other —
+only the conductor delegates. The writing model mirrors a real working
+session: everyone writes their own work, the owner collates and edits. Each
+dispatched support agent writes a contribution file
+(`contributions/<agent-slug>.md`, stage-protocol §11 shape with the
+identity-marker first line); the lead alone edits the stage's `produces[]`
+artifacts; pipeline links advance the artifacts directly instead. On mob and
+subagent-with-supports stages the contribution files are the completion
+evidence — the engine refuses approval while one is missing. The review loop
+is NOT a mode: `reviewer` + `reviewer_max_iterations` deliver the two-party
+critique topology on top of any mode, and a NOT-READY re-invokes the lead
+alone.
 
 **Consumer contract.** Orchestrator code reading the `mode` field must
 handle `agent-team` explicitly — at minimum throw "mode agent-team not yet
 implemented". Do not fall through to a default execution path. Silent
 fallthrough on enum extension is a known foot-gun.
+
+**Swarm-trigger coupling.** The autonomous Construction swarm fires on
+`for_each: unit-of-work` + `mode: subagent`. Re-moding the per-unit build
+stage silently takes it off the swarm path; `aidlc-graph compile` emits a
+stderr advisory when it sees that shape.
 
 ### `lead_agent` and `support_agents`
 

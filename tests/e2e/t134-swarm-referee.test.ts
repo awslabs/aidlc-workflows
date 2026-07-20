@@ -250,6 +250,14 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     expect(fEnv.converged).toBe(1);
     expect(fEnv.merge_failures).toEqual([]);
     expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(1);
+    // The row carries the attempt-identity stamp: Stage from the state file's
+    // Current Stage, Run floor = the stage's latest main-workflow
+    // STAGE_STARTED ("" here - the fixture audit has none).
+    const convergedBlock = auditBody(proj)
+      .split("\n---\n")
+      .find((b) => b.includes("**Event**: SWARM_UNIT_CONVERGED"));
+    expect(convergedBlock).toContain("**Stage**: functional-design");
+    expect(convergedBlock).toContain("**Run floor**: ");
   }, 120000);
 
   // Cases 2, 3, 4, 6 are asserted inside test 1's shared-fixture flow above

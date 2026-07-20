@@ -79,6 +79,7 @@ function guarded(proj: string, args: string[]): { rc: number; out: string } {
   const env = { ...process.env };
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
+  env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
   delete env.AIDLC_SKIP_REVISION_BACKSTOP;
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",
@@ -107,6 +108,7 @@ function guardedNoBackstop(proj: string, args: string[]): { rc: number; out: str
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
   env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD = "1";
   env.AIDLC_SKIP_REVISION_BACKSTOP = "1";
+  env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS = "1";
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",
     env,

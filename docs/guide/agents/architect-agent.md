@@ -24,7 +24,7 @@ It also leads the synthesis step of stage 2.1 (Reverse Engineering), where it re
 | Stage | Phase | Contribution |
 |-------|-------|-------------|
 | 1.1 Intent Capture | Ideation | Provides technical context |
-| 2.1 Reverse Engineering (Synthesis step) | Inception | Synthesizes code scan results into a coherent architectural model |
+| 2.1 Reverse Engineering (dispatched final pipeline link) | Inception | Synthesizes code scan results into a coherent architectural model |
 | 2.8 Delivery Planning | Inception | Validates build order against architecture dependencies |
 
 ## What to Expect

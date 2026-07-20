@@ -40,7 +40,8 @@
 //   bun .codex/hooks/aidlc-codex-adapter.ts <target>
 // where <target> ∈ session-start | audit-and-sensors | state-sync |
 //                  runtime-compile | validate-state | post-compact |
-//                  log-subagent | stop | mint | reviewer-scope
+//                  log-subagent | stop | mint | state-transition-guard |
+//                  reviewer-scope
 
 import { createHash } from "node:crypto";
 import {
@@ -449,6 +450,22 @@ switch (target) {
     }
     persistResponse("", 0);
     return 0;
+  }
+
+  case "state-transition-guard": {
+    // Global PreToolUse lifecycle guard. Only Bash can name aidlc-state.ts;
+    // everything else permits immediately. Preserve exit 2 + stderr exactly.
+    if ((codex.tool_name ?? "") === "Bash") {
+      const r = runCoreWithStderr("aidlc-state-transition-guard.ts", rawInput);
+      persistResponse(r.stdout, r.code === 2 ? 2 : 0, r.stderr);
+      if (r.code === 2) {
+        process.stderr.write(r.stderr);
+        process.exit(2);
+      }
+    }
+    persistResponse("", 0);
+    process.exit(0);
+    break;
   }
 
   case "mint": {

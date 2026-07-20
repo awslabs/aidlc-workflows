@@ -156,8 +156,9 @@ resumes it rather than re-initialising.
 ## Notes
 
 - All 3 stages auto-proceed — no approval gates in the Initialization phase
-- All stages update the statusline via `Current Stage` in `aidlc-state.md`
-- All stages update state checkboxes (`[ ]` → `[x]`) and append audit events directly from the tool
+- The deterministic initialization tool reports each completed stage; the
+  engine updates `Current Stage`, state checkboxes, and audit events atomically
+- Conductors never edit initialization lifecycle state directly
 - The Initialization → Ideation phase transition has no governance boundary check
 
 ## Cross-References

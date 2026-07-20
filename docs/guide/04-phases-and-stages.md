@@ -144,7 +144,7 @@ flowchart TD
 flowchart TD
     S21{{"`**2.1 Reverse Engineering**
     (aidlc-developer-agent + aidlc-architect-agent)
-    subagent: two-step`"}}
+    pipeline: 2-link`"}}
     S2P["2.2 Practices Discovery\n(aidlc-pipeline-deploy-agent)"]
     S22["2.3 Requirements Analysis\n(aidlc-product-agent)"]
     S23["2.4 User Stories\n(aidlc-product-agent)"]
@@ -160,7 +160,7 @@ flowchart TD
     S21 -.->|CONDITIONAL| S2P
     S2P -.->|CONDITIONAL| S22
 
-    subgraph RE_DETAIL["Two-Step RE Pattern"]
+    subgraph RE_DETAIL["Two-Link RE Pipeline"]
         direction LR
         DEV_SCAN["Step 1: Developer\nCode Scan"]
         ARCH_SYNTH["Step 2: Architect\nSynthesis"]
@@ -191,20 +191,20 @@ flowchart TD
     style RE_DETAIL fill:#e8eaf6,stroke:#3f51b5
 ```
 
-<!-- Text fallback: Brownfield check (from stage 0.3). If yes, 2.1 Reverse Engineering runs with two-step delegation (developer code scan then architect synthesis). Then 2.2 Practices Discovery (CONDITIONAL — discovers the team's way of working and promotes it to the team/project rule files at an affirmation gate), 2.3 Requirements Analysis (ALWAYS), optionally 2.4 User Stories, optionally 2.5 Refined Mockups, optionally 2.6 Application Design, 2.7 Units Generation (ALWAYS), and 2.8 Delivery Planning (ALWAYS) passes through Verification Gate 2. -->
+<!-- Text fallback: Brownfield check (from stage 0.3). If yes, 2.1 Reverse Engineering runs as a two-link pipeline (developer code scan then architect synthesis-and-write). Then 2.2 Practices Discovery runs as a hub-and-spoke on every included scope (lead draft, mutually blind quality/developer/devsecops spokes, human interview, lead integration) and promotes affirmed work to active-space memory. Next are 2.3 Requirements Analysis (ALWAYS), optional 2.4 User Stories mob, optional 2.5 Refined Mockups, optional 2.6 Application Design, 2.7 Units Generation (ALWAYS), and 2.8 Delivery Planning (ALWAYS), followed by Verification Gate 2. -->
 
 | # | Stage | Lead | Supporting | Key Artifacts | Condition |
 |---|-------|------|-----------|---------------|-----------|
 | 2.1 | Reverse Engineering | aidlc-developer-agent | aidlc-architect-agent | 9 RE artifacts | Brownfield projects |
-| 2.2 | Practices Discovery | aidlc-pipeline-deploy-agent | aidlc-quality-agent, aidlc-developer-agent, aidlc-devsecops-agent | `team-practices.md`, `discovered-rules.md`, `evidence.md` (promoted to `aidlc/spaces/<space>/memory/team.md` / `memory/project.md` on affirmation) | CONDITIONAL |
+| 2.2 | Practices Discovery | aidlc-pipeline-deploy-agent | aidlc-quality-agent, aidlc-developer-agent, aidlc-devsecops-agent | `team-practices.md`, `discovered-rules.md`, `evidence.md` (promoted to `aidlc/spaces/<active-space>/memory/team.md` / `project.md` on affirmation) | CONDITIONAL |
 | 2.3 | Requirements Analysis | aidlc-product-agent | — | `requirements.md` | ALWAYS |
-| 2.4 | User Stories | aidlc-product-agent | aidlc-design-agent | `stories.md`, `personas.md` | User-facing features |
+| 2.4 | User Stories | aidlc-product-agent | aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent | `stories.md`, `personas.md` | User-facing features |
 | 2.5 | Refined Mockups | aidlc-design-agent | aidlc-product-agent | Hi-fi mockups, interaction spec | UI projects |
 | 2.6 | Application Design | aidlc-architect-agent | aidlc-aws-platform-agent, aidlc-design-agent | App design artifacts, ADRs | Per execution plan |
 | 2.7 | Units Generation | aidlc-architect-agent | aidlc-delivery-agent | `unit-of-work.md`, `unit-of-work-dependency.md` (DAG), `unit-of-work-story-map.md` | ALWAYS |
 | 2.8 | Delivery Planning | aidlc-delivery-agent | aidlc-architect-agent | `bolt-plan.md`, `team-allocation.md`, `risk-and-sequencing-rationale.md`, `external-dependency-map.md` | ALWAYS |
 
-**Key behavior:** Stage 2.1 runs as a **subagent** using the two-step Reverse Engineering pattern — first an aidlc-developer-agent code scan, then an aidlc-architect-agent synthesis. It only executes for brownfield (existing codebase) projects.
+**Key behavior:** Stage 2.1 runs as a **pipeline** (2-link chain) — first an aidlc-developer-agent code scan, then an aidlc-architect-agent synthesis that writes the artifacts. It only executes for brownfield projects. Stage 2.2 runs as a **subagent hub-and-spoke** for greenfield and brownfield work: the lead drafts, quality/developer/devsecops inspect it independently, the human interview resolves gaps, and the lead integrates. Stage 2.4 runs as a **mob** — the lead drafts, and the design, developer, and quality agents contribute in parallel via contribution files.
 
 ---
 
@@ -403,9 +403,12 @@ If verification fails, the conductor reports the issues and asks whether to proc
 | Mode | Stages | User Interaction | Description |
 |------|--------|-----------------|-------------|
 | Inline (auto-proceed) | 0.1, 0.2, 0.3 | None | Run deterministically inside `aidlc-utility intent-birth`, no approval gate |
-| Inline | All other stages | Full | Agent works in conversation, approval gate at end |
-| Subagent (simple) | 3.5 | Approval gate only | Code generation runs in background |
-| Subagent (two-step) | 2.1 | Approval gate only | Developer scan + architect synthesis |
+| Inline | 28 stages | Full | Agent works in conversation, approval gate at end |
+| Subagent | 2.2, 3.5 | Practices interview + final gate for 2.2; approval gate for 3.5 | Hub-and-spoke Practices Discovery; focused Code Generation |
+| Pipeline (2-link) | 2.1 | Approval gate only | Developer scan, then architect synthesis-and-write |
+| Mob | 2.4 | Mid-stage judgment questions + approval gate | Lead drafts; design/developer/quality collaborate in parallel via contribution files |
+
+Across all 32 stages, the topology count is **28 inline / 2 subagent / 1 pipeline / 1 mob**.
 
 ---
 

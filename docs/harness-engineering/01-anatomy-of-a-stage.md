@@ -31,14 +31,14 @@ The frontmatter is a flat block of YAML keys. Some are mechanical — `slug`, `p
 | `consumes` | The artifacts this stage reads | Per artifact: is it `required`, and is it `conditional_on` brownfield/greenfield? |
 | `produces` | The artifacts this stage writes | These are the forward edges other stages discover. |
 | `lead_agent` / `support_agents` | Who runs the stage | One persona owns it; supporters add perspective. |
-| `mode` | How it executes | `inline` (in the conductor's context) or `subagent` (delegated to a fresh context). |
+| `mode` | Communication topology | `inline` (voices in the conductor's context), `subagent` (hub-and-spoke dispatch), `pipeline` (chain), or `mob` (mesh in bounded rounds). |
 | `for_each` | Whether it iterates | Names an artifact whose instances drive a once-per-instance run. |
 
 A few notes on the calls that bite hardest:
 
 - **`consumes[].required` is scoped to the active plan, not global.** `required: true` means "if the producing stage runs in *this* workflow, this consume must be satisfied" — not "the producer always runs." Scopes deliberately skip upstream stages, and a flat global requirement would make those scopes structurally invalid. The stage body handles the absent-input case gracefully (prose like "if produced").
 - **`consumes[].conditional_on` captures the brownfield/greenfield split.** A consume marked `conditional_on: brownfield` is only required when the workflow is brownfield. For an unconditional consume, omit the field entirely — there is no `always` value.
-- **`mode` is a dispatch mechanism.** `inline` runs short stages in the conductor's own context; `subagent` delegates long stages (like Construction code generation) to a fresh context so they don't blow out the main context window. Multiple agents touching a stage is expressed with `support_agents`, not `mode` — the conductor invokes the lead first, then each supporter in turn.
+- **`mode` is the communication topology** — who talks to whom while the body runs. `inline` runs short stages in the conductor's own context with supporters as adopted voices; `subagent` delegates the lead to a fresh context (long stages like Construction code generation) and, when supporters are declared, dispatches each as a mutually-blind spoke; `pipeline` chains supporters in declared order, each seeing all upstream work; `mob` runs all supporters in parallel against the lead's draft with one bounded objection round. WHO participates is `support_agents`; HOW they participate is `mode`. `pipeline` and `mob` require non-empty `support_agents`.
 - **`for_each` names the iteration artifact.** The five Construction stages that run once per Unit declare `for_each: unit-of-work`; the other stages omit the field and run once. Aggregation is inferred from the graph, not declared.
 - **`lead_agent` and `support_agents` validate against `core/agents/*.md`.** There's no hardcoded list — adding an agent means dropping its file in that directory (see [Adding an Agent](03-adding-an-agent.md)).
 
@@ -52,7 +52,7 @@ Below the frontmatter, the body has three compartments, always in this order: `#
 
 - **`## Steps`** is the imperative prose the agent follows — load personas, read prior context, create the questions file, generate the artifacts, present the approval gate. This is where the stage's domain work lives, and it's the compartment you'll edit most when you change *what a stage does* without touching the graph.
 - **`## Sensors`** documents the deterministic checks bound to the stage's outputs. In `application-design.md` it explains that `required-sections` and `upstream-coverage` fire on the stage's markdown artifacts and what each one verifies. The binding itself is the `sensors:` list up in the frontmatter; this compartment is the human-readable description of what those bindings do. Sensors are covered in full in [Sensors](06-sensors.md).
-- **`## Learn`** documents the learning-loop ritual — the `memory.md` diary the agent keeps while the stage runs, and how kept observations route into practices and sensors at the approval gate. Crucially, this ritual writes into the *space memory layer* (`aidlc/spaces/<space>/memory/`) and the harness's sensor config (`.claude/sensors/`), never back into the stage file itself.
+- **`## Learn`** documents the learning-loop ritual — the `memory.md` diary the agent keeps while the stage runs, and how kept observations route into practices and sensors at the approval gate. Crucially, this ritual writes into the *space memory layer* (`aidlc/spaces/<active-space>/memory/`) and the harness's sensor config (`.claude/sensors/`), never back into the stage file itself.
 
 These three compartments were pre-declared so that v0.5.0's additions — the populated Sensors and Learn bindings — slotted in cleanly rather than forcing a body restructure. The full body model and what each compartment may contain is in [Three-compartment body model](../reference/15-stage-definition.md#three-compartment-body-model).
 

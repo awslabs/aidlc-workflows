@@ -180,8 +180,8 @@ const STATE_FEATURE = ["- **Scope**: feature", "- **Current Stage**: scope-defin
   "\n",
 );
 
-// Synthetic single-stage pair, field shapes copied EXACTLY from
-// handleSingleReport's spawnAuditAppend calls (aidlc-orchestrate.ts):
+// Synthetic single-stage pair, field shapes copied exactly from
+// handleSingleReport's append-batch transaction (aidlc-orchestrate.ts):
 // STAGE_STARTED carries Stage + Agent + Workflow; STAGE_COMPLETED carries
 // Stage + Details + Workflow. The Workflow value is the synthetic
 // `single-stage:<slug>` id that marks the pair as belonging to NO main

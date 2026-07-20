@@ -311,6 +311,9 @@ describe("sdk-drive calibration (known-answer)", () => {
       assistantText: "",
       resultEvent: undefined,
       askedQuestions: [],
+      timedOut: false,
+      stoppedAfterAskUserQuestion: false,
+      stoppedAfterToolResult: false,
     };
 
     // Asserting on a tool that never fired MUST throw — not silently pass.
@@ -324,6 +327,9 @@ describe("sdk-drive calibration (known-answer)", () => {
       assistantText: "",
       resultEvent: undefined,
       askedQuestions: [],
+      timedOut: false,
+      stoppedAfterAskUserQuestion: false,
+      stoppedAfterToolResult: false,
     };
     expect(() =>
       assertToolResultContains(empty, "Bash", DOCTOR_HEADER),
@@ -345,6 +351,9 @@ describe("sdk-drive calibration (known-answer)", () => {
       assistantText: "",
       resultEvent: undefined,
       askedQuestions: [],
+      timedOut: false,
+      stoppedAfterAskUserQuestion: false,
+      stoppedAfterToolResult: false,
     };
     expect(() =>
       assertToolResultContains(withBash, "Bash", DOCTOR_HEADER),

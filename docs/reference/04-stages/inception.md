@@ -23,35 +23,37 @@ off to Construction.
 > is shorthand for that dir; e.g.
 > `<record>/inception/requirements-analysis/requirements.md` expands to
 > `aidlc/spaces/default/intents/<YYMMDD>-<label>/inception/requirements-analysis/requirements.md`.
+> Reverse Engineering outputs are the exception: they live outside the intent
+> record in the durable, per-repository store
+> `aidlc/spaces/<active-space>/codekb/<repo>/`.
 > (Projects created before the per-intent layout used a flat tree; the engine
 > migrates them on first run.)
 
-The phase contains a mix of inline and subagent
-execution modes, including a two-step subagent delegation at Stage 2.1
-(aidlc-developer-agent for the code scan, then aidlc-architect-agent for the synthesis)
-and a parallel multi-agent dispatch at Stage 2.2 (Practices Discovery).
+The phase contains three dispatched topologies: the two-link Reverse
+Engineering pipeline at Stage 2.1, the Practices Discovery hub-and-spoke at
+Stage 2.2, and the User Stories mob at Stage 2.4.
 
 **Key characteristics of the Inception phase:**
 
 - The phase begins with a technical discovery stage (2.1 Reverse Engineering)
-  that uses subagent delegation, followed by a methodology-discovery stage
-  (2.2 Practices Discovery) that uses parallel multi-agent dispatch, then six
-  inline analysis and design stages.
-- Stage 2.1 uses a two-step subagent pattern: aidlc-developer-agent scans the code,
+  that uses a two-link pipeline, followed by a methodology-discovery stage
+  (2.2 Practices Discovery) that uses a subagent hub-and-spoke, then an inline
+  requirements stage, a mob story stage, and four inline design/planning stages.
+- Stage 2.1 uses a two-link pipeline: aidlc-developer-agent scans the code,
   then aidlc-architect-agent synthesizes the scan into 9 structured artifacts. It
   has an always-rerun policy for brownfield projects.
-- Stage 2.2 dispatches four agents in parallel (pipeline-deploy, quality,
-  developer, devsecops) for evidence-scan on brownfield, then runs interview
-  and affirmation gates. On affirmation, content is promoted from
+- Stage 2.2 runs the same topology on greenfield and brownfield work:
+  pipeline-deploy lead draft, mutually blind quality/developer/devsecops
+  spokes, human interview, then lead integration. On affirmation, content is promoted from
   `<record>/inception/practices-discovery/` to the space's memory layer —
-  `aidlc/spaces/<space>/memory/team.md` and `aidlc/spaces/<space>/memory/project.md` —
+  `aidlc/spaces/<active-space>/memory/team.md` and `project.md` —
   the cross-row promotion that makes this stage structurally distinct from every other stage.
 - Stage 2.7 produces `unit-of-work.md`, which defines the units that drive
   the phased construction flow in the Construction phase.
 - Stage 2.8 produces the execution plan that determines which Construction
-  stages run for each unit and in what order. It reads `aidlc/spaces/<space>/memory/team.md`
-  for the team's Way of Working (branching), Walking Skeleton stance, and
-  Deployment sections.
+  stages run for each unit and in what order. It reads
+  `aidlc/spaces/<active-space>/memory/{org,team,project}.md` for the team's Way
+  of Working, Walking Skeleton stance, and Deployment sections.
 - The phase boundary verification at Stage 2.8 validates Requirements to
   Stories to Architecture alignment.
 
@@ -75,10 +77,10 @@ and a parallel multi-agent dispatch at Stage 2.2 (Practices Discovery).
 
 | Stage | Name                   | Condition   | Lead Agent             | Support Agents                                       | Mode                             |
 |-------|------------------------|-------------|------------------------|------------------------------------------------------|----------------------------------|
-| 2.1   | Reverse Engineering    | CONDITIONAL | aidlc-developer-agent        | aidlc-architect-agent                                      | subagent (aidlc-developer-agent → aidlc-architect-agent, 2-step) |
-| 2.2   | Practices Discovery    | CONDITIONAL | aidlc-pipeline-deploy-agent  | aidlc-quality-agent, aidlc-developer-agent, aidlc-devsecops-agent      | inline (parallel multi-Task on brownfield) |
+| 2.1   | Reverse Engineering    | CONDITIONAL | aidlc-developer-agent        | aidlc-architect-agent                                      | pipeline (aidlc-developer-agent → aidlc-architect-agent, 2-link chain) |
+| 2.2   | Practices Discovery    | CONDITIONAL | aidlc-pipeline-deploy-agent  | aidlc-quality-agent, aidlc-developer-agent, aidlc-devsecops-agent      | subagent (hub-and-spoke on greenfield and brownfield) |
 | 2.3   | Requirements Analysis  | ALWAYS      | aidlc-product-agent          | --                                                   | inline                           |
-| 2.4   | User Stories           | CONDITIONAL | aidlc-product-agent          | aidlc-design-agent                                         | inline                           |
+| 2.4   | User Stories           | CONDITIONAL | aidlc-product-agent          | aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent | mob                              |
 | 2.5   | Refined Mockups        | CONDITIONAL | aidlc-design-agent           | aidlc-product-agent                                        | inline                           |
 | 2.6   | Application Design     | CONDITIONAL | aidlc-architect-agent        | aidlc-aws-platform-agent, aidlc-design-agent               | inline                           |
 | 2.7   | Units Generation       | ALWAYS      | aidlc-architect-agent        | aidlc-delivery-agent                                       | inline                           |
@@ -97,15 +99,15 @@ and a parallel multi-agent dispatch at Stage 2.2 (Practices Discovery).
 | Condition        | CONDITIONAL -- brownfield detected; always rerun for freshness         |
 | Lead Agent       | aidlc-developer-agent                                                        |
 | Support Agents   | aidlc-architect-agent                                                        |
-| Mode             | subagent (two-step: aidlc-developer-agent then aidlc-architect-agent)              |
+| Mode             | pipeline (2-link chain: aidlc-developer-agent scans, aidlc-architect-agent synthesizes and writes) |
 | Completion Emoji | (uses stage-protocol.md completion template)                           |
 
 ### Purpose
 
 Reverse Engineering performs a comprehensive analysis of the existing codebase
-for brownfield projects. It uses a two-step subagent delegation pattern:
+for brownfield projects. It runs as a two-link pipeline (`mode: pipeline`):
 first, the aidlc-developer-agent scans the entire codebase; then, the aidlc-architect-agent
-synthesizes the scan results into 9 structured artifacts. These artifacts
+synthesizes the scan results into 9 structured artifacts and writes them. These artifacts
 provide the technical foundation that all subsequent Inception and Construction
 stages build upon.
 
@@ -121,7 +123,9 @@ artifacts reflect the current state of the codebase, not a stale snapshot.
 
 1. **Check Conditions** -- Read `<record>/aidlc-state.md` to confirm the
    project type is brownfield. If the project is not brownfield, skip this
-   stage and update `aidlc-state.md` with skip reason.
+   stage with `aidlc-orchestrate.ts report --stage reverse-engineering
+   --result skipped --reason "greenfield workspace has no existing codebase to
+   reverse engineer"`. The engine records `[S]` and routes onward atomically.
 
 2. **Developer Code Scan** -- Delegate to Task tool with the aidlc-developer-agent
    subagent (`subagent_type="aidlc-developer-agent"`). Include aidlc-developer-agent persona from
@@ -139,28 +143,34 @@ artifacts reflect the current state of the codebase, not a stale snapshot.
    - Technical debt signals
 
    Developer returns structured scan results following the Developer Code Scan
-   Template in `templates/re-artifacts.md`.
+   Template in
+   `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`.
 
 3. **Architect Synthesis** -- Delegate to Task tool with the aidlc-architect-agent
    subagent (`subagent_type="aidlc-architect-agent"`). Include aidlc-architect-agent persona from
    `agents/aidlc-architect-agent.md` and knowledge from
    `.claude/knowledge/aidlc-architect-agent/` in the delegation prompt. Pass
    the complete developer scan results as context. Include workspace state from
-   `aidlc-state.md`.
+   `aidlc-state.md`. Resolve the repository's output directory with
+   `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts codekb-path --repo <repo>` and
+   pass that exact path to the architect.
 
    The architect synthesizes scan results into the 9 output artifacts (see
-   Outputs below).
+   Outputs below) in the resolved space-level codekb directory.
 
-4. **Update State** -- Mark Reverse Engineering as `[x]` completed in
-   `<record>/aidlc-state.md`. Update current stage and next stage.
+4. **Prepare Completion** -- Verify all nine artifacts exist. Do not edit
+   `aidlc-state.md`; lifecycle completion belongs to the report after the gate.
 
-5. **Present Completion & Request Approval** -- Display completion summary
-   of all 9 artifacts produced. Standard approval gate: Approve (continue to
-   Requirements Analysis) / Request Changes.
+5. **Present Completion & Request Approval** -- Open the gate with
+   `aidlc-orchestrate.ts report --stage reverse-engineering --result
+   awaiting-approval`, display all nine artifacts, then report the human's
+   approved/rejected outcome through the same engine command.
 
 ### Outputs
 
-All 9 artifacts written to `<record>/inception/reverse-engineering/`:
+All 9 artifacts for each repository are written to
+`aidlc/spaces/<active-space>/codekb/<repo>/`, using the exact directory printed
+by `aidlc-utility.ts codekb-path --repo <repo>`:
 
 | #  | File                             | Contents                                                    |
 |----|----------------------------------|-------------------------------------------------------------|
@@ -185,9 +195,9 @@ Standard 2-option gate: **Approve** (continue to Requirements Analysis) /
   projects even when prior artifacts exist. This is a deliberate deviation from
   the upstream reference, documented in SKILL.md's "Deliberate Deviations"
   section.
-- **Two-step subagent pattern:** The aidlc-developer-agent performs the raw code
-  scan, then the aidlc-architect-agent synthesizes the scan into structured
-  artifacts. This separation ensures the scan is thorough (developer
+- **Two-link pipeline:** The aidlc-developer-agent performs the raw code
+  scan (link 1, the lead), then the aidlc-architect-agent synthesizes the scan
+  into structured artifacts and writes them (link 2, the final link). This separation ensures the scan is thorough (developer
   perspective) and the synthesis is architecturally informed (architect
   perspective).
 - For bugfix and refactor scopes, this stage always executes (even for what
@@ -213,35 +223,37 @@ Standard 2-option gate: **Approve** (continue to Requirements Analysis) /
 | Condition        | CONDITIONAL -- always rerun for freshness on EXECUTE scopes            |
 | Lead Agent       | aidlc-pipeline-deploy-agent                                                  |
 | Support Agents   | aidlc-quality-agent, aidlc-developer-agent, aidlc-devsecops-agent                        |
-| Mode             | inline (with parallel multi-Task dispatch on brownfield)               |
+| Mode             | subagent (lead draft → three mutually blind spokes → human interview → lead integration) |
 | Completion Emoji | (uses stage-protocol.md completion template)                           |
 
 ### Purpose
 
 Practices Discovery is the only stage in AI-DLC that writes to both rows of
-the two-axis configuration model. It discovers a team's branching strategy,
+the two-axis configuration model. It discovers a team's way of working,
 walking-skeleton stance, testing posture, deployment cadence, and code-style
-rules from evidence (brownfield) or via AskUserQuestion using `org.md`
-defaults (greenfield), drafts proposals at `<record>/inception/practices-discovery/`,
-and at an affirmation gate **promotes** the affirmed content into team-authored
-harness config: `aidlc/spaces/<space>/memory/team.md` and
-`aidlc/spaces/<space>/memory/project.md`. The affirmation gate is
-what makes the cross-row write legitimate -- without it the framework would
-put words in the team's mouth in its own harness config.
+rules. Brownfield runs use repository and Reverse Engineering evidence;
+greenfield runs seed the lead draft from active-space `org.md`. Both use the
+same subagent hub-and-spoke: pipeline-deploy lead draft, mutually blind
+quality/developer/devsecops contributions, human interview, then lead
+integration. After the human approves at the affirmation gate, the content is
+promoted into `aidlc/spaces/<active-space>/memory/team.md` and `project.md`
+before the stage reports approval.
 
 ### Inputs
 
 - `<record>/aidlc-state.md` (project type)
-- Brownfield only: reverse-engineering's 9 artifacts (business-overview,
+- Brownfield only: reverse-engineering's 9 artifacts from
+  `aidlc/spaces/<active-space>/codekb/<repo>/` (business-overview,
   architecture, code-structure, api-documentation, component-inventory,
   technology-stack, dependencies, code-quality-assessment,
   reverse-engineering-timestamp)
-- `aidlc/spaces/<space>/memory/org.md` (greenfield default suggestions)
+- `aidlc/spaces/<active-space>/memory/{org,team,project}.md` (defaults and prior affirmations)
 - `.claude/knowledge/aidlc-pipeline-deploy-agent/branching-strategies.md` (lead-agent KB)
 
 ### Outputs
 
-Four artifacts written to `<record>/inception/practices-discovery/`:
+Four lead artifacts plus three spoke contributions are written to
+`<record>/inception/practices-discovery/`:
 
 - `team-practices.md` -- descriptive, team-voice prose. Five sections matching
   `team.md` headings: Way of Working, Walking Skeleton, Testing Posture,
@@ -250,36 +262,65 @@ Four artifacts written to `<record>/inception/practices-discovery/`:
   (`ALWAYS …` rules) and Forbidden (`NEVER …` rules).
 - `evidence.md` -- per-agent finding summary; freshness trail for re-runs.
 - `practices-discovery-timestamp.md` -- run timestamp + commit hash.
+- `contributions/aidlc-{quality,developer,devsecops}-agent.md` -- one
+  identity-marked contribution from each mutually blind spoke; these files are
+  engine-checked completion evidence.
 
 On affirmation, content is promoted to:
 
-- `aidlc/spaces/<space>/memory/team.md` -- section-replace via `replaceSection` (re-runs
+- `aidlc/spaces/<active-space>/memory/team.md` -- section-replace via `replaceSection` (re-runs
   overwrite section content rather than accumulate).
-- `aidlc/spaces/<space>/memory/project.md` -- append-under-heading
+- `aidlc/spaces/<active-space>/memory/project.md` -- append-under-heading
   via `appendUnderHeading` (rules accumulate; date stamps distinguish them).
 
 ### Steps
 
-1. Check conditions: read `aidlc-state.md` to classify greenfield vs brownfield.
-   Brownfield runs Step 2; greenfield skips it.
-2. **Discover (brownfield only)** -- the conductor issues four parallel `Task`
-   invocations in a single assistant message: aidlc-pipeline-deploy-agent
-   (branching), aidlc-quality-agent (testing posture), aidlc-developer-agent (code patterns),
-   aidlc-devsecops-agent (CI/security). Each agent reads its own KB, scans evidence,
-   returns a finding. The conductor collects all four findings before proceeding.
-3. **Interview (always)** -- AskUserQuestion for evidence-gaps. Brownfield: ask
-   only the gaps. Greenfield: ask all five practice areas with `org.md` defaults
-   as suggested-answer text. Re-run pre-fills from prior `team.md` content.
-4. Consolidate -- write four artifacts; emit `PRACTICES_DISCOVERED`.
-5. Affirmation gate -- AskUserQuestion presents both drafts. Options:
-   Approve / Edit-then-Approve / Reject-and-rewrite-from-scratch.
-6. Promote (on Approve) -- section-replace the five practice sections in
-   `aidlc/spaces/<space>/memory/team.md`; append rules under `## Mandated` and
-   `## Forbidden` in `aidlc/spaces/<space>/memory/project.md` with date stamps.
-   Atomicity: write `project.md` first, then `team.md`. On failure,
-   emit `PRACTICES_OVERRIDE` and abort without recording PRACTICES_AFFIRMED.
-7. Emit `PRACTICES_AFFIRMED`; update state checkbox; update
-   `Practices Affirmed Timestamp` (v7 state template field, milestone 6).
+1. **Classify Inputs** -- Read `aidlc-state.md` to classify greenfield vs
+   brownfield and resolve the active space. Brownfield loads Reverse
+   Engineering artifacts and repository evidence. Greenfield loads defaults
+   from `memory/org.md`. A re-run also loads prior `team.md` and `project.md`.
+2. **Lead Draft** -- Dispatch `aidlc-pipeline-deploy-agent`. It writes the
+   initial `team-practices.md`, `discovered-rules.md`, and `evidence.md`.
+   Brownfield drafts from observed evidence; greenfield drafts from org
+   defaults and clearly marks every unconfirmed assumption.
+3. **Three Mutually Blind Spokes** -- In one parallel batch, dispatch
+   `aidlc-quality-agent`, `aidlc-developer-agent`, and
+   `aidlc-devsecops-agent` against the lead draft. Briefs contain the draft
+   paths but no other spoke's output. Each writes its own identity-marked
+   contribution file under `contributions/`; it does not edit the lead's
+   artifacts.
+4. **Human Interview** -- Present structured questions after all three spokes
+   return. Brownfield asks evidence gaps and policy judgments; greenfield asks
+   all five practice areas with org defaults as suggestions. Re-runs pre-fill
+   prior affirmed statements. Log every question and exact answer.
+5. **Lead Integration** -- Dispatch the pipeline-deploy lead again with the
+   draft, all three contribution paths, and the interview answers. The lead
+   alone integrates the final artifacts and emits `PRACTICES_DISCOVERED`.
+6. **Open the Affirmation Gate** -- Call `aidlc-orchestrate.ts report --stage
+   practices-discovery --result awaiting-approval` before asking. Present the
+   drafts with exactly two options: **Approve** / **Request Changes**. A
+   Request Changes response is reported through `--result rejected`; no
+   promotion occurs.
+7. **Promote After Human Approval** -- Only after the human chooses Approve,
+   run the deterministic promotion into active-space `team.md` and
+   `project.md`. It writes `project.md` first and `team.md` second and emits
+   `PRACTICES_AFFIRMED`. If promotion fails, it emits `PRACTICES_OVERRIDE`,
+   leaves the stage `[?]` with the gate open, and does not report approval.
+8. **Verify Receipt, Then Report** -- Successful promotion atomically records
+   `Practices Affirmed Timestamp` and the matching `PRACTICES_AFFIRMED` audit
+   receipt. Then call
+   `aidlc-orchestrate.ts report --stage practices-discovery --result
+   approved --user-input "Approve"`. The engine verifies all three
+   contribution files and the current-attempt receipt before completing and
+   routing.
+
+### Approval Gate
+
+Standard 2-option gate: **Approve** / **Request Changes**. Approve is held
+open while promotion runs; only after promotion and the affirmed timestamp
+succeed may the conductor report
+`--result approved --user-input "<exact choice>"`. Promotion failure leaves the
+gate open and the stage incomplete.
 
 ### Notes
 
@@ -291,6 +332,12 @@ On affirmation, content is promoted to:
   `## Deployment`, `## Code Style`). The stage reads each section from
   `org.md` via `extractMarkdownSection` with the matching Title Case
   heading and section-replaces the same heading in `team.md`.
+- On resume, keep the lead draft and every existing contribution file.
+  Dispatch only missing spokes, then continue with the interview and lead
+  integration. Do not repeat completed support work.
+- Contribution evidence is mandatory. Approval is refused if any quality,
+  developer, or devsecops contribution is missing or has the wrong identity
+  marker.
 
 ---
 
@@ -324,7 +371,7 @@ large scope with significant unknowns.
 ### Inputs
 
 - Reverse Engineering artifacts from Stage 2.1
-  (`<record>/inception/reverse-engineering/`), if brownfield
+  (`aidlc/spaces/<active-space>/codekb/<repo>/`), if brownfield
 - User's project description from the intent's `audit/` shards
 
 ### Steps
@@ -334,7 +381,7 @@ large scope with significant unknowns.
    `.claude/knowledge/aidlc-product-agent/`.
 
 2. **Load Prior Context** -- If brownfield: read RE artifacts from
-   `<record>/inception/reverse-engineering/`. Read user's project
+   `aidlc/spaces/<active-space>/codekb/<repo>/`. Read user's project
    description from the intent's `audit/` shards.
 
 3. **Analyze User Request** -- Assess the request for:
@@ -400,16 +447,17 @@ large scope with significant unknowns.
     - Out of scope -- explicitly excluded items
     - Open questions -- remaining uncertainties for later stages
 
-11. **Update State** -- Mark Requirements Analysis as `[x]` completed in
-    `<record>/aidlc-state.md`. Update current and next stage.
+11. **Prepare Completion** -- Verify the requirements artifacts. Do not edit
+    `<record>/aidlc-state.md`; the engine owns completion and routing.
 
 12. **Present Completion & Request Approval** -- Display completion message
     with :mag: emoji and review path. The approval gate has two variants:
 
     **If User Stories is set to SKIP in the execution state:** 3-option gate:
     Approve / Request Changes / Add User Stories (include the currently
-    skipped User Stories stage). If "Add User Stories" is selected, update
-    `aidlc-state.md` to mark User Stories as pending execution.
+    skipped User Stories stage). If "Add User Stories" is selected, run
+    `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts recompose --add user-stories`;
+    do not edit the checkbox directly.
 
     **If User Stories is NOT set to SKIP:** Standard 2-option gate: Approve /
     Request Changes.
@@ -457,8 +505,8 @@ Conditional gate format:
 | Stage #          | 2.4                                                                    |
 | Condition        | CONDITIONAL -- execute for user-facing features, multiple personas, complex business logic, or cross-team work |
 | Lead Agent       | aidlc-product-agent                                                          |
-| Support Agents   | aidlc-design-agent                                                           |
-| Mode             | inline                                                                 |
+| Support Agents   | aidlc-design-agent, aidlc-developer-agent, aidlc-quality-agent               |
+| Mode             | mob (the 2.5.0 mob-elaboration showcase)                               |
 | Completion Emoji | :books:                                                                |
 
 ### Purpose
@@ -469,24 +517,28 @@ structure: PART 1 creates a story plan with clarifying questions, and PART 2
 generates the actual stories and personas. The plan and stories are presented
 together at the completion gate for combined review.
 
-The aidlc-design-agent provides supporting perspective on user experience. This is a
-deliberate addition not in the upstream reference, documented in SKILL.md's
-"Deliberate Deviations" section.
+This stage is the mob-elaboration showcase (mode: mob): the Product Manager
+leads, and the design, developer, and quality agents are dispatched as
+independent collaborators against the lead's draft - blind round, integrate,
+one bounded objection round - with the Product Leader reviewing afterwards.
+The aidlc-design-agent's user-experience perspective is a deliberate addition
+not in the upstream reference, documented in SKILL.md's "Deliberate
+Deviations" section.
 
 ### Inputs
 
 - `<record>/inception/requirements-analysis/requirements.md`
-- RE artifacts from Stage 2.1 (`<record>/inception/reverse-engineering/`),
+- RE artifacts from Stage 2.1
+  (`aidlc/spaces/<active-space>/codekb/<repo>/`),
   if brownfield
 
 ### Steps
 
-1. **Load Agent Personas** -- Load aidlc-product-agent persona from
+1. **Load the Lead Persona** -- Load aidlc-product-agent persona from
    `agents/aidlc-product-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-product-agent/`. Load aidlc-design-agent persona from
-   `agents/aidlc-design-agent.md` and knowledge from
-   `.claude/knowledge/aidlc-design-agent/` for supporting perspective on user
-   experience.
+   `.claude/knowledge/aidlc-product-agent/`. The support agents (design,
+   developer, quality) are NOT loaded inline - this is a mob stage; they are
+   dispatched as independent collaborators during generation.
 
 2. **Validate User Stories Are Needed** -- Assess whether user stories add
    value for this project:
@@ -499,13 +551,14 @@ deliberate addition not in the upstream reference, documented in SKILL.md's
    documenting: decision (Execute or Skip), rationale, factors considered,
    key value areas (if executing) or alternative coverage (if skipping).
 
-   If skipping, update `aidlc-state.md` with skip reason and proceed to next
-   stage.
+   If skipping, call `aidlc-orchestrate.ts report --stage user-stories
+   --result skipped --reason "<reason from the assessment>"`. The engine
+   records `[S]` and routes before artifact or ensemble-evidence checks.
 
 3. **Load Prior Context** -- Read
    `<record>/inception/requirements-analysis/requirements.md`. If brownfield,
    read relevant RE artifacts from
-   `<record>/inception/reverse-engineering/`.
+   `aidlc/spaces/<active-space>/codekb/<repo>/`.
 
 **PART 1: Planning**
 
@@ -541,14 +594,14 @@ deliberate addition not in the upstream reference, documented in SKILL.md's
 
 **PART 2: Generation**
 
-8. **Execute Plan -- Generate Stories and Personas** -- Based on the approved
-   plan, generate:
+8. **Execute Plan -- Generate Stories and Personas via the Mob**:
 
+   **Lead draft.** The aidlc-product-agent first drafts
    `<record>/inception/user-stories/personas.md`:
    - User persona definitions (name, role, goals, pain points, context)
    - Persona relationships and priority ranking
 
-   `<record>/inception/user-stories/stories.md`:
+   and `<record>/inception/user-stories/stories.md`:
    - User stories in standard format: "As a [persona], I want [goal], so that
      [benefit]"
    - Acceptance criteria for each story
@@ -556,8 +609,21 @@ deliberate addition not in the upstream reference, documented in SKILL.md's
    - Story dependencies and relationships
    - INVEST compliance notes
 
-9. **Update State** -- Mark User Stories as `[x]` completed in
-   `<record>/aidlc-state.md`. Update current and next stage.
+   **Mutually blind support contributions.** Dispatch aidlc-design-agent,
+   aidlc-developer-agent, and aidlc-quality-agent in one parallel round against
+   the lead draft. Each brief contains the draft, Q&A, and requirements paths,
+   but no sibling contribution. Each support agent writes its identity-marked
+   file under
+   `<record>/inception/user-stories/contributions/<agent-slug>.md`.
+
+   **Lead integration.** The aidlc-product-agent integrates all three
+   contributions into `personas.md` and `stories.md` before the completion
+   gate. Judgment calls go to the human mid-stage; knowledge disputes get one
+   bounded objection round. Maintained dissent is quoted at the gate.
+
+9. **Prepare Completion** -- Verify the mob artifacts and all three
+   collaborator contribution files. Do not edit state; report the gate outcome
+   through `aidlc-orchestrate.ts`.
 
 10. **Present Completion & Request Approval** -- Display completion message
     with :books: emoji, summary of personas and stories produced, and review
@@ -574,6 +640,7 @@ All artifacts written to `<record>/inception/user-stories/`:
 | `personas.md`                  | User persona definitions, relationships, priority ranking    |
 | `user-stories-assessment.md`   | Execute/skip decision with rationale and factors considered   |
 | `user-stories-questions.md`    | Story plan with clarifying questions using `[Answer]:` tags (input artifact) |
+| `contributions/aidlc-{design,developer,quality}-agent.md` | Mutually blind support contributions integrated by the lead before the gate |
 
 ### Approval Gate
 
@@ -590,6 +657,8 @@ Changes**.
   The formal MVP boundary is set during Delivery Planning (Stage 2.8).
 - The `user-stories-assessment.md` artifact is always produced, even when the
   stage is skipped, to document the rationale.
+- The three identity-marked contribution files are mandatory ensemble evidence;
+  approval is refused until the lead has integrated all three.
 - Stories produced here are consumed by Refined Mockups (2.5), Application
   Design (2.6), Units Generation (2.7), and Delivery Planning (2.8).
 - The aidlc-design-agent support is a deliberate addition for UX-informed
@@ -665,8 +734,8 @@ This stage is typically skipped if Stage 1.6 (Rough Mockups) was also skipped.
    responsive behavior specification, and accessibility compliance checklist.
    For non-UI initiatives, create API developer experience specification.
 
-6. **Update State** -- Mark 2.5 Refined Mockups as `[x]` completed in
-   `<record>/aidlc-state.md`.
+6. **Prepare Completion** -- Verify the refined-mockup artifacts. Do not edit
+   state; report the gate outcome through `aidlc-orchestrate.ts`.
 
 7. **Present Completion & Request Approval** -- Display completion message
    with :art: emoji. Standard approval gate (Approve / Request Changes).
@@ -768,14 +837,16 @@ upstream reference, documented in SKILL.md's "Deliberate Deviations" section.
 5. **Generate Design Artifacts** -- Create 5 design artifacts (see Outputs
    below).
 
-6. **Update State** -- Mark Application Design as `[x]` completed in
-   `<record>/aidlc-state.md`. Update current and next stage.
+6. **Prepare Completion** -- Verify the design artifacts. Do not edit state;
+   report the gate outcome through `aidlc-orchestrate.ts`.
 
 7. **Present Completion & Request Approval** -- Display completion message
    with :building_construction: emoji, summary of design artifacts, key
    architectural decisions highlighted, and review path. 3-option approval
    gate: Approve / Request Changes / Add Units Generation (if it was skipped
-   in execution plan).
+   in execution plan). Selecting Add Units Generation runs
+   `bun {{HARNESS_DIR}}/tools/aidlc-utility.ts recompose --add units-generation`;
+   it never edits the state checkbox directly.
 
 ### Outputs
 
@@ -802,7 +873,8 @@ Special 3-option gate:
 - **Approve** -- Continue to next stage
 - **Request Changes** -- Provide revision feedback
 - **Add Units Generation** -- Include the currently skipped Units Generation
-  stage (if it was skipped in the execution plan)
+  stage (if it was skipped in the execution plan) via
+  `aidlc-utility.ts recompose --add units-generation`
 
 ### Notes
 
@@ -911,9 +983,9 @@ actual unit artifacts.
 6. **Execute Plan -- Generate Unit Artifacts** -- Based on the approved plan,
    generate the 3 output artifacts (see Outputs below).
 
-7. **Update State** -- Mark Units Generation as `[x]` completed in
-   `<record>/aidlc-state.md`. Update current and next stage. Record unit
-   list for the Construction phase phased construction flow.
+7. **Prepare Completion** -- Verify the unit artifacts and record the unit
+   list for Construction. Do not edit state; report the gate outcome through
+   `aidlc-orchestrate.ts`.
 
 8. **Present Completion & Request Approval** -- Display completion message
    with :wrench: emoji, summary of units defined, dependencies mapped, stories
@@ -1071,8 +1143,9 @@ All Inception phase artifacts:
    - Architecture covers all stories
    - Write results to `<record>/verification/phase-check-inception.md`
 
-7. **Update State** -- Mark 2.8 Delivery Planning as `[x]` completed in
-   `<record>/aidlc-state.md`. Update Lifecycle Phase to CONSTRUCTION.
+7. **Prepare Completion** -- Verify the delivery and boundary-verification
+   artifacts. Do not write the phase or stage state; the approval report owns
+   the atomic Inception-to-Construction transition.
 
 8. **Present Completion & Request Approval** -- Display completion message
    with :calendar: emoji. Approval gate: Approve (proceed to Construction) /
@@ -1139,10 +1212,11 @@ Changes**. The user can override stage inclusion/exclusion at this gate.
 The Inception phase produces the following key outputs that carry forward into
 Construction and Operation:
 
-1. **Reverse Engineering Artifacts** (2.1) -- 9 artifacts documenting the
-   existing codebase: business overview, architecture, code structure, API
-   documentation, component inventory, technology stack, dependencies, code
-   quality assessment, and timestamp. (Brownfield projects only.)
+1. **Reverse Engineering Artifacts** (2.1) -- 9 artifacts per repository at
+   `aidlc/spaces/<active-space>/codekb/<repo>/`, documenting the existing
+   codebase: business overview, architecture, code structure, API documentation,
+   component inventory, technology stack, dependencies, code quality
+   assessment, and timestamp. (Brownfield projects only.)
 2. **Requirements Document** (2.3) -- Formal requirements: functional,
    non-functional, constraints, assumptions, out-of-scope, open questions.
 3. **User Stories and Personas** (2.4) -- User stories with acceptance

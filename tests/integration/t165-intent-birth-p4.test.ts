@@ -89,6 +89,21 @@ const intentsDir = (p: string, space = "default"): string =>
 // Auto-birth on an empty workspace
 // ============================================================
 describe("t164 auto-birth (intent-birth) on an empty workspace", () => {
+  test("intent-birth help flags and the init alias are read-only", () => {
+    for (const args of [
+      ["intent-birth", "--help"],
+      ["intent-birth", "-h"],
+      ["init", "--help"],
+    ]) {
+      const r = util(args);
+      expect(r.status, args.join(" ")).toBe(0);
+      expect(r.stdout, args.join(" ")).toContain(
+        "Usage: aidlc-utility intent-birth --scope <scope>",
+      );
+    }
+    expect(existsSync(intentsDir(proj))).toBe(false);
+  });
+
   test("birth mints a per-intent record under spaces/default/intents/ with state", () => {
     const r = util(["intent-birth", "--scope", "poc"]);
     expect(r.status).toBe(0);

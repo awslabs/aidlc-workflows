@@ -131,10 +131,10 @@ Some stages are **conditional** — they may be skipped based on your scope. Whe
 
 ## Inception Phase
 
-Inception elaborates requirements and designs the solution. Stage 2.1 (Reverse Engineering) is notable because it runs as a **subagent** — the conductor delegates to the aidlc-developer-agent for a code scan, then the aidlc-architect-agent for synthesis. This stage runs only for **brownfield** projects (existing codebases).
+Inception elaborates requirements and designs the solution. Stage 2.1 (Reverse Engineering) is notable because it runs as a **pipeline** (a 2-link chain) — the conductor delegates to the aidlc-developer-agent for a code scan, then the aidlc-architect-agent for synthesis and the artifact writes. This stage runs only for **brownfield** projects (existing codebases).
 
 ```
-─── Stage 2.1: Reverse Engineering (subagent) ──────────────────────────────
+─── Stage 2.1: Reverse Engineering (pipeline) ─────────────────────────────
 Delegating to aidlc-developer-agent for code scan...
 [Running in background — no interaction needed]
 ...
@@ -202,15 +202,15 @@ sequenceDiagram
     A->>A: Execute stage steps
     A->>U: Present completion summary
     U->>A: Approval gate response
-    A->>O: Update state file
-    O->>O: Advance to next stage
+    A->>O: Report approval or skip outcome
+    O->>O: Engine updates state and routes
 ```
 
 <!-- Text fallback: You invoke /aidlc. The conductor reads the stage file and loads the agent persona with knowledge. The agent presents an interaction mode, you provide input, the agent executes steps and presents a completion summary. You respond at the approval gate, and the conductor reports the outcome so the engine advances state. -->
 
 ### Subagent Delegation
 
-Two stages (2.1 Reverse Engineering, 3.5 Code Generation) run as subagents. The conductor delegates to a background subprocess; you do not interact during execution. Workspace detection (0.2) now runs deterministically inside `aidlc-utility intent-birth` rather than as a subagent.
+Four stages dispatch to background subagents — 2.1 Reverse Engineering (pipeline: developer scan, then architect synthesis-and-write), 2.2 Practices Discovery (subagent hub-and-spoke: lead draft, three mutually blind support reviews, human interview, lead integration), 2.4 User Stories (mob: collaborators contribute in parallel, and judgment-call disagreements may surface to you mid-stage), and 3.5 Code Generation (subagent). Practices Discovery deliberately brings you into the room between the spokes and final integration; the User Stories mob may also surface judgment calls mid-stage. Workspace detection (0.2) runs deterministically inside `aidlc-utility intent-birth` rather than as a subagent.
 
 ```mermaid
 sequenceDiagram
@@ -225,7 +225,7 @@ sequenceDiagram
     T-->>O: Return structured summary
     O->>U: Present completion summary
     U->>O: Approval gate response
-    O->>O: Update state + advance
+    O->>O: Report outcome; engine updates state + advances
 ```
 
 <!-- Text fallback: The conductor reads the stage file, prepares context, and delegates via the Task tool. The subagent executes autonomously without user interaction and returns a structured summary. The conductor presents the summary to you, you respond at the approval gate, and the conductor reports the outcome so the engine advances state. -->
@@ -247,7 +247,7 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/
 └── verification/           # Phase boundary verification reports
 ```
 
-(Team knowledge lives one level up, at the space level in `aidlc/spaces/<space>/knowledge/` — a sibling of `intents/` — so it accumulates across every intent. Team-affirmed practices and learnings live alongside it in the space's memory layer at `aidlc/spaces/<space>/memory/`, where they likewise persist across intents.)
+(Team knowledge lives one level up, at the space level in `aidlc/spaces/<space>/knowledge/` — a sibling of `intents/` — so it accumulates across every intent. Team-affirmed practices and learnings live alongside it in the active space's memory layer at `aidlc/spaces/<active-space>/memory/`, where they likewise persist across intents.)
 
 ---
 

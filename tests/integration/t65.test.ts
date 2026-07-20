@@ -89,7 +89,11 @@ interface Aggregate {
   forEachNonConstruction: string[];
   forEachValue: string[];
   usesSubagent: boolean;
+  subagentStages: string[];
   usesAgentTeam: boolean;
+  mobStages: string[];
+  pipelineStages: string[];
+  ensembleWithoutSupport: string[];
   producesCount: number;
   badSlugs: Array<{ slug: string; artifact: unknown }>;
   missingProducers: Array<{ slug: string; artifact: string }>;
@@ -167,7 +171,20 @@ beforeAll(() => {
 
   const forEach = parsed.filter((p) => typeof p.obj.for_each === "string");
   const usesSubagent = parsed.some((p) => p.obj.mode === "subagent");
+  const subagentStages = parsed
+    .filter((p) => p.obj.mode === "subagent")
+    .map((p) => p.slug)
+    .sort();
   const usesAgentTeam = parsed.some((p) => p.obj.mode === "agent-team");
+  // 2.5.0 ensemble census: the mob showcase is exactly user-stories; every
+  // pipeline/mob stage must carry support agents (schema coupling, asserted
+  // here against the real tree as well).
+  const mobStages = parsed.filter((p) => p.obj.mode === "mob").map((p) => p.slug);
+  const pipelineStages = parsed.filter((p) => p.obj.mode === "pipeline").map((p) => p.slug);
+  const ensembleWithoutSupport = parsed
+    .filter((p) => p.obj.mode === "mob" || p.obj.mode === "pipeline")
+    .filter((p) => !Array.isArray(p.obj.support_agents) || p.obj.support_agents.length === 0)
+    .map((p) => p.slug);
 
   const produces = new Set<string>();
   const badSlugs: Aggregate["badSlugs"] = [];
@@ -369,7 +386,11 @@ beforeAll(() => {
     forEachNonConstruction: forEach.filter((p) => p.phase !== "construction").map((p) => p.slug),
     forEachValue: [...new Set(forEach.map((p) => p.obj.for_each as string))],
     usesSubagent,
+    subagentStages,
     usesAgentTeam,
+    mobStages,
+    pipelineStages,
+    ensembleWithoutSupport,
     producesCount: produces.size,
     badSlugs,
     missingProducers,
@@ -448,9 +469,32 @@ describe("t65 for_each + mode (in-process)", () => {
     expect(agg.usesSubagent).toBe(true);
   });
 
+  test("mode 'subagent' used by exactly code-generation and practices-discovery", () => {
+    expect(agg.subagentStages).toEqual([
+      "code-generation",
+      "practices-discovery",
+    ]);
+  });
+
   // .sh #11: "mode 'agent-team' reserved — used zero times"
   test("mode 'agent-team' reserved — used zero times", () => {
     expect(agg.usesAgentTeam).toBe(false);
+  });
+
+  // 2.5.0: the mob showcase ships on exactly user-stories; every ensemble
+  // stage (pipeline/mob) carries support agents.
+  test("mode 'mob' used by exactly user-stories (the 2.5.0 showcase)", () => {
+    expect(agg.mobStages).toEqual(["user-stories"]);
+  });
+
+  // reverse-engineering's two-link body (developer scans, architect
+  // synthesizes and writes) IS the chain topology; 2.5.0 re-modes it to say so.
+  test("mode 'pipeline' used by exactly reverse-engineering", () => {
+    expect(agg.pipelineStages).toEqual(["reverse-engineering"]);
+  });
+
+  test("no pipeline/mob stage without support agents", () => {
+    expect(agg.ensembleWithoutSupport).toEqual([]);
   });
 });
 

@@ -1,16 +1,10 @@
 // covers: stage:ideation/approval-handoff
 //
-// t-tui-t101-memory-lifecycle.serial.tui.test.ts — drive the per-stage
-// memory.md START→APPROVAL lifecycle (v0.5.0 milestone 13) through a REAL claude TUI.
-// PATTERN A (land + render, NOT answer-and-advance): jump to approval-handoff,
-// prove memory.md is faithfully created at stage start, WAIT for the approval
-// gate to PAINT, and assert the landed state + the rendered gate WHILE PAUSED on
-// it — never answering (answering would advance the stage and break the
-// Current-Stage==approval-handoff assertion; and the memory.md terminator fires
-// at 0 answers before the gate paints — see the PATTERN A note at the wait
-// below). A faithful rewrite of tests/integration/t101-stage-memory-lifecycle.sh,
-// EQUAL-OR-STRONGER on the same on-disk surface, with the rendered-gate value-add
-// ADDED.
+// t-tui-t101-memory-lifecycle.serial.test.ts — drive the per-stage memory.md
+// START→APPROVAL lifecycle through a REAL Claude TUI. The shared answer-gate
+// loop answers any preparatory menus, then stops at the first numbered
+// Approve / Request Changes menu without answering it. This leaves the workflow
+// paused on approval-handoff while proving the real approval gate rendered.
 //
 // WHAT IT PROVES (the memory.md lifecycle the SKILL.md ## Routing block drives):
 //   - init-from-template fires at stage START — the orchestrator copies
@@ -28,41 +22,15 @@
 //     the .sh's assertion 7 (parser ↔ disk agreement), ported by importing the
 //     exported helper from the distributable (aidlc-lib.ts:982; import-safe under
 //     bun, never loads node-pty).
-//   - RENDER (the tui-only value-add the SDK path is blind to): the captured grid
-//     showed the AskUserQuestion approval gate at least once during the run — the
-//     `❯` caret + an `Enter to select` / `Submit answers` footer. The .sh NEVER saw
-//     a painted gate; the menu was auto-approved headlessly. This is the journey a
-//     real user actually lives.
+//   - RENDER (the tui-only value-add the SDK path is blind to): the captured
+//     grid contains both numbered approval choices, not merely a generic menu
+//     footer that a preparatory Guide / Edit / Chat menu can also paint.
 //
-// WHY PATTERN A (land + render, not answer-and-advance): approval-handoff is a
-// GATE stage (its stage file: "Approval gate: Approve / Request Changes /
-// Reject"). The orchestrator paints a real AskUserQuestion gate and WAITS for a
-// human keystroke; nothing advances until it is answered. This
-// journey's contract is the memory.md LIFECYCLE observed WHILE PAUSED ON that gate
-// — creation at stage start, fidelity, and that the gate RENDERS — plus the jump
-// landing ON approval-handoff (Current Stage == approval-handoff, i.e. NOT
-// advanced). So we jump to the stage, prove memory.md was faithfully created,
-// WAIT for the approval gate to paint, and assert disk + screen while paused —
-// we do NOT answer the gate. Mirrors the committed Pattern-A journeys t24/t27.
-//
-// WHY NOT answer-gate (the verified failure, per the IRON RULE): two ways an
-// answer-gate breaks this journey. (1) With `--until-file memory.md`: memory.md is
-// created at stage START (SKILL.md ## Routing: "create on stage start if absent"),
-// BEFORE the gate paints, so the disk terminator fires after 0 answers within
-// seconds — killing the run before the approval gate paints minutes later, so the
-// render proof was false (verified live 2026-06-06: terminator met after 0
-// answers, sawGate=false). (2) With a post-approval terminator: answering the gate
-// ADVANCES the stage, moving Current Stage OFF approval-handoff and breaking
-// assertion #5. Both contradict the contract. The fix is to NOT answer: wait for
-// the gate to render (the hang-backstop is the waitFor timeout — if it never
-// paints, the test reds, a reachability FINDING never softened). We do NOT assert
-// terminal workflow completion (racy; the Phase-2 lesson) and we do NOT assert any
-// audit event the .sh did not (it asserted none on the audit surface — it read
-// memory.md + the runtime graph). The .sh's assertion 8 (runtime-graph memory_path)
-// is NOT ported: it requires a STAGE_STARTED row that a `--stage` JUMP may not emit
-// (the .sh itself skipped it conditionally), and compiling the runtime graph is a
-// post-hoc deterministic read outside this journey's render+disk surface — better
-// folded into the Phase-4 deterministic tier than asserted racily here.
+// WHY STOP, NOT APPROVE: approval would advance Current Stage and destroy the
+// landed-state assertion. `--stop-at-approval-gate` handles earlier menus but
+// returns before sending a keystroke to the real gate. The fixture also carries
+// a production-shaped runtime graph so the stage's learnings ritual does not
+// fail and improvise audit repair during the live journey.
 //
 // COST: spends real Bedrock tokens (minutes-long LLM turns to reach the gate).
 // Gated behind AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs it; tmux/
@@ -185,11 +153,12 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         // Seed the 3 required upstream ideation artifacts so the forward `--stage
         // approval-handoff` jump finds its required `consumes` present and does NOT
         // render the Missing-inputs gate (SKILL.md jump step 10; same fix as t24).
-        // Without this, the missing-inputs gate fires and the sawGate poll would
+        // Without this, the missing-inputs gate fires and the driver would
         // prove that gate instead of the approval gate this test targets. The jump
         // lands gatelessly (post-0.5.17 the gate keys only on REQUIRED inputs), the
-        // approval-handoff stage runs, and ITS approval gate is what sawGate proves.
+        // approval-handoff stage runs, and its approval gate is what the detector proves.
         ideationArtifacts: true,
+        runtimeGraph: true,
       });
       // The render value-add: tail the grid during the run to prove the approval
       // gate painted at least once (the SDK path can't see it).
@@ -244,42 +213,28 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         // the marker appears.
         expect(waitFor(session, "\\[AIDLC\\].*IDEATION", 120000, 0)).toBe(true);
 
-        // --- PATTERN A (land + render), NOT answer-and-advance --------------
-        // t101's contract is the memory.md START→APPROVAL lifecycle observed WHILE
-        // PAUSED ON the gate: (a) memory.md is created at stage START, (b) the jump
-        // lands ON approval-handoff (assertion #5 below requires Current Stage ==
-        // approval-handoff — i.e. NOT advanced), and (c) the approval gate RENDERS.
-        // These are mutually exclusive with answering the gate: an answer-gate that
-        // advances the stage would move Current Stage OFF approval-handoff and break
-        // assertion #5. The earlier `--until-file memory.md` answer-gate ALSO failed
-        // the other way — memory.md is created at stage start, so the terminator
-        // fired after 0 answers (within seconds), killing the run BEFORE the
-        // approval gate painted minutes later, so sawGate was false (verified live
-        // 2026-06-06). So we do NOT run answer-gate here. Instead we WAIT for the
-        // approval gate to PAINT (the caret + AUQ footer — the same gridHasMenu
-        // signature), leaving the workflow paused on it, then assert memory.md +
-        // the landed Current Stage + the rendered gate. This mirrors the committed
-        // Pattern-A journeys (t24/t27): wait for the rendered signal, capture,
-        // assert disk + screen, never answer. The hang-backstop is the waitFor
-        // timeout: if the gate never paints, waitFor returns false and the sawGate
-        // assertion reds — a FINDING about reachability, never softened.
-        //
-        // memory.md is created at stage start (before the gate), so once the gate
-        // footer is up the artifact is guaranteed present; the pollTimer latches
-        // sawGate the moment the caret+footer paint. Wait generously for the gate.
-        // waitFor polls the grid at the driver's own cadence (faster + more robust
-        // than a 1s test-side poll, which raced and missed a brief gate elsewhere —
-        // the t29 lesson) and matches the AUQ footer. This IS the render proof: a
-        // footer can only paint when a gate is up. If the gate never paints, waitFor
-        // returns false and this reds — a FINDING that approval-handoff did not reach
-        // its user-facing gate in budget, never softened to pass.
-        const gateRendered = waitFor(
+        // Answer preparatory menus, then stop with the actual approval menu
+        // painted and unanswered. A generic footer is insufficient evidence:
+        // the captured grid must carry both canonical numbered choices.
+        const stopped = drive([
+          "answer-gate",
+          "--session",
           session,
-          "Enter to select|Submit answers",
-          Math.max(60000, TEST_TIMEOUT_MS - 60000),
-          0,
-        );
-        expect(gateRendered).toBe(true);
+          "--project-dir",
+          sandbox,
+          "--overall-timeout-ms",
+          String(Math.max(60000, TEST_TIMEOUT_MS - 60000)),
+          "--stop-at-approval-gate",
+        ]);
+        expect(stopped.rc).toBe(0);
+        expect(stopped.stdout).toContain("stopped at approval gate");
+        const approvalGrid = drive([
+          "capture",
+          "--session",
+          session,
+        ]).stdout;
+        expect(approvalGrid).toMatch(/\d+\.\s+Approve\b/i);
+        expect(approvalGrid).toMatch(/\d+\.\s+Request Changes\b/i);
 
         // --- assert ON DISK (equal-or-stronger than the .sh) ------------------
         const memPath = join(seededRecordDir(sandbox), MEM_RELPATH);
@@ -296,29 +251,14 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         expect(mem).toMatch(/^## Tradeoffs$/m);
         expect(mem).toMatch(/^## Open questions$/m);
 
-        // 3. the ownership blockquote (.sh assertion 3, EXACT semantics —
-        //    t101.sh:68-81): when a `>` blockquote header EXISTS it MUST be the
-        //    verbatim template string (a malformed copy is a real fidelity
-        //    defect); when the orchestrator approximated the copy and wrote NO
-        //    blockquote header at all, the .sh skipped rather than failed (LLM
-        //    variance on the template copy, observed live 2026-06-10 — the
-        //    orchestrator authored an equivalent plain-text ownership line).
-        const blockquoteLines = mem
-          .split("\n")
-          .filter((l) => l.startsWith("> "));
-        if (blockquoteLines.length > 0) {
-          const ownershipRe = new RegExp(
-            `^${OWNERSHIP_LINE.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
-            "m",
-          );
-          expect(mem).toMatch(ownershipRe);
-        } else {
-          // .sh: `skip "ownership header (orchestrator approximated the copy)"`.
-          // eslint-disable-next-line no-console
-          console.log(
-            "t-tui-t101 SKIP ownership-header fidelity — orchestrator approximated the template copy (no blockquote header); the .sh skipped here too",
-          );
-        }
+        // 3. the ownership blockquote must be copied verbatim from the template.
+        // Missing, plain-text, or approximated ownership text is a fidelity
+        // defect, not an optional LLM-variance branch.
+        const ownershipRe = new RegExp(
+          `^${OWNERSHIP_LINE.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+          "m",
+        );
+        expect(mem).toMatch(ownershipRe);
 
         // 4. parseMemoryHeadings(file).total == visible `- ` entry count on disk
         //    (.sh assertion 7 — parser ↔ disk agreement). The parser counts real
@@ -335,9 +275,8 @@ describe("t-tui-t101 (memory.md start→approval lifecycle through a driven gate
         const stateMd = readFileSync(seededStateFile(sandbox), "utf8");
         expect(stateMd).toMatch(/\*\*Current Stage\*\*:[ \t]*approval-handoff\b/);
 
-        // (The render assertion — the AUQ gate footer painted — is proven above by
-        // `gateRendered` from waitFor, the tui-only value-add the SDK path is blind
-        // to. No separate poll-timer: waitFor is the robust proof.)
+        // The captured numbered choices above prove the real approval gate
+        // rendered and remained unanswered.
       } finally {
         drive(["kill", "--session", session]);
         cleanupTuiProject(sandbox);

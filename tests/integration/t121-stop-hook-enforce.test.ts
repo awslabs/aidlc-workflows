@@ -25,7 +25,7 @@
 //          - prior===null && stopHookActive → nextCount = 2 (joining mid-flight)
 //          - else → nextCount = 1
 //          - persist; RELEASE (return false) once nextCount >= cap, else block
-//   :259 runEngineNextKind() — spawns the engine; null (spawn fail / non-zero /
+//   :259 runEngineNextDirective() — spawns the engine; null (spawn fail / non-zero /
 //          unparseable) fails OPEN (allow)
 //   :298 continuationReason(kind, stage) — names "pending step", the kind, the
 //          forwarding-loop steps; phrased as continuation, never override-shaped
@@ -117,7 +117,7 @@ const HOOK_TS = join(
 // P9 per-intent layout: the stop hook reads state (stateFilePath), the audit
 // (auditFilePath — its own resolved shard, for the progress-signature length),
 // the guard counter (stopHookDir → <record>/.aidlc-stop-hook/block-count.json),
-// and the current stage's memory/questions dir (<record>/<phase>/<slug>/). All
+// and the current stage's canonical or per-unit memory/questions dir. All
 // re-root under the active intent's record. We PIN the clone-id so the hook
 // (subprocess) and progressSig (in-process) resolve the SAME audit shard.
 const PINNED_CLONE_ID = "testcloneid121";
@@ -170,15 +170,17 @@ afterAll(() => {
 // spawns this via join(projectDir, ".claude/tools/aidlc-orchestrate.ts").
 const MOCK_ENGINE = `// t121 mock engine: emit one directive of kind=$MOCK_KIND.
 const kind = process.env.MOCK_KIND ?? "run-stage";
+const stage = process.env.MOCK_STAGE ?? "requirements-analysis";
+const unit = process.env.MOCK_UNIT ?? "";
 if (kind === "done") {
   console.log(JSON.stringify({ kind: "done", reason: "Workflow complete." }));
 } else if (kind === "parked") {
-  console.log(JSON.stringify({ kind: "parked", reason: "Workflow parked at \\"requirements-analysis\\".", stage: "requirements-analysis" }));
+  console.log(JSON.stringify({ kind: "parked", reason: "Workflow parked at \\"requirements-analysis\\".", stage }));
 } else if (kind === "__nonzero__") {
   process.stderr.write("mock engine failure\\n");
   process.exit(1);
 } else {
-  console.log(JSON.stringify({ kind, stage: "requirements-analysis" }));
+  console.log(JSON.stringify({ kind, stage, ...(unit ? { unit } : {}) }));
 }
 process.exit(0);
 `;
@@ -241,19 +243,27 @@ function seedActiveWithCheckbox(
 
 /**
  * Seed an active workflow at [-] in-progress for the tier-2 pending-question
- * carve-out. Writes Lifecycle Phase (so the hook can derive the stage dir
- * `aidlc-docs/<phase-lowercase>/<slug>/`, mirroring memoryPathFor in
- * aidlc-orchestrate.ts:353) and a `[-]` checkbox row. Options:
+ * carve-out. Writes Lifecycle Phase (so the hook can derive the canonical or
+ * per-unit stage dir) and a `[-]` checkbox row. Options:
  *   - `questions`: if given, writes `<slug>-questions.md` in the stage dir with
  *     this body (a blank `[Answer]:` tag = a pending question; an answered one
  *     = resolved). Omit to seed NO questions file.
+ *   - `unit`: if given for Construction, writes under the per-unit
+ *     `<record>/construction/<unit>/<slug>/` layout and must also be returned by
+ *     the mock engine for the hook to select that exact directory.
  *   - `autonomy`: if given, writes `- **Construction Autonomy Mode**: <value>`
  *     into state — `"autonomous"` must suppress the carve-out (loop stays alive).
  * `phase` defaults to inception (requirements-analysis' real phase).
  */
 function seedInProgressWithQuestions(
   proj: string,
-  opts: { slug?: string; phase?: string; questions?: string; autonomy?: string } = {},
+  opts: {
+    slug?: string;
+    phase?: string;
+    questions?: string;
+    autonomy?: string;
+    unit?: string;
+  } = {},
 ): void {
   const slug = opts.slug ?? "requirements-analysis";
   const phase = opts.phase ?? "inception";
@@ -269,8 +279,10 @@ function seedInProgressWithQuestions(
   );
   seedAuditShard(proj);
   if (opts.questions !== undefined) {
-    // The stage's questions/memory dir re-roots under the record (<record>/<phase>/<slug>/).
-    const stageDir = join(seededRecordDir(proj), phase.toLowerCase(), slug);
+    // The stage's questions dir re-roots under the record.
+    const stageDir = opts.unit
+      ? join(seededRecordDir(proj), phase.toLowerCase(), opts.unit, slug)
+      : join(seededRecordDir(proj), phase.toLowerCase(), slug);
     mkdirSync(stageDir, { recursive: true });
     writeFileSync(join(stageDir, `${slug}-questions.md`), opts.questions, "utf-8");
   }
@@ -530,19 +542,22 @@ interface HookResult {
 
 /**
  * Run the real hook. Mirrors run_hook (.sh): pipe `payload` on stdin with
- * CLAUDE_PROJECT_DIR / MOCK_KIND / CLAUDE_CODE_STOP_HOOK_BLOCK_CAP set, capture
- * stdout, return exit code. `cap` empty-string => env var unset (default cap).
+ * CLAUDE_PROJECT_DIR / MOCK_KIND / MOCK_UNIT /
+ * CLAUDE_CODE_STOP_HOOK_BLOCK_CAP set, capture stdout, return exit code. `cap`
+ * empty-string => env var unset (default cap).
  */
 function runHook(
   proj: string,
   payload: string,
   kind = "run-stage",
   cap = "",
+  unit = "",
 ): HookResult {
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     CLAUDE_PROJECT_DIR: proj,
     MOCK_KIND: kind,
+    MOCK_UNIT: unit,
   };
   // The .sh always exported CLAUDE_CODE_STOP_HOOK_BLOCK_CAP (possibly empty).
   // An empty value is falsy in blockCap() (:69 `if (!raw)`), so it behaves
@@ -911,6 +926,46 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
     expect(r.out).toBe("");
   }, 30000);
 
+  test("(f) gated per-unit Construction finds the active unit's blank question", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "code-generation",
+      phase: "construction",
+      autonomy: "gated",
+      unit: "checkout-api",
+      questions: "# Plan Approval\n\nApprove this plan?\n[Answer]:\n",
+    });
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "run-stage",
+      "",
+      "checkout-api",
+    );
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe("");
+  }, 30000);
+
+  test("(f) per-unit lookup ignores a different unit's stale blank question", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, {
+      slug: "code-generation",
+      phase: "construction",
+      autonomy: "gated",
+      unit: "stale-unit",
+      questions: "# Plan Approval\n\nApprove this old plan?\n[Answer]:\n",
+    });
+    const r = runHook(
+      proj,
+      '{"stop_hook_active":false}',
+      "run-stage",
+      "",
+      "active-unit",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
   // =========================================================================
   // (f) TIER-3 CONVERSATIONAL CARVE-OUT (issue #365 broader reading): when the
   // ending turn answered the human's most recent prompt with NO workflow-engine
@@ -1097,7 +1152,7 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
     expect(t.out).toBe("");
 
     // engine returns non-zero / no directive -> fail open (allow), even
-    // mid-stage. runEngineNextKind() returns null on non-zero exit (:274).
+    // mid-stage. runEngineNextDirective() returns null on non-zero exit (:274).
     const n = runHook(proj, '{"stop_hook_active":false}', "__nonzero__");
     expect(n.rc).toBe(0);
     expect(n.out).toBe("");

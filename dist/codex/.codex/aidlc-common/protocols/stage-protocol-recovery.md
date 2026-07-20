@@ -59,17 +59,30 @@ When resuming, load context appropriate to the current phase and stage type:
 
 **IDEATION stages (1.1–1.7):**
 - Load `<record>/ideation/` artifacts completed so far (intent capture, market research, feasibility, scope)
-- Load guardrails from `.codex/aidlc-rules/`
+- Load guardrails from
+  `aidlc/spaces/<active-space>/memory/{org,team,project}.md`
 
 **INCEPTION — RE (Reverse Engineering) stages:**
-- Load `<record>/inception/reverse-engineering/` artifacts (codebase analysis, component inventory)
+- Load `aidlc/spaces/<active-space>/codekb/<repo>/` artifacts (codebase analysis, component inventory)
 - Load ideation artifacts (scope, feasibility) for context
 
 **INCEPTION — Practices Discovery (stage 2.2):**
-- Load `<record>/inception/reverse-engineering/` artifacts (brownfield evidence inputs)
-- Load `<record>/inception/practices-discovery/` if partially complete (team-practices.md, discovered-rules.md, evidence.md drafts awaiting affirmation)
-- Load `.codex/aidlc-rules/aidlc-team.md` if affirmation already happened (re-run pre-fill from prior affirmed sections)
-- Load `.codex/aidlc-rules/aidlc-org.md` for greenfield default suggestions
+- Load `aidlc/spaces/<active-space>/codekb/<repo>/` artifacts (brownfield evidence inputs)
+- Load `<record>/inception/practices-discovery/` if partially complete,
+  including its lead drafts, interview file, and `contributions/`.
+- Load `aidlc/spaces/<active-space>/memory/team.md` for re-run defaults and
+  `org.md` for greenfield suggestions.
+- If the lead drafts exist, compare the three declared support agents with the
+  identity-marked files in `contributions/`. Dispatch only missing spokes;
+  completed spokes remain valid and mutually blind. If all three exist, resume
+  at the interview or final lead integration rather than repeating discovery.
+- Reconcile the open gate with audit: after a current-attempt
+  `PRACTICES_AFFIRMED` with no `GATE_REJECTED`/`STAGE_REVISING` for this stage
+  after it, verify that its timestamp matches the promotion-recorded state
+  timestamp, then report approval; a rejection after the receipt invalidates
+  it — re-promote the revised drafts first. After `PRACTICES_OVERRIDE`, retry
+  promotion only after its cause is fixed. Never commit approval before
+  promotion succeeds.
 
 **INCEPTION — Requirements stages:**
 - Load RE artifacts (if RE was performed)
@@ -110,6 +123,11 @@ If a stage needs to be re-run (user requested changes after approval):
 - Execute the stage again, overwriting previous artifacts
 - Present new completion message
 
+If a resumed active or revising CONDITIONAL stage proves inapplicable, route
+the outcome through `aidlc-orchestrate.ts report --stage <slug> --result
+skipped --reason "<reason>"`. Never call `aidlc-state.ts skip` directly and
+never mark the checkbox by hand.
+
 ### Context compaction
 The PreCompact hook validates state file structure in `aidlc-state.md` before compaction.
 After compaction, the orchestrator can re-read state and continue.
@@ -121,7 +139,7 @@ If `aidlc-state.md` exists but cannot be parsed (missing required sections, inva
 1. Create a backup: copy `aidlc-state.md` to `aidlc-state.md.bak`
 2. Scan `<record>/` for existing artifacts to determine which stages actually completed
 3. Rebuild `aidlc-state.md` from artifact evidence:
-   - If `<record>/inception/reverse-engineering/` has analysis files, mark RE stages complete
+   - If `aidlc/spaces/<active-space>/codekb/<repo>/` has analysis files for the intent's repositories, mark RE stages complete
    - If `<record>/inception/requirements-analysis/` has requirement docs, mark requirements stages complete
    - If `<record>/inception/application-design/` has design docs, mark design stages complete
    - If application code exists matching story designs, mark code gen stages complete
@@ -204,14 +222,14 @@ Generation.
 ### Major changes (affects prior stages):
 1. Identify which prior stages are affected
 2. Present impact analysis to the user via a structured question
-3. If approved, re-run affected stages in order
-4. Update aidlc-state.md to reflect re-run
+3. If approved, use the stage/phase jump or recompose command that names the affected boundary, then re-run stages in order
+4. Report every rerun lifecycle outcome through `aidlc-orchestrate.ts`; never edit `aidlc-state.md` directly
 
 ### Scope changes (new requirements):
 1. Document the change in `<record>/audit/<host>-<clone>.md`
 2. Return to requirements-analysis or delivery-planning as appropriate
 3. Re-plan execution from that point forward
-4. If scope change affects which stages execute (e.g., expanding from `poc` to `feature`), update scope configuration in aidlc-state.md
+4. If the stage set changes, run `aidlc-utility.ts recompose` (or a scope change through `aidlc-orchestrate.ts next`); never edit scope configuration in `aidlc-state.md`
 
 ### Archive before change
 Before any major change that would overwrite existing artifacts:
@@ -223,7 +241,7 @@ This ensures no prior work is permanently lost.
 ### Unit modification handling
 If the user wants to add, remove, or split implementation units mid-workflow:
 - **Adding a unit**: Add it to the workflow plan, create its story design, slot it into the build order. Do NOT re-run completed units.
-- **Removing a unit**: Mark it as skipped in aidlc-state.md, archive its artifacts if any exist. Check for dependencies — if other units depend on the removed unit, flag the impact.
+- **Removing a unit**: Recompose the unit plan through the owning stage, archive its artifacts if any exist, and check dependencies. Do not hand-edit a unit or stage checkbox in `aidlc-state.md`.
 - **Splitting a unit**: Archive the original unit's artifacts, create two new unit entries in the plan, distribute the original stories between them, run story design for each new unit.
 
 ### Architectural change handling

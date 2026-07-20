@@ -150,6 +150,10 @@ interface CliResult {
 function state(p: string, ...args: string[]): CliResult {
   const res = spawnSync(BUN, [STATE_TS, ...args, "--project-dir", p], {
     encoding: "utf-8",
+    env: {
+      ...process.env,
+      AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    },
   });
   const stdout = res.stdout ?? "";
   return {

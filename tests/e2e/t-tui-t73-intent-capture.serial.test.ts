@@ -179,6 +179,7 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         withState: "state-initialization-done.md",
         greenfieldStub: true,
         withAudit: true,
+        runtimeGraph: true,
       });
       // The render value-add: tail the grid during the run to prove the AUQ menu
       // painted at least once (the SDK path can't see it).
@@ -353,6 +354,32 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         const auditMd = readAllAuditShards(sandbox);
         expect(auditMd).toMatch(/STAGE_COMPLETED/);
         expect(auditMd.toLowerCase()).toContain("intent-capture");
+
+        // --- learnings-before-gate ordering (guards the §13 turn binding) ------
+        // The learnings ritual is its own logged human interaction BEFORE the
+        // gate opens: its QUESTION_ANSWERED row must precede the stage's
+        // STAGE_AWAITING_APPROVAL row in the audit ledger. Without this pin a
+        // conductor that reopens the gate ahead of the learnings turn (the
+        // pre-fix live failure mode on Kiro) would still pass this test.
+        const questionAnsweredAt = auditMd.lastIndexOf(
+          "**Event**: QUESTION_ANSWERED",
+        );
+        const gateOpenedAt = auditMd.lastIndexOf(
+          "**Event**: STAGE_AWAITING_APPROVAL",
+        );
+        expect(questionAnsweredAt).toBeGreaterThan(-1);
+        expect(gateOpenedAt).toBeGreaterThan(questionAnsweredAt);
+        // Interview answers also emit QUESTION_ANSWERED, so the ordering pin
+        // alone passes when the ritual is skipped outright. Require a
+        // learnings-flavored answer (§13 pins the option labels verbatim)
+        // before the last gate open.
+        const learningsAnswers = [
+          ...auditMd.matchAll(
+            /\*\*Event\*\*: QUESTION_ANSWERED\n(?:\*\*[^\n]+\n)*?\*\*Details\*\*: [^\n]*(?:Nothing to add|Add a note)/g,
+          ),
+        ];
+        expect(learningsAnswers.length).toBeGreaterThanOrEqual(1);
+        expect(gateOpenedAt).toBeGreaterThan(learningsAnswers.at(-1)!.index);
 
         // --- render assertion (the tui-only value-add) -----------------------
         // The captured grid showed the AUQ select footer and/or the multi-tab

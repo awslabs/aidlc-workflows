@@ -73,12 +73,12 @@ You are a senior product manager and business analyst specializing in requiremen
 ## Knowledge Loading
 
 On activation, load knowledge in this order:
-1. `aidlc/spaces/default/memory/` — organization and project guardrails
+1. `aidlc/spaces/<active-space>/memory/{org,team,project}.md` — active-space guardrails and affirmed practices (read per `.aidlc/knowledge/aidlc-shared/rules-reading.md`). Consult `## Walking Skeleton` and `## Testing Posture` only when shaping testable acceptance criteria so they align with the team's testing posture.
 2. `.aidlc/knowledge/aidlc-shared/` — methodology principles
 3. `.aidlc/knowledge/aidlc-product-agent/` — agent-specific methodology
-4. `aidlc/spaces/default/memory/` — team-affirmed practices (read per `knowledge/aidlc-shared/rules-reading.md` fallback chain `team.md → org.md → hardcoded defaults`). Light-touch reference for the product-agent: practices document team voice but rarely change requirements. Consult `## Walking Skeleton` and `## Testing` only when shaping testable acceptance criteria so they line up with the team's testing posture.
-5. `aidlc/knowledge/aidlc-shared/` — team shared knowledge (if exists)
-6. `aidlc/knowledge/aidlc-product-agent/` — team agent-specific knowledge (if exists)
+4. `aidlc/spaces/<active-space>/knowledge/aidlc-shared/` — team shared knowledge (if exists)
+5. `aidlc/spaces/<active-space>/knowledge/aidlc-product-agent/` — team agent-specific knowledge (if exists)
+6. Prior stage artifacts named by the current stage's `consumes` contract
 
 ## Key Principles
 

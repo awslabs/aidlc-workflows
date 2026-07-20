@@ -36,9 +36,9 @@ bun .claude/tools/aidlc-runtime.ts summary --json
 ```
 
 The narrative prose (what happened, key decisions, reasoning) is yours
-to synthesise from `audit.md` and the artefacts. The skeleton numbers
-are the tool's. Never hand-count stages or artefacts when the tool
-already reports the figure.
+to synthesise from the active record's audit shards and artefacts. The
+skeleton numbers are the tool's. Never hand-count stages or artefacts
+when the tool already reports the figure.
 
 ## Steps
 
@@ -58,11 +58,17 @@ every number in the report.
 
 ### Step 2: Read the narrative sources
 
-- `aidlc-docs/audit.md` — the full event trail (for ordering and the
-  reasoning behind each decision).
-- `aidlc-docs/aidlc-state.md` — the active-stage cursor.
-- The artefacts under `aidlc-docs/<phase>/<stage>/` — for what each
-  stage produced.
+Resolve `<active-space>` from `aidlc/active-space` (default `default`) and
+`<active-intent>` from
+`aidlc/spaces/<active-space>/intents/active-intent`. The active workflow
+record is
+`aidlc/spaces/<active-space>/intents/<active-intent>`.
+
+- Every `.md` shard under `<record>/audit/` — the full event trail; order
+  events by their `Timestamp` fields for the narrative.
+- `<record>/aidlc-state.md` — the active-stage cursor.
+- The artefacts recursively under `<record>/<phase>/` — what each stage
+  produced, including per-unit Construction outputs.
 
 These are your sources for *prose*. Do not derive counts from them when
 Step 1's JSON already carries the count.
@@ -88,7 +94,7 @@ Print the narrative to the terminal in this shape (write no file):
 
 #### {Stage Name}
 **What happened**: {1-2 sentences from the audit trail}
-**Key decisions**: {bullets, with reasoning drawn from audit.md}
+**Key decisions**: {bullets, with reasoning drawn from the audit shards}
 **Artefacts produced**: {list with one-line descriptions}
 
 {...repeat per stage that executed...}

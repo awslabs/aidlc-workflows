@@ -31,6 +31,7 @@ import { projectTier } from "../../core/tools/aidlc-tiers.ts";
 const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = [
   { event: "SessionStart", target: "session-start" },
   { event: "UserPromptSubmit", target: "mint" },
+  { event: "PreToolUse", target: "state-transition-guard" },
   // No matcher: the reviewer-scope target self-filters (Bash + apply_patch;
   // everything else exits 0 instantly), and Codex read access rides the shell
   // tool anyway. Verified on 0.142.5: subagent tool calls carry agent_type,

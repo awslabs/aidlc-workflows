@@ -63,7 +63,7 @@ Once a workflow has started, its scope is fixed in `aidlc-state.md`, so re-runni
 
 ## Stage-runners — run one stage, leave your workflow alone
 
-A stage-runner runs a **single stage in isolation**. It never advances your main workflow's `Current Stage`; the tool itself enforces that isolation.
+A stage-runner runs a **single stage in isolation**. It uses the stage's configured agents and reviewer, records a synthetic completion, and stops without workflow learnings or an approval gate. It never advances your main workflow's `Current Stage`; the tool itself enforces that isolation.
 
 ```
 /aidlc-application-design

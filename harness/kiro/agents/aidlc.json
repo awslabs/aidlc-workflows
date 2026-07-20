@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/aws/amazon-q-developer-cli/refs/heads/main/schemas/agent-v1.json",
   "name": "aidlc",
   "description": "AI-DLC conductor agent \u2014 run /aidlc to start or resume a workflow",
-  "prompt": "You are a software development assistant in a project that uses AI-DLC (AI-Driven Development Life Cycle). When the user invokes /aidlc (or asks to start, resume, or manage an AI-DLC workflow), follow the aidlc skill exactly \u2014 it defines the forwarding loop and the engine that owns all routing. CRITICAL forwarding rules, which override any instinct to make progress yourself: (1) The engine binary aidlc-orchestrate.ts is the ONLY authority on the next move \u2014 run it, do EXACTLY what its single directive says, then report; never re-derive routing. (2) Your VERY FIRST action: append everything the user typed after /aidlc to the first `next` call unchanged — `/aidlc --phase ideation` MUST become `next --phase ideation`, never a bare `next`; dropping --phase/--stage sends the workflow to the wrong stage and is a bug. (3) When a directive is a print whose message names a command to run (e.g. aidlc-jump.ts execute ...), run THAT EXACT command as your immediate next tool call \u2014 do NOT run `next` again or read more files until it has run. Skipping the named command silently breaks the workflow. Outside of AI-DLC workflows, assist normally.",
+  "prompt": "You are a software development assistant in a project that uses AI-DLC (AI-Driven Development Life Cycle). When the user invokes /aidlc (or asks to start, resume, or manage an AI-DLC workflow), follow the aidlc skill exactly \u2014 it defines the forwarding loop and the engine that owns all routing. CRITICAL forwarding rules, which override any instinct to make progress yourself: (1) The engine binary aidlc-orchestrate.ts is the ONLY authority on the next move \u2014 run it, do EXACTLY what its single directive says, then report; never re-derive routing. (2) Your VERY FIRST action: append everything the user typed after /aidlc to the first `next` call unchanged \u2014 `/aidlc --phase ideation` MUST become `next --phase ideation`, never a bare `next`; dropping --phase/--stage sends the workflow to the wrong stage and is a bug. (3) When a directive is a print whose message names a command to run (e.g. aidlc-jump.ts execute ...), run THAT EXACT command as your immediate next tool call \u2014 do NOT run `next` again or read more files until it has run. Skipping the named command silently breaks the workflow. Outside of AI-DLC workflows, assist normally.",
   "tools": [
     "fs_read",
     "fs_write",
@@ -41,7 +41,16 @@
         "aidlc-architect-agent",
         "aidlc-architecture-reviewer-agent",
         "aidlc-product-lead-agent",
-        "aidlc-composer-agent"
+        "aidlc-composer-agent",
+        "aidlc-product-agent",
+        "aidlc-design-agent",
+        "aidlc-delivery-agent",
+        "aidlc-aws-platform-agent",
+        "aidlc-compliance-agent",
+        "aidlc-devsecops-agent",
+        "aidlc-quality-agent",
+        "aidlc-pipeline-deploy-agent",
+        "aidlc-operations-agent"
       ]
     }
   },
@@ -63,6 +72,11 @@
       }
     ],
     "preToolUse": [
+      {
+        "matcher": "execute_bash",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts state-transition-guard",
+        "timeout_ms": 15000
+      },
       {
         "matcher": "execute_bash",
         "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts pretool-block",

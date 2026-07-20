@@ -40,7 +40,8 @@ Load aidlc-architect-agent persona from `agents/aidlc-architect-agent.md` for te
 
 - Read user's project description from $ARGUMENTS or `<record>/audit/<host>-<clone>.md`
 - Check for existing `<record>/` artifacts from prior sessions
-- Load guardrails from `.claude/rules/`
+- Load guardrails from
+  `aidlc/spaces/<active-space>/memory/{org,team,project}.md`
 
 ### Step 3: Generate Clarifying Questions
 
@@ -75,11 +76,11 @@ Create `<record>/ideation/intent-capture/stakeholder-map.md` containing:
 - Decision-makers vs. influencers
 - Communication requirements
 
-### Step 6: Update State
+### Step 6: Completion Handoff
 
-Update `<record>/aidlc-state.md`:
-- Mark intent-capture as `[x]` completed
-- Update current stage and next stage
+Hand completion to `stage-protocol.md` via
+`bun .claude/tools/aidlc-orchestrate.ts report --stage intent-capture --result <outcome>`.
+The engine owns all lifecycle transitions and advancement.
 
 ### Step 7: Present Completion & Request Approval
 
@@ -115,13 +116,13 @@ Before the approval gate, read memory.md and surface candidates as a
 structured question. For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
-- Prescriptive rule → `.claude/rules/aidlc-phase-<phase>.md` (phase-scoped)
-  or `.claude/rules/aidlc-<org|team|project>.md` (cross-cutting)
+- Prescriptive rule → a practice line under the routed heading in
+  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
 - Verification check → new manifest at `.claude/sensors/aidlc-<id>.md`
   (capability descriptor only — no `applies_to`); add the new id to
   the relevant stage's `sensors: [...]` frontmatter list to wire it
 
-If nothing surfaces or the user skips all, proceed to the gate. The memory.md
+Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
 file stays in the artefact directory as part of the stage's permanent record.
 
 Stage files are immutable framework artefacts — the ritual writes into the

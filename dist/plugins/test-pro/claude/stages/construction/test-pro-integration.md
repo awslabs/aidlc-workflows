@@ -74,15 +74,19 @@ Run the integration tests against the assembled units. Capture results into
 `test-pro-integration-test-results.md` (total / passed / failed, with the seam
 each failure touches).
 
-### Step 6: Update State
+### Step 6: Open the Approval Gate
 
-Update `<record>/aidlc-state.md`: mark test-pro-integration as `[x]` completed and update "Current Status".
+Run `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage test-pro-integration --result awaiting-approval`.
 
 ### Step 7: Present Completion & Request Approval
 
 Completion emoji: :link:
 Review path: this stage's engine-resolved record dir.
 Standard 2-option approval (Approve / Request Changes).
+STOP for the human response. Report Approve with
+`--result approved --user-input "<exact choice>"`; report
+Request Changes with `--result rejected --user-input "<feedback>"`, revise the
+artifacts, then report `--result revised` before re-presenting.
 
 ## Sensors
 

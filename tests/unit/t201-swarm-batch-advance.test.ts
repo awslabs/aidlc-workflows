@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next
+// covers: subcommand:aidlc-orchestrate:next, function:swarmConvergedUnits, function:latestMainWorkflowStageStarted
 //
 // CLI-contract test for the autonomous Construction swarm batch advance.
 // mechanism = cli.
@@ -52,8 +52,8 @@ import {
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
+  seedBoltDagBatches,
   seededAuditShard,
-  seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
 
@@ -117,24 +117,6 @@ function constructionState(): string {
 `;
 }
 
-/** Write a multi-batch bolt_dag (each inner array is one topological batch). */
-function seedMultiBatchDag(proj: string, batches: string[][]): void {
-  const names = batches.flat();
-  writeFileSync(
-    join(seededRecordDir(proj), "runtime-graph.json"),
-    JSON.stringify(
-      {
-        bolt_dag: {
-          units: names.map((name) => ({ name, depends_on: [] })),
-          batches,
-        },
-      },
-      null,
-      2,
-    ),
-  );
-}
-
 /**
  * One audit block in the exact `\n## <heading>\n**Timestamp**: …\n**Event**: …\n
  * …\n---\n` shape appendAuditEntryUnlocked writes, so findAllEvents +
@@ -160,21 +142,48 @@ function appendShard(proj: string, content: string): void {
   writeFileSync(shard, content, { flag: "a" });
 }
 
+/** The fixture timestamp shape shared by the seeders below. */
+function fixtureTs(atSecond: number): string {
+  return `2026-07-05T00:00:${String(atSecond).padStart(2, "0")}.000Z`;
+}
+
 /**
  * Append SWARM_UNIT_CONVERGED audit rows (one per unit) into the deterministic
- * audit shard, exactly the way a real finalize's rows would look. `atSecond`
- * offsets the (monotonically-increasing) timestamps so a caller can place rows
- * before or after a seeded STAGE_STARTED floor; the default keeps the original
- * base the pre-floor cases used.
+ * audit shard, exactly the way a real finalize's rows would look — including
+ * the attempt-identity stamp (`Stage` + `Run floor`) the consumers require to
+ * match before counting a row. `atSecond` offsets the (monotonically-
+ * increasing) timestamps so a caller can place rows before or after a seeded
+ * STAGE_STARTED floor; `runFloorSecond` is the floor the emitting finalize saw
+ * (undefined = "" — no STAGE_STARTED at emission, matching a consumer-side
+ * empty floor).
  */
-function seedConverged(proj: string, units: string[], atSecond = 0): void {
+function seedConverged(
+  proj: string,
+  units: string[],
+  atSecond = 0,
+  opts: { stage?: string; runFloorSecond?: number; omitStamp?: boolean } = {},
+): void {
   let body = "";
   units.forEach((unit, i) => {
-    const ts = `2026-07-05T00:00:${String(atSecond + i).padStart(2, "0")}.000Z`;
-    body += auditBlock("Swarm Unit Converged", ts, "SWARM_UNIT_CONVERGED", [
+    const fields: [string, string][] = [
       ["Batch number", "1"],
       ["Unit name", unit],
-    ]);
+    ];
+    if (!opts.omitStamp) {
+      fields.push(
+        ["Stage", opts.stage ?? "code-generation"],
+        [
+          "Run floor",
+          opts.runFloorSecond === undefined ? "" : fixtureTs(opts.runFloorSecond),
+        ],
+      );
+    }
+    body += auditBlock(
+      "Swarm Unit Converged",
+      fixtureTs(atSecond + i),
+      "SWARM_UNIT_CONVERGED",
+      fields,
+    );
   });
   appendShard(proj, body);
 }
@@ -190,13 +199,15 @@ function seedStageStarted(
   atSecond: number,
   workflow?: string,
 ): void {
-  const ts = `2026-07-05T00:00:${String(atSecond).padStart(2, "0")}.000Z`;
   const fields: [string, string][] = [
     ["Stage", slug],
     ["Agent", "aidlc-developer-agent"],
   ];
   if (workflow) fields.push(["Workflow", workflow]);
-  appendShard(proj, auditBlock("Stage Start", ts, "STAGE_STARTED", fields));
+  appendShard(
+    proj,
+    auditBlock("Stage Start", fixtureTs(atSecond), "STAGE_STARTED", fields),
+  );
 }
 
 /** Seed a fresh autonomous Construction project at code-generation. */
@@ -230,7 +241,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
   // 1: batch 1 incomplete (nothing converged) -> invoke-swarm emits batch 1.
   test("1: with no unit converged, next emits invoke-swarm for the first batch", () => {
     const proj = seedProject();
-    seedMultiBatchDag(proj, [["auth"], ["api"]]);
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["auth"]);
@@ -241,7 +252,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
   // advances to the next unconverged batch.
   test("2: with the first batch converged, next advances to the second batch", () => {
     const proj = seedProject();
-    seedMultiBatchDag(proj, [["auth"], ["api"]]);
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
     seedConverged(proj, ["auth"]);
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
@@ -254,7 +265,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
   // complete the stage.
   test("3: with every batch converged, next presents the stage settle gate (no swarm)", () => {
     const proj = seedProject();
-    seedMultiBatchDag(proj, [["auth"], ["api"]]);
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
     seedConverged(proj, ["auth", "api"]);
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
@@ -269,7 +280,7 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
   // later batch is not reached until this one fully converges.
   test("4: a partially-converged batch re-emits only its unconverged units", () => {
     const proj = seedProject();
-    seedMultiBatchDag(proj, [["a", "b"], ["c"]]);
+    seedBoltDagBatches(proj, [["a", "b"], ["c"]]);
     seedConverged(proj, ["a"]);
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
@@ -289,7 +300,7 @@ describe("t201 converged-set freshness floor (stage re-run replay guard)", () =>
   // stale rows must NOT settle the stage - the swarm re-fans batch 1.
   test("5: converged rows older than the stage's latest STAGE_STARTED are ignored", () => {
     const proj = seedProject();
-    seedMultiBatchDag(proj, [["auth"], ["api"]]);
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
     seedConverged(proj, ["auth", "api"]); // prior run, seconds 0-1
     seedStageStarted(proj, "code-generation", 10); // re-entry floor
     const d = runNext(proj);
@@ -297,14 +308,15 @@ describe("t201 converged-set freshness floor (stage re-run replay guard)", () =>
     expect(d.units).toEqual(["auth"]);
   }, 30000);
 
-  // 6: rows AFTER the floor are the current run's coverage - the normal flow
-  // with the floor present. Also proves earlier-batch rows from the same run
-  // are never orphaned (no new STAGE_STARTED fires between batches).
-  test("6: converged rows newer than the floor still advance the batches", () => {
+  // 6: rows AFTER the floor, stamped with the CURRENT attempt's floor, are the
+  // current run's coverage - the normal flow. Also proves earlier-batch rows
+  // from the same run are never orphaned (no new STAGE_STARTED fires between
+  // batches).
+  test("6: converged rows stamped with the current floor still advance the batches", () => {
     const proj = seedProject();
-    seedMultiBatchDag(proj, [["auth"], ["api"]]);
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
     seedStageStarted(proj, "code-generation", 0);
-    seedConverged(proj, ["auth"], 10);
+    seedConverged(proj, ["auth"], 10, { runFloorSecond: 0 });
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["api"]);
@@ -315,7 +327,7 @@ describe("t201 converged-set freshness floor (stage re-run replay guard)", () =>
   // belongs to no main workflow (mirrors hasStageAuditEvent's filter).
   test("7: a single-stage-runner STAGE_STARTED does not move the floor", () => {
     const proj = seedProject();
-    seedMultiBatchDag(proj, [["auth"], ["api"]]);
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
     seedConverged(proj, ["auth", "api"]); // seconds 0-1
     seedStageStarted(proj, "code-generation", 10, "single-stage:code-generation");
     const d = runNext(proj);
@@ -328,7 +340,7 @@ describe("t201 converged-set freshness floor (stage re-run replay guard)", () =>
   // 8: a STAGE_STARTED for a DIFFERENT slug is not this stage's floor.
   test("8: another stage's STAGE_STARTED does not move the floor", () => {
     const proj = seedProject();
-    seedMultiBatchDag(proj, [["auth"], ["api"]]);
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
     seedConverged(proj, ["auth", "api"]); // seconds 0-1
     seedStageStarted(proj, "build-and-test", 10);
     const d = runNext(proj);
@@ -340,10 +352,55 @@ describe("t201 converged-set freshness floor (stage re-run replay guard)", () =>
   // rows" (never to "exclude all"), preserving cases 1-4's fixture shape.
   test("9: with no STAGE_STARTED row the converged set counts every row", () => {
     const proj = seedProject();
-    seedMultiBatchDag(proj, [["auth"], ["api"]]);
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
     seedConverged(proj, ["auth", "api"]);
     const d = runNext(proj);
     expect(d.kind).toBe("run-stage");
     expect(d.gate).toBe(true);
+  }, 30000);
+});
+
+describe("t201 converged-row attempt identity (Stage + Run floor stamp)", () => {
+  // Timestamp flooring alone cannot reject a STALE-ATTEMPT row emitted with a
+  // CURRENT timestamp (a late `finalize` retry against a prior attempt's
+  // preserved worktree) or another swarm stage's rows when the floor degrades
+  // to "". Each row therefore carries the emitting attempt's identity - Stage
+  // + Run floor - and the consumers count a row only when BOTH match.
+
+  // 10: the late-retry replay. The stage re-entered (fresh floor at second
+  // 10); a finalize retry against the attempt-1 worktree then lands rows with
+  // CURRENT timestamps but attempt 1's floor. They must not settle attempt 2.
+  test("10: a current-timestamp row carrying a prior attempt's floor is rejected", () => {
+    const proj = seedProject();
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
+    seedStageStarted(proj, "code-generation", 0); // attempt 1 floor
+    seedStageStarted(proj, "code-generation", 10); // attempt 2 floor
+    seedConverged(proj, ["auth", "api"], 20, { runFloorSecond: 0 });
+    const d = runNext(proj);
+    expect(d.kind).toBe("invoke-swarm");
+    expect(d.units).toEqual(["auth"]);
+  }, 30000);
+
+  // 11: rows naming ANOTHER stage never count, even when this stage has no
+  // STAGE_STARTED yet (the ""-floor degrade that used to fail open).
+  test("11: another stage's converged rows are rejected by the Stage stamp", () => {
+    const proj = seedProject();
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
+    seedConverged(proj, ["auth", "api"], 0, { stage: "build-and-test" });
+    const d = runNext(proj);
+    expect(d.kind).toBe("invoke-swarm");
+    expect(d.units).toEqual(["auth"]);
+  }, 30000);
+
+  // 12: pre-2.5.0 rows without the stamp fail CLOSED - the affected units
+  // re-fan (finalize's re-verify makes the re-run safe), never silently count.
+  test("12: unstamped legacy rows are not coverage", () => {
+    const proj = seedProject();
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
+    seedStageStarted(proj, "code-generation", 0);
+    seedConverged(proj, ["auth", "api"], 10, { omitStamp: true });
+    const d = runNext(proj);
+    expect(d.kind).toBe("invoke-swarm");
+    expect(d.units).toEqual(["auth"]);
   }, 30000);
 });

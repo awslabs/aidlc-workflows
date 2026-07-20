@@ -74,6 +74,7 @@ const AUDIT_TS = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md");
 const STATE_MACHINE = join(REPO_ROOT, "docs", "reference", "12-state-machine.md");
 const SKILL = join(AIDLC_SRC, "skills", "aidlc", "SKILL.md");
+const STAGES = join(AIDLC_SRC, "aidlc-common", "stages");
 
 function read(path: string): string {
   return readFileSync(path, "utf-8");
@@ -142,6 +143,66 @@ describe("t86 stage-protocol §13 + MEMORY_EMPTY + SKILL.md gate wiring (migrate
     // The core architectural rule the learning loop relies on — without it a
     // future contributor might edit stage files in a §13 write.
     expect(/^### Why stage files stay immutable$/m.test(body)).toBe(true);
+  });
+
+  test("§13 requires a valid two-option free-text learning question", () => {
+    const body = read(STAGE_PROTOCOL);
+    expect(body.includes("Every stage that reaches a human approval gate")).toBe(true);
+    expect(body.includes("auto-proceeding bootstrap initialization stages")).toBe(true);
+    expect(body.includes("at least two explicit choices")).toBe(true);
+    expect(body.includes("**Nothing to add**")).toBe(true);
+    expect(body.includes("**Add a note**")).toBe(true);
+    expect(body.includes("Never emit a one-option structured question")).toBe(true);
+    expect(body.includes("mandatory even when `surface` returned zero candidates")).toBe(true);
+    expect(body.includes("do not infer or self-select **Nothing to add**")).toBe(true);
+  });
+
+  test("every gated stage keeps the zero-candidate path behind the human learning question", () => {
+    const stale: string[] = [];
+    const missing: string[] = [];
+    const bootstrapContradictions: string[] = [];
+    const bootstrapMissingException: string[] = [];
+    for (const phase of readdirSync(STAGES)) {
+      const phaseDir = join(STAGES, phase);
+      for (const name of readdirSync(phaseDir).filter((file) => file.endsWith(".md"))) {
+        const rel = `${phase}/${name}`;
+        const body = read(join(phaseDir, name));
+        if (phase === "initialization") {
+          if (body.includes('still ask the mandatory "Anything to add for next time?"')) {
+            bootstrapContradictions.push(rel);
+          }
+          if (!body.includes("auto-proceeding bootstrap stage (`gate: false`)")) {
+            bootstrapMissingException.push(rel);
+          }
+          continue;
+        }
+        if (body.includes("If nothing surfaces or the user skips all, proceed to the gate")) {
+          stale.push(rel);
+        }
+        if (!body.includes('still ask the mandatory "Anything to add for next time?"')) {
+          missing.push(rel);
+        }
+      }
+    }
+    expect(stale).toEqual([]);
+    expect(missing).toEqual([]);
+    expect(bootstrapContradictions).toEqual([]);
+    expect(bootstrapMissingException).toEqual([]);
+  });
+
+  test("guided and chat summaries require an answerable structured confirmation", () => {
+    const body = read(STAGE_PROTOCOL);
+    expect(body.includes('label: Looks correct')).toBe(true);
+    expect(body.includes('label: Request changes')).toBe(true);
+    expect(body.includes("**Consolidated Summary Confirmation**")).toBe(true);
+    expect(body.includes("blank `[Answer]:` tag")).toBe(true);
+    expect(body.includes("Fill that tag only after the user responds")).toBe(true);
+    expect(body.includes("Never ask for this confirmation as bare prose")).toBe(true);
+    expect(
+      body.includes(
+        "same **Looks correct / Request changes** structured confirmation from Step 3a",
+      ),
+    ).toBe(true);
   });
 
   // --- .sh test 4 (prose half: two of the three registration sources) ------

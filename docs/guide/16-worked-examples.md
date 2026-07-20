@@ -35,7 +35,7 @@ You respond:
 | 0.1 | Workspace Scaffold | Initialization | orchestrator | inline (auto-proceed) |
 | 0.2 | Workspace Detection | Initialization | orchestrator | inline (auto-proceed) |
 | 0.3 | State Init | Initialization | orchestrator | inline (auto-proceed) |
-| 2.1 | Reverse Engineering | Inception | aidlc-developer-agent + aidlc-architect-agent | subagent |
+| 2.1 | Reverse Engineering | Inception | aidlc-developer-agent + aidlc-architect-agent | pipeline |
 | 2.3 | Requirements Analysis | Inception | aidlc-product-agent | inline |
 | 3.5 | Code Generation | Construction | aidlc-developer-agent | subagent |
 | 3.6 | Build and Test | Construction | aidlc-quality-agent | inline |
@@ -52,7 +52,7 @@ The 3 Initialization stages run as a single deterministic tool call (`aidlc-util
 
 ### Stage 2.1 — Reverse Engineering
 
-A two-step subagent scans the codebase: first a aidlc-developer-agent code scan, then an aidlc-architect-agent synthesis. Produces 9 artifacts in `<record>/inception/reverse-engineering/`:
+A two-link pipeline scans the codebase: first an aidlc-developer-agent code scan, then an aidlc-architect-agent synthesis that writes the artifacts. It produces 9 durable artifacts for the repository in `aidlc/spaces/default/codekb/user-service/`:
 
 | Artifact | Contents |
 |----------|----------|
@@ -143,16 +143,18 @@ Results captured in `<record>/construction/build-and-test/test-results.md`: 89 t
 ### End state
 
 ```
-aidlc/spaces/default/intents/260624-null-display-fix/
-  aidlc-state.md              # All 7 stages marked [x]
-  audit/                      # Full decision trail (per-clone shards)
-  inception/
-    reverse-engineering/       # 9 RE artifacts
-    requirements-analysis/     # requirements.md + questions
-  construction/
-    bugfix-null-display-name/
-      code-generation/         # plan + summary
-    build-and-test/            # instructions + test results
+aidlc/spaces/default/
+  codekb/
+    user-service/             # 9 space-level RE artifacts
+  intents/260624-null-display-fix/
+    aidlc-state.md            # All 7 stages marked [x]
+    audit/                    # Full decision trail (per-clone shards)
+    inception/
+      requirements-analysis/ # requirements.md + questions
+    construction/
+      bugfix-null-display-name/
+        code-generation/     # plan + summary
+      build-and-test/        # instructions + test results
 ```
 
 Application code in workspace root:
@@ -220,17 +222,21 @@ Compiles the initiative brief aggregating all Ideation outputs. Phase boundary v
 
 ### Inception Phase (stages 2.1-2.8)
 
-**Stage 2.1 — Reverse Engineering** (subagent)
+**Stage 2.1 — Reverse Engineering** (pipeline)
 
-Two-step scan of the existing codebase. Identifies the existing service structure, database schema, and API patterns that the notification service must integrate with.
+Two-link scan of the existing codebase. It writes the 9 artifacts to the repository's space-level store at `aidlc/spaces/<active-space>/codekb/<repo>/`, identifying the existing service structure, database schema, and API patterns that the notification service must integrate with.
 
 **Stage 2.2 — Practices Discovery** (aidlc-pipeline-deploy-agent)
 
-The aidlc-pipeline-deploy-agent leads this stage, with aidlc-quality-agent, aidlc-developer-agent, and aidlc-devsecops-agent supporting. Because this is a brownfield project, it consumes the Reverse Engineering artifacts to infer the team's existing practices — test framework and coverage conventions, CI/lint setup, branching and review norms. Produces `team-practices.md`, `discovered-rules.md`, and `evidence.md`. On affirmation, the discovered practices are promoted into `aidlc/spaces/<space>/memory/team.md` and `aidlc/spaces/<space>/memory/project.md` so downstream stages honour them.
+This is a subagent hub-and-spoke. The aidlc-pipeline-deploy-agent drafts from the Reverse Engineering evidence; aidlc-quality-agent, aidlc-developer-agent, and aidlc-devsecops-agent then inspect that draft in parallel without seeing one another's contributions. The human interview resolves evidence gaps and policy judgments, after which the lead integrates all three contributions into `team-practices.md`, `discovered-rules.md`, and `evidence.md`. The gate offers **Approve** / **Request Changes**. After Approve, `practices-promote` writes `aidlc/spaces/<active-space>/memory/team.md` and `project.md`, then atomically records the affirmed timestamp and matching `PRACTICES_AFFIRMED` receipt; only then does the conductor report the stage approved. A missing, stale, or failed promotion leaves the gate open and the stage incomplete.
 
 **Stage 2.3 — Requirements Analysis** (aidlc-product-agent)
 
 Produces 12 functional requirements (notification triggers, preference CRUD, email rendering, digest scheduling) and 5 non-functional requirements (delivery latency < 5s, email retry, preference storage). Questions drill into edge cases: what happens when email delivery fails? How frequently should digests run?
+
+**Stage 2.4 — User Stories** (mob)
+
+The aidlc-product-agent first drafts the personas and stories. The aidlc-design-agent, aidlc-developer-agent, and aidlc-quality-agent then inspect that draft as mutually blind collaborators, each writing an identity-marked contribution file. The aidlc-product-agent lead integrates all three contributions into `personas.md` and `stories.md` before presenting the **Approve** / **Request Changes** gate.
 
 **Stage 2.6 — Application Design** (aidlc-architect-agent)
 

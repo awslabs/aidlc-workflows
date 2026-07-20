@@ -112,6 +112,10 @@ function eventCount(p: string, type: string): number {
 function stateSync(args: string[], p: string): { status: number; stdout: string; stderr: string } {
   const r = Bun.spawnSync({
     cmd: [BUN, STATE_TOOL, ...args, "--project-dir", p],
+    env: {
+      ...process.env,
+      AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -132,6 +136,10 @@ async function fireParallel(p: string, argSets: string[][]): Promise<number[]> {
   const procs = argSets.map((args) =>
     Bun.spawn({
       cmd: [BUN, STATE_TOOL, ...args, "--project-dir", p],
+      env: {
+        ...process.env,
+        AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      },
       stdout: "ignore",
       stderr: "ignore",
     }),
@@ -341,7 +349,12 @@ describe("t145 C2b state-lock lost-update safety (mechanism cli — parallel spa
       // Race a burst of rejects at the open [?] gate — exactly one is accepted.
       const codes = await fireParallel(
         proj,
-        Array.from({ length: 4 }, () => ["reject", "requirements-analysis"]),
+        Array.from({ length: 4 }, (_unused, i) => [
+          "reject",
+          "requirements-analysis",
+          "--feedback",
+          `cycle-${c}-reject-${i}`,
+        ]),
       );
       expect(codes.filter((x) => x === 0).length).toBe(1);
       // Re-enter the gate ([R] → [?]) so the next cycle has a valid target.

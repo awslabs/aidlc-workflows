@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 469,
+    "total": 473,
     "enumeratedByClass": {
-      "function": 243,
+      "function": 245,
       "audit": 72,
       "scope": 9,
       "stage": 32,
-      "hook": 12,
-      "subcommand": 94,
+      "hook": 13,
+      "subcommand": 95,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 99,
+      "function": 101,
       "audit": 31,
       "scope": 9,
-      "stage": 8,
-      "hook": 12,
-      "subcommand": 81,
+      "stage": 9,
+      "hook": 13,
+      "subcommand": 82,
       "render-surface": 7
     }
   },
@@ -1760,6 +1760,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:latestMainWorkflowStageStarted",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t201-swarm-batch-advance.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:latestStartedStageSlug",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2906,6 +2918,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:swarmConvergedUnits",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t201-swarm-batch-advance.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:templateEligibleArtifacts",
       "minMechanism": "none",
       "coveredBy": [
@@ -3335,6 +3359,18 @@
         },
         {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "hook",
+      "unitId": "aidlc-state-transition-guard",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t242-state-transition-guard.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3909,8 +3945,13 @@
       "unitClass": "stage",
       "unitId": "inception/user-stories",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/integration/t238-user-stories-mob.sdk.test.ts",
+          "mechanism": "sdk"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "stage",
@@ -4006,6 +4047,18 @@
       "minMechanism": "cli",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-audit append-batch",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t127-single-stage-invariant.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "subcommand",

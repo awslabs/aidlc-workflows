@@ -136,14 +136,14 @@ harness-engineer view is what the loop produces and where it lands:
 ### Where a kept learning lands
 
 A confirmed learning *is* a practice: it lands in the same space memory files
-practices-discovery affirms (`aidlc/spaces/<space>/memory/team.md` /
+practices-discovery affirms (`aidlc/spaces/<active-space>/memory/team.md` /
 `memory/project.md`) — there is no separate `*-learnings.md` surface. The gate
 routes it by topical heading:
 
 | Heading at the gate | Lands in | Audit event |
 |---|---|---|
-| Interpretation / Deviation / Tradeoff | `aidlc/spaces/<space>/memory/project.md` (default) | `RULE_LEARNED` |
-| same, promoted one click | `aidlc/spaces/<space>/memory/team.md` | `RULE_LEARNED` |
+| Interpretation / Deviation / Tradeoff | `aidlc/spaces/<active-space>/memory/project.md` (default) | `RULE_LEARNED` |
+| same, promoted one click | `aidlc/spaces/<active-space>/memory/team.md` | `RULE_LEARNED` |
 | Open question | nothing — research items don't promote | — |
 
 The default scope is **project**, the narrowest. A one-click "promote to team"

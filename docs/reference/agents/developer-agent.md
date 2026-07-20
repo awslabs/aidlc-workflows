@@ -24,7 +24,8 @@
 
 | Stage | Name | What This Agent Contributes |
 |-------|------|-----------------------------|
-| practices-discovery | Practices Discovery (Inception) | Code-pattern evidence scan: naming conventions, layer separation, error handling, and file organisation, returned as code-style rules |
+| practices-discovery | Practices Discovery (Inception) | Mutually blind code-pattern spoke: naming conventions, layer separation, error handling, and file organisation, written to its own contribution file |
+| user-stories | User Stories | Implementability voice in the mob ensemble (dispatched collaborator, writes its own contribution file) |
 | functional-design | Functional Design | API contract design and data model specification |
 | deployment-execution | Deployment Execution | Database migration execution and validation |
 

@@ -69,9 +69,11 @@ Follow stage-protocol.md question flow.
 
 Create CD pipeline configuration, deployment strategy document, rollback runbook, feature flag configuration, and environment promotion matrix.
 
-### Step 5: Update State
+### Step 5: Completion Handoff
 
-Mark deployment-pipeline as `[x]` completed in `<record>/aidlc-state.md`.
+Hand completion to `stage-protocol.md` via
+`bun .kiro/tools/aidlc-orchestrate.ts report --stage deployment-pipeline --result <outcome>`.
+The engine owns all lifecycle transitions and advancement.
 
 ### Step 6: Present Completion & Request Approval
 
@@ -106,13 +108,13 @@ Before the approval gate, read memory.md and surface candidates as a
 structured question. For each entry the user keeps, write to the appropriate
 harness destination per `stage-protocol.md` §13 — never to this stage file:
 
-- Prescriptive rule → `.kiro/steering/aidlc-phase-<phase>.md` (phase-scoped)
-  or `.kiro/steering/aidlc-<org|team|project>.md` (cross-cutting)
+- Prescriptive rule → a practice line under the routed heading in
+  `aidlc/spaces/<active-space>/memory/project.md` (default) or `team.md` (promoted)
 - Verification check → new manifest at `.kiro/sensors/aidlc-<id>.md`
   (capability descriptor only — no `applies_to`); add the new id to
   the relevant stage's `sensors: [...]` frontmatter list to wire it
 
-If nothing surfaces or the user skips all, proceed to the gate. The memory.md
+Even when nothing surfaces, still ask the mandatory "Anything to add for next time?" question from stage-protocol.md section 13. Do not infer "Nothing to add." Only after the human answers that question may you proceed to the gate. The memory.md
 file stays in the artefact directory as part of the stage's permanent record.
 
 Stage files are immutable framework artefacts — the ritual writes into the

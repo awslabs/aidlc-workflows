@@ -9,11 +9,13 @@ Section references (e.g., "Protocol Section 1") map to the source file.
 > [Stage Definition](15-stage-definition.md). This chapter covers runtime
 > execution behaviour.
 
-> **Path convention.** Artifacts, state, and the audit trail live under the
-> active intent's **record dir** — `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`,
-> written `<record>/` below. The audit trail is a directory of per-clone shards
-> at `<record>/audit/<host>-<clone>.md` (readers glob and merge by timestamp),
-> not a single file.
+> **Path convention.** Intent-scoped artifacts, state, and the audit trail live
+> under the active intent's **record dir** —
+> `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`, written `<record>/` below.
+> Reverse Engineering outputs instead live in the space-level, per-repository
+> store `aidlc/spaces/<active-space>/codekb/<repo>/`. The audit trail is a
+> directory of per-clone shards at `<record>/audit/<host>-<clone>.md` (readers
+> glob and merge by timestamp), not a single file.
 
 ---
 
@@ -75,15 +77,15 @@ with a fresh timestamp.
 
 | # | Check |
 |---|-------|
-| 1 | At the approval gate, optionally call `bun .claude/tools/aidlc-state.ts gate-start <slug>` (positional slug, not `--stage`) -- the tool flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. If skipped, the engine's `report` / `reject` paths backfill the missing `STAGE_AWAITING_APPROVAL` row (tagged `Recovered=true`) before recording the outcome. (`STAGE_STARTED` / the `[-]` transition is emitted earlier by `advance` / `approve` when the stage becomes active.) |
+| 1 | At the approval gate, call `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`. The engine flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
 | 2 | Log options BEFORE calling `AskUserQuestion` via `bun .claude/tools/aidlc-log.ts decision` (not by hand-writing to the `audit/` shards) |
-| 3 | After the user responds, log the exact choice via `bun .claude/tools/aidlc-log.ts answer`, then use `aidlc-orchestrate.ts report --stage <slug> --result approved` for approval or `aidlc-state.ts reject <slug>` for request-changes. If the approval UI first captures only the "Request Changes" choice, ask once for revision feedback and then call `reject` immediately before any revision work or re-presented gate |
+| 3 | After the user responds, log the exact choice via `bun .claude/tools/aidlc-log.ts answer`, then use `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` for approval or `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "<feedback>"` for request-changes. After revision work, report `--result revised` before re-presenting the gate. |
 | 4 | Never summarize user input -- pass exact option labels to the log tool; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
-| 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
+| 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
 | 7 | Mark previous stage task `completed` and current stage task `in_progress` with `activeForm` BEFORE work begins (the `sync-statusline` hook handles state syncing) |
 | 8 | Use ONLY event types from `knowledge/aidlc-shared/audit-format.md` -- the state and log tools enforce this; never write directly to the `audit/` shards |
-| 9 | Do NOT hand-write `STAGE_STARTED` / `STAGE_COMPLETED` blocks to the `audit/` shards. The state-tool subcommands emit them. Hand-written blocks break atomicity and miss the timestamp guarantee |
+| 9 | Do NOT hand-write lifecycle events or invoke lifecycle verbs on `aidlc-state.ts`. Report outcomes through `aidlc-orchestrate.ts`; the engine's internal state call emits the atomic audit rows |
 
 ---
 
@@ -162,6 +164,7 @@ revision, an 'Accept as-is' option will become available."
 ```mermaid
 flowchart TD
     COMPLETE["Stage work complete"]
+    REPORT_AWAITING["Report awaiting-approval:\nengine verifies evidence + opens gate"]
     AUDIT_PRE["Append to this clone's audit shard:\nstage summary + options\n(fresh ISO timestamp)"]
     ASK["AskUserQuestion:\nApproval Gate"]
 
@@ -178,7 +181,9 @@ flowchart TD
     REVISION_COUNT{"Revision\ncycle >= 3?"}
     NOTE_2ND["After 2nd revision:\nnote that escape hatch\nactivates next cycle"]
 
-    UPDATE_STATE["Update aidlc-state.md:\nmark stage as completed"]
+    REPORT_APPROVED["Report approved:\nengine completes + routes"]
+    REPORT_REJECTED["Report rejected:\nengine records feedback + revising state"]
+    REPORT_REVISED["Report revised:\nengine verifies evidence + re-opens gate"]
     PROGRESS["Display progress line:\nN/total overall"]
     NEXT_STAGE["Proceed to next stage"]
 
@@ -187,25 +192,28 @@ flowchart TD
 
     ADD_EXEC["Insert skipped stage\ninto workflow"]
 
-    COMPLETE --> AUDIT_PRE --> ASK
+    COMPLETE --> REPORT_AWAITING --> AUDIT_PRE --> ASK
     ASK --> APPROVE
     ASK --> CHANGES
     ASK --> ACCEPT
     ASK --> ADD_STAGE
 
-    APPROVE --> AUDIT_POST_A --> UPDATE_STATE --> PROGRESS --> NEXT_STAGE
-    ACCEPT --> AUDIT_POST_ACC --> UPDATE_STATE
+    APPROVE --> AUDIT_POST_A --> REPORT_APPROVED --> PROGRESS --> NEXT_STAGE
+    ACCEPT --> AUDIT_POST_ACC --> REPORT_APPROVED
 
-    CHANGES --> AUDIT_POST_C --> REVISION_COUNT
-    REVISION_COUNT -->|"< 3"| NOTE_2ND --> REVISE --> RE_PRESENT --> AUDIT_PRE
+    CHANGES --> AUDIT_POST_C --> REPORT_REJECTED --> REVISION_COUNT
+    REVISION_COUNT -->|"< 3"| NOTE_2ND --> REVISE --> REPORT_REVISED --> RE_PRESENT --> AUDIT_PRE
     REVISION_COUNT -->|">= 3"| REVISE
 
     ADD_STAGE --> AUDIT_POST_ADD --> ADD_EXEC
 
     style COMPLETE fill:#e8f5e9,stroke:#388e3c
+    style REPORT_AWAITING fill:#e3f2fd,stroke:#1565c0
     style ASK fill:#bbdefb,stroke:#1565c0
     style APPROVE fill:#a5d6a7,stroke:#2e7d32
     style CHANGES fill:#fff9c4,stroke:#f9a825
+    style REPORT_REJECTED fill:#fff3e0,stroke:#ef6c00
+    style REPORT_REVISED fill:#e3f2fd,stroke:#1565c0
     style ACCEPT fill:#ffccbc,stroke:#bf360c
     style ADD_STAGE fill:#e1bee7,stroke:#7b1fa2
     style NEXT_STAGE fill:#c8e6c9,stroke:#388e3c
@@ -313,6 +321,12 @@ Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
   "Select 'Other' on any question to discuss it before answering."
 - After each batch, IMMEDIATELY write answers to the questions file
 - Log each batch with fresh ISO timestamp
+- Present a consolidated answer summary, then a structured confirmation with
+  **Looks correct** and **Request changes** options. Do not ask for confirmation
+  as bare prose. Before presenting it, append or reset a dedicated
+  **Consolidated Summary Confirmation** entry in the stage questions file with
+  both options and a blank `[Answer]:`; fill it only from the human's response.
+  A request for changes resets that confirmation to blank before re-prompting.
 
 #### Edit File (Self-Guided Mode)
 
@@ -325,7 +339,7 @@ Log the mode choice to the `audit/` shards. Users can switch modes mid-stage.
 - Open-ended conversation; extract decisions as they emerge
 - End signal: "When ready to proceed, say **done** and I'll summarize."
 - Write extracted answers to file with value, timestamp, and `**Mode:** chat`
-- Present decision summary for confirmation before proceeding
+- Present the decision summary, then persist and use the same **Looks correct / Request changes** structured confirmation before proceeding
 - Best for: exploratory stages, brainstorming, questions needing discussion
 
 **Step 4: Verify completeness.** Read file, confirm all `[Answer]:` tags
@@ -401,18 +415,20 @@ audit log entries.
 |----------|---------|
 | `[ ]` | Not started |
 | `[-]` | In progress (executing, not yet approved) |
+| `[?]` | Awaiting human approval |
+| `[R]` | Revising after rejection |
 | `[x]` | Completed (approved by user) |
-| `[S]` | Skipped via `--stage` or `--phase` jump |
+| `[S]` | Skipped by a justified current-stage report or navigation |
 
-**Enforcement:** At stage START, mark `[-]`. At stage END (after approval),
-mark `[x]`. Never skip `[-]` by going directly from `[ ]` to `[x]`.
+**Enforcement:** The engine marks these states; stage prose and conductors do
+not. Report gate and terminal outcomes through `aidlc-orchestrate.ts`.
 
 **`[S]` behavior:**
-- Set by the Stage/Phase Jump handler for all in-scope stages before the jump target
+- Set by `report --stage <current> --result skipped --reason "<reason>"`, scope composition, or Stage/Phase Jump
 - Excluded from statusline progress counts (not counted in total or done)
-- Not modified by normal stage advancement (sed patterns don't match `[S]`)
+- Preserved while the engine routes onward; never paired with `STAGE_COMPLETED`
 - On resume, treated as completed for task tracking (task created and immediately marked completed)
-- Never set during normal workflow execution -- only by explicit `--stage`/`--phase` jumps
+- A reported skip requires an explicit current stage and nonblank reason; single-stage runs reject it
 
 ### Task Status Transitions
 
@@ -539,29 +555,52 @@ See [Knowledge System](10-knowledge-system.md) for the full loading order.
 Steps 1-3 ship with the framework. Steps 4-5 are user-managed. Step 6 is
 dynamic per workflow position.
 
-### Inline Stages
+### Inline Stages and Inline Mob Leads
 
-1. Read lead agent's flat file (e.g., `agents/aidlc-architect-agent.md`)
-2. Load knowledge per 6-step order
-3. Apply agent's perspective during execution
+1. Read **every** file in `directive.inline_context_paths` before doing stage
+   work. The engine expands exact persona and existing knowledge-file paths:
+   lead + supports for `inline`, and the lead only for `mob` because mob
+   supports are dispatched. Agent names alone are not loaded context.
+2. Preserve the directive's path order, which follows the 6-step knowledge
+   order. Do not omit support-agent entries on `inline` or the lead entries on
+   `mob`.
+3. Apply every loaded perspective during execution.
 
 ### Subagent Stages
 
-1. Include agent persona context in Claude Code Task tool prompt
-2. Pass relevant prior artifacts as context
-3. Specify `subagent_type` from stage metadata
+1. Dispatch the named harness agent; its config loads the persona and knowledge.
+2. Pass exact rule paths, relevant prior-artifact paths, and task instructions
+   rather than copied persona or knowledge prose.
+3. Select the agent named by the stage metadata.
 
-### Multi-Agent Stages
+### Multi-Agent Stages (Ensemble Topologies)
 
-The conductor brings in the lead agent first, then each support agent with the lead's
-output as context. *How* it brings them in follows `directive.mode`: on an inline stage
-(every multi-agent stage in the shipped graph) the support agents are personas the
-conductor loads into its own context — not `Task` dispatches. `Task` is reserved for
-`mode: subagent` stages. Either way the conductor performs every delegation; agents
-never spawn subagents.
+*How* the conductor brings support agents in follows `directive.mode` — the stage's
+communication topology: on an `inline` stage the support agents are personas the
+conductor loads into its own context (voices, not dispatches); on `subagent`
+(hub-and-spoke), `pipeline` (chain), and `mob` (mesh as bounded rounds) each support
+agent is a real, independently dispatched collaborator. Everyone writes their own
+work: on subagent/mob each collaborator writes a contribution file (Contribution +
+Positions, §11) that the lead integrates — the lead alone edits the `produces[]`
+artifacts, and the contribution files are the engine-checked completion evidence;
+on pipeline the chain links advance the artifacts directly and the final link leaves
+them complete. Who sees what differs per topology — spokes are mutually blind, chain
+links see all upstream work, mob objectors get one confirm-or-maintain round while
+judgment-call objections surface to the human mid-stage — but on every topology the
+conductor performs every delegation; agents never spawn subagents. See
+stage-protocol.md §5 "Multi-agent stages" for the full contract.
 
 Example: Feasibility uses `aidlc-architect-agent` (lead) + `aidlc-aws-platform-agent` +
-`aidlc-compliance-agent`, all inline.
+`aidlc-compliance-agent`, all inline. The mob showcase is `user-stories`: the
+`aidlc-product-agent` drafts personas and stories; design, developer, and quality
+collaborators contribute against that draft while mutually blind; then the lead
+integrates their work before the gate, with `aidlc-product-lead-agent` reviewing.
+The hub-and-spoke showcase is `practices-discovery`: pipeline-deploy lead draft,
+mutually blind quality, developer, and devsecops contributions, human interview,
+then lead integration. Its gate offers **Approve** / **Request Changes**; after
+Approve, `practices-promote` must commit both the affirmed timestamp and a
+`PRACTICES_AFFIRMED` audit receipt from the current stage attempt before the
+conductor reports the stage approved.
 
 ### The 11 Domain Agents
 
@@ -596,8 +635,9 @@ existence, then offers to resume from the last incomplete stage.
 |-------------------|----------------|
 | **Initialization (0.1-0.3)** | Workspace filesystem; `aidlc-state.md` |
 | **Ideation (1.1-1.7)** | `<record>/ideation/` artifacts; guardrails |
-| **Inception -- RE** | RE artifacts; ideation scope/feasibility |
-| **Inception -- Requirements** | RE artifacts (if performed); requirements-analysis docs |
+| **Inception -- RE** | Per-repo RE artifacts at `aidlc/spaces/<active-space>/codekb/<repo>/`; ideation scope/feasibility |
+| **Inception -- Practices Discovery** | Preserve the lead draft and existing contribution files; dispatch only missing quality/developer/devsecops spokes, then continue with the human interview and lead integration |
+| **Inception -- Requirements** | Per-repo `codekb/` artifacts (if performed); requirements-analysis docs |
 | **Inception -- Design** | Requirements; user stories; application-design docs |
 | **Inception -- Delivery Planning** | All inception artifacts; delivery-planning if partial |
 | **Construction -- Code Gen** | Current unit's design artifacts, story design, acceptance criteria, prior code |
@@ -678,7 +718,8 @@ Affect prior stages:
 1. Identify affected prior stages
 2. Present impact analysis via `AskUserQuestion`
 3. If approved, re-run affected stages in order
-4. Update `aidlc-state.md`
+4. Re-enter and complete them through orchestrator directives and reports; do
+   not edit lifecycle checkboxes directly
 
 ### Scope Changes
 
@@ -686,8 +727,8 @@ New requirements or scope-level modifications:
 1. Document in the `audit/` shards
 2. Return to Requirements Analysis (2.3) or Delivery Planning (2.8)
 3. Re-plan from that point
-4. If change affects stage selection (e.g., `poc` -> `feature`), update scope
-   in `aidlc-state.md`
+4. If change affects stage selection (e.g., `poc` -> `feature`), use the
+   scope/recompose command so the engine updates the plan atomically
 
 ### Unit Changes
 
@@ -782,7 +823,7 @@ brief analysis, skip optional stages:
 | **Planning** | Stages producing markdown artifacts (analysis, questions, design) |
 | **Generation** | Stages producing executable code (Code Generation, Build and Test) |
 | **Artifact** | A versioned markdown file in `<record>/` recording a decision, design, or analysis |
-| **Guardrail** | A learned behavioral rule stored in the space memory layer (`aidlc/spaces/<space>/memory/`) |
+| **Guardrail** | A learned behavioral rule stored in the active space memory layer (`aidlc/spaces/<active-space>/memory/`) |
 | **Approval Gate** | Structured prompt where user approves or requests changes |
 | **Inline Stage** | Stage executing directly in the orchestrator conversation |
 | **Subagent Stage** | Stage delegating execution to a Claude Code Task tool call |
@@ -866,8 +907,8 @@ investigation before marking complete.
 |------|--------|
 | Current-unit only | Pass only current unit's design artifacts |
 | Summarize inception | 1-2 line summary per inception artifact with path; subagent Reads if needed |
-| Always include | Agent persona, knowledge files, `aidlc-state.md`, task instructions |
-| Cap knowledge files | Max 3 most relevant; list others by path |
+| Always include | Specific task instructions and relevant state/artifact paths; the harness agent config loads persona and knowledge |
+| Large knowledge sets | Name especially relevant file paths; do not paste persona or knowledge prose into the prompt |
 
 ### Failure Recovery
 
@@ -926,11 +967,13 @@ approval gate:
    emits structured candidates — the LLM does not re-parse or classify.
 3. **Confirm**: the conductor renders the candidates; the user picks which to
    keep and, for free-text additions, picks the heading that derives the
-   destination.
+   destination. The always-present "Anything to add?" channel renders at least
+   `Nothing to add` and `Add a note`; one-option structured questions are
+   invalid on Claude Code and Codex.
 4. **Admission check**: each kept learning is checked against `org.md`'s
    matching section; a contradiction is surfaced to revise / skip / escalate.
 5. **Persist**: `aidlc-learnings.ts persist` writes each confirmed learning as a practice to
-   `aidlc/spaces/<space>/memory/{project,team}.md` (and, for a sensor-binding
+   `aidlc/spaces/<active-space>/memory/{project,team}.md` (and, for a sensor-binding
    learning, installs the manifest + stage `sensors:` import in one locked
    transaction), emitting `RULE_LEARNED` / `SENSOR_PROPOSED`.
 
