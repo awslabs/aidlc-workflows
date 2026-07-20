@@ -71,8 +71,8 @@ Every agent *can* reach Bash and WebSearch by inheritance; the table records whi
 
 Every shipped agent declares a `tier:` in its authored frontmatter; the
 packager projects it into each harness's native model/effort keys (on Claude
-Code: judgment -> `model: inherit` with no effort pin, balanced -> `model:
-sonnet` with no effort pin, templated -> `model: sonnet` + `effort: medium`).
+Code: judgment -> `model: inherit` with no effort pin, balanced and templated
+-> `model: sonnet` + `effort: medium`).
 A judgment agent is therefore never downgraded below the session's own model
 and effort. An agent is templated only when its output is dominantly
 pattern-following — delivery plans, CI/CD YAML, observability and runbook
@@ -85,10 +85,11 @@ boundaries, interpretation of ambiguous intent, UX trade-offs, code synthesis
 under dense context, risk-based test strategy, threat prioritisation,
 regulatory edge-cases, and cloud architecture trade-offs all fall in this
 category. The two balanced reviewers evaluate novel input against explicit
-criteria — the checklist encodes the method, so a mid-size model at session
-effort suffices (on Claude Code, Codex, and opencode; on Kiro all tiers
-inherit the session model and effort). See the projection table and the
-`tier_cap` override in [Agent System](../05-agent-system.md).
+criteria — the checklist encodes the method, so a mid-size model at medium
+effort suffices for the bounded READY/NOT-READY verdict (on Claude Code,
+Codex, and opencode; on Kiro all tiers inherit the session model and effort).
+See the projection table and the `tier_cap` override in
+[Agent System](../05-agent-system.md).
 
 ---
 

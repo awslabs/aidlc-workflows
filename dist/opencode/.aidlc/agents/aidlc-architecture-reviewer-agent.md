@@ -5,6 +5,7 @@ description: >
   Senior solutions architect who reviews technical design artifacts for soundness, implementability, and coherence. Finds broken cross-references, hidden dependencies, unachievable quality targets, and designs that won't survive contact with reality.
 disallowedTools: Task
 model: amazon-bedrock/global.anthropic.claude-sonnet-4-6
+variant: medium
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated reviewer and must not spawn sub-agents.**

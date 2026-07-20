@@ -6,22 +6,23 @@
 // whose output cascades downstream (architect, developer, product, ...): it
 // inherits the session's own model and effort so the user's ceiling is never
 // silently capped. `balanced` marks reviewer-shaped work (novel input judged
-// against explicit criteria): a mid-size model, session effort. `templated`
-// marks dominantly pattern-following output whose methodology already lives in
-// knowledge (delivery plans, CI/CD config, runbooks): a mid-size model at a
-// deliberately reduced effort - the one place the framework steps DOWN on its
-// own. Tiers only ever step down, never up, and only for templated work; the
-// names describe the WORK, not the dial, so a reader can classify a new agent
-// without knowing today's model lineup.
+// against explicit criteria): a mid-size model at medium effort - the review
+// contract is checklist- and evidence-grounded, and field data showed session
+// effort on such bounded verdicts multiplies latency without changing the
+// verdicts. `templated` marks dominantly pattern-following output whose
+// methodology already lives in knowledge (delivery plans, CI/CD config,
+// runbooks): the same mid-size model at the same reduced effort. Tiers only
+// ever step down, never up, and never for judgment work (whose output
+// cascades downstream); the names describe the WORK, not the dial, so a
+// reader can classify a new agent without knowing today's model lineup.
 //
 // Projection targets (see TIER_PROJECTIONS):
 //   - Claude Code   agent .md frontmatter: `model:` and optional `effort:`.
 //                   An OMITTED key inherits the session value, and a pinned
 //                   `effort:` overrides the session in both directions - a pin
 //                   is a cap, not a floor. So `judgment` writes `model:
-//                   inherit` and NO effort line; `balanced` writes `model:
-//                   sonnet` and NO effort line; only `templated` pins
-//                   `effort: medium`.
+//                   inherit` and NO effort line; `balanced` and `templated`
+//                   both write `model: sonnet` and pin `effort: medium`.
 //   - Codex CLI     agent role .toml: `model` and `model_reasoning_effort`.
 //                   Omitted keys fall back to the shipped .codex/config.toml
 //                   session defaults (live-verified on codex-cli 0.139.0 and
@@ -109,13 +110,19 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     opencode: { model: null, variant: null },
   },
   balanced: {
-    claude: { model: "sonnet", effort: null },
-    codex: { model: "openai.gpt-5.4", effort: null },
+    // Reviewer-shaped work: a mid-size model at medium effort. The review
+    // contract is checklist- and evidence-grounded, so the bounded verdict
+    // does not benefit from session-effort deliberation (field data: session
+    // effort multiplied review latency without changing verdicts). Kiro pins
+    // no model for any tier (Kiro agents inherit the session model), so the
+    // medium pin is inert there - see the Kiro CLI/IDE projection note above.
+    claude: { model: "sonnet", effort: "medium" },
+    codex: { model: "openai.gpt-5.4", effort: "medium" },
     kiro: { model: null },
-    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: null },
+    opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
   },
   templated: {
-    // The one deliberate downgrade: a smaller model at reduced effort for
+    // A deliberate downgrade: a smaller model at reduced effort for
     // pattern-following output.
     claude: { model: "sonnet", effort: "medium" },
     codex: { model: "openai.gpt-5.4", effort: "medium" },

@@ -1,6 +1,17 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.13] - 2026-07-28
+
+The `balanced` tier - the two review-only agents, `aidlc-architecture-reviewer-agent` and `aidlc-product-lead-agent` - now steps down to **medium reasoning effort** instead of inheriting the session's. Field data showed reviews under high session effort spending most of their wall-clock in time-to-first-token on the large contexts reviews carry, while the checklist- and evidence-grounded review contract returned the same bounded READY/NOT-READY verdicts either way - the extra depth bought latency, not verdicts. `judgment` agents are untouched: the "never silently downgrade the session" contract still holds where output cascades downstream. **Upgrade:** re-copy your `dist/<harness>/` shell into the project. (#607)
+
+* Claude Code: the two reviewer agent .md files now pin `effort: medium` (previously no `effort:` line, so the session effort carried into every delegated review).
+* Codex CLI: the two reviewer role TOMLs now pin `model_reasoning_effort = "medium"` (previously omitted).
+* opencode: the two reviewer subagent .md files now pin `variant: medium` (previously omitted).
+* Kiro CLI/IDE: unaffected - since #601/#606 (2.5.6) no tier pins a Kiro model, so there is no `chat.modelDefaults` entry to carry a tier effort; Kiro's reviewer agents already inherit the session model and effort.
+* Models are unchanged on every harness; only the effort dial moves (where a Kiro-style model surface exists to carry it).
+* Escape hatch: to give a reviewer the session effort back, delete the projected effort key in your installed copy (e.g. the `effort:` line in `.claude/agents/aidlc-architecture-reviewer-agent.md` / `aidlc-product-lead-agent.md`) - the edit survives until you re-copy the dist shell.
+
 ## [2.5.11] - 2026-07-24
 
 Intent Capture now keeps generated intent and stakeholder claims grounded in the user's description, confirmed answers, workflow-selected scope, or explicitly registered memory. Unsupported content is omitted, elicited, or surfaced as a human-owned assumption instead of being presented as fact. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated stage, Product Lead reviewer contract, and `claim-sources` sensor are installed.
@@ -79,7 +90,6 @@ The adaptive composer now estimates implementation entropy before composing. It 
 * Composed grids fold overlapping ideation/inception stages by default (each fold names its un-SKIP trigger); the human still approves, edits, or rejects every proposal at the gate.
 * In-flight recompose proposals re-estimate the entropy components from what completed stages actually resolved, name that evidence per proposed flip, and strict-validate before the gate so a starved flip is caught before approval, not after.
 * With CodeKB evidence covering the affected codebase, the composer may propose skipping Reverse Engineering; the proposal must disclose that downstream stages then run without the local RE artifact store, and the human decides at the gate. CodeKB is an optional external MCP server (see the Scopes and Depth guide for per-harness setup); without it the composer scores from the workspace scan, and on Kiro CLI / Kiro IDE the fallback is always used.
-
 
 ## [2.5.0] - 2026-07-17
 

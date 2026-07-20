@@ -261,6 +261,13 @@ challenge it, representing the customer (or the review board) at the gate.
 | `aidlc-product-lead-agent` | Requirements, user stories, and UX/mockup artifacts — completeness, business alignment, testability | balanced |
 | `aidlc-architecture-reviewer-agent` | Technical design artifacts — soundness, implementability, broken cross-references, unachievable NFR targets | balanced |
 
+The `balanced` tier projects to a mid-size model at medium effort: the review
+contract is checklist- and evidence-grounded, so the bounded READY/NOT-READY
+verdict does not need your session's full reasoning effort (which multiplies
+review latency on the large contexts reviews carry). To give a reviewer the
+session effort back, delete the projected `effort:` line in your installed
+copy of the agent file — see [Agent System](../reference/05-agent-system.md).
+
 ## The Composer Agent
 
 One more agent sits outside both groups: `aidlc-composer-agent`, the adaptive-workflows composer. The conductor dispatches it on a compose request (`/aidlc compose`, a compose offer on a cold start, `--report`, or `--new-scope`). It estimates the task's implementation entropy (five components: intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions - grounded in CodeKB MCP analysis when configured, the workspace scan otherwise), proposes the minimum viable EXECUTE/SKIP grid with the score breakdown and a per-stage rationale, and - only after your approval at the gate - authors the composed scope (front/report) or proposes pending-stage flips the deterministic `recompose` verb applies (in-flight). Its persona justifies both presence and absence against the entropy profile: every EXECUTE names the component it reduces, every SKIP names what already covers it, and cutting the spine (core, verification, the load-bearing discovery stage) is treated as the dangerous failure. See [Scopes and Depth - The Adaptive Composer](05-scopes-and-depth.md#the-adaptive-composer).

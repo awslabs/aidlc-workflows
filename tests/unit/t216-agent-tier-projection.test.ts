@@ -17,9 +17,11 @@
 //                effort win - an omitted effort key inherits the session
 //                effort, and a pinned one would override it in both
 //                directions, so ABSENCE is the contract)
-//   balanced  -> model: sonnet,  NO effort: line (same inherit reasoning)
-//   templated -> model: sonnet,  effort: medium (the one deliberate,
-//                cost-saving downgrade)
+//   balanced  -> model: sonnet,  effort: medium (reviewer-shaped work is a
+//                bounded, checklist-grounded verdict; field data showed
+//                session effort bought latency, not verdicts)
+//   templated -> model: sonnet,  effort: medium (deliberate, cost-saving
+//                downgrade for pattern-following output)
 //
 // Why this exists: t04 pins the authored tier split for the 11 domain-expert
 // agents. This companion pins the complete 14-agent roster's PROJECTED
@@ -59,7 +61,7 @@ type Agent = (typeof AGENTS)[number];
 // policy rather than echoing either. effort: null = the line must be ABSENT.
 const EXPECTED: Record<Agent, { model: "inherit" | "sonnet"; effort: "medium" | null }> = {
   architect: { model: "inherit", effort: null },
-  "architecture-reviewer": { model: "sonnet", effort: null },
+  "architecture-reviewer": { model: "sonnet", effort: "medium" },
   "aws-platform": { model: "inherit", effort: null },
   compliance: { model: "inherit", effort: null },
   composer: { model: "inherit", effort: null },
@@ -70,7 +72,7 @@ const EXPECTED: Record<Agent, { model: "inherit" | "sonnet"; effort: "medium" | 
   operations: { model: "sonnet", effort: "medium" },
   "pipeline-deploy": { model: "sonnet", effort: "medium" },
   product: { model: "inherit", effort: null },
-  "product-lead": { model: "sonnet", effort: null },
+  "product-lead": { model: "sonnet", effort: "medium" },
   quality: { model: "inherit", effort: null },
 };
 
@@ -111,7 +113,7 @@ describe("t216 complete Claude agent tier-projection contract", () => {
     }
   });
 
-  test("effort: is pinned for templated agents and ABSENT everywhere else", () => {
+  test("effort: is pinned for balanced/templated agents and ABSENT for judgment", () => {
     for (const agent of AGENTS) {
       const values = keyValues(frontmatter(agent), "effort");
       const want = EXPECTED[agent].effort;
