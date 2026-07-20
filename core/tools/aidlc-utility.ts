@@ -13,6 +13,7 @@ import { spawnSync } from "node:child_process";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { adaptLegacyResult, buildBundle, mergeFindings, runDoctorAnalysis } from "./aidlc-doctor-bundle.ts";
 import {
   artifactsRegistryFor,
   findCycles,
@@ -212,6 +213,7 @@ Utilities:
   plugin list       List installed plugins and enabled state (--json for structured output)
   plugin sync       Compose installed plugins into the current install
   --doctor          Run health check on hooks, settings, and directory structure
+  --doctor --export Write a redacted diagnostic report (timeline + findings, no work product); --output <dir> to relocate
   --stage <id>      Jump to a specific stage (by slug or number, e.g., code-generation or 3.5)
   --phase <name>    Jump to the first in-scope stage of a phase (e.g., construction or 3)
   --scope <scope>   Set or change scope (standalone or with --stage/--phase)
@@ -1115,7 +1117,7 @@ function pushNamingAdvisory(
   });
 }
 
-function handleDoctor(projectDir: string): void {
+function handleDoctor(projectDir: string, flags: Record<string, string> = {}): void {
   const results: Array<{ pass: boolean; label: string; fix?: string }> = [];
   const isWindows = process.platform === "win32";
 
@@ -2768,6 +2770,14 @@ function handleDoctor(projectDir: string): void {
     });
   }
 
+  // One fresh analysis, shared by the live report AND the --export writer
+  // (issue #575, Arden #3): the structured condition->remedy findings and the
+  // reconstructed timeline are computed ONCE here. A plain --doctor renders
+  // these findings alongside the legacy check rows, so gate-unresolved /
+  // runtime-graph-stale / cold-hook and the rest surface live too - the live
+  // output and the export can never diverge. The analysis performs no writes.
+  const analysis = runDoctorAnalysis(projectDir);
+
   // Print report
   let output = "AI-DLC Health Check\n";
   output += `${"\u2500".repeat(37)}\n`;
@@ -2784,6 +2794,28 @@ function handleDoctor(projectDir: string): void {
       failed++;
     }
   }
+  // Structured diagnosis findings (workflow timeline analysis) are ADVISORY and
+  // never change doctor's exit code: they render for visibility but do not count
+  // toward `failed`. Only the legacy environment/config checks above drive the
+  // exit status, so a plain `/aidlc --doctor` keeps its pre-existing contract \u2014
+  // a workflow-level diagnosis (which can be a soft, workflow-in-progress signal)
+  // must not flip the exit code that CI and scripts gate on. Info is omitted from
+  // the live view to keep it terse; the export carries the full set.
+  const diagErrors = analysis.findings.filter((f) => f.severity === "error");
+  const diagWarnings = analysis.findings.filter((f) => f.severity === "warning");
+  if (diagErrors.length > 0 || diagWarnings.length > 0) {
+    output += `${"\u2500".repeat(37)}\n`;
+    output += "Workflow diagnosis (advisory):\n";
+    for (const f of diagErrors) {
+      output += `\u2717  [${f.id}] ${f.summary}`;
+      if (f.remedy) output += ` (${f.remedy})`;
+      output += "\n";
+    }
+    for (const f of diagWarnings) {
+      output += `!  [${f.id}] ${f.summary}\n`;
+    }
+  }
+
   output += `${"\u2500".repeat(37)}\n`;
   output += `${passed} passed, ${failed} failed\n`;
 
@@ -2799,11 +2831,64 @@ function handleDoctor(projectDir: string): void {
     });
   }
 
+  // --export: after the live report, write a redacted diagnostic report from
+  // the SAME analysis this run already computed (issue #575). No second read,
+  // no cached diagnosis. The export write never changes doctor's exit code.
+  // `--export` is a bare boolean flag; accept it whether the arg parser recorded
+  // it as "true" (bare) or a stray token followed it, so a trailing word can
+  // never silently disable the export.
+  if ("export" in flags) {
+    try {
+      const tsToken = fsSafeTimestamp();
+      // A bare `--output` (no value) parses to "true"; treat that as an error
+      // rather than creating a directory literally named "true".
+      if (flags.output === "true") {
+        throw new Error("--output requires a directory path (e.g. --output /tmp/aidlc-report)");
+      }
+      const outParent = flags.output
+        ? flags.output
+        : join(projectDir, "aidlc", "diagnostics");
+      mkdirSync(outParent, { recursive: true });
+      // Merge the legacy environment/config checks (bun present, hooks wired,
+      // settings intact) into the exported analysis so report.md/report.json
+      // carry the SAME findings the live report shows — the bundle exists so
+      // the maintainer does NOT need the user's project, so a failing env check
+      // must reach it. The live render (above) and the exit code are untouched;
+      // this only enriches what buildBundle serializes. (Arden round-3 #1.)
+      const analysisForExport = {
+        ...analysis,
+        findings: mergeFindings(results.map(adaptLegacyResult), analysis.findings),
+      };
+      const report = buildBundle(outParent, analysisForExport, tsToken);
+      let out = "\nDiagnostic report created:\n";
+      out += `  ${report.archivePath ?? report.bundleDir}\n\n`;
+      out += "Findings:\n";
+      const topFindings = report.findings.filter((f) => f.severity !== "info").slice(0, 20);
+      if (topFindings.length === 0) {
+        out += "  (no errors or warnings)\n";
+      } else {
+        for (const f of topFindings) out += `  ${f.severity.toUpperCase()} ${f.id}\n`;
+      }
+      out += "\nNo source files or artifact bodies were included.\n";
+      if (report.manualShareNote) out += `\n${report.manualShareNote}\n`;
+      process.stdout.write(out);
+    } catch (e) {
+      // Export failure must not mask the live doctor result; report and go on.
+      process.stdout.write(`\nDiagnostic report could not be created: ${errorMessage(e)}\n`);
+    }
+  }
+
   // Exit non-zero on any check failure so CI and scripts get a clear
   // signal. Doctor's stdout carries the diagnostic regardless of exit
   // code — the orchestrator's tool-failure handler was updated in this
   // same change to print stdout (not stderr) for doctor.
   process.exit(failed > 0 ? 1 : 0);
+}
+
+// A filesystem-safe UTC timestamp token (isoTimestamp has colons that some
+// filesystems reject in names): 2026-07-14T15:26:31Z → 20260714T152631Z.
+function fsSafeTimestamp(): string {
+  return isoTimestamp().replace(/[-:]/g, "").replace(/\.\d+/, "");
 }
 
 // ---------------------------------------------------------------------------
@@ -5261,7 +5346,7 @@ export async function main(argv: string[]): Promise<void> {
       handleStatus(projectDir, flags);
       break;
     case "doctor":
-      handleDoctor(projectDir);
+      handleDoctor(projectDir, flags);
       break;
     case "intent-birth":
       handleIntentBirth(projectDir, flags);

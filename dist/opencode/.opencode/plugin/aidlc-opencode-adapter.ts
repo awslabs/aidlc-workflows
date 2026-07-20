@@ -134,6 +134,7 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
     "tools/aidlc-audit.ts",
     "tools/aidlc-bolt.ts",
     "tools/aidlc-directive.ts",
+    "tools/aidlc-doctor-bundle.ts",
     "tools/aidlc-graph.ts",
     "tools/aidlc-includes.ts",
     "tools/aidlc-jump.ts",

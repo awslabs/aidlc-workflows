@@ -104,7 +104,7 @@ For handlers that require no LLM reasoning (print text, read/format files, check
 4. Handle audit logging inside the script via `appendAuditEntry` from `aidlc-audit.ts` (never hand-write `**Event**:` markdown blocks)
 5. Add the verb to the `aidlc-utility` usage string. If it renders a generated SKILL.md region, also document the corresponding `--check` guard in this chapter.
 
-The `--help`, `--version`, `--status`, and `--doctor` handlers are reference implementations.
+The `--help`, `--version`, `--status`, and `--doctor` handlers are reference implementations. `--doctor` also accepts `--export` (with an optional `--output <dir>`), which runs a fresh doctor pass and then writes a small, redacted diagnostic report; the shared `DoctorFinding` model and the report-assembly logic live in `core/tools/aidlc-doctor-bundle.ts`, so the live report and the exported report draw from one set of findings.
 
 The `codekb-path` handler is a read-only **direct utility verb**: stage prose
 invokes `bun <harness-dir>/tools/aidlc-utility.ts codekb-path`, not

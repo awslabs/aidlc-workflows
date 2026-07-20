@@ -48,6 +48,9 @@ aidlc/.aidlc-readonly-latch
 aidlc/.aidlc-sessions/
 aidlc/spaces/*/intents/*/runtime-graph.json
 aidlc/spaces/*/intents/*/.aidlc-*
+# Redacted diagnostic reports (/aidlc --doctor --export): regenerated, meant to
+# be shared then deleted — machine-local derived output, never shared truth.
+aidlc/diagnostics/
 #
 # COMMITTED (NOT ignored, listed here for the record — do NOT add ignore rules
 # for these): aidlc/spaces/*/memory/** · aidlc/spaces/*/codekb/** ·

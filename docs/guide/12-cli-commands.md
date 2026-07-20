@@ -27,6 +27,7 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc space-create <name>` | Create a new space from the framework baseline |
 | `/aidlc --status` | Display a read-only status summary |
 | `/aidlc --doctor` | Run a health check on your setup |
+| `/aidlc --doctor --export` | Run a fresh health check, then write a small, redacted diagnostic report for sharing |
 | `/aidlc --stage <slug\|#>` | Jump to a specific stage |
 | `/aidlc --stage <slug> --single` | Run one stage in isolation, without advancing your workflow |
 | `/aidlc --phase <name\|#>` | Jump to the start of a phase |
@@ -245,6 +246,8 @@ Display current workflow progress without modifying anything.
 
 Validate that all of this implementation's prerequisites, configuration, and stage-graph integrity are in place. Exits 0 on full pass, 1 on any failure; the full report writes to stdout in both cases so the orchestrator surfaces it either way. `--doctor` is **read-only** — on a fresh shell with no intent yet (no `audit/` shards) it creates no files, so it is safe to run before the first intent is born; once an intent exists it records a `HEALTH_CHECKED` audit row.
 
+When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** section listing the structured findings (e.g. `gate-unresolved`, `runtime-graph-stale`) for unresolved gates, a stale or missing runtime graph, cold hooks, and similar "it will not advance" causes. The live report and `--export` share one analysis, so the findings are identical either way.
+
 **Syntax:**
 
 ```
@@ -303,6 +306,70 @@ Validate that all of this implementation's prerequisites, configuration, and sta
 ✓ Keyword overlap: no conflicts
 ✓ Rule drift: no team/project rule overlaps org policy
 ✓ Paired sensor coverage: no sensor-bound rules (0 feedforward-only)
+```
+
+---
+
+### `/aidlc --doctor --export` — Write a diagnostic report
+
+Add `--export` to `--doctor` to write a small, redacted diagnostic report so a
+misbehaving workflow can be debugged without sharing your whole project
+directory. It runs a **fresh** doctor pass first (the report never reflects a
+cached diagnosis), then writes the report. The report write never changes
+doctor's exit code.
+
+**Syntax:**
+
+```
+/aidlc --doctor --export
+/aidlc --doctor --export --output <dir>
+```
+
+`--output <dir>` overrides the output location; the default is
+`aidlc/diagnostics/` under the project.
+
+**What it produces:** a timestamped `.tar.gz` when a system `tar` is available,
+otherwise the report directory is retained with instructions to compress it
+yourself before sharing (no new package dependency, no bespoke archive writer).
+The report contains:
+
+| File | Contents |
+|------|----------|
+| `report.md` | Human-readable workflow timeline plus findings |
+| `report.json` | Machine-readable timeline, findings, and summary |
+| `manifest.json` | Report schema version, AI-DLC version, harness, hashed intent id, per-file SHA-256 checksums, applied redactions, truncation notices, and the excluded list |
+| `evidence/normalized.json` | Allowlisted, normalized fields only — never raw files |
+
+**What it diagnoses:** the report reconstructs the workflow **timeline** from the
+audit trail (stage durations, gates, revisions, gaps, and abnormal/incomplete
+flags), then runs **deterministic** condition→remedy rules (no LLM) for the
+common "it will not advance" causes: unresolved approval gates, state/audit
+drift, and a stale or missing runtime graph / cold or frozen hook heartbeats.
+Findings come from the same shared `DoctorFinding` model the
+live `--doctor` uses, so the command and the report can never diverge. A remedy
+that names a recovery bypass (for example an `AIDLC_DISABLE_*` env var or an
+"archive your workspace" instruction) is always flagged as not safe to automate.
+
+**Safety.** The report never includes workspace source, raw state/audit/
+runtime-graph files, artifact/contribution/question/memory bodies, environment
+variables, or command output. Every emitted string is redacted: your home dir
+becomes `~`, the project root becomes `<project>`, intent ids are hashed, and
+secret-like values are scrubbed. Inputs whose real path escapes the project root
+are refused (a symlinked leaf or parent is not followed out of the tree),
+per-file and total size are capped (truncations are recorded in the manifest),
+and files are created owner-only where the platform supports it.
+
+**Example output:**
+
+```
+Diagnostic report created:
+  aidlc/diagnostics/aidlc-diagnostic-report-20260714-153000-3f9a1c22.tar.gz
+
+Findings:
+  ERROR gate-unresolved
+  WARNING runtime-graph-stale
+
+No source files or artifact bodies were included.
 ```
 
 ---

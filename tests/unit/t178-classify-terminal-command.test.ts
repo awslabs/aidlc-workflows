@@ -72,6 +72,34 @@ describe("classifyTerminalCommand() — read-only flags (match anywhere)", () =>
     });
   });
 
+  test("--doctor carries allowlisted export args (--export, --output <dir>) as args", () => {
+    // The diagnostic export surface must reach the tool through the terminal
+    // path the Kiro adapter runs, so --doctor collects its allowlisted trailing
+    // flags into args. A bare --doctor has none (no spurious key).
+    expect(classifyTerminalCommand(["--doctor", "--export", "--output", "/tmp/x"])).toEqual({
+      subcommand: "doctor",
+      source: "read-only-flag",
+      args: ["--export", "--output", "/tmp/x"],
+    });
+    expect(classifyTerminalCommand(["--doctor", "--export"])).toEqual({
+      subcommand: "doctor",
+      source: "read-only-flag",
+      args: ["--export"],
+    });
+    // Bare --doctor: no args field at all.
+    expect(classifyTerminalCommand(["--doctor"])).toEqual({
+      subcommand: "doctor",
+      source: "read-only-flag",
+    });
+    // Only the allowlist rides through: an arbitrary trailing token is ignored,
+    // never captured into args.
+    expect(classifyTerminalCommand(["--doctor", "--export", "--evil"])).toEqual({
+      subcommand: "doctor",
+      source: "read-only-flag",
+      args: ["--export"],
+    });
+  });
+
   test("the exported READ_ONLY_FLAGS set is exactly the four utility flags", () => {
     // Pins the set classifyTerminalCommand reads from; a drift here would
     // silently change what the seam treats as terminal.

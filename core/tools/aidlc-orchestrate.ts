@@ -303,6 +303,7 @@ interface ParsedFlags {
   depth?: string;
   testStrategy?: string;
   readOnly?: string; // the matched read-only flag, if any
+  readOnlyArgs?: string[]; // allowlisted trailing args for the read-only flag (e.g. --doctor --export --output <dir>)
   resume?: boolean; // --resume: re-enter an existing workflow (resume choice)
   single?: boolean; // --single: run ONE stage under a synthetic workflow id, never touching the main pointer
   newIntent?: boolean; // --new-intent: the conductor confirmed new-work alongside an active intent → emit the SAME birth directive (with the --label seam) the fresh-start path uses, instead of constructing intent-birth from SKILL.md prose
@@ -345,6 +346,24 @@ function parseNextFlags(args: string[]): ParsedFlags {
     const a = args[i];
     if (READ_ONLY_FLAGS.has(a)) {
       flags.readOnly = a;
+      continue;
+    }
+    // Allowlisted trailing args for `--doctor`: `--export` (boolean) and
+    // `--output <dir>`. Recognised ONLY once `--doctor` has matched, so they
+    // never leak into another read-only flag or into freeform intent text.
+    // Kept as a fixed allowlist (mirrored by classifyTerminalCommand in
+    // aidlc-lib.ts) so an arbitrary token can never ride the read-only path
+    // into the tool. The value of `--output` is the following non-flag token.
+    if (flags.readOnly === "--doctor" && (a === "--export" || a === "--output")) {
+      flags.readOnlyArgs = flags.readOnlyArgs ?? [];
+      flags.readOnlyArgs.push(a);
+      if (a === "--output") {
+        const next = args[i + 1];
+        if (next !== undefined && !next.startsWith("--")) {
+          flags.readOnlyArgs.push(next);
+          i++;
+        }
+      }
       continue;
     }
     // A LEADING `compose` verb forces the composer (front on a fresh workspace,
@@ -1501,8 +1520,14 @@ function handleNext(args: string[], projectDir: string | undefined): void {
   // harnessDir() so the directive names the right tree on every harness.
   if (flags.readOnly) {
     const sub = flags.readOnly.replace(/^--/, "");
+    // Carry the allowlisted trailing args (`--doctor --export [--output <dir>]`)
+    // into the named command so the documented export surface reaches the tool
+    // through the real routing path, not just a direct invocation.
+    const extra = flags.readOnlyArgs && flags.readOnlyArgs.length > 0
+      ? ` ${flags.readOnlyArgs.join(" ")}`
+      : "";
     emit(printDirective(
-      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${sub}\`, print its output verbatim, then stop. This is a read-only utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
+      `Run \`bun ${harnessDir()}/tools/aidlc-utility.ts ${sub}${extra}\`, print its output verbatim, then stop. This is a read-only utility, NOT workflow work: do NOT run \`next\` and do NOT advance, resume, or run any workflow stage.`,
     ));
     return;
   }

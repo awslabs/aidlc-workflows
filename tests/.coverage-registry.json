@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 473,
+    "total": 474,
     "enumeratedByClass": {
-      "function": 245,
+      "function": 246,
       "audit": 72,
       "scope": 9,
       "stage": 32,
@@ -1271,6 +1271,13 @@
     {
       "unitClass": "function",
       "unitId": "function:docsRoot",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:DOCTOR_EXPORT_FLAGS",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -5113,6 +5120,10 @@
         },
         {
           "file": "tests/unit/t238-build-binaries.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t243-doctor-bundle.test.ts",
           "mechanism": "cli"
         },
         {
