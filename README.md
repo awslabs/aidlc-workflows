@@ -734,7 +734,7 @@ uv run python run.py test
 
 ### AIDLC Design Reviewer
 
-**Location:** [`scripts/aidlc-designreview/`](scripts/aidlc-designreview/)
+**Location:** [aws-samples/sample-aidlc-design-reviewer](https://github.com/aws-samples/sample-aidlc-design-reviewer)
 
 ⚠️ **EXPERIMENTAL FEATURE** — AI-powered design review tool that analyzes AIDLC design artifacts using Claude models via AWS Bedrock.
 
@@ -746,30 +746,17 @@ uv run python run.py test
   - **CLI Tool** — On-demand reviews for CI/CD pipelines
   - **Claude Code Hook** — Real-time review during development (experimental)
 
-**Installation (CLI Tool):**
+See the [aws-samples/sample-aidlc-design-reviewer](https://github.com/aws-samples/sample-aidlc-design-reviewer) repository for installation and documentation.
 
-```bash
-cd scripts/aidlc-designreview
-uv sync --extra test
-source .venv/bin/activate  # Linux/Mac
-design-reviewer --aidlc-docs /path/to/aidlc-docs
-```
+---
 
-**Installation (Claude Code Hook):**
+### AIDLC Traceability
 
-```bash
-# From workspace root
-./scripts/aidlc-designreview/tool-install/install-linux.sh      # Linux
-./scripts/aidlc-designreview/tool-install/install-mac.sh        # macOS
-.\scripts\aidlc-designreview\tool-install\install-windows.ps1   # Windows PowerShell
-```
+**Location:** [aws-samples/sample-aidlc-traceability](https://github.com/aws-samples/sample-aidlc-traceability)
 
-The installer automatically detects your workspace root and installs the hook to `.claude/`.
+Tool for generating traceability matrices across AI-DLC artifacts, mapping requirements through to design and implementation.
 
-**Documentation:**
-
-- [scripts/aidlc-designreview/README.md](scripts/aidlc-designreview/README.md) — Main documentation
-- [scripts/aidlc-designreview/INSTALLATION.md](scripts/aidlc-designreview/INSTALLATION.md) — Hook installation guide
+See the [aws-samples/sample-aidlc-traceability](https://github.com/aws-samples/sample-aidlc-traceability) repository for installation and documentation.
 
 ---
 

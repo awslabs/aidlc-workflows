@@ -1,4 +1,0 @@
-This is not valid JSON at all.
-It contains some text that looks like a response but isn't structured.
-Maybe the model said: Here are my findings about the design...
-{ broken json "key": }
