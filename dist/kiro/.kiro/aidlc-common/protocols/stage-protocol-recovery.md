@@ -122,6 +122,7 @@ If a stage needs to be re-run (user requested changes after approval):
 - Load prior artifacts as context
 - Execute the stage again, overwriting previous artifacts
 - Present new completion message
+- If `<record>/construction/build-and-test/test-results.md` contains a `## Loop-Back Log` whose latest entry has a planned fix but the audit shows no matching `STAGE_JUMPED` (Target: code-generation) after it, the session died between logging and jumping: re-execute the jump per stage-protocol.md §1 "Build-and-Test failure loop-back" rather than re-diagnosing. On any resume, the loop-back count is the ledger's entry count, never zero.
 
 If a resumed active or revising CONDITIONAL stage proves inapplicable, route
 the outcome through `aidlc-orchestrate.ts report --stage <slug> --result

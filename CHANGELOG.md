@@ -1,6 +1,18 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.16] - 2026-07-28
+
+Bounded Build & Test → Code Generation failure loop-back. When Build and Test (3.6) diagnoses a failure whose root cause lies in the generated code or a code-generation approach choice (a library/version, container image, instance type, algorithm, or flag), the workflow can now jump back to code-generation and repair it instead of writing the approach off or dead-ending at a failed gate. Step 10's "On failure" handling becomes a 4-rung failure-escalation ladder: (1) in-stage fix, max 2 attempts, for root causes in the stage's own remit; (2) classify the failure and PRICE a candidate fix in a swappable dimension — declaring a feasible path out of scope on an unpriced effort assumption is a protocol violation; (3) under `Construction Autonomy Mode: autonomous`, a bounded autonomous loop-back (max 3 per intent) that records the diagnosis + priced fix and replays through code-generation; (4) a priced halt-and-ask question (Retry with fix [price] / Accept failure / Abort) when gated, out of bound, or out of fixes — giving up is the human's decision, never the agent's. **Upgrade:** re-copy your `dist/<harness>/` shell into the project (prose-only change; no tool or state-format changes).
+
+* The loop-back counter is a crash-safe artifact ledger, not session state: an append-only `## Loop-Back Log` in test-results.md, one `### Loop-back N — <ISO timestamp>` entry (Diagnosis / Root-cause stage / Planned fix / Price) per attempt; the entry count IS the bound. It survives the backward jump (jumps reset checkboxes, never artifacts); the `STAGE_JUMPED` audit rows remain the deterministic cross-check. Human-directed backward jumps don't count against the bound.
+* The jump routes through the engine: `aidlc-orchestrate.ts next --stage code-generation` emits the validated `aidlc-jump.ts execute` print; the conductor runs the printed command verbatim, never composes it by hand.
+* On an autonomous loop-back replay the Artifact Re-use question is not presented: deterministically Modify for the unit(s) the fix targets, Keep for all others, Modify for build-and-test itself (Redo is forbidden — it would erase the ledger); every auto-decision is still audited via `aidlc-state.ts reuse-artifact`.
+* Swarm replays take the cheap path: after `prepare`, run `check` on every unit first and claim already-green units at `finalize` without a worker turn; dispatch workers only for units the planned fix targets or that fail the check.
+* Crash resume: a latest Loop-Back Log entry with a planned fix but no matching `STAGE_JUMPED` (Target: code-generation) after it means the session died between logging and jumping — re-execute the jump, don't re-diagnose; on any resume the count is the ledger's entry count.
+* Single-stage runs (`/aidlc --stage build-and-test --single`) stop at rung 2: no main-workflow position to move, so priced options are logged and presented at that run's gate.
+* The failed run's gate is not presented and its learnings ritual defers to the eventual passing run — a sanctioned exception to the NO EMERGENT BEHAVIOR RULE and the stage-ritual-is-atomic checklist item, named in stage-protocol.md §1 and every harness conductor SKILL.
+
 ## [2.5.11] - 2026-07-24
 
 Intent Capture now keeps generated intent and stakeholder claims grounded in the user's description, confirmed answers, workflow-selected scope, or explicitly registered memory. Unsupported content is omitted, elicited, or surfaced as a human-owned assumption instead of being presented as fact. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated stage, Product Lead reviewer contract, and `claim-sources` sensor are installed.
@@ -79,7 +91,6 @@ The adaptive composer now estimates implementation entropy before composing. It 
 * Composed grids fold overlapping ideation/inception stages by default (each fold names its un-SKIP trigger); the human still approves, edits, or rejects every proposal at the gate.
 * In-flight recompose proposals re-estimate the entropy components from what completed stages actually resolved, name that evidence per proposed flip, and strict-validate before the gate so a starved flip is caught before approval, not after.
 * With CodeKB evidence covering the affected codebase, the composer may propose skipping Reverse Engineering; the proposal must disclose that downstream stages then run without the local RE artifact store, and the human decides at the gate. CodeKB is an optional external MCP server (see the Scopes and Depth guide for per-harness setup); without it the composer scores from the workspace scan, and on Kiro CLI / Kiro IDE the fallback is always used.
-
 
 ## [2.5.0] - 2026-07-17
 

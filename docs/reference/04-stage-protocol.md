@@ -125,7 +125,10 @@ never guesses the next stage.
 
 **No Emergent Behavior Rule:** Construction and Operation stages (phases 3-4)
 must always use this 2-option format. They must never introduce additional
-navigation options.
+navigation options. Two sanctioned carve-outs exist: the revision escape
+hatch (below) and the Build-and-Test failure loop-back (protocol Section 1,
+"Build-and-Test failure loop-back" -- the bounded 3.6 to 3.5 repair loop with
+its priced halt-and-ask question).
 
 ### Conditional 3rd Option
 

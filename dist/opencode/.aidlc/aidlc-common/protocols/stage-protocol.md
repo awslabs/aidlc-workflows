@@ -18,7 +18,7 @@ Before and during EVERY stage, verify:
 2. [ ] **Log non-gate questions via `aidlc-log.ts`** — before presenting a structured question that is not an approval gate: `bun .aidlc/tools/aidlc-log.ts decision --stage <slug> --decision "<summary>" --options "<csv>"`. After response: `bun .aidlc/tools/aidlc-log.ts answer --stage <slug> --details "<exact choice>"`. Approval choices go only through `aidlc-orchestrate.ts report`. (§2, §3)
 3. [ ] **Never summarize User Input** — use exact option labels. (§2, §3)
 4. [ ] **Task transitions + state sync** — Mark previous task `completed`, then `TaskUpdate({ ..., status: "in_progress", activeForm: "Running [Stage] [slug]" })`. The `[slug]` suffix triggers the PostToolUse hook that syncs the state file. `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` auto-advances to the next in-scope stage (or completes the workflow on the final stage) — do NOT call `advance` separately after approval. (§4)
-5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes.
+5. [ ] **Stage ritual is ATOMIC** — once a stage starts, EVERY step in its protocol fires: questions → artifact → reviewer (if declared) → learnings → gate. No step is skippable based on inferred user intent. "Skip to stage X" means skip INTERMEDIATE stages, NOT shortcut the TARGET stage's ritual. If a user jumps forward from a stage at its gate, the current stage's learnings ritual (§13) MUST fire before the jump executes. EXCEPTION: the Build-and-Test failure loop-back (§1) jumps back from a deliberately in-flight failed stage; its §13 learnings ritual defers to the eventual passing run.
 6. [ ] **Autonomy is NEVER inferred** — a user saying "go with recommended" or "pick the best answers" for one stage is a ONE-TIME instruction for THAT stage only. It does NOT create a standing rule. The next stage starts fresh with its declared autonomy mode. The ONLY way to get autonomous mode is: (a) the directive explicitly carries `autonomy: autonomous`, OR (b) the human explicitly says "run this autonomous" for the specific stage being proposed. NEVER carry forward an autonomy inference from a previous stage. NEVER self-answer questions without explicit permission for THIS stage.
 
 ---
@@ -32,7 +32,7 @@ Every stage (except the 3 stages in the Initialization phase: workspace-scaffold
 When you present an approval gate question, you MUST end your turn immediately and wait for the user's explicit response. Do NOT call any tool until the user has typed their choice in a new message. An approval gate is a mandatory human checkpoint that cannot be inferred, auto-approved, or skipped.
 
 ### NO EMERGENT BEHAVIOR RULE
-Construction and Operation stages MUST use standardized 2-option completion messages. DO NOT create 3-option menus or other emergent navigation patterns. Only IDEATION and INCEPTION stages may conditionally include a 3rd option (to add a previously skipped stage). Any deviation from these patterns is a protocol violation.
+Construction and Operation stages MUST use standardized 2-option completion messages. DO NOT create 3-option menus or other emergent navigation patterns. Only IDEATION and INCEPTION stages may conditionally include a 3rd option (to add a previously skipped stage). Any deviation from these patterns is a protocol violation. Two sanctioned carve-outs exist: the revision loop escape hatch (below) and the Build-and-Test failure loop-back (§1, "Build-and-Test failure loop-back").
 
 ### For simple decisions (3 or fewer options):
 Present a structured question:
@@ -147,6 +147,91 @@ options:
   - label: Abort
     description: Stop Construction; worktree preserved.
 ```
+
+### Build-and-Test failure loop-back (3.6 → 3.5)
+
+When Build and Test (3.6) diagnoses a failure whose ROOT CAUSE lies in the
+generated code or an approach chosen at code-generation (not in this stage's
+own test/build scaffolding), the workflow may return to code-generation and
+repair it rather than writing the approach off or dead-ending at the gate.
+The stage's Step 10 failure-escalation ladder decides WHEN this fires; this
+subsection defines HOW. It is a sanctioned exception to the NO EMERGENT
+BEHAVIOR RULE (like the revision escape hatch) and to Critical-checklist
+item 5's "complete the current stage before jumping": a failed build-and-test
+run is deliberately left in-flight — its gate is NOT presented and its §13
+learnings ritual DEFERS to the eventual passing run (the stage diary
+memory.md persists across the loop).
+
+**The loop-back counter** lives in test-results.md under `## Loop-Back Log`:
+the count of `### Loop-back N` entries IS the bound (max 3 per intent). This
+artifact ledger is chosen over parsing STAGE_JUMPED audit rows because it
+survives the backward jump (jumps reset checkboxes, never artifacts), is
+colocated with the diagnosis it must carry anyway, and is readable at the
+final gate; the STAGE_JUMPED rows the jump tool emits remain the
+deterministic audit cross-check. The log is append-only. A human-directed
+backward jump does not count against the bound — only entries this protocol
+writes do.
+
+**Autonomous loop-back procedure** (mode `autonomous`, bound not exhausted,
+priced fix identified):
+1. Append the `### Loop-back N — <ISO timestamp>` entry (Diagnosis /
+   Root-cause stage / Planned fix / Price) to test-results.md and a matching
+   Deviations entry to this stage's memory.md.
+2. Execute the jump through the ENGINE: run
+   `bun .aidlc/tools/aidlc-orchestrate.ts next --stage code-generation`.
+   The engine validates the target and answers with a `print` directive naming
+   the exact `aidlc-jump.ts execute --target code-generation --direction
+   backward --scope <scope>` command; run that printed command verbatim (it
+   resets the target + downstream stages, emits the canonical `STAGE_JUMPED`,
+   and pivots Current Stage), then re-run `next` and continue the forwarding
+   loop. Never compose the `execute` call by hand — the engine's print is the
+   validated form.
+3. On the code-generation re-entry, apply the planned fix ONLY to the unit(s)
+   the diagnosis names (see "Autonomous failure loop-back" under Artifact
+   Re-use, below). The standing `Construction Autonomy Mode: autonomous` grant
+   is unchanged by the jump; the replayed code-generation gate is
+   auto-approved under it with
+   `--user-input "Autonomous loop-back N per stage-protocol §1"` — the human
+   already approved the original run of this stage; the replay is a repair of
+   that approved shape, not a new autonomy inference (checklist item 6).
+4. Build and Test then re-runs naturally on the forward replay; choose Modify
+   at its own Artifact Re-use prompt (never Redo — it would erase the
+   Loop-Back Log) and re-execute Step 10 fresh.
+
+**Swarm interaction.** On a loop-back replay where the engine emits
+`invoke-swarm`, the jump's fresh `STAGE_STARTED` floors the convergence
+ledger (each `SWARM_UNIT_CONVERGED` row is stamped with its attempt's run
+floor, so prior-attempt rows no longer count) — all units re-dispatch by
+default. Do not spend a worker turn per unit: after `prepare`, run
+`check <unit> --check-cmd "<the project's convergence check>"` on every unit
+FIRST — units already green (the prior run's code is in the base the
+worktrees forked from) are claimed at `finalize` without any worker turn
+(`finalize` re-verifies every claimed unit, so the claim is safe); dispatch
+workers only for the unit(s) the Loop-Back Log's planned fix targets or that
+fail the check. On the inline per-unit path all artifacts still exist, so the
+fix is applied through the Artifact Re-use ritual per unit.
+
+**Halt-and-ask (gated or unset mode, bound exhausted, or no identifiable
+fix):**
+
+```question
+prompt: "Build and Test failed: [short error]. Root cause: [diagnosis]. Candidate fix: [fix] — estimated price: [effort/cost/risk]. Loop-backs used: [N]/3. How would you like to proceed?"
+header: Build Failure
+multiSelect: false
+options:
+  - label: Retry with fix
+    description: Jump back to code-generation, apply [fix] ([price]), re-run.
+  - label: Accept failure
+    description: Log the failure in test-results.md and proceed to this stage's approval gate.
+  - label: Abort
+    description: Stop here; the workflow can resume later.
+```
+
+"Retry with fix" runs the same procedure as the autonomous loop-back (a
+human-approved retry does count an entry in the Loop-Back Log, and the human
+may override the bound explicitly). Every option's description must carry its
+price where one is known — presenting an unpriced give-up option is a
+protocol violation.
 
 ---
 
@@ -1145,3 +1230,13 @@ bun .aidlc/tools/aidlc-state.ts reuse-artifact <stage-slug> \
 The tool emits `ARTIFACT_REUSED` with the `Stage` / `Decision` / `Artifacts` fields — never hand-write `**Event**:` markdown blocks. See `docs/reference/12-state-machine.md` for the canonical emitter registry.
 
 This applies to ALL stages, not just jump targets — when the workflow replays forward after a backward jump, each subsequent stage will also encounter existing artifacts and offer the same choice.
+
+**Autonomous failure loop-back**: when the replay was initiated by the
+Build-and-Test failure loop-back (§1) under `Construction Autonomy Mode:
+autonomous`, the 3-option question is NOT presented (the loop is meant to run
+without the human). The conductor decides deterministically from the
+Loop-Back Log's planned fix: **Modify** for the unit(s) the fix targets,
+**Keep** for all other units, **Modify** for build-and-test itself on
+re-entry (Redo is forbidden there — it would erase the Loop-Back Log). Every
+auto-decision is still audited via `aidlc-state.ts reuse-artifact --decision
+<keep|modify>`.
