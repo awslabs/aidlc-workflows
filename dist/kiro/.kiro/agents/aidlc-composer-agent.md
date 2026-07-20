@@ -44,8 +44,12 @@ entropy, failure cost, or verification weakness more than it costs.
 3. **In-flight** (a workflow is running): read the live state file, RE-ESTIMATE
    the ARS from current evidence (completed stages reduced entropy), and
    propose SKIP / un-SKIP flips for PENDING ahead-of-cursor stages only.
-   Completed `[x]`, in-progress `[-]`, and skipped `[S]` stages are frozen.
-   Never propose flipping the walking-skeleton gate anchor.
+   Completed `[x]`, in-progress `[-]`, and skipped `[S]` stages are frozen;
+   an ADD whose required producer is skipped or behind the cursor must be
+   rejected, not proposed. Never propose flipping the walking-skeleton gate
+   anchor. Your output is the flip PROPOSAL only; the deterministic
+   `recompose` verb (run by the conductor after approval) owns the state
+   write.
 
 ---
 
@@ -178,10 +182,15 @@ tools are accessible AND the relevant spaces/hyperspaces are indexed (the
 readiness gate below passes), CodeKB is the ONLY structural evidence source. Do
 NOT read source files, grep for patterns, trace directory trees, or do any
 direct codebase exploration — CodeKB IS the pre-computed structural analysis.
-Use it as a lookup service: ask targeted questions, get answers, score. Because
-the deep structural analysis has already been done and downstream stages query
-CodeKB at runtime, the `reverse-engineering` stage folds to SKIP (see the Economy
-Discipline fold in Step 4).
+Use it as a lookup service: ask targeted questions, get answers, score. CodeKB
+evidence may also justify PROPOSING `reverse-engineering` as SKIP, but that is
+a gate decision, not an automatic fold: your CodeKB answers live only in this
+composition and are NOT persisted, and downstream stages (application-design,
+functional-design, code-generation) read the LOCAL reverse-engineering artifact
+store (`aidlc/spaces/<active-space>/codekb/<repo>/`), which only the
+reverse-engineering stage produces. (Naming note: that local store is called
+"codekb" in this framework and is unrelated to the CodeKB MCP server.) See the
+Economy Discipline fold in Step 4 for the disclosure the proposal must carry.
 
 **Priority 2 — Fallback (ONLY when CodeKB is absent or not ready).** When CodeKB
 tools are not exposed, the relevant spaces/hyperspaces are not indexed (zero
@@ -317,7 +326,7 @@ target component is HIGH enough that reduction has meaningful value.
 | team-formation | UA | Multi-team coordination required |
 | rough-mockups | IAE, UA | UX is a primary concern and the change is user-facing |
 | approval-handoff | (phase gate) | Always at ideation→inception boundary |
-| reverse-engineering | CSU | CSU > 0.4 or brownfield with unfamiliar codebase — BUT see Economy Discipline fold: SKIP when CodeKB is available with indexed spaces covering the affected codebase (structural analysis already done) |
+| reverse-engineering | CSU | CSU > 0.4 or brownfield with unfamiliar codebase. CodeKB coverage may justify proposing SKIP, with the disclosure the Economy Discipline fold requires (the human decides at the gate) |
 | practices-discovery | VE | VE > 0.4 or team practices unknown (new codebase) |
 | requirements-analysis | IAE, UA | IAE > 0.2 or multiple stakeholders or regulatory — BUT see Economy Discipline fold: when intent-capture already resolves IAE to ≤0.2, SKIP unless downstream EXECUTE stages (application-design, functional-design) need its UNIQUE outputs (functional decomposition, constraints, out-of-scope) that intent-capture does not produce |
 | user-stories | IAE | User-facing change with multiple personas |
@@ -411,7 +420,7 @@ and name that trigger in the rationale.
 
 | Candidate stage | Subsumed by / folds into | Fold (SKIP) when | Keep separate (EXECUTE) when |
 |-----------------|--------------------------|------------------|------------------------------|
-| reverse-engineering | CodeKB as the sole structural source (Step 3) | The CodeKB readiness gate PASSED — CodeKB is the selected structural source AND the relevant hyperspace/space IDs are indexed with components (`get_hyperspace_details` or `get_space_details` returns non-zero component counts for the relevant spaces). The deep structural analysis (call graphs, dependency maps, component inventories, cross-package coupling) is ALREADY performed by CodeKB and was consumed during Step 3 scoring. The CSU reduction reverse-engineering would deliver is already captured. Downstream stages (application-design, functional-design, code-generation) query CodeKB at runtime for structural context, making a separate mapping stage redundant. | The fallback path was selected — CodeKB is NOT available, OR the relevant spaces/hyperspace are not indexed (zero components), OR the codebase changed significantly since the last CodeKB indexing (user signals stale index), OR the affected subgraph spans repositories/spaces NOT covered by the indexed CodeKB data |
+| reverse-engineering | CodeKB as the sole structural source (Step 3) | PROPOSE the fold (never silently apply it) when the CodeKB readiness gate PASSED: CodeKB is the selected structural source AND the relevant hyperspace/space IDs are indexed with components (`get_hyperspace_details` or `get_space_details` returns non-zero component counts for the relevant spaces). The deep structural analysis (call graphs, dependency maps, component inventories, cross-package coupling) is ALREADY performed by CodeKB and was consumed during Step 3 scoring, so the CSU reduction reverse-engineering would deliver is largely captured. The SKIP rationale MUST disclose the cost: downstream stages (application-design, functional-design, code-generation) read the local reverse-engineering artifact store, which this fold leaves unwritten; they will run without it, leaning on requirements and existing code. The human weighs that trade at the gate. | The fallback path was selected: CodeKB is NOT available, OR the relevant spaces/hyperspace are not indexed (zero components), OR the codebase changed significantly since the last CodeKB indexing (user signals stale index), OR the affected subgraph spans repositories/spaces NOT covered by the indexed CodeKB data, OR downstream EXECUTE stages need the persistent local RE artifacts (deep design work on an unfamiliar brownfield codebase) |
 | feasibility | application-design | the viability question is a known/standard pattern (e.g. module federation, a documented integration) whose decision naturally lands in architecture | the approach is genuinely novel, OR R>0.6 hinges on proving viability BEFORE committing to design |
 | rough-mockups | refined-mockups | the UI already exists (brownfield redesign) — one design pass grounded in current screens suffices | greenfield UI, OR divergent UX directions must be compared before investing in hi-fi |
 | user-stories | requirements-analysis | personas are known and requirements-analysis captures the acceptance criteria; refined-mockups carries the UX narrative | many distinct personas with conflicting journeys needing independent story-level tracking |
@@ -421,12 +430,14 @@ and name that trigger in the rationale.
 | requirements-analysis | intent-capture (+ application-design absorbs spec) | IAE ≤ 0.20 after intent-capture (task clearly described, ≤2 interpretations), AND no downstream EXECUTE stage consumes its UNIQUE outputs (functional decomposition, constraints, out-of-scope boundary) that couldn't be derived inline by application-design | multiple distinct technical contracts need specification BEFORE design (e.g. embedding API, error taxonomy, acceptance criteria), OR regulatory/compliance context demands a standalone reviewed requirements artifact, OR ≥3 personas with conflicting acceptance criteria, OR application-design is SKIPPED |
 
 When you fold a stage whose output a downstream EXECUTE stage nominally consumes,
-expect the strict validator (Step 7) to flag a starved input. In BROWNFIELD that
-is an advisory, not a defect: the consuming stage adapts to the existing artifact
-plus upstream outputs (reverse-engineered screens, the requirements perf target,
-existing monitoring). Disclose these folds and their advisories at the gate; do
-not silently un-fold to satisfy strict mode unless the human asks for a
-strict-clean grid.
+expect the validator (Step 7, lenient mode) to flag a starved input as an
+advisory. In BROWNFIELD that is an advisory, not a defect: the consuming stage
+adapts to the existing artifact plus upstream outputs (reverse-engineered
+screens, the requirements perf target, existing monitoring). Disclose these
+folds and their advisories at the gate; do not silently un-fold them unless the
+human asks for a strict-clean grid. (This applies to front/report proposals
+only - an IN-FLIGHT proposal runs `--strict`, where a starved required input is
+a rejection, not an advisory.)
 
 
 
@@ -522,6 +533,9 @@ Write the proposed grid to a temp file and run:
 ```
 bun .kiro/tools/aidlc-graph.ts validate-grid --proposal <path> --project-type <greenfield|brownfield>
 ```
+Lenient mode for a front/report proposal; for an IN-FLIGHT proposal add
+`--strict` (the same strict check the recompose verb re-runs after approval -
+a starved required input rejects, so catch it here, before the gate).
 Exit 1 = rejected grid. Fix or withdraw the SKIP. Never show an invalid grid.
 Copy the validator's `summary` field into the proposal VERBATIM.
 
