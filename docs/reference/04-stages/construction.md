@@ -86,6 +86,20 @@ Generation included — is covered, one human approval per stage.
 Only the exact value `unit-major` activates it; absent or `stage-major` is the
 default.
 
+**Per-unit batch waves (optional, stage-major only).** On the default
+stage-major walk, the conductor MAY process a `gate: false` per-unit directive
+as a wave: it reads `bolt_dag.batches` from the intent's `runtime-graph.json`,
+finds the batch containing `directive.unit`, and dispatches the stage body for
+every uncovered unit of that batch concurrently (one dispatch per unit, each
+running the stage's lead persona for that one unit, confined to
+`construction/<unit>/<stage>/`). The engine needs no cooperation — per-unit
+coverage is a stateless disk scan, so the next `next` simply skips whatever
+landed. Reviewers run per wave unit at wave end, and every verdict settles
+before the single stage gate. Waves never apply under
+`Construction Iteration: unit-major`; harnesses without a parallel dispatch
+primitive stay on the serial loop. See `stage-protocol.md` §3 "Per-unit batch
+waves" for the full contract.
+
 **Parallel batches.** When two or more Bolts share dependency-satisfaction
 and don't depend on each other, the conductor dispatches their Code
 Generation stages concurrently by issuing N `Task` calls in a single

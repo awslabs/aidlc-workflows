@@ -102,7 +102,12 @@ fields and instance-array fields never coexist.
 
 The optional `bolt_dag` node is the machine-readable unit dependency
 graph the engine reads to compute a parallel build batch — "the DAG is
-the permission" for a swarm fan-out. Its source is the **fenced
+the permission" for a swarm fan-out. The conductor is a second consumer
+of `bolt_dag.batches`: on the default stage-major walk it may read the
+node to widen a `gate: false` per-unit design directive into a batch
+wave (dispatching the stage body for every uncovered unit of the batch
+containing `directive.unit` concurrently — stage-protocol.md §3
+"Per-unit batch waves"). Its source is the **fenced
 `yaml` `units:` edge block** that units-generation (2.7) authors on
 `unit-of-work-dependency.md`, beside the human-readable prose:
 
