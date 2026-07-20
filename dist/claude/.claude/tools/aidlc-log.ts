@@ -60,6 +60,10 @@ function parseFlags(
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith("--")) {
+      if (a === "--single") {
+        flags.single = "true";
+        continue;
+      }
       if (i + 1 >= args.length) {
         error(`${a} expects a value, got end of arguments.`);
       }
@@ -176,6 +180,7 @@ function handleReview(args: string[]): void {
   };
   if (flags.unit) fields.Unit = flags.unit;
   if (flags.iteration) fields.Iteration = flags.iteration;
+  if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
 
   let eventType: "REVIEW_REQUESTED" | "REVIEW_COMPLETED";
   if (flags.verdict !== undefined) {

@@ -82,7 +82,6 @@ import {
   validateDirective,
 } from "./aidlc-directive.ts";
 import {
-  activeIntent,
   activeSpace,
   auditBlockField,
   type CheckboxLine,
@@ -97,7 +96,6 @@ import {
   loadScopeMetadata,
   loadScopeMapping,
   nextInScopeStage,
-  parseBoltDag,
   parseCheckboxes,
   parseStateStageSuffixes,
   PHASE_NUMBERS,
@@ -108,15 +106,15 @@ import {
   relativeCodekbDir,
   relativeRecordDir,
   relativeSpaceRecordPrefix,
+  resolveBoltDag,
+  type BoltDagResolution,
   resolveProjectDir,
-  runtimeGraphPath,
   scopeCostSummary,
   selectionAwareDefaultScope,
   type StageEntry,
   stateFilePath,
   swarmConvergedUnits,
   toPosix,
-  unitDependencyPath,
   validScopes,
   harnessDir,
   type WorkspaceCommand,
@@ -772,53 +770,6 @@ function readConstructionIteration(
   return raw.trim() === "unit-major" ? "unit-major" : null;
 }
 
-interface CachedBoltDagSnapshot {
-  batches: string[][];
-  unitKinds: Map<string, string> | null;
-}
-
-// Read the compiled Bolt batches and unit kinds in one runtime-graph snapshot.
-// Returns null when there is no graph file or no bolt_dag node. An absent graph
-// is a legitimate branch (the swarm simply does not trigger).
-function readBoltDagSnapshot(projectDir: string): CachedBoltDagSnapshot | null {
-  const path = runtimeGraphPath(projectDir);
-  if (!existsSync(path)) return null;
-  try {
-    const graph: unknown = JSON.parse(readFileSync(path, "utf-8"));
-    if (graph !== null && typeof graph === "object" && "bolt_dag" in graph) {
-      const boltDag = (
-        graph as { bolt_dag?: { batches?: unknown; units?: unknown } }
-      ).bolt_dag;
-      const batches = boltDag?.batches;
-      if (Array.isArray(batches)) {
-        const unitKinds = new Map<string, string>();
-        if (Array.isArray(boltDag?.units)) {
-          for (const unit of boltDag.units) {
-            if (
-              unit !== null &&
-              typeof unit === "object" &&
-              typeof (unit as { name?: unknown }).name === "string" &&
-              typeof (unit as { kind?: unknown }).kind === "string"
-            ) {
-              unitKinds.set(
-                (unit as { name: string }).name,
-                (unit as { kind: string }).kind,
-              );
-            }
-          }
-        }
-        return {
-          batches: batches as string[][],
-          unitKinds: unitKinds.size > 0 ? unitKinds : null,
-        };
-      }
-    }
-  } catch {
-    // Malformed runtime graph — fail safe to "no DAG"; the swarm does not fire.
-  }
-  return null;
-}
-
 // The set of Units of Work the swarm referee has recorded as CONVERGED for the
 // active intent, read from the audit ledger. This is the swarm's completion
 // signal, NOT on-disk artifact presence. A swarm unit builds inside an isolated
@@ -864,57 +815,16 @@ function readBoltDagSnapshot(projectDir: string): CachedBoltDagSnapshot | null {
 //               instead of silently building one unit.
 // Pure in-memory: never writes the graph (next stays read-only); the
 // runtime-compile hook repairs the cache on the next transition.
-type BoltBatchesResolution =
-  | {
-      state: "ok";
-      batches: string[][];
-      unitKinds: Map<string, string> | null;
-      healed: boolean;
-    }
-  | { state: "none" }
-  | { state: "malformed"; reason: string; detail: string };
+type BoltBatchesResolution = BoltDagResolution;
 
 function resolveBoltBatches(projectDir: string): BoltBatchesResolution {
-  // A cached DAG with zero units (a hand-corrupted graph; no shipped writer
-  // emits empty batches) is treated as a miss, not an "ok" empty plan: falling
-  // through to the heal guarantees callers see either real batches, "none", or
-  // a loud "malformed", never an empty unit list that would strand the settle
-  // branch on an undefined unit.
-  const cached = readBoltDagSnapshot(projectDir);
-  if (cached && cached.batches.flat().length > 0) {
-    return {
-      state: "ok",
-      batches: cached.batches,
-      unitKinds: cached.unitKinds,
-      healed: false,
-    };
+  const resolution = resolveBoltDag(projectDir);
+  if (resolution.state === "ok" && resolution.healed) {
+    process.stderr.write(
+      `aidlc-orchestrate: runtime-graph.json has no bolt_dag; recomputed ${resolution.batches.length} unit batch(es) from unit-of-work-dependency.md (stale runtime graph; check the runtime-compile hook)\n`,
+    );
   }
-  const depPath = unitDependencyPath(projectDir);
-  if (!existsSync(depPath)) return { state: "none" };
-  let body: string;
-  try {
-    body = readFileSync(depPath, "utf-8");
-  } catch (e) {
-    return { state: "malformed", reason: "unreadable", detail: errorMessage(e) };
-  }
-  const parsed = parseBoltDag(body);
-  if (!parsed.ok) {
-    return { state: "malformed", reason: parsed.reason, detail: parsed.detail };
-  }
-  process.stderr.write(
-    `aidlc-orchestrate: runtime-graph.json has no bolt_dag; recomputed ${parsed.batches.length} unit batch(es) from unit-of-work-dependency.md (stale runtime graph; check the runtime-compile hook)\n`,
-  );
-  const unitKinds = new Map(
-    parsed.units
-      .filter((unit) => unit.kind !== undefined)
-      .map((unit) => [unit.name, unit.kind!]),
-  );
-  return {
-    state: "ok",
-    batches: parsed.batches,
-    unitKinds: unitKinds.size > 0 ? unitKinds : null,
-    healed: true,
-  };
+  return resolution;
 }
 
 // True when `node` is the SKELETON-GATE stage for `scope` — the FIRST
@@ -2203,10 +2113,23 @@ function tryEmitSwarm(
   //     from the intent's recorded set; `prepare` errors without it on a multi-repo
   //     intent, surfacing the choice rather than guessing.
   const repos = intentRepos(projectDir);
+  const reviewerFields = node.reviewer
+    ? {
+        stage: node.slug,
+        stage_file: stageFileFor(node.phase, node.slug),
+        reviewer: node.reviewer,
+        reviewer_max_iterations: node.reviewer_max_iterations ?? 2,
+      }
+    : {};
   if (repos.length === 1) {
-    emit({ kind: "invoke-swarm", units: pendingUnits, repo: repos[0] });
+    emit({
+      kind: "invoke-swarm",
+      units: pendingUnits,
+      ...reviewerFields,
+      repo: repos[0],
+    });
   } else {
-    emit({ kind: "invoke-swarm", units: pendingUnits });
+    emit({ kind: "invoke-swarm", units: pendingUnits, ...reviewerFields });
   }
   return true;
 }
@@ -3373,6 +3296,14 @@ function checkStageCompletionEvidence(
 // nothing itself). STAGE_STARTED carries Stage + Agent + Workflow (the
 // synthetic id); STAGE_COMPLETED carries Stage + Details + Workflow, matching
 // the field shape aidlc-state.ts emits for the same events.
+//
+// The reviewer precondition is DELIBERATELY not engine-enforced here. It
+// guards the four completing state transitions (aidlc-state.ts approve /
+// advance / finalize / complete-workflow), none of which this path reaches —
+// structurally, per invariant (1) above. An isolated run has no gate to
+// protect; its reviewer step is prose-driven (SKILL.md single-runner branch),
+// and its receipts are tagged `single-stage:<slug>` precisely so they can
+// never satisfy the MAIN workflow's guard.
 function handleSingleReport(
   flags: ReportFlags,
   projectDir: string | undefined,

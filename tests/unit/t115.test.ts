@@ -1118,4 +1118,72 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(r.out).toContain("declares a reviewer");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
   }, 30000);
+
+  test("R9: advance, finalize, and complete-workflow enforce the same reviewer receipt", () => {
+    for (const command of ["advance", "finalize", "complete-workflow"]) {
+      const refusedProject = projWithState("state-mid-inception.md");
+      const before = readFileSync(statePath(refusedProject), "utf-8");
+      const refused = state([command, "requirements-analysis"], refusedProject);
+      expect(refused.status, command).not.toBe(0);
+      expect(refused.out, command).toContain("declares a reviewer");
+      expect(readFileSync(statePath(refusedProject), "utf-8"), command).toBe(before);
+
+      const acceptedProject = projWithState("state-mid-inception.md");
+      expect(log([
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--reviewer",
+        "aidlc-product-lead-agent",
+        "--iteration",
+        "1",
+        "--verdict",
+        "READY",
+      ], acceptedProject).status, command).toBe(0);
+      expect(
+        state([command, "requirements-analysis"], acceptedProject).status,
+        command,
+      ).toBe(0);
+    }
+  }, 30000);
+
+  test("R10: a persisted autonomous Construction setting does not bypass an Inception reviewer", () => {
+    const p = projWithState("state-mid-inception.md");
+    writeFileSync(
+      statePath(p),
+      `${readFileSync(statePath(p), "utf-8")}\n- **Construction Autonomy Mode**: autonomous\n`,
+      "utf-8",
+    );
+    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
+
+    const r = state(["approve", "requirements-analysis"], p);
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain("declares a reviewer");
+    expect(countEvent(p, "GATE_APPROVED")).toBe(0);
+  }, 30000);
+
+  test("R11: an isolated --single review receipt cannot satisfy the main workflow", () => {
+    const p = projWithState("state-mid-inception.md");
+    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
+    expect(log([
+      "review",
+      "--single",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "1",
+      "--verdict",
+      "READY",
+    ], p).status).toBe(0);
+
+    expect(
+      auditBlocksFor(p, "REVIEW_COMPLETED")[0],
+    ).toContain("**Workflow**: single-stage:requirements-analysis");
+    const r = state(["approve", "requirements-analysis", "--user-input", "Approve"], p);
+    expect(r.status).not.toBe(0);
+    expect(r.out).toContain("declares a reviewer");
+    expect(countEvent(p, "GATE_APPROVED")).toBe(0);
+  }, 30000);
 });

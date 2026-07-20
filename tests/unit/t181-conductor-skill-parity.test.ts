@@ -162,6 +162,20 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  test("autonomous review logging uses the main harness tool with a worktree target", () => {
+    const offenders: string[] = [];
+    for (const rel of skills) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
+      if (!body.includes('--project-dir "<worktree>"')) {
+        offenders.push(`${rel}  missing worktree project target`);
+      }
+      if (/bun "<worktree>\/\.[^/]+\/tools\/aidlc-log\.ts"/.test(body)) {
+        offenders.push(`${rel}  resolves the logger inside the worktree`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   test("every harness Stage Graph table matches the canonical generated table", () => {
     const canonicalRel = "harness/claude/skills/aidlc/SKILL.md";
     const canonical = stageTableRows(

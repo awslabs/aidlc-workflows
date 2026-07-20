@@ -33,6 +33,8 @@ export interface StageEntry {
   // fields uses the GraphStage type in aidlc-graph.ts (required there).
   plugin?: string;
   condition?: string;
+  reviewer?: string;
+  reviewer_max_iterations?: number;
   produces?: string[];
   // Artifacts the stage MAY write per unit; exempt from the per-unit
   // coverage check in aidlc-orchestrate.ts unitCovered. See GraphStage in
@@ -1909,7 +1911,7 @@ export function auditFilePath(projectDir: string, intent?: string, space?: strin
 // appends — the whole point of per-clone sharding).
 export const CLONE_ID_FILE = ".aidlc-clone-id";
 
-function cloneIdPath(projectDir: string): string {
+export function cloneIdPath(projectDir: string): string {
   return join(workspaceRoot(projectDir), CLONE_ID_FILE);
 }
 
@@ -5370,80 +5372,97 @@ export function parseBoltDag(body: string): BoltDagParse {
   return { ok: true, units: edges, batches };
 }
 
-// Read the per-unit kinds off the compiled runtime graph's bolt_dag.units[]
-// (name to kind). Returns null when there is no graph file, no bolt_dag node, a
-// malformed graph, OR when no unit carries a kind: every null path means "no
-// kinds known", so the engine cheaply skips filtering and every unit stays on
-// the full matrix. Mirrors readBoltDagBatches' fail-safe posture: an absent or
-// unreadable graph is a legitimate branch, never a throw.
-//
-// Trust posture (also matching readBoltDagBatches): kind values are only
-// shape-checked here (string), not enum-checked - the UNIT_KINDS enum gate
-// lives at units-generation parse, before the graph is compiled. A unit
-// hand-tagged in the compiled graph with a valid-but-wrong kind therefore
-// over-prunes (or under-prunes) silently; the compiled graph is trusted as
-// already-validated input, same as its batches.
-export function readBoltDagUnitKinds(projectDir: string): Map<string, string> | null {
-  const path = runtimeGraphPath(projectDir);
-  if (!existsSync(path)) return null;
-  try {
-    const graph: unknown = JSON.parse(readFileSync(path, "utf-8"));
-    if (graph !== null && typeof graph === "object" && "bolt_dag" in graph) {
-      const boltDag = (graph as { bolt_dag?: { units?: unknown } }).bolt_dag;
-      const units = boltDag?.units;
-      if (Array.isArray(units)) {
-        const kinds = new Map<string, string>();
-        for (const u of units) {
-          if (
-            u !== null &&
-            typeof u === "object" &&
-            typeof (u as { name?: unknown }).name === "string" &&
-            typeof (u as { kind?: unknown }).kind === "string"
-          ) {
-            kinds.set((u as { name: string }).name, (u as { kind: string }).kind);
-          }
-        }
-        if (kinds.size > 0) return kinds;
-      }
+export type BoltDagResolution =
+  | {
+      state: "ok";
+      batches: string[][];
+      units: string[];
+      unitKinds: Map<string, string> | null;
+      healed: boolean;
     }
-  } catch {
-    // Malformed runtime graph: fail safe to "no kinds" (full matrix).
-  }
-  return null;
-}
+  | { state: "none" }
+  | { state: "malformed"; reason: string; detail: string };
 
-// Read every unit name off the compiled runtime graph's bolt_dag.units[].
-// Returns null on a missing file/node, a malformed graph, or an empty units
-// list. Companion to readBoltDagUnitKinds: the kinds map only carries the
-// kind-tagged units, but the all-vacuous coverage check needs the COMPLETE
-// unit set so an untagged unit (which owes the full matrix) still blocks a
-// wrong "everything is vacuous" verdict.
-export function readBoltDagUnits(projectDir: string): string[] | null {
-  const path = runtimeGraphPath(projectDir);
-  if (!existsSync(path)) return null;
-  try {
-    const graph: unknown = JSON.parse(readFileSync(path, "utf-8"));
-    if (graph !== null && typeof graph === "object" && "bolt_dag" in graph) {
-      const boltDag = (graph as { bolt_dag?: { units?: unknown } }).bolt_dag;
-      const units = boltDag?.units;
-      if (Array.isArray(units)) {
-        const names: string[] = [];
-        for (const u of units) {
-          if (
-            u !== null &&
-            typeof u === "object" &&
-            typeof (u as { name?: unknown }).name === "string"
-          ) {
-            names.push((u as { name: string }).name);
+// Resolve the active intent's unit DAG from the compiled graph, healing a
+// missing/stale cache from the authored dependency artifact. Callers must keep
+// the three states distinct: "none" is a real no-DAG workflow, while
+// "malformed" means the unit set is unknowable and must fail closed.
+export function resolveBoltDag(projectDir: string): BoltDagResolution {
+  const graphPath = runtimeGraphPath(projectDir);
+  if (existsSync(graphPath)) {
+    try {
+      const graph: unknown = JSON.parse(readFileSync(graphPath, "utf-8"));
+      const boltDag =
+        graph !== null && typeof graph === "object" && "bolt_dag" in graph
+          ? (graph as { bolt_dag?: { batches?: unknown; units?: unknown } }).bolt_dag
+          : undefined;
+      const batches = boltDag?.batches;
+      if (
+        Array.isArray(batches) &&
+        batches.every(
+          (batch) =>
+            Array.isArray(batch) &&
+            batch.every((unit) => typeof unit === "string" && unit.length > 0),
+        )
+      ) {
+        const typedBatches = batches as string[][];
+        const units = typedBatches.flat();
+        if (units.length > 0) {
+          const unitKinds = new Map<string, string>();
+          if (Array.isArray(boltDag?.units)) {
+            for (const unit of boltDag.units) {
+              if (
+                unit !== null &&
+                typeof unit === "object" &&
+                typeof (unit as { name?: unknown }).name === "string" &&
+                typeof (unit as { kind?: unknown }).kind === "string"
+              ) {
+                unitKinds.set(
+                  (unit as { name: string }).name,
+                  (unit as { kind: string }).kind,
+                );
+              }
+            }
           }
+          return {
+            state: "ok",
+            batches: typedBatches,
+            units,
+            unitKinds: unitKinds.size > 0 ? unitKinds : null,
+            healed: false,
+          };
         }
-        if (names.length > 0) return names;
       }
+    } catch {
+      // Fall through to the authored dependency artifact.
     }
-  } catch {
-    // Malformed runtime graph: fail safe to "no units known".
   }
-  return null;
+
+  const dependencyPath = unitDependencyPath(projectDir);
+  if (!existsSync(dependencyPath)) return { state: "none" };
+
+  let body: string;
+  try {
+    body = readFileSync(dependencyPath, "utf-8");
+  } catch (e) {
+    return { state: "malformed", reason: "unreadable", detail: errorMessage(e) };
+  }
+  const parsed = parseBoltDag(body);
+  if (!parsed.ok) {
+    return { state: "malformed", reason: parsed.reason, detail: parsed.detail };
+  }
+  const unitKinds = new Map(
+    parsed.units
+      .filter((unit) => unit.kind !== undefined)
+      .map((unit) => [unit.name, unit.kind!]),
+  );
+  return {
+    state: "ok",
+    batches: parsed.batches,
+    units: parsed.batches.flat(),
+    unitKinds: unitKinds.size > 0 ? unitKinds : null,
+    healed: true,
+  };
 }
 
 // Prune a produces name list to the artifacts that apply to `unitKind`. Returns

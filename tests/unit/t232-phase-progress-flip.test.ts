@@ -59,6 +59,7 @@ const TOOLS_DIR = join(
 const STATE_TOOL = join(TOOLS_DIR, "aidlc-state.ts");
 const JUMP_TOOL = join(TOOLS_DIR, "aidlc-jump.ts");
 const UTILITY_TOOL = join(TOOLS_DIR, "aidlc-utility.ts");
+const LOG_TOOL = join(TOOLS_DIR, "aidlc-log.ts");
 
 const tempDirs: string[] = [];
 
@@ -122,6 +123,29 @@ function birth(proj: string, scope: string): RunResult {
   return run(UTILITY_TOOL, proj, ["intent-birth", "--scope", scope]);
 }
 
+function recordRequiredReview(proj: string, slug: string): void {
+  if (slug !== "rough-mockups") return;
+  const reviewed = run(LOG_TOOL, proj, [
+    "review",
+    "--stage",
+    slug,
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+    "--verdict",
+    "READY",
+  ]);
+  if (reviewed.rc !== 0) {
+    throw new Error(`failed to record ${slug} review: ${reviewed.combined}`);
+  }
+}
+
+function advance(proj: string, slug: string): RunResult {
+  recordRequiredReview(proj, slug);
+  return run(STATE_TOOL, proj, ["advance", slug]);
+}
+
 // Feature scope, greenfield: birth lands on intent-capture; the whole
 // Ideation ladder then approval-handoff -> practices-discovery crosses the
 // ideation->inception boundary (greenfield SKIPs reverse-engineering).
@@ -165,13 +189,13 @@ describe("t232 Phase Progress - advance", () => {
   test("non-boundary advance leaves the section byte-identical", () => {
     expect(born.rc).toBe(0);
     const before = phaseProgressSection(proj);
-    expect(run(STATE_TOOL, proj, ["advance", "intent-capture"]).rc).toBe(0);
+    expect(advance(proj, "intent-capture").rc).toBe(0);
     expect(phaseProgressSection(proj)).toBe(before);
   });
 
   test("boundary advance flips completed->Verified, entered->Active", () => {
     for (const slug of IDEATION_LADDER.slice(1)) {
-      expect(run(STATE_TOOL, proj, ["advance", slug]).rc).toBe(0);
+      expect(advance(proj, slug).rc).toBe(0);
     }
     const res = run(STATE_TOOL, proj, ["advance", "approval-handoff"]);
     expect(res.rc).toBe(0);
@@ -189,7 +213,7 @@ describe("t232 Phase Progress - finalize", () => {
     tempDirs.push(proj);
     expect(birth(proj, "feature").rc).toBe(0);
     for (const slug of IDEATION_LADDER) {
-      expect(run(STATE_TOOL, proj, ["advance", slug]).rc).toBe(0);
+      expect(advance(proj, slug).rc).toBe(0);
     }
     expect(run(STATE_TOOL, proj, ["finalize", "approval-handoff"]).rc).toBe(0);
     expect(rowStatus(proj, "Ideation")).toBe("Verified");

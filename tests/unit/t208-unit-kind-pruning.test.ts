@@ -36,6 +36,7 @@ resetAidlcEnv();
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
 // nfr-requirements produces[] and their per-kind applicability (verified against
@@ -150,6 +151,44 @@ function runReport(proj: string, args: string[], enforceGuard = false): Directiv
   }
 }
 
+function logReviewReady(proj: string, unit: string): void {
+  const r = spawnSync(BUN, [
+    LOG,
+    "review",
+    "--stage",
+    "functional-design",
+    "--reviewer",
+    "aidlc-architecture-reviewer-agent",
+    "--unit",
+    unit,
+    "--iteration",
+    "1",
+    "--verdict",
+    "READY",
+    "--project-dir",
+    proj,
+  ], { encoding: "utf-8" });
+  if ((r.status ?? -1) !== 0) {
+    throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  }
+}
+
+function seedDependencyArtifact(
+  proj: string,
+  unitsBlock: string[],
+): void {
+  writeFileSync(
+    join(seededRecordDir(proj), "runtime-graph.json"),
+    `${JSON.stringify({ stages: [] }, null, 2)}\n`,
+  );
+  const dir = join(seededRecordDir(proj), "inception", "units-generation");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "unit-of-work-dependency.md"),
+    ["# Unit dependency", "", "```yaml", "units:", ...unitsBlock, "```", ""].join("\n"),
+  );
+}
+
 describe("t208 engine unit-kind pruning", () => {
   // 1: a spec unit's nfr-requirements directive carries only the unannotated
   // (all-kinds) artifacts; the three service-gated ones are pruned out.
@@ -226,6 +265,65 @@ describe("t208 engine unit-kind pruning", () => {
     // Either the per-unit coverage guard (svc uncovered) or the artifact guard
     // refuses; the point is the approval does NOT commit.
     expect(d.kind).not.toBe("done");
+  }, 30000);
+
+  test("5c: a mixed stage requires reviews only for non-vacuous units", () => {
+    const proj = seedProject("functional-design");
+    seedBoltDag(proj, [
+      { name: "pack", kind: "packaging" },
+      { name: "svc", kind: "service" },
+    ]);
+    coverUnit(proj, "svc", "functional-design", FD_PRODUCES);
+    logReviewReady(proj, "svc");
+
+    const d = runReport(
+      proj,
+      ["--stage", "functional-design", "--result", "approved"],
+      true,
+    );
+    expect(d.kind).toBe("done");
+  }, 30000);
+
+  test("5d: stale DAG healing keeps per-unit review enforcement complete", () => {
+    const proj = seedProject("functional-design");
+    seedDependencyArtifact(proj, [
+      "  - name: alpha",
+      "    kind: service",
+      "    depends_on: []",
+      "  - name: beta",
+      "    kind: service",
+      "    depends_on: [alpha]",
+    ]);
+    coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+    logReviewReady(proj, "alpha");
+
+    const d = runReport(
+      proj,
+      ["--stage", "functional-design", "--result", "approved"],
+      true,
+    );
+    expect(d.kind).toBe("error");
+    expect(d.message).toContain("beta");
+    expect(d.message).toContain("no fresh recorded review");
+  }, 30000);
+
+  test("5e: malformed dependency data fails closed instead of degrading to one review", () => {
+    const proj = seedProject("functional-design");
+    seedDependencyArtifact(proj, [
+      "  - name: alpha",
+      "    kind: not-a-kind",
+      "    depends_on: []",
+    ]);
+
+    const d = runReport(
+      proj,
+      ["--stage", "functional-design", "--result", "approved"],
+      true,
+    );
+    expect(d.kind).toBe("error");
+    expect(d.message).toContain("unit list cannot be resolved");
+    expect(d.message).toContain("malformed");
   }, 30000);
 
   // 6: a stage with NO produces_kinds (code-generation) ignores kinds entirely -

@@ -61,6 +61,7 @@ resetAidlcEnv();
 
 const BUN = process.execPath; // the bun running this test
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -73,6 +74,9 @@ interface Directive {
   unit?: string;
   units?: unknown;
   gate?: unknown;
+  reviewer?: string;
+  reviewer_max_iterations?: number;
+  message?: string;
   [k: string]: unknown;
 }
 
@@ -237,6 +241,48 @@ function runNext(proj: string): Directive {
   }
 }
 
+function runReport(proj: string): Directive {
+  const r = spawnSync(BUN, [
+    ORCH,
+    "report",
+    "--stage",
+    "code-generation",
+    "--result",
+    "approved",
+    "--project-dir",
+    proj,
+  ], { encoding: "utf-8", env: process.env });
+  try {
+    return JSON.parse((r.stdout ?? "").trim()) as Directive;
+  } catch {
+    throw new Error(
+      `runReport did not emit parseable JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`,
+    );
+  }
+}
+
+function logReviewReady(proj: string, unit: string): void {
+  const r = spawnSync(BUN, [
+    LOG,
+    "review",
+    "--stage",
+    "code-generation",
+    "--reviewer",
+    "aidlc-architecture-reviewer-agent",
+    "--unit",
+    unit,
+    "--iteration",
+    "1",
+    "--verdict",
+    "READY",
+    "--project-dir",
+    proj,
+  ], { encoding: "utf-8" });
+  if ((r.status ?? -1) !== 0) {
+    throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  }
+}
+
 describe("t201 autonomous swarm advances through every Bolt batch (issue headline)", () => {
   // 1: batch 1 incomplete (nothing converged) -> invoke-swarm emits batch 1.
   test("1: with no unit converged, next emits invoke-swarm for the first batch", () => {
@@ -245,6 +291,9 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["auth"]);
+    expect(d.stage).toBe("code-generation");
+    expect(d.reviewer).toBe("aidlc-architecture-reviewer-agent");
+    expect(d.reviewer_max_iterations).toBe(2);
   }, 30000);
 
   // 2: batch 1 complete, batch 2 incomplete -> invoke-swarm emits batch 2 ONLY.
@@ -285,6 +334,21 @@ describe("t201 autonomous swarm advances through every Bolt batch (issue headlin
     const d = runNext(proj);
     expect(d.kind).toBe("invoke-swarm");
     expect(d.units).toEqual(["b"]);
+  }, 30000);
+
+  test("4b: autonomous settle requires one architecture review per converged unit", () => {
+    const proj = seedProject();
+    seedBoltDagBatches(proj, [["auth"], ["api"]]);
+    seedConverged(proj, ["auth", "api"]);
+
+    const refused = runReport(proj);
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain("declares a reviewer");
+
+    logReviewReady(proj, "auth");
+    logReviewReady(proj, "api");
+    const accepted = runReport(proj);
+    expect(accepted.kind).toBe("done");
   }, 30000);
 });
 

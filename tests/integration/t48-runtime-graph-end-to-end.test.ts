@@ -73,6 +73,7 @@ const BUN = process.execPath; // the bun running this test
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const RUNTIME = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 interface RuntimeStageRow {
   stage_slug: string;
@@ -215,6 +216,19 @@ beforeAll(() => {
   if (gate.status !== 0 || !gate.out.includes('"kind":"print"')) {
     throw new Error(`gate report failed: ${gate.out}`);
   }
+  run(LOG, [
+    "review",
+    "--stage",
+    firstStage,
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    "1",
+    "--verdict",
+    "READY",
+    "--project-dir",
+    proj,
+  ]);
   const approval = run(
     ORCHESTRATE,
     [

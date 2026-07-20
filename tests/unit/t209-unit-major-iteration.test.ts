@@ -58,6 +58,7 @@ resetAidlcEnv();
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 // The record-relative prefix every resolved per-unit path is rooted at.
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
@@ -257,6 +258,28 @@ function setIteration(proj: string, value: string): { rc: number; out: string } 
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
+function logReviewReady(proj: string, stage: string, unit: string): void {
+  const r = spawnSync(BUN, [
+    LOG,
+    "review",
+    "--stage",
+    stage,
+    "--reviewer",
+    "aidlc-architecture-reviewer-agent",
+    "--unit",
+    unit,
+    "--iteration",
+    "1",
+    "--verdict",
+    "READY",
+    "--project-dir",
+    proj,
+  ], { encoding: "utf-8" });
+  if ((r.status ?? -1) !== 0) {
+    throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  }
+}
+
 function seedStaleKindDependency(proj: string): void {
   writeFileSync(
     join(seededRecordDir(proj), "runtime-graph.json"),
@@ -428,5 +451,35 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     const warning =
       "runtime-graph.json has no bolt_dag; recomputed 1 unit batch(es)";
     expect(run.stderr.split(warning).length - 1).toBe(1);
+  }, 30000);
+
+  test("9: reviews recorded during the unit-major walk survive a later STAGE_STARTED", () => {
+    const proj = seedProject("unit-major");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    coverFullGrid(proj, ["alpha", "beta"]);
+
+    for (const unit of ["alpha", "beta"]) {
+      logReviewReady(proj, "functional-design", unit);
+      logReviewReady(proj, "nfr-requirements", unit);
+    }
+
+    const functional = runReport(proj, [
+      "--stage",
+      "functional-design",
+      "--result",
+      "approved",
+    ]);
+    expect(functional.kind).toBe("done");
+
+    // Advancing functional-design emitted nfr-requirements's STAGE_STARTED
+    // after both nfr reviews. Unit-major freshness deliberately ignores that
+    // late row, while still honoring workflow/jump/rejection boundaries.
+    const nfr = runReport(proj, [
+      "--stage",
+      "nfr-requirements",
+      "--result",
+      "approved",
+    ]);
+    expect(nfr.kind).toBe("done");
   }, 30000);
 });

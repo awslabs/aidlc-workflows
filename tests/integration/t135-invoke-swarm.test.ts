@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:finalize, audit:SWARM_STARTED, audit:SWARM_COMPLETED, audit:SWARM_BATON_RETURNED
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:finalize, audit:REVIEW_COMPLETED, audit:SWARM_STARTED, audit:SWARM_COMPLETED, audit:SWARM_BATON_RETURNED
 //
 // CLI-contract port of tests/integration/t135-invoke-swarm.sh (TAP plan 8),
 // mechanism = cli. The .sh proves invoke-swarm end-to-end across TWO real
@@ -86,6 +86,7 @@ resetAidlcEnv();
 const BUN = process.execPath; // the bun running this test
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
+const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 // ---------------------------------------------------------------------------
 // Engine-side helpers (cases 1, 2, 7).
@@ -181,23 +182,29 @@ function runNext(proj: string): { directive: Directive; raw: string } {
 // ---------------------------------------------------------------------------
 
 let wtproj: string | undefined;
+let reviewRefusalProj: string | undefined;
 let finalizeStatus = -1;
 let finalizeOut = "";
 let auditBody = "";
+let reviewRefusalStatus = -1;
+let reviewRefusalOut = "";
+let reviewRefusalAudit = "";
 
-function setupReferee(): void {
-  if (wtproj !== undefined) return; // build once; cases 3-6 read the result
+function seedRefereeProject(): string {
   const proj = setupWorktreeFixture();
-  wtproj = proj;
   // The fixture already seeded the per-intent workspace shell + default record +
   // a seed commit (README only) on main. Write the construction state into the
   // seeded record, a bare audit shard, and a per-intent .gitignore (cursors +
   // audit/runtime machine-local), then amend so the worktree fork branches off a
   // clean tree that CARRIES the committed record.
-  writeFileSync(
-    seededStateFile(proj),
-    readFileSync(join(FIXTURES_DIR, "state-construction.md"), "utf-8"),
+  const state = readFileSync(
+    join(FIXTURES_DIR, "state-construction.md"),
+    "utf-8",
+  ).replace(
+    /^- \*\*Current Stage\*\*:.*$/m,
+    "- **Current Stage**: code-generation",
   );
+  writeFileSync(seededStateFile(proj), state);
   mkdirSync(seededAuditDir(proj), { recursive: true });
   writeFileSync(join(seededAuditDir(proj), "fixture.md"), "# AI-DLC Audit Log\n");
   writeFileSync(
@@ -218,6 +225,37 @@ function setupReferee(): void {
     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--amend", "--no-edit"],
     { cwd: proj },
   );
+  return proj;
+}
+
+function logWorktreeReview(proj: string, unit: string): void {
+  const wt = join(proj, ".aidlc", "worktrees", `bolt-${unit}`);
+  for (const terminal of [false, true]) {
+    const args = [
+      LOG_TOOL,
+      "review",
+      "--stage",
+      "code-generation",
+      "--unit",
+      unit,
+      "--reviewer",
+      "aidlc-architecture-reviewer-agent",
+      "--iteration",
+      "1",
+    ];
+    if (terminal) args.push("--verdict", "READY");
+    args.push("--project-dir", wt);
+    const logged = spawnSync(BUN, args, { encoding: "utf-8" });
+    if (logged.status !== 0) {
+      throw new Error(`worktree review log failed: ${logged.stdout}${logged.stderr}`);
+    }
+  }
+}
+
+function setupReferee(): void {
+  if (wtproj !== undefined) return; // build once; cases 3-6 read the result
+  const proj = seedRefereeProject();
+  wtproj = proj;
 
   // Conductor step 1: prepare forks a worktree per unit + emits SWARM_STARTED.
   spawnSync(
@@ -231,6 +269,7 @@ function setupReferee(): void {
   const winWorktree = join(proj, ".aidlc", "worktrees", "bolt-win");
   if (existsSync(winWorktree)) {
     writeFileSync(join(winWorktree, "win.txt"), "done\n");
+    logWorktreeReview(proj, "win");
   }
 
   // Conductor step 3: finalize claiming BOTH (the conductor wrongly claims
@@ -252,6 +291,29 @@ function setupReferee(): void {
   auditBody = readAllShards(seededAuditDir(proj));
 }
 
+function setupReviewRefusal(): void {
+  if (reviewRefusalProj !== undefined) return;
+  const proj = seedRefereeProject();
+  reviewRefusalProj = proj;
+  spawnSync(
+    BUN,
+    [SWARM_TOOL, "--project-dir", proj, "prepare", "--batch", "1", "--units", "unreviewed", "--base", "main"],
+    { encoding: "utf-8" },
+  );
+  const fin = spawnSync(
+    BUN,
+    [
+      SWARM_TOOL, "--project-dir", proj, "finalize",
+      "--batch", "1", "--units", "unreviewed", "--claimed", "unreviewed",
+      "--check-cmd", "true",
+    ],
+    { encoding: "utf-8" },
+  );
+  reviewRefusalStatus = fin.status ?? -1;
+  reviewRefusalOut = fin.stdout ?? "";
+  reviewRefusalAudit = readAllShards(seededAuditDir(proj));
+}
+
 /** Concatenate every audit shard (audit/*.md), sorted by filename. */
 function readAllShards(dir: string): string {
   let names: string[];
@@ -268,6 +330,10 @@ afterAll(() => {
     // Worktrees are read-locked; loosen perms before the recursive remove.
     spawnSync("chmod", ["-R", "u+w", wtproj]);
     cleanupWorktreeFixture(wtproj);
+  }
+  if (reviewRefusalProj !== undefined) {
+    spawnSync("chmod", ["-R", "u+w", reviewRefusalProj]);
+    cleanupWorktreeFixture(reviewRefusalProj);
   }
 });
 
@@ -352,5 +418,25 @@ describe("t135 referee — batch-level swarm audit taxonomy + baton return (the 
     expect(finalizeStatus).toBe(2);
     expect(finalizeOut).toContain('"converged": 1');
     expect(finalizeOut).toContain('"failed": 1');
+  }, 60000);
+
+  test("6b: the accepted worktree review receipt is merged into the main audit", () => {
+    setupReferee();
+    expect(auditBody).toContain("**Event**: REVIEW_COMPLETED");
+    const review = auditBody.slice(auditBody.indexOf("**Event**: REVIEW_COMPLETED"));
+    expect(review).toContain("**Stage**: code-generation");
+    expect(review).toContain("**Unit**: win");
+    expect(review).toContain("**Reviewer**: aidlc-architecture-reviewer-agent");
+  }, 60000);
+});
+
+describe("t135 referee - autonomous reviewer receipt is a finalize precondition", () => {
+  test("8: a green claimed unit without a worktree review is refused before merge", () => {
+    setupReviewRefusal();
+    expect(reviewRefusalStatus).toBe(2);
+    expect(reviewRefusalOut).toContain("no terminal REVIEW_COMPLETED");
+    expect(reviewRefusalOut).toContain('"converged": 0');
+    expect(reviewRefusalOut).toContain('"failed": 1');
+    expect(reviewRefusalAudit).not.toContain("**Event**: SWARM_UNIT_CONVERGED");
   }, 60000);
 });

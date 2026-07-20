@@ -67,6 +67,7 @@ const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
+const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-audit-logger.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility ([-])
 // feasibility declares produces: feasibility-assessment, constraint-register, ...
@@ -138,6 +139,26 @@ function recordStageStarted(proj: string, slug: string): void {
   );
   if ((r.status ?? -1) !== 0) {
     throw new Error(`recordStageStarted failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  }
+}
+
+function recordReview(proj: string, slug: string, iteration: number): void {
+  const r = spawnSync(BUN, [
+    LOG,
+    "review",
+    "--stage",
+    slug,
+    "--reviewer",
+    "aidlc-product-lead-agent",
+    "--iteration",
+    String(iteration),
+    "--verdict",
+    "READY",
+    "--project-dir",
+    proj,
+  ], { encoding: "utf-8", env: process.env });
+  if ((r.status ?? -1) !== 0) {
+    throw new Error(`recordReview failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
   }
 }
 
@@ -309,6 +330,38 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 
+  test("3b: a recovered rejection invalidates the review checked before the backstop", () => {
+    seedStateFile(proj, "state-mid-inception.md");
+    const slug = field(proj, "Current Stage");
+    guarded(proj, ["checkbox", `${slug}=in-progress`]);
+    guarded(proj, ["gate-start", slug]);
+    recordReview(proj, slug, 1);
+    recordHumanTurn(proj);
+    fireArtifact(
+      proj,
+      join(
+        seededRecordDir(proj),
+        "inception",
+        "requirements-analysis",
+        "requirements.md",
+      ),
+    );
+    recordHumanTurn(proj);
+
+    const refused = guarded(proj, ["approve", slug, "--user-input", "looks good now"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    expect(field(proj, "Revision Count")).toBe("1");
+    expect(stateContent(proj)).toContain(`- [?] ${slug}`);
+
+    recordReview(proj, slug, 2);
+    const accepted = guarded(proj, ["approve", slug, "--user-input", "looks good now"]);
+    expect(accepted.rc).toBe(0);
+    expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
+  });
+
   // --- Scenario 4: a properly recorded reject cycle - the backstop must not pile
   // a spurious second (Recovered) reject on top. gate-start; HUMAN_TURN; revise
   // artifact; reject (count -> 1); revise (re-enter gate); HUMAN_TURN; approve.
@@ -477,7 +530,16 @@ describe("t205: approve-time gate-revision backstop", () => {
     const mainShard = seededAuditShard(proj);
     const cloneShard = join(seededAuditDir(proj), "0-aaa.md");
     const body = readFileSync(mainShard, "utf-8");
-    const blocks = body.split("\n---\n");
+    // Production timestamps are second-resolution, so these rapid fixture
+    // subprocesses can tie. Give each pre-split block an explicit earlier,
+    // increasing timestamp so this test isolates cross-shard ordering rather
+    // than relying on wall-clock scheduling.
+    const blocks = body.split("\n---\n").map((block, index) =>
+      block.replace(
+        /^\*\*Timestamp\*\*: .+$/m,
+        `**Timestamp**: 2000-01-01T00:00:${String(index).padStart(2, "0")}Z`,
+      )
+    );
     // Keep header + first events in main; last two event blocks go to the clone.
     const cut = blocks.length - 2;
     writeFileSync(mainShard, blocks.slice(0, cut).join("\n---\n"), "utf-8");

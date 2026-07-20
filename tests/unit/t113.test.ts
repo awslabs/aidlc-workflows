@@ -84,7 +84,14 @@ function dispatchSubagent(): Record<string, unknown> {
 }
 
 function invokeSwarm(): Record<string, unknown> {
-  return { kind: "invoke-swarm", units: ["auth", "billing"] };
+  return {
+    kind: "invoke-swarm",
+    units: ["auth", "billing"],
+    stage: "code-generation",
+    stage_file: ".claude/aidlc-common/stages/construction/code-generation.md",
+    reviewer: "aidlc-architecture-reviewer-agent",
+    reviewer_max_iterations: 2,
+  };
 }
 
 function presentGate(): Record<string, unknown> {
@@ -149,6 +156,14 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
     const d = invokeSwarm();
     d.repo = "repo-a";
     expect(errs(d)).toBe("VALID");
+  });
+
+  test("invoke-swarm rejects a non-positive reviewer iteration cap", () => {
+    const d = invokeSwarm();
+    d.reviewer_max_iterations = 0;
+    expect(errs(d)).toContain(
+      "invoke-swarm: reviewer_max_iterations must be a positive integer",
+    );
   });
 
   test("present-gate well-formed -> VALID", () => {

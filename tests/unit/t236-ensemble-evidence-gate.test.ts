@@ -280,6 +280,20 @@ function appendAuditEvent(
   writeFileSync(shard, lines.join("\n"), { flag: "a" });
 }
 
+function recordReview(proj: string, unit?: string): void {
+  appendAuditEvent(
+    proj,
+    "REVIEW_COMPLETED",
+    `2026-07-19T00:00:${unit ? "01" : "00"}.000Z`,
+    {
+      Stage: "user-stories",
+      Reviewer: "aidlc-product-lead-agent",
+      Verdict: "READY",
+      ...(unit ? { Unit: unit } : {}),
+    },
+  );
+}
+
 function expectApprovalCommitted(
   proj: string,
   directive: Directive,
@@ -490,6 +504,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
   test("all three contribution files well-formed -> approval commits state and audit", () => {
     const proj = seedProject();
     for (const agent of MOB_SUPPORTS) writeContribution(proj, agent);
+    recordReview(proj);
     const before = mutationSnapshot(proj);
     const d = report(proj);
     expectApprovalCommitted(proj, d, before);
@@ -497,6 +512,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
 
   test("escape hatch AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 commits approval", () => {
     const proj = seedProject();
+    recordReview(proj);
     const before = mutationSnapshot(proj);
     const d = report(proj, { AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1" });
     expectApprovalCommitted(proj, d, before);
@@ -599,6 +615,8 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     writeUnitArtifact(completeProj, "beta");
     writeUnitContribution(completeProj, "alpha", "aidlc-design-agent");
     writeUnitContribution(completeProj, "beta", "aidlc-design-agent");
+    recordReview(completeProj, "alpha");
+    recordReview(completeProj, "beta");
     const before = mutationSnapshot(completeProj);
     const complete = report(completeProj, { AIDLC_STAGE_GRAPH: completeGraph });
     expectApprovalCommitted(completeProj, complete, before);
@@ -617,6 +635,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     ]);
     writeUnitArtifact(proj, "svc");
     writeUnitContribution(proj, "svc", "aidlc-design-agent");
+    recordReview(proj, "svc");
 
     const before = mutationSnapshot(proj);
     const d = report(proj, { AIDLC_STAGE_GRAPH: graph });
@@ -637,6 +656,7 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     const completeProj = seedProject();
     const completeGraph = perUnitEnsembleGraph(completeProj);
     writeFallbackContribution(completeProj, "aidlc-design-agent");
+    recordReview(completeProj);
     const before = mutationSnapshot(completeProj);
     const complete = report(completeProj, {
       AIDLC_STAGE_GRAPH: completeGraph,
@@ -1011,6 +1031,8 @@ describe("t236 ensemble evidence gate — mob approval requires contribution fil
     setAutonomous(proj);
     seedBoltDag(proj, ["unit-a", "unit-b"]);
     seedSwarmConverged(proj, ["unit-a", "unit-b"]);
+    recordReview(proj, "unit-a");
+    recordReview(proj, "unit-b");
     const graph = nonSkeletonSwarmGraph(proj);
     const before = mutationSnapshot(proj);
     const d = report(proj, { AIDLC_STAGE_GRAPH: graph });

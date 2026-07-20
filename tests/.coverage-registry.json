@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 474,
+    "total": 477,
     "enumeratedByClass": {
       "function": 246,
-      "audit": 72,
+      "audit": 74,
       "scope": 9,
       "stage": 32,
       "hook": 13,
-      "subcommand": 95,
+      "subcommand": 96,
       "render-surface": 7
     },
     "coveredByClass": {
       "function": 101,
-      "audit": 31,
+      "audit": 33,
       "scope": 9,
       "stage": 9,
       "hook": 13,
-      "subcommand": 82,
+      "subcommand": 83,
       "render-surface": 7
     }
   },
@@ -335,6 +335,34 @@
       "coveredBy": [
         {
           "file": "tests/unit/t35.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "REVIEW_COMPLETED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t135-invoke-swarm.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t115.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "REVIEW_REQUESTED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t115.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1110,6 +1138,13 @@
     {
       "unitClass": "function",
       "unitId": "function:CLONE_ID_FILE",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:cloneIdPath",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
@@ -2312,20 +2347,6 @@
     },
     {
       "unitClass": "function",
-      "unitId": "function:readBoltDagUnitKinds",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
-      "unitId": "function:readBoltDagUnits",
-      "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
-    },
-    {
-      "unitClass": "function",
       "unitId": "function:readCurrentSessionId",
       "minMechanism": "none",
       "coveredBy": [],
@@ -2538,6 +2559,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveBoltDag",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -4498,6 +4526,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t31.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-log review",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t115.test.ts",
           "mechanism": "cli"
         }
       ],

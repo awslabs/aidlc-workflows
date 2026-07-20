@@ -23,13 +23,13 @@ If you are **using** AI-DLC to build software, start with the [User Guide](../gu
 | [Stage Protocol](04-stage-protocol.md) | Behavioral contract: approval gates, compliance checklist |
 | [Stages](04-stages/) | Per-phase stage documentation (5 files) |
 | [Agent System](05-agent-system.md) | Agent structure, frontmatter contract, configuration matrix |
-| [Hooks and Tools](06-hooks-and-tools.md) | Hook system, CLI tools, 72-event audit taxonomy |
+| [Hooks and Tools](06-hooks-and-tools.md) | Hook system, CLI tools, 74-event audit taxonomy |
 | [Sensor System](07-sensor-system.md) | Sensor manifest schema, PULL imports, fire model, default severity |
 | [Rule System](08-rule-system.md) | Rule file layout, scope derivation, the layer-chain resolver, conflict gates |
 | [Testing](09-testing.md) | Test pyramid, tiers, stubs, fixtures, test registry |
 | [Knowledge System](10-knowledge-system.md) | Two-tier architecture, loading order, templates |
 | [Contributing](11-contributing.md) | Development workflow, utility handler checklist, documentation policy |
-| [State Machine](12-state-machine.md) | Workflow / phase / stage machines, 72-event taxonomy, audit-first rules |
+| [State Machine](12-state-machine.md) | Workflow / phase / stage machines, 74-event taxonomy, audit-first rules |
 | [Runtime Graph](13-runtime-graph.md) | The compiled `runtime-graph.json` artifact: data-plane mirror of the stage graph |
 | [Harness Primitives Mapping](14-claude-features.md) | How each AI-DLC concept maps to a harness's native primitives (Claude Code in depth) |
 | [Stage Definition](15-stage-definition.md) | YAML frontmatter contract, three-compartment body, compile pipeline |

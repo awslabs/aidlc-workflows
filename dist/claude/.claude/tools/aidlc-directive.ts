@@ -163,15 +163,16 @@ export interface DispatchSubagentDirective {
 // invoke-swarm — fan out N parallel workers across N worktrees for a build
 // batch; converge each on a signal. `units` is the build batch to fan out.
 //
-// invoke-swarm shape is intentionally minimal. The engine now EMITS this kind
-// (aidlc-orchestrate `next` answers with it for an eligible Construction batch
-// under an autonomy grant) and the conductor CONSUMES it (runs aidlc-swarm.ts,
-// takes the baton back on the failure envelope). `units` is the only field both
-// sides need: the conductor reads the rest of the batch context off the compiled
-// runtime graph, so this shape stays minimal.
+// The reviewer fields make the post-convergence verifier explicit. They remain
+// optional for compatibility with older/custom emitters, but the shipped engine
+// includes them whenever the swarm stage declares a reviewer.
 export interface InvokeSwarmDirective {
   kind: "invoke-swarm";
   units: string[];
+  stage?: string;
+  stage_file?: string;
+  reviewer?: string;
+  reviewer_max_iterations?: number;
   // repo — OPTIONAL. The sibling repo NAME this batch targets, present only when
   // the engine can resolve it deterministically: the intent records exactly one
   // repo (the lone sibling). Absent for a legacy/single-projectDir intent (no
@@ -305,7 +306,15 @@ const DISPATCH_SUBAGENT_FIELDS = [
   "worker",
 ] as const;
 
-const INVOKE_SWARM_FIELDS = ["kind", "units", "repo"] as const;
+const INVOKE_SWARM_FIELDS = [
+  "kind",
+  "units",
+  "stage",
+  "stage_file",
+  "reviewer",
+  "reviewer_max_iterations",
+  "repo",
+] as const;
 const PRESENT_GATE_FIELDS = ["kind", "stage", "phase", "memory_path"] as const;
 const ASK_FIELDS = ["kind", "question"] as const;
 const PRINT_FIELDS = ["kind", "message"] as const;
@@ -379,6 +388,10 @@ export function validateDirective(obj: unknown): ValidationResult {
       break;
     case "invoke-swarm":
       checkStringArray(o, "units", kind, errors);
+      checkOptionalString(o, "stage", kind, errors);
+      checkOptionalString(o, "stage_file", kind, errors);
+      checkOptionalString(o, "reviewer", kind, errors);
+      checkOptionalPositiveInteger(o, "reviewer_max_iterations", kind, errors);
       checkOptionalString(o, "repo", kind, errors);
       break;
     case "present-gate":
