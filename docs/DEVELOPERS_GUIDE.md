@@ -13,33 +13,33 @@ You can run AWS CodeBuild builds locally using the [CodeBuild local agent](https
 
 1. Setup
 
-- Download the local CodeBuild script and make it executable.
-- Send the `GH_TOKEN` environmental GitHub Personal Access Token (PAT) into a `./.env` file
+   - Download the local CodeBuild script and make it executable.
+   - Send the `GH_TOKEN` environmental GitHub Personal Access Token (PAT) into a `./.env` file
 
-```bash
-if [ ! -f codebuild_build.sh ]; then
-  curl -O https://raw.githubusercontent.com/aws/aws-codebuild-docker-images/master/local_builds/codebuild_build.sh && chmod +x codebuild_build.sh;
-fi;
-echo "GH_TOKEN=${GH_TOKEN:-ghp_notset}" > "./.env";
-```
+   ```bash
+   if [ ! -f codebuild_build.sh ]; then
+     curl -O https://raw.githubusercontent.com/aws/aws-codebuild-docker-images/master/local_builds/codebuild_build.sh && chmod +x codebuild_build.sh;
+   fi;
+   echo "GH_TOKEN=${GH_TOKEN:-ghp_notset}" > "./.env";
+   ```
 
 2. Iterate
 
-- _Optionally edit the `buildspec-override` value in the `.github/workflows/codebuild.yml` GitHub workflow_
-- Update `./buildspec.yml` based on the workflow contents to a local file
-- Run AWS CodeBuild build locally with images based on the machine architecture
+   - _Optionally edit the `buildspec-override` value in the `.github/workflows/codebuild.yml` GitHub workflow_
+   - Update `./buildspec.yml` based on the workflow contents to a local file
+   - Run AWS CodeBuild build locally with images based on the machine architecture
 
-```bash
-cat .github/workflows/codebuild.yml \
-    | uvx yq -r '.jobs.build.steps[] | select(.id == "codebuild") | .with["buildspec-override"]' \
-    > buildspec.yml
-./codebuild_build.sh \
-  -i "public.ecr.aws/codebuild/amazonlinux-$([ "$(arch)" = "arm64" -o "$(arch)" = "aarch64" ] && echo "aarch64" || echo "x86_64")-standard:$([ "$(arch)" = "arm64" -o "$(arch)" = "aarch64" ] && echo "3.0" || echo "5.0")" \
-  -a "./.codebuild/artifacts/" \
-  -l "public.ecr.aws/codebuild/local-builds:$([ "$(arch)" = "arm64" -o "$(arch)" = "aarch64" ] && echo "aarch64" || echo "latest")" \
-  -c \
-  -e "./.env"
-```
+   ```bash
+   cat .github/workflows/codebuild.yml \
+       | uvx yq -r '.jobs.build.steps[] | select(.id == "codebuild") | .with["buildspec-override"]' \
+       > buildspec.yml
+   ./codebuild_build.sh \
+     -i "public.ecr.aws/codebuild/amazonlinux-$([ "$(arch)" = "arm64" -o "$(arch)" = "aarch64" ] && echo "aarch64" || echo "x86_64")-standard:$([ "$(arch)" = "arm64" -o "$(arch)" = "aarch64" ] && echo "3.0" || echo "5.0")" \
+     -a "./.codebuild/artifacts/" \
+     -l "public.ecr.aws/codebuild/local-builds:$([ "$(arch)" = "arm64" -o "$(arch)" = "aarch64" ] && echo "aarch64" || echo "latest")" \
+     -c \
+     -e "./.env"
+   ```
 
 ### All Script Options
 
