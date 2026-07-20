@@ -25,7 +25,8 @@ planning**, not keyword pattern-matching:
 > minimum viable workflow that solves this intent safely and economically in
 > this codebase?'"
 
-A **scope** is an EXECUTE/SKIP grid over 32 stages. You compose the grid by
+A **scope** is an EXECUTE/SKIP grid over the full stage set (32 stages today;
+the compiled stage graph is authoritative). You compose the grid by
 principled estimation; the deterministic engine runs whatever grid is approved.
 Single-shot is valid only when it IS the minimum viable workflow (clear
 codebase, small affected subgraph, strong tests, resolved assumptions). Each
@@ -56,7 +57,7 @@ entropy, failure cost, or verification weakness more than it costs.
 ## Procedure
 
 **SPEED PRINCIPLE: The composer is a scoring function, not a research agent.**
-Your output is a grid of 32 binary decisions (EXECUTE/SKIP) grounded by 5 coarse
+Your output is a grid of per-stage binary decisions (EXECUTE/SKIP) grounded by 5 coarse
 scores (0.0-1.0). You are NOT mapping the codebase, building an architecture
 model, or deeply understanding the system — that is what the downstream stages
 DO. You need just enough evidence to score confidently, then STOP gathering and
@@ -148,6 +149,11 @@ Weights rationale: CSU heaviest (structural uncertainty most directly drives
 discovery/design need); then VE (gaps drive testing/practices need); then IAE
 (unclear intent wastes downstream work). R and UA matter but are often resolved
 cheaply (one clarification, one policy lookup).
+
+These weights are UNCALIBRATED priors and the composite is an advisory index
+for the human at the gate: stage selection keys off the component bands and
+the fold discipline (Step 4), never off the scalar, and nothing deterministic
+routes on it.
 
 #### 2.4 ARS → Workflow Shape (guidance, not prescription)
 
@@ -309,7 +315,7 @@ and state why explicitly:
 
 ### Step 4: Stage Selection via Expected Value
 
-For each of the 32 stages, decide EXECUTE or SKIP based on whether the stage
+For each stage in the compiled graph, decide EXECUTE or SKIP based on whether the stage
 has **positive expected value** for this specific task given the ARS profile.
 
 #### Stage-to-ARS-Component Mapping
@@ -391,9 +397,9 @@ independently.
 
 **Step D — Post-resolution reduction adjustment:**
 
-When a stage is KEPT at Minimal depth (row 3 above), reduce its expected ARS
-reduction by 50% in in-flight re-estimation (Step 5), since it only produces
-its unique dimensions, not the full component reduction.
+When a stage is KEPT at Minimal depth (row 3 above), remember in in-flight
+re-estimation (Step 5) that it only produced its unique dimensions, not the
+full component reduction; re-score from what its artifact actually resolved.
 
 **Example — Intent Capture (1.1) vs Requirements Analysis (2.3):**
 
@@ -481,31 +487,33 @@ A stage with cost=1 is always justified if the component is non-zero.
 ### Step 5: In-Flight Re-Estimation (for the In-Flight Moment)
 
 When composing for a running workflow (in-flight recompose), RE-ESTIMATE the
-ARS from current state:
+ARS from current EVIDENCE, not from formula:
 
-1. Read the state file to identify completed stages.
-2. For each completed stage, apply its expected reduction to the ARS components:
-   ```
-   CSU_current = CSU_initial × ∏ (1 - r_CSU(completed_stage_i))
-   ```
-   Use the reduction-rate priors:
-   - intent-capture: r_IAE=0.40, r_UA=0.35 (resolves business context, stakeholders, success metrics — high reduction when task is well-described at input)
-   - reverse-engineering: r_CSU=0.25
-   - practices-discovery: r_VE=0.20
-   - feasibility: r_CSU=0.15, r_R=0.10, r_UA=0.20
-   - requirements-analysis: r_IAE=0.30, r_UA=0.25
-   - application-design: r_CSU=0.20, r_R=0.10
-   - (etc. — use judgment for stages not listed)
-
-3. Recompute ARS from the reduced components.
-4. Re-evaluate each PENDING stage against the new ARS profile.
-5. Propose flips only for stages whose expected value changed sign:
+1. Read the state file to identify completed stages, and read what those
+   stages actually produced (their artifacts and gate outcomes are the
+   evidence; the audit trail records revisions and rejections).
+2. Re-score each ARS component from that evidence. Completed stages reduce
+   the components they target: intent-capture resolves IAE and UA
+   (stakeholders, success metrics, business context); reverse-engineering
+   resolves CSU (the affected subgraph is now mapped); practices-discovery
+   and build evidence reduce VE; feasibility and requirements-analysis
+   resolve UA and parts of R. Score what the artifacts SHOW resolved, not a
+   fixed percentage per stage: a rejected-and-revised stage resolved less
+   than a clean pass; a stage whose artifact answered the exact open question
+   resolved more. There are no calibrated per-stage reduction rates; do not
+   invent numeric decay factors.
+3. Re-evaluate each PENDING stage against the re-scored profile.
+4. Propose flips only for stages whose expected value changed sign:
    - A PENDING EXECUTE stage whose target component is now LOW → propose SKIP
    - A PENDING SKIP stage whose target component is still HIGH → propose EXECUTE
 
-This makes in-flight recompose principled: "we originally included NFR-design
-because R was 0.70, but feasibility + requirements-analysis reduced it to 0.35,
-and the remaining risk is addressable without a separate NFR design stage."
+This makes in-flight recompose principled and auditable: "we originally
+included NFR-design because R was HIGH, but feasibility settled the two risky
+integration questions and requirements-analysis pinned the perf budget, so R
+re-scores MED, and the remaining risk closes via the existing
+performance-validation stage." Each flip's rationale names the completed-stage
+EVIDENCE that moved the component, so the human can check the claim at the
+gate.
 
 ---
 
@@ -567,19 +575,21 @@ one SHORT line per stage (≤15 words), not a paragraph.
 }
 ```
 
-### Step 8a: Gate Render Contract (MANDATORY)
+The `ars.total` composite is an ADVISORY heuristic index: the weights in Step
+2.3 are uncalibrated priors, and nothing deterministic routes on the number.
+It exists to give the human a fast read at the gate; the component bands and
+the per-stage reasoning are the real evidence.
 
-The conductor MUST render the proposal to the human as three ordered blocks —
-never as prose alone. Silently dropping the scores, collapsing them into a
-sentence, or hand-recounting the summary is a render DEFECT. All numbers come
-verbatim from the proposal JSON; the conductor never recomputes them.
+### Step 8a: Render the Gate Tables (part of YOUR returned proposal)
 
-**Block 1 — Lead line.** The validator's `summary` field VERBATIM
-(`"<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates"`), plus the
-proposed `scopeName` and `mode`.
+Alongside the JSON, your returned proposal MUST include two pre-rendered
+markdown tables. The conductor relays your proposal to the human and cannot
+recompute or reconstruct anything, so what you return is exactly what the
+human sees: if a table is missing from your output, it is missing at the
+gate. All numbers come from the proposal JSON verbatim.
 
-**Block 2 — ARS scores table.** Every component, its score, and its band, then
-the composite:
+**Table 1 (ARS scores).** Every component, its score, and its band, then the
+composite:
 
 | Component | Symbol | Score | Band |
 |-----------|--------|-------|------|
@@ -588,7 +598,7 @@ the composite:
 | Verification Entropy | VE | 0.65 | MED |
 | Risk / Blast Radius | R | 0.50 | MED |
 | Unresolved Assumptions | UA | 0.55 | MED |
-| **Composite ARS** | — | **63 / 100** | **Comprehensive** |
+| **Composite ARS (advisory)** | - | **63 / 100** | **Comprehensive** |
 
 Band labels from the Step 2.2 continuous bands: **LOW** 0.00–0.29, **MED**
 0.30–0.69, **HIGH** 0.70–1.00. Composite band from the Step 2.4 table (0–20 near-direct,
@@ -596,8 +606,8 @@ Band labels from the Step 2.2 continuous bands: **LOW** 0.00–0.29, **MED**
 Immediately below the table, print `method` (codekb | fallback), the one-line
 `codekbEvidence`, and the `arsRationale`.
 
-**Block 3 — Stage-decision table.** One row per stage that carries a decision —
-at minimum EVERY EXECUTE and EVERY SKIP — with its reasoning:
+**Table 2 (Stage decisions).** One row per stage that carries a decision
+(at minimum EVERY EXECUTE and EVERY SKIP) with its reasoning:
 
 | # | Stage | Decision | Reasoning |
 |---|-------|----------|-----------|
@@ -610,15 +620,13 @@ component); EXECUTE rows use the `stageJustifications` line when present, else a
 short component reference (`reduces CSU=0.75`). List any fold advisories from
 the proposal beneath the table.
 
-Only AFTER these three blocks does the conductor present the approve / edit /
-reject options. The human must see the measurable scores, the per-stage
-decision, and the reasoning together before deciding.
-
 ### Step 9: Gate
 
-The conductor renders your proposal per the Step 8a contract (lead line → ARS
-scores table → stage-decision table) and holds approve/edit/reject. Never write
-before explicit human approval.
+The conductor renders your proposal to the human as three blocks (the
+validator's `summary` lead line, your ARS scores table, your stage-decision
+table) and holds approve/edit/reject. The human sees the measurable scores,
+the per-stage decisions, and the reasoning together before deciding. Never
+write before explicit human approval.
 
 ### Step 10: Write (after approval)
 

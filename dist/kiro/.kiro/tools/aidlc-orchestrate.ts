@@ -481,7 +481,7 @@ function composeDispatchDirective(
     parts.push(
       `Dispatch the composer agent (${hd}/agents/aidlc-composer-agent.md) as a subagent to propose re-shaping the RUNNING workflow's pending stages` +
         (flags.intent ? ` for: "${flags.intent}".` : "."),
-      "The composer reads the live state file's Stage Progress and proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages only (completed [x], in-progress [-], and skipped [S] stages are frozen).",
+      "The composer reads the live state file's Stage Progress, re-estimates the entropy components from what completed stages resolved, validates the flipped grid with --strict, and proposes SKIP/un-SKIP flips for PENDING, ahead-of-cursor stages only (completed [x], in-progress [-], and skipped [S] stages are frozen; an ADD whose required producer is skipped or behind the cursor is rejected, not proposed).",
       "BEFORE presenting the gate, write the pending-proposal marker `aidlc/.aidlc-compose-pending` (any content) so the turn can end at the gate; on approve run `bun " +
         hd +
         "/tools/aidlc-utility.ts recompose --skip <slugs> --add <slugs>` (comma-separated) and DELETE the marker; on reject/edit-then-resolve delete the marker too.",
@@ -502,8 +502,8 @@ function composeDispatchDirective(
     }
   }
   parts.push(
-    `The composer runs \`bun ${hd}/tools/aidlc-utility.ts detect --json\` (read-only scan + scope-registry paths) and reads the scope definitions under ${hd}/scopes/, then returns a structured proposal (mode matched|custom, scopeName, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, and a summary the validator computed).`,
-    "Render the proposal to the human and present the approve/edit/reject gate (see the composer block in SKILL.md), LEADING with the validator's summary line formatted \"<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates\" - use the validator's numbers verbatim, never recount by hand. Do NOT write any file and do NOT advance any stage before an explicit approval.",
+    `The composer runs \`bun ${hd}/tools/aidlc-utility.ts detect --json\` (read-only scan + scope-registry paths), estimates the five entropy components (intent ambiguity, structural uncertainty, verification entropy, risk, unresolved assumptions) per its persona, and returns a structured proposal: mode matched|custom, scopeName, an ars block (the five component scores with method codekb|fallback), an arsRationale, the per-stage EXECUTE/SKIP grid, a per-SKIP rationale, a summary the validator computed, and two pre-rendered markdown tables (ARS scores with bands; per-stage decisions with reasoning).`,
+    "Render the proposal to the human as THREE blocks before the approve/edit/reject gate (see the composer block in SKILL.md): (1) the validator's summary line formatted \"<execute> stages EXECUTE / <skip> SKIP, <gates> approval gates\" plus scopeName and mode - use the validator's numbers verbatim, never recount by hand; (2) the composer's ARS score table verbatim, with its method line and arsRationale; (3) the composer's stage-decision table verbatim, with any fold advisories beneath it. Relay the composer's tables and numbers as returned - never recompute, collapse into prose, or drop them. Do NOT write any file and do NOT advance any stage before an explicit approval.",
   );
   return printDirective(parts.join(" "));
 }

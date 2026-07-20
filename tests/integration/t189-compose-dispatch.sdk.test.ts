@@ -30,6 +30,12 @@
 //   (d) NOTHING was written: no aidlc-state.md (no birth), no composed scope
 //       file in .claude/scopes/ beyond the 9 stock ones, scope-grid.json
 //       still has exactly 9 keys. P0 stops at render - the write is P2.
+//   (e) the composer's returned proposal carries the ARS contract: the
+//       Task/Agent tool-result names the entropy components (at least CSU)
+//       and the evidence method (codekb | fallback). The dispatch print and
+//       SKILL.md both demand the ars block; a proposal without it means the
+//       composer silently ran the old keyword flow - the exact regression a
+//       live trace caught once (three-key proposal, zero ARS output).
 //
 // It SPENDS TOKENS - driveAidlc drives the real /aidlc on Opus/Bedrock. Gated
 // on claude-CLI presence (the file calls driveAidlc(), so claude-gate.ts marks
@@ -81,6 +87,15 @@ describe("t189 composer dispatch (/aidlc compose, sdk live)", () => {
           (t) => t.toolName === "Task" || t.toolName === "Agent",
         );
         expect(taskCalls.length).toBeGreaterThanOrEqual(1);
+
+        // (e) The composer's proposal carries the ARS contract. Match the
+        // component symbol case-insensitively (json key "csu" or table label
+        // "CSU") and the method value - both are demanded verbatim by the
+        // dispatch print, so their absence means the persona's scoring never
+        // ran, not conversational variance.
+        const composerOut = taskCalls.map((t) => t.resultText).join("\n");
+        expect(composerOut.toLowerCase()).toContain("csu");
+        expect(/\b(codekb|fallback)\b/i.test(composerOut)).toBe(true);
 
         // (c) A gate fired and the run stopped there (the approve/edit/reject
         // turn-stop the composer block mandates).
