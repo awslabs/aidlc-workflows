@@ -222,6 +222,7 @@ describe("documentation parity derives current behavior from authored implementa
     const ideHooks = at("harness", "kiro-ide", "hooks");
 
     expect(existsSync(join(ideHooks, "aidlc-reviewer-scope.kiro.hook"))).toBe(false);
+    expect(existsSync(join(ideHooks, "aidlc-reviewer-scope.json"))).toBe(false);
     expect(skill).toContain("read-scope bound is prose-only on this harness");
     expect(skill).not.toContain(".aidlc-reviewer-dispatch.json");
     expect(skill).not.toContain("kiro-cli");

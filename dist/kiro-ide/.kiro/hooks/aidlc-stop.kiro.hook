@@ -1,1 +1,0 @@
-{"version":"1.0.0","enabled":true,"name":"aidlc-stop","description":"Enforces the forwarding loop — reminds the agent to continue when workflow has pending work.","when":{"type":"agentStop"},"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-kiro-adapter.ts stop"}}

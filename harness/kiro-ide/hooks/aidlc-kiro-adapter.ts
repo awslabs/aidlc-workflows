@@ -2,19 +2,34 @@
 // aidlc-kiro-adapter.ts — the Kiro IDE hook shim (AUTHORED shell file; the
 // aidlc-*.ts hook bodies beside it are PACKAGED core, byte-shared with the
 // Claude Code harness). This is the IDE-specific adapter; the CLI harness ships
-// its own (harness/kiro/) which reads stdin. They are deliberately separate
-// files so neither carries a runtime "am I CLI or IDE?" branch.
+// its own (harness/kiro/) wired to kiro-cli's agent-JSON hook events and their
+// payload shapes. They are deliberately separate files so neither carries a
+// runtime "am I CLI or IDE?" branch.
 //
-// Kiro IDE hook context (live-captured on Kiro IDE 0.12-main — see
-// docs/reference/kiro-ide-hook-payload.md):
-//   1. stdin is OPENED BUT NEVER WRITTEN/CLOSED — reading it hangs. The IDE
-//      delivers context through the `USER_PROMPT` environment variable instead.
-//   2. USER_PROMPT is JSON: { toolName, toolArgs, toolResult, toolSuccess }.
-//      `toolArgs` is ALWAYS empty {} — the IDE never passes tool inputs. So the
-//      file path is recoverable ONLY from the `toolResult` prose, and the shell
-//      command is not recoverable at all (toolResult carries only stdout+exit).
-//   3. toolName arrives as the IDE tool name: `fs_write`, `str_replace`,
+// Kiro IDE hook context (live-captured on 0.12-main AND 1.0.165 — see
+// docs/reference/kiro-ide-hook-payload.md). The channel changed across IDE
+// generations; the adapter accepts BOTH:
+//   1. IDE 1.x (v2 hooks, `.kiro/hooks/aidlc-*.json`): context arrives as JSON
+//      on STDIN, snake_case: { session_id, hook_event_name, cwd, tool_name,
+//      tool_input, tool_response } — no success flag. USER_PROMPT is empty.
+//      stdin is written AND closed, so a read resolves promptly; it is still
+//      raced against a short timeout below in case a 0.12-style
+//      open-never-closed stdin reappears.
+//   2. IDE 0.12 (legacy `.kiro.hook` era): stdin was OPENED BUT NEVER
+//      WRITTEN/CLOSED — reading it hangs. Context came through the
+//      `USER_PROMPT` env var instead, camelCase: { toolName, toolArgs,
+//      toolResult, toolSuccess }.
+//   3. On both channels the tool inputs are ALWAYS empty ({} — the IDE never
+//      passes them), so the file path is recoverable ONLY from the
+//      toolResult/tool_response prose, and the shell command is not
+//      recoverable at all (the result carries only stdout+exit).
+//   4. The tool name arrives as the IDE tool name: `fs_write`, `str_replace`,
 //      `fs_append`, `execute_bash`, etc.
+//
+// Payload acquisition is GATED to the two payload-dependent targets
+// (audit-and-sensors, log-subagent). Every other target is payload-independent
+// and never touches stdin — block fires on EVERY PreToolUse, and a 2s stall on
+// a never-closing stdin there would be felt on every tool call.
 //
 // Consequences, by target:
 //   - audit-and-sensors: scrape the written file path from toolResult prose
@@ -24,17 +39,21 @@
 //     filter and always forward — the core hook self-gates on the audit tail.
 //   - state-sync: payload-independent — the core hook reads the latest
 //     STAGE_STARTED slug from the audit tail (no task payload needed).
-//   - session-start/session-end/stop/log-subagent: no file path / command
-//     needed; build the same fixed inputs as before.
+//   - log-subagent: recovers the delegate's identity + message from the
+//     result prose (payload-dependent, #459).
+//   - session-start/session-end/stop: no payload needed; build the same
+//     fixed inputs as before.
 //
 // session-start emits {"additionalContext": "..."} — Kiro's context channel is
 // plain stdout at exit 0, so the shim unwraps the JSON and prints the text.
 // stop emits {"decision":"block","reason":"..."} — passed through verbatim.
 //
-// Usage (registered in .kiro/hooks/*.kiro.hook):
+// Usage (registered in .kiro/hooks/aidlc-*.json — the IDE's v2 hook schema,
+// {"version":"v1","hooks":[{name,trigger,matcher,action}]}):
 //   bun .kiro/hooks/aidlc-kiro-adapter.ts <target>
-// where <target> ∈ session-start | audit-and-sensors | runtime-compile |
-//                  state-sync | log-subagent | stop | session-end
+// where <target> ∈ mint | block | session-start | audit-and-sensors |
+//                  runtime-compile | state-sync | log-subagent | stop |
+//                  session-end
 
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,8 +72,9 @@ import { existsSync, readFileSync } from "node:fs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
-// The IDE hands hook context via the USER_PROMPT env var (NOT stdin). Shape:
-//   { toolName, toolArgs (always {}), toolResult, toolSuccess }
+// The NORMALIZED hook context, whichever channel delivered it: 1.x snake_case
+// stdin { tool_name, tool_input (always {}), tool_response } or 0.12 camelCase
+// USER_PROMPT { toolName, toolArgs (always {}), toolResult, toolSuccess }.
 interface IdeHookContext {
   toolName?: string;
   toolArgs?: Record<string, unknown>;
@@ -62,24 +82,46 @@ interface IdeHookContext {
   toolSuccess?: boolean;
 }
 
+// The two targets whose forward depends on the tool payload. Every other
+// target builds a fixed input (or reads only the filesystem), so it skips
+// payload acquisition entirely and keeps its zero-latency path.
+const PAYLOAD_TARGETS = new Set(["audit-and-sensors", "log-subagent"]);
+
 export async function run(
   target: string,
   input: string,
   _extraArgs: string[] = [],
 ): Promise<number> {
-void input;
 // LOAD-BEARING (not debug-only): this is the base dir for resolve(projectDir,
 // rawPath) that turns the IDE's workspace-relative write path into the absolute
 // path the core audit-logger's record-root check needs — the core fix of this
 // harness. It also feeds hookDebug/recordHookDrop. Do not remove it.
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
+// Normalize the hook context for the payload-dependent targets. IDE 1.x
+// delivers it as JSON on stdin (the `input` argument); 0.12 delivered it via
+// USER_PROMPT with stdin open-but-never-written. Prefer stdin, fall back to
+// the env var so 0.12 keeps working. Field names differ per channel — 0.12
+// camelCase {toolName, toolArgs, toolResult, toolSuccess}; 1.x snake_case
+// {tool_name, tool_input, tool_response} (no success flag) — accept both.
 let ide: IdeHookContext = {};
-{
-  const raw = process.env.USER_PROMPT ?? "";
-  if (raw.length > 0) {
+if (PAYLOAD_TARGETS.has(target)) {
+  let raw = input;
+  if (raw.trim().length === 0) raw = process.env.USER_PROMPT ?? "";
+  if (raw.trim().length > 0) {
     try {
-      ide = JSON.parse(raw) as IdeHookContext;
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const rawResult = parsed.toolResult ?? parsed.tool_response;
+      ide = {
+        toolName: (parsed.toolName ?? parsed.tool_name) as string | undefined,
+        toolArgs: (parsed.toolArgs ?? parsed.tool_input) as
+          | Record<string, unknown>
+          | undefined,
+        toolResult: typeof rawResult === "string" ? rawResult : "",
+        toolSuccess: (parsed.toolSuccess ?? parsed.tool_success) as
+          | boolean
+          | undefined,
+      };
     } catch {
       // Malformed context — advisory hooks fail open.
       ide = {};
@@ -88,6 +130,7 @@ let ide: IdeHookContext = {};
 }
 hookDebug(projectDir, "kiro-adapter", "invoked", {
   target,
+  hasStdinPayload: input.trim().length > 0,
   hasUserPrompt: (process.env.USER_PROMPT ?? "").length > 0,
   toolName: ide.toolName ?? "",
   toolResult: (ide.toolResult ?? "").slice(0, 160),
@@ -95,9 +138,9 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
 
 // --- mint: record a HUMAN_TURN event on prompt submit ---
 //
-// Wired by aidlc-mint.kiro.hook (promptSubmit). The IDE delivers no cwd payload
-// (context arrives via USER_PROMPT, which carries no project dir), so resolve
-// the project dir from process.cwd() — appendAuditEntry then resolves the
+// Wired by aidlc-mint.json (UserPromptSubmit). Payload-independent (never
+// reads stdin — a mint must never wait on it), so resolve the project dir
+// from process.cwd() — appendAuditEntry then resolves the
 // active intent from the on-disk cursor (aidlc/spaces/<space>/intents/active-intent)
 // using only that dir, so the event lands in the correct per-intent shard with
 // no payload. One ledger event per human turn; no marker file, no turn counter.
@@ -119,7 +162,7 @@ if (target === "mint") {
 
 // --- block: the preToolUse human-presence floor ---
 //
-// Wired by aidlc-block.kiro.hook (preToolUse). Hard-blocks tool calls ONLY while
+// Wired by aidlc-block.json (PreToolUse). Hard-blocks tool calls ONLY while
 // an approval gate is actually OPEN (a stage sits at [?] in the state file) and
 // no HUMAN_TURN has been recorded since the last gate resolution - the exit-2
 // floor behind the core handleApprove check. The gate-open predicate is
@@ -205,7 +248,7 @@ type Forward = { hook: string; input: Record<string, unknown> } | null;
 function buildForward(): Forward {
   switch (target) {
     case "session-start":
-      // promptSubmit carries no source discrimination — every submit is a
+      // UserPromptSubmit carries no source discrimination — every submit is a
       // startup from the core hook's perspective; its state-file self-gate
       // makes this a no-op outside active workflows.
       return {
@@ -218,11 +261,12 @@ function buildForward(): Forward {
       // The file path comes from the toolResult prose (toolArgs is empty).
       //
       // A FAILED write must not be audited as a successful artifact update
-      // (#417): the IDE sets toolSuccess=false and toolResult carries error
-      // prose, and relying on that prose failing to match extractWrittenPath's
-      // patterns is implicit — guard it explicitly. Only false is treated as a
-      // failure; an absent toolSuccess (defensive) falls through to the path
-      // check so an unknown-shape payload is never silently dropped here.
+      // (#417): the 0.12 channel sets toolSuccess=false and toolResult carries
+      // error prose, and relying on that prose failing to match
+      // extractWrittenPath's patterns is implicit — guard it explicitly. Only
+      // false is treated as a failure; an absent success flag (the 1.x stdin
+      // channel carries none) falls through to the path check so an
+      // unknown-shape payload is never silently dropped here.
       if (ide.toolSuccess === false) return null;
       const canon = canonicalWriteTool(ide.toolName ?? "");
       if (canon === "") return null;
@@ -292,8 +336,9 @@ function buildForward(): Forward {
       // / `**Agent:** <name>`, #459). Recover that identity rather than
       // hardcoding "unknown", and forward the result text as the message so
       // SUBAGENT_COMPLETED carries the real agent and a snippet of its output.
-      // (The .kiro.hook already filters to invoke_sub_agent, so there is no
-      // tool-name gate here — dropping it is what revives the event on the IDE.)
+      // (The hook file's matcher already filters to invoke_sub_agent, so there
+      // is no tool-name gate here — dropping it is what revives the event on
+      // the IDE.)
       const result = ide.toolResult ?? "";
       return {
         hook: "aidlc-log-subagent.ts",
@@ -384,6 +429,23 @@ return result.code;
 }
 
 if (import.meta.main) {
-  const input = (process.env.USER_PROMPT ?? "").length > 0 ? "" : await Bun.stdin.text();
-  process.exit(await run(process.argv[2] ?? "", input, process.argv.slice(3)));
+  const target = process.argv[2] ?? "";
+  // Read stdin ONLY for the payload-dependent targets, raced against a short
+  // timeout: IDE 1.x writes+closes stdin so the read resolves promptly, but
+  // the 0.12 IDE opened stdin without ever writing or closing it — a bare
+  // read hangs. Every other target skips the read entirely (zero latency;
+  // block fires on EVERY PreToolUse).
+  let input = "";
+  if (PAYLOAD_TARGETS.has(target) && !process.stdin.isTTY) {
+    try {
+      input = await Promise.race([
+        Bun.stdin.text(),
+        // NOT the path `resolve` imported above — plain promise settlement.
+        new Promise<string>((settle) => setTimeout(() => settle(""), 2000)),
+      ]);
+    } catch {
+      input = "";
+    }
+  }
+  process.exit(await run(target, input, process.argv.slice(3)));
 }

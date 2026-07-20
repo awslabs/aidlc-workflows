@@ -46,8 +46,10 @@ Open `your-project/` in Kiro IDE. The install ships:
 - `.kiro/skills/aidlc/SKILL.md` — the conductor loaded when you invoke
   `/aidlc`. The shipped `.kiro/settings/cli.json` and agent-v1 JSON files are
   CLI-only compatibility surfaces; they do not select an IDE default agent.
-- `.kiro/hooks/*.kiro.hook` — the framework hooks registered in the IDE's
-  native hook format. They appear in the IDE's Agent Hooks panel.
+- `.kiro/hooks/aidlc-*.json` — the framework hooks registered in the IDE's
+  native v2 hook format. They appear in the IDE's Agent Hooks panel. (Kiro IDE
+  1.x no longer executes the legacy `.kiro.hook` format the harness shipped
+  before; on those builds legacy hooks are silently inert.)
 
 In the chat panel, run `/aidlc --doctor` to verify the setup, then
 `/aidlc <description>` to start a workflow.
@@ -63,30 +65,34 @@ the workspace and the first intent auto-births on your first `/aidlc`.
 
 ## How hooks work on Kiro IDE
 
-Kiro IDE registers hooks through `.kiro.hook` files under `.kiro/hooks/` (a
-different mechanism from Kiro CLI, which reads a `hooks` block inside the agent
-JSON). Each `.kiro.hook` runs a command that routes through the shared
-`aidlc-kiro-adapter.ts` shim, which normalizes the IDE's hook event into the
-shape the byte-shared core hooks expect.
+Kiro IDE registers hooks through v2 hook JSON files
+(`{"version":"v1","hooks":[{name,trigger,matcher,action}]}`, PascalCase
+triggers) under `.kiro/hooks/` (a different mechanism from Kiro CLI, which
+reads a `hooks` block inside the agent JSON). Each hook runs a command that
+routes through the shared `aidlc-kiro-adapter.ts` shim, which normalizes the
+IDE's hook event into the shape the byte-shared core hooks expect.
 
-The IDE delivers hook context through the **`USER_PROMPT` environment variable**
-(not stdin — the IDE opens stdin but never writes to it). `USER_PROMPT` is a JSON
-string `{ toolName, toolArgs, toolResult, toolSuccess }`. The IDE leaves
-`toolArgs` empty, so the adapter recovers the written file path from the
-`toolResult` text and drives the payload-free hooks (`runtime-compile`,
-`sync-statusline`) off the audit trail instead of a tool payload.
+Kiro IDE 1.x delivers hook context as **JSON on stdin** (snake_case:
+`{ tool_name, tool_input, tool_response }`; the older 0.12 builds instead set
+the `USER_PROMPT` environment variable with a camelCase equivalent, and the
+adapter accepts both). Either way the IDE leaves the tool inputs empty, so the
+adapter recovers the written file path from the tool-result text and drives the
+payload-free hooks (`runtime-compile`, `sync-statusline`) off the audit trail
+instead of a tool payload. Only the two payload-dependent targets read stdin
+(raced against a 2s timeout); everything else — including the per-tool-call
+`block` floor — keeps a zero-latency path.
 
-| Hook | IDE event | Purpose |
-|------|-----------|---------|
-| `aidlc-session-start` | `promptSubmit` | Injects workflow resume context |
-| `aidlc-mint` | `promptSubmit` | Records a human-turn event on every prompt (human-presence gate) |
-| `aidlc-session-end` | `agentStop` | Emits `SESSION_ENDED` (observability) |
-| `aidlc-stop` | `agentStop` | Forwarding-loop continuation |
-| `aidlc-block` | `preToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (human-presence floor) |
-| `aidlc-audit-logger` | `postToolUse` (write) | Logs artifact create/update (path from `toolResult`) |
-| `aidlc-sensor-fire` | `postToolUse` (write) | Fires applicable sensors (path from `toolResult`) |
-| `aidlc-runtime-compile` | `postToolUse` (shell) | Recompiles the runtime graph (gated on the audit tail) |
-| `aidlc-sync-statusline` | `postToolUse` (shell) | Forward-only sync of `Current Stage` from the latest `STAGE_STARTED` in the audit (the `spec` event never fires in the IDE) |
+| Hook | Trigger (matcher) | Purpose |
+|------|-------------------|---------|
+| `aidlc-session-start` | `UserPromptSubmit` | Injects workflow resume context |
+| `aidlc-mint` | `UserPromptSubmit` | Records a human-turn event on every prompt (human-presence gate) |
+| `aidlc-session-end` | `Stop` | Emits `SESSION_ENDED` (observability) |
+| `aidlc-stop` | `Stop` | Forwarding-loop continuation |
+| `aidlc-block` | `PreToolUse` | Hard-blocks tool calls while an approval gate is open and no human has acted since (human-presence floor) |
+| `aidlc-audit-logger` | `PostToolUse` (`fs_write\|str_replace\|fs_append`) | Logs artifact create/update, then fires applicable sensors (path from the tool result) |
+| `aidlc-log-subagent` | `PostToolUse` (`invoke_sub_agent`) | Records `SUBAGENT_COMPLETED` with the delegate's identity |
+| `aidlc-runtime-compile` | `PostToolUse` (`execute_bash`) | Recompiles the runtime graph (gated on the audit tail) |
+| `aidlc-sync-statusline` | `PostToolUse` (`execute_bash`) | Forward-only sync of `Current Stage` from the latest `STAGE_STARTED` in the audit (the IDE surfaces no task payload to parse) |
 
 You will see a "Run Command Hook" line in chat each time one fires.
 
@@ -109,7 +115,7 @@ ways to enable it, either works:
 
 | Area | Claude Code | Kiro IDE |
 |------|-------------|----------|
-| Hook registration | `settings.json` `hooks` block | `.kiro/hooks/*.kiro.hook` files (shown in the Agent Hooks panel) |
+| Hook registration | `settings.json` `hooks` block | `.kiro/hooks/aidlc-*.json` v2 hook files (shown in the Agent Hooks panel) |
 | Gates & questions | `AskUserQuestion` widget | Numbered prose options (reply with a number); the questions FILE with `[Answer]:` tags stays the source of truth |
 | Statusline | Current stage + model + context % | Not available — use `/aidlc --status` and the progress line at each gate |
 | Subagent stages (2.1, 3.5) | `Task` tool | Kiro `subagent` tool → `aidlc-developer-agent` / `aidlc-architect-agent`; the IDE reads a delegate's tool grants from the agent `.md` frontmatter (`tools:`), injected at packaging - the agent-v1 JSONs are CLI-only |
@@ -135,12 +141,12 @@ substituted to `.kiro` and the `rules/` → `steering/` rename). `bun
 scripts/package.ts --check` is the drift guard and runs in CI. The authored
 Kiro IDE surfaces live in `harness/kiro-ide/`: the orchestrator skill
 (`skills/aidlc/`), CLI-compatibility agent JSONs (`agents/`), the hook adapter
-and `.kiro.hook` files (`hooks/`), CLI-only `settings/cli.json`, and
+and v2 hook JSON files (`hooks/`), CLI-only `settings/cli.json`, and
 `AGENTS.md` — edit those (or `core/`), never the generated `dist/kiro-ide`.
 
 The IDE harness differs from the CLI harness (`harness/kiro/`) in three ways:
 the `/aidlc` skill is its conductor rather than an agent selected through
-`settings/cli.json`; it ships `.kiro.hook` files (the CLI relies on the
+`settings/cli.json`; it ships v2 hook JSON files (the CLI relies on the
 agent-JSON `hooks` block, which the IDE ignores); and its manifest injects a
 `tools:` frontmatter grant into the delegation-target agent `.md` files
 (`frontmatterAdditions`), because the IDE resolves a delegated subagent's tools

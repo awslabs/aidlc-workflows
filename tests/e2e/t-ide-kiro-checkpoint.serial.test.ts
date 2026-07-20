@@ -166,13 +166,13 @@ function gateApprovedCountFor(sandbox: string, slug: string): number {
 
 describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on the desktop app)", () => {
   // Drives the SHIPPED dist/kiro-ide tree (harness:"kiro-ide" => mint + block
-  // .kiro.hook files seeded) and asserts the REAL fix surfaces on disk: the
+  // v2 hook JSON files seeded) and asserts the REAL fix surfaces on disk: the
   // HUMAN_TURN events the mint hook records + the GATE_APPROVED audit ledger.
   test.skipIf(SKIP_REASON !== null)(
     `one human turn commits the approved gate and REFUSES a same-turn fabricated approval${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
-      // harness:"kiro-ide" seeds dist/kiro-ide/.kiro (the .kiro.hook files the IDE
-      // actually reads - mint on promptSubmit, block on preToolUse) + a real open
+      // harness:"kiro-ide" seeds dist/kiro-ide/.kiro (the v2 hook JSON files the IDE
+      // actually reads - mint on UserPromptSubmit, block on PreToolUse) + a real open
       // gate via the mid-inception state fixture (a STAGE_AWAITING_APPROVAL the engine
       // can approve). The committed slug is that stage; the blocked slug is the next
       // stage's gate, auto-opened by the first approve's reentrant advance.
@@ -246,8 +246,8 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
   // HUMAN_TURN event. A presence-only assert would stay green if a future Kiro
   // per-continuation mint inflated the count; pinning == 1 proves the mint fires
   // once per HUMAN turn, not per continuation. (To toggle the mint hook off you
-  // ADD/REMOVE the .kiro.hook FILE, never `enabled:false` - a .kiro.hook fires even
-  // disabled; here we keep the shipped hook in place.)
+  // ADD/REMOVE the hook FILE — the legacy era proved `enabled:false` could not
+  // be trusted to silence a hook; here we keep the shipped hook in place.)
   test.skipIf(SKIP_REASON !== null)(
     `one human turn records exactly one HUMAN_TURN across N model continuations${SKIP_REASON ? ` - SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
