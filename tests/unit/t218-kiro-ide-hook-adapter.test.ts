@@ -132,6 +132,40 @@ function ctx(toolName: string, toolResult: string): string {
   return JSON.stringify({ toolName, toolArgs: {}, toolResult, toolSuccess: true });
 }
 
+/** Spawn the adapter with stdin held OPEN (piped, never written, never
+ *  closed) - the live Kiro IDE condition. runIde/spawnSync's input:"" closes
+ *  stdin at EOF, so it can never reproduce the hang this reproduces: the
+ *  child must exit on its own with stdin still open, or the timeout kill
+ *  marks the red. */
+async function runIdeOpenStdin(
+  projectDir: string,
+  target: string,
+  userPrompt: string | null,
+): Promise<{ code: number; timedOut: boolean }> {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    CLAUDE_PROJECT_DIR: projectDir,
+  };
+  if (userPrompt === null) delete env.USER_PROMPT;
+  else env.USER_PROMPT = userPrompt;
+  const proc = Bun.spawn({
+    cmd: ["bun", join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target],
+    cwd: projectDir,
+    stdin: "pipe",
+    stdout: "ignore",
+    stderr: "ignore",
+    env,
+  });
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    proc.kill();
+  }, 15_000);
+  const code = await proc.exited;
+  clearTimeout(timer);
+  return { code, timedOut };
+}
+
 describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
   test("1: audit-and-sensors resolves a RELATIVE toolResult path (real IDE shape) and logs CREATE", () => {
     const dir = scratchProject(true);
@@ -314,6 +348,50 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("12b: EMPTY USER_PROMPT + stdin held open still exits promptly (live IDE agentStop shape)", async () => {
+    // Regression guard for the entry-guard stdin read reintroduced by the
+    // run()-export refactor: `await Bun.stdin.text()` when USER_PROMPT is
+    // empty. Live-captured on Kiro IDE: agentStop fires with USER_PROMPT set
+    // but ZERO-LENGTH and stdin open-but-never-written, so that await hung
+    // the stop and session-end hooks forever. Test 12 cannot catch this
+    // (input:"" is instant EOF); this one holds the pipe open and requires
+    // the adapter to finish anyway. Both empty-string (the captured agentStop
+    // shape) and absent USER_PROMPT must survive.
+    const dir = scratchProject(true);
+    try {
+      for (const userPrompt of ["", null]) {
+        for (const target of ["session-end", "block"]) {
+          const r = await runIdeOpenStdin(dir, target, userPrompt);
+          const label = `${target}/${userPrompt === null ? "absent" : "empty"}`;
+          expect(`${label}:timedOut=${r.timedOut}`).toBe(`${label}:timedOut=false`);
+          expect(`${label}:${r.code}`).toBe(`${label}:0`);
+        }
+      }
+      expect(readAudit(dir)).toContain("SESSION_ENDED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  test("12c: USER_PROMPT + stdin held open still does the postToolUse work", async () => {
+    const dir = scratchProject(true);
+    try {
+      const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "# intent\n");
+      const r = await runIdeOpenStdin(
+        dir,
+        "audit-and-sensors",
+        ctx("fs_write", `Created the ${file} file.`),
+      );
+      expect(r.timedOut).toBe(false);
+      expect(r.code).toBe(0);
+      expect(readAudit(dir)).toContain("ARTIFACT_CREATED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 45_000);
 
   test("13: hook-debug.log is OPT-IN — absent without AIDLC_HOOK_DEBUG, present with it", () => {
     const debugLogPath = (dir: string) =>

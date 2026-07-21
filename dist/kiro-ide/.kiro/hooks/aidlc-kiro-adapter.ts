@@ -384,6 +384,9 @@ return result.code;
 }
 
 if (import.meta.main) {
-  const input = (process.env.USER_PROMPT ?? "").length > 0 ? "" : await Bun.stdin.text();
-  process.exit(await run(process.argv[2] ?? "", input, process.argv.slice(3)));
+  // NEVER await stdin here, even when USER_PROMPT is absent: the IDE opens
+  // hook stdin but never writes or closes it, so any read hangs the hook
+  // process forever (see the header). Context arrives via USER_PROMPT only;
+  // run() ignores its input parameter by design.
+  process.exit(await run(process.argv[2] ?? "", "", process.argv.slice(3)));
 }
