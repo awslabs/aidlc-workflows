@@ -14,9 +14,13 @@ on:
 permissions:
   contents: read
 
+# PR validation builds are independently cancellable per ref; production
+# deployments are serialized separately (see the deploy job's `pages` group)
+# so a push deploy and a manual dispatch can never interleave and an older
+# run cannot overwrite a newer site.
 concurrency:
-  group: docs-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: docs-build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -63,6 +67,11 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     needs: build
+    # One shared production group across push and manual runs, never
+    # cancelled mid-deploy (the Pages starter-workflow convention).
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     permissions:
       pages: write
       id-token: write

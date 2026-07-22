@@ -38,16 +38,26 @@ let missing = 0;
 for (const file of listMarkdown(docsDir)) {
   const body = readFileSync(file, "utf-8");
   const lines = body.split("\n");
-  let inFence = false;
+  // Open fence delimiter, or null outside a fence. CommonMark: a fence closes
+  // only on the SAME marker character with AT LEAST as many markers as the
+  // opener (and no info string) - a ``` line inside a ```` block is content.
+  let fence: { char: string; len: number } | null = null;
   let changed = false;
   for (let i = 0; i < lines.length; i++) {
-    // CommonMark fences: a line opening or closing a ``` / ~~~ block (with
-    // optional leading indent and info string). Content inside is skipped.
-    if (/^\s{0,3}(`{3,}|~{3,})/.test(lines[i])) {
-      inFence = !inFence;
-      continue;
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(lines[i]);
+    if (m) {
+      const [, marker, rest] = m;
+      if (fence === null) {
+        fence = { char: marker[0], len: marker.length };
+        continue;
+      }
+      if (marker[0] === fence.char && marker.length >= fence.len && rest.trim() === "") {
+        fence = null;
+        continue;
+      }
+      // Incompatible delimiter inside an open fence: plain content.
     }
-    if (inFence) continue;
+    if (fence !== null) continue;
     // Inline links/images: `](target)` with an optional `#fragment`. Absolute
     // URLs (scheme-prefixed) and pure in-page anchors are left alone.
     const next = lines[i].replace(
