@@ -111,15 +111,6 @@
     "model": "openai.gpt-5.5",
     "trigger": "manual"
   },
-  "postCompact": {
-    "session_id": "019eb919-44fc-7910-8a91-ac2f87ea75f9",
-    "turn_id": "019eb91c-477a-7531-b03e-7732a41d22c8",
-    "transcript_path": "/tmp/example-project/codex-home/sessions/2026/06/12/rollout-2026-06-12T09-51-41-019eb919-44fc-7910-8a91-ac2f87ea75f9.jsonl",
-    "cwd": "/tmp/example-project/e1-hooks",
-    "hook_event_name": "PostCompact",
-    "model": "openai.gpt-5.5",
-    "trigger": "manual"
-  },
   "postToolUse_updatePlan_slug": {
     "session_id": "019eb916-28ed-76f3-be31-29fd14b24e6e",
     "turn_id": "019eb916-29a5-7800-99d9-75b115d3b0ae",

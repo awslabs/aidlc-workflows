@@ -29,7 +29,7 @@
 //      their predecessor — correct, since none of them can emit an end.
 //
 // Output contracts:
-//   - session-start / post-compact: the core hook prints
+//   - session-start: the core hook prints
 //     {"additionalContext": "..."}; Codex expects the hookSpecificOutput
 //     wrapper (verified live, findings E1) — the shim re-wraps.
 //   - stop: {"decision":"block","reason"} passes through VERBATIM — the
@@ -39,9 +39,8 @@
 // Usage (wired in .codex/hooks.json):
 //   bun .codex/hooks/aidlc-codex-adapter.ts <target>
 // where <target> ∈ session-start | audit-and-sensors | state-sync |
-//                  runtime-compile | validate-state | post-compact |
-//                  log-subagent | stop | mint | state-transition-guard |
-//                  reviewer-scope
+//                  runtime-compile | validate-state | log-subagent | stop |
+//                  mint | state-transition-guard | reviewer-scope
 
 import { createHash } from "node:crypto";
 import {
@@ -359,21 +358,6 @@ switch (target) {
     // SESSION_COMPACTED + recovery breadcrumb are all self-contained.
     runCore("aidlc-validate-state.ts", rawInput);
     persistResponse("", 0);
-    return 0;
-  }
-
-  case "post-compact": {
-    // Codex-only event (S9c): re-inject the mission AFTER compaction. The
-    // core session-start hook with source=compact emits NO audit row (the
-    // PreCompact hook owns SESSION_COMPACTED) but still renders the
-    // workflow-context block — exactly the deterministic mission reload.
-    const r = runCore(
-      "aidlc-session-start.ts",
-      JSON.stringify({ hook_event_name: "SessionStart", source: "compact" }),
-    );
-    const wrapped = wrapContext(r.stdout, "PostCompact");
-    persistResponse(wrapped, 0);
-    if (wrapped) process.stdout.write(wrapped);
     return 0;
   }
 

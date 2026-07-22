@@ -379,15 +379,19 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("11: post-compact re-injects the mission context wrapped for PostCompact", () => {
+  test("11: compact-source session-start re-injects the mission without a new session audit row", () => {
     const dir = scratchProject(true);
     try {
-      const r = runAdapter(dir, "post-compact", withCwd(FIXTURES.postCompact, dir));
+      const r = runAdapter(
+        dir,
+        "session-start",
+        withCwd({ ...FIXTURES.sessionStart, source: "compact" }, dir),
+      );
       expect(r.code).toBe(0);
       const out = JSON.parse(r.stdout) as {
         hookSpecificOutput?: { hookEventName?: string; additionalContext?: string };
       };
-      expect(out.hookSpecificOutput?.hookEventName).toBe("PostCompact");
+      expect(out.hookSpecificOutput?.hookEventName).toBe("SessionStart");
       expect(out.hookSpecificOutput?.additionalContext).toContain("AIDLC WORKFLOW ACTIVE");
       // source=compact emits NO session audit row (PreCompact owns it).
       const audit = readAudit(dir);

@@ -26,7 +26,7 @@ import { projectTier } from "../../core/tools/aidlc-tiers.ts";
 
 // ---------------------------------------------------------------------------
 // Hook wiring (kiro-normative shape: register ONLY events with a real core-hook
-// consumer; dropped hooks ship unregistered). PostCompact is Codex-only.
+// consumer; dropped hooks ship unregistered).
 // ---------------------------------------------------------------------------
 const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = [
   { event: "SessionStart", target: "session-start" },
@@ -41,7 +41,6 @@ const HOOK_WIRING: Array<{ event: string; matcher?: string; target: string }> = 
   { event: "PostToolUse", matcher: "update_plan", target: "state-sync" },
   { event: "PostToolUse", matcher: "Bash", target: "runtime-compile" },
   { event: "PreCompact", target: "validate-state" },
-  { event: "PostCompact", target: "post-compact" },
   { event: "SubagentStop", target: "log-subagent" },
   { event: "Stop", target: "stop" },
 ];
@@ -172,7 +171,6 @@ const SNAKE: Record<string, string> = {
   PostToolUse: "post_tool_use",
   PermissionRequest: "permission_request",
   PreCompact: "pre_compact",
-  PostCompact: "post_compact",
   SubagentStart: "subagent_start",
   SubagentStop: "subagent_stop",
   Stop: "stop",

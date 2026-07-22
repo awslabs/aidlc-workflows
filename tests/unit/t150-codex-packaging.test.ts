@@ -38,7 +38,6 @@ const TRUST_SUFFIXES = [
   "post_tool_use:1:0",
   "post_tool_use:2:0",
   "pre_compact:0:0",
-  "post_compact:0:0",
   "subagent_stop:0:0",
   "stop:0:0",
 ] as const;
@@ -148,7 +147,7 @@ describe("t150 dist/codex packaging parity + drift guard", () => {
       hooks: Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
     };
     expect(Object.keys(wiring.hooks).sort()).toEqual(
-      ["PostCompact", "PostToolUse", "PreCompact", "PreToolUse", "SessionStart", "Stop", "SubagentStop", "UserPromptSubmit"].sort(),
+      ["PostToolUse", "PreCompact", "PreToolUse", "SessionStart", "Stop", "SubagentStop", "UserPromptSubmit"].sort(),
     );
     // Matchers per the verified tool-name map.
     const postMatchers = wiring.hooks.PostToolUse.map((g) => g.matcher).sort();
