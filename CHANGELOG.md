@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.12] - 2026-07-24
+
+Fixes an autonomous-Construction hang: when unit names are authored in uppercase (e.g. `U-16`) in `unit-of-work-dependency.md`, the swarm's converged batches were compared against the referee's kebab-lower audit slugs without case-folding, so `next` re-emitted `invoke-swarm` for the first batch forever and the stage could never settle. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `next` now case-folds the unit-name membership tests (batch advance, the report-side settle evidence gate, the approve-time artifact-guard exemption, and the per-unit review-receipt check), while still emitting the original-cased unit names in `invoke-swarm` directives.
+* Fixes #621.
+
 ## [2.5.11] - 2026-07-24
 
 Intent Capture now keeps generated intent and stakeholder claims grounded in the user's description, confirmed answers, workflow-selected scope, or explicitly registered memory. Unsupported content is omitted, elicited, or surfaced as a human-owned assumption instead of being presented as fact. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated stage, Product Lead reviewer contract, and `claim-sources` sensor are installed.

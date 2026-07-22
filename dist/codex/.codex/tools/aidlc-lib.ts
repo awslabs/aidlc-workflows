@@ -3513,6 +3513,13 @@ export function latestMainWorkflowStageStarted(
 // fields (pre-2.5.0 audit logs) fail closed: the affected units re-fan on the
 // next swarm pass, which finalize's re-verify makes safe. The timestamp check
 // stays as belt-and-braces.
+//
+// The set holds LOWERCASED names: rows carry the referee's forced kebab-lower
+// unit slug (prepare/finalize reject non-kebab), while bolt_dag.batches
+// preserve unit names as authored in unit-of-work-dependency.md (often upper,
+// e.g. "U-16"). Every consumer must lowercase the DAG-side name before its
+// membership test, or an uppercase-authored batch reads as unconverged
+// forever (#621).
 export function swarmConvergedUnits(
   projectDir: string,
   slug: string,
@@ -3526,7 +3533,7 @@ export function swarmConvergedUnits(
     if ((auditBlockField(block, "Run floor") ?? "") !== floor) continue;
     if (floor && timestamp < floor) continue;
     const unit = auditBlockField(block, "Unit name");
-    if (unit) converged.add(unit);
+    if (unit) converged.add(unit.toLowerCase());
   }
   return converged;
 }

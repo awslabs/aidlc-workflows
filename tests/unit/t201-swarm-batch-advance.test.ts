@@ -468,3 +468,53 @@ describe("t201 converged-row attempt identity (Stage + Run floor stamp)", () => 
     expect(d.units).toEqual(["auth"]);
   }, 30000);
 });
+
+describe("t201 authored-casing vs referee slug (issue #621)", () => {
+  // bolt_dag.batches preserve unit names EXACTLY as authored in
+  // unit-of-work-dependency.md (often upper, e.g. "U-16"), but the referee
+  // forces kebab-lower slugs (prepare/finalize reject non-kebab), so the
+  // SWARM_UNIT_CONVERGED rows finalize writes carry "u-16". The membership
+  // test must case-fold or an uppercase-authored batch reads as unconverged
+  // forever and next re-emits batch 1 indefinitely (#621). The directive keeps
+  // the ORIGINAL-cased names: the conductor's `prepare` derives the slug.
+
+  // 13: the hang itself. Batch 1 fully converged under lowercase rows must
+  // advance to batch 2 - and batch 2's unit keeps its authored casing.
+  test("13: lowercase converged rows advance an uppercase-authored batch", () => {
+    const proj = seedProject();
+    seedBoltDagBatches(proj, [["U-16", "U-AUTH", "U-AZ"], ["U-BENCH"]]);
+    seedConverged(proj, ["u-16", "u-auth", "u-az"]);
+    const d = runNext(proj);
+    expect(d.kind).toBe("invoke-swarm");
+    expect(d.units).toEqual(["U-BENCH"]);
+  }, 30000);
+
+  // 14: a partial pass re-fans only the owed units, original-cased.
+  test("14: a partially-converged uppercase batch re-emits only the owed units, original-cased", () => {
+    const proj = seedProject();
+    seedBoltDagBatches(proj, [["U-16", "U-AUTH", "U-AZ"], ["U-BENCH"]]);
+    seedConverged(proj, ["u-16"]);
+    const d = runNext(proj);
+    expect(d.kind).toBe("invoke-swarm");
+    expect(d.units).toEqual(["U-AUTH", "U-AZ"]);
+  }, 30000);
+
+  // 15: every unit converged (lowercase rows) -> the settle directive, not a
+  // re-fan, and the settle's report is accepted once each unit's review is
+  // recorded (the report-side evidence gate case-folds too).
+  test("15: an uppercase DAG settles and reports approved on lowercase rows", () => {
+    const proj = seedProject();
+    seedBoltDagBatches(proj, [["U-16", "U-AUTH", "U-AZ"], ["U-BENCH"]]);
+    seedConverged(proj, ["u-16", "u-auth", "u-az", "u-bench"]);
+    const d = runNext(proj);
+    expect(d.kind).toBe("run-stage");
+    expect(d.gate).toBe(true);
+    expect(d.unit).toBe("U-BENCH"); // last unit, authored casing preserved
+
+    for (const unit of ["U-16", "U-AUTH", "U-AZ", "U-BENCH"]) {
+      logReviewReady(proj, unit);
+    }
+    const accepted = runReport(proj);
+    expect(accepted.kind).toBe("done");
+  }, 30000);
+});

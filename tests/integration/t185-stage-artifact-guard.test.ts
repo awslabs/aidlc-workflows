@@ -407,7 +407,7 @@ describe("t185: stage-completion artifact guard (#366)", () => {
   describe("settled-swarm exemption (autonomous code-generation)", () => {
     const UNITS = ["user-auth", "billing"];
 
-    function seedSwarm(converged: string[]): void {
+    function seedSwarm(converged: string[], dagUnits: string[] = UNITS): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
       // Autonomy grant: append the field beside Scope (fixture ships without it).
@@ -424,8 +424,8 @@ describe("t185: stage-completion artifact guard (#366)", () => {
         join(seededRecordDir(proj), "runtime-graph.json"),
         `${JSON.stringify({
           bolt_dag: {
-            units: UNITS.map((name) => ({ name, depends_on: [] })),
-            batches: [UNITS],
+            units: dagUnits.map((name) => ({ name, depends_on: [] })),
+            batches: [dagUnits],
           },
         })}\n`,
       );
@@ -466,6 +466,17 @@ describe("t185: stage-completion artifact guard (#366)", () => {
       const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("Refusing to complete");
+    });
+
+    // #621: the DAG preserves unit names as authored (mixed/upper case) while
+    // the referee's convergence rows carry the forced kebab-lower slug. The
+    // exemption's membership test must case-fold, or an uppercase-authored
+    // DAG is refused the settle approval the engine just presented.
+    test("PASSES an uppercase-authored DAG whose rows carry kebab-lower slugs (#621)", () => {
+      seedSwarm(["user-auth", "billing"], ["User-Auth", "BILLING"]);
+      bypassed(proj, ["gate-start", "code-generation"]);
+      const r = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      expect(r.rc).toBe(0);
     });
   });
 });

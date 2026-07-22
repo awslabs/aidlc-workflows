@@ -2012,8 +2012,10 @@ function isSettledAutonomousSwarm(
   if (r.state !== "ok") return false;
   const units = r.batches.flat();
   if (units.length === 0) return false;
+  // converged holds kebab-lower slugs (see swarmConvergedUnits); lowercase the
+  // authored DAG name for the membership test (#621).
   const converged = swarmConvergedUnits(projectDir, node.slug);
-  return units.every((unit) => converged.has(unit));
+  return units.every((unit) => converged.has(unit.toLowerCase()));
 }
 
 // Try to handle an eligible autonomous swarm stage, returning true (and emitting)
@@ -2070,12 +2072,15 @@ function tryEmitSwarm(
   // Select the first topological batch with an unconverged unit; emit only that
   // batch's still-owed units. Ledger signal = SWARM_UNIT_CONVERGED (see above),
   // floored at this stage's latest STAGE_STARTED so a jump-driven re-run never
-  // reads a prior run's rows as coverage.
+  // reads a prior run's rows as coverage. converged holds kebab-lower slugs
+  // (see swarmConvergedUnits), so lowercase the authored batch name for the
+  // membership test — but emit the ORIGINAL name: the conductor's `prepare`
+  // re-derives the kebab slug from it (#621).
   const converged = swarmConvergedUnits(projectDir, slug);
   let pendingUnits: string[] | null = null;
   for (const batch of batches) {
     if (!Array.isArray(batch) || batch.length === 0) continue;
-    const owed = batch.filter((u) => !converged.has(u));
+    const owed = batch.filter((u) => !converged.has(u.toLowerCase()));
     if (owed.length > 0) {
       pendingUnits = owed;
       break;

@@ -984,8 +984,10 @@ function isSettledSwarmForArtifactGuard(
   // Shared attempt-scoped read (aidlc-lib.ts): a row counts only when its
   // Stage names this slug AND its Run floor equals the current attempt's
   // floor, so stale-attempt and cross-stage rows never satisfy the guard.
+  // converged holds kebab-lower slugs (see swarmConvergedUnits); lowercase the
+  // authored DAG name for the membership test (#621).
   const converged = swarmConvergedUnits(pd, stage.slug);
-  return resolution.units.every((unit) => converged.has(unit));
+  return resolution.units.every((unit) => converged.has(unit.toLowerCase()));
 }
 
 // Deterministic off-switch for the approve-time gate-revision backstop (mirrors
@@ -1365,6 +1367,12 @@ function verifyReviewerPrecondition(
   // declared-artifact write clears the matching receipt. For per-unit stages,
   // the path's construction/<unit>/ segment scopes invalidation to that unit;
   // an ambiguous matching path fails closed by clearing every unit receipt.
+  //
+  // The set holds LOWERCASED unit names: an autonomous swarm's reviews run in
+  // kebab-lower-slugged Bolt worktrees (so their rows carry e.g. "u-16"),
+  // while the DAG preserves the authored casing (e.g. "U-16") — the same
+  // mismatch as the convergence ledger (#621). Every membership op below
+  // case-folds so an uppercase-authored DAG is not refused over casing.
   const recordedRepos = new Set(intentRepos(pd));
   const reviewedUnits = new Set<string>();
   let sawStageReview = false;
@@ -1380,7 +1388,7 @@ function verifyReviewerPrecondition(
       } else if (targetUnit === null) {
         reviewedUnits.clear();
       } else {
-        reviewedUnits.delete(targetUnit);
+        reviewedUnits.delete(targetUnit.toLowerCase());
       }
       continue;
     }
@@ -1392,7 +1400,7 @@ function verifyReviewerPrecondition(
     if (verdict !== "READY" && verdict !== "NOT-READY") continue;
     sawStageReview = true;
     const unit = auditBlockField(e.block, "Unit");
-    if (unit) reviewedUnits.add(unit);
+    if (unit) reviewedUnits.add(unit.toLowerCase());
   }
 
   if (!perUnit) {
@@ -1427,7 +1435,7 @@ function verifyReviewerPrecondition(
   );
   if (reviewUnits.length === 0) return;
 
-  const missing = reviewUnits.filter((u) => !reviewedUnits.has(u));
+  const missing = reviewUnits.filter((u) => !reviewedUnits.has(u.toLowerCase()));
   if (missing.length > 0) {
     error(
       `Refusing to complete "${stage.slug}": it declares a reviewer (${reviewer}) but ` +
