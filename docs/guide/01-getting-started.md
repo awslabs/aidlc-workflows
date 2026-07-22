@@ -141,6 +141,15 @@ other distributions, see [Running on Kiro CLI](harnesses/kiro-cli.md),
 [AI-DLC on opencode](harnesses/opencode.md). The Claude Code implementation
 ships as a `.claude/` directory that you copy into your project.
 
+The `cp` commands below run from a clone of this repository on the `v2`
+branch:
+
+```bash
+git clone https://github.com/awslabs/aidlc-workflows.git
+cd aidlc-workflows
+git checkout v2
+```
+
 ### Step 1: Copy the implementation
 
 ```bash

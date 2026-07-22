@@ -20,6 +20,16 @@ configs, hook wiring, activation) differs.
 
 ## Install
 
+The copies below come from a clone of the
+[aidlc-workflows](https://github.com/awslabs/aidlc-workflows) repository on the
+`v2` branch:
+
+```bash
+git clone https://github.com/awslabs/aidlc-workflows.git
+cd aidlc-workflows
+git checkout v2
+```
+
 ```bash
 cp -r dist/kiro/.kiro your-project/.kiro
 cp -r dist/kiro/aidlc your-project/aidlc       # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it

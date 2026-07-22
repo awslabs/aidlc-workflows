@@ -96,6 +96,18 @@ On Windows, use *either* PowerShell *or* CMD, not both — your prompt shows `PS
 
 Every harness runs on **AWS Bedrock**, so set Bedrock up before your first run — enable model access in your AWS account and make sure the harness can see working AWS credentials. Each harness section below has the specifics.
 
+### Get the code
+
+Every install below copies from this repository's `dist/<harness>/` trees, so clone it and switch to the `v2` branch first:
+
+```bash
+git clone https://github.com/awslabs/aidlc-workflows.git
+cd aidlc-workflows
+git checkout v2
+```
+
+Run the `cp` commands in the sections below from this repository's root.
+
 ### Install a harness
 
 With bun in place, pick your harness below and expand it — each section installs that CLI, sets up your project, and walks the first run end to end.
