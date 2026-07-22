@@ -401,6 +401,39 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("11a: two compact starts with a state change between them render FRESH context (replay-cache exemption)", () => {
+    // Codex SessionStart input has no turn_id: two DISTINCT compactions in one
+    // session are byte-identical stdin, which the ×2 replay cache would treat
+    // as a duplicate and answer with the FIRST compaction's stale context.
+    // Compact-source session-start bypasses the cache, so the second render
+    // must reflect the state as it stands NOW.
+    const dir = scratchProject(true);
+    try {
+      const payload = withCwd({ ...FIXTURES.sessionStart, source: "compact" }, dir);
+      const r1 = runAdapter(dir, "session-start", payload);
+      expect(r1.code).toBe(0);
+      const ctx1 =
+        (JSON.parse(r1.stdout) as { hookSpecificOutput?: { additionalContext?: string } })
+          .hookSpecificOutput?.additionalContext ?? "";
+      expect(ctx1).toContain("requirements-analysis");
+      // The workflow moves on between compactions.
+      const stateFile = seededStateFile(dir);
+      writeFileSync(
+        stateFile,
+        readFileSync(stateFile, "utf-8").replaceAll("requirements-analysis", "code-generation"),
+      );
+      const r2 = runAdapter(dir, "session-start", payload);
+      expect(r2.code).toBe(0);
+      const ctx2 =
+        (JSON.parse(r2.stdout) as { hookSpecificOutput?: { additionalContext?: string } })
+          .hookSpecificOutput?.additionalContext ?? "";
+      expect(ctx2).toContain("code-generation");
+      expect(ctx2).not.toContain("requirements-analysis");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("13: session-start FORWARDS session_id — core hook stamps the per-session→intent record (M3 rebind wiring)", () => {
     // The genuine M3 fix: Codex now forwards session_id alongside its real
     // `source`, so the core hook's P8 stamp/rebind path is reachable. Proof:

@@ -111,6 +111,13 @@ const projectEnv = {
 // the duplicate waits briefly for that response and replays it byte-for-byte.
 // Entries are pruned after 30 minutes. Failure anywhere → fail open (run or
 // allow), never trap the turn.
+//
+// Compact-source SessionStart is EXEMPT: Codex SessionStart input carries no
+// turn_id, so two DISTINCT compactions in one session produce byte-identical
+// stdin and would replay the FIRST compaction's (stale) workflow context.
+// The compact render is read-only (source=compact emits no audit row), so
+// re-running a true duplicate is harmless while replaying a stale one is not.
+const bypassReplay = target === "session-start" && codex.source === "compact";
 
 const DEDUPE_ROOT = join(
   tmpdir(),
@@ -157,6 +164,7 @@ function replayResponse(): { stdout: string; code: number; stderr?: string } {
 }
 
 function persistResponse(stdout: string, code: number, stderr?: string): void {
+  if (bypassReplay) return;
   try {
     writeFileSync(responseFile, JSON.stringify({ stdout, code, ...(stderr ? { stderr } : {}) }), "utf-8");
   } catch {
@@ -164,15 +172,17 @@ function persistResponse(stdout: string, code: number, stderr?: string): void {
   }
 }
 
-try {
-  mkdirSync(DEDUPE_ROOT, { recursive: true });
-  pruneStale();
-  mkdirSync(slotDir); // atomic claim — throws EEXIST for the duplicate
-} catch {
-  const replay = replayResponse();
-  if (replay.stdout) process.stdout.write(replay.stdout);
-  if (replay.stderr) process.stderr.write(replay.stderr);
-  return replay.code;
+if (!bypassReplay) {
+  try {
+    mkdirSync(DEDUPE_ROOT, { recursive: true });
+    pruneStale();
+    mkdirSync(slotDir); // atomic claim — throws EEXIST for the duplicate
+  } catch {
+    const replay = replayResponse();
+    if (replay.stdout) process.stdout.write(replay.stdout);
+    if (replay.stderr) process.stderr.write(replay.stderr);
+    return replay.code;
+  }
 }
 
 // --- Core-hook subprocess plumbing ------------------------------------------
@@ -220,6 +230,12 @@ function runCoreWithStderr(
 
 // Re-wrap the core context output ({"additionalContext": ...}) into the
 // hookSpecificOutput envelope Codex consumes (verified live for SessionStart).
+// CONTRACT WARNING: each Codex event has its OWN output schema — do not reuse
+// this envelope for other events without checking the binary's embedded
+// <event>.command.output schema. PostCompact in particular allows NO
+// hookSpecificOutput and no context channel at all ("this event cannot emit
+// additionalContext"); reusing this wrapper there is rejected as invalid
+// hook JSON on every compaction.
 function wrapContext(coreStdout: string, eventName: string): string {
   try {
     const parsed = JSON.parse(coreStdout) as { additionalContext?: string };
@@ -362,8 +378,8 @@ switch (target) {
   }
 
   case "log-subagent": {
-    // SubagentStop already carries agent_type (real role name on Codex
-    // ≥ 0.139.0 — doctor pins the minimum) + agent_id. Verbatim pipe.
+    // SubagentStop already carries agent_type (real role name since Codex
+    // 0.139.0; the doctor-enforced floor is 0.145.0) + agent_id. Verbatim pipe.
     runCore("aidlc-log-subagent.ts", rawInput);
     persistResponse("", 0);
     return 0;

@@ -26,7 +26,7 @@
 //   4. `/aidlc space-create teamB` → `/aidlc space teamB` → birth there; no leak.
 //   5. `/aidlc space default` → A still resumable.
 //
-// LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.139.0 binary
+// LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.145.0 binary
 // (AIDLC_CODEX_BIN or PATH) + AWS creds for the Bedrock profile in
 // AIDLC_CODEX_AWS_PROFILE (default "codex"). Skips cleanly otherwise. Serial.
 
@@ -88,14 +88,14 @@ function codexVersionOk(): boolean {
   const m = (r.stdout ?? "").match(/(\d+)\.(\d+)\.(\d+)/);
   if (r.status !== 0 || !m) return false;
   const [maj, min] = [Number(m[1]), Number(m[2])];
-  return maj > 0 || min >= 139;
+  return maj > 0 || min >= 145;
 }
 
 function skipReason(): string | null {
   if (process.env.AIDLC_CODEX_EXEC_LIVE !== "1") {
     return "set AIDLC_CODEX_EXEC_LIVE=1 to run the live codex-exec workspace journey (uses Bedrock)";
   }
-  if (!codexVersionOk()) return `codex >= 0.139.0 not found (AIDLC_CODEX_BIN=${CODEX_BIN})`;
+  if (!codexVersionOk()) return `codex >= 0.145.0 not found (AIDLC_CODEX_BIN=${CODEX_BIN})`;
   if (!existsSync(CODEX_DIST)) return `distributable missing: ${CODEX_DIST}`;
   return null;
 }

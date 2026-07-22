@@ -163,7 +163,7 @@ Source of truth: one file per scope under `.codex/scopes/aidlc-<name>.md` (ident
 - **Gates**: the question protocol is two-track per `question-rendering.md` — `request_user_input` when the shipped config flags enable it, numbered prose otherwise. Gate semantics live in the engine either way.
 - **Git under the sandbox**: `workspace-write` keeps `.git` read-only in-sandbox BY DESIGN; the shipped `.codex/rules/default.rules` pre-allows `git worktree`/`git commit`/`git add` so escalations auto-approve. Headless contexts (exec workers, CI) need `writable_roots=[<main repo>/.git]` in config — see the shipped `config.toml` template.
 - **Swarm floor = exec workers** (D-8): headless `codex exec` per unit, always `< /dev/null`, resumable via `codex exec resume`. `AIDLC_USE_SWARM=1` loud-degrades (no Workflow tool on this harness) — announce it and pass `--degraded-from ultracode` to the referee.
-- **Session lifecycle**: there is no SessionEnd event; the session-start hook adapter reconciles an unclosed prior session as an inferred `SESSION_ENDED` audit row at the next start. After compaction, Codex emits SessionStart with `source=compact`, which re-injects the workflow mission deterministically.
+- **Session lifecycle**: there is no SessionEnd event; the session-start hook adapter reconciles an unclosed prior session as an inferred `SESSION_ENDED` audit row at the next start. After compaction, Codex emits SessionStart with `source=compact`, which re-injects the workflow mission before the first post-compaction continuation (the reason Codex >= 0.145.0 is required).
 
 ---
 

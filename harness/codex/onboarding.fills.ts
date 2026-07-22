@@ -16,7 +16,7 @@ const fills: OnboardingFills = {
     title_block: `# AI-DLC on Codex CLI
 
 This project uses AI-DLC (AI-Driven Development Life Cycle) under the OpenAI
-Codex CLI harness (minimum version 0.139.0). Invoke the orchestrator skill with
+Codex CLI harness (minimum version 0.145.0). Invoke the orchestrator skill with
 \`$aidlc\` (or \`/skills\` → aidlc) followed by a scope or project description.
 The deterministic engine, state machine, audit log, and referee are
 byte-identical to every other harness distribution; only the shell differs. Run
@@ -29,7 +29,7 @@ to list intents, \`$aidlc --doctor\` to validate setup, and
 re-shape the pending stages - every proposal stops at an approve/edit/reject
 gate).`,
 
-    prereq_bullets: `- **Codex CLI ≥ 0.139.0**: earlier releases do not surface the real agent role in subagent hook payloads and do not resolve hyphenated agent TOMLs. \`$aidlc --doctor\` enforces the pin. Check with \`codex --version\`.
+    prereq_bullets: `- **Codex CLI ≥ 0.145.0**: earlier releases defer compact-source SessionStart after a mid-turn auto-compaction, so one model continuation can run without the restored workflow mission. Releases before 0.139.0 also lack reliable subagent role attribution and hyphenated agent-TOML resolution. \`$aidlc --doctor\` enforces the pin. Check with \`codex --version\`.
 - **bun**: Required for CLI tools and hook scripts (state management, audit logging, jump orchestration). Install via \`curl -fsSL https://bun.sh/install | bash\`. On Windows: \`npm install -g bun\` or \`powershell -c "irm bun.sh/install.ps1 | iex"\`. \`bun\` must be on your PATH for the non-interactive shells the harness spawns — these source \`~/.zshenv\` (zsh) or \`~/.bashrc\` (bash), NOT \`~/.zshrc\`.
 - **Model provider**: The shipped \`.codex/config.toml\` defaults to **Amazon Bedrock** — the session (and judgment-tier agents, which inherit it) on \`openai.gpt-5.5\`, balanced/templated agents pinned to \`openai.gpt-5.4\` (the tier projection). Set your AWS profile/region under \`[model_providers.amazon-bedrock.aws]\` (shipped defaults \`profile = "default"\`, \`region = "us-east-1"\`); you need Bedrock model access and AWS credentials on the default SDK credential chain. For OpenAI auth instead, comment out \`model_provider\` and the \`[model_providers]\` block. Note: \`web_search\` is unavailable on Bedrock, so the market-research stage degrades gracefully.
 - **MCP servers (optional)**: Codex reads MCP server definitions from \`[mcp_servers.<name>]\` tables in \`config.toml\` (project \`.codex/config.toml\` or \`~/.codex/config.toml\`). The shipped config declares none — add the servers you need there. Credentials flow through your environment; a server you have no credentials for is simply unavailable and never blocks a workflow.`,
@@ -51,7 +51,7 @@ This is the same AI-DLC core that ships to every harness, rendered onto Codex CL
 - **No custom statusline and no welcome message**: workflow position rides the \`update_plan\` tool and \`$aidlc --status\`.
 - **Git under the sandbox**: \`workspace-write\` keeps \`.git\` read-only in-sandbox; interactive sessions auto-escalate and \`.codex/rules/default.rules\` pre-allows \`git worktree\`/\`commit\`/\`add\`. Headless runs need \`writable_roots\` (template in the shipped \`config.toml\`).
 - **Swarm floor** is \`codex exec\`-per-unit workers; \`AIDLC_USE_SWARM=1\` has no Workflow tool here and loud-degrades (\`SWARM_DEGRADED\`).
-- **Session lifecycle**: Codex has no SessionEnd event (an unclosed session is reconciled as an inferred \`SESSION_ENDED\` at the next start); after compaction, Codex emits SessionStart with \`source=compact\`, which re-injects the workflow mission.
+- **Session lifecycle**: Codex has no SessionEnd event (an unclosed session is reconciled as an inferred \`SESSION_ENDED\` at the next start); after compaction, Codex emits SessionStart with \`source=compact\`, which re-injects the workflow mission before the first post-compaction continuation (the reason Codex >= 0.145.0 is required).
 - **The AIDLC method** (the layered practice files \`org.md\`, \`team.md\`, \`project.md\`, and the per-phase \`phases/<phase>.md\`) lives once at the workspace root under \`aidlc/spaces/<active-space>/memory/\` — the single hand-editable source of truth, identical on every harness, NOT a per-harness copy. Codex auto-merges the root \`AGENTS.md\` and the orchestrator injects the active-space memory paths into context on demand; AI-DLC's own stage resolver reads the same tree directly (via the \`AIDLC_RULES_DIR\` seam in the shipped \`config.toml\`). Edit the method there, never under \`.codex/\`. (\`.codex/rules/default.rules\` remains Codex's native Starlark permission-rules file — distinct from the AIDLC method, and the two must not collide.)
 `,
 

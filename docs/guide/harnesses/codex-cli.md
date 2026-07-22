@@ -9,8 +9,10 @@ never hand-edit it (the drift guard fails CI).
 
 ## Prerequisites
 
-- **Codex CLI ≥ 0.139.0** — earlier releases do not surface the real agent
-  role in subagent hook payloads and do not resolve hyphenated agent TOMLs.
+- **Codex CLI ≥ 0.145.0** — earlier releases defer compact-source
+  `SessionStart` after a mid-turn auto-compaction, so one model continuation
+  can run without the restored workflow mission. Releases before 0.139.0 also
+  lack reliable subagent role attribution and hyphenated agent-TOML resolution.
   `/aidlc --doctor` enforces the pin. Check with `codex --version`.
 - **bun** — same requirement as the Claude harness; every tool and hook runs
   via bun.
@@ -114,7 +116,9 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
 - **Session lifecycle**: Codex has no SessionEnd event; an unclosed session
   is reconciled as an inferred `SESSION_ENDED` audit row at the next session
   start. After compaction, Codex emits SessionStart with `source=compact`;
-  that supported event re-injects the workflow mission before the next turn.
+  that supported event re-injects the workflow mission before the first
+  post-compaction continuation. This immediate drain is why AI-DLC requires
+  Codex >= 0.145.0.
 - **Artifact audit fidelity**: in headless `codex exec` runs the model often
   writes files via shell heredocs, which bypass the `apply_patch` hook
   matcher — `ARTIFACT_*` rows can be sparse. Interactive TUI sessions (where

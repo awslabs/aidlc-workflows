@@ -1263,11 +1263,13 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         fix: `copy from \`${from}\``,
       });
     }
-    // Minimum Codex version pin (G10): SubagentStart/Stop agent_type carries
-    // the real role name only from 0.139.0 (hyphenated agent TOMLs resolve
-    // without registration from the same release). Older versions degrade
-    // SUBAGENT_COMPLETED attribution and the agent transposition contract.
-    const MIN_CODEX = [0, 139, 0] as const;
+    // Minimum Codex version pin (G10): 0.139.0 introduced real role names in
+    // SubagentStart/Stop and hyphenated agent-TOML resolution; 0.145.0 also
+    // drains compact-source SessionStart hooks immediately after a mid-turn
+    // compaction. Older versions either break agent attribution/transposition
+    // or let the first post-compaction continuation run without the restored
+    // workflow mission.
+    const MIN_CODEX = [0, 145, 0] as const;
     const codexVer = Bun.spawnSync(["codex", "--version"], { stdout: "pipe", stderr: "ignore" });
     const verText = (codexVer.stdout?.toString() ?? "").trim();
     const verMatch = verText.match(/(\d+)\.(\d+)\.(\d+)/);
@@ -1275,7 +1277,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       results.push({
         pass: false,
         label: "codex CLI on PATH",
-        fix: "install Codex CLI >= 0.139.0 (https://developers.openai.com/codex)",
+        fix: "install Codex CLI >= 0.145.0 (https://developers.openai.com/codex)",
       });
     } else {
       const v = [Number(verMatch[1]), Number(verMatch[2]), Number(verMatch[3])];
@@ -1285,8 +1287,8 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
           (v[1] > MIN_CODEX[1] || (v[1] === MIN_CODEX[1] && v[2] >= MIN_CODEX[2])));
       results.push({
         pass: ok,
-        label: `codex CLI version ${verMatch[0]} >= 0.139.0 (subagent attribution + agent TOML resolution)`,
-        fix: "upgrade Codex CLI to 0.139.0 or later",
+        label: `codex CLI version ${verMatch[0]} >= 0.145.0 (immediate compact-session reload + subagent attribution + agent TOML resolution)`,
+        fix: "upgrade Codex CLI to 0.145.0 or later",
       });
     }
     // Hook trust pre-seed reminder (advisory pass-with-label): untrusted
