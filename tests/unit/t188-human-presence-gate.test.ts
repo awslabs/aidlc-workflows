@@ -86,7 +86,11 @@ function guardedLog(proj: string, args: string[]): { rc: number; out: string } {
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
-// Drive the public report surface with the same guard posture.
+// Drive the public report surface with the same guard posture. NOTE the
+// contract difference from `guarded`: when aidlc-state.ts refuses the
+// transition, orchestrate relays the refusal as an error DIRECTIVE
+// ({"kind":"error",...}) on stdout and exits 0 — only a malformed directive
+// exits non-zero. Refusal assertions must read the directive, not the rc.
 function guardedReport(proj: string, args: string[]): { rc: number; out: string } {
   const env = { ...process.env };
   env.AIDLC_SKIP_ARTIFACT_GUARD = "1";
@@ -398,6 +402,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "Approve",
       ]);
       expect(approve.rc).toBe(0);
+      expect(approve.out).toContain('"kind":"done"');
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     });
 
@@ -425,7 +430,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "--user-input",
         "fabricated approval",
       ]);
-      expect(approve.rc).not.toBe(0);
+      expect(approve.rc).toBe(0);
+      expect(approve.out).toContain('"kind":"error"');
       expect(approve.out).toContain("Refusing to approve");
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     });
@@ -454,7 +460,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "--user-input",
         "fabricated approval",
       ]);
-      expect(approve.rc).not.toBe(0);
+      expect(approve.rc).toBe(0);
+      expect(approve.out).toContain('"kind":"error"');
       expect(approve.out).toContain("Refusing to approve");
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     });
