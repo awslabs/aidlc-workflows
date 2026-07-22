@@ -112,7 +112,7 @@ Scopes differ by an order of magnitude in ceremony: `poc` runs 8 stages with 5 a
 
 The routing table above gives the counts; this matrix shows exactly **which** stages execute under each stock scope, so you can see what you will walk through before starting a workflow. A ✓ means the stage is EXECUTE under that scope; an empty cell means SKIP. Stage numbers and names match [Phases and Stages](04-phases-and-stages.md).
 
-<!-- BEGIN scope-stage-matrix: derived from each stage's `scopes:` frontmatter via the compiled scope-grid.json — kept in sync by tests/unit/t238-scope-matrix-doc-sync.test.ts; do not hand-edit cells without re-checking that test -->
+<!-- BEGIN scope-stage-matrix: derived from each stage's `scopes:` frontmatter via the compiled scope-grid.json — kept in sync by tests/unit/t244-scope-matrix-doc-sync.test.ts; do not hand-edit cells without re-checking that test -->
 
 | # | Stage | `enterprise` | `feature` | `mvp` | `poc` | `bugfix` | `refactor` | `infra` | `security-patch` | `workshop` |
 |---|-------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|

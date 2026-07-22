@@ -1,6 +1,6 @@
 // covers: doc:docs/guide/05-scopes-and-depth.md(scope-stage-matrix), file:tools/data/scope-grid.json, file:tools/data/stage-graph.json
 //
-// t238 — Doc drift guard for the Stage-by-Scope Matrix in
+// t244 — Doc drift guard for the Stage-by-Scope Matrix in
 // docs/guide/05-scopes-and-depth.md.
 //
 // Mechanism: none. Every byte inspected is a static file checked into the
@@ -127,12 +127,15 @@ function parseDocTable(): DocTable {
 
 const doc = parseDocTable();
 
-describe("t238 stage-by-scope matrix doc drift guard", () => {
+describe("t244 stage-by-scope matrix doc drift guard", () => {
   // --- Ground truth sanity ---
   test("1: ground truth — compiled grid and graph are non-empty and consistent", () => {
     expect(Object.keys(grid).length).toBeGreaterThan(0);
     expect(graph.length).toBeGreaterThan(0);
     expect(initStages.length).toBe(3);
+    // The collapsed init-row label must match the actual init stage numbers from the graph.
+    const initNums = initStages.map((s) => s.number);
+    expect(INIT_ROW_LABEL).toBe(initNums[0] + "\u2013" + initNums[initNums.length - 1]);
     // Every grid column covers exactly the graph's stage set.
     const slugs = graph.map((s) => s.slug).sort();
     for (const scope of Object.keys(grid)) {
@@ -156,9 +159,9 @@ describe("t238 stage-by-scope matrix doc drift guard", () => {
   });
 
   // --- Rows reverse: the doc has no unknown or duplicate stage rows ---
-  test("4: rows reverse — no unknown or duplicate stage rows in the doc", () => {
+  test("4: rows reverse — no unknown or duplicate stage rows in the doc, in document order", () => {
     expect(new Set(doc.rowNumbers).size).toBe(doc.rowNumbers.length);
-    expect([...doc.rowNumbers].sort()).toEqual(bodyStages.map((s) => s.number).sort());
+    expect(doc.rowNumbers).toEqual(bodyStages.map((s) => s.number));
   });
 
   // --- Cells: every ✓/empty cell matches the grid's EXECUTE/SKIP ---
