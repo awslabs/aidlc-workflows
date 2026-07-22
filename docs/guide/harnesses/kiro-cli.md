@@ -43,7 +43,7 @@ so the AI-DLC conductor agent is active by default — `/aidlc` just works.
 have configured**; if you prefer your own default, remove that setting and use
 `kiro-cli chat --agent aidlc` instead.
 
-No shipped agent pins a model (#601): a pinned ID resolves only when that
+No shipped agent pins a model: a pinned ID resolves only when that
 model is enabled on the user's Kiro install, so the conductor and all 14
 personas inherit your session model (`/model`). The same `cli.json` also
 ships one CONDITIONAL per-model reasoning-effort default via
