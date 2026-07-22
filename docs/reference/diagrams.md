@@ -485,12 +485,12 @@ sequenceDiagram
 
 ## 11. Approval Gate Flow
 
-Every stage (except the 3 Initialization stages) ends with an approval gate. The orchestrator logs the options to the audit trail before presenting them to the user, then logs the user's response afterward. After 3 revision cycles, an "Accept as-is" escape hatch becomes available. Ideation and Inception stages may also include a conditional third option to add a previously skipped stage.
+Every stage (except the 3 Initialization stages) ends with an approval gate. The gate's audit trail is report-owned: `report --result awaiting-approval` records the held gate (`STAGE_AWAITING_APPROVAL`) before the question is presented, and `report --result approved|rejected` records the response verbatim (`GATE_APPROVED`/`GATE_REJECTED`) — never `aidlc-log.ts decision`/`answer`. After 3 revision cycles, an "Accept as-is" escape hatch becomes available. Ideation and Inception stages may also include a conditional third option to add a previously skipped stage.
 
 ```mermaid
 flowchart TD
     COMPLETE["Stage work complete"]
-    AUDIT_PRE["Append to audit.md:\nstage summary + options\n(fresh ISO timestamp)"]
+    REPORT_AWAITING["Report awaiting-approval:\nengine opens gate + emits\nSTAGE_AWAITING_APPROVAL"]
     ASK["AskUserQuestion:\nApproval Gate"]
 
     APPROVE["Approve"]
@@ -498,42 +498,42 @@ flowchart TD
     ACCEPT["Accept as-is\n(escape hatch)"]
     ADD_STAGE["Add Skipped Stage\n(Ideation/Inception only)"]
 
-    AUDIT_POST_A["Log: User approved\n(fresh timestamp)"]
-    AUDIT_POST_C["Log: User requested changes\n(fresh timestamp)"]
-    AUDIT_POST_ACC["Log: User accepted as-is\n(fresh timestamp)"]
-    AUDIT_POST_ADD["Log: User added stage\n(fresh timestamp)"]
-
     REVISION_COUNT{"Revision\ncycle >= 3?"}
     NOTE_2ND["After 2nd revision:\nnote that escape hatch\nactivates next cycle"]
 
-    REPORT_APPROVED["Report approved:\nengine completes + routes"]
+    REPORT_APPROVED["Report approved with exact choice:\nengine emits GATE_APPROVED,\ncompletes + routes"]
+    REPORT_REJECTED["Report rejected with feedback:\nengine emits GATE_REJECTED,\nrecords revising state"]
+    REPORT_REVISED["Report revised:\nengine re-opens gate"]
     PROGRESS["Display progress line:\nN/total overall"]
     NEXT_STAGE["Proceed to next stage"]
 
     REVISE["Apply user feedback\nto stage artifacts"]
     RE_PRESENT["Re-present completion\nmessage"]
 
-    ADD_EXEC["Insert skipped stage\ninto workflow"]
+    ADD_EXEC["Insert skipped stage into workflow\n(scope tooling records the change)"]
 
-    COMPLETE --> AUDIT_PRE --> ASK
+    COMPLETE --> REPORT_AWAITING --> ASK
     ASK --> APPROVE
     ASK --> CHANGES
     ASK --> ACCEPT
     ASK --> ADD_STAGE
 
-    APPROVE --> AUDIT_POST_A --> REPORT_APPROVED --> PROGRESS --> NEXT_STAGE
-    ACCEPT --> AUDIT_POST_ACC --> REPORT_APPROVED
+    APPROVE --> REPORT_APPROVED --> PROGRESS --> NEXT_STAGE
+    ACCEPT --> REPORT_APPROVED
 
-    CHANGES --> AUDIT_POST_C --> REVISION_COUNT
-    REVISION_COUNT -->|"< 3"| NOTE_2ND --> REVISE --> RE_PRESENT --> AUDIT_PRE
+    CHANGES --> REPORT_REJECTED --> REVISION_COUNT
+    REVISION_COUNT -->|"< 3"| NOTE_2ND --> REVISE --> REPORT_REVISED --> RE_PRESENT --> ASK
     REVISION_COUNT -->|">= 3"| REVISE
 
-    ADD_STAGE --> AUDIT_POST_ADD --> ADD_EXEC
+    ADD_STAGE --> ADD_EXEC
 
     style COMPLETE fill:#e8f5e9,stroke:#388e3c
+    style REPORT_AWAITING fill:#e3f2fd,stroke:#1565c0
     style ASK fill:#bbdefb,stroke:#1565c0
     style APPROVE fill:#a5d6a7,stroke:#2e7d32
     style CHANGES fill:#fff9c4,stroke:#f9a825
+    style REPORT_REJECTED fill:#fff3e0,stroke:#ef6c00
+    style REPORT_REVISED fill:#e3f2fd,stroke:#1565c0
     style ACCEPT fill:#ffccbc,stroke:#bf360c
     style ADD_STAGE fill:#e1bee7,stroke:#7b1fa2
     style NEXT_STAGE fill:#c8e6c9,stroke:#388e3c

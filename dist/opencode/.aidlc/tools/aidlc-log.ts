@@ -6,16 +6,18 @@
 // they fire per-question / per-review, not per state transition.
 
 import { existsSync, readFileSync } from "node:fs";
-import { appendAuditEntry } from "./aidlc-audit.ts";
+import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   emitError,
   errorMessage,
+  holdsAuditLock,
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
   isAutonomousMode,
   parseCheckboxes,
   resolveProjectDir,
   stateFilePath,
+  withAuditLock,
 } from "./aidlc-lib.js";
 
 // Resolve the project dir AND assert that an active workflow exists before any
@@ -42,11 +44,19 @@ function resolveActiveProjectDir(explicit?: string): string {
   return pd;
 }
 
+// handleAnswer emits inside a withAuditLock section (classification and
+// emission share one snapshot); appendAuditEntry acquires the OS lock itself,
+// so route held-lock emits through the unlocked variant (the aidlc-state.ts
+// idiom) to avoid self-deadlocking on the lock dir we already hold.
 function emitAudit(
   pd: string,
   eventType: string,
   fields: Record<string, string>
 ): void {
+  if (holdsAuditLock(pd)) {
+    appendAuditEntryUnlocked(eventType, fields, pd);
+    return;
+  }
   appendAuditEntry(eventType, fields, pd);
 }
 
@@ -113,6 +123,19 @@ function handleDecision(args: string[]): void {
 // Usage: aidlc-log answer --stage <slug> --details <text>
 //
 // Fires AFTER the user answers a question.
+
+// A gate-choice answer: the exact option labels an approval gate presents
+// (Approve / Request Changes / Accept as-is, plus their past-tense and
+// reject variants), with optional trailing feedback after the label. Only
+// these shapes are report-owned; any other details text is an ordinary
+// interview answer even when a gate is open (e.g. a clarifying question
+// asked at the gate before rejecting).
+const GATE_CHOICE_RE = /^(approved?\b|request(ed)? changes\b|accept(ed)? as.is\b|reject(ed)?\b)/;
+
+function isGateChoice(details: string): boolean {
+  return GATE_CHOICE_RE.test(details.trim().toLowerCase());
+}
+
 function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -124,60 +147,80 @@ function handleAnswer(args: string[]): void {
     Details: flags.details,
   };
 
-  // Human-presence gate (ledger-event design): the interview answer is
-  // a human-judgement event, so require a HUMAN_TURN appended AFTER the last
-  // QUESTION_ANSWERED (ledger order) before recording another. The prior
-  // QUESTION_ANSWERED is the "since" boundary (its own consume-once: one human turn
-  // logs one answer), so no separate marker/consume step is needed. Autonomy
-  // carve-out FIRST (Construction swarm/Bolt answers are not human), then the scoped
-  // test off-switch. Fail-open when no ledger exists (presence not tracked yet).
-  const content = existsSync(stateFilePath(pd))
-    ? readFileSync(stateFilePath(pd), "utf-8")
-    : null;
+  // Classification and emission run under ONE audit lock: a concurrent
+  // gate-start (itself locked) cannot flip the stage to [?] between the
+  // checkbox read below and the QUESTION_ANSWERED append, which would
+  // re-create the answer-consumes-the-turn deadlock this branch prevents.
+  // appendAuditEntry / emitError re-acquire reentrantly (per-pd depth).
+  withAuditLock(pd, () => {
+    // Human-presence gate (ledger-event design): the interview answer is
+    // a human-judgement event, so require a HUMAN_TURN appended AFTER the last
+    // QUESTION_ANSWERED (ledger order) before recording another. The prior
+    // QUESTION_ANSWERED is the "since" boundary (its own consume-once: one human turn
+    // logs one answer), so no separate marker/consume step is needed. Autonomy
+    // carve-out FIRST (Construction swarm/Bolt answers are not human), then the scoped
+    // test off-switch. Fail-open when no ledger exists (presence not tracked yet).
+    const content = existsSync(stateFilePath(pd))
+      ? readFileSync(stateFilePath(pd), "utf-8")
+      : null;
 
-  // Approval choices are lifecycle transitions, not interview answers. A
-  // conductor may nevertheless route a structured approval through `answer`
-  // before `report`; emitting QUESTION_ANSWERED here would consume the same
-  // HUMAN_TURN that approval needs. Treat that redundant call as a successful
-  // no-op so the report command can commit the gate without weakening the
-  // workflow-global freshness boundary for real interview answers.
-  const targetAtApprovalGate =
-    content !== null &&
-    parseCheckboxes(content).some(
-      (checkbox) =>
-        checkbox.slug === flags.stage &&
-        checkbox.state === "awaiting-approval",
-    );
-  if (targetAtApprovalGate) {
+    // Approval choices are lifecycle transitions, not interview answers. A
+    // conductor may nevertheless route a structured approval through `answer`
+    // before `report`; emitting QUESTION_ANSWERED here would consume the same
+    // HUMAN_TURN that approval needs. When the target stage is at [?] AND the
+    // details text is gate-choice shaped, acknowledge without emitting so the
+    // report command can commit the gate. The human-presence requirement is
+    // NOT waived: a gate-choice answer with no fresh HUMAN_TURN refuses, so a
+    // fabricated `answer && report rejected` chain (reject carries no presence
+    // guard of its own) breaks here instead of slipping through the skip.
+    // Non-gate answers keep the normal record path even at an open gate.
+    const targetAtApprovalGate =
+      content !== null &&
+      parseCheckboxes(content).some(
+        (checkbox) =>
+          checkbox.slug === flags.stage &&
+          checkbox.state === "awaiting-approval",
+      );
+    if (targetAtApprovalGate && isGateChoice(flags.details)) {
+      if (
+        !isAutonomousMode(content) &&
+        !humanPresenceGuardDisabled() &&
+        !humanActedSinceLastAnswer(pd)
+      ) {
+        error(
+          "Refusing to acknowledge this approval choice: a real human has not acted at this gate this turn. The gate is report-owned - after the human types their choice, call aidlc-orchestrate.ts report --result approved or rejected; do not log it as an answer."
+        );
+      }
+      console.log(
+        JSON.stringify({
+          skipped: "QUESTION_ANSWERED",
+          stage: flags.stage,
+          reason: "approval-gate-report-owned",
+        }),
+      );
+      return;
+    }
+
+    if (isAutonomousMode(content)) {
+      // autonomous Construction: no human presence required
+    } else if (humanPresenceGuardDisabled()) {
+      // scoped test off-switch
+    } else if (!humanActedSinceLastAnswer(pd)) {
+      error(
+        "Refusing to record this answer: a real human has not acted at this checkpoint this turn. Type your answer in the session (which records a human turn) before logging it."
+      );
+    }
+
+    try {
+      emitAudit(pd, "QUESTION_ANSWERED", fields);
+    } catch (e) {
+      error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+
     console.log(
-      JSON.stringify({
-        skipped: "QUESTION_ANSWERED",
-        stage: flags.stage,
-        reason: "approval-gate-report-owned",
-      }),
+      JSON.stringify({ emitted: "QUESTION_ANSWERED", stage: flags.stage })
     );
-    return;
-  }
-
-  if (isAutonomousMode(content)) {
-    // autonomous Construction: no human presence required
-  } else if (humanPresenceGuardDisabled()) {
-    // scoped test off-switch
-  } else if (!humanActedSinceLastAnswer(pd)) {
-    error(
-      "Refusing to record this answer: a real human has not acted at this checkpoint this turn. Type your answer in the session (which records a human turn) before logging it."
-    );
-  }
-
-  try {
-    emitAudit(pd, "QUESTION_ANSWERED", fields);
-  } catch (e) {
-    error(`Audit emission failed: ${errorMessage(e)}`);
-  }
-
-  console.log(
-    JSON.stringify({ emitted: "QUESTION_ANSWERED", stage: flags.stage })
-  );
+  });
 }
 
 // --- Subcommand: review ---

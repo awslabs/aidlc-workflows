@@ -19,9 +19,13 @@
 //     auto-cascaded in the same human turn opens AFTER the GATE_APPROVED that just
 //     committed (so no HUMAN_TURN follows it -> refused); a stale human turn
 //     precedes the last resolution (-> refused).
-//   - `aidlc-log answer` targeting a stage already at [?] is a successful no-op:
-//     approval choices are report-owned and must not emit QUESTION_ANSWERED,
-//     which would consume the HUMAN_TURN before the following approve.
+//   - `aidlc-log answer` carrying a GATE-CHOICE-shaped --details (Approve /
+//     Request Changes / Accept as-is / Reject) for a stage already at [?] is a
+//     successful no-op WHEN a human acted: approval choices are report-owned
+//     and must not emit QUESTION_ANSWERED, which would consume the HUMAN_TURN
+//     before the following approve. With NO human turn the same call REFUSES
+//     (so a fabricated `answer && report rejected` chain breaks at the answer).
+//     A non-gate-shaped answer at an open gate records normally.
 //   - fail-open when the ledger has NO events at all (presence not tracked yet).
 //
 // CRITICAL test-harness note: run-tests.ts sets AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1
@@ -436,7 +440,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
     });
 
-    test("the approval-answer no-op does not substitute for a HUMAN_TURN", () => {
+    test("a gate-choice answer with NO human turn refuses (fabricated approve chain breaks at the answer)", () => {
       const slug = field(proj, "Current Stage");
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
@@ -448,8 +452,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "--details",
         "Approve",
       ]);
-      expect(answer.rc).toBe(0);
-      expect(answer.out).toContain('"skipped":"QUESTION_ANSWERED"');
+      expect(answer.rc).not.toBe(0);
+      expect(answer.out).toContain("Refusing to acknowledge this approval choice");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
 
       const approve = guardedReport(proj, [
@@ -464,6 +468,73 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(approve.out).toContain('"kind":"error"');
       expect(approve.out).toContain("Refusing to approve");
       expect(eventCount(proj, "GATE_APPROVED")).toBe(0);
+    });
+
+    test("a rejection-choice answer with NO human turn refuses (reject carries no presence guard of its own)", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+
+      const answer = guardedLog(proj, [
+        "answer",
+        "--stage",
+        slug,
+        "--details",
+        "Request Changes: tighten the schema",
+      ]);
+      expect(answer.rc).not.toBe(0);
+      expect(answer.out).toContain("Refusing to acknowledge this approval choice");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+      expect(eventCount(proj, "GATE_REJECTED")).toBe(0);
+    });
+
+    test("a redundant rejection answer with a human turn is a no-op and report still rejects", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      recordHumanTurn(proj);
+
+      const answer = guardedLog(proj, [
+        "answer",
+        "--stage",
+        slug,
+        "--details",
+        "Request Changes: tighten the schema",
+      ]);
+      expect(answer.rc).toBe(0);
+      expect(answer.out).toContain('"skipped":"QUESTION_ANSWERED"');
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+
+      const reject = guardedReport(proj, [
+        "--stage",
+        slug,
+        "--result",
+        "rejected",
+        "--user-input",
+        "Request Changes: tighten the schema",
+      ]);
+      expect(reject.rc).toBe(0);
+      expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
+    });
+
+    test("a non-gate answer at an open gate still records QUESTION_ANSWERED", () => {
+      const slug = field(proj, "Current Stage");
+      guarded(proj, ["checkbox", `${slug}=in-progress`]);
+      guarded(proj, ["gate-start", slug]);
+      recordHumanTurn(proj);
+
+      // A clarifying question's response at the gate is NOT gate-choice shaped;
+      // it must land in the audit trail, not be swallowed by the skip.
+      const answer = guardedLog(proj, [
+        "answer",
+        "--stage",
+        slug,
+        "--details",
+        "Use PostgreSQL for the session store",
+      ]);
+      expect(answer.rc).toBe(0);
+      expect(answer.out).toContain('"emitted":"QUESTION_ANSWERED"');
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
     });
   });
 });

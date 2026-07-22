@@ -592,8 +592,9 @@ Use these templates for non-standard events. Each provides structured fields for
 ### Audit log rules
 - ALWAYS append to this clone's audit shard `<record>/audit/<host>-<clone>.md` — NEVER overwrite or truncate existing content.
 - CRITICAL: The "User Input" field in audit entries MUST contain the user's COMPLETE, UNMODIFIED input. NEVER summarize, paraphrase, or truncate user responses. This is a compliance and traceability requirement — the exact wording may carry nuance that summaries lose.
-- Log all approval prompts BEFORE showing them to the user. This ensures the audit trail captures what was presented, not just what was answered.
-- Log all user responses with ISO timestamps immediately after receiving them.
+- The approval gate's audit trail is report-owned: `report --result awaiting-approval` records that the gate was presented (`STAGE_AWAITING_APPROVAL`), and `report --result approved|rejected` records the response (`GATE_APPROVED`/`GATE_REJECTED` with the exact user input). Do not add separate log entries for the gate prompt or the gate choice.
+- Log non-gate question options BEFORE showing them to the user (`aidlc-log.ts decision`). This ensures the audit trail captures what was presented, not just what was answered.
+- Log all non-gate user responses with ISO timestamps immediately after receiving them (`aidlc-log.ts answer`).
 - If this clone's audit shard does not exist, create it with a header: `# AI-DLC Audit Log`
 - If this clone's audit shard appears corrupted (no valid markdown structure), create a backup (`<record>/audit/<host>-<clone>.md.bak`) and start a new shard noting the corruption.
 - `ERROR_LOGGED` and `RECOVERY_COMPLETED` are declared in the taxonomy but reserved for the recovery workflow (not yet implemented). Do not hand-write them via `aidlc-audit.ts append` — the recovery flow will ship its own emitter. Canonical state transitions go through the state/log/bolt tools (see §4 "Silent bookkeeping writes").
