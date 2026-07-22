@@ -40,7 +40,6 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
     approval-handoff/
 
   inception/                        # Phase 2 artifacts
-    reverse-engineering/            (conditional: brownfield)
     practices-discovery/            (conditional)
     requirements-analysis/
     user-stories/                   (conditional)
@@ -71,6 +70,16 @@ aidlc/spaces/<space>/intents/<YYMMDD>-<label>/   # one record dir per intent
   archive/                          (created on-demand)
     {ISO-date}-{stage-name}/
 ```
+
+**Reverse-engineering output is not in the record dir.** The 9
+reverse-engineering artifacts (`architecture.md`, `code-structure.md`,
+`technology-stack.md`, …) land one level up, in the space-level per-repo
+CodeKB — `aidlc/spaces/<space>/codekb/<repo>/` — so every intent in the space
+reuses one shared, current view of each repo instead of regenerating it per
+intent. The store is refreshed for staleness on each brownfield run
+(`reverse-engineering-timestamp.md` is the freshness marker), and codekb
+writes are audit-logged with a `codekb > <repo> > <name>` breadcrumb, so the
+per-intent trail still records what changed and when.
 
 **Team knowledge is not in the record dir.** It lives one level up, at the space
 level — `aidlc/spaces/<space>/knowledge/` (a sibling of `intents/`) — so it
@@ -157,7 +166,7 @@ The welcome message is rendered at session start via `companyAnnouncements` in `
 
 | Stage | Key Artifacts | Condition |
 |-------|--------------|-----------|
-| 2.1 Reverse Engineering | 9 files including `architecture.md`, `code-structure.md`, `technology-stack.md` | Brownfield only |
+| 2.1 Reverse Engineering | 9 files including `architecture.md`, `code-structure.md`, `technology-stack.md` (written to the space-level `aidlc/spaces/<active-space>/codekb/<repo>/`, not the intent record — shared across intents) | Brownfield only |
 | 2.2 Practices Discovery | `team-practices.md`, `discovered-rules.md`, `evidence.md`, `practices-discovery-timestamp.md`, plus quality/developer/devsecops contribution files (promoted to `aidlc/spaces/<active-space>/memory/team.md` and `project.md` after approval) | Conditional |
 | 2.3 Requirements Analysis | `requirements.md` | Always |
 | 2.4 User Stories | `stories.md`, `personas.md` | User-facing features |

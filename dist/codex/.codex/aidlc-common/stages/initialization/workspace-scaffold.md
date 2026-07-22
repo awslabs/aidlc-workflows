@@ -58,10 +58,15 @@ idempotent (created on demand):
 
 - `<record>/initialization/` — workspace-scaffold/, workspace-detection/, state-init/
 - `<record>/ideation/` — intent-capture/, market-research/, feasibility/, scope-definition/, team-formation/, rough-mockups/, approval-handoff/
-- `<record>/inception/` — reverse-engineering/, requirements-analysis/, user-stories/, refined-mockups/, application-design/, units-generation/, delivery-planning/
+- `<record>/inception/` — requirements-analysis/, user-stories/, refined-mockups/, application-design/, units-generation/, delivery-planning/
 - `<record>/construction/` — build-and-test/, ci-pipeline/
 - `<record>/operation/` — deployment-pipeline/, environment-provisioning/, deployment-execution/, observability-setup/, incident-response/, performance-validation/, feedback-optimization/
 - `<record>/verification/`
+
+`reverse-engineering/` is deliberately absent from the inception list: that
+stage writes its 9 artifacts to the space-level per-repo store
+`aidlc/spaces/<space>/codekb/<repo>/` (shared across intents, refreshed for
+staleness), never to the intent record — see its stage file.
 
 ### Step 4: Display Confirmation
 
