@@ -141,7 +141,8 @@ async function runIdeOpenStdin(
   projectDir: string,
   target: string,
   userPrompt: string | null,
-): Promise<{ code: number; timedOut: boolean }> {
+  entry: string[] = [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target],
+): Promise<{ code: number; timedOut: boolean; stdout: string }> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     CLAUDE_PROJECT_DIR: projectDir,
@@ -149,10 +150,10 @@ async function runIdeOpenStdin(
   if (userPrompt === null) delete env.USER_PROMPT;
   else env.USER_PROMPT = userPrompt;
   const proc = Bun.spawn({
-    cmd: ["bun", join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target],
+    cmd: ["bun", ...entry],
     cwd: projectDir,
     stdin: "pipe",
-    stdout: "ignore",
+    stdout: "pipe",
     stderr: "ignore",
     env,
   });
@@ -163,7 +164,7 @@ async function runIdeOpenStdin(
   }, 15_000);
   const code = await proc.exited;
   clearTimeout(timer);
-  return { code, timedOut };
+  return { code, timedOut, stdout: await new Response(proc.stdout).text() };
 }
 
 describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
@@ -349,26 +350,60 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("12b: EMPTY USER_PROMPT + stdin held open still exits promptly (live IDE agentStop shape)", async () => {
+  test("12b: EMPTY USER_PROMPT + stdin held open still runs the agentStop hooks (live IDE shape)", async () => {
     // Regression guard for the entry-guard stdin read reintroduced by the
     // run()-export refactor: `await Bun.stdin.text()` when USER_PROMPT is
     // empty. Live-captured on Kiro IDE: agentStop fires with USER_PROMPT set
     // but ZERO-LENGTH and stdin open-but-never-written, so that await hung
-    // the stop and session-end hooks forever. Test 12 cannot catch this
-    // (input:"" is instant EOF); this one holds the pipe open and requires
-    // the adapter to finish anyway. Both empty-string (the captured agentStop
-    // shape) and absent USER_PROMPT must survive.
+    // the agentStop hooks (stop + session-end) forever. Test 12 cannot catch
+    // this (input:"" is instant EOF); this one holds the pipe open and
+    // requires each hook to finish AND do its real work. Both empty-string
+    // (the captured agentStop shape) and absent USER_PROMPT must survive,
+    // and each invocation is asserted on its own effect - a shared final
+    // assertion would let one variant silently no-op behind the other.
     const dir = scratchProject(true);
     try {
-      for (const userPrompt of ["", null]) {
-        for (const target of ["session-end", "block"]) {
-          const r = await runIdeOpenStdin(dir, target, userPrompt);
-          const label = `${target}/${userPrompt === null ? "absent" : "empty"}`;
-          expect(`${label}:timedOut=${r.timedOut}`).toBe(`${label}:timedOut=false`);
-          expect(`${label}:${r.code}`).toBe(`${label}:0`);
-        }
+      for (const userPrompt of ["", null] as const) {
+        const label = userPrompt === null ? "absent" : "empty";
+        // stop: the forwarding loop must emit its block decision.
+        const stop = await runIdeOpenStdin(dir, "stop", userPrompt);
+        expect(`stop/${label}:timedOut=${stop.timedOut}`).toBe(`stop/${label}:timedOut=false`);
+        expect(`stop/${label}:${stop.code}`).toBe(`stop/${label}:0`);
+        const decision = JSON.parse(stop.stdout) as { decision?: string };
+        expect(`stop/${label}:decision=${decision.decision}`).toBe(`stop/${label}:decision=block`);
+        // session-end: each invocation must append its own SESSION_ENDED row.
+        const before = readAudit(dir).split("SESSION_ENDED").length - 1;
+        const end = await runIdeOpenStdin(dir, "session-end", userPrompt);
+        expect(`session-end/${label}:timedOut=${end.timedOut}`).toBe(`session-end/${label}:timedOut=false`);
+        expect(`session-end/${label}:${end.code}`).toBe(`session-end/${label}:0`);
+        const after = readAudit(dir).split("SESSION_ENDED").length - 1;
+        expect(`session-end/${label}:delta=${after - before}`).toBe(`session-end/${label}:delta=1`);
       }
-      expect(readAudit(dir)).toContain("SESSION_ENDED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  test("12d: the DISPATCHER adapter route also never reads stdin for kiro-ide", async () => {
+    // Same hang, second door: `aidlc adapter kiro-ide <target>` acquired
+    // stdin in runAdapter() before invoking the adapter's run(), so the
+    // dispatcher path hung even after the adapter's own entry guard was
+    // fixed. Pin both agentStop targets through the dispatcher with stdin
+    // held open and the captured empty-USER_PROMPT shape.
+    const dir = scratchProject(true);
+    try {
+      const dispatcher = join(dir, ".kiro", "tools", "aidlc.ts");
+      const stop = await runIdeOpenStdin(dir, "stop", "", [dispatcher, "adapter", "kiro-ide", "stop"]);
+      expect(`stop:timedOut=${stop.timedOut}`).toBe("stop:timedOut=false");
+      expect(`stop:${stop.code}`).toBe("stop:0");
+      const decision = JSON.parse(stop.stdout) as { decision?: string };
+      expect(decision.decision).toBe("block");
+      const before = readAudit(dir).split("SESSION_ENDED").length - 1;
+      const end = await runIdeOpenStdin(dir, "session-end", "", [dispatcher, "adapter", "kiro-ide", "session-end"]);
+      expect(`session-end:timedOut=${end.timedOut}`).toBe("session-end:timedOut=false");
+      expect(`session-end:${end.code}`).toBe("session-end:0");
+      const after = readAudit(dir).split("SESSION_ENDED").length - 1;
+      expect(after - before).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

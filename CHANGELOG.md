@@ -4,9 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [2.5.7] - 2026-07-23
 
-Fixes a Kiro IDE regression that silently disabled the agent-stop hooks: the forwarding-loop reminder and `SESSION_ENDED` never ran, because the IDE delivers an empty `USER_PROMPT` on agent stop and the adapter's entry guard then waited on stdin, which Kiro IDE opens but never writes. Hooks on prompt submit and after tool use were unaffected (the IDE populates `USER_PROMPT` for those events). Verified live on Kiro IDE against both the broken and fixed adapter. **Upgrade:** re-copy `dist/kiro-ide/` into your project (only `.kiro/hooks/aidlc-kiro-adapter.ts` changed).
+Fixes a Kiro IDE regression that silently disabled the agent-stop hooks: the forwarding-loop reminder and `SESSION_ENDED` never ran, because the IDE delivers an empty `USER_PROMPT` on agent stop and the adapter's entry guard then waited on stdin, which Kiro IDE opens but never writes. Hooks on prompt submit and after tool use were unaffected (the IDE populates `USER_PROMPT` for those events). Verified live on Kiro IDE against both the broken and fixed adapter. **Upgrade:** re-copy your `dist/<harness>/` shell into the project (on Kiro IDE the fix is in `.kiro/hooks/aidlc-kiro-adapter.ts` and `.kiro/tools/aidlc.ts`).
 
 * Kiro IDE agent-stop hooks (forwarding loop, session end) work again: the adapter no longer reads stdin on any event (context arrives only via the `USER_PROMPT` environment variable; the stdin value was never consumed).
+* The dispatcher route (`aidlc adapter kiro-ide <target>`) had the same hang - it acquired stdin before invoking the adapter - and is fixed the same way: stdin is never read for the kiro-ide harness.
 
 ## [2.5.6] - 2026-07-22
 
