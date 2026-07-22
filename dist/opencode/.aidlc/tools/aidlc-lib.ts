@@ -3257,6 +3257,72 @@ export function repoDir(projectDir: string, repoName: string): string {
   return join(projectDir, repoName);
 }
 
+// --- Workspace source fingerprint (#629) -----------------------------------
+//
+// A reviewer receipt for a `workspace_requires` stage (code-generation) must be
+// bound to the SOURCE STATE the reviewer actually inspected: workspace writes
+// deliberately emit no audit events (aidlc-audit-logger.ts excludes them), so
+// without a binding a post-review source edit leaves the receipt satisfying the
+// completion guard for code nobody re-reviewed. The binding is a git-native
+// content fingerprint: per repo, a `git write-tree` over a TEMPORARY index
+// seeded from HEAD with `git add -A` applied — the exact tracked + untracked
+// (gitignore-respecting) content state, computed without touching the real
+// index or worktree. Reverting an edit restores the original fingerprint
+// (content-addressed), so an undone change does not strand a receipt.
+//
+// Multi-repo: the intent's recorded repo set (intentRepos), each resolved via
+// repoDir(); no recorded repos = the legacy single-repo default (projectDir).
+// Returns null when ANY target dir is not a usable git checkout — callers
+// treat null as "no binding available" and keep today's behaviour (fail-open),
+// which also grandfathers receipts recorded before this shipped.
+
+function gitTreeFingerprint(repoDir: string): string | null {
+  if (!isGitRepoDir(repoDir)) return null;
+  const idx = join(
+    tmpdir(),
+    `aidlc-src-fp-${process.pid}-${randomUUID().slice(0, 8)}`,
+  );
+  const env = { ...process.env, GIT_INDEX_FILE: idx };
+  try {
+    // Seed from HEAD so deletions of tracked files change the tree. An unborn
+    // HEAD (fresh init) fails read-tree; the empty temp index is then correct.
+    spawnSync("git", ["-C", repoDir, "read-tree", "HEAD"], { env, encoding: "utf-8" });
+    const add = spawnSync("git", ["-C", repoDir, "add", "-A"], { env, encoding: "utf-8" });
+    if (add.status !== 0) return null;
+    // Drop the aidlc workspace family from the fingerprint: the record tree is
+    // COMMITTED by design and mutates on every engine action (the very
+    // REVIEW_COMPLETED append this fingerprint is stamped into, gate rows,
+    // state updates), so including it would make every receipt stale by the
+    // time the completion guard recomputes. Record-artifact freshness is
+    // already covered by the audit-event invalidation; this fingerprint is
+    // the APPLICATION SOURCE binding. --ignore-unmatch keeps this a no-op for
+    // sibling repos that carry no aidlc tree.
+    spawnSync(
+      "git",
+      ["-C", repoDir, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "aidlc", ".aidlc", ".aidlc-worktrees"],
+      { env, encoding: "utf-8" },
+    );
+    const wt = spawnSync("git", ["-C", repoDir, "write-tree"], { env, encoding: "utf-8" });
+    if (wt.status !== 0) return null;
+    const sha = wt.stdout.trim();
+    return sha.length > 0 ? sha : null;
+  } finally {
+    rmSync(idx, { force: true });
+  }
+}
+
+export function workspaceSourceFingerprint(projectDir: string): string | null {
+  const repos = intentRepos(projectDir);
+  if (repos.length === 0) return gitTreeFingerprint(projectDir);
+  const lines: string[] = [];
+  for (const name of [...repos].sort()) {
+    const sha = gitTreeFingerprint(repoDir(projectDir, name));
+    if (sha === null) return null;
+    lines.push(`${name}=${sha}`);
+  }
+  return createHash("sha256").update(lines.join("\n")).digest("hex");
+}
+
 // True iff `dir` looks like a git checkout: it holds a `.git` (a directory for a
 // normal clone, OR a file for a submodule / linked worktree). Workspace-internal
 // dirs that are never code repos are excluded by the discovery scan, not here.

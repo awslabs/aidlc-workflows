@@ -213,6 +213,15 @@ Approval gates no longer deadlock when a conductor redundantly routes the human'
 * `aidlc-log.ts answer --stage <slug>` now returns `{"skipped":"QUESTION_ANSWERED",...,"reason":"approval-gate-report-owned"}` when that same stage is at `[?]` and no unresolved `DECISION_RECORDED` follows the current gate-open; it emits no answer event and exits successfully so any existing `answer && report` chain can recover regardless of how the approval was phrased. A non-gate question logged after the gate makes its next answer record exactly, even when the answer begins with a gate word such as "Approve" or "Reject".
 * Approval-gate instructions now explicitly reserve `aidlc-log.ts decision` / `answer` for non-gate questions and direct every approval or rejection through `aidlc-orchestrate.ts report`.
 * Human-presence regression coverage now pins the successful redundant-answer path, the rejection-path chain, the no-human refusal, and the rule that an ordinary interview answer still consumes the turn before a later gate.
+
+## [2.5.11] - 2026-07-24
+
+Code-generation reviewer receipts are now bound to the workspace source state the reviewer actually inspected. Editing application source after the architecture reviewer's terminal verdict invalidates the receipt, so the stage can no longer complete with source nobody re-reviewed — closing the freshness gap #569 left for work produced outside the intent record. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `aidlc-log.ts review --verdict` stamps a `Source Fingerprint` on `REVIEW_COMPLETED` for `workspace_requires` stages: a git-native content fingerprint (temp-index `git write-tree` over tracked + untracked source, aidlc workspace tree excluded), per recorded repo, computed without touching the real index.
+* `approve`/`advance`/`finalize`/`complete-workflow` recompute the fingerprint and refuse a fingerprinted receipt whose source no longer matches, with a message naming the mismatch and the re-review command. Reverting the edit restores the original fingerprint (content-addressed), so an undone change does not strand a receipt.
+* Receipts recorded before this release (no fingerprint field) and workspaces where no fingerprint can be computed keep the previous behavior. Off-switch: `AIDLC_SKIP_SOURCE_FRESHNESS=1`.
+
 ## [2.5.7] - 2026-07-23
 
 Fixes a Kiro IDE regression that silently disabled the agent-stop hooks: the forwarding-loop reminder and `SESSION_ENDED` never ran, because the IDE delivers an empty `USER_PROMPT` on agent stop and the adapter's entry guard then waited on stdin, which Kiro IDE opens but never writes. Hooks on prompt submit and after tool use were unaffected (the IDE populates `USER_PROMPT` for those events). Verified live on Kiro IDE against both the broken and fixed adapter. **Upgrade:** re-copy your `dist/<harness>/` shell into the project (on Kiro IDE the fix is in `.kiro/hooks/aidlc-kiro-adapter.ts` and `.kiro/tools/aidlc.ts`).

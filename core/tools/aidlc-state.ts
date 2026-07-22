@@ -24,6 +24,7 @@ import {
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   intentRepos,
+  workspaceSourceFingerprint,
   isAutonomousMode,
   isoTimestamp,
   KNOWN_CODEKB_STAGES,
@@ -1264,6 +1265,7 @@ function verifyReviewerPrecondition(
     phase: string;
     for_each?: string;
     reviewer?: string;
+    workspace_requires?: boolean;
     produces?: string[];
     optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
@@ -1283,11 +1285,94 @@ function verifyReviewerPrecondition(
   // and per-unit write invalidation are all documented there.
   const receipts = freshReviewReceipts(pd, content, stage);
   const perUnit = stage.for_each === "unit-of-work";
-  const sawStageReview = receipts.stageVerdict !== null;
-  const reviewedUnits = new Set(receipts.unitVerdicts.keys());
+  const unitMajor =
+    perUnit && getField(content, "Construction Iteration")?.trim() === "unit-major";
+
+  // Unit-major may author a later stage's per-unit artifacts before that
+  // stage's STAGE_STARTED row exists. Its attempt floor therefore uses the
+  // current workflow, jumps, and gate rejections but ignores STAGE_STARTED.
+  // Stage-major and non-per-unit flows additionally floor at STAGE_STARTED.
+  //
+  // WORKFLOW_STARTED and STAGE_JUMPED floor deliberately stage-AGNOSTIC: any
+  // jump invalidates every stage's reviews, including stages the jump never
+  // re-opens. That over-invalidation is harmless (a stage that stays [x] never
+  // re-completes, so its stale floor is never consulted) and it is what closes
+  // the redo-jump hole: a backward jump re-opens stages WITHOUT emitting their
+  // GATE_REJECTED or (until re-entry) STAGE_STARTED, so a stage-scoped floor
+  // would accept the prior attempt's reviews. Fail-closed over precise.
+  let floorIdx = -1;
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    if (e.event === "WORKFLOW_STARTED" || e.event === "STAGE_JUMPED") {
+      floorIdx = i;
+      continue;
+    }
+    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
+    if (e.event === "STAGE_STARTED" && !unitMajor) {
+      if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
+      floorIdx = i;
+    } else if (e.event === "GATE_REJECTED") {
+      floorIdx = i;
+    }
+  }
+
+  // Collect fresh matching terminal reviews after the attempt floor. A later
+  // declared-artifact write clears the matching receipt. For per-unit stages,
+  // the path's construction/<unit>/ segment scopes invalidation to that unit;
+  // an ambiguous matching path fails closed by clearing every unit receipt.
+  const recordedRepos = new Set(intentRepos(pd));
+  const reviewedUnits = new Set<string>();
+  let sawStageReview = false;
+  // #629 - source-freshness binding. A receipt for a workspace_requires stage
+  // (code-generation) carries the Source Fingerprint the reviewer inspected
+  // (stamped by aidlc-log.ts review). Workspace source writes are deliberately
+  // invisible to the audit trail, so the invalidation the declared-artifact
+  // events provide for record artifacts is provided for application source by
+  // recomputing the fingerprint here: a mismatch means the source tree changed
+  // after the verdict, and the receipt no longer proves the CURRENT source was
+  // reviewed. Legacy receipts without the field (or an unbindable workspace -
+  // null fingerprint) keep today's fail-open behaviour, so in-flight upgrades
+  // do not brick. Off-switch: AIDLC_SKIP_SOURCE_FRESHNESS=1.
+  let staleSourceReceipts = false;
+  let currentSourceFp: string | null | undefined;
+  const sourceFreshnessOff = process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
+  for (let i = floorIdx + 1; i < events.length; i++) {
+    const e = events[i];
+    if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
+      const file = auditBlockField(e.block, "File");
+      if (!file) continue;
+      const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
+      if (targetUnit === undefined) continue;
+      if (!perUnit) {
+        sawStageReview = false;
+      } else if (targetUnit === null) {
+        reviewedUnits.clear();
+      } else {
+        reviewedUnits.delete(targetUnit);
+      }
+      continue;
+    }
+    if (e.event !== "REVIEW_COMPLETED") continue;
+    if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
+    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
+    if (auditBlockField(e.block, "Reviewer") !== reviewer) continue;
+    const verdict = auditBlockField(e.block, "Verdict");
+    if (verdict !== "READY" && verdict !== "NOT-READY") continue;
+    const recordedFp = auditBlockField(e.block, "Source Fingerprint");
+    if (recordedFp && stage.workspace_requires && !sourceFreshnessOff) {
+      if (currentSourceFp === undefined) currentSourceFp = workspaceSourceFingerprint(pd);
+      if (currentSourceFp !== null && currentSourceFp !== recordedFp) {
+        staleSourceReceipts = true;
+        continue;
+      }
+    }
+    sawStageReview = true;
+    const unit = auditBlockField(e.block, "Unit");
+    if (unit) reviewedUnits.add(unit);
+  }
 
   if (!perUnit) {
-    if (!sawStageReview) reviewerPreconditionError(stage.slug, reviewer);
+    if (!sawStageReview) reviewerPreconditionError(stage.slug, reviewer, staleSourceReceipts);
     return;
   }
 
@@ -1300,7 +1385,7 @@ function verifyReviewerPrecondition(
     );
   }
   if (resolution.state === "none" || resolution.units.length === 0) {
-    if (!sawStageReview) reviewerPreconditionError(stage.slug, reviewer);
+    if (!sawStageReview) reviewerPreconditionError(stage.slug, reviewer, staleSourceReceipts);
     return;
   }
 
@@ -1320,17 +1405,31 @@ function verifyReviewerPrecondition(
 
   const missing = reviewUnits.filter((u) => !reviewedUnits.has(u));
   if (missing.length > 0) {
+    const staleNote = staleSourceReceipts
+      ? ` At least one recorded review was discarded because the workspace source ` +
+        `changed after its verdict (source-fingerprint mismatch) — the current ` +
+        `source tree was never reviewed.`
+      : "";
     error(
       `Refusing to complete "${stage.slug}": it declares a reviewer (${reviewer}) but ` +
         `${missing.length} of ${reviewUnits.length} applicable units have no fresh recorded ` +
-        `review (${missing.join(", ")}). The reviewer fires once per unit; record ` +
+        `review (${missing.join(", ")}).${staleNote} The reviewer fires once per unit; record ` +
         `each with \`aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ` +
         `${reviewer} --verdict <READY|NOT-READY>\` before approving.`
     );
   }
 }
 
-function reviewerPreconditionError(slug: string, reviewer: string): never {
+function reviewerPreconditionError(slug: string, reviewer: string, staleSource = false): never {
+  if (staleSource) {
+    error(
+      `Refusing to complete "${slug}": the workspace source changed after the ` +
+        `recorded review (source-fingerprint mismatch), so the current source tree ` +
+        `was never reviewed. Re-invoke the reviewer (stage-protocol §12a) against ` +
+        `the current source and record a fresh verdict with \`aidlc-log.ts review ` +
+        `--stage ${slug} --reviewer ${reviewer} --verdict <READY|NOT-READY>\` before completing.`
+    );
+  }
   error(
     `Refusing to complete "${slug}": it declares a reviewer (${reviewer}) but no ` +
       `fresh REVIEW_COMPLETED is recorded for it. Invoke the reviewer ` +

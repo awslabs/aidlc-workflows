@@ -7,8 +7,8 @@ import {
   activeIntent,
   appendSlug,
   appendUnderHeading,
+  auditBlockField,
   type CheckboxState,
-  checkSummaryConfirmationEvidence,
   codekbDir,
   countCheckboxes,
   emitError,
@@ -18,15 +18,14 @@ import {
   findStageBySlug,
   findAllEvents,
   firstInScopeStageOfPhase,
-  freshReviewReceipts,
   getField,
   holdsAuditLock,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   intentRepos,
+  workspaceSourceFingerprint,
   isAutonomousMode,
   isoTimestamp,
-  KNOWN_CODEKB_STAGES,
   loadScopeMapping,
   nextInScopeStage,
   PHASE_NUMBERS,
@@ -34,7 +33,6 @@ import {
   parseCheckboxes,
   parseRefsList,
   parseStateStageSuffixes,
-  producesArtifactFile,
   readAllAuditShards,
   readStateFile,
   recordDir,
@@ -62,10 +60,6 @@ import {
   writeStateFile,
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
-import {
-  stageUsageAuditFields,
-  workflowUsageAuditFields,
-} from "./aidlc-usage.ts";
 
 // All valid checkbox states (lib.ts adds [?] awaiting-approval and [R] revising)
 const VALID_CHECKBOX_STATES: CheckboxState[] = [
@@ -100,10 +94,15 @@ const HARNESS_DOC_DIRS = new Set([
   ".git",
 ]);
 
-// KNOWN_CODEKB_STAGES now lives in aidlc-lib.ts (imported above) beside the
-// shared produces-artifact matchers, so the review-freeze hook and this tool
-// agree on which stages use the codekb layout. Imports are hoisted, so the
-// TDZ concern that once kept a local copy here does not apply.
+// The codekb stages - their produces live in the space-level codekb dir, keyed
+// by repo, NOT under a per-intent record dir. Mirrors KNOWN_CODEKB_STAGES in
+// aidlc-orchestrate.ts (kept local because that set is not exported and the
+// guard has no engine context at approve/advance time). reverse-engineering is
+// the sole member; a future codekb stage joins both sets. Declared at module
+// top (not beside verifyStageArtifacts) for the same TDZ reason as
+// HARNESS_DOC_DIRS: the command dispatch runs at top level, so a const declared
+// lower in the file would be in its temporal dead zone when the guard runs.
+const KNOWN_CODEKB_STAGES: ReadonlySet<string> = new Set(["reverse-engineering"]);
 
 // --- Audit emission helper ---
 // Uses the throw-on-error appendAuditEntry (not handleAppend which writes JSON to stdout).
@@ -128,33 +127,6 @@ function emitAudit(
     return appendAuditEntryUnlocked(eventType, fields, projectDir).timestamp;
   }
   return appendAuditEntry(eventType, fields, projectDir).timestamp;
-}
-
-// Per-stage token/cost rollup fields for STAGE_COMPLETED / WORKFLOW_COMPLETED.
-// Wraps aidlc-usage's ledger-read helper (a ledger read only: NO transcript
-// I/O) in a try/catch so any failure returns {} (no fields). Usage must NEVER
-// block, delay, or break a completion event, so the caller computes this into a
-// const ABOVE the withAuditLock(...) call and only merges the resulting strings
-// into the emit `fields`. "Before emitAudit" is NOT far enough - emitAudit runs
-// UNDER the held lock (see emitAudit above), so a ledger read there would still
-// happen inside the lock; computing it before the lock opens keeps the
-// completion path lock-clean. When no ledger exists (Kiro/Codex/opencode, or a
-// Claude session that never folded) this returns {} and the completion event is
-// unchanged.
-function stageRollupFields(pd: string, stageSlug: string): Record<string, string> {
-  try {
-    return stageUsageAuditFields(pd, stageSlug);
-  } catch {
-    return {};
-  }
-}
-
-function workflowRollupFields(pd: string): Record<string, string> {
-  try {
-    return workflowUsageAuditFields(pd);
-  } catch {
-    return {};
-  }
 }
 
 function auditField(block: string, fieldName: string): string | null {
@@ -270,11 +242,90 @@ function auditTailHasFields(
   );
 }
 
-// producesArtifactFile / producesArtifactUnit / freshReviewReceipts moved to
-// aidlc-lib.ts: the review-freeze PreToolUse hook shares the SAME scan so its
-// write-freeze window and this tool's completion precondition can never
-// diverge (a divergence would block writes the engine accepts, or miss writes
-// the engine refuses). Imported above.
+// True when a written File path (from an ARTIFACT_CREATED/ARTIFACT_UPDATED audit
+// row) is one of the stage's declared produces[] artifacts. Matches on the path
+// SUFFIX `/<slug>/<name>.md` rather than resolving one absolute dir, so it
+// covers BOTH the standard <record>/<phase>/<slug>/ layout AND the per-unit
+// construction/<unit>/<slug>/ layout without needing to know the {unit}
+// segment. Codekb stages get their own arm: their produces live DIRECTLY under
+// a per-repo dir beneath the space codekb root (codekb/<repo>/<name>.md) with
+// no <slug> segment anywhere, so the suffix idiom matches the codekb marker +
+// one repo segment instead - the matcher analog of the placement split
+// producesDirsForStage handles for the artifact guard. When the active intent
+// records repos, that segment must belong to the recorded set so a write to one
+// repo's durable codekb cannot revise an unrelated intent. The audit File field
+// is stored forward-slash-normalised (aidlc-audit-logger.ts), so the
+// forward-slash matching is harness-neutral; we still normalise defensively in
+// case a caller passes a raw OS path.
+function producesArtifactFile(
+  stage: { slug: string; produces?: string[] },
+  file: string,
+  recordedRepos: ReadonlySet<string>
+): boolean {
+  const produces = stage.produces ?? [];
+  if (produces.length === 0) return false;
+  const norm = file.replace(/\\/g, "/");
+  if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
+    return produces.some((name) => {
+      const idx = norm.lastIndexOf(`/${name}.md`);
+      if (idx === -1 || idx + `/${name}.md`.length !== norm.length) return false;
+      // Exactly one <repo> segment between /codekb/ and /<name>.md.
+      const head = norm.slice(0, idx);
+      const repoSlash = head.lastIndexOf("/");
+      if (repoSlash === -1 || !head.slice(0, repoSlash).endsWith("/codekb")) return false;
+      const repo = head.slice(repoSlash + 1);
+      if (repo.length === 0) return false;
+      // An empty registry is the legacy projectDir-is-the-repo case. Keep the
+      // historical any-repo match: codekbRepoName's basename is a write-path
+      // default, not ownership evidence for durable files that may predate repo
+      // recording or have been written with an explicit repo target.
+      return recordedRepos.size === 0 || recordedRepos.has(repo);
+    });
+  }
+  return produces.some((name) => norm.endsWith(`/${stage.slug}/${name}.md`));
+}
+
+// Resolve the unit targeted by a declared produces[] write. `undefined` means
+// the file does not belong to this stage, `null` means a matching stage-level
+// artifact, and a string names the per-unit Construction target.
+function producesArtifactUnit(
+  stage: {
+    slug: string;
+    for_each?: string;
+    produces?: string[];
+    optional_produces?: string[];
+  },
+  file: string,
+  recordedRepos: ReadonlySet<string>,
+): string | null | undefined {
+  const reviewedArtifacts = [
+    ...(stage.produces ?? []),
+    ...(stage.optional_produces ?? []),
+  ];
+  if (
+    !producesArtifactFile(
+      { slug: stage.slug, produces: reviewedArtifacts },
+      file,
+      recordedRepos,
+    )
+  ) {
+    return undefined;
+  }
+  if (stage.for_each !== "unit-of-work") return null;
+
+  const norm = file.replace(/\\/g, "/");
+  for (const name of reviewedArtifacts) {
+    const suffix = `/${stage.slug}/${name}.md`;
+    if (!norm.endsWith(suffix)) continue;
+    const parent = norm.slice(0, -suffix.length);
+    const marker = "/construction/";
+    const markerIdx = parent.lastIndexOf(marker);
+    if (markerIdx === -1) return null;
+    const unit = parent.slice(markerIdx + marker.length);
+    return unit.length > 0 && !unit.includes("/") ? unit : null;
+  }
+  return null;
+}
 
 // The gate-revision backstop predicate (the reconciliation half of the
 // forwarding-reliability gap). TRUE when the human demonstrably revised the
@@ -1212,27 +1263,6 @@ function verifyStageArtifacts(
   }
 }
 
-function verifySummaryConfirmationPrecondition(
-  pd: string,
-  content: string,
-  stage: {
-    slug: string;
-    name: string;
-    phase: string;
-    outputs?: string;
-    produces?: string[];
-    optional_produces?: string[];
-    produces_kinds?: Record<string, string[]>;
-    for_each?: string;
-    summary_confirmation?: "required" | "if-present";
-  },
-): void {
-  const evidence = checkSummaryConfirmationEvidence(pd, stage, {
-    stateContent: content,
-  });
-  if (!evidence.ok) error(evidence.message);
-}
-
 // --- Reviewer precondition (§12a / RFC Track 1) -----------------------------
 //
 // A stage that declares a `reviewer` cannot be approved until the reviewer step
@@ -1264,6 +1294,7 @@ function verifyReviewerPrecondition(
     phase: string;
     for_each?: string;
     reviewer?: string;
+    workspace_requires?: boolean;
     produces?: string[];
     optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
@@ -1272,22 +1303,123 @@ function verifyReviewerPrecondition(
   if (!stage.reviewer) return; // stage declares no reviewer — nothing to enforce
 
   const reviewer = stage.reviewer;
-  if (readAllAuditShards(pd).length === 0) {
+  const audit = readAllAuditShards(pd);
+  if (audit.length === 0) {
     reviewerPreconditionError(stage.slug, reviewer);
   }
 
-  // The fresh-receipt scan lives in aidlc-lib.ts (freshReviewReceipts) so the
-  // review-freeze PreToolUse hook and this precondition read the SAME window:
-  // event interleave (timestamp, buffer-position tiebreak), the stage-agnostic
-  // WORKFLOW_STARTED/STAGE_JUMPED floor, the unit-major STAGE_STARTED skip,
-  // and per-unit write invalidation are all documented there.
-  const receipts = freshReviewReceipts(pd, content, stage);
+  // Build ONE position-tiebroken event stream (the same interleave idiom
+  // unrecordedRevisionSinceGateOpen uses) — a timestamp-only floor is unsafe
+  // because isoTimestamp() is second-precision, so a review and the reject that
+  // should invalidate it can share a timestamp and a `<` compare would keep the
+  // stale review. Ordering by (timestamp, buffer position) breaks that tie.
+  const RELEVANT = new Set([
+    "WORKFLOW_STARTED",
+    "STAGE_STARTED",
+    "STAGE_JUMPED",
+    "GATE_REJECTED",
+    "ARTIFACT_CREATED",
+    "ARTIFACT_UPDATED",
+    "REVIEW_COMPLETED",
+  ]);
+  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const events: { pos: number; ts: string; event: string; block: string }[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const ev = auditBlockField(blocks[i], "Event");
+    if (!ev || !RELEVANT.has(ev)) continue;
+    events.push({ pos: i, ts: auditBlockField(blocks[i], "Timestamp") ?? "", event: ev, block: blocks[i] });
+  }
+  events.sort((a, b) => (a.ts !== b.ts ? (a.ts < b.ts ? -1 : 1) : a.pos - b.pos));
+
   const perUnit = stage.for_each === "unit-of-work";
-  const sawStageReview = receipts.stageVerdict !== null;
-  const reviewedUnits = new Set(receipts.unitVerdicts.keys());
+  const unitMajor =
+    perUnit && getField(content, "Construction Iteration")?.trim() === "unit-major";
+
+  // Unit-major may author a later stage's per-unit artifacts before that
+  // stage's STAGE_STARTED row exists. Its attempt floor therefore uses the
+  // current workflow, jumps, and gate rejections but ignores STAGE_STARTED.
+  // Stage-major and non-per-unit flows additionally floor at STAGE_STARTED.
+  //
+  // WORKFLOW_STARTED and STAGE_JUMPED floor deliberately stage-AGNOSTIC: any
+  // jump invalidates every stage's reviews, including stages the jump never
+  // re-opens. That over-invalidation is harmless (a stage that stays [x] never
+  // re-completes, so its stale floor is never consulted) and it is what closes
+  // the redo-jump hole: a backward jump re-opens stages WITHOUT emitting their
+  // GATE_REJECTED or (until re-entry) STAGE_STARTED, so a stage-scoped floor
+  // would accept the prior attempt's reviews. Fail-closed over precise.
+  let floorIdx = -1;
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    if (e.event === "WORKFLOW_STARTED" || e.event === "STAGE_JUMPED") {
+      floorIdx = i;
+      continue;
+    }
+    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
+    if (e.event === "STAGE_STARTED" && !unitMajor) {
+      if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
+      floorIdx = i;
+    } else if (e.event === "GATE_REJECTED") {
+      floorIdx = i;
+    }
+  }
+
+  // Collect fresh matching terminal reviews after the attempt floor. A later
+  // declared-artifact write clears the matching receipt. For per-unit stages,
+  // the path's construction/<unit>/ segment scopes invalidation to that unit;
+  // an ambiguous matching path fails closed by clearing every unit receipt.
+  const recordedRepos = new Set(intentRepos(pd));
+  const reviewedUnits = new Set<string>();
+  let sawStageReview = false;
+  // #629 - source-freshness binding. A receipt for a workspace_requires stage
+  // (code-generation) carries the Source Fingerprint the reviewer inspected
+  // (stamped by aidlc-log.ts review). Workspace source writes are deliberately
+  // invisible to the audit trail, so the invalidation the declared-artifact
+  // events provide for record artifacts is provided for application source by
+  // recomputing the fingerprint here: a mismatch means the source tree changed
+  // after the verdict, and the receipt no longer proves the CURRENT source was
+  // reviewed. Legacy receipts without the field (or an unbindable workspace -
+  // null fingerprint) keep today's fail-open behaviour, so in-flight upgrades
+  // do not brick. Off-switch: AIDLC_SKIP_SOURCE_FRESHNESS=1.
+  let staleSourceReceipts = false;
+  let currentSourceFp: string | null | undefined;
+  const sourceFreshnessOff = process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
+  for (let i = floorIdx + 1; i < events.length; i++) {
+    const e = events[i];
+    if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
+      const file = auditBlockField(e.block, "File");
+      if (!file) continue;
+      const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
+      if (targetUnit === undefined) continue;
+      if (!perUnit) {
+        sawStageReview = false;
+      } else if (targetUnit === null) {
+        reviewedUnits.clear();
+      } else {
+        reviewedUnits.delete(targetUnit);
+      }
+      continue;
+    }
+    if (e.event !== "REVIEW_COMPLETED") continue;
+    if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
+    if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
+    if (auditBlockField(e.block, "Reviewer") !== reviewer) continue;
+    const verdict = auditBlockField(e.block, "Verdict");
+    if (verdict !== "READY" && verdict !== "NOT-READY") continue;
+    const recordedFp = auditBlockField(e.block, "Source Fingerprint");
+    if (recordedFp && stage.workspace_requires && !sourceFreshnessOff) {
+      if (currentSourceFp === undefined) currentSourceFp = workspaceSourceFingerprint(pd);
+      if (currentSourceFp !== null && currentSourceFp !== recordedFp) {
+        staleSourceReceipts = true;
+        continue;
+      }
+    }
+    sawStageReview = true;
+    const unit = auditBlockField(e.block, "Unit");
+    if (unit) reviewedUnits.add(unit);
+  }
 
   if (!perUnit) {
-    if (!sawStageReview) reviewerPreconditionError(stage.slug, reviewer);
+    if (!sawStageReview) reviewerPreconditionError(stage.slug, reviewer, staleSourceReceipts);
     return;
   }
 
@@ -1300,7 +1432,7 @@ function verifyReviewerPrecondition(
     );
   }
   if (resolution.state === "none" || resolution.units.length === 0) {
-    if (!sawStageReview) reviewerPreconditionError(stage.slug, reviewer);
+    if (!sawStageReview) reviewerPreconditionError(stage.slug, reviewer, staleSourceReceipts);
     return;
   }
 
@@ -1320,26 +1452,36 @@ function verifyReviewerPrecondition(
 
   const missing = reviewUnits.filter((u) => !reviewedUnits.has(u));
   if (missing.length > 0) {
+    const staleNote = staleSourceReceipts
+      ? ` At least one recorded review was discarded because the workspace source ` +
+        `changed after its verdict (source-fingerprint mismatch) — the current ` +
+        `source tree was never reviewed.`
+      : "";
     error(
       `Refusing to complete "${stage.slug}": it declares a reviewer (${reviewer}) but ` +
         `${missing.length} of ${reviewUnits.length} applicable units have no fresh recorded ` +
-        `review (${missing.join(", ")}). The reviewer fires once per unit; record ` +
+        `review (${missing.join(", ")}).${staleNote} The reviewer fires once per unit; record ` +
         `each with \`aidlc-log.ts review --stage ${stage.slug} --unit <unit> --reviewer ` +
         `${reviewer} --verdict <READY|NOT-READY>\` before approving.`
     );
   }
 }
 
-function reviewerPreconditionError(slug: string, reviewer: string): never {
+function reviewerPreconditionError(slug: string, reviewer: string, staleSource = false): never {
+  if (staleSource) {
+    error(
+      `Refusing to complete "${slug}": the workspace source changed after the ` +
+        `recorded review (source-fingerprint mismatch), so the current source tree ` +
+        `was never reviewed. Re-invoke the reviewer (stage-protocol §12a) against ` +
+        `the current source and record a fresh verdict with \`aidlc-log.ts review ` +
+        `--stage ${slug} --reviewer ${reviewer} --verdict <READY|NOT-READY>\` before completing.`
+    );
+  }
   error(
     `Refusing to complete "${slug}": it declares a reviewer (${reviewer}) but no ` +
       `fresh REVIEW_COMPLETED is recorded for it. Invoke the reviewer ` +
       `(stage-protocol §12a) and record the verdict with \`aidlc-log.ts review --stage ` +
-      `${slug} --reviewer ${reviewer} --verdict <READY|NOT-READY>\` before completing. ` +
-      `Terminal ordering: apply any fixes FIRST, then run the reviewer, record the ` +
-      `receipt, and stop editing produces[] artifacts - a later write to one ` +
-      `invalidates the receipt and re-opens this refusal. Do not apply suggestions ` +
-      `riding on a READY verdict; surface them at the gate instead.`
+      `${slug} --reviewer ${reviewer} --verdict <READY|NOT-READY>\` before completing.`
   );
 }
 
@@ -1352,13 +1494,6 @@ function handleAdvance(args: string[]): void {
   const completedSlug = positional[0];
 
   const pd = resolveProjectDir(projectDir);
-  // Per-stage token/cost rollup - computed BEFORE withAuditLock opens (a ledger
-  // read, never transcript I/O, and try/caught so it never blocks a completion).
-  // "Before emitAudit" is not far enough: emitAudit runs UNDER the held lock, so
-  // the read must happen above the lock. Merged into STAGE_COMPLETED's fields
-  // inside the arrow below. {} when no ledger exists (non-Claude harness, or a
-  // Claude session that never folded) - the event is then unchanged.
-  const usageFields = stageRollupFields(pd, completedSlug);
   // C2b lost-update safety: the whole read→decide→emit-audit→write critical
   // section runs under one audit lock so the next-stage derivation, the 5 audit
   // rows, and the state write all commit atomically against a single snapshot
@@ -1485,7 +1620,6 @@ function handleAdvance(args: string[]): void {
   // guarded. Runs before any mutation; error() exits leaving state untouched.
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
-    verifySummaryConfirmationPrecondition(pd, content, completedStage);
     verifyReviewerPrecondition(pd, content, completedStage);
   }
 
@@ -1534,7 +1668,6 @@ function handleAdvance(args: string[]): void {
       emitAudit(pd, "STAGE_COMPLETED", {
         Stage: completedSlug,
         Details: `Stage ${completedStage.name} completed`,
-        ...usageFields,
       });
     }
     if (crossesPhaseBoundary) {
@@ -1601,7 +1734,6 @@ function handleFinalize(args: string[]): void {
     "completed";
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
-    verifySummaryConfirmationPrecondition(pd, content, completedStage);
     verifyReviewerPrecondition(pd, content, completedStage);
   }
 
@@ -1692,8 +1824,6 @@ function handleCompleteWorkflow(args: string[]): void {
   }
 
   const pd = resolveProjectDir(projectDir);
-  const stageUsageFields = stageRollupFields(pd, completedSlug);
-  const workflowUsageFields = workflowRollupFields(pd);
   // C2b lost-update safety: read→decide→emit-audit (4 rows)→write under one
   // lock so the 4 audit rows and the completion state commit atomically against
   // a single snapshot (audit-first / decide-inside-lock). emitAudit uses the
@@ -1721,7 +1851,6 @@ function handleCompleteWorkflow(args: string[]): void {
   // before any mutation so a refusal leaves state untouched.
   if (!alreadyMarkedCompleted) {
     verifyStageArtifacts(pd, completedStage);
-    verifySummaryConfirmationPrecondition(pd, content, completedStage);
     verifyReviewerPrecondition(pd, content, completedStage);
   }
 
@@ -1763,7 +1892,6 @@ function handleCompleteWorkflow(args: string[]): void {
       emitAudit(pd, "STAGE_COMPLETED", {
         Stage: completedSlug,
         Details: `Final stage ${completedStage.name} completed`,
-        ...stageUsageFields,
       });
     }
     emitAudit(pd, "PHASE_COMPLETED", {
@@ -1777,7 +1905,6 @@ function handleCompleteWorkflow(args: string[]): void {
     const workflowFields: Record<string, string> = {
       Scope: scope,
       Details: `Scope: ${scope}, ${completedCount} stages completed`,
-      ...workflowUsageFields,
     };
     if (reason) workflowFields.Reason = reason;
     emitAudit(pd, "WORKFLOW_COMPLETED", workflowFields);
@@ -1854,7 +1981,6 @@ function handleGateStart(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, "in-progress");
   verifyStageArtifacts(pd, stage);
-  verifySummaryConfirmationPrecondition(pd, content, stage);
 
   content = setCheckbox(content, slug, "awaiting-approval");
   const timestamp = isoTimestamp();
@@ -1888,11 +2014,6 @@ function handleApprove(args: string[]): void {
   const { userInput } = parseApproveFlags(args.slice(1));
 
   const pd = resolveProjectDir(projectDir);
-  // Per-stage token/cost rollup - computed BEFORE the lock opens (ledger read
-  // only, try/caught). Approve is the STAGE_COMPLETED that fires in the normal
-  // gate flow (the nested advance/complete-workflow suppress their own once this
-  // one is audited), so the usage rollup attaches here. {} when no ledger exists.
-  const usageFields = stageRollupFields(pd, slug);
   // C2b lost-update safety: the ENTIRE approve transaction — including the
   // nested handleAdvance / handleCompleteWorkflow calls below — runs under one
   // outer lock. withAuditLock is REENTRANT (per-pd depth counter): the nested
@@ -1926,7 +2047,6 @@ function handleApprove(args: string[]): void {
   // Covers per-unit Construction stages (globs the record's
   // construction/<unit>/<slug>/) and code-producing stages (workspace_requires).
   verifyStageArtifacts(pd, stage);
-  verifySummaryConfirmationPrecondition(pd, content, stage);
 
   // Human-presence guard: a gate cannot be approved unless a real
   // human acted at THIS gate since the last gate resolution. Runs BEFORE any
@@ -2006,7 +2126,6 @@ function handleApprove(args: string[]): void {
   // rows and revision count remain as the consistent reopened-gate state if
   // this check refuses.
   if (recoveredRevision) writeStateFile(pd, content);
-  verifySummaryConfirmationPrecondition(pd, content, stage);
   verifyReviewerPrecondition(pd, content, stage);
 
   const timestamp = isoTimestamp();
@@ -2029,7 +2148,6 @@ function handleApprove(args: string[]): void {
     emitAudit(pd, "STAGE_COMPLETED", {
       Stage: slug,
       Details: `Stage ${stage.name} approved by gate`,
-      ...usageFields,
     });
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
@@ -2181,7 +2299,6 @@ function handleRevise(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
   validateSlugInState(content, slug, "revising");
   verifyStageArtifacts(pd, stage);
-  verifySummaryConfirmationPrecondition(pd, content, stage);
 
   content = setCheckbox(content, slug, "awaiting-approval");
   const timestamp = isoTimestamp();
@@ -2220,7 +2337,6 @@ function handleSkip(args: string[]): void {
   const route = args.includes("--route");
 
   const pd = resolveProjectDir(projectDir);
-  const workflowUsageFields = workflowRollupFields(pd);
   // C2b lost-update safety: validate→transition→emit-audit→write under one lock.
   withAuditLock(pd, () => {
   let content = readStateFile(pd);
@@ -2397,7 +2513,6 @@ function handleSkip(args: string[]): void {
           Scope: scope,
           Details: `Scope: ${scope}, final stage ${slug} skipped`,
           Reason: reason,
-          ...workflowUsageFields,
         });
       }
     }
