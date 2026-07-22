@@ -78,9 +78,9 @@ with a fresh timestamp.
 | # | Check |
 |---|-------|
 | 1 | At the approval gate, call `bun .claude/tools/aidlc-orchestrate.ts report --stage <slug> --result awaiting-approval`. The engine flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
-| 2 | Log options BEFORE calling `AskUserQuestion` via `bun .claude/tools/aidlc-log.ts decision` (not by hand-writing to the `audit/` shards) |
-| 3 | After the user responds, log the exact choice via `bun .claude/tools/aidlc-log.ts answer`, then use `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` for approval or `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "<feedback>"` for request-changes. After revision work, report `--result revised` before re-presenting the gate. |
-| 4 | Never summarize user input -- pass exact option labels to the log tool; for automated stages use `N/A -- [reason]` |
+| 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `bun .claude/tools/aidlc-log.ts decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc-log.ts answer`. |
+| 3 | After an approval-gate response, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` for approval or `aidlc-orchestrate.ts report --stage <slug> --result rejected --user-input "<feedback>"` for request-changes. Never call `aidlc-log.ts decision` or `aidlc-log.ts answer` for the gate. After revision work, report `--result revised` before re-presenting it. |
+| 4 | Never summarize user input -- pass exact option labels to the owning log or report tool; for automated stages use `N/A -- [reason]` |
 | 5 | One audit entry per interaction -- the log/state tools enforce single-event emission; never merge multiple events into one call |
 | 6 | At stage end, call `aidlc-orchestrate.ts report --stage <slug> --result approved --user-input "<exact choice>"` (gated stages) or `report --stage <slug> --result completed` (Initialization). The engine flips `[?]`/`[-]` to `[x]`, emits `GATE_APPROVED` when gated, and emits `STAGE_COMPLETED` atomically through the state tool |
 | 7 | Mark previous stage task `completed` and current stage task `in_progress` with `activeForm` BEFORE work begins (the `sync-statusline` hook handles state syncing) |
@@ -531,12 +531,13 @@ Read and Edit).
 `PostToolUse` hook auto-logs file writes. Conversation events must be logged
 manually (most commonly missed step).
 
-**At each approval gate:** (1) BEFORE `AskUserQuestion` -- append options with
-fresh timestamp. (2) AFTER response -- append user's choice with fresh
-timestamp.
+**At each approval gate:** (1) BEFORE `AskUserQuestion` -- report
+`awaiting-approval`. (2) AFTER response -- report `approved` or `rejected` with
+the exact user input. The report-owned lifecycle events are the gate's complete
+audit record; do not call `aidlc-log.ts decision` or `aidlc-log.ts answer`.
 
-**At each question interaction:** AFTER receiving answers -- append Q&A
-summary.
+**At each non-gate question interaction:** AFTER receiving answers -- append
+the Q&A summary through `aidlc-log.ts answer`.
 
 ---
 

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.8] - 2026-07-23
+
+Approval gates no longer deadlock when a conductor redundantly routes the human's approval through `aidlc-log.ts answer` before reporting the approval. The logger recognizes an answer whose target stage is already awaiting approval and has no unresolved non-gate question, returns a successful skip without emitting `QUESTION_ANSWERED`, and leaves the real `HUMAN_TURN` available for `report --result approved`; ordinary interview answers remain workflow-global freshness boundaries, so one answer still cannot authorize a fabricated later approval in the same turn. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `aidlc-log.ts answer --stage <slug>` now returns `{"skipped":"QUESTION_ANSWERED",...,"reason":"approval-gate-report-owned"}` when that same stage is at `[?]` and no unresolved `DECISION_RECORDED` follows the current gate-open; it emits no answer event and exits successfully so any existing `answer && report` chain can recover regardless of how the approval was phrased. A non-gate question logged after the gate makes its next answer record exactly, even when the answer begins with a gate word such as "Approve" or "Reject".
+* Approval-gate instructions now explicitly reserve `aidlc-log.ts decision` / `answer` for non-gate questions and direct every approval or rejection through `aidlc-orchestrate.ts report`.
+* Human-presence regression coverage now pins the successful redundant-answer path, the rejection-path chain, the no-human refusal, and the rule that an ordinary interview answer still consumes the turn before a later gate.
+
 ## [2.5.7] - 2026-07-23
 
 Fixes a Kiro IDE regression that silently disabled the agent-stop hooks: the forwarding-loop reminder and `SESSION_ENDED` never ran, because the IDE delivers an empty `USER_PROMPT` on agent stop and the adapter's entry guard then waited on stdin, which Kiro IDE opens but never writes. Hooks on prompt submit and after tool use were unaffected (the IDE populates `USER_PROMPT` for those events). Verified live on Kiro IDE against both the broken and fixed adapter. **Upgrade:** re-copy your `dist/<harness>/` shell into the project (on Kiro IDE the fix is in `.kiro/hooks/aidlc-kiro-adapter.ts` and `.kiro/tools/aidlc.ts`).

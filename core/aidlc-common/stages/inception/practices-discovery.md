@@ -136,9 +136,9 @@ Working, Walking Skeleton, Testing Posture, Deployment, and Code Style.
   sections as suggested answers.
 - **Re-run:** show the matching `memory/team.md` content as the default.
 
-Log every question with `aidlc-log.ts decision` before presenting it and every
-answer with `aidlc-log.ts answer` after the response, following the standard
-question flow.
+Log every interview question with `aidlc-log.ts decision` before presenting it
+and every interview answer with `aidlc-log.ts answer` after the response,
+following the standard non-gate question flow.
 
 ### Step 5: Lead Integration
 
@@ -173,12 +173,14 @@ Run the section 13 learnings ritual, then:
 1. Open the gate before the question:
    `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage
    practices-discovery --result awaiting-approval`.
-2. Log the affirmation question with `aidlc-log.ts decision`.
+2. Do not log the affirmation gate with `aidlc-log.ts decision` or
+   `aidlc-log.ts answer`; the lifecycle `report` calls own its audit events.
 3. Present `team-practices.md` and `discovered-rules.md` with two options:
    **Approve** (promote, then continue to `directive.next_stage`) and
    **Request Changes**.
 4. STOP and wait for the human response.
-5. Log the exact answer with `aidlc-log.ts answer`.
+5. Carry the exact answer only into the matching `report` or promotion path
+   below; never call `aidlc-log.ts answer` for this gate.
 6. On Request Changes, report `--result rejected --user-input "<feedback>"`,
    revise through the lead (and re-run a support only when its evidence must be
    refreshed), then report `--result revised` before re-presenting the gate.

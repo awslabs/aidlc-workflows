@@ -13,6 +13,7 @@ import {
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
   isAutonomousMode,
+  parseCheckboxes,
   resolveProjectDir,
   stateFilePath,
 } from "./aidlc-lib.js";
@@ -133,6 +134,31 @@ function handleAnswer(args: string[]): void {
   const content = existsSync(stateFilePath(pd))
     ? readFileSync(stateFilePath(pd), "utf-8")
     : null;
+
+  // Approval choices are lifecycle transitions, not interview answers. A
+  // conductor may nevertheless route a structured approval through `answer`
+  // before `report`; emitting QUESTION_ANSWERED here would consume the same
+  // HUMAN_TURN that approval needs. Treat that redundant call as a successful
+  // no-op so the report command can commit the gate without weakening the
+  // workflow-global freshness boundary for real interview answers.
+  const targetAtApprovalGate =
+    content !== null &&
+    parseCheckboxes(content).some(
+      (checkbox) =>
+        checkbox.slug === flags.stage &&
+        checkbox.state === "awaiting-approval",
+    );
+  if (targetAtApprovalGate) {
+    console.log(
+      JSON.stringify({
+        skipped: "QUESTION_ANSWERED",
+        stage: flags.stage,
+        reason: "approval-gate-report-owned",
+      }),
+    );
+    return;
+  }
+
   if (isAutonomousMode(content)) {
     // autonomous Construction: no human presence required
   } else if (humanPresenceGuardDisabled()) {

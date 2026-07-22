@@ -77,10 +77,10 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `DECISION_RECORDED` | Before presenting a structured question, to record the options shown | Timestamp, Stage, Decision, Options | `tools/aidlc-log.ts decision` |
+| `DECISION_RECORDED` | Before presenting a non-gate structured question, to record the options shown | Timestamp, Stage, Decision, Options | `tools/aidlc-log.ts decision` |
 | `GATE_APPROVED` | Human approved at gate | Timestamp, Stage, User Input | `tools/aidlc-state.ts approve` |
 | `GATE_REJECTED` | Human requested changes | Timestamp, Stage, Feedback, optional `Recovered=true` (backfilled by the approve-time revision backstop) | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill) |
-| `QUESTION_ANSWERED` | Question answered by user | Timestamp, Stage, Details | `tools/aidlc-log.ts answer` |
+| `QUESTION_ANSWERED` | Non-gate question answered by user | Timestamp, Stage, Details | `tools/aidlc-log.ts answer` |
 | `REVIEW_REQUESTED` | Conductor dispatches the §12a reviewer sub-agent | Timestamp, Stage, Reviewer, optional Unit (per-unit stages), optional Iteration | `tools/aidlc-log.ts review` |
 | `REVIEW_COMPLETED` | Reviewer verdict read; gates the approval of a reviewer-bearing stage | Timestamp, Stage, Reviewer, Verdict, optional Unit (per-unit stages), optional Iteration | `tools/aidlc-log.ts review --verdict` |
 
