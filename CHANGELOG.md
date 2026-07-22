@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.25] - 2026-07-29
+
+The adaptive composer's ARS arithmetic is now deterministic: the new `aidlc-graph.ts ars` subcommand computes the weighted composite, band labels, the per-stage expected-value screen, nearest stock scopes, and both gate tables from the schema-versioned `tools/data/ars-priors.json`, so the same component scores always render the same proposal numbers — auditable and runnable without an LLM. The composer scores the five components from evidence and copies the tool's output; a model never does the multiplication. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* `aidlc-graph.ts ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]` prints a JSON result: the advisory composite with its band, LOW/MED/HIGH component bands at the shipped 0.30/0.70 boundaries, the per-stage EV screen against the cost priors, nearest stock scopes by grid diff count, and the two gate tables pre-rendered as markdown.
+* Component weights (0.20/0.30/0.25/0.15/0.10), band boundaries, stage cost priors, and EV thresholds move to `tools/data/ars-priors.json` (schemaVersion 1); the composer persona's tables now document that file instead of being the source.
+* Out-of-range scores, unknown stage slugs (`--completed`), and priors-schema violations exit 1 with a naming error — same typo discipline as `validate-grid`, never a silent fallback.
+
 ## [2.5.17] - 2026-07-29
 
 Hardens the Kiro CLI and Kiro IDE shell permission lists. Kiro matches each `execute_bash` pattern as a full string, not as a prefix, so the shipped patterns were both too narrow (a bare `date -u` and `bun run .kiro/tools/<tool>.ts` needed an approval the framework never asked for, stalling a workflow when no approver was available) and too broad (a trailing wildcard let `bun .kiro/tools/../../anything.ts` run unprompted). The pre-approved set is now the framework's own project-relative tool calls and nothing else, and the deny list catches the recursive-`rm` and `git push` variants full-string matching used to miss. **Upgrade:** re-copy your `dist/kiro/` or `dist/kiro-ide/` shell into the project so the corrected agent configs are installed. If you start Kiro from a directory other than the project root, start it from the root instead: out-of-root invocation forms are no longer pre-approved.

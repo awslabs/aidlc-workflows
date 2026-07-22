@@ -1,0 +1,185 @@
+// covers: function:computeArs, function:loadArsPriors, subcommand:aidlc-graph:ars
+//
+// t244 - deterministic ARS arithmetic (#618).
+//
+// The composer persona used to carry the ARS arithmetic as prose — the same
+// five component scores could render different composites across runs because
+// a model did the multiplication. The `ars` subcommand is the who-computes
+// swap: weights/bands/cost-priors/EV-thresholds live in
+// tools/data/ars-priors.json, and this file is the calibration anchor:
+//
+//   1. ARITHMETIC PIN — the persona's own worked example (0.55/0.75/0.65/
+//      0.50/0.55) must render composite 63 / "Comprehensive", byte-matching
+//      the Table 1 composite row the persona documents.
+//   2. BAND EDGES — component bands are continuous with no gaps: 0.29 LOW,
+//      0.30 MED, 0.69 MED, 0.70 HIGH; composite 20 Near-direct vs 21 Focused.
+//   3. PRIORS SCHEMA — the shipped ars-priors.json loads, weights sum to 1.0,
+//      and every compiled graph stage has a priors entry (no `no-prior` rows).
+//   4. INVALID INPUT — out-of-range scores, unknown --completed slugs, and a
+//      corrupted priors file (weights not summing to 1, wrong schemaVersion)
+//      exit 1 with a naming error, never a silent fallback.
+//
+// Mechanism: MIXED — in-process imports for the arithmetic/band/schema pins,
+// spawns for the CLI exit-code rows (cli). Priors fault-injection rides the
+// AIDLC_ARS_PRIORS env seam (mirrors AIDLC_SCOPE_GRID).
+
+import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { computeArs, loadArsPriors } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+import { AIDLC_SRC } from "../harness/fixtures.ts";
+
+const BUN = process.execPath;
+const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
+const PRIORS_PATH = join(AIDLC_SRC, "tools", "data", "ars-priors.json");
+
+// The persona's worked example (Step 8a, Table 1): 0.20*0.55 + 0.30*0.75 +
+// 0.25*0.65 + 0.15*0.50 + 0.10*0.55 = 0.6275 -> raw 62.75 -> total 63.
+const PERSONA_EXAMPLE = { iae: 0.55, csu: 0.75, ve: 0.65, r: 0.5, ua: 0.55 };
+
+function runArs(args: string[], env?: Record<string, string>) {
+  return spawnSync(BUN, [GRAPH_TOOL, "ars", ...args], {
+    encoding: "utf-8",
+    env: { ...process.env, ...env },
+  });
+}
+
+const SCORE_FLAGS = ["--iae", "0.55", "--csu", "0.75", "--ve", "0.65", "--r", "0.5", "--ua", "0.55"];
+
+describe("t244 ars arithmetic pin (in-process)", () => {
+  test("persona worked example: composite 63 / Comprehensive, Table 1 row byte-exact", () => {
+    const r = computeArs(PERSONA_EXAMPLE);
+    expect(r.composite.raw).toBeCloseTo(62.75, 10);
+    expect(r.composite.total).toBe(63);
+    expect(r.composite.label).toBe("Comprehensive");
+    expect(r.tables.arsScores).toContain(
+      "| **Composite ARS (advisory)** | - | **63 / 100** | **Comprehensive** |"
+    );
+    expect(r.tables.arsScores).toContain("| Codebase Structural Uncertainty | CSU | 0.75 | HIGH |");
+  });
+
+  test("component band edges: 0.29 LOW, 0.30 MED, 0.69 MED, 0.70 HIGH", () => {
+    const at = (v: number) =>
+      computeArs({ iae: v, csu: 0, ve: 0, r: 0, ua: 0 }).components.iae.band;
+    expect(at(0.29)).toBe("LOW");
+    expect(at(0.3)).toBe("MED");
+    expect(at(0.69)).toBe("MED");
+    expect(at(0.7)).toBe("HIGH");
+  });
+
+  test("composite band edges: uniform 0.20 -> 20 Near-direct, 0.21 -> 21 Focused", () => {
+    const flat = (v: number) => computeArs({ iae: v, csu: v, ve: v, r: v, ua: v }).composite;
+    expect(flat(0.2).total).toBe(20);
+    expect(flat(0.2).label).toBe("Near-direct");
+    expect(flat(0.21).total).toBe(21);
+    expect(flat(0.21).label).toBe("Focused");
+    expect(flat(1).total).toBe(100);
+    expect(flat(1).label).toBe("Full ceremony");
+  });
+
+  test("EV screen: spine always executes, all-zero scores collapse the ideation gate", () => {
+    const zero = computeArs({ iae: 0, csu: 0, ve: 0, r: 0, ua: 0 });
+    expect(zero.screenGrid["code-generation"]).toBe("EXECUTE");
+    expect(zero.screenGrid["build-and-test"]).toBe("EXECUTE");
+    expect(zero.screenGrid["workspace-detection"]).toBe("EXECUTE");
+    // cost-1 stages justify only on a NON-ZERO component (strict >), so a
+    // fully-resolved intent folds the whole ideation phase — including its
+    // phase gate: no ideation stage runs, so the boundary does not exist.
+    expect(zero.screenGrid["intent-capture"]).toBe("SKIP");
+    expect(zero.screenGrid["approval-handoff"]).toBe("SKIP");
+    // Any non-zero IAE re-opens intent-capture and with it the phase gate.
+    const some = computeArs({ iae: 0.5, csu: 0, ve: 0, r: 0, ua: 0 });
+    expect(some.screenGrid["intent-capture"]).toBe("EXECUTE");
+    expect(some.screenGrid["approval-handoff"]).toBe("EXECUTE");
+  });
+
+  test("--completed keeps the stage EXECUTE in the derived grid and marks the row COMPLETED", () => {
+    const r = computeArs(
+      { iae: 0, csu: 0, ve: 0, r: 0, ua: 0 },
+      { completed: ["intent-capture"] }
+    );
+    const row = r.evScreen.find((x) => x.stage === "intent-capture");
+    expect(row?.decision).toBe("COMPLETED");
+    expect(r.screenGrid["intent-capture"]).toBe("EXECUTE");
+  });
+
+  test("shipped priors: schema loads, weights sum to 1.0, every graph stage covered", () => {
+    const priors = loadArsPriors();
+    expect(priors.schemaVersion).toBe(1);
+    const r = computeArs(PERSONA_EXAMPLE);
+    // 32 stages screened, none falling through to the no-prior branch.
+    expect(r.evScreen.length).toBeGreaterThanOrEqual(32);
+    expect(r.evScreen.filter((x) => x.screen === "no-prior")).toHaveLength(0);
+    // Table 2 carries one row per screened stage plus its two header lines.
+    expect(r.tables.stageDecisions.split("\n")).toHaveLength(r.evScreen.length + 2);
+    // nearestScopes is sorted ascending by diff.
+    const diffs = r.nearestScopes.map((s) => s.diff);
+    expect([...diffs].sort((a, b) => a - b)).toEqual(diffs);
+  });
+
+  test("out-of-range score throws (in-process typo discipline)", () => {
+    expect(() => computeArs({ iae: 1.5, csu: 0, ve: 0, r: 0, ua: 0 })).toThrow("[0.00, 1.00]");
+    expect(() =>
+      computeArs({ iae: 0, csu: 0, ve: 0, r: 0, ua: 0 }, { completed: ["not-a-stage"] })
+    ).toThrow('unknown stage "not-a-stage"');
+  });
+});
+
+describe("t244 ars CLI (spawn)", () => {
+  test("happy path prints the full ArsResult JSON and exits 0", () => {
+    const r = runArs(SCORE_FLAGS);
+    expect(r.status).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.composite.total).toBe(63);
+    expect(out.tables.arsScores).toContain("**63 / 100**");
+    expect(Object.keys(out.screenGrid).length).toBeGreaterThanOrEqual(32);
+  });
+
+  test("score outside [0,1] exits 1 naming the flag", () => {
+    const r = runArs(["--iae", "1.5", "--csu", "0.5", "--ve", "0.5", "--r", "0.5", "--ua", "0.5"]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("--iae must be a number in [0.00, 1.00]");
+  });
+
+  test("missing required flag exits 1", () => {
+    const r = runArs(["--iae", "0.5"]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("--csu");
+  });
+
+  test("unknown --completed slug exits 1 (typo discipline, like validate-grid)", () => {
+    const r = runArs([...SCORE_FLAGS, "--completed", "intent-capture,not-a-stage"]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('unknown stage "not-a-stage"');
+  });
+
+  test("invalid --project-type exits 1", () => {
+    const r = runArs([...SCORE_FLAGS, "--project-type", "purplefield"]);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("brownfield or greenfield");
+  });
+
+  test("priors fault injection: bad weight sum and wrong schemaVersion exit 1", () => {
+    const dir = mkdtempSync(join(tmpdir(), "t244-priors-"));
+    try {
+      const shipped = JSON.parse(readFileSync(PRIORS_PATH, "utf-8"));
+      const badSum = { ...shipped, weights: { ...shipped.weights, iae: 0.5 } };
+      const badSumPath = join(dir, "bad-sum.json");
+      writeFileSync(badSumPath, JSON.stringify(badSum));
+      const r1 = runArs(SCORE_FLAGS, { AIDLC_ARS_PRIORS: badSumPath });
+      expect(r1.status).toBe(1);
+      expect(r1.stderr).toContain("must sum to 1.0");
+
+      const badVersion = { ...shipped, schemaVersion: 2 };
+      const badVersionPath = join(dir, "bad-version.json");
+      writeFileSync(badVersionPath, JSON.stringify(badVersion));
+      const r2 = runArs(SCORE_FLAGS, { AIDLC_ARS_PRIORS: badVersionPath });
+      expect(r2.status).toBe(1);
+      expect(r2.stderr).toContain("unsupported schemaVersion 2");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
