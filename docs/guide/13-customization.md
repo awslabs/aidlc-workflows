@@ -34,9 +34,9 @@ This file is listed in `.gitignore` so your personal changes are never committed
 
 ## Agent Models and Effort (Tiers)
 
-Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated`) that the build projects into each harness's native model/effort keys — judgment agents inherit your session's model and effort, balanced agents pin a mid-size model, and templated agents additionally reduce effort. See [Agent System](../reference/05-agent-system.md) for the full projection table.
+Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated`) that the build projects into each harness's native model/effort keys — judgment agents inherit your session's model and effort, balanced agents pin a mid-size model (on Claude Code, Codex, and opencode; on Kiro all tiers inherit the session model), and templated agents additionally reduce effort. See [Agent System](../reference/05-agent-system.md) for the full projection table.
 
-To change ONE agent's behavior in your installed copy, edit the projected value directly — for example, set `model: opus` in a Claude agent's `.claude/agents/aidlc-*-agent.md` frontmatter, or change the `"model"` field in a Kiro agent JSON. The edit survives until you re-copy the `dist/<harness>/` shell. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>` — both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
+To change ONE agent's behavior in your installed copy, edit the projected value directly — for example, set `model: opus` in a Claude agent's `.claude/agents/aidlc-*-agent.md` frontmatter, or add a `"model"` field to a Kiro agent JSON (with a model ID enabled on your install — Kiro agents ship without a model pin so they inherit the session model by default). The edit survives until you re-copy the `dist/<harness>/` shell. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>` — both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
 
 ---
 

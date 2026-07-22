@@ -29,10 +29,10 @@
 //                   spawns on the config.toml model + effort). `judgment`
 //                   omits both keys.
 //   - Kiro CLI/IDE  every tier omits `"model"` — Kiro agents INHERIT the
-//                   session model (#601: a shipped model ID resolves only
-//                   when that model is enabled on the user's install; a
-//                   session on another model rejects every delegated spawn
-//                   with "Invalid model ID", and Kiro also rejects the
+//                   session model (a shipped model ID resolves only when that
+//                   model is enabled on the user's install; a session on
+//                   another model rejects every delegated spawn with
+//                   "Invalid model ID", and Kiro also rejects the
 //                   Claude-dialect aliases outright, so there is no safe
 //                   pinnable value). The agent-v1 schema documents the
 //                   fallback: "If not specified, uses the default model" —
@@ -127,8 +127,8 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
 /** Kiro effort per tier - used ONLY to derive cli.json chat.modelDefaults
  *  entries (effort rides on the model on Kiro, never on the agent). Kept out
  *  of TierProjection so no agent-surface writer can reach it. EMPTY today:
- *  no tier pins a Kiro model (#601 - Kiro agents inherit the session model),
- *  so there is no model entry to carry a tier effort - every agent runs at
+ *  no tier pins a Kiro model (Kiro agents inherit the session model), so
+ *  there is no model entry to carry a tier effort - every agent runs at
  *  the session model's own default effort. If a tier ever pins a Kiro model
  *  again, add its effort here and kiroModelDefaults() resumes emitting. */
 export const KIRO_TIER_EFFORT: Partial<Record<Tier, KiroEffort>> = {};
