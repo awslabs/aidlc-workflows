@@ -1,0 +1,13 @@
+# Pin LF for all text files, on every platform. The dist/ drift guard
+# (`bun scripts/package.ts --check`) does a byte-parity diff of the committed
+# trees against freshly generated ones, so a checkout must never rewrite line
+# endings (with Git for Windows' default core.autocrlf=true it otherwise
+# rewrites every text file to CRLF and the guard reports the whole dist/ as
+# drifted — see issue #640).
+* text=auto eol=lf
+
+# Binary assets — never normalize.
+*.pdf binary
+*.png binary
+*.jpg binary
+*.zip binary
