@@ -5,7 +5,7 @@
 AI-DLC Workflows 2.0 is now **generally available**. The new version makes autonomous software development practical by turning AI agents into verifiable, self-correcting engineering workflows — one harness-neutral core, rendered natively across Claude Code, Kiro IDE, Kiro CLI, Codex CLI, and opencode.
 
 > [!NOTE]
-> Interfaces, stage definitions, the agent roster, and the install model are stable, but we will continue to optimize based on feedback; pin a known-good version for anything you depend on, and review all generated output before you act on it. See the [roadmap](https://awslabs.github.io/aidlc-workflows/roadmap/) for what's shipped, in flight, and planned.
+> Interfaces, stage definitions, the agent roster, and the install model are stable, but we will continue to optimize based on feedback; pin a known-good version for anything you depend on, and review all generated output before you act on it. See the [roadmap](https://awslabs.github.io/aidlc-workflows/roadmap.html) for what's shipped, in flight, and planned.
 
 A native implementation of the **AI-DLC methodology** (AI-Driven Development Life Cycle) that runs on **many harnesses from one source of truth** — today Claude Code, Kiro IDE, Kiro CLI, Codex CLI, and opencode, and any capable harness you port it to. Run a full software-development lifecycle with a 14-agent roster — 11 domain experts, 2 review-only agents, and the adaptive-workflows composer — working through a 32-stage workflow, with you approving every gate.
 
