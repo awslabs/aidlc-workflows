@@ -2,13 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.5.5] - 2026-07-20
+## [2.5.5] - 2026-07-22
 
 Reviewer-bearing stages now have an engine-enforced, auditable verification boundary on every completion route. Interactive, per-unit, unit-major, and autonomous Construction runs record reviewer dispatch and verdict events, and stale or incomplete reviews refuse completion without adding another human checkpoint. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
 
 * `aidlc-log.ts review` records `REVIEW_REQUESTED` before dispatch and `REVIEW_COMPLETED` after a `READY` or `NOT-READY` verdict; isolated stage runs are tagged separately from the main workflow.
-* `approve`, `advance`, `finalize`, and `complete-workflow` refuse reviewer-bearing stages without a fresh verdict from the declared reviewer; a rejection, revision, workflow restart, or relevant jump invalidates older receipts.
-* Per-unit enforcement requires one review for each applicable unit, self-heals a stale runtime graph from `unit-of-work-dependency.md`, and skips units whose kind has no artifacts in the stage.
+* `approve`, `advance`, `finalize`, and `complete-workflow` refuse reviewer-bearing stages without a fresh `READY` or `NOT-READY` verdict from the declared reviewer; a rejection, revision, workflow restart, relevant jump, or later declared-artifact write invalidates older receipts.
+* Per-unit enforcement requires one review for each applicable unit, invalidates only the unit whose artifact changed, validates cached unit data against authoritative `unit-of-work-dependency.md`, self-heals stale caches, and skips units whose kind has no artifacts in the stage.
 * Autonomous Code Generation keeps the #568 owner-collaborator-verifier contract: every converged swarm unit is reviewed in its Bolt worktree before finalization, without an additional human prompt.
 
 ## [2.5.2] - 2026-07-21

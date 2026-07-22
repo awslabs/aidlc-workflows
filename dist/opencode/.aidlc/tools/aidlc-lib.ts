@@ -5383,11 +5383,26 @@ export type BoltDagResolution =
   | { state: "none" }
   | { state: "malformed"; reason: string; detail: string };
 
-// Resolve the active intent's unit DAG from the compiled graph, healing a
-// missing/stale cache from the authored dependency artifact. Callers must keep
-// the three states distinct: "none" is a real no-DAG workflow, while
-// "malformed" means the unit set is unknowable and must fail closed.
+type ResolvedBoltDag = Extract<BoltDagResolution, { state: "ok" }>;
+
+function boltDagMatches(a: ResolvedBoltDag, b: ResolvedBoltDag): boolean {
+  if (JSON.stringify(a.batches) !== JSON.stringify(b.batches)) return false;
+  const aKinds = a.unitKinds ?? new Map<string, string>();
+  const bKinds = b.unitKinds ?? new Map<string, string>();
+  if (aKinds.size !== bKinds.size) return false;
+  for (const [unit, kind] of aKinds) {
+    if (bKinds.get(unit) !== kind) return false;
+  }
+  return true;
+}
+
+// Resolve the active intent's unit DAG. The authored dependency artifact is
+// authoritative whenever it exists: a valid cache is accepted only when its
+// batches and unit kinds still match that artifact. Callers must keep the three
+// states distinct: "none" is a real no-DAG workflow, while "malformed" means
+// the unit set is unknowable and must fail closed.
 export function resolveBoltDag(projectDir: string): BoltDagResolution {
+  let cached: ResolvedBoltDag | null = null;
   const graphPath = runtimeGraphPath(projectDir);
   if (existsSync(graphPath)) {
     try {
@@ -5424,7 +5439,7 @@ export function resolveBoltDag(projectDir: string): BoltDagResolution {
               }
             }
           }
-          return {
+          cached = {
             state: "ok",
             batches: typedBatches,
             units,
@@ -5439,7 +5454,7 @@ export function resolveBoltDag(projectDir: string): BoltDagResolution {
   }
 
   const dependencyPath = unitDependencyPath(projectDir);
-  if (!existsSync(dependencyPath)) return { state: "none" };
+  if (!existsSync(dependencyPath)) return cached ?? { state: "none" };
 
   let body: string;
   try {
@@ -5456,13 +5471,14 @@ export function resolveBoltDag(projectDir: string): BoltDagResolution {
       .filter((unit) => unit.kind !== undefined)
       .map((unit) => [unit.name, unit.kind!]),
   );
-  return {
+  const authored: ResolvedBoltDag = {
     state: "ok",
     batches: parsed.batches,
     units: parsed.batches.flat(),
     unitKinds: unitKinds.size > 0 ? unitKinds : null,
     healed: true,
   };
+  return cached !== null && boltDagMatches(cached, authored) ? cached : authored;
 }
 
 // Prune a produces name list to the artifacts that apply to `unitKind`. Returns

@@ -272,7 +272,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `DECISION_RECORDED` | `tools/aidlc-log.ts` | Fires before `AskUserQuestion` so options are captured |
 | `QUESTION_ANSWERED` | `tools/aidlc-log.ts` | Fires after user response |
 | `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the §12a reviewer sub-agent |
-| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires when the reviewer verdict is read. All completing state transitions (`approve`, `advance`, `finalize`, and `complete-workflow`) require a matching receipt from the current workflow attempt; per-unit stages require one per applicable unit. Autonomous swarm finalization additionally requires each configured unit's receipt after its Bolt started. |
+| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires when a `READY` or `NOT-READY` reviewer verdict is read. All completing state transitions (`approve`, `advance`, `finalize`, and `complete-workflow`) require a matching receipt from the current workflow attempt and after the latest relevant declared-artifact write; per-unit stages require one per applicable unit and scope artifact invalidation to that unit. Autonomous swarm finalization additionally requires each configured unit's receipt after its Bolt started. |
 
 ### Scope and configuration
 

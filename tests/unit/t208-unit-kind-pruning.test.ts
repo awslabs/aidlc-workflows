@@ -37,6 +37,7 @@ resetAidlcEnv();
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 
 // nfr-requirements produces[] and their per-kind applicability (verified against
@@ -170,6 +171,32 @@ function logReviewReady(proj: string, unit: string): void {
   ], { encoding: "utf-8" });
   if ((r.status ?? -1) !== 0) {
     throw new Error(`review log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  }
+}
+
+function logArtifactUpdated(proj: string, unit: string): void {
+  const file = join(
+    seededRecordDir(proj),
+    "construction",
+    unit,
+    "functional-design",
+    "business-rules.md",
+  );
+  const r = spawnSync(BUN, [
+    AUDIT,
+    "append",
+    "ARTIFACT_UPDATED",
+    "--field",
+    "Tool=Edit",
+    "--field",
+    `File=${file}`,
+    "--field",
+    `Context=construction > ${unit} > functional-design > business-rules.md`,
+    "--project-dir",
+    proj,
+  ], { encoding: "utf-8" });
+  if ((r.status ?? -1) !== 0) {
+    throw new Error(`artifact log failed: ${r.stdout ?? ""}${r.stderr ?? ""}`);
   }
 }
 
@@ -308,6 +335,31 @@ describe("t208 engine unit-kind pruning", () => {
     expect(d.message).toContain("no fresh recorded review");
   }, 30000);
 
+  test("5d2: a valid stale DAG cannot hide an authored unit from review enforcement", () => {
+    const proj = seedProject("functional-design");
+    seedDependencyArtifact(proj, [
+      "  - name: alpha",
+      "    kind: service",
+      "    depends_on: []",
+      "  - name: beta",
+      "    kind: service",
+      "    depends_on: [alpha]",
+    ]);
+    seedBoltDag(proj, [{ name: "alpha", kind: "service" }]);
+    coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+    logReviewReady(proj, "alpha");
+
+    const d = runReport(
+      proj,
+      ["--stage", "functional-design", "--result", "approved"],
+      true,
+    );
+    expect(d.kind).toBe("error");
+    expect(d.message).toContain("beta");
+    expect(d.message).toContain("no fresh recorded review");
+  }, 30000);
+
   test("5e: malformed dependency data fails closed instead of degrading to one review", () => {
     const proj = seedProject("functional-design");
     seedDependencyArtifact(proj, [
@@ -324,6 +376,33 @@ describe("t208 engine unit-kind pruning", () => {
     expect(d.kind).toBe("error");
     expect(d.message).toContain("unit list cannot be resolved");
     expect(d.message).toContain("malformed");
+  }, 30000);
+
+  test("5f: a post-review artifact update invalidates only the matching unit", () => {
+    const proj = seedProject("functional-design");
+    seedBoltDag(proj, ["alpha", "beta"]);
+    coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    coverUnit(proj, "beta", "functional-design", FD_PRODUCES);
+    logReviewReady(proj, "alpha");
+    logReviewReady(proj, "beta");
+    logArtifactUpdated(proj, "beta");
+
+    const refused = runReport(
+      proj,
+      ["--stage", "functional-design", "--result", "approved"],
+      true,
+    );
+    expect(refused.kind).toBe("error");
+    expect(refused.message).toContain("1 of 2 applicable units");
+    expect(refused.message).toContain("(beta)");
+
+    logReviewReady(proj, "beta");
+    const accepted = runReport(
+      proj,
+      ["--stage", "functional-design", "--result", "approved"],
+      true,
+    );
+    expect(accepted.kind).toBe("done");
   }, 30000);
 
   // 6: a stage with NO produces_kinds (code-generation) ignores kinds entirely -

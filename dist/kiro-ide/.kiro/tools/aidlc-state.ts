@@ -284,6 +284,48 @@ function producesArtifactFile(
   return produces.some((name) => norm.endsWith(`/${stage.slug}/${name}.md`));
 }
 
+// Resolve the unit targeted by a declared produces[] write. `undefined` means
+// the file does not belong to this stage, `null` means a matching stage-level
+// artifact, and a string names the per-unit Construction target.
+function producesArtifactUnit(
+  stage: {
+    slug: string;
+    for_each?: string;
+    produces?: string[];
+    optional_produces?: string[];
+  },
+  file: string,
+  recordedRepos: ReadonlySet<string>,
+): string | null | undefined {
+  const reviewedArtifacts = [
+    ...(stage.produces ?? []),
+    ...(stage.optional_produces ?? []),
+  ];
+  if (
+    !producesArtifactFile(
+      { slug: stage.slug, produces: reviewedArtifacts },
+      file,
+      recordedRepos,
+    )
+  ) {
+    return undefined;
+  }
+  if (stage.for_each !== "unit-of-work") return null;
+
+  const norm = file.replace(/\\/g, "/");
+  for (const name of reviewedArtifacts) {
+    const suffix = `/${stage.slug}/${name}.md`;
+    if (!norm.endsWith(suffix)) continue;
+    const parent = norm.slice(0, -suffix.length);
+    const marker = "/construction/";
+    const markerIdx = parent.lastIndexOf(marker);
+    if (markerIdx === -1) return null;
+    const unit = parent.slice(markerIdx + marker.length);
+    return unit.length > 0 && !unit.includes("/") ? unit : null;
+  }
+  return null;
+}
+
 // The gate-revision backstop predicate (the reconciliation half of the
 // forwarding-reliability gap). TRUE when the human demonstrably revised the
 // stage's artifact at an OPEN gate but no `reject` verb was ever recorded, so
@@ -1231,10 +1273,11 @@ function verifyStageArtifacts(
 // orchestrate's report: direct recovery calls must not bypass it (issue #366).
 //
 // The audit read is FLOORED (mirrors swarmConvergedUnits / hasStageAuditEvent):
-// only REVIEW_COMPLETED rows recorded AFTER the stage's latest STAGE_STARTED and
-// after any later GATE_REJECTED count. Without the floor a stale review from a
-// prior stage-run (a redo-jump re-runs the stage) or from before a reject/revise
-// would clear the gate for an artifact nobody re-reviewed.
+// only REVIEW_COMPLETED rows recorded AFTER the stage's latest STAGE_STARTED,
+// any later GATE_REJECTED, and the latest relevant produces[] write count.
+// Per-unit artifact writes invalidate only that unit's receipt. Without these
+// floors a stale review from a prior stage-run, before a reject/revise, or
+// before an artifact edit would clear the gate for work nobody re-reviewed.
 //
 // The row must match BOTH Stage AND Reviewer (a row naming the wrong reviewer —
 // a typo, or the conductor self-certifying — must not satisfy it). On per-unit
@@ -1251,6 +1294,7 @@ function verifyReviewerPrecondition(
     for_each?: string;
     reviewer?: string;
     produces?: string[];
+    optional_produces?: string[];
     produces_kinds?: Record<string, string[]>;
   }
 ): void {
@@ -1272,6 +1316,8 @@ function verifyReviewerPrecondition(
     "STAGE_STARTED",
     "STAGE_JUMPED",
     "GATE_REJECTED",
+    "ARTIFACT_CREATED",
+    "ARTIFACT_UPDATED",
     "REVIEW_COMPLETED",
   ]);
   const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
@@ -1315,15 +1361,35 @@ function verifyReviewerPrecondition(
     }
   }
 
-  // Collect the units with a fresh, matching terminal review (after the floor).
+  // Collect fresh matching terminal reviews after the attempt floor. A later
+  // declared-artifact write clears the matching receipt. For per-unit stages,
+  // the path's construction/<unit>/ segment scopes invalidation to that unit;
+  // an ambiguous matching path fails closed by clearing every unit receipt.
+  const recordedRepos = new Set(intentRepos(pd));
   const reviewedUnits = new Set<string>();
   let sawStageReview = false;
   for (let i = floorIdx + 1; i < events.length; i++) {
     const e = events[i];
+    if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
+      const file = auditBlockField(e.block, "File");
+      if (!file) continue;
+      const targetUnit = producesArtifactUnit(stage, file, recordedRepos);
+      if (targetUnit === undefined) continue;
+      if (!perUnit) {
+        sawStageReview = false;
+      } else if (targetUnit === null) {
+        reviewedUnits.clear();
+      } else {
+        reviewedUnits.delete(targetUnit);
+      }
+      continue;
+    }
     if (e.event !== "REVIEW_COMPLETED") continue;
     if (auditBlockField(e.block, "Workflow")?.startsWith("single-stage:")) continue;
     if (auditBlockField(e.block, "Stage") !== stage.slug) continue;
     if (auditBlockField(e.block, "Reviewer") !== reviewer) continue;
+    const verdict = auditBlockField(e.block, "Verdict");
+    if (verdict !== "READY" && verdict !== "NOT-READY") continue;
     sawStageReview = true;
     const unit = auditBlockField(e.block, "Unit");
     if (unit) reviewedUnits.add(unit);

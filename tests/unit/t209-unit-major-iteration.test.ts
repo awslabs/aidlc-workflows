@@ -449,7 +449,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.produces?.some((path) => path.endsWith("/frontend-components.md"))).toBe(false);
 
     const warning =
-      "runtime-graph.json has no bolt_dag; recomputed 1 unit batch(es)";
+      "runtime-graph.json bolt_dag is missing or stale; recomputed 1 unit batch(es)";
     expect(run.stderr.split(warning).length - 1).toBe(1);
   }, 30000);
 

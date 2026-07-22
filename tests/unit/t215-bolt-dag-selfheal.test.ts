@@ -30,7 +30,7 @@ const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const RP = `aidlc/spaces/${DEFAULT_SPACE}/intents/${DEFAULT_RECORD_DIR}`;
 const SEP = "\u2014";
 const HEAL_NOTE =
-  "aidlc-orchestrate: runtime-graph.json has no bolt_dag; recomputed 2 unit batch(es) from unit-of-work-dependency.md (stale runtime graph; check the runtime-compile hook)";
+  "aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed 2 unit batch(es) from unit-of-work-dependency.md (check the runtime-compile hook)";
 const FD_PRODUCES = [
   "business-logic-model",
   "business-rules",
@@ -344,17 +344,28 @@ describe("t215 bolt dag self-heal", () => {
     expect(r.stderr).toBe("");
   }, 30000);
 
-  test("6: existing bolt_dag wins over a malformed dependency artifact without stderr", () => {
+  test("6: malformed authored dependency data fails closed despite a valid cached bolt_dag", () => {
     const proj = seedProject("functional-design");
     seedBoltDag(proj, ["gamma"]);
     seedDanglingDependency(proj);
     const r = runNext(proj);
-    expect(r.directive.kind).toBe("run-stage");
-    expect(r.directive.unit).toBe("gamma");
-    expect(r.directive.produces).toContain(
-      `${RP}/construction/gamma/functional-design/business-logic-model.md`,
-    );
+    expect(r.directive.kind).toBe("error");
+    expect(r.directive.message).toContain("unit-of-work-dependency.md");
+    expect(r.directive.message).toContain("malformed");
+    expect(r.directive.message).toContain("unknown unit");
     expect(r.stderr).toBe("");
+  }, 30000);
+
+  test("6b: a valid but outdated cached bolt_dag heals from the authored artifact", () => {
+    const proj = seedProject("functional-design");
+    seedBoltDag(proj, ["alpha"]);
+    seedAlphaBetaDependency(proj);
+    coverUnit(proj, "alpha", "functional-design", FD_PRODUCES);
+    const r = runNext(proj);
+    expect(r.directive.kind).toBe("run-stage");
+    expect(r.directive.unit).toBe("beta");
+    expect(r.stderr).toContain(HEAL_NOTE);
+    logCapturedStderr(r.stderr);
   }, 30000);
 
   test("7: approve guard sees healed units and refuses uncovered per-unit work", () => {

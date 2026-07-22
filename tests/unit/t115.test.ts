@@ -88,6 +88,7 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   FIXTURES_DIR,
+  seededRecordDir,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
@@ -967,6 +968,20 @@ function log(args: string[], p: string): CliResult {
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
 }
 
+function appendAudit(event: string, fields: Record<string, string>, p: string): CliResult {
+  const fieldArgs = Object.entries(fields).flatMap(([key, value]) => [
+    "--field",
+    `${key}=${value}`,
+  ]);
+  const res = spawnSync(
+    BUN,
+    [AUDIT_TOOL, "append", event, ...fieldArgs, "--project-dir", p],
+    { encoding: "utf-8" },
+  );
+  const stdout = res.stdout ?? "";
+  return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
+}
+
 describe("t115 reviewer precondition (report refuses approve without a recorded review)", () => {
   test("R1: approving a reviewer-bearing stage is REFUSED without a REVIEW_COMPLETED", () => {
     const p = projWithState("state-mid-inception.md");
@@ -1185,5 +1200,87 @@ describe("t115 reviewer precondition (report refuses approve without a recorded 
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("declares a reviewer");
     expect(countEvent(p, "GATE_APPROVED")).toBe(0);
+  }, 30000);
+
+  test("R12: a declared artifact create or update after review requires a fresh review", () => {
+    for (const event of ["ARTIFACT_CREATED", "ARTIFACT_UPDATED"]) {
+      const p = projWithState("state-mid-inception.md");
+      expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
+      expect(log([
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--reviewer",
+        "aidlc-product-lead-agent",
+        "--verdict",
+        "READY",
+      ], p).status).toBe(0);
+      expect(appendAudit(event, {
+        Tool: event === "ARTIFACT_CREATED" ? "Write" : "Edit",
+        File: join(
+          seededRecordDir(p),
+          "inception",
+          "requirements-analysis",
+          "requirements.md",
+        ),
+        Context: "inception > requirements-analysis > requirements.md",
+      }, p).status).toBe(0);
+
+      const refused = state(["approve", "requirements-analysis"], p);
+      expect(refused.status).not.toBe(0);
+      expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+      expect(countEvent(p, "GATE_APPROVED")).toBe(0);
+
+      expect(log([
+        "review",
+        "--stage",
+        "requirements-analysis",
+        "--reviewer",
+        "aidlc-product-lead-agent",
+        "--verdict",
+        "READY",
+      ], p).status).toBe(0);
+      expect(state(["approve", "requirements-analysis"], p).status).toBe(0);
+    }
+  }, 30000);
+
+  test("R13: an unrelated artifact update does not invalidate the review", () => {
+    const p = projWithState("state-mid-inception.md");
+    expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
+    expect(log([
+      "review",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--verdict",
+      "READY",
+    ], p).status).toBe(0);
+    expect(appendAudit("ARTIFACT_UPDATED", {
+      Tool: "Edit",
+      File: join(seededRecordDir(p), "inception", "user-stories", "stories.md"),
+      Context: "inception > user-stories > stories.md",
+    }, p).status).toBe(0);
+
+    expect(state(["approve", "requirements-analysis"], p).status).toBe(0);
+    expect(countEvent(p, "GATE_APPROVED")).toBe(1);
+  }, 30000);
+
+  test("R14: malformed REVIEW_COMPLETED verdicts do not satisfy the precondition", () => {
+    for (const verdict of [undefined, "MAYBE"]) {
+      const p = projWithState("state-mid-inception.md");
+      expect(state(["gate-start", "requirements-analysis"], p).status).toBe(0);
+      const fields: Record<string, string> = {
+        Stage: "requirements-analysis",
+        Reviewer: "aidlc-product-lead-agent",
+      };
+      if (verdict !== undefined) fields.Verdict = verdict;
+      expect(appendAudit("REVIEW_COMPLETED", fields, p).status).toBe(0);
+
+      const refused = state(["approve", "requirements-analysis"], p);
+      expect(refused.status).not.toBe(0);
+      expect(refused.out).toContain("fresh REVIEW_COMPLETED");
+      expect(countEvent(p, "GATE_APPROVED")).toBe(0);
+    }
   }, 30000);
 });

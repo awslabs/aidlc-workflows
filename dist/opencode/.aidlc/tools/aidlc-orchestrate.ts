@@ -797,15 +797,16 @@ function readConstructionIteration(
 // run's converged rows would make the fresh run's batches look already built
 // and the rebuild would be silently skipped.
 
-// The resolved unit batch DAG for the active intent, cache-first with a
-// self-heal: the compiled runtime graph's bolt_dag is authoritative when
-// present, but a graph that is missing, malformed, or lacking the node while
-// units-generation's dependency artifact exists on disk is a STALE CACHE, not
-// a zero-unit workflow. In that case the batches are recomputed directly from
-// unit-of-work-dependency.md via the same pure parse the runtime compiler
-// uses, so the per-unit loop, the approve-side coverage guard, and the swarm
-// fan-out never truncate a multi-unit plan because a hook failed to refresh
-// the graph. Three states:
+// The resolved unit batch DAG for the active intent, cache-validated with a
+// self-heal: when units-generation's dependency artifact exists, it is the
+// authority and a compiled bolt_dag is accepted only while its batches and
+// unit kinds still match. A graph that is missing, malformed, lacks the node,
+// or disagrees with the artifact is a STALE CACHE, not a zero-unit workflow.
+// In that case the batches are recomputed directly from
+// unit-of-work-dependency.md via the same pure parse the runtime compiler uses,
+// so the per-unit loop, the approve-side coverage guard, and the swarm fan-out
+// never truncate a multi-unit plan because a hook failed to refresh the graph.
+// Three states:
 //   ok        - batches resolved (healed=true when recomputed; a heal writes
 //               one stderr note, since the compile hook should have run).
 //   none      - no dependency artifact: a genuine zero-unit scope; callers
@@ -821,7 +822,7 @@ function resolveBoltBatches(projectDir: string): BoltBatchesResolution {
   const resolution = resolveBoltDag(projectDir);
   if (resolution.state === "ok" && resolution.healed) {
     process.stderr.write(
-      `aidlc-orchestrate: runtime-graph.json has no bolt_dag; recomputed ${resolution.batches.length} unit batch(es) from unit-of-work-dependency.md (stale runtime graph; check the runtime-compile hook)\n`,
+      `aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed ${resolution.batches.length} unit batch(es) from unit-of-work-dependency.md (check the runtime-compile hook)\n`,
     );
   }
   return resolution;
@@ -2278,7 +2279,7 @@ function emitPerUnitRunStage(
       emit({
         kind: "error",
         message:
-          `Cannot iterate units for stage "${node.slug}": runtime-graph.json has no bolt_dag and inception/units-generation/unit-of-work-dependency.md is ${r.reason} (${r.detail}). Fix the fenced units block in that artifact, then run next again.`,
+          `Cannot iterate units for stage "${node.slug}": inception/units-generation/unit-of-work-dependency.md is authoritative for the unit set and is ${r.reason} (${r.detail}). Fix the fenced units block in that artifact, then run next again.`,
       });
       return;
     case "ok":
