@@ -93,6 +93,14 @@ export type TierProjection = {
    *  session's opencode.json defaults — same inherit-by-omission contract
    *  as codex. */
   opencode: { model: string | null; variant: OpencodeVariant | null };
+  /** Copilot .agent.md frontmatter: `model:` (a Copilot-native model name or
+   *  prioritized array). Model-only BY DESIGN — Copilot has no per-agent
+   *  effort surface. `null` for every tier today (null projection per ADR-004):
+   *  the emitter OMITS the `model:` field so agents inherit the session model.
+   *  Copilot model name strings are controlled by GitHub/Microsoft and shift
+   *  with subscription tier, so shipping them risks silent wrong-model
+   *  degradation; populating them is a validated follow-up. */
+  copilot: { model: string | null };
 };
 
 export type Harness = keyof TierProjection;
@@ -107,12 +115,14 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     codex: { model: null, effort: null },
     kiro: { model: null },
     opencode: { model: null, variant: null },
+    copilot: { model: null },
   },
   balanced: {
     claude: { model: "sonnet", effort: null },
     codex: { model: "openai.gpt-5.4", effort: null },
     kiro: { model: null },
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: null },
+    copilot: { model: null },
   },
   templated: {
     // The one deliberate downgrade: a smaller model at reduced effort for
@@ -121,6 +131,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     codex: { model: "openai.gpt-5.4", effort: "medium" },
     kiro: { model: null },
     opencode: { model: "amazon-bedrock/global.anthropic.claude-sonnet-4-6", variant: "medium" },
+    copilot: { model: null },
   },
 };
 

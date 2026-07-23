@@ -75,7 +75,7 @@ export type HarnessManifest = {
    * new harness picks its projection shape in its manifest - the packager
    * never infers it from the harness name.
    */
-  tierFlavor: "claude" | "codex" | "kiro" | "opencode";
+  tierFlavor: "claude" | "codex" | "kiro" | "opencode" | "copilot";
   /** core/<src> → <harnessDir>/<dst> projections. */
   coreDirs: DirMap[];
   /** harness/<name>/<src> → <harnessDir>/<dst> authored-file copies. */
