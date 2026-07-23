@@ -979,7 +979,12 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       text(2, `aidlc adapter ${action.harness} ${action.target}: adapter does not export run(target, input, extraArgs)\n`);
       return 1;
     }
-    return await mod.run(action.target, await readStdin(), action.extraArgs);
+    // kiro-ide: NEVER read stdin - the IDE opens hook stdin without writing
+    // or closing it, so awaiting it hangs the hook process forever. The IDE
+    // adapter's run() ignores its input parameter (context arrives via the
+    // USER_PROMPT env var); mirrors the adapter's own entry guard.
+    const input = action.harness === "kiro-ide" ? "" : await readStdin();
+    return await mod.run(action.target, input, action.extraArgs);
   } finally {
     if (previousHarness === undefined) delete process.env.AIDLC_HARNESS_DIR;
     else process.env.AIDLC_HARNESS_DIR = previousHarness;

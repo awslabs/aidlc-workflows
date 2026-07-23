@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.7] - 2026-07-23
+
+Fixes a Kiro IDE regression that silently disabled the agent-stop hooks: the forwarding-loop reminder and `SESSION_ENDED` never ran, because the IDE delivers an empty `USER_PROMPT` on agent stop and the adapter's entry guard then waited on stdin, which Kiro IDE opens but never writes. Hooks on prompt submit and after tool use were unaffected (the IDE populates `USER_PROMPT` for those events). Verified live on Kiro IDE against both the broken and fixed adapter. **Upgrade:** re-copy your `dist/<harness>/` shell into the project (on Kiro IDE the fix is in `.kiro/hooks/aidlc-kiro-adapter.ts` and `.kiro/tools/aidlc.ts`).
+
+* Kiro IDE agent-stop hooks (forwarding loop, session end) work again: the adapter no longer reads stdin on any event (context arrives only via the `USER_PROMPT` environment variable; the stdin value was never consumed).
+* The dispatcher route (`aidlc adapter kiro-ide <target>`) had the same hang - it acquired stdin before invoking the adapter - and is fixed the same way: stdin is never read for the kiro-ide harness.
+
 ## [2.5.6] - 2026-07-22
 
 Unblocks agent delegation on the Kiro harnesses (#601): every shipped model pin is removed from the Kiro agent surfaces, so the conductor and all 14 personas inherit the session model. Previously every `invoke_sub_agent` spawn failed with `Invalid model ID` whenever the pinned IDs (`claude-opus-4.8` on the conductor JSON, `claude-sonnet-4.5` on the tier-projected persona JSONs and `.md` frontmatter) were not enabled on the user's Kiro install - blocking the subagent stages, every `reviewer:`-bound gate, the 2.5.0 ensemble dispatches, and any manual delegation. Verified fix shape (live on Kiro IDE): with both pin layers stripped, all 14 agents spawn and respond on a session model the pins never named. **Upgrade:** re-copy the entire `.kiro/` tree from `dist/kiro/` or `dist/kiro-ide/` into your project (agents, settings, tools, and knowledge all carry changes).
