@@ -56,13 +56,13 @@ Markdown list item using exactly one of these forms:
 ```markdown
 - [desc] Initial description: "<JSON-escaped verbatim project description>"
 - [scope] Workflow-selected scope: `<scope>`.
-- [memory:M<n>] `aidlc/spaces/<active-space>/memory/<file>.md#<exact H2 heading>`: "<JSON-escaped exact single-line rule>"
+- [memory:M<n>] `aidlc/spaces/<active-space>/memory/{org,team,project}.md#<exact H2 heading>`: "<JSON-escaped exact single-line rule>"
 ```
 
 The sensor verifies `[desc]` and `[scope]` against `aidlc-state.md`. It resolves
-each memory path under the active space and requires the quoted rule to exactly
-match a visible entry under the named H2. Entries inside comments or code
-fences are not sources.
+each memory path against the active space's stage-loaded `org.md`, `team.md`, or
+`project.md` and requires the quoted rule to exactly match a visible entry under
+the named H2. Entries inside comments or code fences are not sources.
 
 The register is the complete permitted-source universe for this stage. Do not
 register background knowledge, common practice, or an inference as a source.
@@ -143,8 +143,9 @@ Otherwise:
    by a blank `[Answer]:`.
 2. Present those two options as a structured question, log it through the
    standard question decision/answer pair, END YOUR TURN, and wait.
-3. On `Accept assumptions`, fill the confirmation answer and retain the
-   `[assumption]` labels. Acceptance does not turn an assumption into fact.
+3. On `Accept assumptions`, fill the confirmation answer exactly as
+   `[Answer]: A. Accept assumptions` and retain the `[assumption]` labels.
+   Acceptance does not turn an assumption into fact.
 4. On `Convert to follow-up questions`, fill that answer, append consecutively
    numbered `Q<n>` follow-ups, collect and confirm their answers, revise both
    artifacts, reset `## Assumption Confirmation`, and repeat this step if any
@@ -173,10 +174,11 @@ This stage's outputs are markdown artefacts under `<record>/ideation/intent-capt
 The imported sensors check those outputs:
 
 - **`claim-sources`** verifies every claim block has a resolvable source tag,
-  source-register values match state and active memory, each artifact has
-  `## Assumptions & Open Questions`, and retained assumptions exactly match a
-  completed human confirmation. It validates structure and source resolution,
-  not whether a source semantically entails the claim.
+  source-register values match state and the three stage-loaded active-memory
+  files, each artifact has `## Assumptions & Open Questions`, and retained
+  assumptions exactly match a completed human confirmation. It validates
+  structure and source resolution, not whether a source semantically entails
+  the claim.
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. This stage declares no upstream artefacts; the sensor still runs but reports zero unreferenced inputs by default.
 

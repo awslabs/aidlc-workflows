@@ -41,6 +41,8 @@ interface RecordAuthority {
 
 const ASSUMPTIONS_HEADING = "Assumptions & Open Questions";
 const REVIEW_HEADING = "Review";
+const ACCEPT_ASSUMPTIONS_ANSWER = "A. Accept assumptions";
+const ACTIVE_MEMORY_FILES = new Set(["org.md", "team.md", "project.md"]);
 const SOURCE_TAG_RE =
 	/\[(desc|scope|assumption|Q\d+|memory:[A-Za-z0-9][A-Za-z0-9._-]*)\]/g;
 const SOURCE_ENTRY_RE =
@@ -290,6 +292,13 @@ function memoryRuleMatches(
 		);
 		return false;
 	}
+	const memoryFile = sourcePath.slice(expectedPrefix.length);
+	if (!ACTIVE_MEMORY_FILES.has(memoryFile)) {
+		findings.push(
+			`[${id}] must name an active memory file under ${expectedPrefix}: org.md, team.md, or project.md`,
+		);
+		return false;
+	}
 
 	const memoryRoot = resolve(authority.projectRoot, expectedPrefix);
 	const sourceFile = resolve(authority.projectRoot, sourcePath);
@@ -484,8 +493,7 @@ function parseSourceUniverse(
 		registered,
 		answeredQuestions,
 		assumptionsAccepted:
-			answerIsFilled(assumptionAnswer) &&
-			/^(?:A[.)]?\s*)?Accept assumptions\b/i.test(assumptionAnswer.trim()),
+			assumptionAnswer.trim() === ACCEPT_ASSUMPTIONS_ANSWER,
 		acceptedAssumptions,
 		findings,
 	};

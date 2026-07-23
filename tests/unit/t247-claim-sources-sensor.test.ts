@@ -166,6 +166,27 @@ describe("t247 claim-sources sensor", () => {
     );
   });
 
+  test("a memory source outside the stage's active memory files fails", () => {
+    const dir = makeStageDir();
+    writeFileSync(
+      join(dir, "aidlc", "spaces", "default", "memory", "fabricated.md"),
+      "# Fabricated Rules\n\n## Forbidden\n\n- Do not add network access.\n",
+      "utf-8",
+    );
+    replaceInFile(
+      dir,
+      "intent-capture-questions.md",
+      "memory/project.md#Forbidden",
+      "memory/fabricated.md#Forbidden",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "[memory:M1] must name an active memory file",
+    );
+  });
+
   test("every deliverable requires Assumptions & Open Questions", () => {
     const dir = makeStageDir();
     replaceInFile(
@@ -247,6 +268,33 @@ describe("t247 claim-sources sensor", () => {
       "retained assumption is not listed in ## Assumption Confirmation",
     );
   });
+
+  for (const answer of [
+    "A. Accept assumptions? No",
+    "A. Accept assumptions with caveats",
+  ]) {
+    test(`assumption confirmation rejects non-exact answer: ${answer}`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "stakeholder-map.md",
+        "None.",
+        "- A procurement reviewer may be needed. [assumption]",
+      );
+      const questionsPath = join(dir, "intent-capture-questions.md");
+      writeFileSync(
+        questionsPath,
+        `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: ${answer}\n`,
+        "utf-8",
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "retained assumptions require",
+      );
+    });
+  }
 
   test("assumption tags outside the assumptions section fail", () => {
     const dir = makeStageDir();

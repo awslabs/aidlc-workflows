@@ -7,8 +7,8 @@ Intent Capture now keeps generated intent and stakeholder claims grounded in the
 
 * `intent-capture-questions.md` now records a `## Sources` register and asks explicitly about stakeholders, decision authority, communication needs, and whether the workflow-selected scope matches the intended product boundary.
 * `intent-statement.md` and `stakeholder-map.md` now require inline source tags plus `## Assumptions & Open Questions`; unselected answer options cannot become inferred requirements or exclusions.
-* Retained assumptions require a structured accept-or-follow-up decision before Product Lead review and the approval gate. Accepted assumptions remain labeled as assumptions downstream.
-* The new advisory `claim-sources` sensor checks every existing Intent Capture deliverable on each stage write, rejecting untagged or unresolved claims, source-register values that differ from authoritative state or active memory, hidden comment/fence sources, misplaced assumptions, non-exact assumption confirmations, and missing source registers while excluding reviewer-added `## Review` content.
+* Retained assumptions require the exact structured accept option before Product Lead review and the approval gate. Accepted assumptions remain labeled as assumptions downstream.
+* The new advisory `claim-sources` sensor checks every existing Intent Capture deliverable on each stage write, rejecting untagged or unresolved claims, source-register values that differ from authoritative state or the stage-loaded `org.md`, `team.md`, and `project.md` memory files, hidden comment/fence sources, misplaced assumptions, non-exact assumption confirmations, and missing source registers while excluding reviewer-added `## Review` content.
 * Approval & Handoff now declares `stakeholder-map` as a required consumed artifact, making the dependency visible to graph and upstream-coverage checks.
 
 ## [2.5.10] - 2026-07-23

@@ -30,14 +30,15 @@ For each deliverable, the sensor verifies:
 - every substantive paragraph, list item, and table data row has an inline
   `[desc]`, `[scope]`, `[Q<n>]`, `[memory:<id>]`, or `[assumption]` tag
 - source-register entries are visible Markdown list items, `[desc]` and
-  `[scope]` exactly match `aidlc-state.md`, and memory entries exactly match a
-  visible rule under the cited active-memory H2
+  `[scope]` exactly match `aidlc-state.md`, and memory entries name the active
+  space's stage-loaded `org.md`, `team.md`, or `project.md` and exactly match a
+  visible rule under the cited H2
 - question tags resolve to visible filled answers in the sibling
   `intent-capture-questions.md`
 - `[scope]` is used only for a workflow-selected Initial Scope Signal
 - `[assumption]` appears only in the assumptions section
-- retained assumptions exactly match entries under an answered
-  `## Assumption Confirmation`
+- retained assumptions exactly match entries under an
+  `## Assumption Confirmation` answered exactly `A. Accept assumptions`
 
 The sensor excludes scaffolding, fenced code, HTML comments, and reviewer-added
 `## Review` content. It validates citation shape and resolution only; the
