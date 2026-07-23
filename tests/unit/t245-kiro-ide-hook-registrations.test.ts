@@ -1,4 +1,4 @@
-// t244-kiro-ide-hook-registrations: structural contract test for the v2 hook
+// t245-kiro-ide-hook-registrations: structural contract test for the v2 hook
 // JSON files shipped in dist/kiro-ide/.kiro/hooks/. Ensures every registration
 // is valid JSON with the expected version, trigger, matcher, and adapter
 // command — so a typo cannot silently disable a hook while the suite stays

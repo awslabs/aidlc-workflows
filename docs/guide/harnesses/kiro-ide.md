@@ -78,19 +78,18 @@ reads a `hooks` block inside the agent JSON). Each hook runs a command that
 routes through the shared `aidlc-kiro-adapter.ts` shim, which normalizes the
 IDE's hook event into the shape the byte-shared core hooks expect.
 
-The IDE delivers hook context through the **`USER_PROMPT` environment variable**
-on pre-1.0 builds (not stdin - the IDE opens stdin but never writes to it on
-those versions). `USER_PROMPT` is a JSON string
+The adapter reads hook context from the **`USER_PROMPT` environment variable**
+(the pre-1.0 channel). On IDE 1.x, where context arrives on stdin and
+`USER_PROMPT` is empty, the two payload-dependent targets (`audit-and-sensors`,
+`log-subagent`) fire but no-op with a visible hook drop. The remaining hooks are
+payload-independent and work on both IDE generations. The stdin context channel
+is planned as a follow-up enhancement.
+
+On pre-1.0 builds, `USER_PROMPT` is a JSON string
 `{ toolName, toolArgs, toolResult, toolSuccess }`. The IDE leaves `toolArgs`
 empty, so the adapter recovers the written file path from the `toolResult` text
 and drives the payload-free hooks (`runtime-compile`, `sync-statusline`) off the
 audit trail instead of a tool payload.
-
-> **Known boundary (IDE 1.x):** On IDE >= 1.0, the payload arrives on **stdin**
-> and `USER_PROMPT` is empty. The shipped adapter still reads only the 0.12
-> `USER_PROMPT` channel, so the two payload-dependent targets
-> (`audit-and-sensors`, `log-subagent`) fire but no-op safely on 1.x. The stdin
-> context channel lands in a follow-up release (#615).
 
 | Hook | Trigger (matcher) | Purpose |
 |------|-------------------|---------|
