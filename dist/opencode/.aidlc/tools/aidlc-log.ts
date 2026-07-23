@@ -8,6 +8,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+  auditBlockField,
   emitError,
   errorMessage,
   holdsAuditLock,
@@ -15,6 +16,7 @@ import {
   humanPresenceGuardDisabled,
   isAutonomousMode,
   parseCheckboxes,
+  readAllAuditShards,
   resolveProjectDir,
   stateFilePath,
   withAuditLock,
@@ -124,16 +126,54 @@ function handleDecision(args: string[]): void {
 //
 // Fires AFTER the user answers a question.
 
-// A gate-choice answer: the exact option labels an approval gate presents
-// (Approve / Request Changes / Accept as-is, plus their past-tense and
-// reject variants), with optional trailing feedback after the label. Only
-// these shapes are report-owned; any other details text is an ordinary
-// interview answer even when a gate is open (e.g. a clarifying question
-// asked at the gate before rejecting).
-const GATE_CHOICE_RE = /^(approved?\b|request(ed)? changes\b|accept(ed)? as.is\b|reject(ed)?\b)/;
+// An answer at an open approval gate belongs to a non-gate question only when
+// the audit stream proves that question was asked: a DECISION_RECORDED for this
+// stage after the current STAGE_AWAITING_APPROVAL, with no later
+// QUESTION_ANSWERED. This structural signal handles arbitrary user wording and
+// avoids guessing from gate-option words that may also begin substantive
+// answers. Caller holds the audit lock, so this snapshot cannot race an emit.
+function hasPendingDecisionAtGate(pd: string, stage: string): boolean {
+  const audit = readAllAuditShards(pd);
+  if (audit.length === 0) return false;
 
-function isGateChoice(details: string): boolean {
-  return GATE_CHOICE_RE.test(details.trim().toLowerCase());
+  const relevant = new Set([
+    "STAGE_AWAITING_APPROVAL",
+    "DECISION_RECORDED",
+    "QUESTION_ANSWERED",
+  ]);
+  const events = audit
+    .replace(/\r\n/g, "\n")
+    .split(/\n---\n/)
+    .map((block, position) => ({
+      event: auditBlockField(block, "Event") ?? "",
+      stage: auditBlockField(block, "Stage"),
+      timestamp: auditBlockField(block, "Timestamp") ?? "",
+      position,
+    }))
+    .filter((event) => relevant.has(event.event))
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) {
+        return a.timestamp < b.timestamp ? -1 : 1;
+      }
+      return a.position - b.position;
+    });
+
+  const gateOpen = events.findLastIndex(
+    (event) =>
+      event.event === "STAGE_AWAITING_APPROVAL" && event.stage === stage,
+  );
+  if (gateOpen === -1) return false;
+
+  let pending = false;
+  for (const event of events.slice(gateOpen + 1)) {
+    if (event.stage !== stage) continue;
+    if (event.event === "DECISION_RECORDED") {
+      pending = true;
+    } else if (event.event === "QUESTION_ANSWERED") {
+      pending = false;
+    }
+  }
+  return pending;
 }
 
 function handleAnswer(args: string[]): void {
@@ -165,15 +205,14 @@ function handleAnswer(args: string[]): void {
       : null;
 
     // Approval choices are lifecycle transitions, not interview answers. A
-    // conductor may nevertheless route a structured approval through `answer`
-    // before `report`; emitting QUESTION_ANSWERED here would consume the same
-    // HUMAN_TURN that approval needs. When the target stage is at [?] AND the
-    // details text is gate-choice shaped, acknowledge without emitting so the
-    // report command can commit the gate. The human-presence requirement is
-    // NOT waived: a gate-choice answer with no fresh HUMAN_TURN refuses, so a
-    // fabricated `answer && report rejected` chain (reject carries no presence
-    // guard of its own) breaks here instead of slipping through the skip.
-    // Non-gate answers keep the normal record path even at an open gate.
+    // conductor may nevertheless route an approval through `answer` before
+    // `report`; emitting QUESTION_ANSWERED here would consume the same
+    // HUMAN_TURN that approval needs. When the target stage is at [?] and no
+    // unresolved non-gate decision was recorded after the gate opened,
+    // acknowledge without emitting so the report command can commit the gate.
+    // The human-presence requirement is NOT waived: a redundant answer with no
+    // fresh HUMAN_TURN refuses, so a fabricated `answer && report rejected`
+    // chain (reject carries no presence guard of its own) breaks at the answer.
     const targetAtApprovalGate =
       content !== null &&
       parseCheckboxes(content).some(
@@ -181,7 +220,9 @@ function handleAnswer(args: string[]): void {
           checkbox.slug === flags.stage &&
           checkbox.state === "awaiting-approval",
       );
-    if (targetAtApprovalGate && isGateChoice(flags.details)) {
+    const pendingDecision =
+      targetAtApprovalGate && hasPendingDecisionAtGate(pd, flags.stage);
+    if (targetAtApprovalGate && !pendingDecision) {
       if (
         !isAutonomousMode(content) &&
         !humanPresenceGuardDisabled() &&
