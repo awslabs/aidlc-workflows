@@ -92,6 +92,7 @@ import {
 
 const BUN = process.execPath;
 const SWARM_TOOL = join(AIDLC_SRC, "tools", "aidlc-swarm.ts");
+const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 
 const fixtures: string[] = [];
 afterAll(() => {
@@ -172,6 +173,30 @@ function runRef(proj: string, args: string[]): RefResult {
   return { rc: res.status ?? -1, out: res.stdout ?? "" };
 }
 
+function logWorktreeReview(proj: string, unit: string): void {
+  const worktree = wtPath(proj, unit);
+  for (const terminal of [false, true]) {
+    const args = [
+      LOG_TOOL,
+      "review",
+      "--stage",
+      "functional-design",
+      "--unit",
+      unit,
+      "--reviewer",
+      "aidlc-architecture-reviewer-agent",
+      "--iteration",
+      "1",
+    ];
+    if (terminal) args.push("--verdict", "READY");
+    args.push("--project-dir", worktree);
+    const logged = spawnSync(BUN, args, { cwd: worktree, encoding: "utf-8" });
+    if (logged.status !== 0) {
+      throw new Error(`worktree review log failed: ${logged.stdout}${logged.stderr}`);
+    }
+  }
+}
+
 /** Concatenate every audit shard (audit/*.md) for the seeded record — the swarm
  *  tool writes SWARM_* rows to its own per-clone shard alongside fixture.md. */
 const auditBody = (p: string): string => {
@@ -234,6 +259,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
 
     // --- Case 6: finalize the genuinely converged alpha (claimed) — merges back
     // + emits SWARM_UNIT_CONVERGED, envelope converged:1, exit 0.
+    logWorktreeReview(proj, "alpha");
     const f = runRef(proj, [
       "finalize",
       "--batch",
@@ -337,6 +363,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     runRef(proj, ["prepare", "--batch", "2", "--units", "win,lie", "--base", "main"]);
     // `win` genuinely converges; `lie` does NOT (no impl) but is falsely claimed.
     writeFileSync(join(wtPath(proj, "win"), "win.txt"), "done\n");
+    logWorktreeReview(proj, "win");
     const f = runRef(proj, [
       "finalize",
       "--batch",
@@ -374,6 +401,7 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     const proj = makeSwarmFixture();
     runRef(proj, ["prepare", "--batch", "2", "--units", "wn,le", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "wn"), "wn.txt"), "done\n");
+    logWorktreeReview(proj, "wn");
     const f = runRef(proj, [
       "finalize",
       "--batch",
@@ -559,21 +587,22 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     const proj = makeSwarmFixture();
     runRef(proj, ["prepare", "--batch", "1", "--units", "orphan", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "orphan"), "impl.txt"), "done\n");
-    // Force a deterministic merge failure: delete the worktree's forked state
-    // mirror. Re-verify still passes (impl.txt is on disk), but `aidlc-state
-    // merge` refuses ("worktree state file does not exist"), so complete --merge
-    // fails and the unit lands in merge_failures.
-    rmSync(
-      join(
-        wtPath(proj, "orphan"),
-        "aidlc",
-        "spaces",
-        "default",
-        "intents",
-        DEFAULT_RECORD_DIR,
-        "aidlc-state.md",
-      ),
+    logWorktreeReview(proj, "orphan");
+    // Force a deterministic merge failure while keeping the intent record
+    // discoverable so the referee can read its review receipt. Replacing the
+    // forked state file with a directory makes `aidlc-state merge` fail when it
+    // reads the mirror, before any main-state mutation.
+    const orphanState = join(
+      wtPath(proj, "orphan"),
+      "aidlc",
+      "spaces",
+      "default",
+      "intents",
+      DEFAULT_RECORD_DIR,
+      "aidlc-state.md",
     );
+    rmSync(orphanState);
+    mkdirSync(orphanState);
     const f = runRef(proj, [
       "finalize",
       "--batch",
