@@ -75,6 +75,25 @@ const HARNESS_CAPABILITIES = {
     ideAgentTools: false,
     reviewerScopeRegistration: "codex-hooks",
   },
+  copilot: {
+    harnessDir: ".github",
+    onboarding: {
+      mode: "emit",
+      fills: "onboarding.fills.ts",
+      dist: "AGENTS.md",
+    },
+    rootFiles: [".gitignore", "AGENTS.md"],
+    skillsRoot: ".github/skills",
+    plugin: {
+      kind: "store",
+      manifestDir: ".github-plugin",
+      wiringFile: "hooks/hooks.json",
+    },
+    memoryInclude: "codex-env",
+    kiroAgentJson: false,
+    ideAgentTools: false,
+    reviewerScopeRegistration: "unsupported",
+  },
   "kiro-ide": {
     harnessDir: ".kiro",
     onboarding: {

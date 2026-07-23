@@ -133,8 +133,19 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
           "file://aidlc/spaces/default/memory/**/*.md",
         );
       } else if (harness.capabilities.memoryInclude === "codex-env") {
-        const config = readFileSync(join(harness.engineRoot, "config.toml"), "utf-8");
-        expect(config).toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
+        // codex-env is the emit-onboarding class (validateManifest ties it to
+        // onboarding.mode === "emit"). Two harnesses land here with distinct
+        // native includes: Codex ships a config.toml AIDLC_RULES_DIR seam;
+        // Copilot has no config file — it resolves the default-space method tree
+        // by convention and points the model at it through the auto-read root
+        // AGENTS.md prose. Both ship the emit()-rendered onboarding doc.
+        if (harness.name === "copilot") {
+          const agentsMd = readFileSync(harness.onboardingDist, "utf-8");
+          expect(agentsMd, harness.name).toContain("aidlc/spaces/<active-space>/memory/");
+        } else {
+          const config = readFileSync(join(harness.engineRoot, "config.toml"), "utf-8");
+          expect(config).toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
+        }
         expect(existsSync(harness.onboardingDist)).toBe(true);
       } else {
         // opencode: the instructions glob in the project-root opencode.json is

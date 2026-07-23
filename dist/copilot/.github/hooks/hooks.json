@@ -1,0 +1,74 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .github/hooks/aidlc-copilot-adapter.ts session-start"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .github/hooks/aidlc-copilot-adapter.ts user-prompt-submit"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .github/hooks/aidlc-copilot-adapter.ts pre-tool-use"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .github/hooks/aidlc-copilot-adapter.ts post-tool-use"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .github/hooks/aidlc-copilot-adapter.ts pre-compact"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .github/hooks/aidlc-copilot-adapter.ts subagent-stop"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun .github/hooks/aidlc-copilot-adapter.ts stop"
+          }
+        ]
+      }
+    ]
+  }
+}

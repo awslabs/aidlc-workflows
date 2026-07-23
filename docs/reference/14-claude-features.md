@@ -18,14 +18,14 @@ For hooks: see [Hooks and Tools](06-hooks-and-tools.md). For knowledge: see [Kno
 The AI-DLC concept is the constant; the primitive that carries it is the
 harness parameter. Add a column when you port to a new harness.
 
-| AI-DLC Concept | Claude Code | Kiro CLI | Kiro IDE | Codex CLI | opencode |
-|----------------|-------------|----------|----------|-----------|----------|
-| **Orchestrator entry** (`/aidlc` + runners) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`$aidlc`) | Command → skill (`/aidlc`; skills from `.aidlc/skills` via `skills.paths`) |
-| **Agent personas** (14 total) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | Persona `.md`; delegation targets add IDE `tools:` grants | `.codex/agents/` TOMLs | `.opencode/agents/*.md` (subagents) + persona `.md` |
-| **Automation** (audit, state, tracking) | Hooks via `settings.json` | Hooks via `agents/aidlc.json` | `.kiro/hooks/aidlc-*.json` (v2, IDE >= 1.0) + `.kiro/hooks/aidlc-*.kiro.hook` (legacy, pre-1.0) | Hooks via `.codex/hooks.json` (one adapter) | Adapter plugin (`.opencode/plugin/`) |
-| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<active-space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) |
-| **Project onboarding doc** | `CLAUDE.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` |
-| **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | Agent `.md` `tools:` frontmatter for delegates | `.codex/config.toml` (+ Starlark `rules/`) | `opencode.json` (project root) |
+| AI-DLC Concept | Claude Code | Kiro CLI | Kiro IDE | Codex CLI | opencode | GitHub Copilot |
+|----------------|-------------|----------|----------|-----------|----------|----------------|
+| **Orchestrator entry** (`/aidlc` + runners) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`/aidlc`) | Skills (`$aidlc`) | Command → skill (`/aidlc`; skills from `.aidlc/skills` via `skills.paths`) | Skills (`/aidlc`; skills from `.github/skills`) |
+| **Agent personas** (14 total) | `.claude/agents/*.md` | `.kiro/agents/*.json` + persona `.md` | Persona `.md`; delegation targets add IDE `tools:` grants | `.codex/agents/` TOMLs | `.opencode/agents/*.md` (subagents) + persona `.md` | `.github/agents/*.agent.md` (Copilot-native frontmatter) |
+| **Automation** (audit, state, tracking) | Hooks via `settings.json` | Hooks via `agents/aidlc.json` | `.kiro/hooks/aidlc-*.json` (v2, IDE >= 1.0) + `.kiro/hooks/aidlc-*.kiro.hook` (legacy, pre-1.0) | Hooks via `.codex/hooks.json` (one adapter) | Adapter plugin (`.opencode/plugin/`) | Hooks via `.github/hooks/hooks.json` (one adapter) |
+| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<active-space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) | `aidlc/spaces/<active-space>/memory/` (via the auto-read root `AGENTS.md`) |
+| **Project onboarding doc** | `CLAUDE.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` | `AGENTS.md` |
+| **Permissions / config** | `.claude/settings.json` | `.kiro/settings/cli.json` + agent config | Agent `.md` `tools:` frontmatter for delegates | `.codex/config.toml` (+ Starlark `rules/`) | `opencode.json` (project root) | `.agent.md` `tools:` allowlist + VS Code settings |
 
 The deterministic engine, state machine, audit log, stage graph, and swarm
 referee underneath are byte-identical across every harness — only the primitives

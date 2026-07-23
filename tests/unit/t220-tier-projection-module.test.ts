@@ -358,7 +358,10 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
   for (const harness of HARNESS_MATRIX) {
     test(`${harness.name}: no shipped agent .md carries a raw tier: line (all 14)`, () => {
       const dir = join(harness.engineRoot, "agents");
-      const mds = readdirSync(dir).filter((f) => f.endsWith("-agent.md"));
+      // Copilot transposes each persona to a Copilot-native `<slug>.agent.md`
+      // file; every other harness keeps the core `<slug>-agent.md` name.
+      const suffix = harness.name === "copilot" ? "-agent.agent.md" : "-agent.md";
+      const mds = readdirSync(dir).filter((f) => f.endsWith(suffix));
       expect(mds.length).toBe(14);
       for (const f of mds) {
         const raw = readFileSync(join(dir, f), "utf-8");

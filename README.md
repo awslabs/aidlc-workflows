@@ -58,6 +58,7 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 | **Claude Code** | `dist/claude/.claude/` + `dist/claude/aidlc/` → `<project>/` | `/aidlc` | [Quick Start](#quick-start) below + [Getting Started](docs/guide/01-getting-started.md). |
 | **Codex CLI** (≥ 0.145.0) | `dist/codex/` → `<project>/` (`.codex/` + `.agents/` + `aidlc/` + `AGENTS.md`) | `$aidlc` (or `/skills` → aidlc) | [Quick Start](#quick-start) below + [AI-DLC on Codex CLI](docs/guide/harnesses/codex-cli.md). |
 | **opencode** (≥ 1.17) | `dist/opencode/` → `<project>/` (`.aidlc/` + `.opencode/` + `aidlc/` + `opencode.json` + `AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on opencode](docs/guide/harnesses/opencode.md). |
+| **GitHub Copilot** (VS Code ≥ 1.102) | `dist/copilot/` → `<project>/` (`.github/` + `aidlc/` + `AGENTS.md`) | `/aidlc` | [Quick Start](#quick-start) below + [AI-DLC on GitHub Copilot](docs/guide/harnesses/copilot.md). |
 
 The deterministic engine — state machine, audit log, and the referee that coordinates parallel agents — is byte-identical across every harness; only the shell differs. Each section in the [Quick Start](#quick-start) installs one harness end to end, and its guide above goes deeper on prerequisites and differences.
 

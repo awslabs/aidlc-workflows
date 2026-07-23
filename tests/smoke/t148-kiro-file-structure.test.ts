@@ -214,14 +214,28 @@ describe("t148 dist/kiro file structure", () => {
         expect(fmToolsOf(join(IDE_AGENTS, f))).toBeUndefined();
       }
     }
-    // Leak guard: the grant is IDE-native and must not ship anywhere else.
-    const nonIdeAgentTrees = HARNESS_MATRIX.filter(
+    // Leak guard: the IDE-native read/write/shell grant must not ship anywhere
+    // else. Most harnesses carry NO agent `tools:` field at all (on Claude one
+    // would RESTRICT the agent to non-Claude tool names, breaking it). Copilot
+    // is the exception — its emitted .agent.md carries a Copilot-native tool
+    // allowlist (runTerminalCommand/editFiles/…) BY DESIGN, a different
+    // mechanism from the Kiro-IDE grant — so the guard there asserts the value
+    // is not the IDE grant rather than absent.
+    const IDE_GRANTS = [`["read", "write", "shell"]`, `["read", "shell"]`];
+    const nonIdeHarnesses = HARNESS_MATRIX.filter(
       (harness) => !harness.capabilities.ideAgentTools,
-    ).map((harness) => join(harness.engineRoot, "agents"));
-    expect(nonIdeAgentTrees.length).toBeGreaterThan(0);
-    for (const tree of nonIdeAgentTrees) {
+    );
+    expect(nonIdeHarnesses.length).toBeGreaterThan(0);
+    for (const harness of nonIdeHarnesses) {
+      const tree = join(harness.engineRoot, "agents");
       for (const f of readdirSync(tree).filter((n) => n.endsWith(".md"))) {
-        expect(fmToolsOf(join(tree, f))).toBeUndefined();
+        const tools = fmToolsOf(join(tree, f));
+        if (harness.name === "copilot") {
+          expect(tools, `${harness.name}/${f}`).not.toBe(undefined);
+          expect(IDE_GRANTS, `${harness.name}/${f}`).not.toContain(tools);
+        } else {
+          expect(tools, `${harness.name}/${f}`).toBeUndefined();
+        }
       }
     }
   });
