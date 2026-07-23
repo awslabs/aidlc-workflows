@@ -4,7 +4,7 @@
     {
       "name": "aidlc-stop",
       "trigger": "Stop",
-      "description": "Enforces the forwarding loop — reminds the agent to continue when workflow has pending work.",
+      "description": "Forwarding-loop audit on agent stop (advisory-only: the IDE's Stop trigger cannot block; enforcement relies on the conductor's own Stop protocol).",
       "action": { "type": "command", "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts stop" }
     }
   ]

@@ -31,7 +31,8 @@
 // plain stdout at exit 0, so the shim unwraps the JSON and prints the text.
 // stop emits {"decision":"block","reason":"..."} — passed through verbatim.
 //
-// Usage (registered in .kiro/hooks/*.kiro.hook):
+// Usage (registered in .kiro/hooks/*.json v2 hook files for IDE 1.x+, and in
+// .kiro/hooks/*.kiro.hook legacy files for pre-1.0 builds):
 //   bun .kiro/hooks/aidlc-kiro-adapter.ts <target>
 // where <target> ∈ session-start | audit-and-sensors | runtime-compile |
 //                  state-sync | log-subagent | stop | session-end
@@ -205,7 +206,9 @@ type Forward = { hook: string; input: Record<string, unknown> } | null;
 function buildForward(): Forward {
   switch (target) {
     case "session-start":
-      // promptSubmit carries no source discrimination — every submit is a
+      // Reached from the v2 SessionStart trigger (once per session on IDE
+      // 1.x+) or the legacy promptSubmit wiring (per prompt on pre-1.0, which
+      // carries no source discrimination). Either way every invocation is a
       // startup from the core hook's perspective; its state-file self-gate
       // makes this a no-op outside active workflows.
       return {
@@ -292,9 +295,25 @@ function buildForward(): Forward {
       // / `**Agent:** <name>`, #459). Recover that identity rather than
       // hardcoding "unknown", and forward the result text as the message so
       // SUBAGENT_COMPLETED carries the real agent and a snippet of its output.
-      // (The .kiro.hook already filters to invoke_sub_agent, so there is no
-      // tool-name gate here — dropping it is what revives the event on the IDE.)
+      // (The hook registration already filters to invoke_sub_agent, so there is
+      // no tool-name gate here — dropping it is what revives the event on the IDE.)
+      //
+      // An EMPTY payload is the IDE-1.x case (the payload arrives on stdin,
+      // which this adapter does not read, so USER_PROMPT — and with it
+      // toolResult — is empty). Forwarding it would fabricate a real
+      // SUBAGENT_COMPLETED row with `Agent Type: unknown` and no message.
+      // No-op instead, and record a VISIBLE drop so --doctor can surface the
+      // degradation until the stdin context channel lands. A NON-empty payload
+      // without an identity marker keeps the documented "unknown" fallback.
       const result = ide.toolResult ?? "";
+      if (result.trim() === "") {
+        recordHookDrop(
+          projectDir,
+          "kiro-adapter",
+          "log-subagent: empty tool payload (IDE 1.x delivers context on stdin, which this adapter does not read) — SUBAGENT_COMPLETED not recorded",
+        );
+        return null;
+      }
       return {
         hook: "aidlc-log-subagent.ts",
         input: {

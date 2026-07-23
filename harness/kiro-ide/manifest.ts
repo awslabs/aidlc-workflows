@@ -68,7 +68,10 @@ const manifest: HarnessManifest = {
     { src: "hooks/aidlc-block.json", dst: "hooks/aidlc-block.json" },
     { src: "hooks/aidlc-log-subagent.json", dst: "hooks/aidlc-log-subagent.json" },
     { src: "hooks/aidlc-runtime-compile.json", dst: "hooks/aidlc-runtime-compile.json" },
-    { src: "hooks/aidlc-session-end.json", dst: "hooks/aidlc-session-end.json" },
+    // No v2 session-end registration: the IDE's Stop trigger fires at the end
+    // of every assistant turn (not at conversation close), so a v2 registration
+    // would append a spurious SESSION_ENDED between prompts. session-end stays
+    // legacy-only (below) until the IDE exposes a genuine session-end event.
     { src: "hooks/aidlc-session-start.json", dst: "hooks/aidlc-session-start.json" },
     { src: "hooks/aidlc-stop.json", dst: "hooks/aidlc-stop.json" },
     { src: "hooks/aidlc-sync-statusline.json", dst: "hooks/aidlc-sync-statusline.json" },

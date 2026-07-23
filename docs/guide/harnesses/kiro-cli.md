@@ -21,9 +21,10 @@ configs, hook wiring, activation) differs.
 ## Install
 
 ```bash
-cp -r dist/kiro/.kiro your-project/.kiro
-cp -r dist/kiro/aidlc your-project/aidlc       # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
-cp dist/kiro/AGENTS.md your-project/AGENTS.md   # merge if you already have one
+mkdir -p your-project/.kiro your-project/aidlc
+cp -R dist/kiro/.kiro/. your-project/.kiro/
+cp -R dist/kiro/aidlc/. your-project/aidlc/    # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
+cp dist/kiro/AGENTS.md your-project/AGENTS.md  # merge if you already have one
 ```
 
 The `aidlc/` directory is the workspace shell — it ships the pre-built

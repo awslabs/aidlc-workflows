@@ -108,14 +108,15 @@ With bun in place, pick your harness below and expand it — each section instal
 **2. Set up your project**
 
 ```bash
-cp -r dist/kiro-ide/.kiro your-project/.kiro
-cp -r dist/kiro-ide/aidlc your-project/aidlc        # the workspace shell — a sibling of .kiro/, not inside it
+mkdir -p your-project/.kiro your-project/aidlc
+cp -R dist/kiro-ide/.kiro/. your-project/.kiro/
+cp -R dist/kiro-ide/aidlc/. your-project/aidlc/     # the workspace shell — a sibling of .kiro/, not inside it
 cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have one
 ```
 
 The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tree the engine reads; `/aidlc --doctor` fails its "workspace shell ready" check without it.
 
-Open `your-project/` in Kiro IDE. The install ships `.kiro/settings/cli.json` with `chat.defaultAgent` set to `aidlc` and registers the framework hooks in both formats: `.kiro/hooks/aidlc-*.json` (v2 schema for IDE >= 1.0) and `.kiro/hooks/aidlc-*.kiro.hook` (legacy format for pre-1.0 IDEs). In the chat panel, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start.
+Open `your-project/` in Kiro IDE. The `/aidlc` command loads the shipped conductor skill (the bundled `.kiro/settings/cli.json` is a Kiro CLI-only compatibility surface — the IDE ignores it and does not select a default agent from it). The install registers the framework hooks in both formats: `.kiro/hooks/aidlc-*.json` (v2 schema for IDE >= 1.0) and `.kiro/hooks/aidlc-*.kiro.hook` (legacy format for pre-1.0 IDEs). In the chat panel, run `/aidlc --doctor` to verify, then `/aidlc <description>` to start.
 
 > [!NOTE]
 > AI-DLC on Kiro works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**. On weaker models the conductor may skip optional stage steps (reviewer pass, learnings ritual) or rush approval gates.
@@ -135,8 +136,9 @@ kiro-cli login
 **2. Set up your project**
 
 ```bash
-cp -r dist/kiro/.kiro your-project/.kiro
-cp -r dist/kiro/aidlc your-project/aidlc       # the workspace shell — a sibling of .kiro/, not inside it
+mkdir -p your-project/.kiro your-project/aidlc
+cp -R dist/kiro/.kiro/. your-project/.kiro/
+cp -R dist/kiro/aidlc/. your-project/aidlc/    # the workspace shell — a sibling of .kiro/, not inside it
 cp dist/kiro/AGENTS.md your-project/AGENTS.md   # merge if you already have one
 cd your-project && kiro-cli chat
 ```
