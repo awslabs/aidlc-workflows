@@ -5143,6 +5143,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/unit/t149-copilot-doctor.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t184-stage-graph-drift.test.ts",
           "mechanism": "cli"
         },

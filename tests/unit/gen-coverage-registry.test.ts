@@ -835,6 +835,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t147-kiro-hook-adapter.test.ts",
     "unit/t148-copilot-adapter-dispatch.test.ts",
     "unit/t149-codex-hook-adapter.test.ts",
+    "unit/t149-copilot-doctor.test.ts",
     "unit/t155-template-override.test.ts",
     "unit/t158-memory-writer-reader-seam.test.ts",
     "unit/t168-statusline-orientation.test.ts",

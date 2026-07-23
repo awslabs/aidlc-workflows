@@ -1077,6 +1077,39 @@ function scopeFilenameMatchesDeclaredName(stem: string, name: string, plugin: st
   return stem === name || stem === `aidlc-${name}`;
 }
 
+// The agent slugs doctor cross-references stage frontmatter against. The
+// canonical loadAgents() requires the full AgentMetadata shape (name +
+// display_name), which every harness ships EXCEPT Copilot: its emitter
+// transposes each agent to Copilot-native `.agent.md` frontmatter carrying only
+// `name` (no display_name), so loadAgents() throws on a `.github` tree and would
+// pin doctor at a spurious "Schema validation: check failed" on a perfectly
+// valid Copilot install. Read the slugs straight from the `.agent.md`
+// frontmatter `name` there (the exact slugs stage frontmatter names); use the
+// canonical loader everywhere else so no other harness changes behavior.
+function doctorAgentSlugs(): string[] {
+  if (harnessDir() === ".github") {
+    const dir = agentsDir();
+    if (!existsSync(dir)) return [];
+    const slugs: string[] = [];
+    for (const f of readdirSync(dir).filter((n) => n.endsWith(".md")).sort()) {
+      const fm = frontmatterBlock(readFileSync(join(dir, f), "utf-8"));
+      const name = fm ? scalarField(fm, "name") : "";
+      if (name) slugs.push(name);
+    }
+    return slugs;
+  }
+  return loadAgents().map((a) => a.slug);
+}
+
+// Agent filename/name matcher. Copilot's transposed files are named
+// `<slug>.agent.md`, so the `.md`-stripped stem carries a trailing `.agent`
+// the declared `name` does not; accept that form on `.github` so a healthy
+// Copilot install does not render 14 phantom naming "mismatch" advisories.
+function agentFilenameMatchesDeclaredName(stem: string, name: string): boolean {
+  if (harnessDir() === ".github") return stem === name || stem === `${name}.agent`;
+  return stem === name;
+}
+
 function namingMismatches(
   dir: string,
   kind: "Agent" | "Scope",
@@ -1314,6 +1347,83 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       label: ".opencode/command/aidlc.md present (/aidlc entry point)",
       fix: "copy from `dist/opencode/.opencode/command/aidlc.md`",
     });
+  } else if (harness === ".github") {
+    // GitHub Copilot (VS Code agent mode, FR-007 / data-flows Flow 2.2): the
+    // install has no settings.json — its wiring is the emitted surface set under
+    // .github/. Validate the four required components so a broken copy is named
+    // precisely. These rows are ADDITIVE and gated on the detected .github
+    // harness dir; they never run for the other four harnesses (whose branches
+    // above own their own wiring checks). A failing row here names the specific
+    // missing component and, via the shared renderer + non-zero exit, gives CI
+    // and the user an actionable signal.
+    //
+    // Check A — agents dir present AND carries at least one *.agent.md. An empty
+    // (or absent) agents dir means the emitter never ran or the copy was partial.
+    const copilotAgentsDir = join(projectDir, ".github", "agents");
+    let agentMdCount = 0;
+    if (existsSync(copilotAgentsDir)) {
+      try {
+        agentMdCount = readdirSync(copilotAgentsDir).filter((f) =>
+          f.endsWith(".agent.md"),
+        ).length;
+      } catch {
+        // Unreadable dir → treated as no agent files below.
+      }
+    }
+    if (!existsSync(copilotAgentsDir)) {
+      results.push({
+        pass: false,
+        label: "Missing .github/agents/ directory",
+        fix: "copy the emitted `dist/copilot/.github/agents/` into your project's .github/agents/",
+      });
+    } else if (agentMdCount === 0) {
+      results.push({
+        pass: false,
+        label: "No *.agent.md files in .github/agents/",
+        fix: "re-run `bun scripts/package.ts copilot` and copy the emitted `dist/copilot/.github/agents/`",
+      });
+    } else {
+      results.push({
+        pass: true,
+        label: `.github/agents/ present (${agentMdCount} *.agent.md)`,
+      });
+    }
+
+    // Check B — the /aidlc orchestrator skill (sole user entry point).
+    const copilotSkill = join(projectDir, ".github", "skills", "aidlc", "SKILL.md");
+    results.push(
+      existsSync(copilotSkill)
+        ? { pass: true, label: ".github/skills/aidlc/SKILL.md present (/aidlc entry point)" }
+        : {
+            pass: false,
+            label: "Missing /aidlc skill at .github/skills/aidlc/SKILL.md",
+            fix: "copy from `dist/copilot/.github/skills/aidlc/SKILL.md`",
+          },
+    );
+
+    // Check C — the hook registry Copilot reads to wire lifecycle events.
+    const copilotHooksJson = join(projectDir, ".github", "hooks", "hooks.json");
+    results.push(
+      existsSync(copilotHooksJson)
+        ? { pass: true, label: ".github/hooks/hooks.json present (hook wiring)" }
+        : {
+            pass: false,
+            label: "Missing .github/hooks/hooks.json",
+            fix: "copy from `dist/copilot/.github/hooks/hooks.json`",
+          },
+    );
+
+    // Check D — the stdin adapter every hooks.json command dispatches through.
+    const copilotAdapter = join(projectDir, ".github", "hooks", "aidlc-copilot-adapter.ts");
+    results.push(
+      existsSync(copilotAdapter)
+        ? { pass: true, label: ".github/hooks/aidlc-copilot-adapter.ts present (hook adapter)" }
+        : {
+            pass: false,
+            label: "Missing hook adapter at .github/hooks/aidlc-copilot-adapter.ts",
+            fix: "copy from `dist/copilot/.github/hooks/aidlc-copilot-adapter.ts`",
+          },
+    );
   } else {
     const settingsPath = join(projectDir, harness, "settings.json");
     results.push({
@@ -1521,7 +1631,9 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     pushNamingAdvisory(
       results,
       "Agent",
-      namingMismatches(agentsDir(), "Agent", (stem, name) => stem === name),
+      namingMismatches(agentsDir(), "Agent", (stem, name) =>
+        agentFilenameMatchesDeclaredName(stem, name),
+      ),
     );
   } catch (e) {
     results.push({
@@ -2433,7 +2545,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   try {
     const stagesDir = resolveHarnessPath(["aidlc-common", "stages"]);
     const graph = loadStageGraphAll();
-    const agentSlugs = loadAgents().map((a) => a.slug);
+    const agentSlugs = doctorAgentSlugs();
     const schemaFails: { slug: string; errors: string[] }[] = [];
     let attempted = 0;
     for (const stage of graph) {
