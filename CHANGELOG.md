@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.12] - 2026-07-27
+
+Adds **GitHub Copilot** as a supported harness. The framework now renders natively onto Copilot in VS Code agent mode from the same harness-neutral core, joining Claude Code, Kiro CLI, Kiro IDE, Codex CLI, and opencode. **Upgrade:** copy `dist/copilot/` into your project (the `.github/` tree plus the root `AGENTS.md` and `aidlc/` shell), then run `/aidlc` in the Copilot chat view; verify with `/aidlc --doctor`.
+
+* New harness guide `docs/guide/harnesses/copilot.md` covers prerequisites (VS Code 1.102+ for agent mode and hooks, a GitHub Copilot subscription with agent mode enabled, and bun on PATH), installation into the `.github/` layout, invoking `/aidlc` in Copilot chat, and running `/aidlc --doctor`.
+* The supported-harness lists across `docs/` and `README.md` now include GitHub Copilot alongside the existing five harnesses.
+
 ## [2.5.11] - 2026-07-24
 
 Intent Capture now keeps generated intent and stakeholder claims grounded in the user's description, confirmed answers, workflow-selected scope, or explicitly registered memory. Unsupported content is omitted, elicited, or surfaced as a human-owned assumption instead of being presented as fact. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated stage, Product Lead reviewer contract, and `claim-sources` sensor are installed.
@@ -40,6 +47,7 @@ Approval gates no longer deadlock when a conductor redundantly routes the human'
 * `aidlc-log.ts answer --stage <slug>` now returns `{"skipped":"QUESTION_ANSWERED",...,"reason":"approval-gate-report-owned"}` when that same stage is at `[?]` and no unresolved `DECISION_RECORDED` follows the current gate-open; it emits no answer event and exits successfully so any existing `answer && report` chain can recover regardless of how the approval was phrased. A non-gate question logged after the gate makes its next answer record exactly, even when the answer begins with a gate word such as "Approve" or "Reject".
 * Approval-gate instructions now explicitly reserve `aidlc-log.ts decision` / `answer` for non-gate questions and direct every approval or rejection through `aidlc-orchestrate.ts report`.
 * Human-presence regression coverage now pins the successful redundant-answer path, the rejection-path chain, the no-human refusal, and the rule that an ordinary interview answer still consumes the turn before a later gate.
+
 ## [2.5.7] - 2026-07-23
 
 Fixes a Kiro IDE regression that silently disabled the agent-stop hooks: the forwarding-loop reminder and `SESSION_ENDED` never ran, because the IDE delivers an empty `USER_PROMPT` on agent stop and the adapter's entry guard then waited on stdin, which Kiro IDE opens but never writes. Hooks on prompt submit and after tool use were unaffected (the IDE populates `USER_PROMPT` for those events). Verified live on Kiro IDE against both the broken and fixed adapter. **Upgrade:** re-copy your `dist/<harness>/` shell into the project (on Kiro IDE the fix is in `.kiro/hooks/aidlc-kiro-adapter.ts` and `.kiro/tools/aidlc.ts`).

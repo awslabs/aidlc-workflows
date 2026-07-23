@@ -2,16 +2,16 @@
 
 ## 🚀 **Announcing 2.0 (GA)**
 
-AI-DLC Workflows 2.0 is now **generally available**. The new version makes autonomous software development practical by turning AI agents into verifiable, self-correcting engineering workflows — one harness-neutral core, rendered natively across Claude Code, Kiro IDE, Kiro CLI, Codex CLI, and opencode.
+AI-DLC Workflows 2.0 is now **generally available**. The new version makes autonomous software development practical by turning AI agents into verifiable, self-correcting engineering workflows — one harness-neutral core, rendered natively across Claude Code, Kiro IDE, Kiro CLI, Codex CLI, opencode, and GitHub Copilot.
 
 > [!NOTE]
 > Interfaces, stage definitions, the agent roster, and the install model are stable, but we will continue to optimize based on feedback; pin a known-good version for anything you depend on, and review all generated output before you act on it. See the [roadmap](https://awslabs.github.io/aidlc-workflows/roadmap.html) for what's shipped, in flight, and planned.
 
-A native implementation of the **AI-DLC methodology** (AI-Driven Development Life Cycle) that runs on **many harnesses from one source of truth** — today Claude Code, Kiro IDE, Kiro CLI, Codex CLI, and opencode, and any capable harness you port it to. Run a full software-development lifecycle with a 14-agent roster — 11 domain experts, 2 review-only agents, and the adaptive-workflows composer — working through a 32-stage workflow, with you approving every gate.
+A native implementation of the **AI-DLC methodology** (AI-Driven Development Life Cycle) that runs on **many harnesses from one source of truth** — today Claude Code, Kiro IDE, Kiro CLI, Codex CLI, opencode, and GitHub Copilot, and any capable harness you port it to. Run a full software-development lifecycle with a 14-agent roster — 11 domain experts, 2 review-only agents, and the adaptive-workflows composer — working through a 32-stage workflow, with you approving every gate.
 
 The methodology lives once, in a harness-neutral `core/`; each harness adds a thin surface that decides how it shows up on that harness. So you edit the methodology in one place, and every harness distribution is generated from it — no harness gets special treatment. (See [Repository layout](#repository-layout) for how the pieces fit together.)
 
-![version](https://img.shields.io/badge/version-2.5.11-blue)
+![version](https://img.shields.io/badge/version-2.5.12-blue)
 ![license](https://img.shields.io/badge/license-MIT--0-green)
 ![Kiro IDE](https://img.shields.io/badge/harness-Kiro%20IDE-orange)
 ![Kiro CLI](https://img.shields.io/badge/harness-Kiro%20CLI-orange)
@@ -47,7 +47,7 @@ Ad-hoc AI coding works until the project gets real. Then context drifts between 
 
 ## Methodology and implementation
 
-**AI-DLC is a methodology** — a structured, gated approach to AI-driven software development, defined by AWS (see the [blog post](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/) and [method paper](https://prod.d13rzhkk8cj2z0.amplifyapp.com/) under [References](#references)). **This repository is its native, multi-harness implementation** — the methodology rendered as skills, agents, hooks, and tools from one harness-neutral `core/`, so it runs natively inside Claude Code, Kiro IDE, Kiro CLI, Codex CLI, opencode, or any capable harness you port it to. The methodology is the *what*; each harness distribution is the *how* for one runtime, and every distribution is generated from the same source.
+**AI-DLC is a methodology** — a structured, gated approach to AI-driven software development, defined by AWS (see the [blog post](https://aws.amazon.com/blogs/devops/ai-driven-development-life-cycle/) and [method paper](https://prod.d13rzhkk8cj2z0.amplifyapp.com/) under [References](#references)). **This repository is its native, multi-harness implementation** — the methodology rendered as skills, agents, hooks, and tools from one harness-neutral `core/`, so it runs natively inside Claude Code, Kiro IDE, Kiro CLI, Codex CLI, opencode, GitHub Copilot, or any capable harness you port it to. The methodology is the *what*; each harness distribution is the *how* for one runtime, and every distribution is generated from the same source.
 
 ## Pick your harness
 
