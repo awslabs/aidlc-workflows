@@ -29,15 +29,20 @@ For each deliverable, the sensor verifies:
 - a `## Assumptions & Open Questions` section exists
 - every substantive paragraph, list item, and table data row has an inline
   `[desc]`, `[scope]`, `[Q<n>]`, `[memory:<id>]`, or `[assumption]` tag
-- question and memory tags resolve to filled answers or registered sources in
-  the sibling `intent-capture-questions.md`
+- source-register entries are visible Markdown list items, `[desc]` and
+  `[scope]` exactly match `aidlc-state.md`, and memory entries exactly match a
+  visible rule under the cited active-memory H2
+- question tags resolve to visible filled answers in the sibling
+  `intent-capture-questions.md`
 - `[scope]` is used only for a workflow-selected Initial Scope Signal
 - `[assumption]` appears only in the assumptions section
-- retained assumptions have an answered `## Assumption Confirmation`
+- retained assumptions exactly match entries under an answered
+  `## Assumption Confirmation`
 
-The sensor excludes scaffolding and reviewer-added `## Review` content. It
-validates citation shape and resolution only; the stage's adversarial reviewer
-judges whether the cited source actually supports the claim.
+The sensor excludes scaffolding, fenced code, HTML comments, and reviewer-added
+`## Review` content. It validates citation shape and resolution only; the
+stage's adversarial reviewer judges whether the cited source actually supports
+the claim.
 
 ## Failure mode
 

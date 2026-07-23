@@ -58,7 +58,7 @@ Five manifests ship under `.claude/sensors/`, each prefixed `aidlc-`:
 
 | Manifest | Fires on | Checks |
 |----------|----------|--------|
-| `aidlc-claim-sources.md` | Intent Capture record-dir output | Every Intent Capture claim carries a resolvable source tag, each deliverable surfaces assumptions, and retained assumptions have explicit human confirmation |
+| `aidlc-claim-sources.md` | Intent Capture record-dir output | Every Intent Capture claim carries a resolvable source tag; registered description, scope, and memory values match authoritative inputs; retained assumptions exactly match explicit human confirmation |
 | `aidlc-required-sections.md` | record-dir markdown output | The output carries the required H2 headings — a generic content-shape check |
 | `aidlc-upstream-coverage.md` | record-dir markdown output | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
 | `aidlc-linter.md` | `.ts` / `.js` code output | Wraps your configured linter (ESLint by default) |

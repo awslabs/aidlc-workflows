@@ -149,7 +149,7 @@ Five sensors ship with the framework:
 
 | Sensor | Fires on | Checks |
 |--------|----------|--------|
-| `claim-sources` | Intent Capture record-dir outputs | Every claim has a source tag that resolves to the stage's description, workflow scope, answered questions, or memory register; retained assumptions are surfaced and explicitly confirmed |
+| `claim-sources` | Intent Capture record-dir outputs | Every claim has a visible source tag; registered description, workflow scope, and memory text match authoritative inputs; retained assumptions exactly match explicit confirmation |
 | `required-sections` | Any record-dir markdown output | The output contains the required H2 headings (a generic content-shape check) |
 | `upstream-coverage` | Any record-dir markdown output | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
 | `linter` | `.ts` / `.js` code outputs | Wraps your configured linter (ESLint by default) |

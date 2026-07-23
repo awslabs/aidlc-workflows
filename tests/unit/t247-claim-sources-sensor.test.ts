@@ -8,6 +8,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -38,6 +39,32 @@ function makeStageDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "aidlc-t247-"));
   tempDirs.push(dir);
   cpSync(FIXTURE, dir, { recursive: true });
+  const memoryDir = join(dir, "aidlc", "spaces", "default", "memory");
+  mkdirSync(memoryDir, { recursive: true });
+  writeFileSync(join(dir, "aidlc", "active-space"), "default\n", "utf-8");
+  writeFileSync(
+    join(dir, "aidlc-state.md"),
+    `# AI-DLC State Tracking
+
+## Project Information
+- **Project**: Build a local CLI that echoes supplied text.
+- **Scope**: poc
+
+## Workspace State
+- **Project Root**: ${dir}
+`,
+    "utf-8",
+  );
+  writeFileSync(
+    join(memoryDir, "project.md"),
+    `# Project-Level Rules
+
+## Forbidden
+
+- Do not add network access.
+`,
+    "utf-8",
+  );
   return dir;
 }
 
@@ -200,6 +227,27 @@ describe("t247 claim-sources sensor", () => {
     );
   });
 
+  test("a broader retained assumption cannot reuse a narrower confirmation", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "stakeholder-map.md",
+      "None.",
+      "- A procurement reviewer may be needed. [assumption]",
+    );
+    const questionsPath = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questionsPath,
+      `${readFileSync(questionsPath, "utf-8")}\n\n## Assumption Confirmation\n\n- A procurement reviewer may be needed for international purchases. [assumption]\n\nA. Accept assumptions\nB. Convert to follow-up questions\n\n[Answer]: A. Accept assumptions\n`,
+      "utf-8",
+    );
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "retained assumption is not listed in ## Assumption Confirmation",
+    );
+  });
+
   test("assumption tags outside the assumptions section fail", () => {
     const dir = makeStageDir();
     replaceInFile(
@@ -250,5 +298,85 @@ describe("t247 claim-sources sensor", () => {
     const result = run(dir);
     expect(result.pass).toBe(false);
     expect(result.findings.join("\n")).toContain("## Sources is missing [desc]");
+  });
+
+  test("source entries inside comments and code fences are ignored", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-capture-questions.md",
+      '- [desc] Initial description: "Build a local CLI that echoes supplied text."\n- [scope] Workflow-selected scope: `poc`.\n',
+      '<!-- - [desc] Initial description: "Build a local CLI that echoes supplied text." -->\n```markdown\n- [scope] Workflow-selected scope: `poc`.\n```\n',
+    );
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain("## Sources is missing [desc]");
+    expect(result.findings.join("\n")).toContain("## Sources is missing [scope]");
+  });
+
+  test("question headings and answers inside comments and fences are ignored", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "Output exactly matches the supplied text. [Q3]",
+      "Output exactly matches the supplied text. [Q99]",
+    );
+    const questionsPath = join(dir, "intent-capture-questions.md");
+    writeFileSync(
+      questionsPath,
+      `${readFileSync(questionsPath, "utf-8")}\n\n<!--\n## Q99. Fabricated comment question\n[Answer]: Fabricated answer\n-->\n\n\`\`\`markdown\n## Q99. Fabricated fenced question\n[Answer]: Fabricated answer\n\`\`\`\n`,
+      "utf-8",
+    );
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain("[Q99] has no filled answer");
+  });
+
+  test("description, scope, and memory entries must match authoritative inputs", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-capture-questions.md",
+      '"Build a local CLI that echoes supplied text."',
+      '"Build a hosted API."',
+    );
+    replaceInFile(
+      dir,
+      "intent-capture-questions.md",
+      "Workflow-selected scope: `poc`.",
+      "Workflow-selected scope: `enterprise`.",
+    );
+    replaceInFile(
+      dir,
+      "intent-capture-questions.md",
+      '"Do not add network access."',
+      '"Network access is allowed."',
+    );
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    const findings = result.findings.join("\n");
+    expect(findings).toContain(
+      "[desc] does not exactly match Project in aidlc-state.md",
+    );
+    expect(findings).toContain(
+      "[scope] does not exactly match Scope in aidlc-state.md",
+    );
+    expect(findings).toContain(
+      "[memory:M1] quoted rule does not exactly match an entry under ## Forbidden",
+    );
+  });
+
+  test("source tags hidden in comments or inline code do not ground a claim", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "The initiative provides a local command that echoes supplied text. <!-- [desc] --> `[Q1]`",
+    );
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain("claim block has no source tag");
   });
 });

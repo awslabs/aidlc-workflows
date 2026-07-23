@@ -124,7 +124,7 @@ function birth(proj: string, scope: string): RunResult {
 }
 
 function recordRequiredReview(proj: string, slug: string): void {
-  if (slug !== "rough-mockups") return;
+  if (slug !== "intent-capture" && slug !== "rough-mockups") return;
   const reviewed = run(LOG_TOOL, proj, [
     "review",
     "--stage",

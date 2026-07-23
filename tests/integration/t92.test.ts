@@ -546,6 +546,27 @@ describe("t92 Group B: PASSED real round-trip per sensor", () => {
 
   test("10a: claim-sources — grounded Intent Capture deliverables -> PASSED", () => {
     const proj = makeProj();
+    const memoryDir = join(proj, "aidlc", "spaces", "default", "memory");
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(join(proj, "aidlc", "active-space"), "default\n", "utf-8");
+    writeFileSync(
+      join(proj, "aidlc-docs", "aidlc-state.md"),
+      `# AI-DLC State Tracking
+
+## Project Information
+- **Project**: Build a local CLI that echoes supplied text.
+- **Scope**: poc
+
+## Workspace State
+- **Project Root**: ${proj}
+`,
+      "utf-8",
+    );
+    writeFileSync(
+      join(memoryDir, "project.md"),
+      "# Project-Level Rules\n\n## Forbidden\n\n- Do not add network access.\n",
+      "utf-8",
+    );
     for (const name of [
       "intent-capture-questions.md",
       "intent-statement.md",

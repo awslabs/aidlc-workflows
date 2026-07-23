@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { errorMessage } from "./aidlc-lib.ts";
 
 interface Flags {
@@ -27,7 +27,15 @@ interface SourceUniverse {
 	registered: Set<string>;
 	answeredQuestions: Set<string>;
 	assumptionsAccepted: boolean;
-	assumptionConfirmation: string;
+	acceptedAssumptions: Set<string>;
+	findings: string[];
+}
+
+interface RecordAuthority {
+	projectDescription: string;
+	scope: string;
+	projectRoot: string;
+	activeSpace: string;
 	findings: string[];
 }
 
@@ -35,6 +43,8 @@ const ASSUMPTIONS_HEADING = "Assumptions & Open Questions";
 const REVIEW_HEADING = "Review";
 const SOURCE_TAG_RE =
 	/\[(desc|scope|assumption|Q\d+|memory:[A-Za-z0-9][A-Za-z0-9._-]*)\]/g;
+const SOURCE_ENTRY_RE =
+	/^ {0,3}[-*+]\s+\[(desc|scope|memory:[A-Za-z0-9][A-Za-z0-9._-]*)\]\s+(.+?)\s*$/;
 
 function parseFlags(argv: string[]): Flags {
 	const flags: Flags = {};
@@ -56,20 +66,273 @@ function fail(message: string): never {
 	process.exit(1);
 }
 
-function sectionBody(body: string, heading: string): string | null {
-	const lines = body.split(/\r?\n/);
-	let collecting = false;
-	const collected: string[] = [];
-	for (const line of lines) {
-		const match = /^##\s+(.+?)\s*$/.exec(line);
-		if (match) {
-			if (collecting) break;
-			collecting = match[1] === heading;
+function visibleMarkdownLines(body: string): string[] {
+	const lines = body.replace(/^﻿/, "").replace(/\r\n/g, "\n").split("\n");
+	const visible: string[] = [];
+	let inComment = false;
+	let fence: { marker: "`" | "~"; length: number } | null = null;
+
+	for (const rawLine of lines) {
+		if (fence) {
+			const closing = /^ {0,3}([`~]+)[ \t]*$/.exec(rawLine);
+			if (
+				closing &&
+				closing[1][0] === fence.marker &&
+				closing[1].length >= fence.length
+			) {
+				fence = null;
+			}
+			visible.push("");
 			continue;
 		}
-		if (collecting) collected.push(line);
+
+		let line = "";
+		let cursor = 0;
+		while (cursor < rawLine.length) {
+			if (inComment) {
+				const end = rawLine.indexOf("-->", cursor);
+				if (end < 0) {
+					cursor = rawLine.length;
+					break;
+				}
+				inComment = false;
+				cursor = end + 3;
+				continue;
+			}
+
+			const start = rawLine.indexOf("<!--", cursor);
+			if (start < 0) {
+				line += rawLine.slice(cursor);
+				break;
+			}
+			line += rawLine.slice(cursor, start);
+			inComment = true;
+			cursor = start + 4;
+		}
+
+		const opening = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+		if (opening) {
+			fence = {
+				marker: opening[1][0] as "`" | "~",
+				length: opening[1].length,
+			};
+			visible.push("");
+			continue;
+		}
+		visible.push(line);
 	}
-	return collecting ? collected.join("\n") : null;
+
+	return visible;
+}
+
+function h2Heading(line: string): string | null {
+	const match = /^ {0,3}##(?:[ \t]+|$)(.*)$/.exec(line);
+	if (!match) return null;
+	return match[1].replace(/[ \t]+#+[ \t]*$/, "").trim();
+}
+
+function sectionsNamed(lines: string[], heading: string): string[][] {
+	const sections: string[][] = [];
+	let current: string[] | null = null;
+	for (const line of lines) {
+		const h2 = h2Heading(line);
+		if (h2 !== null) {
+			if (current !== null) sections.push(current);
+			current = h2 === heading ? [] : null;
+			continue;
+		}
+		if (current !== null) current.push(line);
+	}
+	if (current !== null) sections.push(current);
+	return sections;
+}
+
+function stateField(body: string, label: string): string {
+	const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return (
+		new RegExp(`^- \\*\\*${escaped}\\*\\*:\\s*(.*)$`, "m").exec(body)?.[1]?.trim() ??
+		""
+	);
+}
+
+function findRecordRoot(stageDir: string): string | null {
+	let cursor = resolve(stageDir);
+	for (;;) {
+		if (existsSync(join(cursor, "aidlc-state.md"))) return cursor;
+		const parent = dirname(cursor);
+		if (parent === cursor) return null;
+		cursor = parent;
+	}
+}
+
+function projectRootFor(recordRoot: string, stateBody: string): string {
+	if (basename(recordRoot) === "aidlc-docs") return dirname(recordRoot);
+
+	let cursor = recordRoot;
+	for (;;) {
+		if (basename(cursor) === "aidlc") return dirname(cursor);
+		const parent = dirname(cursor);
+		if (parent === cursor) break;
+		cursor = parent;
+	}
+
+	const configured = stateField(stateBody, "Project Root");
+	return configured ? resolve(configured) : "";
+}
+
+function activeSpaceFor(projectRoot: string, recordRoot: string): string {
+	const cursorPath = join(projectRoot, "aidlc", "active-space");
+	if (existsSync(cursorPath)) {
+		try {
+			return readFileSync(cursorPath, "utf-8").trim();
+		} catch {
+			return "";
+		}
+	}
+
+	const spacesRoot = join(projectRoot, "aidlc", "spaces");
+	const rel = relative(spacesRoot, recordRoot);
+	if (!rel.startsWith("..") && !rel.startsWith(sep)) {
+		const first = rel.split(sep)[0];
+		if (first && first !== ".") return first;
+	}
+	return "";
+}
+
+function loadRecordAuthority(stageDir: string): RecordAuthority {
+	const findings: string[] = [];
+	const recordRoot = findRecordRoot(stageDir);
+	if (!recordRoot) {
+		return {
+			projectDescription: "",
+			scope: "",
+			projectRoot: "",
+			activeSpace: "",
+			findings: ["cannot verify source register: aidlc-state.md was not found"],
+		};
+	}
+
+	let stateBody = "";
+	try {
+		stateBody = readFileSync(join(recordRoot, "aidlc-state.md"), "utf-8");
+	} catch (error) {
+		findings.push(
+			`cannot verify source register: failed to read aidlc-state.md: ${errorMessage(error)}`,
+		);
+	}
+
+	const projectDescription = stateField(stateBody, "Project");
+	const scope = stateField(stateBody, "Scope");
+	const projectRoot = projectRootFor(recordRoot, stateBody);
+	const activeSpace = projectRoot
+		? activeSpaceFor(projectRoot, recordRoot)
+		: "";
+	if (!projectDescription) {
+		findings.push("aidlc-state.md is missing Project authority for [desc]");
+	}
+	if (!scope) findings.push("aidlc-state.md is missing Scope authority for [scope]");
+	if (!projectRoot) {
+		findings.push("cannot resolve the project root for memory source validation");
+	}
+	if (!activeSpace) {
+		findings.push("cannot resolve the active space for memory source validation");
+	}
+
+	return {
+		projectDescription,
+		scope,
+		projectRoot,
+		activeSpace,
+		findings,
+	};
+}
+
+function parseQuotedValue(value: string): string | null {
+	if (!/^"(?:\\.|[^"\\])*"$/.test(value)) return null;
+	try {
+		const parsed = JSON.parse(value);
+		return typeof parsed === "string" ? parsed : null;
+	} catch {
+		return null;
+	}
+}
+
+function memoryRuleMatches(
+	id: string,
+	value: string,
+	authority: RecordAuthority,
+	findings: string[],
+): boolean {
+	const match = /^`([^`#]+)#([^`#]+)`:\s*("(?:\\.|[^"\\])*")$/.exec(value);
+	if (!match) {
+		findings.push(
+			`[${id}] must use \`aidlc/spaces/<space>/memory/<file>.md#<exact H2>\`: "<exact rule>"`,
+		);
+		return false;
+	}
+
+	const [, sourcePath, heading, quoted] = match;
+	const rule = parseQuotedValue(quoted);
+	if (rule === null) {
+		findings.push(`[${id}] has an invalid quoted rule`);
+		return false;
+	}
+	if (!authority.projectRoot || !authority.activeSpace) return false;
+
+	const expectedPrefix = `aidlc/spaces/${authority.activeSpace}/memory/`;
+	if (
+		!sourcePath.startsWith(expectedPrefix) ||
+		sourcePath.includes("\\") ||
+		sourcePath.split("/").includes("..")
+	) {
+		findings.push(
+			`[${id}] path must name a file under the active memory root ${expectedPrefix}`,
+		);
+		return false;
+	}
+
+	const memoryRoot = resolve(authority.projectRoot, expectedPrefix);
+	const sourceFile = resolve(authority.projectRoot, sourcePath);
+	if (
+		sourceFile !== memoryRoot &&
+		!sourceFile.startsWith(`${memoryRoot}${sep}`)
+	) {
+		findings.push(`[${id}] path escapes the active memory root`);
+		return false;
+	}
+	if (!existsSync(sourceFile)) {
+		findings.push(`[${id}] memory source does not exist: ${sourcePath}`);
+		return false;
+	}
+
+	let memoryBody = "";
+	try {
+		memoryBody = readFileSync(sourceFile, "utf-8");
+	} catch (error) {
+		findings.push(
+			`[${id}] failed to read memory source ${sourcePath}: ${errorMessage(error)}`,
+		);
+		return false;
+	}
+	const sections = sectionsNamed(visibleMarkdownLines(memoryBody), heading);
+	if (sections.length !== 1) {
+		findings.push(
+			`[${id}] memory source must contain exactly one ## ${heading} heading`,
+		);
+		return false;
+	}
+	const entries = sections[0]
+		.map((line) =>
+			line.replace(/^ {0,3}(?:[-*+]|\d+\.)\s+/, "").trim(),
+		)
+		.filter((line) => line.length > 0 && !/^>/.test(line));
+	if (!entries.includes(rule)) {
+		findings.push(
+			`[${id}] quoted rule does not exactly match an entry under ## ${heading}`,
+		);
+		return false;
+	}
+	return true;
 }
 
 function answerIsFilled(answer: string): boolean {
@@ -77,14 +340,17 @@ function answerIsFilled(answer: string): boolean {
 	return normalized.length > 0 && !/^_+$/.test(normalized);
 }
 
-function parseSourceUniverse(questionsPath: string): SourceUniverse {
+function parseSourceUniverse(
+	questionsPath: string,
+	stageDir: string,
+): SourceUniverse {
 	const findings: string[] = [];
 	if (!existsSync(questionsPath)) {
 		return {
 			registered: new Set(),
 			answeredQuestions: new Set(),
 			assumptionsAccepted: false,
-			assumptionConfirmation: "",
+			acceptedAssumptions: new Set(),
 			findings: [`questions file missing: ${questionsPath}`],
 		};
 	}
@@ -97,29 +363,73 @@ function parseSourceUniverse(questionsPath: string): SourceUniverse {
 			registered: new Set(),
 			answeredQuestions: new Set(),
 			assumptionsAccepted: false,
-			assumptionConfirmation: "",
+			acceptedAssumptions: new Set(),
 			findings: [
 				`failed to read questions file ${questionsPath}: ${errorMessage(error)}`,
 			],
 		};
 	}
 
+	const lines = visibleMarkdownLines(body);
+	const authority = loadRecordAuthority(stageDir);
+	findings.push(...authority.findings);
 	const registered = new Set<string>();
-	const sources = sectionBody(body, "Sources");
-	if (sources === null) {
+	const seenSources = new Set<string>();
+	const sourceSections = sectionsNamed(lines, "Sources");
+	if (sourceSections.length === 0) {
 		findings.push("questions file is missing ## Sources");
 	} else {
-		for (const match of sources.matchAll(
-			/\[(desc|scope|memory:[A-Za-z0-9][A-Za-z0-9._-]*)\]/g,
-		)) {
-			const id = match[1];
-			if (registered.has(id)) {
+		if (sourceSections.length > 1) {
+			findings.push("questions file has duplicate ## Sources sections");
+		}
+		for (const line of sourceSections[0]) {
+			const match = SOURCE_ENTRY_RE.exec(line);
+			if (!match) continue;
+			const [, id, value] = match;
+			if (seenSources.has(id)) {
 				findings.push(`duplicate source id [${id}] in ## Sources`);
 			}
-			registered.add(id);
+			seenSources.add(id);
+
+			let valid = false;
+			if (id === "desc") {
+				const desc = /^Initial description:\s*("(?:\\.|[^"\\])*")$/.exec(
+					value,
+				);
+				const parsed = desc ? parseQuotedValue(desc[1]) : null;
+				if (parsed === null) {
+					findings.push(
+						'[desc] must use Initial description: "<verbatim project description>"',
+					);
+				} else if (parsed !== authority.projectDescription) {
+					findings.push(
+						"[desc] does not exactly match Project in aidlc-state.md",
+					);
+				} else {
+					valid = true;
+				}
+			} else if (id === "scope") {
+				const scope =
+					/^Workflow-selected scope:\s*`([^`]+)`\.?$/.exec(value)?.[1] ??
+					"";
+				if (!scope) {
+					findings.push(
+						"[scope] must use Workflow-selected scope: `<scope>`.",
+					);
+				} else if (scope !== authority.scope) {
+					findings.push(
+						"[scope] does not exactly match Scope in aidlc-state.md",
+					);
+				} else {
+					valid = true;
+				}
+			} else {
+				valid = memoryRuleMatches(id, value, authority, findings);
+			}
+			if (valid) registered.add(id);
 		}
 		for (const required of ["desc", "scope"]) {
-			if (!registered.has(required)) {
+			if (!seenSources.has(required)) {
 				findings.push(`## Sources is missing [${required}]`);
 			}
 		}
@@ -127,28 +437,48 @@ function parseSourceUniverse(questionsPath: string): SourceUniverse {
 
 	const answeredQuestions = new Set<string>();
 	const seenQuestions = new Set<string>();
-	const questionMatches = [
-		...body.matchAll(/^##\s+Q(\d+)\b[^\r\n]*$/gm),
-	];
-	for (const match of questionMatches) {
-		const id = `Q${match[1]}`;
+	for (let index = 0; index < lines.length; index++) {
+		const heading = h2Heading(lines[index]);
+		const question = heading ? /^Q(\d+)\b/.exec(heading) : null;
+		if (!question) continue;
+		const id = `Q${question[1]}`;
 		if (seenQuestions.has(id)) {
 			findings.push(`duplicate question id ${id}`);
 		}
 		seenQuestions.add(id);
-		const start = (match.index ?? 0) + match[0].length;
-		const nextH2 = body.indexOf("\n## ", start);
-		const end = nextH2 >= 0 ? nextH2 : body.length;
-		const section = body.slice(start, end);
-		const answer = /^\[Answer\]:\s*(.*)$/m.exec(section)?.[1] ?? "";
+		let end = index + 1;
+		while (end < lines.length && h2Heading(lines[end]) === null) end++;
+		const answers = lines
+			.slice(index + 1, end)
+			.map((line) => /^\[Answer\]:\s*(.*)$/.exec(line)?.[1])
+			.filter((answer): answer is string => answer !== undefined);
+		if (answers.length > 1) {
+			findings.push(`duplicate [Answer]: entries for ${id}`);
+		}
+		const answer = answers[0] ?? "";
 		if (answerIsFilled(answer)) answeredQuestions.add(id);
+		index = end - 1;
 	}
 
-	const assumptionSection = sectionBody(body, "Assumption Confirmation");
-	const assumptionAnswer =
-		assumptionSection === null
-			? ""
-			: (/^\[Answer\]:\s*(.*)$/m.exec(assumptionSection)?.[1] ?? "");
+	const confirmationSections = sectionsNamed(lines, "Assumption Confirmation");
+	if (confirmationSections.length > 1) {
+		findings.push("questions file has duplicate ## Assumption Confirmation sections");
+	}
+	const confirmation = confirmationSections[0] ?? [];
+	const assumptionAnswers = confirmation
+		.map((line) => /^\[Answer\]:\s*(.*)$/.exec(line)?.[1])
+		.filter((answer): answer is string => answer !== undefined);
+	if (assumptionAnswers.length > 1) {
+		findings.push("duplicate [Answer]: entries for Assumption Confirmation");
+	}
+	const assumptionAnswer = assumptionAnswers[0] ?? "";
+	const acceptedAssumptions = new Set(
+		confirmation
+			.filter((line) => isListItem(line))
+			.filter((line) => sourceTags(line).includes("assumption"))
+			.map(normalizedAssumption)
+			.filter((entry) => entry.length > 0),
+	);
 
 	return {
 		registered,
@@ -156,7 +486,7 @@ function parseSourceUniverse(questionsPath: string): SourceUniverse {
 		assumptionsAccepted:
 			answerIsFilled(assumptionAnswer) &&
 			/^(?:A[.)]?\s*)?Accept assumptions\b/i.test(assumptionAnswer.trim()),
-		assumptionConfirmation: assumptionSection ?? "",
+		acceptedAssumptions,
 		findings,
 	};
 }
@@ -182,7 +512,7 @@ function claimBlocks(body: string): {
 	blocks: ClaimBlock[];
 	hasAssumptionsSection: boolean;
 } {
-	const lines = body.split(/\r?\n/);
+	const lines = visibleMarkdownLines(body);
 	const tableHeaders = new Set<number>();
 	for (let index = 1; index < lines.length; index++) {
 		if (isTableSeparator(lines[index]) && isTableLine(lines[index - 1])) {
@@ -195,7 +525,6 @@ function claimBlocks(body: string): {
 	let skipReview = false;
 	let hasAssumptionsSection = false;
 	let pending: string[] = [];
-	let inFence = false;
 
 	const flush = (): void => {
 		const text = pending.join("\n").trim();
@@ -211,24 +540,19 @@ function claimBlocks(body: string): {
 
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index];
-		const h2 = /^##\s+(.+?)\s*$/.exec(line);
-		if (h2) {
+		const h2 = h2Heading(line);
+		if (h2 !== null) {
 			flush();
-			section = h2[1];
+			section = h2;
 			skipReview = section === REVIEW_HEADING;
 			if (section === ASSUMPTIONS_HEADING) hasAssumptionsSection = true;
 			continue;
 		}
-		if (/^#{1,6}\s+/.test(line)) {
+		if (/^ {0,3}#{1,6}(?:[ \t]+|$)/.test(line)) {
 			flush();
 			continue;
 		}
-		if (/^\s*```/.test(line)) {
-			flush();
-			inFence = !inFence;
-			continue;
-		}
-		if (inFence || skipReview || /^\s*<!--/.test(line)) continue;
+		if (skipReview) continue;
 		if (line.trim().length === 0 || /^\s*---+\s*$/.test(line)) {
 			flush();
 			continue;
@@ -257,7 +581,8 @@ function claimBlocks(body: string): {
 }
 
 function sourceTags(text: string): string[] {
-	return [...text.matchAll(SOURCE_TAG_RE)].map((match) => match[1]);
+	const withoutInlineCode = text.replace(/(`+)([\s\S]*?)\1/g, "");
+	return [...withoutInlineCode.matchAll(SOURCE_TAG_RE)].map((match) => match[1]);
 }
 
 function normalizedAssumption(text: string): string {
@@ -303,9 +628,7 @@ function inspectDeliverable(
 				findings.push(`${location}: assumption/open question lacks [assumption]`);
 			} else if (
 				universe.assumptionsAccepted &&
-				!normalizedAssumption(universe.assumptionConfirmation).includes(
-					normalizedAssumption(block.text),
-				)
+				!universe.acceptedAssumptions.has(normalizedAssumption(block.text))
 			) {
 				findings.push(
 					`${location}: retained assumption is not listed in ## Assumption Confirmation`,
@@ -397,7 +720,7 @@ export function main(argv: string[]): void {
 	const questionsPath = resolve(
 		join(stageDir, `${flags.stage ?? "intent-capture"}-questions.md`),
 	);
-	const universe = parseSourceUniverse(questionsPath);
+	const universe = parseSourceUniverse(questionsPath, stageDir);
 	const findings = [...universe.findings];
 	let hasAssumptions = false;
 	for (const path of scanPaths) {

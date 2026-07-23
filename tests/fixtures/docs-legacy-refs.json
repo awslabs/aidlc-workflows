@@ -53,6 +53,11 @@
       "why": "shipped upstream-coverage sensor matches-glob value"
     },
     {
+      "file": "docs/reference/07-sensor-system.md",
+      "text": "| `aidlc-claim-sources.md` | `**/{aidlc-docs,intents}/**` |",
+      "why": "shipped claim-sources sensor matches-glob value"
+    },
+    {
       "file": "docs/guide/12-cli-commands.md",
       "text": "| Submodules | If a `.gitmodules` is present, reports how many submodule paths are declared and how many are uninitialized, naming `git submodule update --init --recursive` when any are (advisory - never fails) |",
       "why": "the `--init` is part of the canonical `git submodule update --init --recursive` remedy (the doctor Submodules row names it), NOT the retired aidlc `--init` command"

@@ -50,12 +50,19 @@ Load aidlc-architect-agent persona from `agents/aidlc-architect-agent.md` for te
 
 Create `<record>/ideation/intent-capture/intent-capture-questions.md`.
 
-Start the file with a `## Sources` register containing:
-- `[desc]` — the user's initial project description, quoted verbatim
-- `[scope]` — the workflow-selected scope from `aidlc-state.md`, explicitly
-  labeled as workflow metadata rather than product scope
-- One stable `[memory:M<n>]` id, source path + heading, and exact quoted rule
-  for each active-memory rule that will inform an artifact claim
+Start the file with a `## Sources` register. Every source is a top-level
+Markdown list item using exactly one of these forms:
+
+```markdown
+- [desc] Initial description: "<JSON-escaped verbatim project description>"
+- [scope] Workflow-selected scope: `<scope>`.
+- [memory:M<n>] `aidlc/spaces/<active-space>/memory/<file>.md#<exact H2 heading>`: "<JSON-escaped exact single-line rule>"
+```
+
+The sensor verifies `[desc]` and `[scope]` against `aidlc-state.md`. It resolves
+each memory path under the active space and requires the quoted rule to exactly
+match a visible entry under the named H2. Entries inside comments or code
+fences are not sources.
 
 The register is the complete permitted-source universe for this stage. Do not
 register background knowledge, common practice, or an inference as a source.
@@ -166,9 +173,10 @@ This stage's outputs are markdown artefacts under `<record>/ideation/intent-capt
 The imported sensors check those outputs:
 
 - **`claim-sources`** verifies every claim block has a resolvable source tag,
-  each artifact has `## Assumptions & Open Questions`, and retained assumptions
-  have a completed human confirmation. It validates structure and source
-  resolution, not whether a source semantically entails the claim.
+  source-register values match state and active memory, each artifact has
+  `## Assumptions & Open Questions`, and retained assumptions exactly match a
+  completed human confirmation. It validates structure and source resolution,
+  not whether a source semantically entails the claim.
 - **`required-sections`** verifies the output contains the registry default (≥2 H2 headings). Failure mode: missing headings emit `SENSOR_FAILED` with detail at `<record>/.aidlc-sensors/<stage-slug>/required-sections-<iso>.md`.
 - **`upstream-coverage`** verifies the output prose references each artefact declared in this stage's `consumes:` frontmatter. This stage declares no upstream artefacts; the sensor still runs but reports zero unreferenced inputs by default.
 

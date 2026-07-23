@@ -128,6 +128,13 @@ describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
     expect(stage).toContain("Do not invoke the reviewer");
 
     const reviewer = readFileSync(PRODUCT_LEAD, "utf-8");
+    expect(reviewer).toContain("## Intent Capture Grounding Review");
+    expect(reviewer).toContain(
+      "Apply this section only when reviewing `intent-capture`",
+    );
+    expect(reviewer).toMatch(
+      /Other stages do not\s+produce this source register or inline citation format/,
+    );
     expect(reviewer).toContain(
       "Does every substantive claim trace to a permitted source",
     );
