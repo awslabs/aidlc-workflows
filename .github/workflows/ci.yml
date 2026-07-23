@@ -10,6 +10,13 @@ on:
   pull_request:
     branches:
       - v2
+    # Run on PR open, on every push to the PR branch (synchronize), and on
+    # reopen. This is GitHub's default set for `pull_request`; declared
+    # explicitly so the re-run-on-modify behavior is unambiguous.
+    types:
+      - opened
+      - synchronize
+      - reopened
   workflow_dispatch:
 
 permissions:
