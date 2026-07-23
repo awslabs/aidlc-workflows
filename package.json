@@ -6,6 +6,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.adapters.json",
     "lint": "biome check --error-on-warnings core harness scripts plugins tests",
+    "test": "bun tests/run-tests.ts --smoke --unit",
     "check": "bun scripts/package.ts --check && bun run typecheck && bun run lint"
   },
   "description": "Dev-only tooling for the multi-harness AI-DLC framework. Generated distributions live under dist/<harness>/ and run via bun without requiring this private package.",
