@@ -112,10 +112,13 @@ function parseDocTable(): DocTable {
     const [num, label] = [c[0], c[1]];
     const body = c.slice(2);
     if (num === INIT_ROW_LABEL) {
+      if (initCells) throw new Error("duplicate collapsed initialization row");
       initCells = body;
     } else if (num === "" && label.includes("Total")) {
+      if (totals) throw new Error("duplicate **Total stages** footer row");
       totals = body.map((t) => Number.parseInt(t.replace(/\*/g, ""), 10));
     } else {
+      if (rows.has(num)) throw new Error(`duplicate stage row: ${num}`);
       rowNumbers.push(num);
       rows.set(num, { name: label, cells: body });
     }
@@ -135,7 +138,7 @@ describe("t244 stage-by-scope matrix doc drift guard", () => {
     expect(initStages.length).toBe(3);
     // The collapsed init-row label must match the actual init stage numbers from the graph.
     const initNums = initStages.map((s) => s.number);
-    expect(INIT_ROW_LABEL).toBe(initNums[0] + "\u2013" + initNums[initNums.length - 1]);
+    expect(INIT_ROW_LABEL).toBe(`${initNums[0]}\u2013${initNums[initNums.length - 1]}`);
     // Every grid column covers exactly the graph's stage set.
     const slugs = graph.map((s) => s.slug).sort();
     for (const scope of Object.keys(grid)) {
