@@ -10,7 +10,7 @@ Unblocks agent delegation on the Kiro harnesses (#601): every shipped model pin 
 * The authored conductor pin (`"model": "claude-opus-4.8"` in `agents/aidlc.json`, both Kiro harnesses) is removed - the conductor inherits the session model too.
 * `settings/cli.json` keeps ONLY the authored conditional effort default (`chat.modelDefaults["claude-opus-4.8"] -> xhigh`, applied when the session actually runs that model; inert otherwise and inert for spawns). The tier-derived `claude-sonnet-4.5 -> high` entry no longer ships.
 * The kiro projection machinery (`TIER_PROJECTIONS[].kiro`, `KIRO_TIER_EFFORT`, `kiroModelDefaults()`) stays in place, dormant, should a per-install-resolvable pinning mechanism appear.
-* Docs updated (`docs/reference/05-agent-system.md` tier table, `docs/guide/harnesses/kiro-cli.md`, `docs/guide/13-customization.md`). Claude Code, Codex, and opencode projections are unchanged. No command or flag changes; no breaking change for CI or scripts.
+* Docs updated across the guide, reference, and harness-engineering trees (`docs/reference/05-agent-system.md` tier table + roster observations, `docs/guide/harnesses/kiro-cli.md`, `docs/guide/13-customization.md` per-agent override surfaces - agent JSON on Kiro CLI, `.md` frontmatter on Kiro IDE, `docs/guide/06-agents.md`, `docs/guide/agents/architect-agent.md`, `docs/reference/agents/README.md`, `docs/reference/14-claude-features.md`, `docs/harness-engineering/03-adding-an-agent.md`): every tier model/effort claim is scoped per harness - on Kiro all tiers inherit the session model and effort. Claude Code, Codex, and opencode projections are unchanged. No command or flag changes; no breaking change for CI or scripts.
 
 ## [2.5.5] - 2026-07-22
 

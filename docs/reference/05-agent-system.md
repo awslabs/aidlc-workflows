@@ -91,7 +91,7 @@ The authored dial on every agent is `tier:` -- it names the KIND of work the per
 
 The projection per harness (`core/tools/aidlc-tiers.ts` is the single source of truth):
 
-| Tier | Claude Code (.md frontmatter) | Codex CLI (.toml) | Kiro CLI/IDE (agent JSON `"model"`) | Kiro cli.json `chat.modelDefaults` | opencode (.md frontmatter) |
+| Tier | Claude Code (.md frontmatter) | Codex CLI (.toml) | Kiro CLI/IDE (agent JSON `"model"`, CLI / `.md` frontmatter `model:`, IDE) | Kiro cli.json `chat.modelDefaults` | opencode (.md frontmatter) |
 |------|-------------------------------|-------------------|--------------------------------------|-------------------------------------|-----------------------------|
 | `judgment` | `model: inherit`, no `effort:` line | no `model`/`model_reasoning_effort` keys (config.toml session defaults apply) | field OMITTED (schema fallback: the user's default model) | no tier entry | no `model:`/`variant:` keys (opencode.json session defaults apply) |
 | `balanced` | `model: sonnet`, no `effort:` line | `model = "openai.gpt-5.4"`, no effort key | field OMITTED (see below) | no tier entry | `model: amazon-bedrock/global.anthropic.claude-sonnet-4-6`, no variant key |
@@ -137,7 +137,7 @@ access grant.
 
 **Observations:**
 - aidlc-architect-agent has the broadest stage involvement (9 stages across 3 phases).
-- Across the full 14-agent roster, nine agents carry the `judgment` tier and five step down (the two `balanced` reviewers plus the three `templated` planners); the stepped-down agents produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
+- Across the full 14-agent roster, nine agents carry the `judgment` tier and five step down on Claude Code, Codex, and opencode (the two `balanced` reviewers plus the three `templated` planners; on Kiro all tiers inherit the session model and effort, so no agent steps down there); the stepped-down agents produce reviews against explicit checklists or dominantly templated planning, CI/CD, and runbook work. The matrix above covers the 11 domain-expert agents.
 - aidlc-compliance-agent operates purely in an advisory capacity (4 support stages, no lead stages).
 - Six of 11 agents are expected to use Bash for CLI interaction.
 - Three agents are expected to use WebSearch for research tasks.
