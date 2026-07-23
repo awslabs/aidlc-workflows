@@ -43,10 +43,19 @@ const ASSUMPTIONS_HEADING = "Assumptions & Open Questions";
 const REVIEW_HEADING = "Review";
 const ACCEPT_ASSUMPTIONS_ANSWER = "A. Accept assumptions";
 const ACTIVE_MEMORY_FILES = new Set(["org.md", "team.md", "project.md"]);
+const NON_VISIBLE_HTML_ELEMENTS = new Set([
+	"code",
+	"pre",
+	"script",
+	"style",
+	"template",
+]);
 const SOURCE_TAG_RE =
 	/\[(desc|scope|assumption|Q\d+|memory:[A-Za-z0-9][A-Za-z0-9._-]*)\]/g;
 const SOURCE_ENTRY_RE =
 	/^ {0,3}[-*+]\s+\[(desc|scope|memory:[A-Za-z0-9][A-Za-z0-9._-]*)\]\s+(.+?)\s*$/;
+const REFERENCE_TITLE_RE =
+	/^ {0,3}(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\))[ \t]*$/;
 
 function parseFlags(argv: string[]): Flags {
 	const flags: Flags = {};
@@ -588,9 +597,213 @@ function claimBlocks(body: string): {
 	return { blocks, hasAssumptionsSection };
 }
 
+function isEscaped(text: string, index: number): boolean {
+	let slashes = 0;
+	for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor--) {
+		slashes++;
+	}
+	return slashes % 2 === 1;
+}
+
+function matchingDelimiter(
+	text: string,
+	start: number,
+	opening: "[" | "(",
+	closing: "]" | ")",
+): number {
+	let depth = 0;
+	let quote: "'" | '"' | null = null;
+	for (let index = start; index < text.length; index++) {
+		const char = text[index];
+		if (isEscaped(text, index)) continue;
+		if (quote) {
+			if (char === quote) quote = null;
+			continue;
+		}
+		if (
+			opening === "(" &&
+			depth === 1 &&
+			(char === '"' || char === "'") &&
+			/\s/.test(text[index - 1] ?? "")
+		) {
+			quote = char;
+			continue;
+		}
+		if (char === opening) {
+			depth++;
+		} else if (char === closing) {
+			depth--;
+			if (depth === 0) return index;
+		}
+	}
+	return -1;
+}
+
+interface HtmlTag {
+	end: number;
+	name: string;
+	closing: boolean;
+	selfClosing: boolean;
+	hidesContent: boolean;
+}
+
+function htmlTagAt(text: string, start: number): HtmlTag | null {
+	if (text[start] !== "<" || isEscaped(text, start)) return null;
+	const tail = text.slice(start);
+	const named = /^<(\/?)([A-Za-z][A-Za-z0-9-]*)\b/.exec(tail);
+	const autolink = /^<(?:https?:\/\/|mailto:|[^<>\s]+@)/i.test(tail);
+	if (!named && !autolink) return null;
+
+	let quote: "'" | '"' | null = null;
+	let end = -1;
+	for (let index = start + 1; index < text.length; index++) {
+		const char = text[index];
+		if (quote) {
+			if (char === quote && !isEscaped(text, index)) quote = null;
+			continue;
+		}
+		if (char === '"' || char === "'") {
+			quote = char;
+		} else if (char === ">") {
+			end = index;
+			break;
+		}
+	}
+	if (end < 0) return null;
+	if (!named) {
+		return {
+			end,
+			name: "",
+			closing: false,
+			selfClosing: true,
+			hidesContent: false,
+		};
+	}
+
+	const raw = text.slice(start, end + 1);
+	const closing = named[1] === "/";
+	const name = named[2].toLowerCase();
+	const hiddenAttribute =
+		/(?:^|\s)hidden(?:\s|=|\/?>)/i.test(raw) ||
+		/\saria-hidden\s*=\s*(?:"true"|'true'|true)(?:\s|\/?>)/i.test(raw) ||
+		/\sstyle\s*=\s*(?:"[^"]*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"]*"|'[^']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^']*')/i.test(
+			raw,
+		);
+	return {
+		end,
+		name,
+		closing,
+		selfClosing: /\/\s*>$/.test(raw),
+		hidesContent:
+			!closing &&
+			(NON_VISIBLE_HTML_ELEMENTS.has(name) || hiddenAttribute),
+	};
+}
+
+function visibleHtmlText(text: string): string {
+	let visible = "";
+	let hiddenElement = "";
+	let hiddenDepth = 0;
+	for (let index = 0; index < text.length; index++) {
+		const tag = htmlTagAt(text, index);
+		if (tag) {
+			if (hiddenElement && tag.name === hiddenElement) {
+				if (tag.closing) {
+					hiddenDepth--;
+					if (hiddenDepth === 0) hiddenElement = "";
+				} else if (!tag.selfClosing) {
+					hiddenDepth++;
+				}
+			} else if (!hiddenElement && tag.hidesContent && !tag.selfClosing) {
+				hiddenElement = tag.name;
+				hiddenDepth = 1;
+			}
+			index = tag.end;
+			continue;
+		}
+		if (!hiddenElement) visible += text[index];
+	}
+	return visible;
+}
+
+function withoutReferenceDefinitions(text: string): string {
+	const visible: string[] = [];
+	let mayContinueDefinition = false;
+	for (const line of text.split("\n")) {
+		if (mayContinueDefinition && REFERENCE_TITLE_RE.test(line)) {
+			visible.push("");
+			mayContinueDefinition = false;
+			continue;
+		}
+
+		const start = line.search(/\S/);
+		if (start >= 0 && start <= 3 && line[start] === "[") {
+			const labelEnd = matchingDelimiter(line, start, "[", "]");
+			if (labelEnd >= 0 && line[labelEnd + 1] === ":") {
+				visible.push("");
+				mayContinueDefinition = true;
+				continue;
+			}
+		}
+
+		visible.push(line);
+		mayContinueDefinition = false;
+	}
+	return visible.join("\n");
+}
+
+function visibleMarkdownLinkText(text: string): string {
+	let visible = "";
+	for (let index = 0; index < text.length; index++) {
+		const image =
+			text[index] === "!" &&
+			text[index + 1] === "[" &&
+			!isEscaped(text, index);
+		const link = text[index] === "[" && !isEscaped(text, index);
+		if (!image && !link) {
+			visible += text[index];
+			continue;
+		}
+
+		const labelStart = image ? index + 1 : index;
+		const labelEnd = matchingDelimiter(text, labelStart, "[", "]");
+		if (labelEnd < 0) {
+			visible += text[index];
+			continue;
+		}
+
+		let syntaxEnd = labelEnd;
+		if (text[labelEnd + 1] === "(") {
+			const destinationEnd = matchingDelimiter(text, labelEnd + 1, "(", ")");
+			if (destinationEnd < 0) {
+				visible += text[index];
+				continue;
+			}
+			syntaxEnd = destinationEnd;
+		} else if (text[labelEnd + 1] === "[") {
+			const referenceEnd = matchingDelimiter(text, labelEnd + 1, "[", "]");
+			if (referenceEnd < 0) {
+				visible += text[index];
+				continue;
+			}
+			syntaxEnd = referenceEnd;
+		} else if (!image) {
+			visible += text[index];
+			continue;
+		}
+
+		if (!image) visible += text.slice(labelStart + 1, labelEnd);
+		index = syntaxEnd;
+	}
+	return visible;
+}
+
 function sourceTags(text: string): string[] {
 	const withoutInlineCode = text.replace(/(`+)([\s\S]*?)\1/g, "");
-	return [...withoutInlineCode.matchAll(SOURCE_TAG_RE)].map((match) => match[1]);
+	const visibleText = visibleMarkdownLinkText(
+		withoutReferenceDefinitions(visibleHtmlText(withoutInlineCode)),
+	);
+	return [...visibleText.matchAll(SOURCE_TAG_RE)].map((match) => match[1]);
 }
 
 function normalizedAssumption(text: string): string {

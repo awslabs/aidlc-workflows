@@ -427,4 +427,61 @@ describe("t247 claim-sources sensor", () => {
     expect(result.pass).toBe(false);
     expect(result.findings.join("\n")).toContain("claim block has no source tag");
   });
+
+  for (const [label, replacement] of [
+    [
+      "Markdown link destination",
+      "The initiative provides a local command that echoes supplied text. [documentation](https://example.invalid?source=[desc]-[Q1])",
+    ],
+    [
+      "Markdown image metadata",
+      "The initiative provides a local command that echoes supplied text. ![hidden [desc] [Q1]](https://example.invalid/pixel.png)",
+    ],
+    [
+      "Markdown reference metadata",
+      'The initiative provides a local command that echoes supplied text. [documentation][evidence]\n[evidence]: https://example.invalid\n"hidden [desc] [Q1]"',
+    ],
+    [
+      "HTML attributes",
+      'The initiative provides a local command that echoes supplied text. <span title="[desc] [Q1]">documentation</span>',
+    ],
+    [
+      "hidden HTML content",
+      'The initiative provides a local command that echoes supplied text. <span hidden>[desc] [Q1]</span>',
+    ],
+    [
+      "HTML code content",
+      "The initiative provides a local command that echoes supplied text. <code>[desc] [Q1]</code>",
+    ],
+  ] as const) {
+    test(`source tags hidden in ${label} do not ground a claim`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        replacement,
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "claim block has no source tag",
+      );
+    });
+  }
+
+  test("source tags in a visible Markdown link label ground a claim", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+      "The initiative provides a local command that echoes supplied text. [Grounded by [desc] and [Q1]](https://example.invalid)",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(true);
+    expect(result.findings).toEqual([]);
+  });
 });
