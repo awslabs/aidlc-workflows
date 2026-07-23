@@ -45,6 +45,14 @@ const ARCH_REVIEWER = join(
   "agents",
   "aidlc-architecture-reviewer-agent.md",
 );
+const INTENT_CAPTURE = join(
+  REPO_ROOT,
+  "core",
+  "aidlc-common",
+  "stages",
+  "ideation",
+  "intent-capture.md",
+);
 
 describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
   test("stage-protocol §12a step 2 carries the shared adversarial contract", () => {
@@ -107,6 +115,25 @@ describe("t234 adversarial review contract pins (reviewer-as-verifier)", () => {
     expect(src).toContain("not grounds for NOT-READY");
     // The 2.2.17 identity-marker contract stays intact alongside the new section.
     expect(src).toContain("**Reviewer:** aidlc-product-lead-agent");
+  });
+
+  test("intent-capture binds product-lead review to the grounded artifact contract", () => {
+    const stage = readFileSync(INTENT_CAPTURE, "utf-8");
+    expect(stage).toContain("reviewer: aidlc-product-lead-agent");
+    expect(stage).toContain("reviewer_max_iterations: 2");
+    expect(stage).toMatch(/sensors:\n\s+- claim-sources/);
+    expect(stage).toContain("## Sources");
+    expect(stage).toContain("Every substantive claim block");
+    expect(stage).toContain("## Assumptions & Open Questions");
+    expect(stage).toContain("Do not invoke the reviewer");
+
+    const reviewer = readFileSync(PRODUCT_LEAD, "utf-8");
+    expect(reviewer).toContain(
+      "Does every substantive claim trace to a permitted source",
+    );
+    expect(reviewer).toContain(
+      "An unresolved citation or an unsourced claim presented as fact is",
+    );
   });
 
   test("architecture-reviewer persona restates the contract in domain voice", () => {

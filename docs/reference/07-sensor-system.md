@@ -11,7 +11,7 @@ frames both as control-plane inputs that the compile resolves into each
 stage node.
 
 This chapter covers the manifest *file format* — what a sensor manifest
-contains, how stages import sensors, and how the four shipped manifests
+contains, how stages import sensors, and how the five shipped manifests
 are configured. For the user-facing view of how sensors fire during a
 workflow, see [Rules and the Learning Loop](../guide/09-rules-and-the-learning-loop.md)
 in the User Guide.
@@ -95,7 +95,7 @@ timeout_seconds: 5                           # optional
 | `command` | ✓ | string | Canonical invocation prefix — each shipped sensor names its own per-sensor script (e.g. `bun .claude/tools/aidlc-sensor-required-sections.ts`). The dispatcher (`aidlc-sensor.ts`) appends `--stage <slug>` plus the file flag matching the sensor's input shape: `--output-path <path>` for document sensors, `--file-path <path>` for the code sensors (`linter`, `type-check`). |
 | `default_severity` | ✓ | enum | Only `advisory` is accepted today; `blocking` reserved for the future ralph-driver work. |
 | `description` | ✓ | string | One-line human description. |
-| `category` | optional | string | Free-form descriptive label (the four shipped manifests use `document-shape` and `code-quality`; not a closed enum). |
+| `category` | optional | string | Free-form descriptive label (the shipped manifests use `document-provenance`, `document-shape`, and `code-quality`; not a closed enum). |
 | `matches` | optional | glob string | Capability filter consumed by the PostToolUse hook at fire time. See [`matches` filter](#matches-filter) below. |
 | `input_schema` | optional | object | Advisory today; future LLM dispatch will use it as a templating contract. |
 | `output_schema` | optional | object | Advisory today; future LLM dispatch will use it as a parsing contract. |
@@ -173,7 +173,8 @@ property — see [Plane Architecture](02-plane-architecture.md)).
 | Stages | `sensors:` |
 |---|---|
 | 3 initialization (workspace-scaffold, workspace-detection, state-init) | `[]` (deterministic setup, no agent-authored markdown) |
-| 7 ideation, 8 inception, 7 operation markdown stages + `code-generation` | `[required-sections, upstream-coverage]` for markdown stages; `[linter, type-check]` for `code-generation` (code only) |
+| `intent-capture` | `[claim-sources, required-sections, upstream-coverage]` (`claim-sources` checks inline provenance and human-confirmed assumptions across the stage's deliverables) |
+| 6 other ideation, 8 inception, 7 operation markdown stages + `code-generation` | `[required-sections, upstream-coverage]` for markdown stages; `[linter, type-check]` for `code-generation` (code only) |
 | `build-and-test` | `[required-sections, upstream-coverage, type-check]` (linter intentionally omitted — build runs canonical lint) |
 | 5 construction-design (ci-pipeline, functional-design, infrastructure-design, nfr-design, nfr-requirements) | `[required-sections, upstream-coverage, linter, type-check]` (markdown design with code samples) |
 
@@ -195,6 +196,7 @@ the PostToolUse hook at fire time, not by the resolver at compile time.
 
 | Manifest | `matches` |
 |---|---|
+| `aidlc-claim-sources.md` | `**/{aidlc-docs,intents}/**` |
 | `aidlc-required-sections.md` | `**/{aidlc-docs,intents}/**` |
 | `aidlc-upstream-coverage.md` | `**/{aidlc-docs,intents}/**` |
 | `aidlc-linter.md` | `**/*.{ts,js}` |
@@ -203,9 +205,9 @@ the PostToolUse hook at fire time, not by the resolver at compile time.
 `matches` **is** the fire filter — it is not optional in practice. The hook
 compares the path being written against the glob and fires only on a match;
 an entry **without** a `matches` glob never fires at all (`aidlc-sensor-fire.ts`:
-`if (!entry.matches) continue`). All four shipped manifests therefore declare
-one — the two document-shape sensors scope to the artifact tree (the shipped
-manifests carry the `matches` value shown above), the two
+`if (!entry.matches) continue`). All five shipped manifests therefore declare
+one — the provenance and two document-shape sensors scope to the artifact tree
+(the shipped manifests carry the `matches` value shown above), the two
 code-quality sensors to their language globs. The compile resolver copies
 `matches` verbatim into the per-stage `sensors_applicable[]` entry; the hook
 reads the snapshotted value off the graph node.
@@ -345,8 +347,8 @@ is the one sanctioned stage-frontmatter edit: it grows the import list
 (immutable in shape, not in contents), never the `## Steps` / `## Sensors`
 / `## Learn` body.
 
-The four shipped manifests illustrate the variation these defaults
-later evolve into: `aidlc-required-sections.md` and
+The five shipped manifests illustrate the variation these defaults
+later evolve into: `aidlc-claim-sources.md`, `aidlc-required-sections.md`, and
 `aidlc-upstream-coverage.md` use `timeout_seconds: 5` with their
 artifact-tree `matches` glob (the value shown in the `matches` table above);
 `aidlc-linter.md` uses `30` with `matches: "**/*.{ts,js}"`;
@@ -397,5 +399,5 @@ is an author error that the parser rejects.
   at workflow start and read off the graph node at fire time. See
   [Plane Architecture](02-plane-architecture.md).
 
-The schema above plus the four shipped manifests in
+The schema above plus the five shipped manifests in
 `dist/claude/.claude/sensors/` are the working examples.

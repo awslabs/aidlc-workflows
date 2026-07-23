@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.11] - 2026-07-24
+
+Intent Capture now keeps generated intent and stakeholder claims grounded in the user's description, confirmed answers, workflow-selected scope, or explicitly registered memory. Unsupported content is omitted, elicited, or surfaced as a human-owned assumption instead of being presented as fact. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated stage, Product Lead reviewer contract, and `claim-sources` sensor are installed.
+
+* `intent-capture-questions.md` now records a `## Sources` register and asks explicitly about stakeholders, decision authority, communication needs, and whether the workflow-selected scope matches the intended product boundary.
+* `intent-statement.md` and `stakeholder-map.md` now require inline source tags plus `## Assumptions & Open Questions`; unselected answer options cannot become inferred requirements or exclusions.
+* Retained assumptions require a structured accept-or-follow-up decision before Product Lead review and the approval gate. Accepted assumptions remain labeled as assumptions downstream.
+* The new advisory `claim-sources` sensor checks every existing Intent Capture deliverable on each stage write, rejecting untagged or unresolved claims, misplaced assumptions, stale assumption confirmations, and missing source registers while excluding reviewer-added `## Review` content.
+* Approval & Handoff now declares `stakeholder-map` as a required consumed artifact, making the dependency visible to graph and upstream-coverage checks.
+
 ## [2.5.10] - 2026-07-23
 
 Restores hook firing on Kiro IDE >=1.0.1xx, where the IDE silently stopped executing the legacy `.kiro.hook` format the harness shipped (field-proven on 1.0.165: no `HUMAN_TURN` minting, no `SESSION_STARTED`, no artifact audit rows, no sensor firing). Eight of the nine Kiro IDE hooks now ship in both the legacy format (for pre-1.0 IDE builds) and the IDE's v2 hook schema (for 1.x+); `session-end` stays legacy-only (see below). Coexistence is safe: on pre-1.0 IDEs the v2 files are ignored, on 1.x+ only v2 fires (legacy files appear struck-through and never execute), no double-firing observed on any generation tested. **Upgrade:** copy the tree CONTENTS - `mkdir -p your-project/.kiro && cp -R dist/kiro-ide/.kiro/. your-project/.kiro/` - a plain `cp -r dist/kiro-ide/.kiro your-project/.kiro` nests a second `.kiro` inside your existing `.kiro/` and the IDE never sees the new hooks. Do NOT delete existing `.kiro/hooks/aidlc-*.kiro.hook` files (they serve pre-1.0 IDE builds). Do NOT click the IDE's per-hook "Migrate" button on aidlc hooks (the v2 versions are already shipped; an IDE-generated twin could double-fire).

@@ -1,9 +1,9 @@
-// covers: function:parseSensorManifest, function:validateSensorManifest, file:sensors/aidlc-required-sections.md, file:sensors/aidlc-upstream-coverage.md, file:sensors/aidlc-linter.md, file:sensors/aidlc-type-check.md
+// covers: function:parseSensorManifest, function:validateSensorManifest, file:sensors/aidlc-claim-sources.md, file:sensors/aidlc-required-sections.md, file:sensors/aidlc-upstream-coverage.md, file:sensors/aidlc-linter.md, file:sensors/aidlc-type-check.md
 //
-// t86 — sensor manifest schema for the 4 framework sensors + the legacy
+// t86 — sensor manifest schema for the 5 framework sensors + the legacy
 // negative-case fixtures. Migrated from tests/unit/t86-sensor-manifest-schema.sh
-// (TAP plan 28: Part 1 = 5 existence rows, Part 2 = 4 manifests × 5 frontmatter
-// rows = 20, Part 3 = 3 negative-fixture rejection rows).
+// (extended plan 34: Part 1 = 6 existence rows, Part 2 = 5 manifests × 5
+// frontmatter rows = 25, Part 3 = 3 negative-fixture rejection rows).
 //
 // Mechanism: none. This is a pure schema / structural check over shipped bytes
 // — no process boundary, no argv/exit/stdout seam, no LLM, zero tokens. The .sh
@@ -29,7 +29,7 @@
 //            - :26  tolerates UNKNOWN keys for forward-compat (so a stray
 //                   `applies_to:` is ignored, NOT rejected — see negative B)
 //   dist/claude/.claude/sensors/aidlc-{required-sections,upstream-coverage,
-//     linter,type-check}.md — the 4 shipped framework manifests.
+//     linter,type-check,claim-sources}.md — the 5 shipped framework manifests.
 //   tests/fixtures/v05-mr3-sensors-dir/malformed-{unknown-kind,empty-applies-to,
 //     missing-id}.md — legacy negative-case fixtures.
 //
@@ -53,7 +53,7 @@
 //
 // Old TAP -> new test parity (1:1, every .sh row -> a named expect()):
 //   .sh L42      Part1: .claude/sensors/ dir exists           -> "sensors/ directory exists"
-//   .sh L44-46   Part1: 4 manifest files exist                -> "each of the 4 framework manifests exists" [4 expects]
+//   .sh L44-46   Part1: framework manifest files exist        -> "each of the 5 framework manifests exists" [5 expects]
 //   .sh L90      Part2 check1 ×4: id matches filename stem     -> "<id>: real schema accepts it; id == filename stem"
 //   .sh L94      Part2 check2 ×4: kind == deterministic        -> (same per-manifest test, kind pin)
 //   .sh L102     Part2 check3 ×4: command per-sensor script    -> (same per-manifest test, command pin)
@@ -78,10 +78,11 @@ import {
 const SENSORS_DIR = join(AIDLC_SRC, "sensors");
 const NEG_DIR = join(FIXTURES_DIR, "v05-mr3-sensors-dir");
 
-// The 4 framework manifests, keyed by their expected frontmatter id. id MUST
+// The 5 framework manifests, keyed by their expected frontmatter id. id MUST
 // equal the filename stem minus the `aidlc-` prefix and the `.md` suffix
 // (filename↔id contract). Same roster as the .sh's SENSOR_NAMES.
 const SENSOR_NAMES = [
+  "claim-sources",
   "required-sections",
   "upstream-coverage",
   "linter",
@@ -107,16 +108,16 @@ function frontmatterHasAppliesTo(raw: string): boolean {
     .some((line) => /^applies_to:/.test(line));
 }
 
-describe("t86 sensor manifest schema (migrated from t86-sensor-manifest-schema.sh, plan 28)", () => {
+describe("t86 sensor manifest schema (extended from t86-sensor-manifest-schema.sh, plan 34)", () => {
   // ===========================================================================
-  // Part 1 — directory + file existence (5 .sh rows).
+  // Part 1 — directory + file existence (6 rows).
   // ===========================================================================
   test("sensors/ directory exists [.sh Part 1]", () => {
     expect(existsSync(SENSORS_DIR), `missing ${SENSORS_DIR}`).toBe(true);
     expect(statSync(SENSORS_DIR).isDirectory()).toBe(true);
   });
 
-  test("each of the 4 framework manifests exists [.sh Part 1 ×4]", () => {
+  test("each of the 5 framework manifests exists [Part 1 ×5]", () => {
     for (const name of SENSOR_NAMES) {
       const f = manifestPath(name);
       expect(existsSync(f), `missing sensors/aidlc-${name}.md`).toBe(true);
@@ -124,7 +125,7 @@ describe("t86 sensor manifest schema (migrated from t86-sensor-manifest-schema.s
   });
 
   // ===========================================================================
-  // Part 2 — per-manifest frontmatter shape (4 manifests × 5 checks = 20 rows).
+  // Part 2 — per-manifest frontmatter shape (5 manifests × 5 checks = 25 rows).
   // Each manifest gets ONE test() that runs the REAL validator (stronger than
   // the .sh's awk) and pins the five field literals the .sh asserted.
   // ===========================================================================
@@ -209,18 +210,18 @@ describe("t86 sensor manifest schema (migrated from t86-sensor-manifest-schema.s
     ).toThrow(/missing required field: id/);
   });
 
-  // .sh L36: plan 28. Re-count the assertion budget so a silently dropped
-  // manifest or negative case is caught (5 existence + 4×5 frontmatter + 3
-  // negatives = 28).
-  test("covers EXACTLY 28 assertions (TAP plan parity)", () => {
-    const PART1 = 1 + SENSOR_NAMES.length; // dir + 4 files = 5
-    const PART2 = SENSOR_NAMES.length * 5; // 4 manifests × 5 checks = 20
+  // Re-count the extended assertion budget so a silently dropped manifest or
+  // negative case is caught (6 existence + 5×5 frontmatter + 3 negatives = 34).
+  test("covers EXACTLY 34 assertions", () => {
+    const PART1 = 1 + SENSOR_NAMES.length; // dir + 5 files = 6
+    const PART2 = SENSOR_NAMES.length * 5; // 5 manifests × 5 checks = 25
     const PART3 = 3; // 3 negative-case fixtures
-    expect(PART1).toBe(5);
-    expect(PART2).toBe(20);
+    expect(PART1).toBe(6);
+    expect(PART2).toBe(25);
     expect(PART3).toBe(3);
-    expect(PART1 + PART2 + PART3).toBe(28);
+    expect(PART1 + PART2 + PART3).toBe(34);
     expect([...SENSOR_NAMES]).toEqual([
+      "claim-sources",
       "required-sections",
       "upstream-coverage",
       "linter",

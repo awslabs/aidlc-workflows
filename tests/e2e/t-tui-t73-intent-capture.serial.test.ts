@@ -41,7 +41,8 @@
 //         answers were written back, the thing the headless auto-approve faked),
 //       * a *intent*statement* artifact exists, is > 100 bytes, and has at least
 //         one markdown heading,
-//       * a *stakeholder* map artifact exists,
+//       * both deliverables carry source tags and an Assumptions & Open
+//         Questions section,
 //       * aidlc-state.md Completed counter == the number of `- [x]` lines
 //         (internal consistency invariant), Completed >= 4 (monotonic from the
 //         fixture's 3 + this stage), and Lifecycle Phase == IDEATION,
@@ -311,6 +312,9 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         const questionsBody = readFileSync(questionsFile as string, "utf8");
         const answerCount = (questionsBody.match(/\[Answer\]:/g) ?? []).length;
         expect(answerCount).toBeGreaterThan(0);
+        expect(questionsBody).toContain("## Sources");
+        expect(questionsBody).toContain("[desc]");
+        expect(questionsBody).toContain("[scope]");
 
         // .sh tests 4+5+6: a *intent*statement* artifact exists, > 100 bytes, with
         // at least one markdown heading. (The terminator already required it to
@@ -320,10 +324,20 @@ describe("t-tui-t73-intent-capture (answering the stage gate produces artifacts 
         const intentBody = readFileSync(intentFile as string, "utf8");
         expect(Buffer.byteLength(intentBody, "utf8")).toBeGreaterThan(100);
         expect(intentBody).toMatch(/^#/m);
+        expect(intentBody).toContain("## Assumptions & Open Questions");
+        expect(intentBody).toMatch(
+          /\[(?:desc|scope|Q\d+|memory:[A-Za-z0-9][A-Za-z0-9._-]*|assumption)\]/,
+        );
 
-        // .sh test 8: a *stakeholder* map artifact exists.
+        // .sh test 8: a *stakeholder* map artifact exists. The grounding
+        // contract additionally requires source tags and assumption surfacing.
         const stakeholderFile = findArtifact(icDir, ["stakeholder"]);
         expect(stakeholderFile).not.toBeNull();
+        const stakeholderBody = readFileSync(stakeholderFile as string, "utf8");
+        expect(stakeholderBody).toContain("## Assumptions & Open Questions");
+        expect(stakeholderBody).toMatch(
+          /\[(?:desc|scope|Q\d+|memory:[A-Za-z0-9][A-Za-z0-9._-]*|assumption)\]/,
+        );
 
         // --- state invariants (the .sh's tests 9, 11, 12) ---------------------
         const stateMd = readFileSync(seededStateFile(sandbox), "utf8");

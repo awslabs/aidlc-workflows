@@ -61,6 +61,7 @@ export const TOOLS = {
   runnerGen: "aidlc-runner-gen.ts",
   runtime: "aidlc-runtime.ts",
   sensor: "aidlc-sensor.ts",
+  sensorClaimSources: "aidlc-sensor-claim-sources.ts",
   sensorLinter: "aidlc-sensor-linter.ts",
   sensorRequiredSections: "aidlc-sensor-required-sections.ts",
   sensorTypeCheck: "aidlc-sensor-type-check.ts",
@@ -672,6 +673,7 @@ function resolveAlias(argv: string[]): Action | undefined {
   }
   if (head === "__sensor-script") {
     const scripts: Record<string, string> = {
+      "claim-sources": TOOLS.sensorClaimSources,
       linter: TOOLS.sensorLinter,
       "required-sections": TOOLS.sensorRequiredSections,
       "type-check": TOOLS.sensorTypeCheck,
@@ -867,6 +869,8 @@ async function loadDelegate(tool: string): Promise<DelegateModule | null> {
       return import("./aidlc-runtime.ts");
     case TOOLS.sensor:
       return import("./aidlc-sensor.ts");
+    case TOOLS.sensorClaimSources:
+      return import("./aidlc-sensor-claim-sources.ts");
     case TOOLS.sensorLinter:
       return import("./aidlc-sensor-linter.ts");
     case TOOLS.sensorRequiredSections:

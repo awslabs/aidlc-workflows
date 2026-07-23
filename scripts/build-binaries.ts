@@ -297,7 +297,13 @@ function sensorListGate(artifact: string): GateResult {
     .split(/\r?\n/)
     .map((line) => line.split("\t")[0])
     .filter(Boolean);
-  const expected = ["linter", "required-sections", "type-check", "upstream-coverage"];
+  const expected = [
+    "claim-sources",
+    "linter",
+    "required-sections",
+    "type-check",
+    "upstream-coverage",
+  ];
   return commandGate(
     "sensor-list",
     result,

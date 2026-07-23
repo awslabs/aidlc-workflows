@@ -6,7 +6,8 @@
 // zero subprocess, zero tokens).
 // Technique: example-based (real committed stage .md files are the fixtures).
 //
-// In-process migration of tests/integration/t43-stage-io-contracts.sh (TAP plan 19).
+// In-process migration of tests/integration/t43-stage-io-contracts.sh, extended
+// with the approval-handoff stakeholder-map edge (20 contract checks).
 // The .sh spawned `bun -e` once per stage via two helpers — get_inputs() and
 // get_outputs() — each of which imported parseStageFrontmatter, read a stage
 // .md file, and printed `obj.inputs` / `obj.outputs` ONLY when that field was a
@@ -35,7 +36,7 @@
 //     reverse-engineering / requirements-analysis files).
 //
 // Parity mapping (.sh assertion -> test below) is documented inline per block.
-// 19 old TAP assertions -> 19 expect-bearing tests.
+// 19 old TAP assertions plus the stakeholder-map edge -> 20 expect-bearing tests.
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
@@ -405,5 +406,22 @@ describe("state-init -> workspace classification edge", () => {
     const siIn = inp("state-init");
     expect(siIn).not.toBeNull();
     expect(siIn!).toMatch(/workspace|classification/i);
+  });
+});
+
+// ============================================================
+// Test 20: approval-handoff consumes the stakeholder map it reads in prose.
+// This keeps the artifact visible to the runtime dependency graph and the
+// upstream-coverage sensor.
+// ============================================================
+describe("intent-capture -> approval-handoff stakeholder edge", () => {
+  test("approval-handoff requires stakeholder-map", () => {
+    const fm = frontmatter("approval-handoff");
+    expect(fm).not.toBeNull();
+    const consumes = Array.isArray(fm?.consumes) ? fm.consumes : [];
+    expect(consumes).toContainEqual({
+      artifact: "stakeholder-map",
+      required: true,
+    });
   });
 });

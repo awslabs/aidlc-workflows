@@ -38,6 +38,7 @@ const TOOL_FILES = [
   "aidlc-orchestrate.ts",
   "aidlc-runner-gen.ts",
   "aidlc-runtime.ts",
+  "aidlc-sensor-claim-sources.ts",
   "aidlc-sensor-linter.ts",
   "aidlc-sensor-type-check.ts",
   "aidlc-state.ts",
@@ -174,6 +175,7 @@ describe("t227 tool entrypoint exports", () => {
       const result = runTool("aidlc-sensor.ts", ["list"], projectDir);
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
+      expect(result.stdout ?? "").toContain("claim-sources\tdeterministic");
       expect(result.stdout ?? "").toContain("required-sections\tdeterministic");
       expect(result.stdout ?? "").toContain("upstream-coverage\tdeterministic");
     } finally {

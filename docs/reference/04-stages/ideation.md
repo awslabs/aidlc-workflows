@@ -65,6 +65,7 @@ CONDITIONAL stages that do not apply to the current scope.
 | Condition        | ALWAYS -- first stage of every workflow; establishes the initiative's foundation |
 | Lead Agent       | aidlc-product-agent                                                          |
 | Support Agents   | aidlc-architect-agent (technical context)                                    |
+| Reviewer         | aidlc-product-lead-agent (source-grounding and product-quality review)       |
 | Mode             | inline                                                                 |
 | Completion Emoji | :bulb:                                                                 |
 
@@ -89,25 +90,28 @@ as seed context so the stage does not re-ask "what do you want to build?"
 
 1. **Load Agent Personas** -- Load aidlc-product-agent persona and knowledge. Load aidlc-architect-agent persona for technical context perspective.
 2. **Load Prior Context** -- Read user's project description. Check for existing artifacts. Load guardrails.
-3. **Generate Clarifying Questions** -- Create `<record>/ideation/intent-capture/intent-capture-questions.md` with questions covering business problem, customer, success metrics, initiative trigger, project type. Uses `[Answer]:` tag format with A-E options plus X (Other). Offers tri-mode question flow.
+3. **Generate Clarifying Questions** -- Create `<record>/ideation/intent-capture/intent-capture-questions.md` with a `## Sources` register for the initial description, workflow-selected scope, and any active-memory rules used. Ask about the business problem, customer, success metrics, initiative trigger, stakeholders, decision authority, communication needs, and whether the workflow-selected scope matches the intended product boundary. Uses `[Answer]:` tag format with A-E options plus X (Other). Offers tri-mode question flow.
 4. **Collect and Analyze Answers** -- Confirm all tags filled. Run ambiguity/contradiction analysis.
-5. **Generate Artifacts** -- Produce intent statement and stakeholder map.
-6. **Prepare Completion** -- Verify both artifacts. Do not edit state; report
+5. **Generate Grounded Artifacts** -- Produce the intent statement and stakeholder map. Every substantive paragraph, list item, and table data row carries an inline `[desc]`, `[scope]`, `[Q<n>]`, `[memory:<id>]`, or `[assumption]` tag. Both files include `## Assumptions & Open Questions`.
+6. **Resolve Assumptions** -- If either artifact retains an assumption, ask the user to accept it or convert it into follow-up questions. Acceptance preserves the assumption label; it does not promote the claim to fact.
+7. **Prepare Completion** -- Run Product Lead review, verify both artifacts, and report
    the gate outcome through `aidlc-orchestrate.ts`.
-7. **Present Completion & Request Approval** -- Standard 2-option gate.
+8. **Present Completion & Request Approval** -- Standard 2-option gate.
 
 ### Outputs
 
 | File                          | Contents                                                      |
 |-------------------------------|---------------------------------------------------------------|
-| `intent-statement.md`         | Problem Statement, Target Customer, Success Metrics, Initiative Trigger, Project Type, Initial Scope Signal |
-| `stakeholder-map.md`          | Key stakeholders and interests, decision-makers vs. influencers, communication requirements |
-| `intent-capture-questions.md` | Clarifying questions with `[Answer]:` tags (input artifact) |
+| `intent-statement.md`         | Source-tagged Problem Statement, Target Customer, Success Metrics, Initiative Trigger, and workflow-selected vs. user-confirmed Initial Scope Signal; mandatory assumptions section |
+| `stakeholder-map.md`          | Source-tagged stakeholders and interests, decision-makers vs. influencers, communication requirements; mandatory assumptions section |
+| `intent-capture-questions.md` | Permitted-source register, clarifying questions with `[Answer]:` tags, and assumption confirmation when needed |
 
 ### Notes
 
 - First stage of every workflow. No prior artifacts other than user input.
 - Freeform intent in `$ARGUMENTS` is used as seed context.
+- Unselected options are not exclusions or requirements. Unsupported content is
+  omitted, elicited in a follow-up, or retained only as an explicit assumption.
 - The intent statement feeds every subsequent Ideation stage and carries forward into Inception.
 
 ---

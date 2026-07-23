@@ -1,6 +1,6 @@
 // covers: subcommand:aidlc-sensor:list
 //
-// CLI-contract port of tests/integration/t93-sensor-list-describe.sh (TAP plan 12),
+// CLI-contract port of tests/integration/t93-sensor-list-describe.sh (extended plan 13),
 // mechanism = cli. Equal-or-stronger migration: every .sh assertion that
 // shelled out to `bun aidlc-sensor.ts list|describe|--help|-h` (or bare, no
 // subcommand) is preserved by SPAWNING the real CLI via node:child_process
@@ -16,7 +16,7 @@
 // (dist/claude/.claude/sensors/), resolved by loadSensors() as
 // __FILE_DIR/../sensors (aidlc-graph.ts:168) — independent of cwd, so no temp
 // project, no fixtures, no audit.md. This port therefore writes NOTHING to disk
-// and seeds nothing; it doubles as a forward-check that the 4 shipped manifests
+// and seeds nothing; it doubles as a forward-check that the 5 shipped manifests
 // stay parseable, exactly as the .sh comment (t93:17-19) states.
 //
 // COVERS ID: this .cli file credits the `aidlc-sensor list` subcommand unit
@@ -26,14 +26,14 @@
 //
 // PARITY NOTES (every .sh `ok`/`assert_eq` line maps to an expect() below;
 // several are STRONGER than the original grep/awk):
-//   - .sh Case 1  list emits 4 framework sensors (grep -c TAB == 4)   -> Test 1:
-//       rows.length === 4 (same observable: count of tab-bearing rows).
+//   - .sh Case 1  list emits the framework sensors                    -> Test 1:
+//       rows.length === 5 (same observable: count of tab-bearing rows).
 //   - .sh Case 2  every row column 2 == "deterministic" (awk != count) -> Test 2:
 //       every row's cols[1] === "deterministic" (same observable, per-row).
 //   - .sh Case 3  list is alpha-sorted by id (IDS == sort IDS)        -> Test 3:
 //       ids deep-equals ids.slice().sort() (same observable).
-//   - .sh Case 4  list returns exactly the 4 expected ids (assert_eq) -> Test 4:
-//       ids === ["linter","required-sections","type-check","upstream-coverage"]
+//   - .sh Case 4  list returns exactly the expected ids (assert_eq)   -> Test 4:
+//       ids includes claim-sources plus the original four.
 //       (same sentinel set, exact).
 //   - .sh Case 5  describe required-sections: id, kind=deterministic,
 //       command, default_severity=advisory, matches: **/{aidlc-docs,intents}/**  -> Test 5:
@@ -43,14 +43,15 @@
 //   - .sh Case 6  describe upstream-coverage: id, command, matches         -> Test 6.
 //   - .sh Case 7  describe linter: id, matches: **/*.{ts,js}, command       -> Test 7.
 //   - .sh Case 8  describe type-check: id, matches: **/*.{ts,tsx}, command  -> Test 8.
-//   - .sh Case 9  describe <unknown-id> exits !=0 + "unknown sensor id" hint -> Test 9:
+//   - New Case 9  describe claim-sources: id, command, matches         -> Test 9.
+//   - .sh Case 9  describe <unknown-id> exits !=0 + "unknown sensor id" hint -> Test 10:
 //       res.status === 1 (STRONGER than the .sh's `-ne 0`) + the hint asserted.
-//   - .sh Case 10 --help prints "Usage: aidlc-sensor" + list/describe/fire   -> Test 10.
-//   - .sh Case 11 -h prints the same usage banner                           -> Test 11.
-//   - .sh Case 12 no subcommand exits !=0 + "Usage: aidlc-sensor"           -> Test 12:
+//   - .sh Case 10 --help prints "Usage: aidlc-sensor" + list/describe/fire   -> Test 11.
+//   - .sh Case 11 -h prints the same usage banner                           -> Test 12.
+//   - .sh Case 12 no subcommand exits !=0 + "Usage: aidlc-sensor"           -> Test 13:
 //       res.status === 1 (STRONGER) + the usage hint asserted.
 //
-// 12 .sh asserts -> 12 expect()-bearing test() cases here, one observable each.
+// 12 migrated cases + 1 claim-sources case -> 13 test() cases.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -98,6 +99,7 @@ function listRows(out: string): string[][] {
 }
 
 const EXPECTED_IDS = [
+  "claim-sources",
   "linter",
   "required-sections",
   "type-check",
@@ -108,11 +110,11 @@ const EXPECTED_IDS = [
 // list subcommand (covers: subcommand:aidlc-sensor:list)
 // ============================================================
 
-describe("t93 aidlc-sensor list (migrated from t93-sensor-list-describe.sh, plan 12)", () => {
-  test("1: list emits exactly 4 framework sensors", () => {
+describe("t93 aidlc-sensor list (extended from t93-sensor-list-describe.sh, plan 13)", () => {
+  test("1: list emits exactly 5 framework sensors", () => {
     const r = sensor("list");
     expect(r.status).toBe(0); // STRONGER: .sh discarded $? on list; we pin clean exit
-    expect(listRows(r.out)).toHaveLength(4);
+    expect(listRows(r.out)).toHaveLength(5);
   });
 
   test("2: list column 2 is 'deterministic' for every row", () => {
@@ -130,7 +132,7 @@ describe("t93 aidlc-sensor list (migrated from t93-sensor-list-describe.sh, plan
     expect(ids).toEqual([...ids].sort());
   });
 
-  test("4: list returns exactly the 4 framework sensor ids", () => {
+  test("4: list returns exactly the 5 framework sensor ids", () => {
     const r = sensor("list");
     const ids = listRows(r.out).map((cols) => cols[0]);
     // .sh sentinel set — flags drift if a sensor is renamed/added/removed.
@@ -196,7 +198,20 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
     ).toBe(true);
   });
 
-  test("9: describe <unknown-id> exits 1 with a known-ids hint", () => {
+  test("9: describe claim-sources includes the canonical command and record-tree match", () => {
+    const r = sensor("describe", "claim-sources");
+    expect(r.status).toBe(0);
+    expect(hasLine(r.out, "id: claim-sources")).toBe(true);
+    expect(
+      hasLine(
+        r.out,
+        "command: bun .claude/tools/aidlc-sensor-claim-sources.ts",
+      ),
+    ).toBe(true);
+    expect(hasLine(r.out, "matches: **/{aidlc-docs,intents}/**")).toBe(true);
+  });
+
+  test("10: describe <unknown-id> exits 1 with a known-ids hint", () => {
     const r = sensor("describe", "definitely-not-a-real-sensor-id");
     expect(r.status).toBe(1); // STRONGER: .sh asserted `-ne 0`; the tool's dispatchError exits 1
     expect(r.out).toContain("unknown sensor id");
@@ -207,8 +222,8 @@ describe("t93 aidlc-sensor describe (migrated from t93-sensor-list-describe.sh, 
 // Help / dispatch (the .sh's --help, -h, and no-subcommand cases)
 // ============================================================
 
-describe("t93 aidlc-sensor help + dispatch (migrated from t93-sensor-list-describe.sh, plan 12)", () => {
-  test("10: --help prints usage covering all 3 subcommands", () => {
+describe("t93 aidlc-sensor help + dispatch (extended from t93-sensor-list-describe.sh, plan 13)", () => {
+  test("11: --help prints usage covering all 3 subcommands", () => {
     const r = sensor("--help");
     expect(r.out).toContain("Usage: aidlc-sensor");
     expect(r.out).toContain("list");
@@ -216,12 +231,12 @@ describe("t93 aidlc-sensor help + dispatch (migrated from t93-sensor-list-descri
     expect(r.out).toContain("fire");
   });
 
-  test("11: -h prints the same usage banner", () => {
+  test("12: -h prints the same usage banner", () => {
     const r = sensor("-h");
     expect(r.out).toContain("Usage: aidlc-sensor");
   });
 
-  test("12: no subcommand exits 1 with a usage hint", () => {
+  test("13: no subcommand exits 1 with a usage hint", () => {
     const r = sensor();
     expect(r.status).toBe(1); // STRONGER: .sh asserted `-ne 0`; main()'s no-cmd arm exits 1
     expect(r.out).toContain("Usage: aidlc-sensor");

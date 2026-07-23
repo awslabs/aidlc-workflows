@@ -323,6 +323,22 @@ Users can switch modes mid-stage. For example, start with "Guide Me" for the fir
 
 The file is the authoritative record for all decision traceability and audit purposes.
 
+### Consuming grounded artifacts
+
+When an upstream artifact carries inline source tags or an
+`Assumptions & Open Questions` section, preserve that epistemic status:
+
+- A source tag records provenance; it does not grant permission to strengthen
+  or broaden the claim.
+- Content tagged `[assumption]` remains an assumption in every downstream
+  artifact until the user confirms it through that downstream stage's
+  questions file.
+- Never silently promote an assumption, open question, unselected option, or
+  workflow metadata into a confirmed requirement, scope boundary, stakeholder,
+  metric, or constraint.
+- When downstream work needs an unresolved item, ask a follow-up and record the
+  answer in the current stage's questions file.
+
 ### Answer analysis (MANDATORY)
 After collecting answers, analyze ALL responses for:
 - Vague answers: "mix of", "not sure", "depends", "probably"

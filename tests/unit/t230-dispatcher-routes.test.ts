@@ -548,6 +548,7 @@ describe("t230 dispatcher route completeness", () => {
       "aidlc-orchestrate.ts",
       "aidlc-runner-gen.ts",
       "aidlc-runtime.ts",
+      "aidlc-sensor-claim-sources.ts",
       "aidlc-sensor-linter.ts",
       "aidlc-sensor-type-check.ts",
       "aidlc-state.ts",
@@ -561,6 +562,7 @@ describe("t230 dispatcher route completeness", () => {
     ].sort();
     const routeTargets = new Set(ROUTES.flatMap((route) => (route.tool ? [route.tool] : [])));
     if (ROUTES.some((route) => route.group === "sensor" && route.verbs.includes("fire"))) {
+      routeTargets.add("aidlc-sensor-claim-sources.ts");
       routeTargets.add("aidlc-sensor-linter.ts");
       routeTargets.add("aidlc-sensor-required-sections.ts");
       routeTargets.add("aidlc-sensor-type-check.ts");

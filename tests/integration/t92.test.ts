@@ -11,7 +11,7 @@
 // in-process handleFire() twin would lose the exit-code half AND the
 // process.exit(0) / lock-orphan-recovery behaviour the .sh relies on.
 //
-// SPAWN vs IN-PROCESS split: ALL 45 assertions are spawn-based. There is
+// SPAWN vs IN-PROCESS split: ALL 47 cases are spawn-based. There is
 // no pure-function arm — every behaviour (argv validation exit codes,
 // truth-table branches, audit emission, concurrency, lock-orphan
 // recovery) is observed through the real CLI subprocess + the audit.md it
@@ -87,6 +87,13 @@ const TOOLS_DIR = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
 const SENSOR_TS = join(TOOLS_DIR, "aidlc-sensor.ts");
 const STUBS_DIR = join(REPO_ROOT, "tests", "fixtures", "v05-mr9-sensor-fire", "scripts");
 const FIXTURES_ROOT = join(REPO_ROOT, "tests", "fixtures", "v05-mr9-sensor-fire");
+const INTENT_GROUNDING_FIXTURE = join(
+  REPO_ROOT,
+  "tests",
+  "fixtures",
+  "intent-grounding",
+  "passing",
+);
 
 // --- Stub setup: write fixture per-sensor scripts into an ISOLATED temp dir
 // and point the dispatcher at it via AIDLC_SENSOR_SCRIPT_DIR (the script seam,
@@ -426,7 +433,7 @@ describe("t92 Group A: argv validation (exit 1, no audit emit)", () => {
 });
 
 // ============================================================
-// Group B — PASSED round-trip per sensor, REAL fixtures (4).
+// Group B — PASSED round-trip per sensor, REAL fixtures (5).
 // (t92-sensor-fire.sh:295-395)
 // Fires the actual shipped per-sensor scripts (AIDLC_SENSORS_DIR unset
 // so the shipped manifests load) against real fixture content.
@@ -535,6 +542,38 @@ describe("t92 Group B: PASSED real round-trip per sensor", () => {
     expect(isInteger(r.dur)).toBe(true);
     expect(r.detailExists).toBe(false);
     expect(r.path).toBe(`aidlc-docs/${r.outname}`);
+  });
+
+  test("10a: claim-sources — grounded Intent Capture deliverables -> PASSED", () => {
+    const proj = makeProj();
+    for (const name of [
+      "intent-capture-questions.md",
+      "intent-statement.md",
+      "stakeholder-map.md",
+    ]) {
+      copyFileSync(
+        join(INTENT_GROUNDING_FIXTURE, name),
+        join(proj, "aidlc-docs", name),
+      );
+    }
+    const outputPath = join(proj, "aidlc-docs", "intent-statement.md");
+    const result = fire(
+      [
+        "claim-sources",
+        "--stage",
+        "intent-capture",
+        "--output-path",
+        outputPath,
+      ],
+      { CLAUDE_PROJECT_DIR: proj },
+    );
+    expect(result.rc).toBe(0);
+    expect(auditEventCount(proj, "SENSOR_FIRED")).toBe(1);
+    expect(auditEventCount(proj, "SENSOR_PASSED")).toBe(1);
+    expect(auditEventCount(proj, "SENSOR_FAILED")).toBe(0);
+    expect(auditField(proj, "SENSOR_PASSED", "Sensor ID")).toBe(
+      "claim-sources",
+    );
   });
 
   // linter spawns the real eslint binary (manifest timeout_seconds=30); the
@@ -1058,6 +1097,9 @@ describe("t92 Group K: manifest command resolves next to dispatcher", () => {
   });
   test("39: type-check manifest command resolves", () => {
     assertManifestCommandResolves("type-check");
+  });
+  test("39a: claim-sources manifest command resolves", () => {
+    assertManifestCommandResolves("claim-sources");
   });
 });
 

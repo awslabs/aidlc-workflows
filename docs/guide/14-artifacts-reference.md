@@ -145,7 +145,7 @@ The welcome message is rendered at session start via `companyAnnouncements` in `
 
 | Stage | Key Artifacts | Condition |
 |-------|--------------|-----------|
-| 1.1 Intent Capture | `intent-statement.md`, `stakeholder-map.md` | Always |
+| 1.1 Intent Capture | `intent-capture-questions.md` (source register and confirmed answers), `intent-statement.md`, `stakeholder-map.md` (inline source tags and mandatory assumptions sections) | Always |
 | 1.2 Market Research | `competitive-analysis.md`, `build-vs-buy.md` | Conditional |
 | 1.3 Feasibility | `feasibility-assessment.md`, `constraint-register.md`, `raid-log.md` | Conditional |
 | 1.4 Scope Definition | `scope-document.md`, `intent-backlog.md` | Always |

@@ -36,10 +36,10 @@
 //   - the shipped dist/kiro tree drives a real workflow from a seeded
 //     init-done state through intent-capture,
 //   - the numbered-prose gate protocol is answerable by keystroke,
-//   - ON DISK: questions file with >=1 [Answer]: line; intent-statement
-//     (>100 bytes, has a heading); stakeholder map; state Completed == [x]
-//     count, > 3, IDEATION phase; intent-capture [x] with Current Stage moved
-//     off it; audit has STAGE_COMPLETED for intent-capture.
+//   - ON DISK: questions file with >=1 [Answer]: line; intent-statement and
+//     stakeholder map with source tags plus Assumptions & Open Questions;
+//     state Completed == [x] count, > 3, IDEATION phase; intent-capture [x]
+//     with Current Stage moved off it; audit has STAGE_COMPLETED.
 //
 // COST: spends real Kiro credits (minutes of LLM turns on the `auto` model).
 // Gated behind AIDLC_KIRO_TUI_LIVE=1; tmux / kiro-cli / kiro auth / dist-kiro
@@ -264,15 +264,27 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         expect(questionsBody).toMatch(
           /## Consolidated Summary Confirmation[\s\S]*\[Answer\]:[^\r\n]*Looks correct/i,
         );
+        expect(questionsBody).toContain("## Sources");
+        expect(questionsBody).toContain("[desc]");
+        expect(questionsBody).toContain("[scope]");
 
         const intentFile = findArtifact(icDir, ["intent", "statement"]);
         expect(intentFile).not.toBeNull();
         const intentBody = readFileSync(intentFile as string, "utf8");
         expect(Buffer.byteLength(intentBody, "utf8")).toBeGreaterThan(100);
         expect(intentBody).toMatch(/^#/m);
+        expect(intentBody).toContain("## Assumptions & Open Questions");
+        expect(intentBody).toMatch(
+          /\[(?:desc|scope|Q\d+|memory:[A-Za-z0-9][A-Za-z0-9._-]*|assumption)\]/,
+        );
 
         const stakeholderFile = findArtifact(icDir, ["stakeholder"]);
         expect(stakeholderFile).not.toBeNull();
+        const stakeholderBody = readFileSync(stakeholderFile as string, "utf8");
+        expect(stakeholderBody).toContain("## Assumptions & Open Questions");
+        expect(stakeholderBody).toMatch(
+          /\[(?:desc|scope|Q\d+|memory:[A-Za-z0-9][A-Za-z0-9._-]*|assumption)\]/,
+        );
 
         const stateMd = readFileSync(seededStateFile(sandbox), "utf8");
         const xCount = (stateMd.match(/^- \[x\]/gm) ?? []).length;

@@ -173,6 +173,7 @@ export function resolveSensorScriptPath(id: string): string {
 }
 
 const BUNDLED_SENSOR_IDS = new Set([
+	"claim-sources",
 	"linter",
 	"required-sections",
 	"type-check",
@@ -414,12 +415,12 @@ function handleFire(args: string[]): void {
 				.map(consumeWithProducer)
 				.join(","),
 		);
-		// Coverage is evaluated over the stage's whole deliverable set (the
-		// sensor unions the sibling files named here), not the single fired
-		// file - a multi-artifact stage splits its upstream citations across
-		// siblings. Same eligibility filter as required-sections: the
-		// `*-questions`/`*-timestamp` scaffolding is excluded so a citation
-		// that appears only in the Q&A file never counts as coverage.
+	}
+	// Stage-level document sensors evaluate the union of existing deliverables,
+	// not only the file whose write triggered the hook. Questions/timestamp
+	// scaffolding is excluded from that union. claim-sources still locates the
+	// sibling questions file explicitly as its source universe.
+	if (id === "upstream-coverage" || id === "claim-sources") {
 		scriptArgs.push(
 			"--deliverables",
 			templateEligibleArtifacts([

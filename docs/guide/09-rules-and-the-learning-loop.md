@@ -143,12 +143,13 @@ A sensor result is **advisory** in this release. A failing sensor produces an au
 
 Sensor activity shows up in the intent's `audit/` shards as `Sensor Fired`, `Sensor Passed`, and `Sensor Failed` rows. A failed row links to a detail file (for example `<record>/.aidlc-sensors/<stage-slug>/required-sections-<timestamp>.md`) that lists the specific gap — the missing headings, the unreferenced upstream artifact, the lint error. The audit log is covered in [State and Audit](10-state-and-audit.md).
 
-### The four framework sensors
+### The five framework sensors
 
-Four sensors ship with the framework:
+Five sensors ship with the framework:
 
 | Sensor | Fires on | Checks |
 |--------|----------|--------|
+| `claim-sources` | Intent Capture record-dir outputs | Every claim has a source tag that resolves to the stage's description, workflow scope, answered questions, or memory register; retained assumptions are surfaced and explicitly confirmed |
 | `required-sections` | Any record-dir markdown output | The output contains the required H2 headings (a generic content-shape check) |
 | `upstream-coverage` | Any record-dir markdown output | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
 | `linter` | `.ts` / `.js` code outputs | Wraps your configured linter (ESLint by default) |

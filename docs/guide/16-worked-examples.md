@@ -197,18 +197,48 @@ The 3 Initialization stages run automatically inside `aidlc-utility intent-birth
 
 **Stage 1.1 — Intent Capture** (aidlc-product-agent)
 
-The aidlc-product-agent captures your intent and produces `intent-statement.md` and `stakeholder-map.md`. Questions focus on target users, notification channels, and priority:
+The aidlc-product-agent first records the permitted source universe in
+`intent-capture-questions.md`, then asks about the problem, target users,
+stakeholders, decision authority, communication needs, and scope:
 
-```
-Q1: Which notification channels are in scope?
+```markdown
+## Sources
+
+- [desc] Initial description: "A notification service for our task management app..."
+- [scope] Workflow-selected scope: `feature`.
+
+## Q1. Which notification channels are in scope?
 A. In-app only
 B. In-app + email
 C. In-app + email + push
 D. In-app + email + push + SMS
 X. Other
+
+[Answer]: B. In-app + email
 ```
 
-You answer B (in-app + email). After approval, the stage produces a structured intent statement linking notification types to user triggers.
+The resulting artifacts keep each claim tied to that register or a confirmed
+answer:
+
+```markdown
+## Target Customer
+
+Task-management users receiving assignment, due-date, or comment events. [desc]
+
+## Notification Channels
+
+In-app notifications and optional email digests are in scope. [Q1]
+
+## Assumptions & Open Questions
+
+None.
+```
+
+The stakeholder map uses the same tags in a `Source` column. Any unsupported
+content is asked as a follow-up or remains under `## Assumptions & Open
+Questions`; retained assumptions require your explicit acceptance and stay
+labeled as assumptions. The aidlc-product-lead-agent then reviews source
+grounding before the ordinary approval gate.
 
 **Stage 1.4 — Scope Definition** (aidlc-product-agent)
 

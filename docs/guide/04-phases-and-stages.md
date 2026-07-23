@@ -134,6 +134,12 @@ flowchart TD
 
 **Stage colors:** Green = ALWAYS (runs for every scope). Yellow = CONDITIONAL (skipped for some scopes).
 
+Intent Capture records the initial description, workflow-selected scope, and
+used memory rules in its questions file. Claims in the intent statement and
+stakeholder map carry inline source tags; both artifacts surface assumptions
+and open questions. Retained assumptions require explicit confirmation before
+the Product Lead reviewer and approval gate run.
+
 ---
 
 ## Phase 2: Inception
