@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.9] - 2026-07-23
+
+Codex compaction no longer fails with `error: hook returned invalid PostCompact hook JSON output` on every compaction. Codex's PostCompact event cannot carry context by schema; AI-DLC now relies on Codex's compact-source `SessionStart` event to restore workflow context through the schema-supported `additionalContext` field. The minimum Codex CLI version is now 0.145.0 because earlier releases defer that hook until the next turn after a mid-turn auto-compaction, allowing one continuation without the restored workflow mission. **Upgrade:** upgrade Codex CLI to >= 0.145.0, then re-copy `dist/codex/` into the project; the leftover `post_compact` trust entry in `$CODEX_HOME/config.toml` is harmless and may be deleted.
+
+* Removed the PostCompact hook registration Codex rejected; compact-source `SessionStart` re-injects the active workflow mission without recording a duplicate `SESSION_STARTED` audit event.
+* Compact-source `SessionStart` deliveries now bypass the adapter's duplicate-delivery replay cache, so a second compaction in the same session re-renders fresh workflow state instead of replaying the first compaction's context.
+* `/aidlc --doctor` now enforces Codex CLI >= 0.145.0 so compact-source `SessionStart` restores the workflow mission before the first post-compaction continuation.
+
 ## [2.5.8] - 2026-07-23
 
 Approval gates no longer deadlock when a conductor redundantly routes the human's approval through `aidlc-log.ts answer` before reporting the approval. The logger recognizes an answer whose target stage is already awaiting approval and has no unresolved non-gate question, returns a successful skip without emitting `QUESTION_ANSWERED`, and leaves the real `HUMAN_TURN` available for `report --result approved`; ordinary interview answers remain workflow-global freshness boundaries, so one answer still cannot authorize a fabricated later approval in the same turn. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
