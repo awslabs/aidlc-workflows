@@ -1,27 +1,47 @@
-# Kiro IDE hook payload — empirical reference
+# Kiro IDE hook payload - empirical reference
 
-How Kiro IDE delivers context to a `runCommand` hook, captured live on Kiro IDE
-0.12-main by registering probe `.kiro.hook` files that dumped stdin, argv, and
-the full environment. This is the evidence base for the `harness/kiro-ide/`
-adapter's IDE branch; the CLI harness (`harness/kiro/`) uses a different,
-stdin-based mechanism.
+How Kiro IDE delivers context to a `runCommand` hook. The channel differs by
+IDE generation:
 
-## The channel: `USER_PROMPT` env var, not stdin
+- **Pre-1.0 (0.12-main):** context arrives through the **`USER_PROMPT`
+  environment variable** (camelCase JSON). Stdin is opened but never written or
+  closed - reading it hangs.
+- **IDE >= 1.0 (1.x):** context arrives as **JSON on stdin** (snake_case:
+  `{ tool_name, tool_input, tool_response }`). `USER_PROMPT` is empty.
 
-A Kiro IDE `runCommand` hook receives its event context through the
-**`USER_PROMPT` environment variable**, not stdin.
+The shipped adapter (`aidlc-kiro-adapter.ts`) accepts both: it races a stdin
+read against a 2s timeout (covering the 0.12 dead-stdin case) and falls back to
+`USER_PROMPT`. Both field spellings (camelCase / snake_case) are normalized
+internally.
+
+## Pre-1.0 channel: `USER_PROMPT` env var
+
+Captured live on Kiro IDE 0.12-main by registering probe `.kiro.hook` files
+that dumped stdin, argv, and the full environment.
 
 - **stdin** is opened but never written or closed, so `Bun.stdin.text()` hangs.
-  The old adapter's stdin read could never work in the IDE (it fell to a 2s
-  timeout and proceeded with an empty payload).
 - **`USER_PROMPT`** is a JSON string of the shape:
-
   ```json
   { "toolName": "fs_write", "toolArgs": {}, "toolResult": "Created the /abs/path/file.md file.", "toolSuccess": true }
   ```
 
+## IDE 1.x channel: stdin (snake_case)
+
+Captured live on Kiro IDE 1.0.165. The stdin payload shape (field-verbatim from
+the probe):
+
+```json
+{ "session_id": "sess_...", "hook_event_name": "PostToolUse", "cwd": "/path/to/project", "tool_name": "execute_bash", "tool_input": {}, "tool_response": "Output:\n...\nExit Code: 0" }
+```
+
+- `USER_PROMPT` is empty on 1.x.
+- No `toolSuccess` / `tool_success` field - only an explicit `false` (which 1.x
+  never sends) triggers the #417 failed-write guard; absence falls through.
+- `tool_input` is always `{}` on both generations - the IDE never passes tool
+  inputs.
+
 `VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE (absent on the CLI),
-but the adapter keys off `USER_PROMPT` as the context channel.
+but the adapter keys off the payload content, not these markers.
 
 ## Per-event captures
 
@@ -37,7 +57,7 @@ but the adapter keys off `USER_PROMPT` as the context channel.
 1. **`toolArgs` is always `{}`.** The IDE never passes tool inputs. So the
    written file path must be parsed out of the `toolResult` prose, and the shell
    command is not present at all (only its stdout + exit code).
-2. **stdin is dead.** The adapter reads `process.env.USER_PROMPT`.
+2. **stdin is dead on pre-1.0; on 1.x it carries the payload.** The adapter reads stdin first (with a 2s race), falling back to `process.env.USER_PROMPT`.
 3. **Paths in `toolResult` are workspace-RELATIVE**, but the core hooks compare
    against an absolute record root — so the adapter resolves them to absolute
    before forwarding.

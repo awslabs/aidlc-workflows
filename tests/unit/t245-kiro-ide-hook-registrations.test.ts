@@ -68,7 +68,7 @@ function parseHookJson(dir: string, file: string): HookFile {
   return parsed;
 }
 
-describe("t244 Kiro IDE hook registrations (v2 schema contract)", () => {
+describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
   for (const tree of [
     { name: "authored (harness/kiro-ide/hooks)", dir: AUTHORED_HOOKS },
     { name: "dist (dist/kiro-ide/.kiro/hooks)", dir: DIST_HOOKS },
