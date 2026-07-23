@@ -625,7 +625,7 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
       for (const agent of stage.support_agents) {
         const file = join(contribDir, `${agent}.md`);
         const st = safeLstat(file);
-        if (!st || !st.isFile()) {
+        if (!st?.isFile()) {
           problems.push({ collaborator: agent, exists: false, markerMatches: false });
           continue;
         }
