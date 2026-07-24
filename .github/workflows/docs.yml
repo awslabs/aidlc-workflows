@@ -4,9 +4,26 @@ on:
   push:
     branches:
       - v2
+    # Only rebuild/deploy the site when something the build actually consumes
+    # changes: the docs sources, the zensical config, the link-rewrite step,
+    # the Python deps it installs, or this workflow itself.
+    paths:
+      - 'docs/**'
+      - 'zensical.toml'
+      - 'scripts/docs-rewrite-links.ts'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/docs.yml'
   pull_request:
     branches:
       - v2
+    paths:
+      - 'docs/**'
+      - 'zensical.toml'
+      - 'scripts/docs-rewrite-links.ts'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/docs.yml'
   workflow_dispatch:
 
 # The build job validates every PR and push; only the deploy job needs

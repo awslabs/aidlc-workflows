@@ -67,6 +67,9 @@ jobs:
 
   changelog-guard:
     name: Changelog completeness
+    # pull_request only: the guard diffs against the PR event's base commit,
+    # which does not exist on workflow_dispatch (github.base_ref is empty there).
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -81,5 +84,9 @@ jobs:
       # Fail if this PR removes any `## [x.y.z]` heading that exists on the
       # base branch. Complements tests/unit/t68 (which guards version⇄changelog
       # sync and heading uniqueness, but not deletion of an existing entry).
+      # Diff against the FROZEN base commit the PR event fired from
+      # (pull_request.base.sha), NOT origin/<base_ref>: the branch ref moves as
+      # v2 accrues new entries while this PR is open, which would make the guard
+      # falsely report those newer entries as "removed" on any re-run.
       - name: Guard against deleted CHANGELOG entries
-        run: bun scripts/ci-changelog-guard.ts "origin/${{ github.base_ref }}"
+        run: bun scripts/ci-changelog-guard.ts "${{ github.event.pull_request.base.sha }}"
