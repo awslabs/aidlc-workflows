@@ -88,10 +88,12 @@ git checkout v2
    do not append a second copy because duplicate TOML tables invalidate the
    entire config.
 
-4. Merge the shipped `.codex/config.toml` into your `~/.codex/config.toml`
-   (or keep it project-level — trusted projects read it). Verify with:
+4. Back in `your-project/` (step 3 ran from the AI-DLC source checkout), merge
+   the shipped `.codex/config.toml` into your `~/.codex/config.toml` (or keep
+   it project-level — trusted projects read it). Verify with:
 
    ```bash
+   cd your-project
    bun .codex/tools/aidlc-utility.ts doctor
    ```
 

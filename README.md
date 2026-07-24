@@ -231,7 +231,7 @@ The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tre
 After copying, apply the `.gitignore` entries from the shipped `AGENTS.md` before your first workflow, pre-seed hook trust, then verify:
 
 ```bash
-bun .codex/tools/aidlc-utility.ts doctor
+cd your-project && bun .codex/tools/aidlc-utility.ts doctor
 ```
 
 Invoke the orchestrator with `$aidlc` (or `/skills` → aidlc) followed by a scope or description. The [Codex guide](docs/guide/harnesses/codex-cli.md) covers the trust dialog, config merge, and sandbox/git notes in full.
@@ -264,7 +264,7 @@ The engine deliberately lives in `.aidlc/`, NOT `.opencode/` — opencode auto-i
 After copying, apply the `.gitignore` entries from the shipped `AGENTS.md` before your first workflow, then verify:
 
 ```bash
-bun .aidlc/tools/aidlc-utility.ts doctor
+cd your-project && bun .aidlc/tools/aidlc-utility.ts doctor
 ```
 
 Invoke the orchestrator with `/aidlc` followed by a scope or description. The [opencode guide](docs/guide/harnesses/opencode.md) covers the split layout, the adapter plugin, and what differs on this harness in full.
