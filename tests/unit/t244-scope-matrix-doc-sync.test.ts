@@ -92,7 +92,7 @@ function cells(line: string): string[] {
   return line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
 }
 
-const INIT_STAGE_LABEL = "Initialization (all 3 stages)";
+const INIT_STAGE_LABEL = `Initialization (all ${initStages.length} stages)`;
 const TOTALS_LABEL = "**Total stages**";
 
 /** Validate that a line is a well-formed Markdown table separator with the expected column count. */
@@ -117,6 +117,13 @@ function parseDocTable(): DocTable {
   if (lines.length < 3) throw new Error("matrix table not found inside markers");
 
   const header = cells(lines[0]);
+  // Validate the fixed header columns.
+  if (header[0] !== "#") {
+    throw new Error(`expected header[0] to be "#", got "${header[0]}"`);
+  }
+  if (header[1] !== "Stage") {
+    throw new Error(`expected header[1] to be "Stage", got "${header[1]}"`);
+  }
   // header: [ "#", "Stage", "`scope`", ... ]
   const scopes = header.slice(2).map((c) => c.replace(/`/g, ""));
 
@@ -130,6 +137,11 @@ function parseDocTable(): DocTable {
 
   for (const line of lines.slice(2)) {
     const c = cells(line);
+    if (c.length !== header.length) {
+      throw new Error(
+        `row column count (${c.length}) does not match header (${header.length}): "${line.trim()}"`,
+      );
+    }
     const [num, label] = [c[0], c[1]];
     const body = c.slice(2);
     if (num === INIT_ROW_LABEL) {
@@ -138,6 +150,11 @@ function parseDocTable(): DocTable {
         throw new Error(
           `initialization row label mismatch: expected "${INIT_STAGE_LABEL}", got "${label}"`,
         );
+      }
+      for (const cell of body) {
+        if (cell !== CHECK && cell !== "") {
+          throw new Error(`invalid cell content in initialization row: "${cell}" — expected "${CHECK}" or empty`);
+        }
       }
       initCells = body;
     } else if (num === "" && label === TOTALS_LABEL) {
@@ -151,6 +168,11 @@ function parseDocTable(): DocTable {
       });
     } else {
       if (rows.has(num)) throw new Error(`duplicate stage row: ${num}`);
+      for (const cell of body) {
+        if (cell !== CHECK && cell !== "") {
+          throw new Error(`invalid cell content in stage ${num}: "${cell}" — expected "${CHECK}" or empty`);
+        }
+      }
       rowNumbers.push(num);
       rows.set(num, { name: label, cells: body });
     }
