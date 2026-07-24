@@ -92,6 +92,24 @@ function cells(line: string): string[] {
   return line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
 }
 
+const INIT_STAGE_LABEL = "Initialization (all 3 stages)";
+const TOTALS_LABEL = "**Total stages**";
+
+/** Validate that a line is a well-formed Markdown table separator with the expected column count. */
+function validateSeparator(line: string, expectedColumns: number): void {
+  const sepCells = line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+  if (sepCells.length !== expectedColumns) {
+    throw new Error(
+      `separator column count (${sepCells.length}) does not match header (${expectedColumns})`,
+    );
+  }
+  for (const cell of sepCells) {
+    if (!/^:?-{3,}:?$/.test(cell)) {
+      throw new Error(`invalid separator cell: "${cell}" — expected a Markdown delimiter (e.g. ---, :---:)`);
+    }
+  }
+}
+
 function parseDocTable(): DocTable {
   const lines = extractRegion()
     .split("\n")
@@ -101,6 +119,9 @@ function parseDocTable(): DocTable {
   const header = cells(lines[0]);
   // header: [ "#", "Stage", "`scope`", ... ]
   const scopes = header.slice(2).map((c) => c.replace(/`/g, ""));
+
+  // Validate the separator row (lines[1]) is a proper Markdown delimiter.
+  validateSeparator(lines[1], header.length);
 
   let initCells: string[] | undefined;
   const rows = new Map<string, { name: string; cells: string[] }>();
@@ -113,10 +134,21 @@ function parseDocTable(): DocTable {
     const body = c.slice(2);
     if (num === INIT_ROW_LABEL) {
       if (initCells) throw new Error("duplicate collapsed initialization row");
+      if (label !== INIT_STAGE_LABEL) {
+        throw new Error(
+          `initialization row label mismatch: expected "${INIT_STAGE_LABEL}", got "${label}"`,
+        );
+      }
       initCells = body;
-    } else if (num === "" && label.includes("Total")) {
+    } else if (num === "" && label === TOTALS_LABEL) {
       if (totals) throw new Error("duplicate **Total stages** footer row");
-      totals = body.map((t) => Number.parseInt(t.replace(/\*/g, ""), 10));
+      totals = body.map((t) => {
+        const stripped = t.replace(/\*/g, "");
+        if (!/^\d+$/.test(stripped)) {
+          throw new Error(`non-numeric total cell: "${t}"`);
+        }
+        return Number.parseInt(stripped, 10);
+      });
     } else {
       if (rows.has(num)) throw new Error(`duplicate stage row: ${num}`);
       rowNumbers.push(num);
