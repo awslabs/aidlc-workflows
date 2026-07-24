@@ -44,7 +44,7 @@ of `.kiro/`, so copy it separately (or copy the whole `dist/kiro/` tree at once)
 Then start a session in your project:
 
 ```bash
-kiro-cli chat
+cd your-project && kiro-cli chat
 ```
 
 The install ships `.kiro/settings/cli.json` with `chat.defaultAgent: "aidlc"`,
