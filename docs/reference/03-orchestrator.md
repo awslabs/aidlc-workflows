@@ -320,7 +320,7 @@ sequenceDiagram
     participant AU as audit/ shard
 
     O->>A: 1. Read every inline_context_paths entry
-    Note over A: Inline lead/support; mob lead-only persona + knowledge paths
+    Note over A: Inline lead/support — mob lead-only persona + knowledge paths
 
     O->>SF: 2. Read stage file
     Note over SF: directive.stage_file
@@ -460,7 +460,7 @@ sequenceDiagram
     U->>O: Approve walking-skeleton gate
     O->>U: Ladder prompt (fires once)
     U->>O: "Continue autonomously"
-    O->>O: Write Construction Autonomy Mode: autonomous; emit AUTONOMY_MODE_SET
+    O->>O: Write Construction Autonomy Mode: autonomous — emit AUTONOMY_MODE_SET
 
     Note over O,T: Bolts B + C eligible in parallel batch
     O->>T: Task(B code-gen) + Task(C code-gen) in ONE message
