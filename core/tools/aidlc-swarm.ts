@@ -88,6 +88,7 @@ import {
   resolveConstructionRepo,
   resolveProjectDir,
   resolveStage,
+  workspaceSourceFingerprint,
   worktreePath,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -315,6 +316,7 @@ function reviewerReceiptError(
     return `claimed converged but worktree audit has no BOLT_STARTED boundary for unit "${unit}"`;
   }
 
+  let latestTerminal: string | null = null;
   for (let i = boltStart + 1; i < events.length; i++) {
     const event = events[i];
     if (event.event !== "REVIEW_COMPLETED") continue;
@@ -323,30 +325,62 @@ function reviewerReceiptError(
     if (auditBlockField(event.block, "Reviewer") !== reviewer) continue;
     if (auditBlockField(event.block, "Unit") !== unit) continue;
     const verdict = auditBlockField(event.block, "Verdict");
-    if (verdict !== "READY" && verdict !== "NOT-READY") continue;
-    const definition = resolveStage(stage);
-    if (!definition) continue;
-    const recordedFingerprint = auditBlockField(event.block, "Artifact Fingerprint");
-    const currentFingerprint = reviewArtifactFingerprint(
-      worktreePath(projectDir, unit),
-      definition,
-      unit,
-      { requireRequiredArtifacts: true },
+    if (verdict === "READY" || verdict === "NOT-READY") latestTerminal = event.block;
+  }
+
+  if (latestTerminal === null) {
+    return (
+      `claimed converged but no terminal REVIEW_COMPLETED for stage "${stage}", ` +
+      `unit "${unit}", reviewer "${reviewer}" exists after this Bolt started`
     );
-    if (
-      recordedFingerprint !== null &&
-      /^sha256:[0-9a-f]{64}$/.test(recordedFingerprint) &&
-      currentFingerprint !== null &&
-      recordedFingerprint === currentFingerprint
-    ) {
-      return null;
+  }
+
+  const definition = resolveStage(stage);
+  const recordedArtifactFp = auditBlockField(latestTerminal, "Artifact Fingerprint");
+  const currentArtifactFp = definition
+    ? reviewArtifactFingerprint(worktreePath(projectDir, unit), definition, unit, {
+        requireRequiredArtifacts: true,
+      })
+    : null;
+  if (
+    recordedArtifactFp === null ||
+    !/^sha256:[0-9a-f]{64}$/.test(recordedArtifactFp) ||
+    currentArtifactFp === null ||
+    recordedArtifactFp !== currentArtifactFp
+  ) {
+    return (
+      `claimed converged but no terminal REVIEW_COMPLETED for stage "${stage}", ` +
+      `unit "${unit}", reviewer "${reviewer}" with a current artifact fingerprint exists after this Bolt started`
+    );
+  }
+
+  // #629/#646 - a workspace_requires stage's receipt carries the Source
+  // Fingerprint the reviewer inspected (stamped by aidlc-log.ts review), taken
+  // over THIS unit's own worktree since that's where autonomous review runs.
+  // approve/advance re-verify the main checkout's fingerprint against the
+  // newest stage-level receipt, but that reconciliation is deliberately
+  // skipped for a settled swarm (isSettledSwarmForArtifactGuard in
+  // aidlc-state.ts) because the worktree code has not been merged back yet -
+  // so this is the only place a converged unit's receipt is actually bound to
+  // the source it reviewed. An absent field (legacy receipt, or a stage that
+  // never stamps one) and a null current fingerprint (not a git checkout, git
+  // unavailable) both keep the existing fail-open behaviour rather than
+  // stranding a receipt on an unbindable worktree. Off-switch:
+  // AIDLC_SKIP_SOURCE_FRESHNESS=1.
+  const recordedFp = auditBlockField(latestTerminal, "Source Fingerprint");
+  if (recordedFp && process.env.AIDLC_SKIP_SOURCE_FRESHNESS !== "1") {
+    const currentFp = workspaceSourceFingerprint(worktreePath(projectDir, unit));
+    if (currentFp !== null && currentFp !== recordedFp) {
+      return (
+        `claimed converged but the reviewed source no longer matches its worktree's ` +
+        `fingerprint for stage "${stage}", unit "${unit}" (source-fingerprint mismatch); ` +
+        `re-invoke the reviewer against the current worktree source and record a fresh ` +
+        `verdict before finalizing`
+      );
     }
   }
 
-  return (
-    `claimed converged but no terminal REVIEW_COMPLETED for stage "${stage}", ` +
-    `unit "${unit}", reviewer "${reviewer}" with a current artifact fingerprint exists after this Bolt started`
-  );
+  return null;
 }
 
 // --- Audit emission (this tool owns the whole swarm taxonomy) ---------------

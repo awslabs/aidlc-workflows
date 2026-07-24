@@ -1264,6 +1264,7 @@ function verifyReviewerPrecondition(
     name: string;
     phase: string;
     for_each?: string;
+    mode?: string;
     reviewer?: string;
     workspace_requires?: boolean;
     produces?: string[];
@@ -1323,19 +1324,38 @@ function verifyReviewerPrecondition(
   const recordedRepos = new Set(intentRepos(pd));
   const reviewedUnits = new Set<string>();
   let sawStageReview = false;
-  // #629 - source-freshness binding. A receipt for a workspace_requires stage
-  // (code-generation) carries the Source Fingerprint the reviewer inspected
-  // (stamped by aidlc-log.ts review). Workspace source writes are deliberately
-  // invisible to the audit trail, so the invalidation the declared-artifact
-  // events provide for record artifacts is provided for application source by
-  // recomputing the fingerprint here: a mismatch means the source tree changed
-  // after the verdict, and the receipt no longer proves the CURRENT source was
-  // reviewed. Legacy receipts without the field (or an unbindable workspace -
-  // null fingerprint) keep today's fail-open behaviour, so in-flight upgrades
-  // do not brick. Off-switch: AIDLC_SKIP_SOURCE_FRESHNESS=1.
+  // #629 / #646 - source-freshness binding. A receipt for a workspace_requires
+  // stage (code-generation) carries the Source Fingerprint the reviewer
+  // inspected (stamped by aidlc-log.ts review). Workspace source writes are
+  // deliberately invisible to the audit trail, so the invalidation the
+  // declared-artifact events provide for record artifacts is provided for
+  // application source by recomputing the fingerprint here.
+  //
+  // The binding is workspace-global and time-of-stamp, but receipts are
+  // per-unit: a naive per-receipt comparison against the CURRENT tree breaks
+  // the normal multi-unit flow (unit A reviewed, unit B code generated, unit B
+  // reviewed, one approve) - A's receipt was stamped before B's code existed,
+  // so it never matches the final tree, and gets discarded even though
+  // nothing was edited after A's own review (reported against #646). Only the
+  // CHRONOLOGICALLY NEWEST fingerprinted receipt is therefore compared
+  // against the current tree: if it matches, nothing has changed since the
+  // last review was performed, so every receipt collected below stands; if it
+  // mismatches, we cannot attribute WHICH unit's code changed from a
+  // workspace-global hash, so every receipt is discarded (mirrors the
+  // ambiguous-artifact clear-all precedent above, for the same reason).
+  //
+  // Legacy receipts without the field (or an unbindable workspace - null
+  // fingerprint) keep today's fail-open behaviour, so in-flight upgrades do
+  // not brick. Off-switch: AIDLC_SKIP_SOURCE_FRESHNESS=1. Settled autonomous
+  // swarm exempts this reconciliation entirely: receipts are stamped inside
+  // per-unit Bolt worktrees, so a workspace-global fingerprint of the MAIN
+  // checkout is the wrong comparison basis until finalize merges the code
+  // back — aidlc-swarm.ts validates each receipt against its own worktree at
+  // finalize instead (see reviewerReceiptError).
   let staleSourceReceipts = false;
-  let currentSourceFp: string | null | undefined;
+  let newestFingerprintedFp: string | null = null;
   const sourceFreshnessOff = process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
+  const settledSwarm = isSettledSwarmForArtifactGuard(pd, stage, content);
   for (let i = floorIdx + 1; i < events.length; i++) {
     const e = events[i];
     if (e.event === "ARTIFACT_CREATED" || e.event === "ARTIFACT_UPDATED") {
@@ -1359,16 +1379,20 @@ function verifyReviewerPrecondition(
     const verdict = auditBlockField(e.block, "Verdict");
     if (verdict !== "READY" && verdict !== "NOT-READY") continue;
     const recordedFp = auditBlockField(e.block, "Source Fingerprint");
-    if (recordedFp && stage.workspace_requires && !sourceFreshnessOff) {
-      if (currentSourceFp === undefined) currentSourceFp = workspaceSourceFingerprint(pd);
-      if (currentSourceFp !== null && currentSourceFp !== recordedFp) {
-        staleSourceReceipts = true;
-        continue;
-      }
+    if (recordedFp && stage.workspace_requires && !sourceFreshnessOff && !settledSwarm) {
+      newestFingerprintedFp = recordedFp;
     }
     sawStageReview = true;
     const unit = auditBlockField(e.block, "Unit");
     if (unit) reviewedUnits.add(unit);
+  }
+  if (newestFingerprintedFp !== null) {
+    const currentSourceFp = workspaceSourceFingerprint(pd);
+    if (currentSourceFp !== null && currentSourceFp !== newestFingerprintedFp) {
+      staleSourceReceipts = true;
+      reviewedUnits.clear();
+      sawStageReview = false;
+    }
   }
 
   if (!perUnit) {

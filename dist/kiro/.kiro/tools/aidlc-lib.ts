@@ -3276,6 +3276,18 @@ export function repoDir(projectDir: string, repoName: string): string {
 // treat null as "no binding available" and keep today's behaviour (fail-open),
 // which also grandfathers receipts recorded before this shipped.
 
+// The literal directory names that hold AIDLC's own workspace state rather
+// than application source: the record tree, the CLI/IDE workspace shell, Bolt
+// swarm worktrees, and the sensor cache (e.g. the type-check sensor's
+// `.tsbuildinfo`, which a monorepo's per-package tsconfig anchors OUTSIDE the
+// record tree - core/tools/aidlc-sensor-type-check.ts's `sensorsDir`). Matched
+// via `**/<name>/**` pathspec glob magic so a nested occurrence (a monorepo
+// subpackage) is excluded exactly like the workspace root's own copy, not
+// just the top level - a plain pathspec (no glob magic) implicitly prefix-
+// matches as a directory ONLY relative to repoDir, so `aidlc` alone never
+// reaches `services/backend/aidlc`.
+const AIDLC_WORKSPACE_DIR_NAMES = ["aidlc", ".aidlc", ".aidlc-worktrees", ".aidlc-sensors"];
+
 function gitTreeFingerprint(repoDir: string): string | null {
   if (!isGitRepoDir(repoDir)) return null;
   const idx = join(
@@ -3289,23 +3301,58 @@ function gitTreeFingerprint(repoDir: string): string | null {
     spawnSync("git", ["-C", repoDir, "read-tree", "HEAD"], { env, encoding: "utf-8" });
     const add = spawnSync("git", ["-C", repoDir, "add", "-A"], { env, encoding: "utf-8" });
     if (add.status !== 0) return null;
-    // Drop the aidlc workspace family from the fingerprint: the record tree is
-    // COMMITTED by design and mutates on every engine action (the very
-    // REVIEW_COMPLETED append this fingerprint is stamped into, gate rows,
-    // state updates), so including it would make every receipt stale by the
-    // time the completion guard recomputes. Record-artifact freshness is
-    // already covered by the audit-event invalidation; this fingerprint is
-    // the APPLICATION SOURCE binding. --ignore-unmatch keeps this a no-op for
-    // sibling repos that carry no aidlc tree.
+    // Drop the aidlc workspace family from the fingerprint, at ANY depth: the
+    // record tree is COMMITTED by design and mutates on every engine action
+    // (the very REVIEW_COMPLETED append this fingerprint is stamped into,
+    // gate rows, state updates), so including it would make every receipt
+    // stale by the time the completion guard recomputes. Record-artifact
+    // freshness is already covered by the audit-event invalidation; this
+    // fingerprint is the APPLICATION SOURCE binding. --ignore-unmatch keeps
+    // this a no-op when nothing matches (sibling repos with no aidlc tree).
     spawnSync(
       "git",
-      ["-C", repoDir, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "aidlc", ".aidlc", ".aidlc-worktrees"],
+      [
+        "-C", repoDir, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--",
+        ...AIDLC_WORKSPACE_DIR_NAMES.map((name) => `:(glob)**/${name}/**`),
+      ],
       { env, encoding: "utf-8" },
     );
     const wt = spawnSync("git", ["-C", repoDir, "write-tree"], { env, encoding: "utf-8" });
     if (wt.status !== 0) return null;
     const sha = wt.stdout.trim();
-    return sha.length > 0 ? sha : null;
+    if (sha.length === 0) return null;
+
+    // A submodule is recorded in the tree above as a gitlink (its checked-out
+    // commit sha), so editing its tracked source WITHOUT committing inside the
+    // submodule leaves the gitlink - and therefore `sha` above - unchanged,
+    // shipping a reviewed-then-edited submodule as if nothing had changed.
+    // Fold each INITIALIZED submodule's own fingerprint (recursive - a
+    // submodule can itself nest submodules) into the parent's. An
+    // uninitialized submodule has no materialized content in the workspace,
+    // so it contributes nothing to bind. Gitlinks are read straight off the
+    // temp index (mode 160000 in `ls-files -s`) rather than via `git submodule
+    // status`, which spawns the submodule subsystem and measured 1s+ per call
+    // on Windows - a cost this fingerprint (recomputed on every completion
+    // route) cannot afford.
+    const lsFiles = spawnSync("git", ["-C", repoDir, "ls-files", "-s"], { env, encoding: "utf-8" });
+    const subLines: string[] = [];
+    if (lsFiles.status === 0) {
+      for (const line of lsFiles.stdout.split("\n")) {
+        if (!line.startsWith("160000 ")) continue;
+        const tabIdx = line.indexOf("\t");
+        if (tabIdx === -1) continue;
+        const subPath = line.slice(tabIdx + 1).trim();
+        if (!subPath) continue;
+        const subDir = join(repoDir, subPath);
+        if (!isGitRepoDir(subDir)) continue;
+        const subFp = gitTreeFingerprint(subDir);
+        if (subFp === null) return null;
+        subLines.push(`${subPath}=${subFp}`);
+      }
+    }
+    if (subLines.length === 0) return sha;
+    subLines.sort();
+    return createHash("sha256").update(`${sha}\n${subLines.join("\n")}`).digest("hex");
   } finally {
     rmSync(idx, { force: true });
   }

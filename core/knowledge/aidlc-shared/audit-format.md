@@ -83,7 +83,7 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 | `QUESTION_ANSWERED` | Non-gate question answered by user | Timestamp, Stage, Details | `tools/aidlc-log.ts answer` |
 | `SUMMARY_CONFIRMATION_RECORDED` | Consolidated-summary choice recorded after the matching prompt and a fresh human turn; reserved from the public audit CLI | Timestamp, Stage, Details, Checkpoint, Questions File, Questions SHA-256; optional Unit, Workflow | `tools/aidlc-log.ts answer --checkpoint summary-confirmation` |
 | `REVIEW_REQUESTED` | Conductor dispatches the §12a reviewer sub-agent | Timestamp, Stage, Reviewer, optional Unit (per-unit stages), optional Iteration | `tools/aidlc-log.ts review` |
-| `REVIEW_COMPLETED` | Reviewer verdict read; gates the approval of a reviewer-bearing stage | Timestamp, Stage, Reviewer, Verdict, Artifact Fingerprint (`sha256:<hex>` over declared artifact paths and bytes), optional Unit (per-unit stages), optional Iteration | `tools/aidlc-log.ts review --verdict` |
+| `REVIEW_COMPLETED` | Reviewer verdict read; gates the approval of a reviewer-bearing stage | Timestamp, Stage, Reviewer, Verdict, Artifact Fingerprint (`sha256:<hex>` over declared artifact paths and bytes), optional Unit (per-unit stages), optional Iteration, optional Source Fingerprint (`workspace_requires` stages only — a git-native content hash of the workspace source the reviewer inspected; binds the receipt to that source state so a later edit invalidates it. Off-switch: `AIDLC_SKIP_SOURCE_FRESHNESS=1`) | `tools/aidlc-log.ts review --verdict` |
 
 ### Artifact Events (3 events — hook-emitted)
 

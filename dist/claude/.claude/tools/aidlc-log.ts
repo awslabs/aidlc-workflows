@@ -19,6 +19,7 @@ import {
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
   isAutonomousMode,
+  loadStageGraphAll,
   parseCheckboxes,
   readAllAuditShards,
   recordDir,
@@ -29,6 +30,7 @@ import {
   stateFilePath,
   toPosix,
   withAuditLock,
+  workspaceSourceFingerprint,
 } from "./aidlc-lib.js";
 
 // Resolve the project dir AND assert that an active workflow exists before any
@@ -539,6 +541,18 @@ function handleReview(args: string[]): void {
     }
     fields["Artifact Fingerprint"] = fingerprint;
     eventType = "REVIEW_COMPLETED";
+    // #629 - bind the terminal receipt to the workspace source state the
+    // reviewer inspected. Only `workspace_requires` stages (code-generation)
+    // produce application source outside the record, so only their receipts
+    // carry the binding; verifyReviewerPrecondition recomputes and compares at
+    // every completion route. A null fingerprint (not a git checkout, git
+    // unavailable) records no field - the guard then keeps today's fail-open
+    // behaviour rather than refusing on an unbindable receipt.
+    const entry = loadStageGraphAll().find((s) => s.slug === flags.stage);
+    if (entry?.workspace_requires) {
+      const fp = workspaceSourceFingerprint(pd);
+      if (fp !== null) fields["Source Fingerprint"] = fp;
+    }
   } else {
     eventType = "REVIEW_REQUESTED";
   }
