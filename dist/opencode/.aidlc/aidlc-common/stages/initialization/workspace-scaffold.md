@@ -64,9 +64,12 @@ idempotent (created on demand):
 - `<record>/verification/`
 
 `reverse-engineering/` is deliberately absent from the inception list: that
-stage writes its 9 artifacts to the space-level per-repo store
-`aidlc/spaces/<space>/codekb/<repo>/` (shared across intents, refreshed for
-staleness), never to the intent record — see its stage file.
+stage writes its 9 deliverables to the space-level per-repo store
+`aidlc/spaces/<space>/codekb/<repo>/` — one shared view per repo, rewritten
+by each brownfield rerun — not into the intent record. The stage's own
+`memory.md` diary still lands at `<record>/inception/reverse-engineering/`,
+created on demand when the stage runs; this scaffold simply does not
+pre-create that directory. See the stage file for the write paths.
 
 ### Step 4: Display Confirmation
 
