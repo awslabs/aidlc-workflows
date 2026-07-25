@@ -48,12 +48,9 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ### Step 1: Load the Lead Persona (mob stage)
 
-Load the roster in `directive.inline_context_paths` - the directive delivers
-undelivered files as content in `inline_context_content`; read by path only the
-`inline_context_omitted` entries (per the stage protocol's loading rules). For
-this mob the roster contains the aidlc-product-agent persona and its
-shared/role knowledge only; the product manager owns the inline draft and
-integration work.
+Read every path in `directive.inline_context_paths` per the stage protocol. For
+this mob the roster contains the aidlc-product-agent persona and its shared/role
+knowledge only; the product manager owns the inline draft and integration work.
 
 This stage runs `mode: mob` (stage-protocol.md §5 "Multi-agent stages"): the support agents (aidlc-design-agent for user experience, aidlc-developer-agent for implementability, aidlc-quality-agent for testability) are NOT voices to adopt — they are dispatched as independent participants during PART 2. Do not load their personas into your own context.
 
@@ -135,8 +132,8 @@ participants, and the Product Leader reviews afterwards (§12a).
 
 **Round 1 — dispatch the mob.** Per stage-protocol.md §5 `mode: mob`,
 dispatch all three support agents in parallel against the draft (artifacts
-by path: the two draft artifacts, the Q&A file, requirements.md; rules as
-the directive's pasted `rules_content`), mutually blind. Each WRITES its contribution file at
+by path: the two draft artifacts, the Q&A file, requirements.md; rules as the
+accumulated steering bundle), mutually blind. Each WRITES its contribution file at
 `<record>/inception/user-stories/contributions/<agent-slug>.md` (§11 format:
 identity-marker first line, Contribution, Positions): design on UX and
 persona fidelity, developer on implementability and story sizing, quality on

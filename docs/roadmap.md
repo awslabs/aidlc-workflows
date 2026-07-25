@@ -96,7 +96,6 @@ delivered (`reviewer_max_iterations` + HITL escalation, reading
 
 ## Known gaps not on the minor ladder
 
-- Rules enforcement (#495): `rules_in_context` paths are emitted but nothing forces the conductor to read them; quietly undermines Goal 2 at runtime.
 - Stage-level rules layer (`aidlc-stage-<slug>.md`): reserved, unbuilt (Goal 2).
 - Plugin deferred surfaces: agents/scopes/memory/knowledge projection, `when:` evaluation, marketplace (Goal 2).
 - Sensor blocking severity (#431): sensors are advisory-only; a gate cannot be halted by a machine check (adjacent to Goal 4, deliberately out of 2.4.0).

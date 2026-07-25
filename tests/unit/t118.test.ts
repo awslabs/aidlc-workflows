@@ -132,11 +132,13 @@ import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
+  createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
   removeWorkspaceRecord,
   REPO_ROOT,
   resetAidlcEnv,
+  runOrchestrateNext,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
@@ -207,7 +209,7 @@ interface EmitResult {
 // Returns the parsed directive (the .sh piped stdout+stderr 2>&1 through
 // json_field; here we JSON.parse the engine's single emitted directive).
 function emitScopeStage(scope: string, stage: string): EmitResult {
-  const proj = createTestProject();
+  const proj = createOrchestrationTestProject();
   tempDirs.push(proj);
   seedStateFile(proj, join(FIXTURES_DIR, "state-initialization-done.md"));
   const statePath = seededStateFile(proj);
@@ -234,13 +236,14 @@ function emitScopeStage(scope: string, stage: string): EmitResult {
       `${pre}${slug}${dash}${stages[slug] === "EXECUTE" ? "EXECUTE" : "SKIP"}`,
   );
   writeFileSync(statePath, swapped, "utf-8");
-  const res = spawnSync(
-    BUN,
-    [TOOL, "next", "--stage", stage, "--project-dir", proj],
-    { encoding: "utf-8", env: cleanEnv() },
-  );
-  const raw = `${res.stdout ?? ""}${res.stderr ?? ""}`;
-  return { status: res.status ?? -1, directive: parseDirective(res.stdout ?? ""), raw };
+  const res = runOrchestrateNext(TOOL, proj, ["--stage", stage], {
+    env: cleanEnv(),
+  });
+  return {
+    status: res.status,
+    directive: parseDirective(res.stdout),
+    raw: res.out,
+  };
 }
 
 interface FingerprintLoopResult {
@@ -260,7 +263,7 @@ interface FingerprintLoopResult {
 //   (3) bare `next` then reads the pivoted state and emits the run-stage for the
 //       fingerprint — the exact stage|phase|gate of the frozen golden.
 function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopResult {
-  const proj = createTestProject();
+  const proj = createOrchestrationTestProject();
   tempDirs.push(proj);
   seedStateFile(proj, join(FIXTURES_DIR, "state-initialization-done.md"));
   const statePath = seededStateFile(proj);
@@ -273,11 +276,9 @@ function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopRes
   md = md.replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: state-init");
   writeFileSync(statePath, md, "utf-8");
   // STEP 1: the print naming the execute delegate.
-  const step1 = spawnSync(
-    BUN,
-    [TOOL, "next", "--stage", fp, "--project-dir", proj],
-    { encoding: "utf-8", env: cleanEnv() },
-  );
+  const step1 = runOrchestrateNext(TOOL, proj, ["--stage", fp], {
+    env: cleanEnv(),
+  });
   // STEP 2: commit the jump the print named (mutating state).
   spawnSync(
     BUN,
@@ -285,15 +286,14 @@ function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopRes
     { encoding: "utf-8", env: cleanEnv() },
   );
   // STEP 3: re-run `next` over the pivoted state — the landed run-stage.
-  const step3 = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
-    encoding: "utf-8",
+  const step3 = runOrchestrateNext(TOOL, proj, [], {
     env: cleanEnv(),
   });
   return {
-    print: parseDirective(step1.stdout ?? ""),
-    printRaw: `${step1.stdout ?? ""}${step1.stderr ?? ""}`,
-    runStage: parseDirective(step3.stdout ?? ""),
-    runStageRaw: `${step3.stdout ?? ""}${step3.stderr ?? ""}`,
+    print: parseDirective(step1.stdout),
+    printRaw: step1.out,
+    runStage: parseDirective(step3.stdout),
+    runStageRaw: step3.out,
   };
 }
 
@@ -301,15 +301,17 @@ function emitScopeFingerprintLoop(scope: string, fp: string): FingerprintLoopRes
 // gate-axis anchor (t118:186-193), where the happy path runs the in-flight
 // init stage straight from state.
 function emitNext(fixtureFile: string): EmitResult {
-  const proj = createTestProject();
+  const proj = createOrchestrationTestProject();
   tempDirs.push(proj);
   seedStateFile(proj, join(FIXTURES_DIR, fixtureFile));
-  const res = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
-    encoding: "utf-8",
+  const res = runOrchestrateNext(TOOL, proj, [], {
     env: cleanEnv(),
   });
-  const raw = `${res.stdout ?? ""}${res.stderr ?? ""}`;
-  return { status: res.status ?? -1, directive: parseDirective(res.stdout ?? ""), raw };
+  return {
+    status: res.status,
+    directive: parseDirective(res.stdout),
+    raw: res.out,
+  };
 }
 
 // emitNextNoState (t118.sh:289-315): spawn `next [...args]` against a FRESH

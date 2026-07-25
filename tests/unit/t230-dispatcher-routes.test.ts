@@ -209,6 +209,12 @@ describe("t230 dispatcher route parity", () => {
       toolArgs: ["next", "compose"],
     },
     {
+      name: "continue passes through to orchestrate",
+      routerArgs: ["continue", "invalid-token"],
+      tool: "aidlc-orchestrate.ts",
+      toolArgs: ["continue", "invalid-token"],
+    },
+    {
       name: "version is static and byte-compatible with utility",
       routerArgs: ["version"],
       tool: "aidlc-utility.ts",

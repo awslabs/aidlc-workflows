@@ -18,6 +18,8 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
@@ -142,6 +144,7 @@ ${row(" ", "build-and-test")}
 function seedProject(current: string): string {
   const proj = createTestProject();
   tempDirs.push(proj);
+  seedAidlcMemory(proj);
   writeFileSync(seededStateFile(proj), constructionState(current));
   return proj;
 }
@@ -149,6 +152,7 @@ function seedProject(current: string): string {
 function seedInceptionProject(current: string): string {
   const proj = createTestProject();
   tempDirs.push(proj);
+  seedAidlcMemory(proj);
   writeFileSync(seededStateFile(proj), inceptionState(current));
   return proj;
 }
@@ -266,7 +270,20 @@ function runOrch(proj: string, args: string[]): RunResult {
 }
 
 function runNext(proj: string): RunResult {
-  return runOrch(proj, ["next"]);
+  const env = { ...process.env };
+  delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  const r = runOrchestrateNext(ORCH, proj, [], { env });
+  if (r.directive === null) {
+    throw new Error(
+      `aidlc-orchestrate did not emit parseable JSON. status=${r.status}\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`,
+    );
+  }
+  return {
+    directive: r.directive as Directive,
+    stdout: r.stdout,
+    stderr: r.stderr,
+    status: r.status,
+  };
 }
 
 function runReport(proj: string): RunResult {

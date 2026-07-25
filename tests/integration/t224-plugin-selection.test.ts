@@ -7,7 +7,12 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { AIDLC_MEMORY_SRC, AIDLC_SRC, REPO_ROOT } from "../harness/fixtures.ts";
+import {
+  AIDLC_MEMORY_SRC,
+  AIDLC_SRC,
+  REPO_ROOT,
+  runOrchestrateNext,
+} from "../harness/fixtures.ts";
 
 const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
 const BUN = process.execPath;
@@ -53,12 +58,24 @@ function runUtility(project: string, args: string[]) {
 }
 
 function runOrchestrate(project: string, args: string[]) {
-  return spawnSync(BUN, [".claude/tools/aidlc-orchestrate.ts", ...args], {
-    cwd: project,
-    encoding: "utf-8",
-    timeout: TIMEOUT_MS - 5_000,
-    env: { ...process.env, CLAUDE_PROJECT_DIR: project, AIDLC_HARNESS_DIR: ".claude" },
-  });
+  const result = runOrchestrateNext(
+    join(project, ".claude", "tools", "aidlc-orchestrate.ts"),
+    project,
+    args,
+    {
+      cwd: project,
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: project,
+        AIDLC_HARNESS_DIR: ".claude",
+      },
+    },
+  );
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
 }
 
 function stageTableRegion(project: string): string {
@@ -498,7 +515,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     const init = runUtility(composedProj, ["intent-birth", "--scope", scopeName, "--project-dir", composedProj]);
     expect(init.status).toBe(0);
 
-    const next = runOrchestrate(composedProj, ["next", "--scope", scopeName]);
+    const next = runOrchestrate(composedProj, ["--scope", scopeName]);
     expect(next.status).toBe(0);
     expect(next.stdout).not.toContain("Unknown scope");
     const directive = JSON.parse(next.stdout.trim());

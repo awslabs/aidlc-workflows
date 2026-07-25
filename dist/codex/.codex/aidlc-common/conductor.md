@@ -46,7 +46,7 @@ first line, per `stage-protocol.md` §11); the lead alone edits the stage's
   boundary that loads the persona for you. When the stage also declares
   `support_agents`, each support agent is a real spoke: after the lead's
   draft returns, dispatch every support agent against the draft (artifacts
-  by path, rules as the directive's pasted `rules_content`; they are
+  by path, rules as the accumulated steering bundle; they are
   mutually blind: no spoke's brief contains another's contribution); each
   spoke writes its contribution file; then dispatch the lead once more to
   integrate the contributions into the artifacts.

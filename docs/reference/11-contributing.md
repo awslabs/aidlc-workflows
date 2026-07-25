@@ -44,7 +44,7 @@ For the full architecture, see [reference/01-architecture.md](01-architecture.md
 
 1. **Fork and branch** from `main`, then run `bun install --frozen-lockfile`
 2. **Read the architecture** -- [reference/01-architecture.md](01-architecture.md) explains the execution model, agent delegation, and hook system
-3. **Understand the entry points** -- the deterministic engine `core/tools/aidlc-orchestrate.ts` (with exactly three subcommands: `next`, `report`, and `park`) owns routing; the conductor `harness/claude/skills/aidlc/SKILL.md` is a thin forwarding loop that acts on its directives. For the normative engine / directive / conductor / swarm contract see [The Skill System](17-skill-system.md)
+3. **Understand the entry points** -- the deterministic engine `core/tools/aidlc-orchestrate.ts` (with exactly four subcommands: `next`, `continue`, `report`, and `park`; `continue` is internal steering transport) owns routing; the conductor `harness/claude/skills/aidlc/SKILL.md` is a thin forwarding loop that acts on its directives. For the normative engine / directive / conductor / swarm contract see [The Skill System](17-skill-system.md)
 4. **Make changes** -- Edit the harness-neutral source in `core/` (tools, stages, agents, hooks, rules, knowledge) or a harness surface in `harness/<name>/` (the orchestrator skill, settings). Then run `bun scripts/package.ts` to regenerate `dist/` — never hand-edit `dist/`, the drift guard (`package.ts --check`) will fail CI
 5. **Test** -- Run `bun tests/run-tests.ts` before submitting
 6. **Submit** -- Open a PR against `main`

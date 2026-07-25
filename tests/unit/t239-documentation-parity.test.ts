@@ -363,7 +363,7 @@ describe("documentation parity derives current behavior from authored implementa
   });
 
   test("engine docs match the subcommands in aidlc-orchestrate main", () => {
-    expect(engineCommands).toEqual(["next", "report", "park"]);
+    expect(engineCommands).toEqual(["next", "continue", "report", "park"]);
     const expected =
       `exactly ${numberWord(engineCommands.length)} subcommands: ${codeList(engineCommands)}`;
 

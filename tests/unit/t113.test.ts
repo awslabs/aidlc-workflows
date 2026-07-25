@@ -38,6 +38,20 @@ import {
 // --- Well-formed fixtures, one per kind (mirror t113-directive-schema.sh:18-56) ---
 // Fresh object per call so a `delete`/spread in one case can't bleed into another.
 
+function loadSteering(): Record<string, unknown> {
+  return {
+    kind: "load-steering",
+    stage: "application-design",
+    bundle: "sha256:0123456789abcdef",
+    part: 1,
+    parts: 2,
+    rules_content: [
+      { path: "aidlc/spaces/default/memory/org.md", text: "# Organization\n" },
+    ],
+    continue_token: "opaque-token",
+  };
+}
+
 function runStage(): Record<string, unknown> {
   return {
     kind: "run-stage",
@@ -137,6 +151,10 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   // .sh lines 75-82
   // ============================================================
 
+  test("load-steering well-formed -> VALID", () => {
+    expect(validateDirective(loadSteering()).valid).toBe(true);
+  });
+
   test("run-stage well-formed -> VALID", () => {
     expect(validateDirective(runStage()).valid).toBe(true);
   });
@@ -208,6 +226,14 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   // Per-kind missing required field — names the field + kind (8 assertions)
   // .sh lines 99-121
   // ============================================================
+
+  test("load-steering missing continue_token -> error", () => {
+    const d = loadSteering();
+    delete d.continue_token;
+    expect(errs(d)).toContain(
+      "load-steering: missing required field: continue_token",
+    );
+  });
 
   test("run-stage missing lead_agent -> error", () => {
     const d = runStage();
@@ -297,6 +323,23 @@ describe("t113 directive-schema — validateDirective (migrated from t113-direct
   test("run-stage gate 'yes' -> boolean type error", () => {
     expect(errs({ ...runStage(), gate: "yes" })).toContain(
       'run-stage: gate must be boolean or "unresolved", got string',
+    );
+  });
+
+  test("load-steering rejects part beyond parts", () => {
+    expect(errs({ ...loadSteering(), part: 3, parts: 2 })).toContain(
+      "load-steering: part must be less than or equal to parts",
+    );
+  });
+
+  test("load-steering validates path/text entry shape", () => {
+    expect(
+      errs({
+        ...loadSteering(),
+        rules_content: [{ path: 42, text: false }],
+      }),
+    ).toContain(
+      "load-steering: rules_content[0].path must be string, got number",
     );
   });
 

@@ -27,6 +27,8 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
@@ -114,6 +116,7 @@ function coverUnit(proj: string, unit: string, slug: string, names: string[]): v
 function seedProject(current: string): string {
   const proj = createTestProject();
   tempDirs.push(proj);
+  seedAidlcMemory(proj);
   writeFileSync(seededStateFile(proj), constructionState(current));
   return proj;
 }
@@ -125,12 +128,11 @@ function envNoScope(): NodeJS.ProcessEnv {
 }
 
 function runNext(proj: string): Directive {
-  const r = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], { encoding: "utf-8", env: envNoScope() });
-  try {
-    return JSON.parse((r.stdout ?? "").trim()) as Directive;
-  } catch {
+  const r = runOrchestrateNext(ORCH, proj, [], { env: envNoScope() });
+  if (r.directive === null) {
     throw new Error(`runNext no JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`);
   }
+  return r.directive as Directive;
 }
 
 /**

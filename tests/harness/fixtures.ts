@@ -165,6 +165,104 @@ export function createTestProject(): string {
   return proj;
 }
 
+/** Copy the shipped default-space method into an existing test project. */
+export function seedAidlcMemory(proj: string): void {
+  if (existsSync(AIDLC_MEMORY_SRC)) {
+    cpSync(AIDLC_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
+  }
+}
+
+/**
+ * Create a project suitable for an orchestration path that can reach
+ * run-stage. The baseline createTestProject intentionally leaves memory empty
+ * for first-install and memory-lifecycle tests.
+ */
+export function createOrchestrationTestProject(): string {
+  const proj = createTestProject();
+  seedAidlcMemory(proj);
+  return proj;
+}
+
+export interface OrchestrateTestResult {
+  status: number;
+  stdout: string;
+  stderr: string;
+  out: string;
+  directive: Record<string, unknown> | null;
+  steering: Record<string, unknown>[];
+}
+
+/**
+ * Spawn `next`, silently consume deterministic load-steering continuations,
+ * and return the first non-steering directive. Older engine contract tests can
+ * then keep asserting the routing result while t248 owns the transport details.
+ */
+export function runOrchestrateNext(
+  tool: string,
+  proj: string,
+  args: string[] = [],
+  options: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  } = {},
+): OrchestrateTestResult {
+  let command = ["next", ...args, "--project-dir", proj];
+  let stderr = "";
+  const steering: Record<string, unknown>[] = [];
+
+  for (let attempts = 0; attempts < 1_000; attempts++) {
+    const res = spawnSync(process.execPath, [tool, ...command], {
+      encoding: "utf-8",
+      cwd: options.cwd,
+      env: options.env,
+    });
+    const stdout = res.stdout ?? "";
+    stderr += res.stderr ?? "";
+    let directive: Record<string, unknown> | null = null;
+    try {
+      directive = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    } catch {
+      // Preserve the real process result so the caller's existing assertion
+      // reports the malformed or empty output.
+    }
+
+    if (directive?.kind !== "load-steering") {
+      return {
+        status: res.status ?? -1,
+        stdout,
+        stderr,
+        out: `${stdout}${stderr}`,
+        directive,
+        steering,
+      };
+    }
+
+    steering.push(directive);
+    const token = directive.continue_token;
+    if (typeof token !== "string" || token.length === 0) {
+      return {
+        status: res.status ?? -1,
+        stdout,
+        stderr,
+        out: `${stdout}${stderr}`,
+        directive,
+        steering,
+      };
+    }
+    command = ["continue", token, "--project-dir", proj];
+  }
+
+  const message = "steering continuation limit exceeded";
+  return {
+    status: -1,
+    stdout: "",
+    stderr: `${stderr}${message}\n`,
+    out: `${stderr}${message}\n`,
+    directive: null,
+    steering,
+  };
+}
+
 /**
  * The absolute intents dir for a space: `<proj>/aidlc/spaces/<space>/intents`.
  */
@@ -532,9 +630,7 @@ export function setupIntegrationProject(
   // Copy the relocated method tree (aidlc/spaces/default/memory/) to the project
   // root beside .claude/ — the resolver reads the rule layers from there now
   // (P5 relocation). Absent in a tree built before P5, so guard it.
-  if (existsSync(AIDLC_MEMORY_SRC)) {
-    cpSync(AIDLC_MEMORY_SRC, join(proj, "aidlc"), { recursive: true });
-  }
+  seedAidlcMemory(proj);
 
   if (opts.withState) seedStateFile(proj, opts.withState);
   if (opts.withAudit) seedAuditFile(proj);

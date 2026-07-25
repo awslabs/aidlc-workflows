@@ -67,7 +67,8 @@ import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
-  createTestProject,
+  createOrchestrationTestProject,
+  runOrchestrateNext,
   seedAuditFile,
   seededAuditShard,
   seedStateFile,
@@ -87,13 +88,23 @@ afterEach(() => {
 
 /** A fresh temp project registered for teardown (mirrors create_test_project). */
 function freshProject(): string {
-  const proj = createTestProject();
+  const proj = createOrchestrationTestProject();
   projects.push(proj);
   return proj;
 }
 
 /** Combined stdout+stderr of a spawned orchestrate/state invocation (the .sh's 2>&1). */
 function run(tool: string, args: string[]): { out: string; status: number } {
+  if (tool === TOOL && args[0] === "next") {
+    const projectIndex = args.indexOf("--project-dir");
+    const project = args[projectIndex + 1];
+    const nextArgs = [
+      ...args.slice(1, projectIndex),
+      ...args.slice(projectIndex + 2),
+    ];
+    const result = runOrchestrateNext(tool, project, nextArgs);
+    return { out: result.out, status: result.status };
+  }
   const res = spawnSync(BUN, [tool, ...args], { encoding: "utf-8" });
   return {
     out: `${res.stdout ?? ""}${res.stderr ?? ""}`,

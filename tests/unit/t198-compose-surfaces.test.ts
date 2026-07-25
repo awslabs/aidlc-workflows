@@ -37,6 +37,8 @@ import {
   FIXTURES_DIR,
   removeWorkspaceRecord,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { classifyTerminalCommand } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -53,11 +55,11 @@ interface RunResult {
 }
 
 function runNext(proj: string, args: string[]): RunResult {
-  const res = spawnSync(BUN, [ORCH, "next", ...args, "--project-dir", proj], {
-    encoding: "utf-8",
+  const res = runOrchestrateNext(ORCH, proj, args, {
     cwd: proj,
+    env: process.env,
   });
-  return { rc: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
+  return { rc: res.status, out: res.out };
 }
 
 function runUtility(proj: string, args: string[]): RunResult {
@@ -158,6 +160,7 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
 describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
   test("bare compose over an active workflow names the in-flight composer", () => {
     proj = createTestProject();
+    seedAidlcMemory(proj);
     seedStateFile(proj, MID_IDEATION);
     const d = directiveOf(runNext(proj, ["compose"]).out);
     expect(d.kind).toBe("print");
@@ -170,6 +173,7 @@ describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
 
   test("bare next (no compose) still advances - the dispatch branch is inert when unused", () => {
     proj = createTestProject();
+    seedAidlcMemory(proj);
     seedStateFile(proj, MID_IDEATION);
     const d = directiveOf(runNext(proj, []).out);
     expect(d.kind).toBe("run-stage");

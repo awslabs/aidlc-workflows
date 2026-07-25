@@ -252,8 +252,9 @@ territory:
   claimed Unit before merge (the lying-conductor guard), serialise the
   merge-back, and emit the six `SWARM_*` audit events.
 - **The engine** `aidlc-orchestrate.ts` — the deterministic router with exactly
-  three subcommands: `next`, `report`, and `park`; it decides when a
-  Construction batch is eligible for the swarm.
+  four subcommands: `next`, `continue`, `report`, and `park`; `continue` is
+  internal steering transport. It decides when a Construction batch is
+  eligible for the swarm.
 - **The Bolt-DAG parser** — the compile step that reads the edge block into
   `runtime-graph.json`.
 

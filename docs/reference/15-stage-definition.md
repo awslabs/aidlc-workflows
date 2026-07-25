@@ -299,7 +299,7 @@ runs. Five values, four active:
   out the conductor's context). When the stage also declares
   `support_agents`, each one is dispatched as a real spoke against the
   lead's returned draft (mutually blind briefs carrying artifacts by path
-  and rules as pasted `rules_content`) and the lead is dispatched once
+  and the accumulated steering bundle) and the lead is dispatched once
   more to integrate.
 - `pipeline` — chain. The lead drafts; each support agent enriches in
   declared order, every link seeing the draft plus all earlier

@@ -88,6 +88,8 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   FIXTURES_DIR,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
@@ -110,6 +112,7 @@ afterAll(() => {
 function projWithState(fixture: string): string {
   const p = createTestProject();
   tempDirs.push(p);
+  seedAidlcMemory(p);
   seedStateFile(p, join(FIXTURES_DIR, fixture));
   return p;
 }
@@ -127,6 +130,11 @@ function orchestrate(args: string[], p: string): CliResult {
   });
   const stdout = res.stdout ?? "";
   return { status: res.status ?? -1, out: `${stdout}${res.stderr ?? ""}`, stdout };
+}
+
+function orchestrateNext(p: string): CliResult {
+  const res = runOrchestrateNext(ORCH_TOOL, p);
+  return { status: res.status, out: res.out, stdout: res.stdout };
 }
 
 /** Spawn `bun aidlc-state.ts <args...> --project-dir <p>`. Mirrors `bun "$STATE_TOOL" ...`. */
@@ -534,7 +542,7 @@ describe("t115 initialization stages reject gate lifecycle outcomes", () => {
 describe("t115 gated approve round-trip (report -> aidlc-state approve)", () => {
   test("4: next before report points at the active gated stage", () => {
     const p = projWithState("state-mid-ideation.md");
-    const r = orchestrate(["next"], p);
+    const r = orchestrateNext(p);
     expect(r.out).toContain('"stage":"feasibility"');
   });
 
@@ -565,7 +573,7 @@ describe("t115 gated approve round-trip (report -> aidlc-state approve)", () => 
     expect(countEvent(p, "STAGE_STARTED")).toBe(1);
 
     // .sh T8: the follow-up next reflects the advanced stage.
-    const after = orchestrate(["next"], p);
+    const after = orchestrateNext(p);
     expect(after.out).toContain('"stage":"scope-definition"');
 
     // .sh T9: no orphan audit lock dir after report (gated path).

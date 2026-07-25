@@ -74,6 +74,8 @@ import {
   createTestProject,
   FIXTURES_DIR,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seedStateFile,
   seededAuditDir,
   seededRecordDir,
@@ -108,6 +110,7 @@ afterEach(() => {
 function seedCodegenProject(autonomy: string): string {
   const proj = createTestProject();
   engineProjects.push(proj);
+  seedAidlcMemory(proj);
   seedStateFile(proj, join(FIXTURES_DIR, "state-construction.md"));
   const statePath = seededStateFile(proj);
   let state = readFileSync(statePath, "utf-8");
@@ -164,17 +167,11 @@ interface Directive {
 
 /** Run `aidlc-orchestrate.ts next` against the project and parse the directive. */
 function runNext(proj: string): { directive: Directive; raw: string } {
-  const r = spawnSync(BUN, [TOOL, "next", "--project-dir", proj], {
-    encoding: "utf-8",
-  });
-  const raw = `${r.stdout ?? ""}${r.stderr ?? ""}`.trim();
-  let directive: Directive;
-  try {
-    directive = JSON.parse(raw) as Directive;
-  } catch {
-    directive = {};
-  }
-  return { directive, raw };
+  const r = runOrchestrateNext(TOOL, proj);
+  return {
+    directive: (r.directive ?? {}) as Directive,
+    raw: r.out.trim(),
+  };
 }
 
 // ---------------------------------------------------------------------------

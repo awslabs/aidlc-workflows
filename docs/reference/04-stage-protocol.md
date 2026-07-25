@@ -552,19 +552,12 @@ dynamic per workflow position.
 
 ### Inline Stages and Inline Mob Leads
 
-1. The directive delivers the roster as content: `inline_context_content`
-   carries each persona/knowledge file's text for agents not yet delivered
-   this workflow (deliver-once - files delivered on an earlier stage persist
-   in the session), and `rules_content` carries the active-space rules
-   (re-read every stage). `inline_context_paths` remains the full roster:
-   lead + supports for `inline`, and the lead only for `mob` because mob
-   supports are dispatched. Agent names alone are not loaded context.
-2. The roster always partitions into content + omitted:
-   `inline_context_omitted` lists budget overflow AND earlier-delivered
-   files alike, so nothing is silently absent. Read by path every
-   `rules_content_omitted` entry and every `inline_context_omitted` entry
-   not already in context (skip what you already hold; after a fresh
-   session resume mid-workflow, re-read them).
+1. Apply the ordered `load-steering` sequence before `run-stage`. It delivers
+   every substantive active-space rule as content and re-runs on every stage.
+2. Read every `inline_context_paths` entry: lead + supports for `inline`, and
+   the lead only for `mob` because mob supports are dispatched. Persona and
+   knowledge remain path-loaded. Show any `context_warnings` verbatim and
+   continue with the readable roster. Agent names alone are not loaded context.
 3. Apply every loaded perspective during execution. Do not omit support-agent
    perspectives on `inline` or the lead's on `mob`.
 
@@ -573,10 +566,9 @@ dynamic per workflow position.
 1. Dispatch the named harness agent; its config loads the persona and
    knowledge (reviewer checklists are absorbed into the reviewer agents'
    bodies at build time).
-2. Paste the directive's `rules_content` entries verbatim into the brief
-   (plus the `rules_content_omitted` paths to read); pass relevant
-   prior-artifact paths and task instructions rather than copied persona or
-   knowledge prose.
+2. Paste the accumulated `load-steering` rule bundle verbatim into the brief;
+   pass relevant prior-artifact paths and task instructions rather than copied
+   persona or knowledge prose.
 3. Select the agent named by the stage metadata.
 
 ### Multi-Agent Stages (Ensemble Topologies)

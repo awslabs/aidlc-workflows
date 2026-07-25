@@ -75,9 +75,10 @@ import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
-  createTestProject,
+  createOrchestrationTestProject,
   FIXTURES_DIR,
   resetAidlcEnv,
+  runOrchestrateNext,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -103,18 +104,11 @@ function runNext(
   args: string[],
   extraEnv: Record<string, string> = {},
 ): RunResult {
-  const res = spawnSync(
-    BUN,
-    [TOOL, "next", ...args, "--project-dir", proj],
-    {
-      encoding: "utf-8",
-      cwd: proj,
-      env: { ...process.env, ...extraEnv },
-    },
-  );
-  const stdout = res.stdout ?? "";
-  const stderr = res.stderr ?? "";
-  return { rc: res.status ?? -1, out: `${stdout}${stderr}` };
+  const res = runOrchestrateNext(TOOL, proj, args, {
+    cwd: proj,
+    env: { ...process.env, ...extraEnv },
+  });
+  return { rc: res.status, out: res.out };
 }
 
 let proj = "";
@@ -133,25 +127,25 @@ afterEach(() => {
 // ===========================================================================
 describe("t114 happy path: in-flight current stage -> run-stage", () => {
   test("1: in-flight current stage -> run-stage directive", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     expect(runNext(proj, []).out).toContain('"kind":"run-stage"');
   });
 
   test("2: run-stage names the current stage (feasibility)", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     expect(runNext(proj, []).out).toContain('"stage":"feasibility"');
   });
 
   test("3: run-stage carries lead_agent from the graph node", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     expect(runNext(proj, []).out).toContain('"lead_agent":"aidlc-architect-agent"');
   });
 
   test("4: brownfield bugfix active stage -> run-stage reverse-engineering", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, BROWNFIELD_INIT_DONE);
     expect(runNext(proj, []).out).toContain('"stage":"reverse-engineering"');
   });
@@ -165,7 +159,7 @@ describe("t114 scope precedence + validation", () => {
     // state-mid-inception has a valid Scope (bugfix); an explicit bad --scope is
     // validated regardless of the state scope and errors with the verbatim
     // `Unknown scope "..."` wording — never swallowed into a current-stage run.
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_INCEPTION);
     const out = runNext(proj, ["--scope", "bogusscope"]).out;
     expect(out).toContain('"kind":"error"');
@@ -175,7 +169,7 @@ describe("t114 scope precedence + validation", () => {
   test("6: --scope flag beats AWS_AIDLC_DEFAULT_SCOPE env", () => {
     // No state file. An invalid env scope would error IF env won; a valid --scope
     // flag must take precedence, yielding a run-stage with no error.
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(
       proj,
       ["--scope", "bugfix", "--stage", "requirements-analysis"],
@@ -187,7 +181,7 @@ describe("t114 scope precedence + validation", () => {
   test("7: env scope beats default (poc resolved, run-stage emitted)", () => {
     // Valid env scope (poc) resolves; --stage surfaces a run-stage directive.
     // The default (feature) is never reached because env supplied a valid scope.
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["--stage", "intent-capture"], {
       AWS_AIDLC_DEFAULT_SCOPE: "poc",
     }).out;
@@ -197,7 +191,7 @@ describe("t114 scope precedence + validation", () => {
   test("8: invalid env scope -> verbatim AWS_AIDLC_DEFAULT_SCOPE error", () => {
     // The env path validates by composing `aidlc-utility.ts resolve-env-scope`,
     // which owns the canonical `Invalid AWS_AIDLC_DEFAULT_SCOPE "..."` wording.
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, [], {
       AWS_AIDLC_DEFAULT_SCOPE: "frobnicate",
     }).out;
@@ -210,18 +204,18 @@ describe("t114 scope precedence + validation", () => {
 // ===========================================================================
 describe("t114 read-only dispatch + guards", () => {
   test("9: --status -> print directive (read-only dispatch)", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     expect(runNext(proj, ["--status"]).out).toContain('"kind":"print"');
   });
 
   test("10: --version -> print directive (terminal read-only)", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     expect(runNext(proj, ["--version"]).out).toContain('"kind":"print"');
   });
 
   test("11: mutually-exclusive --stage+--phase -> error directive", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     expect(
       runNext(proj, ["--stage", "feasibility", "--phase", "ideation"]).out,
     ).toContain("Cannot use --stage and --phase together");
@@ -236,7 +230,7 @@ describe("t114 help-request routing", () => {
   test("sole bare `help` on a fresh workspace -> help print, not a birth ask", () => {
     // Without the sole-token special case, `help` fell into intentWords and
     // Branch 8 offered to birth an intent literally named "help".
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["help"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc-utility.ts help");
@@ -244,7 +238,7 @@ describe("t114 help-request routing", () => {
   });
 
   test("sole bare `-h` on a fresh workspace -> help print, not a birth ask", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["-h"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc-utility.ts help");
@@ -252,7 +246,7 @@ describe("t114 help-request routing", () => {
   });
 
   test("sole bare `help` over an active workflow -> help print, not a stage advance", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     const out = runNext(proj, ["help"]).out;
     expect(out).toContain('"kind":"print"');
@@ -260,7 +254,7 @@ describe("t114 help-request routing", () => {
   });
 
   test("`intent help` -> global help print, not a switch to an intent named help", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["intent", "help"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc-utility.ts help");
@@ -268,7 +262,7 @@ describe("t114 help-request routing", () => {
   });
 
   test("`space help` -> global help print, not a switch to a space named help", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["space", "help"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc-utility.ts help");
@@ -278,13 +272,13 @@ describe("t114 help-request routing", () => {
   test("`help` inside a longer description stays freeform intent text", () => {
     // Only the SOLE token is a help request; a description mentioning help
     // still reaches the freeform funnel (Branch 8 ask on a fresh workspace).
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["help", "me", "build", "an", "auth", "service"]).out;
     expect(out).toContain('"kind":"ask"');
   });
 
   test("`intent -h` routes to help like `intent help`", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["intent", "-h"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc-utility.ts help");
@@ -293,7 +287,7 @@ describe("t114 help-request routing", () => {
   test("`space -h` routes to help like `space help`", () => {
     // The engine parser and classifyTerminalCommand are supposed to mirror
     // each other; the Kiro seam is pinned elsewhere, this pins the engine.
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["space", "-h"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc-utility.ts help");
@@ -305,7 +299,7 @@ describe("t114 help-request routing", () => {
     // line - re-tokenizing prose deterministically hijacked real descriptions.
     // The SKILL.md forwarding prose owns marker-stripping; a marker-led blob
     // lands in the ask funnel (a human gate), never a silent misroute.
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["/aidlc intent help"]).out;
     expect(out).toContain('"kind":"ask"');
     expect(out).not.toContain("aidlc-utility.ts intent");
@@ -322,7 +316,7 @@ describe("t114 with-state jump -> execute print", () => {
     // existing workflow is a MUTATION, and `next` is read-only — so the engine
     // emits a `print` naming `aidlc-jump.ts execute`, carrying the tool-resolved
     // target + direction.
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     const out = runNext(proj, ["--phase", "construction"]).out;
     expect(out).toContain('"kind":"print"');
@@ -342,7 +336,7 @@ describe("t114 gate axis != execution axis", () => {
     // A rule reading gate from `execution !== ALWAYS` would emit gate:false here
     // — wrong. Every EXECUTE stage gates except bootstrap initialization stages,
     // so intent-capture (an ideation stage) MUST carry gate:true.
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["--stage", "intent-capture"], {
       AWS_AIDLC_DEFAULT_SCOPE: "poc",
     }).out;
@@ -367,7 +361,7 @@ describe("t114 cutover: no --args swallow", () => {
   test("14b: flag-bearing argv reaches the parser (no --args swallow): --stage <bad> -> unknown-stage error", () => {
     // Pin half (b): a flag-bearing jump reaches the parser (unknown-stage error),
     // it does NOT fall through to a bare next ("run current stage").
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["--stage", "nonexistent-stage"], {
       AWS_AIDLC_DEFAULT_SCOPE: "poc",
     }).out;
@@ -386,7 +380,7 @@ describe("t114 cutover: no --args swallow", () => {
 // ===========================================================================
 describe("t114 workspace verbs -> terminal print naming the handler", () => {
   test("20: `space teamB` -> print naming aidlc-utility.ts space teamB (switch, not freeform)", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["space", "teamB"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc-utility.ts space teamB");
@@ -395,7 +389,7 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
   });
 
   test("21: bare `space` (no arg) -> print naming aidlc-utility.ts space (read-only listing)", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["space"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc-utility.ts space");
@@ -404,14 +398,14 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
   });
 
   test("22: `intent some-slug` -> print naming aidlc-utility.ts intent some-slug", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["intent", "some-slug"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc-utility.ts intent some-slug");
   });
 
   test("23: `space-create teamB` -> print naming aidlc-utility.ts space-create teamB", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["space-create", "teamB"]).out;
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("aidlc-utility.ts space-create teamB");
@@ -421,7 +415,7 @@ describe("t114 workspace verbs -> terminal print naming the handler", () => {
     // `add a settings space` leads with "add", so "space" mid-sentence is NOT a
     // workspace verb. The engine must route it as freeform new-work, never as a
     // space-switch print naming the workspace handler.
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     const out = runNext(proj, ["add", "a", "settings", "space"]).out;
     expect(out).not.toContain("aidlc-utility.ts space");
   });
@@ -448,7 +442,7 @@ describe("t114 parked branch (#367)", () => {
   }
 
   test("plain next on a parked workflow -> parked directive", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     park(proj);
     const out = runNext(proj, []).out;
@@ -457,7 +451,7 @@ describe("t114 parked branch (#367)", () => {
   });
 
   test("--resume on a parked workflow self-disables (names unpark, not parked)", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     park(proj);
     const out = runNext(proj, ["--resume"]).out;
@@ -466,7 +460,7 @@ describe("t114 parked branch (#367)", () => {
   });
 
   test("stale parked (Current Stage advanced past Parked At Stage) is ignored", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     park(proj);
     // Advance Current Stage past the parked slug - the marker is now stale.
@@ -481,7 +475,7 @@ describe("t114 parked branch (#367)", () => {
   });
 
   test("after unpark, a plain next no longer parks", () => {
-    proj = createTestProject();
+    proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     park(proj);
     spawnSync(BUN, [STATE, "unpark", "--project-dir", proj], {

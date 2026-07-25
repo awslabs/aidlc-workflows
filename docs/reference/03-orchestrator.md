@@ -1,6 +1,6 @@
 # Orchestrator
 
-Orchestration is split across two pieces. A deterministic **engine** (`aidlc-orchestrate.ts`, with exactly three subcommands: `next`, `report`, and `park`) owns every between-stage decision - scope determination, stage routing, jump resolution, resume and init guards, gate status, and workflow completion - and emits a typed **directive** on each `next`. The **conductor** (`.claude/skills/aidlc/SKILL.md`, invoked via `/aidlc`) is a thin forwarding loop that acts on each directive - running the named stage, asking the human a question, fanning out a swarm - and reports the outcome with `report`. SKILL.md is not the control plane: the routing decisions live in the engine and the compiled data it reads (`tools/data/stage-graph.json`, `tools/data/scope-grid.json`), while SKILL.md owns execution quality inside the move the engine names.
+Orchestration is split across two pieces. A deterministic **engine** (`aidlc-orchestrate.ts`, with exactly four subcommands: `next`, `continue`, `report`, and `park`; `continue` is internal steering transport) owns every between-stage decision - scope determination, stage routing, jump resolution, resume and init guards, gate status, and workflow completion - and emits a typed **directive** on each `next`. The **conductor** (`.claude/skills/aidlc/SKILL.md`, invoked via `/aidlc`) is a thin forwarding loop that acts on each directive - running the named stage, asking the human a question, fanning out a swarm - and reports the outcome with `report`. SKILL.md is not the control plane: the routing decisions live in the engine and the compiled data it reads (`tools/data/stage-graph.json`, `tools/data/scope-grid.json`), while SKILL.md owns execution quality inside the move the engine names.
 
 This chapter documents the workflow behaviour from the conductor's side — entry points, session management, scope-to-stage mapping, the stage execution and advancement protocol, and the deliberate deviations. For the engine internals — the `next`/`report` contract, the typed directive union, the conductor persona, plural skills, scope shape, and the swarm referee — see [Engine and Skill System](17-skill-system.md). For user-facing command usage, see the [User Guide -- CLI Commands](../guide/12-cli-commands.md).
 
@@ -319,8 +319,8 @@ sequenceDiagram
     participant S as aidlc-state.md
     participant AU as audit/ shard
 
-    O->>A: 1. Load delivered steering (rules_content + inline_context_content)
-    Note over A: Content in the directive; read by path only the *_omitted entries
+    O->>A: 1. Apply load-steering parts, then read inline_context_paths
+    Note over A: Rules arrive as content; persona and knowledge remain path-loaded
 
     O->>SF: 2. Read stage file
     Note over SF: directive.stage_file
@@ -362,7 +362,7 @@ Inline stages run directly in the orchestrator conversation. The user can intera
 
 The 6-step process:
 
-1. **Load the delivered steering.** The directive carries the active-space rules (`rules_content`, re-delivered every stage) and the not-yet-delivered persona + knowledge files (`inline_context_content`, once per agent per workflow) as content; `inline_context_paths` remains the full roster. The conductor reads by path only the `rules_content_omitted` / `inline_context_omitted` entries (size-budget overflow). Agent names alone are not loaded context, and support-agent perspectives must not be omitted.
+1. **Load the stage steering.** Follow the ordered `load-steering` sequence until `run-stage`; it delivers every substantive active-space rule as content. Then read every `inline_context_paths` entry. Persona and knowledge remain path-loaded; missing, unreadable, or invalid UTF-8 optional files are omitted from the roster and reported through specific or aggregated `context_warnings`.
 2. **Read the stage file.** The conductor reads the exact `directive.stage_file`.
 3. **Read resolved inputs.** The conductor reads the existing artifacts in `directive.consumes`, applying the stage's documented fallback for expected absent inputs.
 4. **Execute steps directly in conversation.** The orchestrator performs the stage work inline: asking questions, analyzing answers, producing artifacts, and interacting with the user.
@@ -385,16 +385,15 @@ Workspace detection (0.2) used to be a subagent. It is now a deterministic rule-
 
 The 6-step process:
 
-1. **Load delivered rules, read stage and inputs.** Apply the directive's
-   `rules_content`; read by path only `rules_content_omitted` entries. Use the
-   exact directive paths for the stage file and artifacts.
+1. **Load delivered rules, read stage and inputs.** Apply every ordered
+   `load-steering` part before `run-stage`. Use the exact directive paths for
+   the stage file and artifacts.
 2. **Load conductor-owned context.** A mob directive carries its lead's complete
-   roster in `inline_context_paths` (content in `inline_context_content` per
-   the deliver-once rule); fully dispatched subagent/pipeline directives carry
-   an empty roster.
+   path roster in `inline_context_paths`; fully dispatched subagent/pipeline
+   directives carry an empty roster.
 3. **Prepare briefs: rules as content, artifacts as paths.** Paste the
-   directive's `rules_content` entries verbatim (plus the omitted paths to
-   read); pass relevant artifact paths and task instructions. The named
+   accumulated steering bundle verbatim; pass relevant artifact paths and task
+   instructions. The named
    harness agent config loads persona and knowledge; do not copy either into
    the prompt.
 4. **Apply the topology.** Use blind spokes for subagent supports, ordered links

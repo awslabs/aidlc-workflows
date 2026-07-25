@@ -67,6 +67,7 @@
 // per the tool/agent/human split (routing string-building to an LLM would
 // invert the whole thesis).
 
+import { createHash } from "node:crypto";
 import { type Dirent, existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -76,6 +77,7 @@ import {
   type ErrorDirective,
   GATE_UNRESOLVED,
   type GateValue,
+  type LoadSteeringDirective,
   type ParkedDirective,
   type PrintDirective,
   type RunStageDirective,
@@ -174,14 +176,25 @@ const DEFAULT_SCOPE = "feature";
 // boundaries), never a silent miss — we exit non-zero so a wiring bug surfaces
 // loudly rather than emitting a lie the conductor would act on.
 function emit(directive: Directive): void {
-  const result = validateDirective(directive);
+  const transported =
+    directive.kind === "run-stage" && runStageRoutes.has(directive)
+      ? transportRunStage(directive, runStageRoutes.get(directive)!)
+      : directive;
+  const result = validateDirective(transported);
   if (!result.valid) {
     console.error(
       `aidlc-orchestrate: refusing to emit a malformed directive: ${result.errors.join("; ")}`,
     );
     process.exit(1);
   }
-  console.log(JSON.stringify(result.data));
+  const serialized = JSON.stringify(result.data);
+  if (Buffer.byteLength(serialized, "utf-8") > DIRECTIVE_MAX_BYTES) {
+    console.error(
+      `aidlc-orchestrate: refusing to emit a directive larger than ${DIRECTIVE_MAX_BYTES} bytes`,
+    );
+    process.exit(1);
+  }
+  console.log(serialized);
 }
 
 // --- Composing sibling CLI tools ---
@@ -671,55 +684,54 @@ function readConductorPersona(): string | null {
   }
 }
 
-// --- Steering-content injection (the rules_in_context deterministic anchor) ---
+// --- Deterministic rule delivery --------------------------------------------
 //
-// The directive used to carry rule/knowledge PATHS only, with a prose
-// instruction to read them - a knowledge-in-the-LLM delivery of the steering
-// layer itself, observed to be skipped non-deterministically (0/4 memory rules
-// read across three consecutive live stages while the directive "delivered"
-// the paths). These helpers give the roster the same deterministic anchor the
-// conductor persona has had since SPIKE 6: the engine reads each file at
-// directive-build time and bakes the CONTENT into the directive. Paths stay
-// (backward-compatible, and still the brief currency on dispatched
-// topologies); content rides alongside.
-//
-// Delivery is best-effort per file, mirroring readConductorPersona: a missing
-// or unreadable file is dropped silently (an absent file is not withheld
-// steering) and the directive stays well-formed. Empty-template files - the
-// shipped team.md/project.md placeholders whose every substantive line is an
-// HTML comment - are dropped too; injecting comment-only scaffolding would be
-// noise, and the emptiness rule matches knowledge/aidlc-shared/
-// rules-reading.md §1.
-//
-// The size budget bounds the TOTAL emitted directive, not each roster: the
-// directive is one JSON line on stdout, and every harness caps tool output
-// somewhere. On Claude Code, Bash output beyond BASH_MAX_OUTPUT_LENGTH
-// (default 30 000 chars) is diverted to a session file with only a preview
-// in-context - the conductor would have to notice and re-read the file, i.e.
-// exactly the discretionary-read hole this injection exists to close. On
-// harnesses that hard-truncate instead, an over-budget directive is
-// unparseable JSON and bricks the forwarding loop. Either way the budget must
-// keep the whole line under the harness cap. The conservative default stays
-// under the tightest known cap with the first-stage persona (~12KB) already
-// aboard; the AIDLC_DIRECTIVE_MAX_BYTES env seam raises it per harness where
-// the cap is known and configurable (the shipped Claude settings.json sets
-// BASH_MAX_OUTPUT_LENGTH to its 150 000 ceiling and this seam to 120 000).
-// Injection under the budget is cost-neutral against a conductor that obeyed
-// the read instruction - the same bytes land in context either way; files
-// that don't fit go to the companion *_omitted lists - visible, never silent
-// - and the conductor falls back to reading exactly those paths. The fill is
-// greedy, not prefix: a later small file still fits after an oversized one
-// was omitted, maximising delivered steering.
-const DIRECTIVE_MAX_BYTES_DEFAULT = 28 * 1024;
+// Rule paths are compile-time routing metadata; the text is required steering.
+// Before a run-stage is emitted, the engine reads the active-space files and
+// sends their content through one or more bounded load-steering directives.
+// The conductor immediately follows each opaque continuation token. No rule is
+// downgraded to a discretionary path read because it did not fit one tool
+// result. Every serialized directive stays below the common 28 KiB harness
+// floor; a fresh `next` deterministically restarts at part one.
+const DIRECTIVE_MAX_BYTES = 28 * 1024;
+const STEERING_TEXT_TARGET_BYTES = 20 * 1024;
+const CONTEXT_WARNINGS_MAX_BYTES = 6 * 1024;
 
-function directiveMaxBytes(): number {
-  const raw = process.env.AIDLC_DIRECTIVE_MAX_BYTES;
-  if (raw) {
-    const n = Number.parseInt(raw, 10);
-    if (Number.isInteger(n) && n > 0) return n;
-  }
-  return DIRECTIVE_MAX_BYTES_DEFAULT;
-}
+type RuleEntry = { rel: string; abs: string };
+type RuleContent = { path: string; text: string };
+
+type RunStageRoute = {
+  node: GraphStage;
+  scope: string;
+  stateAware: boolean;
+  stateHash: string | null;
+  codekbCtx: CodekbCtx;
+  unit: string;
+  unitKind: string | null;
+  forcePersona: boolean;
+};
+
+type SteeringTokenPayload = {
+  v: 1;
+  s: string;
+  c: string;
+  i: number;
+  b: string;
+  d: string;
+  r: string;
+  a: boolean;
+  u: string;
+  k: string | null;
+  f: boolean;
+  g: GateValue;
+  n: string | null | undefined;
+  x: boolean;
+  p: boolean;
+  h: string | null;
+};
+
+const runStageRoutes = new WeakMap<RunStageDirective, RunStageRoute>();
+let requestedSteeringContinuation: SteeringTokenPayload | null = null;
 
 // True when the text carries at least one substantive line: not blank, not a
 // heading, not a blockquote, not a horizontal rule, and not inside an HTML
@@ -738,57 +750,6 @@ function isSubstantiveRuleText(text: string): boolean {
   });
 }
 
-// Read a roster of files into {path, text} content entries under a byte
-// budget. `rel` is the workspace-relative POSIX path the directive names;
-// `abs` is where the file lives on this machine. Missing/unreadable files are
-// dropped; files past the budget are listed in `omitted`. Size is measured on
-// the JSON-encoded entry (the cost that actually lands on the emitted line,
-// escaping included), and `bytesUsed` reports the total so the caller can
-// spend one budget across consecutive rosters.
-//
-// `substantiveOnly` applies the rules-layer emptiness rule (drop files whose
-// body is all comment placeholders - the shipped team.md/project.md
-// templates). It is a RULES concept: the inline knowledge roster delivers
-// verbatim, because a roster path that is neither in content nor in omitted
-// would read as silently skipped - the exact failure mode this injection
-// removes.
-function readFilesWithBudget(
-  entries: Array<{ rel: string; abs: string }>,
-  maxBytes: number,
-  substantiveOnly: boolean,
-): {
-  content: Array<{ path: string; text: string }>;
-  omitted: string[];
-  bytesUsed: number;
-} {
-  const content: Array<{ path: string; text: string }> = [];
-  const omitted: string[] = [];
-  const seen = new Set<string>();
-  let total = 0;
-  for (const entry of entries) {
-    if (seen.has(entry.rel)) continue;
-    seen.add(entry.rel);
-    let text: string;
-    try {
-      text = readFileSync(entry.abs, "utf-8");
-    } catch {
-      continue;
-    }
-    if (substantiveOnly && !isSubstantiveRuleText(text)) continue;
-    const size = Buffer.byteLength(
-      JSON.stringify({ path: entry.rel, text }),
-      "utf-8",
-    );
-    if (total + size > maxBytes) {
-      omitted.push(entry.rel);
-      continue;
-    }
-    total += size;
-    content.push({ path: entry.rel, text });
-  }
-  return { content, omitted, bytesUsed: total };
-}
-
 // Resolve the {rel, abs} read entries for a node's rules_in_context roster.
 // The roster paths are DISPLAY paths frozen at compile time pinned to the
 // `default` space (see aidlc-graph.ts MEMORY_SPACE); the CONTENT must come
@@ -804,7 +765,7 @@ function readFilesWithBudget(
 function rulesContentEntries(
   node: GraphStage,
   codekbCtx: CodekbCtx,
-): Array<{ rel: string; abs: string }> {
+): RuleEntry[] {
   const memoryDir =
     process.env.AIDLC_RULES_DIR ??
     memoryDirFor(codekbCtx.projectDir, codekbCtx.space);
@@ -822,46 +783,6 @@ function rulesContentEntries(
       abs: join(memoryDir, sub),
     };
   });
-}
-
-// The inline persona/knowledge delivered-set - the content-priority signal.
-// Injecting every inline roster's content on every stage would re-send the
-// same personas stage after stage; like the conductor persona, content
-// delivered once persists in the session. The deterministic proxy for
-// "probably already in context" is the same one D-E uses (state checkboxes):
-// an agent counts as delivered when some OTHER stage with that agent in its
-// inline roster has advanced past pending - a non-pending, non-skipped
-// checkbox means that stage's run-stage directive was emitted. The current
-// node excludes itself so a re-emitted `next` for an in-flight stage carries
-// the same content as the first emit (idempotent). The aidlc-shared tree
-// belongs to every agent; it is delivered with the first inline stage.
-//
-// This is a PRIORITY signal, not a correctness gate: "emitted" does not
-// prove the content fit that directive's budget, survived compaction, or
-// was read where it overflowed to the omitted list. injectSteeringContent
-// therefore keeps EVERY roster file visible - a file whose agent is marked
-// delivered is skipped for content but still listed in
-// inline_context_omitted, and the conductor re-reads any omitted path not
-// already in its context. An overcount here (a recomposed roster crediting
-// a past stage with an agent it never carried) costs one visible re-read,
-// never silent missing steering.
-function deliveredInlineContext(
-  stateContent: string | null,
-  currentSlug: string,
-): { agents: Set<string>; shared: boolean } {
-  const agents = new Set<string>();
-  let shared = false;
-  if (!stateContent) return { agents, shared };
-  for (const c of parseCheckboxes(stateContent)) {
-    if (c.slug === currentSlug) continue;
-    if (c.state === "pending" || c.state === "skipped") continue;
-    const n = nodeForSlug(c.slug);
-    if (!n) continue;
-    const roster = inlineAgentsFor(n);
-    if (roster.length > 0) shared = true;
-    for (const a of roster) agents.add(a);
-  }
-  return { agents, shared };
 }
 
 // "First run-stage of the workflow" — the deterministic signal D-E delivery
@@ -1402,18 +1323,29 @@ function computeGate(
   return true;
 }
 
-// Walk a knowledge/persona dir into {abs, rel} pairs: `rel` is the
-// workspace-relative POSIX display path the directive names; `abs` is where
-// the file lives on this machine, so the content injection can read the same
-// file the roster lists without re-deriving the root.
+// Walk a knowledge directory into path-roster entries. Knowledge remains
+// path-loaded until the future retrieval layer lands. We do a cheap read
+// preflight so an unreadable file produces an actionable warning instead of a
+// path the conductor cannot use.
+function assertReadableUtf8(path: string): void {
+  const bytes = readFileSync(path);
+  new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
+
 function markdownFilesUnder(
   absDir: string,
   relativeDir: string,
+  warnings: string[],
 ): Array<{ abs: string; rel: string }> {
+  if (!existsSync(absDir)) return [];
   let entries: Dirent[];
   try {
     entries = readdirSync(absDir, { withFileTypes: true });
-  } catch {
+  } catch (e) {
+    warnings.push(
+      `Warning: optional persona/knowledge directory "${toPosix(relativeDir)}" is unreadable (${errorMessage(e)}). ` +
+        "Fix the directory or its permissions; this stage will continue without that context.",
+    );
     return [];
   }
   const files: Array<{ abs: string; rel: string }> = [];
@@ -1421,8 +1353,20 @@ function markdownFilesUnder(
     const absPath = join(absDir, entry.name);
     const relativePath = toPosix(join(relativeDir, entry.name));
     if (entry.isDirectory()) {
-      files.push(...markdownFilesUnder(absPath, relativePath));
-    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+      files.push(...markdownFilesUnder(absPath, relativePath, warnings));
+    } else if (
+      (entry.isFile() || entry.isSymbolicLink()) &&
+      entry.name.endsWith(".md")
+    ) {
+      try {
+        assertReadableUtf8(absPath);
+      } catch (e) {
+        warnings.push(
+          `Warning: optional persona/knowledge file "${relativePath}" is unreadable or invalid UTF-8 (${errorMessage(e)}). ` +
+            "Fix the file, encoding, or permissions; this stage will continue without that context.",
+        );
+        continue;
+      }
       files.push({ abs: absPath, rel: relativePath });
     }
   }
@@ -1458,6 +1402,7 @@ type InlineContextEntry = { abs: string; rel: string; agent: string | null };
 function inlineContextEntries(
   node: GraphStage,
   codekbCtx?: CodekbCtx,
+  warnings: string[] = [],
 ): InlineContextEntry[] {
   const agents = inlineAgentsFor(node);
   if (agents.length === 0) return [];
@@ -1472,18 +1417,34 @@ function inlineContextEntries(
 
   for (const agent of agents) {
     const persona = join(harnessRoot, "agents", `${agent}.md`);
-    if (existsSync(persona)) {
-      entries.push({
-        abs: persona,
-        rel: toPosix(join(harnessPrefix, "agents", `${agent}.md`)),
-        agent,
-      });
+    const rel = toPosix(join(harnessPrefix, "agents", `${agent}.md`));
+    if (!existsSync(persona)) {
+      warnings.push(
+        `Warning: optional persona/knowledge file "${rel}" is missing. ` +
+          "Restore the file; this stage will continue without that context.",
+      );
+      continue;
     }
+    try {
+      assertReadableUtf8(persona);
+    } catch (e) {
+      warnings.push(
+        `Warning: optional persona/knowledge file "${rel}" is unreadable or invalid UTF-8 (${errorMessage(e)}). ` +
+          "Fix the file, encoding, or permissions; this stage will continue without that context.",
+      );
+      continue;
+    }
+    entries.push({
+      abs: persona,
+      rel,
+      agent,
+    });
   }
   entries.push(
     ...markdownFilesUnder(
       join(harnessRoot, "knowledge", "aidlc-shared"),
       join(harnessPrefix, "knowledge", "aidlc-shared"),
+      warnings,
     ).map((f) => ({ ...f, agent: null })),
   );
   for (const agent of agents) {
@@ -1491,6 +1452,7 @@ function inlineContextEntries(
       ...markdownFilesUnder(
         join(harnessRoot, "knowledge", agent),
         join(harnessPrefix, "knowledge", agent),
+        warnings,
       ).map((f) => ({ ...f, agent })),
     );
   }
@@ -1508,6 +1470,7 @@ function inlineContextEntries(
       ...markdownFilesUnder(
         join(customRoot, "aidlc-shared"),
         join(customPrefix, "aidlc-shared"),
+        warnings,
       ).map((f) => ({ ...f, agent: null })),
     );
     for (const agent of agents) {
@@ -1515,6 +1478,7 @@ function inlineContextEntries(
         ...markdownFilesUnder(
           join(customRoot, agent),
           join(customPrefix, agent),
+          warnings,
         ).map((f) => ({ ...f, agent })),
       );
     }
@@ -1529,8 +1493,44 @@ function inlineContextEntries(
   });
 }
 
-function inlineContextPaths(node: GraphStage, codekbCtx?: CodekbCtx): string[] {
-  return inlineContextEntries(node, codekbCtx).map((e) => e.rel);
+function inlineContextRoster(
+  node: GraphStage,
+  codekbCtx?: CodekbCtx,
+): { paths: string[]; warnings: string[] } {
+  const warnings: string[] = [];
+  const paths = inlineContextEntries(node, codekbCtx, warnings).map((e) => e.rel);
+  return { paths, warnings: boundedContextWarnings(warnings) };
+}
+
+function boundedContextWarnings(warnings: string[]): string[] {
+  if (
+    Buffer.byteLength(JSON.stringify(warnings), "utf-8") <=
+      CONTEXT_WARNINGS_MAX_BYTES
+  ) {
+    return warnings;
+  }
+
+  const kept: string[] = [];
+  for (let i = 0; i < warnings.length; i++) {
+    const omitted = warnings.length - i - 1;
+    const summary = omitted > 0
+      ? `Warning: ${omitted} additional optional persona/knowledge warning(s) were omitted from this directive. Inspect the configured context directories and repair missing, unreadable, or invalid UTF-8 files.`
+      : null;
+    const candidate = [...kept, warnings[i], ...(summary ? [summary] : [])];
+    if (
+      Buffer.byteLength(JSON.stringify(candidate), "utf-8") >
+        CONTEXT_WARNINGS_MAX_BYTES
+    ) {
+      break;
+    }
+    kept.push(warnings[i]);
+  }
+
+  const omitted = warnings.length - kept.length;
+  return [
+    ...kept,
+    `Warning: ${omitted} additional optional persona/knowledge warning(s) were omitted from this directive. Inspect the configured context directories and repair missing, unreadable, or invalid UTF-8 files.`,
+  ];
 }
 
 // Build a run-stage directive by reading the routing fields straight off the
@@ -1558,6 +1558,8 @@ function buildRunStageDirective(
     node.consumes ?? [], node, projectType, unit, recordPrefix, codekbCtx,
   );
   const { present, absent } = splitConsumesByPresence(resolvedConsumes, scope, codekbCtx);
+  const inlineContext = inlineContextRoster(node, codekbCtx);
+  const ruleEntries = codekbCtx ? rulesContentEntries(node, codekbCtx) : null;
   const directive: RunStageDirective = {
     kind: "run-stage",
     stage: node.slug,
@@ -1569,15 +1571,20 @@ function buildRunStageDirective(
     // agent-team. The node value always satisfies the contract; the validator
     // is the backstop if a future graph activates agent-team.
     mode: node.mode as RunStageDirective["mode"],
-    inline_context_paths: inlineContextPaths(node, codekbCtx),
+    inline_context_paths: inlineContext.paths,
     gate: computeGate(node, scope, stateContent),
     memory_path: memoryPathFor(node.phase, node.slug, recordPrefix),
     consumes: present,
     produces: resolveProduces(node, unit, recordPrefix, codekbCtx, unitKind),
-    rules_in_context: (node.rules_in_context ?? []).map((r) => r.path),
+    rules_in_context:
+      ruleEntries?.map((entry) => entry.rel) ??
+      (node.rules_in_context ?? []).map((r) => r.path),
     sensors_applicable: (node.sensors_applicable ?? []).map((s) => s.id),
     stage_file: stageFileFor(node.phase, node.slug),
   };
+  if (inlineContext.warnings.length > 0) {
+    directive.context_warnings = inlineContext.warnings;
+  }
   if (absent.length > 0) directive.consumes_absent = absent;
   // next_stage: the display name of the in-scope stage that follows this one, so
   // the approval gate's Approve option reads "Continue to <next_stage>" verbatim
@@ -1601,107 +1608,286 @@ function buildRunStageDirective(
   // best-effort — the directive stays well-formed without the field.
   // `forcePersona` covers the isolated single-stage runner, whose directive is
   // always the conductor's first of that run regardless of state - attached
-  // HERE (not by the caller after build) so the steering injection's byte
-  // budget accounts for the persona it shares the emitted line with.
+  // HERE (not by the caller after build) so the final run-stage is complete.
   if (forcePersona || isFirstRunStageOfWorkflow(stateContent, node)) {
     const persona = readConductorPersona();
     if (persona !== null) directive.conductor_persona = persona;
   }
-  injectSteeringContent(directive, node, stateContent, codekbCtx);
+  if (codekbCtx) {
+    runStageRoutes.set(directive, {
+      node,
+      scope,
+      stateAware: stateContent !== null,
+      stateHash: stateContent === null ? null : sha256(stateContent),
+      codekbCtx,
+      unit,
+      unitKind,
+      forcePersona,
+    });
+  }
   return directive;
 }
 
-// Bake steering CONTENT into the directive (the deterministic anchor for the
-// rules_in_context and inline_context_paths rosters - see the injection block
-// comment above readFilesWithBudget). One byte budget covers the whole emitted
-// line: the base directive (persona included) spends first, the active-space
-// rules next (per-stage steering, small, mutated mid-workflow by §13
-// learnings - so re-read every stage), and the not-yet-delivered inline
-// persona/knowledge content last (large, delivered once per agent per
-// workflow). Whatever doesn't fit lands in the *_omitted lists for the
-// conductor to read by path. Requires codekbCtx (the ctx-less test path emits
-// paths-only directives, exactly as before).
-function injectSteeringContent(
+function sha256(value: string): string {
+  return createHash("sha256").update(value, "utf-8").digest("hex");
+}
+
+function readRuleBundle(
+  entries: RuleEntry[],
+): { content: RuleContent[]; error: string | null } {
+  const content: RuleContent[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (seen.has(entry.rel)) continue;
+    seen.add(entry.rel);
+    let text: string;
+    try {
+      const bytes = readFileSync(entry.abs);
+      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch (e) {
+      return {
+        content: [],
+        error:
+          `Cannot load required stage rule "${entry.rel}" (${errorMessage(e)}). ` +
+          "The stage has not started. Restore the file or fix its permissions/UTF-8 encoding, then run `next` again.",
+      };
+    }
+    if (isSubstantiveRuleText(text)) content.push({ path: entry.rel, text });
+  }
+  return { content, error: null };
+}
+
+// Split a rule at Markdown heading boundaries first. Oversized sections are
+// then divided at JavaScript code-point boundaries according to their actual
+// JSON wire size, so escaping control characters cannot overflow a directive
+// and no continuation can cut a multi-byte character.
+function markdownSections(text: string): string[] {
+  const lines = text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const sections: string[] = [];
+  let current = "";
+  for (const line of lines) {
+    if (/^#{1,6}\s/.test(line) && current.length > 0) {
+      sections.push(current);
+      current = "";
+    }
+    current += line;
+  }
+  if (current.length > 0) sections.push(current);
+  return sections.length > 0 ? sections : [text];
+}
+
+function ruleContentBytes(path: string, text: string): number {
+  return Buffer.byteLength(JSON.stringify([{ path, text }]), "utf-8");
+}
+
+function splitRuleText(
+  path: string,
+  text: string,
+  targetBytes: number,
+): string[] {
+  if (ruleContentBytes(path, text) <= targetBytes) return [text];
+
+  const codePoints = Array.from(text);
+  const parts: string[] = [];
+  let start = 0;
+  while (start < codePoints.length) {
+    let low = start + 1;
+    let high = codePoints.length;
+    let fit = start;
+    while (low <= high) {
+      const end = Math.floor((low + high) / 2);
+      const candidate = codePoints.slice(start, end).join("");
+      if (ruleContentBytes(path, candidate) <= targetBytes) {
+        fit = end;
+        low = end + 1;
+      } else {
+        high = end - 1;
+      }
+    }
+    if (fit === start) {
+      // A filesystem path large enough to make one code point exceed the
+      // target is not recoverable by text splitting. Preserve the character
+      // so transportRunStage emits the explicit size error.
+      fit = start + 1;
+    }
+    parts.push(codePoints.slice(start, fit).join(""));
+    start = fit;
+  }
+  return parts;
+}
+
+function steeringPieces(content: RuleContent[]): RuleContent[] {
+  const pieces: RuleContent[] = [];
+  for (const rule of content) {
+    for (const section of markdownSections(rule.text)) {
+      for (const text of splitRuleText(
+        rule.path,
+        section,
+        STEERING_TEXT_TARGET_BYTES,
+      )) {
+        pieces.push({ path: rule.path, text });
+      }
+    }
+  }
+  return pieces;
+}
+
+function steeringChunks(content: RuleContent[]): RuleContent[][] {
+  const chunks: RuleContent[][] = [];
+  let current: RuleContent[] = [];
+  for (const piece of steeringPieces(content)) {
+    const candidate = [...current, piece];
+    const bytes = Buffer.byteLength(JSON.stringify(candidate), "utf-8");
+    if (current.length > 0 && bytes > STEERING_TEXT_TARGET_BYTES) {
+      chunks.push(current);
+      current = [piece];
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+function encodeSteeringToken(payload: SteeringTokenPayload): string {
+  return Buffer.from(JSON.stringify(payload), "utf-8").toString("base64url");
+}
+
+function decodeSteeringToken(token: string): SteeringTokenPayload | null {
+  try {
+    const value: unknown = JSON.parse(
+      Buffer.from(token, "base64url").toString("utf-8"),
+    );
+    if (
+      value === null ||
+      typeof value !== "object" ||
+      !("v" in value) ||
+      value.v !== 1
+    ) {
+      return null;
+    }
+    const p = value as Partial<SteeringTokenPayload>;
+    if (
+      typeof p.s !== "string" ||
+      typeof p.c !== "string" ||
+      typeof p.i !== "number" ||
+      !Number.isInteger(p.i) ||
+      p.i < 1 ||
+      typeof p.b !== "string" ||
+      typeof p.d !== "string" ||
+      typeof p.r !== "string" ||
+      typeof p.a !== "boolean" ||
+      typeof p.u !== "string" ||
+      (p.k !== null && typeof p.k !== "string") ||
+      typeof p.f !== "boolean" ||
+      (typeof p.g !== "boolean" && p.g !== GATE_UNRESOLVED) ||
+      (p.n !== undefined && p.n !== null && typeof p.n !== "string") ||
+      typeof p.x !== "boolean" ||
+      typeof p.p !== "boolean" ||
+      (p.h !== null && typeof p.h !== "string")
+    ) {
+      return null;
+    }
+    return p as SteeringTokenPayload;
+  } catch {
+    return null;
+  }
+}
+
+function steeringTokenPayload(
   directive: RunStageDirective,
-  node: GraphStage,
-  stateContent: string | null,
-  codekbCtx?: CodekbCtx,
-): void {
-  if (!codekbCtx) return;
-  const budget = directiveMaxBytes();
-  const baseBytes = Buffer.byteLength(JSON.stringify(directive), "utf-8");
+  route: RunStageRoute,
+  bundle: string,
+  directiveHash: string,
+  nextPart: number,
+): SteeringTokenPayload {
+  return {
+    v: 1,
+    s: directive.stage,
+    c: route.scope,
+    i: nextPart,
+    b: bundle,
+    d: directiveHash,
+    r: steeringRouteHash(route.node, route.scope),
+    a: route.stateAware,
+    u: directive.unit ?? route.unit,
+    k: route.unitKind,
+    f: route.forcePersona,
+    g: directive.gate,
+    n: directive.next_stage,
+    x: directive.single === true,
+    p: directive.unit !== undefined,
+    h: route.stateHash,
+  };
+}
 
-  const rules = readFilesWithBudget(
-    rulesContentEntries(node, codekbCtx),
-    Math.max(0, budget - baseBytes),
-    true, // rules layer: drop comment-only placeholder files
+function steeringRouteHash(node: GraphStage, scope: string): string {
+  return sha256(
+    JSON.stringify({
+      node,
+      scopeStages: subgraphForScope(scope).map((stage) => stage.slug),
+    }),
   );
-  if (rules.content.length > 0) directive.rules_content = rules.content;
-  if (rules.omitted.length > 0) directive.rules_content_omitted = rules.omitted;
+}
 
-  // Partition the FULL inline roster: content for not-yet-delivered agents
-  // (budget permitting), omitted for everything else - budget overflow AND
-  // the delivered-agent files alike. The roster is always content ∪ omitted,
-  // never silently absent: a file whose content overflowed on its delivery
-  // stage stays visible in omitted on every later stage (the conductor
-  // re-reads any omitted path not already in its context), so a budget miss
-  // costs a visible re-read, never permanently reverts that file to the
-  // discretionary path-read this injection exists to eliminate.
-  const delivered = deliveredInlineContext(stateContent, node.slug);
-  const entries = inlineContextEntries(node, codekbCtx);
-  const isDelivered = (e: InlineContextEntry) =>
-    e.agent === null ? delivered.shared : delivered.agents.has(e.agent);
-  const inline = readFilesWithBudget(
-    entries.filter((e) => !isDelivered(e)),
-    Math.max(0, budget - baseBytes - rules.bytesUsed),
-    false, // knowledge roster: deliver verbatim (see readFilesWithBudget)
-  );
-  const inlineOmitted = [
-    ...inline.omitted,
-    ...entries.filter(isDelivered).map((e) => e.rel),
+function transportRunStage(
+  directive: RunStageDirective,
+  route: RunStageRoute,
+): Directive {
+  const loaded = readRuleBundle(rulesContentEntries(route.node, route.codekbCtx));
+  if (loaded.error) return errorDirective(loaded.error);
+
+  directive.rules_in_context = [
+    ...new Set(loaded.content.map((entry) => entry.path)),
   ];
-  if (inline.content.length > 0) {
-    directive.inline_context_content = inline.content;
-  }
-  if (inlineOmitted.length > 0) {
-    directive.inline_context_omitted = inlineOmitted;
+  const bundle = `sha256:${sha256(JSON.stringify(loaded.content))}`;
+  const directiveHash = sha256(JSON.stringify(directive));
+  const chunks = steeringChunks(loaded.content);
+  const requested = requestedSteeringContinuation;
+
+  if (requested) {
+    if (
+      requested.s !== directive.stage ||
+      requested.b !== bundle ||
+      requested.d !== directiveHash
+    ) {
+      return errorDirective(
+        "The stage or its rules changed during steering delivery. Run a fresh `next` to restart delivery from part 1.",
+      );
+    }
+    if (requested.i > chunks.length) {
+      return errorDirective(
+        "The steering continuation token is out of range. Run a fresh `next` to restart delivery from part 1.",
+      );
+    }
+    if (requested.i === chunks.length) return directive;
+  } else if (chunks.length === 0) {
+    return directive;
   }
 
-  // Budget backstop. The per-entry accounting above excludes JSON overhead
-  // the emitted line still pays - field keys, separators, and the *_omitted
-  // path lists - so a full injection can land a few percent over. The budget
-  // is a harness-truncation bound, not a soft target: move content entries
-  // (inline first - larger, lower-stakes - then rules) back to omitted until
-  // the line fits. Bounded: each pass pops one finite entry. LIMIT: the loop
-  // can only shed CONTENT; if the base directive plus the omitted path lists
-  // alone exceed the budget (a pathologically small AIDLC_DIRECTIVE_MAX_BYTES
-  // - the shipped base is ~18KB against a 28KB floor), the line stays over
-  // and the harness cap governs; content injection cannot fix a budget set
-  // below the directive's own routing fields.
-  const overBudget = () =>
-    Buffer.byteLength(JSON.stringify(directive), "utf-8") > budget;
-  while (overBudget() && (directive.inline_context_content?.length ?? 0) > 0) {
-    const entries = directive.inline_context_content ?? [];
-    const moved = entries.pop();
-    if (entries.length === 0) delete directive.inline_context_content;
-    if (moved) {
-      directive.inline_context_omitted = [
-        ...(directive.inline_context_omitted ?? []),
-        moved.path,
-      ];
-    }
+  const index = requested?.i ?? 0;
+  const payload = steeringTokenPayload(
+    directive,
+    route,
+    bundle,
+    directiveHash,
+    index + 1,
+  );
+  const load: LoadSteeringDirective = {
+    kind: "load-steering",
+    stage: directive.stage,
+    bundle,
+    part: index + 1,
+    parts: chunks.length,
+    rules_content: chunks[index],
+    continue_token: encodeSteeringToken(payload),
+  };
+  if (Buffer.byteLength(JSON.stringify(load), "utf-8") > DIRECTIVE_MAX_BYTES) {
+    return errorDirective(
+      "A rule section could not be split below the directive transport limit. Shorten the affected heading section, then run a fresh `next`.",
+    );
   }
-  while (overBudget() && (directive.rules_content?.length ?? 0) > 0) {
-    const entries = directive.rules_content ?? [];
-    const moved = entries.pop();
-    if (entries.length === 0) delete directive.rules_content;
-    if (moved) {
-      directive.rules_content_omitted = [
-        ...(directive.rules_content_omitted ?? []),
-        moved.path,
-      ];
-    }
-  }
+  return load;
 }
 
 // Find the graph node for a slug. Composes loadGraph() (the one cached read).
@@ -2652,7 +2838,6 @@ function emitPerUnitRunStage(
     emit(directive);
     return;
   }
-
   const directive = buildRunStageDirective(
     node, projectType, pick.unit, scope, stateContent, recordPrefix, codekbCtx,
     kinds?.get(pick.unit) ?? null,
@@ -4297,6 +4482,66 @@ function handlePark(_args: string[], projectDir: string | undefined): void {
   ));
 }
 
+// Resume deterministic rule delivery without mutating workflow state. The
+// token carries the route and hashes of both the run-stage directive and rule
+// bundle. Rebuilding from current disk state makes stale or mixed deliveries
+// fail with a restart instruction instead of combining old and new steering.
+function handleContinue(args: string[], projectDir: string | undefined): void {
+  const token = args[0] ?? "";
+  const payload = decodeSteeringToken(token);
+  if (!payload || args.length !== 1) {
+    emit(errorDirective(
+      "Invalid steering continuation token. Run a fresh `next` to restart delivery from part 1.",
+    ));
+    return;
+  }
+  const pd = resolveProjectDir(projectDir);
+  const liveState = loadStateFileIfPresent(pd);
+  const liveStateHash = liveState === null ? null : sha256(liveState);
+  if (payload.a && payload.h !== liveStateHash) {
+    emit(errorDirective(
+      "The workflow state changed during steering delivery. Run a fresh `next` to restart delivery from part 1.",
+    ));
+    return;
+  }
+  const node = nodeForSlug(payload.s);
+  if (!node) {
+    emit(errorDirective(
+      `Stage "${payload.s}" no longer exists. Run a fresh \`next\` after recompiling the stage graph.`,
+    ));
+    return;
+  }
+  if (payload.r !== steeringRouteHash(node, payload.c)) {
+    emit(errorDirective(
+      "The stage route changed during steering delivery. Run a fresh `next` to restart delivery from part 1.",
+    ));
+    return;
+  }
+
+  const directive = buildRunStageDirective(
+    node,
+    projectTypeFrom(liveState),
+    payload.u,
+    payload.c,
+    payload.a ? liveState : null,
+    relativeRecordDir(pd),
+    codekbCtxFor(pd),
+    payload.k,
+    payload.f,
+  );
+  directive.gate = payload.g;
+  if (payload.p) directive.unit = payload.u;
+  if (payload.n === undefined) {
+    delete directive.next_stage;
+  } else {
+    directive.next_stage = payload.n;
+  }
+  if (payload.x) directive.single = true;
+
+  requestedSteeringContinuation = payload;
+  emit(directive);
+}
+
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
@@ -4321,6 +4566,9 @@ export function main(argv: string[]): void {
     case "next":
       handleNext(subArgs, projectDir);
       break;
+    case "continue":
+      handleContinue(subArgs, projectDir);
+      break;
     case "report":
       handleReport(subArgs, projectDir);
       break;
@@ -4331,7 +4579,7 @@ export function main(argv: string[]): void {
       // Unknown / missing subcommand — usage to stderr, exit 1. Matches the
       // stderr-only usage shape the sibling tools use for a bad subcommand.
       console.error(
-        `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: next, report, park`,
+        `Unknown subcommand: ${subcommand ?? "(none)"}. Valid: next, continue, report, park`,
       );
       process.exit(1);
   }

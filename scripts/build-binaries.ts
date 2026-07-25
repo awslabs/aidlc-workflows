@@ -529,27 +529,49 @@ function pluginSelectGate(artifact: string): GateResult {
 }
 
 function conductorPersonaGate(artifact: string): GateResult {
-  const result = run(
+  const rulesDir = join(
+    dirname(artifact),
+    "runtime",
+    "claude",
+    "aidlc",
+    "spaces",
+    "default",
+    "memory",
+  );
+  const options = {
+    cwd: tmpdir(),
+    env: { ...pathlessEnv(), AIDLC_RULES_DIR: rulesDir },
+    timeoutMs: 30_000,
+  };
+  let result = run(
     artifact,
     ["next", "--single", "--stage", "requirements-analysis"],
-    { cwd: tmpdir(), env: pathlessEnv(), timeoutMs: 30_000 },
+    options,
   );
   let kind = "";
   let personaBytes = 0;
   let inlineContextCount = 0;
-  try {
-    const parsed = JSON.parse(result.stdout) as {
-      kind?: string;
-      conductor_persona?: string;
-      inline_context_paths?: string[];
-    };
-    kind = parsed.kind ?? "";
-    personaBytes = parsed.conductor_persona?.length ?? 0;
-    inlineContextCount = Array.isArray(parsed.inline_context_paths)
-      ? parsed.inline_context_paths.length
-      : 0;
-  } catch {
-    kind = "";
+  for (let attempts = 0; attempts < 100; attempts++) {
+    try {
+      const parsed = JSON.parse(result.stdout) as {
+        kind?: string;
+        continue_token?: string;
+        conductor_persona?: string;
+        inline_context_paths?: string[];
+      };
+      kind = parsed.kind ?? "";
+      if (kind === "load-steering" && parsed.continue_token) {
+        result = run(artifact, ["continue", parsed.continue_token], options);
+        continue;
+      }
+      personaBytes = parsed.conductor_persona?.length ?? 0;
+      inlineContextCount = Array.isArray(parsed.inline_context_paths)
+        ? parsed.inline_context_paths.length
+        : 0;
+    } catch {
+      kind = "";
+    }
+    break;
   }
   // requirements-analysis is mode:inline with a lead agent, so its directive
   // must carry a non-empty inline context roster. An empty roster from the

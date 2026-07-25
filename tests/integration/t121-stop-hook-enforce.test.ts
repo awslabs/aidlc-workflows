@@ -179,6 +179,12 @@ if (kind === "done") {
 } else if (kind === "__nonzero__") {
   process.stderr.write("mock engine failure\\n");
   process.exit(1);
+} else if (kind === "load-steering") {
+  console.log(JSON.stringify({
+    kind,
+    stage,
+    continue_token: "steering-token-495",
+  }));
 } else {
   console.log(JSON.stringify({ kind, stage, ...(unit ? { unit } : {}) }));
 }
@@ -648,6 +654,20 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
     // engine), NEVER an override-shaped instruction.
     expect(reason).toContain("aidlc-orchestrate");
     expect(/ignore|override|disregard|bypass/i.test(reason)).toBe(false);
+  }, 30000);
+
+  test("(a) load-steering reason continues the exact token without narrating chunks", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const r = runHook(proj, '{"stop_hook_active":false}', "load-steering");
+    const parsed = JSON.parse(r.out) as {
+      decision?: string;
+      reason?: string;
+    };
+    expect(parsed.decision).toBe("block");
+    expect(parsed.reason).toContain('continue "steering-token-495"');
+    expect(parsed.reason).toContain("keep following load-steering continuations");
+    expect(parsed.reason).toContain("Do not report or narrate steering chunks");
   }, 30000);
 
   // =========================================================================

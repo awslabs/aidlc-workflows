@@ -74,7 +74,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
+import {
+  cleanupTestProject,
+  runOrchestrateNext,
+  setupIntegrationProject,
+} from "../harness/fixtures.ts";
 
 const BUN = process.execPath; // the bun running this test
 
@@ -284,15 +288,12 @@ describe("t128 custom stage → drivable runner (migrated from t128-custom-runne
     const proj = buildSandbox();
     const { graph, orch } = tools(proj);
     expect(run(graph, ["compile", "--project-dir", proj]).status).toBe(0);
-    const single = run(orch, [
-      "next",
+    const single = runOrchestrateNext(orch, proj, [
       "--stage",
       CUSTOM_SLUG,
       "--single",
       "--scope",
       "fixture-scope",
-      "--project-dir",
-      proj,
     ]);
     expect(single.status).toBe(0);
     // STRONGER than the .sh substring grep: PARSE the emitted JSON directive
@@ -309,15 +310,12 @@ describe("t128 custom stage → drivable runner (migrated from t128-custom-runne
     const proj = buildSandbox();
     const { graph, orch } = tools(proj);
     expect(run(graph, ["compile", "--project-dir", proj]).status).toBe(0);
-    const single = run(orch, [
-      "next",
+    const single = runOrchestrateNext(orch, proj, [
       "--stage",
       CUSTOM_SLUG,
       "--single",
       "--scope",
       "fixture-scope",
-      "--project-dir",
-      proj,
     ]);
     expect(single.status).toBe(0);
     const directive = JSON.parse(single.stdout.trim()) as {

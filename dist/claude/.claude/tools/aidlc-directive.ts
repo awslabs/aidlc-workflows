@@ -1,7 +1,7 @@
 // Directive schema — the frozen engine↔conductor interface. The engine
 // (aidlc-orchestrate.ts) answers "what's next?" with exactly one typed
 // `Directive`; the conductor reads its `kind` and does the one move it names.
-// This module defines the discriminated union over the 9 kinds the engine can
+// This module defines the discriminated union over the 10 kinds the engine can
 // emit, plus a runtime validator. Sibling of aidlc-stage-schema.ts and
 // aidlc-sensor-schema.ts — same tool-boundary discipline: a refused or
 // malformed directive is a clear signal, not a silent miss.
@@ -37,8 +37,9 @@ import { isPlainObject } from "./aidlc-lib.ts";
 export const GATE_UNRESOLVED = "unresolved" as const;
 export type GateValue = boolean | typeof GATE_UNRESOLVED;
 
-// The 9 kinds, keyed on the `kind` discriminator.
+// The 10 kinds, keyed on the `kind` discriminator.
 export type DirectiveKind =
+  | "load-steering"
   | "run-stage"
   | "dispatch-subagent"
   | "invoke-swarm"
@@ -48,6 +49,21 @@ export type DirectiveKind =
   | "error"
   | "done"
   | "parked";
+
+// load-steering - one bounded part of the active stage's deterministic rule
+// bundle. The conductor applies rules_content in order and immediately invokes
+// `aidlc-orchestrate continue <continue_token>`; the final continuation emits
+// the run-stage directive. Chunking is an engine transport detail and is not
+// surfaced as conversational progress.
+export interface LoadSteeringDirective {
+  kind: "load-steering";
+  stage: string;
+  bundle: string;
+  part: number;
+  parts: number;
+  rules_content: Array<{ path: string; text: string }>;
+  continue_token: string;
+}
 
 // run-stage — load the resolved rules, load lead + support agents, load
 // `consumes` artifacts, run the stage body, write `produces`, keep memory.md. Routing fields (lead_agent,
@@ -71,20 +87,11 @@ export interface RunStageDirective {
   // dispatched), and empty on fully-dispatched subagent/pipeline topologies.
   // Carrying paths makes persona loading observable and enforceable in traces.
   inline_context_paths: string[];
-  // inline_context_content - the TEXT of the roster files for agents NOT yet
-  // delivered this workflow (deliver-once, derived from state like
-  // conductor_persona: an agent whose persona+knowledge were injected on an
-  // earlier completed stage persists in the session, so only new agents'
-  // files are baked in). Absent when every roster agent was already
-  // delivered or on the ctx-less path.
-  inline_context_content?: Array<{ path: string; text: string }>;
-  // inline_context_omitted - every roster file NOT in inline_context_content:
-  // size-budget overflow AND earlier-delivered agents' files alike. The
-  // roster always partitions into content + omitted, so no file is ever
-  // silently absent; the conductor reads by path each omitted entry not
-  // already in its context. Absent only when content covers the full roster
-  // or the roster is empty.
-  inline_context_omitted?: string[];
+  // Non-fatal problems discovered while building the path-loaded persona /
+  // knowledge roster. The conductor shows these actionable warnings and
+  // continues with the readable context; rule-delivery failures are blocking
+  // error directives instead.
+  context_warnings?: string[];
   // gate is a boolean for every deterministic case; the string sentinel
   // GATE_UNRESOLVED ("unresolved") appears ONLY for the first Construction Bolt's
   // walking-skeleton gate, which the conductor resolves via report (the
@@ -96,22 +103,10 @@ export interface RunStageDirective {
   // conductor is never pointed at a path that cannot be read.
   consumes: string[];
   produces: string[];
-  // Exact active-space rule paths to read before work. On dispatched
-  // topologies the conductor passes this roster to every agent brief.
+  // Exact active-space rule paths represented by the preceding load-steering
+  // bundle. On dispatched topologies the conductor passes the already-loaded
+  // rule text to every agent brief.
   rules_in_context: string[];
-  // rules_content - the TEXT of each substantive rules_in_context file, read
-  // by the engine at directive-build time (same deterministic delivery as
-  // conductor_persona: content in the directive, not a path the conductor may
-  // skip). Empty-template files (every non-blank body line an HTML comment)
-  // and missing files are dropped; files past the size cap move to
-  // rules_content_omitted instead. Absent on the ctx-less emit path (no
-  // projectDir to read against).
-  rules_content?: Array<{ path: string; text: string }>;
-  // rules_content_omitted - substantive rule files the engine did NOT inject
-  // because the rules_content size cap was reached. The conductor must read
-  // these by path; an entry here is steering that exists but is not in the
-  // directive. Absent when nothing was capped.
-  rules_content_omitted?: string[];
   sensors_applicable: string[];
   stage_file: string;
   // reviewer — the agent to invoke as a separate sub-agent for quality review
@@ -174,15 +169,12 @@ export interface DispatchSubagentDirective {
   support_agents: string[];
   mode: "inline" | "subagent" | "pipeline" | "mob" | "agent-team";
   inline_context_paths: string[];
-  inline_context_content?: Array<{ path: string; text: string }>;
-  inline_context_omitted?: string[];
+  context_warnings?: string[];
   gate: GateValue;
   memory_path: string;
   consumes: string[];
   produces: string[];
   rules_in_context: string[];
-  rules_content?: Array<{ path: string; text: string }>;
-  rules_content_omitted?: string[];
   sensors_applicable: string[];
   stage_file: string;
   worker: string;
@@ -267,6 +259,7 @@ export interface ParkedDirective {
 
 // The Directive union — the engine emits exactly one of these per `next`.
 export type Directive =
+  | LoadSteeringDirective
   | RunStageDirective
   | DispatchSubagentDirective
   | InvokeSwarmDirective
@@ -283,9 +276,10 @@ export type ValidationResult =
 
 // --- Exported constants (imported by tests) ---
 
-// The 9 kinds, in the engine design's catalogue order. Used both for the unknown-kind
+// The 10 kinds, in the engine design's catalogue order. Used both for the unknown-kind
 // error message and as the discriminator allowlist.
 export const VALID_KINDS = [
+  "load-steering",
   "run-stage",
   "dispatch-subagent",
   "invoke-swarm",
@@ -315,15 +309,12 @@ const RUN_STAGE_FIELDS = [
   "mode",
   "single",
   "inline_context_paths",
-  "inline_context_content",
-  "inline_context_omitted",
+  "context_warnings",
   "gate",
   "memory_path",
   "consumes",
   "produces",
   "rules_in_context",
-  "rules_content",
-  "rules_content_omitted",
   "sensors_applicable",
   "stage_file",
   "reviewer",
@@ -332,6 +323,16 @@ const RUN_STAGE_FIELDS = [
   "next_stage",
   "unit",
   "consumes_absent",
+] as const;
+
+const LOAD_STEERING_FIELDS = [
+  "kind",
+  "stage",
+  "bundle",
+  "part",
+  "parts",
+  "rules_content",
+  "continue_token",
 ] as const;
 
 // dispatch-subagent = shared run-stage fields + `worker`; the isolated-run
@@ -358,6 +359,7 @@ const DONE_FIELDS = ["kind", "reason"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
 
 const KNOWN_FIELDS_BY_KIND: Readonly<Record<DirectiveKind, readonly string[]>> = {
+  "load-steering": LOAD_STEERING_FIELDS,
   "run-stage": RUN_STAGE_FIELDS,
   "dispatch-subagent": DISPATCH_SUBAGENT_FIELDS,
   "invoke-swarm": INVOKE_SWARM_FIELDS,
@@ -413,6 +415,23 @@ export function validateDirective(obj: unknown): ValidationResult {
   // Rule 4-6: per-kind required-field presence + type checks, with specific,
   // kind-aware messages.
   switch (kind) {
+    case "load-steering":
+      checkString(o, "stage", kind, errors);
+      checkString(o, "bundle", kind, errors);
+      checkPositiveInteger(o, "part", kind, errors);
+      checkPositiveInteger(o, "parts", kind, errors);
+      checkPathTextArray(o, "rules_content", kind, errors);
+      checkString(o, "continue_token", kind, errors);
+      if (
+        typeof o.part === "number" &&
+        typeof o.parts === "number" &&
+        Number.isInteger(o.part) &&
+        Number.isInteger(o.parts) &&
+        o.part > o.parts
+      ) {
+        errors.push(`${kind}: part must be less than or equal to parts`);
+      }
+      break;
     case "run-stage":
       checkRunStageShared(o, kind, errors);
       checkOptionalBoolean(o, "single", kind, errors);
@@ -483,15 +502,12 @@ function checkRunStageShared(
   checkString(o, "mode", kind, errors);
   checkEnum(o, "mode", VALID_MODES, kind, errors);
   checkStringArray(o, "inline_context_paths", kind, errors);
-  checkOptionalPathTextArray(o, "inline_context_content", kind, errors);
-  checkOptionalStringArray(o, "inline_context_omitted", kind, errors);
+  checkOptionalStringArray(o, "context_warnings", kind, errors);
   checkGate(o, "gate", kind, errors);
   checkString(o, "memory_path", kind, errors);
   checkStringArray(o, "consumes", kind, errors);
   checkStringArray(o, "produces", kind, errors);
   checkStringArray(o, "rules_in_context", kind, errors);
-  checkOptionalPathTextArray(o, "rules_content", kind, errors);
-  checkOptionalStringArray(o, "rules_content_omitted", kind, errors);
   checkStringArray(o, "sensors_applicable", kind, errors);
   checkString(o, "stage_file", kind, errors);
   checkOptionalString(o, "conductor_persona", kind, errors);
@@ -622,10 +638,27 @@ function checkOptionalPositiveInteger(
   }
 }
 
+function checkPositiveInteger(
+  o: Record<string, unknown>,
+  field: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) {
+    errors.push(`${kind}: missing required field: ${field}`);
+    return;
+  }
+  const v = o[field];
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 1) {
+    errors.push(
+      `${kind}: ${field} must be a positive integer, got ${describe(v)}`,
+    );
+  }
+}
+
 // checkOptionalStringArray - a field that may be absent, but if present must
-// be an array of strings (e.g. rules_content_omitted, present only when the
-// injection size cap dropped a file). Mirrors checkStringArray's per-element
-// error wording with the checkOptional* early-return idiom.
+// be an array of strings. Mirrors checkStringArray's per-element error wording
+// with the checkOptional* early-return idiom.
 function checkOptionalStringArray(
   o: Record<string, unknown>,
   field: string,
@@ -636,17 +669,18 @@ function checkOptionalStringArray(
   checkStringArray(o, field, kind, errors);
 }
 
-// checkOptionalPathTextArray - a field that may be absent, but if present must
-// be an array of {path: string, text: string} objects (rules_content /
-// inline_context_content, the engine-injected file contents). Mirrors
-// checkOptionalConsumesAbsent's shape checks.
-function checkOptionalPathTextArray(
+// checkPathTextArray - a required array of {path: string, text: string}
+// objects, used by load-steering's deterministic rule-content payload.
+function checkPathTextArray(
   o: Record<string, unknown>,
   field: string,
   kind: DirectiveKind,
   errors: string[],
 ): void {
-  if (!(field in o)) return;
+  if (!(field in o)) {
+    errors.push(`${kind}: missing required field: ${field}`);
+    return;
+  }
   const v: unknown = o[field];
   if (!Array.isArray(v)) {
     errors.push(`${kind}: ${field} must be array, got ${describe(v)}`);
@@ -750,14 +784,25 @@ function checkEnum(
 
 // --- CLI self-check ---
 //
-// `bun aidlc-directive.ts` constructs one well-formed example of each of the 9
+// `bun aidlc-directive.ts` constructs one well-formed example of each of the 10
 // kinds, validates each, prints one line per kind ("<kind>: VALID" or the
-// errors), and exits 0 iff all 9 validate. Satisfies the acceptance check
-// "bun .../aidlc-directive.ts validates the 9 kinds".
+// errors), and exits 0 iff all 10 validate. Satisfies the acceptance check
+// "bun .../aidlc-directive.ts validates the 10 kinds".
 if (import.meta.main) {
   // One well-formed example per kind. run-stage mirrors the engine design's example
   // directive verbatim (application-design); the others follow the same catalogue table.
   const examples: Directive[] = [
+    {
+      kind: "load-steering",
+      stage: "application-design",
+      bundle: "sha256:0123456789abcdef",
+      part: 1,
+      parts: 2,
+      rules_content: [
+        { path: "aidlc-org.md", text: "## Testing Posture\n\nTests are first-class.\n" },
+      ],
+      continue_token: "opaque-token",
+    },
     {
       kind: "run-stage",
       stage: "application-design",
@@ -780,20 +825,9 @@ if (import.meta.main) {
         "aidlc-project.md",
         "aidlc-phase-inception.md",
       ],
-      // The steering-content fields populated: rules + roster content with
-      // an omitted overflow entry each, so the self-check validates the
-      // populated shape, not just field absence.
-      rules_content: [
-        { path: "aidlc-org.md", text: "## Testing Posture\n\nTests are first-class.\n" },
+      context_warnings: [
+        "Could not read optional knowledge file example.md; fix its permissions.",
       ],
-      rules_content_omitted: ["aidlc-phase-inception.md"],
-      inline_context_content: [
-        {
-          path: ".claude/agents/aidlc-architect-agent.md",
-          text: "# Architect\n\nYou think in systems.\n",
-        },
-      ],
-      inline_context_omitted: [".claude/agents/aidlc-design-agent.md"],
       sensors_applicable: ["required-sections", "upstream-coverage"],
       stage_file: ".claude/aidlc-common/stages/inception/application-design.md",
       next_stage: "Units Generation",

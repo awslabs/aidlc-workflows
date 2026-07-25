@@ -92,14 +92,14 @@ export const ROUTES: readonly Route[] = [
     group: "top",
     kind: "top-passthrough",
     classification: "passthrough",
-    verbs: ["next", "report", "park"],
+    verbs: ["next", "continue", "report", "park"],
     tool: TOOLS.orchestrate,
     human: [
       { command: "next [args]", summary: "run the next orchestrator action" },
       { command: "report [args]", summary: "render the orchestrator report" },
       { command: "park [args]", summary: "park the current workflow" },
     ],
-    all: ["next [args]", "report [args]", "park [args]"],
+    all: ["next [args]", "continue <token>", "report [args]", "park [args]"],
   },
   {
     id: "top-compose",

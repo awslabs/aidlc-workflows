@@ -1,49 +1,43 @@
-// covers: subcommand:aidlc-orchestrate:next, function:validateDirective
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue
 //
-// Steering-content delivery - the deterministic anchor for rules_in_context
-// and inline_context_paths. The engine bakes rule/persona/knowledge CONTENT
-// into the run-stage directive (rules_content / inline_context_content) so
-// per-stage steering no longer depends on the conductor choosing to read the
-// paths. Process-boundary tests against the shipped dist engine: fixture
-// workspace, spawn `next`, assert on the emitted directive.
-//
-// Contract under test:
-//   1. rules_content carries each SUBSTANTIVE rule file's text; the
-//      comment-only team.md/project.md placeholders are dropped.
-//   2. inline_context_content delivers persona + knowledge once per agent per
-//      workflow (deliver-once): agents already on a completed stage's inline
-//      roster are not re-delivered, and the aidlc-shared tree ships only with
-//      the first inline stage.
-//   3. The whole emitted line respects the AIDLC_DIRECTIVE_MAX_BYTES budget;
-//      overflow files land in *_omitted (visible, never silent).
-//   4. Missing rule files are skipped without breaking the directive.
+// Deterministic stage-rule delivery. Rules cross the engine boundary through
+// bounded load-steering directives before run-stage; optional persona/knowledge
+// remains path-loaded with actionable warnings.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  cpSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   cleanupTestProject,
-  DEFAULT_RECORD_DIR,
-  REPO_ROOT,
+  seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
 const BUN = process.execPath;
-const TOOLS_DIR = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
-const ORCH_TOOL = join(TOOLS_DIR, "aidlc-orchestrate.ts");
+const MAX_DIRECTIVE_BYTES = 28 * 1024;
 
-type PathText = { path: string; text: string };
-type RunStage = {
+type RuleContent = { path: string; text: string };
+type WireDirective = {
   kind: string;
   stage?: string;
+  bundle?: string;
+  part?: number;
+  parts?: number;
+  rules_content?: RuleContent[];
+  continue_token?: string;
   rules_in_context?: string[];
-  rules_content?: PathText[];
-  rules_content_omitted?: string[];
   inline_context_paths?: string[];
-  inline_context_content?: PathText[];
-  inline_context_omitted?: string[];
-  conductor_persona?: string;
+  context_warnings?: string[];
+  message?: string;
 };
 
 const projects: string[] = [];
@@ -58,205 +52,398 @@ afterAll(() => {
   for (const proj of projects) cleanupTestProject(proj);
 });
 
-function next(
+function invoke(
   proj: string,
+  subcommand: "next" | "continue",
   args: string[],
-  env: Record<string, string> = {},
-): { directive: RunStage; rawBytes: number } {
+): { directive: WireDirective; bytes: number } {
   const res = spawnSync(
     BUN,
-    [ORCH_TOOL, "next", ...args, "--project-dir", proj],
-    { encoding: "utf-8", env: { ...process.env, ...env } },
+    [
+      join(proj, ".claude", "tools", "aidlc-orchestrate.ts"),
+      subcommand,
+      ...args,
+      "--project-dir",
+      proj,
+    ],
+    { encoding: "utf-8", env: { ...process.env } },
   );
-  expect(res.status).toBe(0);
+  expect(res.status, res.stderr).toBe(0);
   const line = (res.stdout ?? "").trim();
   return {
-    directive: JSON.parse(line) as RunStage,
-    rawBytes: Buffer.byteLength(line, "utf-8"),
+    directive: JSON.parse(line) as WireDirective,
+    bytes: Buffer.byteLength(line, "utf-8"),
   };
 }
 
-// A minimal in-flight state: intent-capture completed, feasibility active.
-// intent-capture's inline roster (product + architect) counts as delivered;
-// feasibility adds aws-platform + compliance.
-function seedFeasibilityState(proj: string): void {
-  const recDir = join(
-    proj, "aidlc", "spaces", "default", "intents", DEFAULT_RECORD_DIR,
-  );
-  mkdirSync(recDir, { recursive: true });
-  writeFileSync(
-    join(recDir, "aidlc-state.md"),
-    [
-      "# AI-DLC State Tracking",
-      "",
-      "## Project Information",
-      "- **Project**: steering fixture",
-      "- **Project Type**: Greenfield",
-      "- **Scope**: mvp",
-      "- **Current Stage**: feasibility",
-      "",
-      "## Stage Checkboxes",
-      // The checkbox delimiter is the state-file FORMAT's em dash
-      // (parseCheckboxes requires it); written as a backslash-u escape
-      // to keep the source ASCII.
-      "- [x] workspace-scaffold \u2014 EXECUTE",
-      "- [x] workspace-detection \u2014 EXECUTE",
-      "- [x] state-init \u2014 EXECUTE",
-      "- [x] intent-capture \u2014 EXECUTE",
-      "- [-] feasibility \u2014 EXECUTE",
-      "- [ ] scope-definition \u2014 EXECUTE",
-      "",
-    ].join("\n"),
-    "utf-8",
-  );
-  writeFileSync(
-    join(proj, "aidlc", "spaces", "default", "intents", "active-intent"),
-    DEFAULT_RECORD_DIR,
-    "utf-8",
-  );
+function drive(
+  proj: string,
+  args = ["--scope", "mvp", "--stage", "intent-capture"],
+): {
+  loads: WireDirective[];
+  contents: RuleContent[];
+  final: WireDirective;
+  sizes: number[];
+} {
+  const loads: WireDirective[] = [];
+  const contents: RuleContent[] = [];
+  const sizes: number[] = [];
+  let result = invoke(proj, "next", args);
+  sizes.push(result.bytes);
+  while (result.directive.kind === "load-steering") {
+    loads.push(result.directive);
+    contents.push(...(result.directive.rules_content ?? []));
+    const token = result.directive.continue_token;
+    expect(token).toBeString();
+    result = invoke(proj, "continue", [token ?? ""]);
+    sizes.push(result.bytes);
+  }
+  return { loads, contents, final: result.directive, sizes };
 }
 
-describe("t248 steering-content delivery", () => {
-  test("rules_content carries substantive rules; placeholders dropped; paths stay", () => {
+function reconstructed(contents: RuleContent[], path: string): string {
+  return contents
+    .filter((entry) => entry.path === path)
+    .map((entry) => entry.text)
+    .join("");
+}
+
+describe("t248 deterministic steering delivery", () => {
+  test("delivers substantive rules before run-stage and keeps knowledge path-loaded", () => {
     const proj = project();
-    const { directive } = next(proj, ["--scope", "mvp", "--stage", "intent-capture"]);
-    expect(directive.kind).toBe("run-stage");
-    // Paths roster unchanged (backward-compatible).
-    expect(directive.rules_in_context).toEqual([
+    const result = drive(proj);
+
+    expect(result.loads.length).toBeGreaterThan(0);
+    expect(result.final.kind).toBe("run-stage");
+    expect(result.final.rules_in_context).toEqual([
       "aidlc/spaces/default/memory/org.md",
-      "aidlc/spaces/default/memory/team.md",
-      "aidlc/spaces/default/memory/project.md",
       "aidlc/spaces/default/memory/phases/ideation.md",
     ]);
-    const paths = (directive.rules_content ?? []).map((e) => e.path);
-    // org.md + phases/ideation.md ship substantive; team/project are
-    // comment-only placeholders and must be dropped, not delivered as noise.
-    expect(paths).toContain("aidlc/spaces/default/memory/org.md");
-    expect(paths).toContain("aidlc/spaces/default/memory/phases/ideation.md");
-    expect(paths).not.toContain("aidlc/spaces/default/memory/team.md");
-    expect(paths).not.toContain("aidlc/spaces/default/memory/project.md");
-    // Text is the real file, not a stub.
-    const org = (directive.rules_content ?? []).find((e) =>
-      e.path.endsWith("org.md"),
-    );
-    expect(org?.text).toContain("## Walking Skeleton");
+    expect(result.final).not.toHaveProperty("rules_content");
+    expect(result.final).not.toHaveProperty("rules_content_omitted");
+    expect(result.final).not.toHaveProperty("inline_context_content");
+    expect(result.final).not.toHaveProperty("inline_context_omitted");
+    expect(result.final.inline_context_paths?.length ?? 0).toBeGreaterThan(1);
+
+    const memory = join(proj, "aidlc", "spaces", "default", "memory");
+    for (const rel of ["org.md", "phases/ideation.md"]) {
+      const path = `aidlc/spaces/default/memory/${rel}`;
+      expect(reconstructed(result.contents, path)).toBe(
+        readFileSync(join(memory, rel), "utf-8"),
+      );
+    }
+    expect(result.contents.some((entry) => entry.path.endsWith("team.md"))).toBe(false);
+    expect(result.contents.some((entry) => entry.path.endsWith("project.md"))).toBe(false);
   });
 
-  test("populated placeholder becomes substantive and is delivered", () => {
+  test("a populated placeholder is delivered as part of the ordered bundle", () => {
     const proj = project();
+    const teamPath = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "memory",
+      "team.md",
+    );
     appendFileSync(
-      join(proj, "aidlc", "spaces", "default", "memory", "team.md"),
+      teamPath,
       "\n## Testing Posture\n\nWe use BDD. Specifications drive scenarios.\n",
       "utf-8",
     );
-    const { directive } = next(proj, ["--scope", "mvp", "--stage", "intent-capture"]);
-    const team = (directive.rules_content ?? []).find((e) =>
-      e.path.endsWith("team.md"),
-    );
-    expect(team?.text).toContain("We use BDD.");
+    const result = drive(proj);
+    expect(
+      reconstructed(
+        result.contents,
+        "aidlc/spaces/default/memory/team.md",
+      ),
+    ).toBe(readFileSync(teamPath, "utf-8"));
   });
 
-  test("missing rule file is skipped; directive stays well-formed", () => {
+  test("large rules are automatically chunked and every directive fits 28 KiB", () => {
+    const proj = project();
+    const orgPath = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "memory",
+      "org.md",
+    );
+    const large = Array.from(
+      { length: 240 },
+      (_, i) =>
+        `## Policy ${i}\n\nPolicy ${i} requires deterministic evidence ` +
+        `${"x".repeat(280)}.\n\n`,
+    ).join("");
+    writeFileSync(orgPath, large, "utf-8");
+
+    const result = drive(proj);
+    expect(result.loads.length).toBeGreaterThan(3);
+    expect(result.loads.map((load) => load.part)).toEqual(
+      Array.from({ length: result.loads.length }, (_, i) => i + 1),
+    );
+    expect(result.loads.every((load) => load.parts === result.loads.length)).toBe(true);
+    expect(result.sizes.every((bytes) => bytes <= MAX_DIRECTIVE_BYTES)).toBe(true);
+    expect(
+      reconstructed(
+        result.contents,
+        "aidlc/spaces/default/memory/org.md",
+      ),
+    ).toBe(large);
+    expect(result.final.kind).toBe("run-stage");
+  });
+
+  test("JSON-escaped control characters are chunked by serialized size", () => {
+    const proj = project();
+    const orgPath = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "memory",
+      "org.md",
+    );
+    const controls = "\u0000\u0001\u0002\t".repeat(5_000);
+    const rule = `# Organization\n\n## Control Policy\n\n${controls}\n`;
+    writeFileSync(orgPath, rule, "utf-8");
+
+    const result = drive(proj);
+    expect(result.loads.length).toBeGreaterThan(3);
+    expect(result.sizes.every((bytes) => bytes <= MAX_DIRECTIVE_BYTES)).toBe(
+      true,
+    );
+    expect(
+      reconstructed(
+        result.contents,
+        "aidlc/spaces/default/memory/org.md",
+      ),
+    ).toBe(rule);
+    expect(result.final.kind).toBe("run-stage");
+  });
+
+  test("plain next restarts at part one with a deterministic token", () => {
+    const proj = project();
+    const first = invoke(proj, "next", [
+      "--scope",
+      "mvp",
+      "--stage",
+      "intent-capture",
+    ]).directive;
+    const restarted = invoke(proj, "next", [
+      "--scope",
+      "mvp",
+      "--stage",
+      "intent-capture",
+    ]).directive;
+    expect(first.kind).toBe("load-steering");
+    expect(restarted.part).toBe(1);
+    expect(restarted.bundle).toBe(first.bundle);
+    expect(restarted.continue_token).toBe(first.continue_token);
+  });
+
+  test("a changed rule invalidates an in-flight continuation", () => {
+    const proj = project();
+    const first = invoke(proj, "next", [
+      "--scope",
+      "mvp",
+      "--stage",
+      "intent-capture",
+    ]).directive;
+    appendFileSync(
+      join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+      "\n## New Policy\n\nChanged during delivery.\n",
+      "utf-8",
+    );
+    const stale = invoke(proj, "continue", [first.continue_token ?? ""]).directive;
+    expect(stale.kind).toBe("error");
+    expect(stale.message).toContain("Run a fresh `next`");
+  });
+
+  test("a changed workflow state invalidates an in-flight continuation", () => {
+    const proj = setupIntegrationProject({
+      withState: "state-mid-ideation.md",
+    });
+    projects.push(proj);
+    const first = invoke(proj, "next", []).directive;
+    appendFileSync(
+      seededStateFile(proj),
+      "\n<!-- State changed during delivery. -->\n",
+      "utf-8",
+    );
+
+    const stale = invoke(proj, "continue", [
+      first.continue_token ?? "",
+    ]).directive;
+    expect(stale.kind).toBe("error");
+    expect(stale.message).toContain("workflow state changed");
+    expect(stale.message).toContain("Run a fresh `next`");
+  });
+
+  test("a changed scope route invalidates an in-flight continuation", () => {
+    const proj = project();
+    const first = invoke(proj, "next", [
+      "--scope",
+      "mvp",
+      "--stage",
+      "intent-capture",
+    ]).directive;
+    const gridPath = join(
+      proj,
+      ".claude",
+      "tools",
+      "data",
+      "scope-grid.json",
+    );
+    const grid = JSON.parse(readFileSync(gridPath, "utf-8")) as Record<
+      string,
+      { stages: Record<string, "EXECUTE" | "SKIP"> }
+    >;
+    const changed = Object.keys(grid.mvp.stages).find(
+      (slug) =>
+        slug !== "intent-capture" && grid.mvp.stages[slug] === "EXECUTE",
+    );
+    expect(changed).toBeString();
+    grid.mvp.stages[changed ?? "market-research"] = "SKIP";
+    writeFileSync(gridPath, `${JSON.stringify(grid, null, 2)}\n`, "utf-8");
+
+    const stale = invoke(proj, "continue", [
+      first.continue_token ?? "",
+    ]).directive;
+    expect(stale.kind).toBe("error");
+    expect(stale.message).toContain("stage route changed");
+    expect(stale.message).toContain("Run a fresh `next`");
+  });
+
+  test("missing required rules block before stage work with repair guidance", () => {
     const proj = project();
     rmSync(join(proj, "aidlc", "spaces", "default", "memory", "org.md"));
-    const { directive } = next(proj, ["--scope", "mvp", "--stage", "intent-capture"]);
-    expect(directive.kind).toBe("run-stage");
-    const paths = (directive.rules_content ?? []).map((e) => e.path);
-    expect(paths).not.toContain("aidlc/spaces/default/memory/org.md");
-    // The paths roster still lists it (compile-frozen); only content skips.
-    expect(directive.rules_in_context).toContain(
-      "aidlc/spaces/default/memory/org.md",
-    );
+    const result = invoke(proj, "next", [
+      "--scope",
+      "mvp",
+      "--stage",
+      "intent-capture",
+    ]).directive;
+    expect(result.kind).toBe("error");
+    expect(result.message).toContain("Cannot load required stage rule");
+    expect(result.message).toContain("The stage has not started");
+    expect(result.message).toContain("run `next` again");
   });
 
-  test("first inline stage delivers roster content; emitted line respects the budget", () => {
+  test("invalid UTF-8 required rules block before stage work", () => {
     const proj = project();
-    const budget = 120_000;
-    const { directive, rawBytes } = next(
-      proj,
-      ["--scope", "mvp", "--stage", "intent-capture"],
-      { AIDLC_DIRECTIVE_MAX_BYTES: String(budget) },
+    writeFileSync(
+      join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+      Buffer.from([0xc3, 0x28]),
     );
-    const contentPaths = (directive.inline_context_content ?? []).map((e) => e.path);
-    // Persona + knowledge for the stage roster (product lead, architect
-    // support) plus the shared tree - content, not just paths.
-    expect(contentPaths.some((p) => p.endsWith("agents/aidlc-product-agent.md"))).toBe(true);
-    expect(contentPaths.some((p) => p.includes("knowledge/aidlc-shared/"))).toBe(true);
-    expect(rawBytes).toBeLessThanOrEqual(budget);
-    // Everything not delivered is named, never silently dropped: content +
-    // omitted partition the roster.
-    const omitted = directive.inline_context_omitted ?? [];
-    const roster = directive.inline_context_paths ?? [];
-    for (const p of roster) {
-      expect(contentPaths.includes(p) || omitted.includes(p)).toBe(true);
-    }
+    const result = invoke(proj, "next", [
+      "--scope",
+      "mvp",
+      "--stage",
+      "intent-capture",
+    ]).directive;
+    expect(result.kind).toBe("error");
+    expect(result.message).toContain("Cannot load required stage rule");
+    expect(result.message).toContain("UTF-8");
+    expect(result.message).toContain("The stage has not started");
   });
 
-  test("tight budget moves overflow to *_omitted lists and the line still fits", () => {
+  test("active-space paths and delivered content name the same files", () => {
     const proj = project();
-    const budget = 22_000; // persona (~12KB) + base directive leave little room
-    const { directive, rawBytes } = next(
-      proj,
-      ["--scope", "mvp", "--stage", "intent-capture"],
-      { AIDLC_DIRECTIVE_MAX_BYTES: String(budget) },
-    );
-    expect(directive.kind).toBe("run-stage");
-    expect(rawBytes).toBeLessThanOrEqual(budget);
-    expect((directive.inline_context_omitted ?? []).length).toBeGreaterThan(0);
-  });
-
-  test("deliver-once: a later stage re-delivers rules; prior agents' files move to omitted, never vanish", () => {
-    const proj = project();
-    seedFeasibilityState(proj);
-    const { directive } = next(proj, [], {
-      AIDLC_DIRECTIVE_MAX_BYTES: "120000",
+    const defaultSpace = join(proj, "aidlc", "spaces", "default");
+    const teamSpace = join(proj, "aidlc", "spaces", "team-a");
+    mkdirSync(teamSpace, { recursive: true });
+    cpSync(join(defaultSpace, "memory"), join(teamSpace, "memory"), {
+      recursive: true,
     });
-    expect(directive.stage).toBe("feasibility");
-    // Rules re-deliver every stage (learnings can mutate them mid-workflow).
-    const rulePaths = (directive.rules_content ?? []).map((e) => e.path);
-    expect(rulePaths).toContain("aidlc/spaces/default/memory/org.md");
-    const content = (directive.inline_context_content ?? []).map((e) => e.path);
-    const omitted = directive.inline_context_omitted ?? [];
-    // The architect (delivered with intent-capture, and feasibility's LEAD)
-    // is not re-sent as content - but every roster file stays VISIBLE in
-    // omitted: a prior delivery that overflowed or was compacted away must
-    // never leave a file silently absent from both lists.
-    expect(content.some((p) => p.includes("aidlc-architect-agent"))).toBe(false);
-    expect(omitted.some((p) => p.includes("aidlc-architect-agent"))).toBe(true);
-    expect(content.some((p) => p.includes("knowledge/aidlc-shared/"))).toBe(false);
-    expect(omitted.some((p) => p.includes("knowledge/aidlc-shared/"))).toBe(true);
-    // feasibility's NEW supports (aws-platform, compliance) arrive as content.
-    expect(content.some((p) => p.includes("aidlc-aws-platform-agent"))).toBe(true);
-    expect(content.some((p) => p.includes("aidlc-compliance-agent"))).toBe(true);
-    // The full roster partitions into content + omitted - nothing dropped.
-    for (const p of directive.inline_context_paths ?? []) {
-      expect(content.includes(p) || omitted.includes(p)).toBe(true);
-    }
-    // No persona re-delivery mid-workflow (D-E unchanged).
-    expect(directive.conductor_persona).toBeUndefined();
+    writeFileSync(join(proj, "aidlc", "active-space"), "team-a\n", "utf-8");
+
+    const result = drive(proj);
+    expect(
+      result.final.rules_in_context?.every((path) =>
+        path.startsWith("aidlc/spaces/team-a/memory/")
+      ),
+    ).toBe(true);
+    expect(
+      result.contents.every((entry) =>
+        entry.path.startsWith("aidlc/spaces/team-a/memory/")
+      ),
+    ).toBe(true);
   });
 
-  test("budget-starved delivery stage never permanently downgrades a file: stage 2 keeps it visible", () => {
-    // Stage 1 (intent-capture) at the DEFAULT budget with the persona aboard
-    // cannot fit the architect persona - it lands in omitted. Stage 2
-    // (feasibility, architect is LEAD) marks the architect delivered, so no
-    // content re-send - but the file must appear in stage 2's omitted list,
-    // not vanish from both (the silent-downgrade defect this partition
-    // prevents).
+  test("unreadable optional knowledge warns and is omitted without blocking", () => {
     const proj = project();
-    seedFeasibilityState(proj);
-    const { directive } = next(proj, [], {}); // default 28KB budget
-    expect(directive.stage).toBe("feasibility");
-    const content = (directive.inline_context_content ?? []).map((e) => e.path);
-    const omitted = directive.inline_context_omitted ?? [];
-    const roster = directive.inline_context_paths ?? [];
-    const architectPersona = roster.find((p) =>
-      p.endsWith("agents/aidlc-architect-agent.md"),
+    const knowledgeDir = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "knowledge",
+      "aidlc-product-agent",
     );
-    expect(architectPersona).toBeDefined();
-    expect(
-      content.includes(architectPersona ?? "") ||
-        omitted.includes(architectPersona ?? ""),
-    ).toBe(true);
+    mkdirSync(knowledgeDir, { recursive: true });
+    const broken = join(knowledgeDir, "broken.md");
+    symlinkSync(join(knowledgeDir, "missing-target.md"), broken);
+
+    const result = drive(proj);
+    const rel =
+      "aidlc/spaces/default/knowledge/aidlc-product-agent/broken.md";
+    expect(result.final.kind).toBe("run-stage");
+    expect(result.final.inline_context_paths).not.toContain(rel);
+    expect(result.final.context_warnings?.join("\n")).toContain(rel);
+    expect(result.final.context_warnings?.join("\n")).toContain(
+      "this stage will continue",
+    );
+  });
+
+  test("invalid UTF-8 optional knowledge warns and is omitted", () => {
+    const proj = project();
+    const knowledgeDir = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "knowledge",
+      "aidlc-product-agent",
+    );
+    mkdirSync(knowledgeDir, { recursive: true });
+    const invalid = join(knowledgeDir, "invalid.md");
+    writeFileSync(invalid, Buffer.from([0xc3, 0x28]));
+
+    const result = drive(proj);
+    const rel =
+      "aidlc/spaces/default/knowledge/aidlc-product-agent/invalid.md";
+    expect(result.final.kind).toBe("run-stage");
+    expect(result.final.inline_context_paths).not.toContain(rel);
+    expect(result.final.context_warnings?.join("\n")).toContain(rel);
+    expect(result.final.context_warnings?.join("\n")).toContain("invalid UTF-8");
+  });
+
+  test("many optional-context failures aggregate without overflowing run-stage", () => {
+    const proj = project();
+    const knowledgeDir = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "knowledge",
+      "aidlc-product-agent",
+    );
+    mkdirSync(knowledgeDir, { recursive: true });
+    for (let i = 0; i < 120; i++) {
+      symlinkSync(
+        join(knowledgeDir, `missing-${i}.md`),
+        join(knowledgeDir, `broken-${String(i).padStart(3, "0")}.md`),
+      );
+    }
+
+    const result = drive(proj);
+    expect(result.final.kind).toBe("run-stage");
+    expect(result.sizes.every((bytes) => bytes <= MAX_DIRECTIVE_BYTES)).toBe(
+      true,
+    );
+    expect(result.final.context_warnings?.join("\n")).toContain(
+      "additional optional persona/knowledge warning(s)",
+    );
   });
 });

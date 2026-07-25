@@ -38,6 +38,8 @@ import {
   cleanupTestProject,
   createTestProject,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seedBoltDag,
   seedBoltDagBatches,
   seededRecordDir,
@@ -142,6 +144,7 @@ function seedProject(opts: {
 }): string {
   const proj = createTestProject();
   tempDirs.push(proj);
+  seedAidlcMemory(proj);
   writeFileSync(
     seededStateFile(proj),
     constructionState({ current: opts.current ?? "functional-design", ...opts }),
@@ -151,21 +154,15 @@ function seedProject(opts: {
 
 /** Run `aidlc-orchestrate.ts next` and parse the emitted directive. */
 function runNext(proj: string): Directive {
-  const r = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], {
-    encoding: "utf-8",
-    env: (() => {
-      const e = { ...process.env };
-      delete e.AWS_AIDLC_DEFAULT_SCOPE;
-      return e;
-    })(),
-  });
-  try {
-    return JSON.parse((r.stdout ?? "").trim()) as Directive;
-  } catch {
+  const env = { ...process.env };
+  delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  const r = runOrchestrateNext(ORCH, proj, [], { env });
+  if (r.directive === null) {
     throw new Error(
       `runNext did not emit parseable JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`,
     );
   }
+  return r.directive as Directive;
 }
 
 // Cover alpha's functional-design produces before `next`, to reach the

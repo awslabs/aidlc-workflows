@@ -20,7 +20,11 @@ import {
   selectionAwareDefaultScope,
   stageEnabledBySelection,
 } from "../../core/tools/aidlc-lib.ts";
-import { withEnvAndFreshCaches } from "../harness/fixtures.ts";
+import {
+  runOrchestrateNext,
+  seedAidlcMemory,
+  withEnvAndFreshCaches,
+} from "../harness/fixtures.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CORE_TOOLS = join(REPO_ROOT, "core", "tools");
@@ -220,7 +224,7 @@ function makePluginOnlyInstall(): string {
     `${JSON.stringify(grid, null, 2)}\n`,
     "utf-8",
   );
-  mkdirSync(join(project, "aidlc"), { recursive: true });
+  seedAidlcMemory(project);
   return project;
 }
 
@@ -365,20 +369,16 @@ describe("t225 env-scope fallback under plugin-only selection", () => {
   test("AWS_AIDLC_DEFAULT_SCOPE naming disabled core falls back to the sole plugin scope", () => {
     const project = makePluginOnlyInstall();
     const tool = join(project, ".claude", "tools", "aidlc-orchestrate.ts");
-    const result = spawnSync(
-      BUN,
+    const result = runOrchestrateNext(
+      tool,
+      project,
       [
-        tool,
-        "next",
         "--stage",
         "requirements-analysis",
         "--single",
-        "--project-dir",
-        project,
       ],
       {
         cwd: project,
-        encoding: "utf-8",
         env: {
           ...process.env,
           AIDLC_HARNESS_DIR: ".claude",
@@ -386,7 +386,7 @@ describe("t225 env-scope fallback under plugin-only selection", () => {
         },
       },
     );
-    const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+    const out = result.out;
     expect(result.status).toBe(0);
     expect(out).not.toContain("Invalid AWS_AIDLC_DEFAULT_SCOPE");
     expect(out).toContain('"kind":"run-stage"');

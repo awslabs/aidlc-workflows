@@ -13,11 +13,11 @@ files are `aidlc/spaces/<active-space>/memory/{org,team,project}.md`;
 selects it. Stage rules are reserved for future use. The compile bakes the
 resolved chain into each stage node's `rules_in_context`; every applicable
 rule appears in the chain - nothing drops at runtime. At stage entry the
-engine delivers each substantive rule file's text in the run-stage
-directive's `rules_content` field (empty templates dropped per § 1;
-size-budget overflow named in `rules_content_omitted`). This file documents
-how to read those layers safely when an agent needs a practice OUTSIDE a
-run-stage directive (tool shaping, question prompts).
+engine delivers each substantive rule file through an ordered sequence of
+bounded `load-steering` directives before `run-stage` (empty templates are
+dropped per § 1; there is no size-based path fallback). This file documents
+how to read those layers safely when an agent needs a practice outside that
+delivery sequence (tool shaping, question prompts).
 
 ---
 

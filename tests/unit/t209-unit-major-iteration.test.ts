@@ -48,6 +48,8 @@ import {
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
   resetAidlcEnv,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seedBoltDag,
   seededRecordDir,
   seededStateFile,
@@ -191,6 +193,7 @@ function coverFullGrid(proj: string, units: string[]): void {
 function seedProject(iteration?: string): string {
   const proj = createTestProject();
   tempDirs.push(proj);
+  seedAidlcMemory(proj);
   writeFileSync(
     seededStateFile(proj),
     constructionState({ skeletonStance: "on", iteration }),
@@ -205,24 +208,18 @@ interface NextRun {
 
 /** Run `aidlc-orchestrate.ts next`, capturing both its directive and diagnostics. */
 function runNextWithStderr(proj: string): NextRun {
-  const r = spawnSync(BUN, [ORCH, "next", "--project-dir", proj], {
-    encoding: "utf-8",
-    env: (() => {
-      const e = { ...process.env };
-      delete e.AWS_AIDLC_DEFAULT_SCOPE;
-      return e;
-    })(),
-  });
-  try {
-    return {
-      directive: JSON.parse((r.stdout ?? "").trim()) as Directive,
-      stderr: r.stderr ?? "",
-    };
-  } catch {
+  const env = { ...process.env };
+  delete env.AWS_AIDLC_DEFAULT_SCOPE;
+  const r = runOrchestrateNext(ORCH, proj, [], { env });
+  if (r.directive === null) {
     throw new Error(
       `runNext did not emit parseable JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`,
     );
   }
+  return {
+    directive: r.directive as Directive,
+    stderr: r.stderr,
+  };
 }
 
 function runNext(proj: string): Directive {

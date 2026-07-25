@@ -42,7 +42,9 @@ const KIRO_TREE = join(REPO_ROOT, "dist", "kiro", ".kiro");
 function scratchProject(): string {
   const dir = mkdtempSync(join(tmpdir(), "t180-"));
   cpSync(KIRO_TREE, join(dir, ".kiro"), { recursive: true });
-  mkdirSync(join(dir, "aidlc"), { recursive: true });
+  cpSync(join(REPO_ROOT, "dist", "kiro", "aidlc"), join(dir, "aidlc"), {
+    recursive: true,
+  });
   return dir;
 }
 
@@ -220,8 +222,9 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
       });
       expect(r.code).toBe(0);
       expect(r.stdout).toContain("SYSTEM (deterministic engine pre-dispatch)");
-      expect(r.stdout).toContain('"kind":"run-stage"');
+      expect(r.stdout).toContain('"kind":"load-steering"');
       expect(r.stdout).toContain('"stage":"requirements-analysis"');
+      expect(r.stdout).toContain('"continue_token"');
       expect(existsSync(forwardingPath(dir))).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });

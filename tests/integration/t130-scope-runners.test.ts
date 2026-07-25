@@ -77,6 +77,7 @@ import { join } from "node:path";
 import {
   cleanupTestProject,
   resetAidlcEnv,
+  runOrchestrateNext,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
@@ -150,19 +151,12 @@ function firstMoveDirective(scope: string): Directive {
   // routing failure downstream.
   expect(init.status).toBe(0);
 
-  const next = spawnSync(
-    BUN,
-    [
-      tool(proj, "aidlc-orchestrate.ts"),
-      "next",
-      "--scope",
-      scope,
-      "--project-dir",
-      proj,
-    ],
-    { encoding: "utf-8" },
+  const next = runOrchestrateNext(
+    tool(proj, "aidlc-orchestrate.ts"),
+    proj,
+    ["--scope", scope],
   );
-  return JSON.parse((next.stdout ?? "").trim());
+  return JSON.parse(next.stdout.trim());
 }
 
 describe("t130 scope runners — baked-scope first move through the engine (migrated from t130-scope-runners.sh, plan 12)", () => {
