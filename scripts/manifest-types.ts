@@ -151,3 +151,143 @@ export type HarnessManifest = {
     kind: "store" | "kiro";
   };
 };
+
+// --- The frontmatter transformation seam -------------------------------
+//
+// These two pure functions implement the frontmatterAdditions /
+// frontmatterRemovals rows declared above. They live here, beside the contract
+// they serve, so the transformation is unit-testable: scripts/package.ts runs
+// its build at import time, so a test cannot reach into it for a function.
+// Both are string-in/string-out and throw rather than emit questionable YAML.
+// Append manifest-declared frontmatter lines to a projected .md, just before
+// the closing `---` of its YAML block (manifest-types.ts frontmatterAdditions).
+// Hard errors, never silent: the file must open with a frontmatter block, and
+// no added line's key may already exist in it - if core later grows the same
+// key, the build fails loudly instead of shipping a double. A multi-line block is
+// supported: a line with NO leading whitespace opens a new key (validated +
+// collision-checked); an indented continuation line (a nested mapping/sequence
+// entry) rides along unchecked.
+export function applyFrontmatterAdditions(
+  content: string,
+  lines: string[],
+  file: string,
+): string {
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n(---\r?\n)/);
+  if (!m) {
+    throw new Error(
+      `frontmatterAdditions: ${file} has no leading frontmatter block to extend.`,
+    );
+  }
+  const fm = m[1];
+  // Keys this addition block itself declares — a duplicate WITHIN the block is
+  // as invalid as one colliding with core, and silently ships a YAML mapping
+  // with a repeated key (last writer wins, or a parser error).
+  const added = new Set<string>();
+  for (const line of lines) {
+    // Indented lines continue the preceding key's block (nested mapping /
+    // sequence); only top-level lines name a key to validate.
+    if (/^\s/.test(line)) continue;
+    const key = line.split(":")[0]?.trim();
+    if (!key || !/^[A-Za-z_][\w-]*$/.test(key)) {
+      throw new Error(
+        `frontmatterAdditions: line "${line}" for ${file} does not start with a YAML key.`,
+      );
+    }
+    if (added.has(key)) {
+      throw new Error(
+        `frontmatterAdditions: ${file} declares "${key}:" twice in the same addition block - ` +
+          `emit one mapping per key.`,
+      );
+    }
+    added.add(key);
+    if (new RegExp(`^${key}:`, "m").test(fm)) {
+      throw new Error(
+        `frontmatterAdditions: ${file} already declares "${key}:" in core - ` +
+          `resolve the collision instead of shipping a duplicate key.`,
+      );
+    }
+  }
+  const insertAt = m[0].length - m[2].length;
+  return `${content.slice(0, insertAt)}${lines.join("\n")}\n${content.slice(insertAt)}`;
+}
+
+// Remove manifest-declared frontmatter keys from a projected .md's YAML block
+// (manifest-types.ts frontmatterRemovals) - the inverse of the additions seam,
+// for a harness-neutral field a given harness must ship WITHOUT. A removed key
+// drops its line plus any indented continuation lines (nested block). Hard
+// errors, never silent: the file must open with a frontmatter block, and each
+// named key must currently exist - a stale removal that no longer matches core
+// fails loudly instead of silently no-opping.
+export function applyFrontmatterRemovals(
+  content: string,
+  keys: string[],
+  file: string,
+): string {
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n(---\r?\n)/);
+  if (!m) {
+    throw new Error(
+      `frontmatterRemovals: ${file} has no leading frontmatter block to trim.`,
+    );
+  }
+  const fmLines = m[1].split(/\r?\n/);
+  const keySet = new Set(keys);
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  let dropping = false;
+  // Only a real top-level MAPPING KEY ends the block being dropped. A blank line
+  // or a full-line `#` comment is neither: treating those as terminators leaves
+  // the rest of the removed key's block behind as orphaned indented lines, which
+  // is invalid YAML (a mapping value with no key).
+  const TOP_LEVEL_KEY = /^([A-Za-z_][\w.-]*)\s*:/;
+  for (const line of fmLines) {
+    const indented = /^\s/.test(line);
+    const blankOrComment = line.trim() === "" || line.trimStart().startsWith("#");
+    const keyMatch = indented ? null : TOP_LEVEL_KEY.exec(line);
+    if (keyMatch) {
+      // A top-level key ends any block being dropped and decides this line.
+      dropping = keySet.has(keyMatch[1]);
+      if (dropping) {
+        seen.add(keyMatch[1]);
+        continue;
+      }
+    } else if (dropping && (indented || blankOrComment)) {
+      // Still inside the removed key's block: its indented values, and the blank
+      // lines / comments interleaved among them, all go with it.
+      continue;
+    } else if (!indented && !blankOrComment) {
+      // A non-indented line that is not a mapping key (e.g. a list item at
+      // column 0, or a stray scalar). Fail closed rather than guess whether it
+      // belongs to the block being dropped.
+      throw new Error(
+        `frontmatterRemovals: ${file} frontmatter line is neither a top-level key ` +
+          `nor an indented continuation: ${JSON.stringify(line)}`,
+      );
+    }
+    kept.push(line);
+  }
+  const missed = keys.filter((k) => !seen.has(k));
+  if (missed.length > 0) {
+    throw new Error(
+      `frontmatterRemovals: ${file} does not declare key(s) [${missed.join(", ")}] in core - ` +
+        `remove the stale entry from the manifest.`,
+    );
+  }
+  // Fail closed on a trailing orphan: if the last kept line is still an indented
+  // continuation of a removed key, the output would be invalid YAML.
+  const orphan = kept.findIndex((line, i) => {
+    if (!/^\s/.test(line)) return false;
+    for (let j = i - 1; j >= 0; j--) {
+      const prev = kept[j];
+      if (prev.trim() === "" || prev.trimStart().startsWith("#")) continue;
+      return !TOP_LEVEL_KEY.test(prev) && !/^\s/.test(prev);
+    }
+    return true; // an indented line with no preceding key at all
+  });
+  if (orphan >= 0) {
+    throw new Error(
+      `frontmatterRemovals: ${file} would emit an orphaned continuation line ` +
+        `(${JSON.stringify(kept[orphan])}) with no owning key.`,
+    );
+  }
+  return `${content.slice(0, m.index ?? 0)}---\n${kept.join("\n")}\n${m[2]}${content.slice((m.index ?? 0) + m[0].length)}`;
+}

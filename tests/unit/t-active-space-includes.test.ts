@@ -198,12 +198,19 @@ describe("t-active-space-includes: Kiro IDE resources follow the active space", 
   });
 
   test("re-point is a no-op on Kiro IDE — no agent JSON resources glob to follow (#555 §1)", () => {
-    // The Kiro IDE ships no agent JSON: the conductor is an authored aidlc.md
-    // (no `resources:` glob) and memory reaches the workflow via the workspace
-    // shell the IDE reads directly, keyed by the aidlc/active-space cursor. So
-    // there is no per-space include to rewrite — repointHarnessIncludes finds
-    // no agents/*.json and returns an empty write list, leaving the authored
-    // .md surfaces byte-identical.
+    // The Kiro IDE ships no agent JSON, so there is no per-space include to
+    // rewrite: repointHarnessIncludes finds no agents/*.json and returns an
+    // empty write list, leaving the authored .md surfaces byte-identical.
+    //
+    // This is a no-op, NOT a lost capability. `resources:` is a Kiro CLI
+    // agent-v1 key that the IDE agent schema does not define, so the memory glob
+    // the JSON carried was inert on this harness even before the JSON was
+    // dropped — re-pointing it changed nothing an IDE session could observe.
+    // The method reaches an IDE workflow through the engine's resolved
+    // `rules_in_context` (and its injected contents), which is the same channel
+    // on every harness. The active-space cursor still governs the surfaces that
+    // genuinely follow it: memoryDirFor() writers and the templates sensor (the
+    // PROJECT family in aidlc-graph.ts), asserted by the other tests here.
     const root = freshRoot();
     seedSpaces(root);
     const agentsSrc = distSurface("kiro-ide", ".kiro", "agents");

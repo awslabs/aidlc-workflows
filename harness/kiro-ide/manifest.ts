@@ -51,6 +51,20 @@ const spacePaths = [`        - "aidlc/spaces/**"`];
 // tools: grant + permissions.rules block, appended to each persona .md during
 // projection. The IDE 1.0 permission model is capability/effect/match; the
 // grant is the IDE analogue of the CLI JSON's allowedTools + toolsSettings.
+//
+// SCOPE of the shell rule. The CLI JSON grants the regex `bun \.kiro/tools/.*`;
+// the IDE matches GLOBS, so the equivalent is `bun .kiro/tools/aidlc-*`. The
+// prefix is deliberately as narrow as the engine's real surface: every command a
+// conductor or delegate issues is `bun .kiro/tools/aidlc-<tool>.ts <verb>` (the
+// eight referenced by the conductor prose today: orchestrate, state, log,
+// utility, learnings, graph, swarm, worktree). A bare `bun *` would additionally
+// pre-approve `bun -e <arbitrary code>` and any workspace script — which can
+// write outside the filesystem paths granted below — so it is not the faithful
+// translation of the CLI grant.
+//
+// These rules are AUTOAPPROVALS, not a sandbox: Kiro defaults an unmatched
+// operation to `ask`, not `deny`. So the lists decide what proceeds without a
+// consent prompt; they do not bound where a delegate can ultimately write.
 function personaFrontmatter(agent: string): string[] {
   const fsPaths = agent === "aidlc-composer-agent" ? composerPaths : spacePaths;
   return [
@@ -60,7 +74,7 @@ function personaFrontmatter(agent: string): string[] {
     `    - capability: shell`,
     `      effect: allow`,
     `      match:`,
-    `        - "bun *"`,
+    `        - "bun .kiro/tools/aidlc-*"`,
     `        - "date -u *"`,
     `    - capability: filesystem`,
     `      effect: allow`,
@@ -139,9 +153,11 @@ const manifest: HarnessManifest = {
   // and permission rules from its .md frontmatter, not the CLI's agent-v1 JSON.
   // `tools:` names the capability categories; `permissions.rules` is the IDE 1.0
   // capability/effect/match model (the analogue of the CLI JSON's allowedTools +
-  // toolsSettings sandbox). Reviewers get "write" too (they append a `## Review`
-  // section to the primary artifact); the ensemble collaborators get write to
-  // author their own contribution files. Never grant a delegation tool here —
+  // toolsSettings autoapproval lists — see personaFrontmatter on why these grant
+  // consent-free operations rather than bound them). Reviewers get "write" too
+  // (they append a `## Review` section to the primary artifact); the ensemble
+  // collaborators get write to author their own contribution files.
+  // Never grant a delegation tool here —
   // delegates must not nest.
   frontmatterAdditions: DELEGATION_AGENTS.map((agent) => ({
     file: `agents/${agent}.md`,

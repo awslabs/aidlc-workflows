@@ -7,7 +7,7 @@ permissions:
     - capability: shell
       effect: allow
       match:
-        - "bun *"
+        - "bun {{HARNESS_DIR}}/tools/aidlc-*"
         - "date -u *"
     - capability: shell
       effect: deny

@@ -35,6 +35,9 @@ const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
 const KIRO_DIST = join(REPO_ROOT, "dist", "kiro", ".kiro");
+// Kiro IDE installs under the same `.kiro` leaf as the CLI but ships Markdown
+// agents and no agent-v1 JSON — the shape the dispatch precheck must recognise.
+const KIRO_IDE_DIST = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex", ".codex");
 const STAGE_TABLE_BEGIN =
   "<!-- BEGIN: compiled stage graph via `bun aidlc-utility.ts stage-table` - do NOT hand-edit -->";
@@ -502,20 +505,36 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   // --- Silent-failure seams (round-4): each must DROP-LOG, never silently no-op ---
   // Helper: compose a hand-built synthetic plugin into a fresh copy of the base
   // install, returning { drops, projectDir } so a test can assert on the drops.
+  // `install` selects WHICH dist seeds the fixture; `harnessLeaf` stays the env
+  // value the compose hook sees. They differ only for Kiro IDE, which installs
+  // under `.kiro` from its own dist — the case the CLI/IDE discriminator keys on.
   function composeSynthetic(
     name: string,
     files: Record<string, string>,
     harnessLeaf: ".claude" | ".kiro" | ".codex" | ".aidlc" = ".claude",
     mutateInstall?: (proj: string, harnessDir: string) => void,
+    install: "claude" | "kiro" | "kiro-ide" | "codex" | "opencode" = harnessLeaf === ".kiro"
+      ? "kiro"
+      : harnessLeaf === ".codex"
+        ? "codex"
+        : harnessLeaf === ".aidlc"
+          ? "opencode"
+          : "claude",
   ): { drops: string; proj: string } {
     const proj = mkdtempSync(join(tmp, `syn-${name}-`));
-    if (harnessLeaf === ".aidlc") {
+    if (install === "opencode") {
       // OpenCode's dist is a whole-project shape (.aidlc + .opencode +
       // opencode.json), unlike the single-dir harness dists.
       cpSync(OPENCODE_DIST, proj, { recursive: true });
     } else {
       const baseDist =
-        harnessLeaf === ".kiro" ? KIRO_DIST : harnessLeaf === ".codex" ? CODEX_DIST : CLAUDE_DIST;
+        install === "kiro"
+          ? KIRO_DIST
+          : install === "kiro-ide"
+            ? KIRO_IDE_DIST
+            : install === "codex"
+              ? CODEX_DIST
+              : CLAUDE_DIST;
       cpSync(baseDist, join(proj, harnessLeaf), { recursive: true });
     }
     const harnessDir = join(proj, harnessLeaf);
@@ -616,6 +635,84 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // The lead is a CORE persona: its shipped agent-v1 JSON is its dispatch
     // surface, so it must never be named as undispatchable.
     expect(drops).not.toContain('agent "aidlc-product-agent"');
+  });
+
+  test("Kiro IDE composes the same ensemble stage — the agent-v1 requirement is CLI-only (#555 §1)", () => {
+    // Same synthetic stage as the Kiro CLI case above, composed into a Kiro IDE
+    // install. The IDE reads Markdown agents and ships no agent-v1 JSON, so the
+    // JSON + trustedAgents dispatch surface the CLI precheck demands does not
+    // exist on this harness — requiring it would reject every plugin-dispatched
+    // stage even though the Markdown persona is present and dispatchable. Both
+    // installs live under `.kiro`, so the precheck keys on the conductor's shape
+    // (agents/aidlc.json present = CLI) rather than the harness leaf.
+    const stage = [
+      "---",
+      "slug: syn-ide-ensemble",
+      "plugin: syn-ide",
+      "phase: inception",
+      "execution: ALWAYS",
+      "condition: always",
+      "lead_agent: aidlc-product-agent",
+      "support_agents:",
+      "  - syn-ide-collaborator-agent",
+      "mode: mob",
+      "produces: []",
+      "consumes: []",
+      "requires_stage: []",
+      "inputs: x",
+      "outputs: y",
+      "---",
+      "",
+      "# Synthetic IDE Ensemble",
+      "",
+      "## Steps",
+      "body",
+      "",
+    ].join("\n");
+    const agent = [
+      "---",
+      "name: syn-ide-collaborator-agent",
+      "display_name: Synthetic IDE Collaborator",
+      "plugin: syn-ide",
+      "---",
+      "",
+      "# Synthetic IDE Collaborator",
+      "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic(
+      "syn-ide",
+      {
+        "stages/inception/syn-ide-ensemble.md": stage,
+        "agents/syn-ide-collaborator-agent.md": agent,
+      },
+      ".kiro",
+      undefined,
+      "kiro-ide",
+    );
+
+    // Precondition: this really is an IDE install (Markdown conductor, no JSON).
+    expect(existsSync(join(proj, ".kiro", "agents", "aidlc.md"))).toBe(true);
+    expect(existsSync(join(proj, ".kiro", "agents", "aidlc.json"))).toBe(false);
+    // The stage composed instead of being dropped, and its Markdown persona
+    // landed alongside the core roster.
+    expect(existsSync(join(
+      proj,
+      ".kiro",
+      "aidlc-common",
+      "stages",
+      "inception",
+      "syn-ide-ensemble.md",
+    ))).toBe(true);
+    expect(existsSync(join(
+      proj,
+      ".kiro",
+      "agents",
+      "syn-ide-collaborator-agent.md",
+    ))).toBe(true);
+    // No dispatch-surface drop was logged for it.
+    expect(drops).not.toContain('stage "syn-ide-ensemble"');
+    expect(drops).not.toContain("agent-v1 JSON");
+    expect(drops).not.toContain("toolsSettings.subagent.trustedAgents");
   });
 
   test("Kiro rejects an agent JSON that is missing conductor trust registration", () => {

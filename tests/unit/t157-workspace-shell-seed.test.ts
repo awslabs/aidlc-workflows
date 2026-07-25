@@ -137,10 +137,16 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         expect(config).toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
         expect(existsSync(harness.onboardingDist)).toBe(true);
       } else if (harness.capabilities.memoryInclude === "kiro-ide-workspace") {
-        // Kiro IDE ships no agent JSON `resources:` surface — the conductor is
-        // an authored agents/aidlc.md and memory reaches the workflow via the
-        // workspace shell the IDE reads directly. The native include is the
-        // seeded memory tree itself, alongside the AGENTS.md rules file.
+        // Kiro IDE has no agent-side preload surface for the method: the IDE
+        // agent schema is `name`/`description`/`tools`/`model`/`mcpServers`/
+        // `permissions` — `resources:` is a Kiro CLI agent-v1 key the IDE does
+        // not read, so the CLI's memory glob never applied here even while the
+        // JSON shipped. The method reaches the workflow through the engine
+        // instead: `rules_in_context` names each resolved rule file and (since
+        // the rules_content injection) the directive carries their contents.
+        // What the shell must therefore provide is the seeded memory tree itself
+        // on disk for the engine to resolve against, alongside the auto-read
+        // project-root AGENTS.md.
         expect(
           existsSync(join(harness.distRoot, "aidlc", "spaces", "default", "memory", "org.md")),
           harness.name,

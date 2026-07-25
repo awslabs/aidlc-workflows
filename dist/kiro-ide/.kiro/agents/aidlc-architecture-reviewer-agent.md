@@ -9,7 +9,7 @@ permissions:
     - capability: shell
       effect: allow
       match:
-        - "bun *"
+        - "bun .kiro/tools/aidlc-*"
         - "date -u *"
     - capability: filesystem
       effect: allow

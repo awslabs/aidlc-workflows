@@ -136,11 +136,17 @@ describe("t148 dist/kiro file structure", () => {
     ).toBe(true);
   });
 
-  test("every dispatched graph writer has a space-scoped write grant on Kiro CLI (JSON) and IDE (md permissions)", () => {
+  test("every dispatched graph writer has a space write grant on Kiro CLI (JSON) and IDE (md permissions)", () => {
     // Kiro CLI expresses the write grant in the agent-v1 JSON (tools +
     // toolsSettings.allowedPaths); Kiro IDE expresses it in the agent .md
     // frontmatter (tools: + permissions.rules), since the IDE ships no agent
-    // JSON. Both must scope every dispatched writer to aidlc/spaces/**.
+    // JSON. Both must name aidlc/spaces/** for every dispatched writer.
+    //
+    // These lists are AUTOAPPROVALS, not sandboxes: an unmatched operation
+    // defaults to `ask`, so naming the space path is what lets a delegate write
+    // its artifacts without a consent prompt — it does not prevent a write
+    // elsewhere. The assertion is therefore "the grant is present", not "writes
+    // are confined".
     const cliDir = join(REPO_ROOT, "dist", "kiro", ".kiro", "agents");
     const cliWriters = dispatchedSpaceWriters("kiro");
     expect(cliWriters.length).toBeGreaterThan(0);
@@ -156,9 +162,9 @@ describe("t148 dist/kiro file structure", () => {
     for (const agent of ideWriters) {
       const md = readFileSync(join(ideDir, `${agent}.md`), "utf-8");
       const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(md)?.[1] ?? "";
-      // tools: grants write; permissions.rules scopes filesystem to the space
-      // (the composer additionally reaches the scope grid, so match the shared
-      // space path every writer carries).
+      // tools: grants write; permissions.rules names the space path as a
+      // filesystem autoapproval (the composer additionally reaches the scope
+      // grid, so match the shared space path every writer carries).
       expect(fm).toContain(`"write"`);
       expect(fm).toContain(`"aidlc/spaces/**"`);
     }

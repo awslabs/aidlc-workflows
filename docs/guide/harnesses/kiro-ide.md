@@ -183,9 +183,14 @@ agent `.md` files (`frontmatterAdditions`) and drops the CLI-only
 `disallowedTools` field (`frontmatterRemovals`), because the IDE resolves a
 delegated subagent's tools from the `.md` frontmatter rather than the agent-v1
 JSON — without the grant an IDE delegate runs toolless. The IDE has no
-`allowedCommands`/`allowedPaths` equivalent for a delegate; its scoping rides
-the 1.0 `permissions.rules` capability/effect/match model instead, which is what
-the injected block carries.
+`allowedCommands`/`allowedPaths` equivalent for a delegate; the 1.0
+`permissions.rules` capability/effect/match model is what the injected block
+carries instead. Read those rules as **autoapprovals, not a sandbox**: Kiro
+defaults an unmatched operation to `ask`, so the shell and filesystem lists
+decide what a delegate may do without a consent prompt — they do not confine it.
+The shell list is `bun .kiro/tools/aidlc-*` plus `date -u *`, the glob equivalent
+of the CLI JSON's `bun \.kiro/tools/.*` regex, kept to the engine's real command
+surface rather than a blanket `bun *`.
 See [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).
 
 ## Next steps

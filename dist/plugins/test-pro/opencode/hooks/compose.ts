@@ -607,13 +607,22 @@ function pluginShipsViableOpencodeAgent(agent: string): boolean {
   return !collidingFile || collidingFile === join(nativeAgentsDir, `${agent}.md`);
 }
 
-// Kiro, Codex, and OpenCode cannot dispatch a Markdown-only persona from the
-// engine roster. Kiro requires BOTH a hand-authored agent-v1 JSON and conductor
-// trustedAgents registration; Codex requires an agent config TOML; OpenCode
-// requires a native `.opencode/agents/<a>.md` subagent (installed, or viably
-// shipped by this plugin — see pluginShipsViableOpencodeAgent). Reject any
+// Kiro CLI, Codex, and OpenCode cannot dispatch a Markdown-only persona from the
+// engine roster. Kiro CLI requires BOTH a hand-authored agent-v1 JSON and
+// conductor trustedAgents registration; Codex requires an agent config TOML;
+// OpenCode requires a native `.opencode/agents/<a>.md` subagent (installed, or
+// viably shipped by this plugin — see pluginShipsViableOpencodeAgent). Reject any
 // dispatched stage whose lead, support, or reviewer lacks that complete
 // surface. Markdown personas remain composable for accepted inline stages.
+//
+// KIRO CLI vs KIRO IDE. Both install under `.kiro`, so HARNESS_LEAF alone cannot
+// tell them apart — the discriminator is the conductor's own shape, which is what
+// the requirement is about: the CLI ships `agents/aidlc.json` (agent-v1, carrying
+// the trustedAgents roster), while the IDE reads Markdown agents and ships
+// `agents/aidlc.md` with no JSON at all. On the IDE the agent-v1 + trustedAgents
+// requirement does not exist, and demanding it would reject every plugin-
+// dispatched stage even when the Markdown persona is present and dispatchable.
+// So on an IDE install this precheck no-ops, exactly as it does on Claude Code.
 async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | null> {
   if (
     HARNESS_LEAF !== ".kiro" &&
@@ -622,6 +631,12 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
   ) {
     return null;
   }
+  // A `.kiro` tree with no agent-v1 conductor is a Kiro IDE install: the
+  // JSON/trustedAgents dispatch surface it would be checked against is not part
+  // of that distribution.
+  const isKiroCli =
+    HARNESS_LEAF === ".kiro" && existsSync(join(HARNESS_DIR, "agents", "aidlc.json"));
+  if (HARNESS_LEAF === ".kiro" && !isKiroCli) return null;
   const surfaceExt = HARNESS_LEAF === ".kiro"
     ? ".json"
     : HARNESS_LEAF === ".codex"
@@ -631,7 +646,7 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
     ? join(PROJECT_DIR, ".opencode", "agents")
     : join(HARNESS_DIR, "agents");
   const trustedAgents = new Set<string>();
-  if (HARNESS_LEAF === ".kiro") {
+  if (isKiroCli) {
     try {
       const conductor = JSON.parse(
         readFileSync(join(HARNESS_DIR, "agents", "aidlc.json"), "utf-8"),
@@ -767,7 +782,7 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
         agent,
         missingSurface: !existsSync(join(surfaceDir, `${agent}${surfaceExt}`)) &&
           !(HARNESS_LEAF === ".aidlc" && pluginShipsViableOpencodeAgent(agent)),
-        missingTrust: HARNESS_LEAF === ".kiro" && !trustedAgents.has(agent),
+        missingTrust: isKiroCli && !trustedAgents.has(agent),
       };
       if (gap.missingSurface || gap.missingTrust) gaps.set(agent, gap);
     }

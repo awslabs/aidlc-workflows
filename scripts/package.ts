@@ -50,6 +50,10 @@ import { dirname, isAbsolute, join, posix, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import type { HarnessManifest } from "./manifest-types.ts";
+import {
+  applyFrontmatterAdditions,
+  applyFrontmatterRemovals,
+} from "./manifest-types.ts";
 import { renderOnboarding } from "./onboarding.ts";
 import {
   kiroModelDefaults,
@@ -249,96 +253,6 @@ function transform(
     return Buffer.from(s, "utf-8");
   }
   return content;
-}
-
-// Append manifest-declared frontmatter lines to a projected .md, just before
-// the closing `---` of its YAML block (manifest-types.ts frontmatterAdditions).
-// Hard errors, never silent: the file must open with a frontmatter block, and
-// no added line's key may already exist in it - if core later grows the same
-// key, the build fails loudly instead of shipping a double. A multi-line block is
-// supported: a line with NO leading whitespace opens a new key (validated +
-// collision-checked); an indented continuation line (a nested mapping/sequence
-// entry) rides along unchecked.
-function applyFrontmatterAdditions(
-  content: string,
-  lines: string[],
-  file: string,
-): string {
-  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n(---\r?\n)/);
-  if (!m) {
-    throw new Error(
-      `frontmatterAdditions: ${file} has no leading frontmatter block to extend.`,
-    );
-  }
-  const fm = m[1];
-  for (const line of lines) {
-    // Indented lines continue the preceding key's block (nested mapping /
-    // sequence); only top-level lines name a key to validate.
-    if (/^\s/.test(line)) continue;
-    const key = line.split(":")[0]?.trim();
-    if (!key || !/^[A-Za-z_][\w-]*$/.test(key)) {
-      throw new Error(
-        `frontmatterAdditions: line "${line}" for ${file} does not start with a YAML key.`,
-      );
-    }
-    if (new RegExp(`^${key}:`, "m").test(fm)) {
-      throw new Error(
-        `frontmatterAdditions: ${file} already declares "${key}:" in core - ` +
-          `resolve the collision instead of shipping a duplicate key.`,
-      );
-    }
-  }
-  const insertAt = m[0].length - m[2].length;
-  return `${content.slice(0, insertAt)}${lines.join("\n")}\n${content.slice(insertAt)}`;
-}
-
-// Remove manifest-declared frontmatter keys from a projected .md's YAML block
-// (manifest-types.ts frontmatterRemovals) - the inverse of the additions seam,
-// for a harness-neutral field a given harness must ship WITHOUT. A removed key
-// drops its line plus any indented continuation lines (nested block). Hard
-// errors, never silent: the file must open with a frontmatter block, and each
-// named key must currently exist - a stale removal that no longer matches core
-// fails loudly instead of silently no-opping.
-function applyFrontmatterRemovals(
-  content: string,
-  keys: string[],
-  file: string,
-): string {
-  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n(---\r?\n)/);
-  if (!m) {
-    throw new Error(
-      `frontmatterRemovals: ${file} has no leading frontmatter block to trim.`,
-    );
-  }
-  const fmLines = m[1].split(/\r?\n/);
-  const keySet = new Set(keys);
-  const seen = new Set<string>();
-  const kept: string[] = [];
-  let dropping = false;
-  for (const line of fmLines) {
-    const isContinuation = /^\s/.test(line);
-    if (!isContinuation) {
-      // A top-level line ends any block being dropped and decides this key.
-      const key = line.split(":")[0]?.trim() ?? "";
-      dropping = keySet.has(key);
-      if (dropping) {
-        seen.add(key);
-        continue;
-      }
-    } else if (dropping) {
-      // Indented continuation of a key currently being dropped.
-      continue;
-    }
-    kept.push(line);
-  }
-  const missed = keys.filter((k) => !seen.has(k));
-  if (missed.length > 0) {
-    throw new Error(
-      `frontmatterRemovals: ${file} does not declare key(s) [${missed.join(", ")}] in core - ` +
-        `remove the stale entry from the manifest.`,
-    );
-  }
-  return `${content.slice(0, m.index ?? 0)}---\n${kept.join("\n")}\n${m[2]}${content.slice((m.index ?? 0) + m[0].length)}`;
 }
 
 function* walk(dir: string): Generator<string> {
