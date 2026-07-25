@@ -89,6 +89,8 @@ import {
   createTestProject,
   FIXTURES_DIR,
   removeWorkspaceRecord,
+  runOrchestrateNext,
+  seedAidlcMemory,
   seededAuditDir,
   seededStateFile,
   seedStateFile,
@@ -126,12 +128,25 @@ function run(tool: string, args: string[]): CliResult {
   };
 }
 
-/** Fresh temp project seeded from a FIXTURES_DIR state fixture. */
+/** Fresh temp project seeded from a FIXTURES_DIR state fixture. Seeds the
+ *  shipped method tree too: since the load-steering migration, `next` on a
+ *  run-stage route FAILS CLOSED when a required rule file is missing, so a
+ *  walk that reaches run-stage needs the memory tree the engine ships. */
 function projWithState(fixtureName: string): string {
   const p = createTestProject();
   tempDirs.push(p);
+  seedAidlcMemory(p);
   seedStateFile(p, join(FIXTURES_DIR, fixtureName));
   return p;
+}
+
+/** Steering-aware `next`: consume load-steering parts, return the routing
+ *  directive (t248 owns the transport; these walks assert routing). */
+// biome-ignore lint/suspicious/noExplicitAny: directives are a typed union; the test reads scalar fields
+function nextDirective(p: string, args: string[] = []): any {
+  const r = runOrchestrateNext(ORCHESTRATE, p, args);
+  expect(r.directive).not.toBeNull();
+  return r.directive;
 }
 
 /** Fresh CLEAN temp project — an empty workspace, NO intent record (SP5a). P9:
@@ -447,7 +462,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   // ============================================================
   test("WALK A (non-gated): next gate:false -> report advance -> next state-init", () => {
     const p = projWithState("state-pre-workspace-detection.md");
-    const n1 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
+    const n1 = nextDirective(p);
     expect(n1.stage).toBe("workspace-detection");
     expect(n1.gate).toBe(false);
     const r = run(ORCHESTRATE, [
@@ -459,7 +474,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     ]);
     // report dispatched advance (not approve) — the done reason names it.
     expect(r.out).toContain("Committed advance for");
-    const n2 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
+    const n2 = nextDirective(p);
     expect(n2.stage).toBe("state-init");
   }, 30000);
 
@@ -471,7 +486,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
   // ============================================================
   test("WALK B (gated): next gate:true -> approve emits one STAGE_STARTED -> next scope-definition", () => {
     const p = projWithState("state-mid-ideation.md");
-    const n1 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
+    const n1 = nextDirective(p);
     expect(n1.stage).toBe("feasibility");
     expect(n1.gate).toBe(true);
     run(ORCHESTRATE, [
@@ -493,7 +508,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
       p,
     ]);
     expect(eventCount(p, "STAGE_STARTED")).toBe(1);
-    const n2 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
+    const n2 = nextDirective(p);
     expect(n2.stage).toBe("scope-definition");
   }, 30000);
 
@@ -514,7 +529,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const p = projWithState("state-construction-bolt1.md");
     // Step 1: the next decision rule defers the skeleton gate -> gate is the
     // STRING "unresolved" (not the boolean), still naming the same EXECUTE stage.
-    const n1 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
+    const n1 = nextDirective(p);
     expect(n1.stage).toBe("functional-design");
     expect(n1.gate).toBe("unresolved");
     // Step 2: the report dispatcher's STANCE branch records the typed stance and
@@ -537,7 +552,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     // Step 3: the next decision rule reads the recorded stance and re-emits the
     // SAME stage with the now-DETERMINED gate (the boolean true). The round-trip
     // closes deterministically — no model in the loop.
-    const n2 = directive(run(ORCHESTRATE, ["next", "--project-dir", p]));
+    const n2 = nextDirective(p);
     expect(n2.stage).toBe("functional-design");
     expect(n2.gate).toBe(true);
   }, 30000);

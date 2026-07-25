@@ -224,7 +224,10 @@ describe("t53 /aidlc bugfix scope routing (sdk)", () => {
           timeoutMs: DRIVE_TIMEOUT_MS,
           stopAfterToolResult: {
             toolName: "Bash",
-            resultIncludes: '"stage":"requirements-analysis"',
+            // The run-stage directive, not the load-steering part that now
+            // precedes it (that result also names the stage and would stop
+            // the drive one beat early).
+            resultIncludes: '"kind":"run-stage","stage":"requirements-analysis"',
           },
         });
 
