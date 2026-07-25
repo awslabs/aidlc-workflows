@@ -559,10 +559,12 @@ dynamic per workflow position.
    (re-read every stage). `inline_context_paths` remains the full roster:
    lead + supports for `inline`, and the lead only for `mob` because mob
    supports are dispatched. Agent names alone are not loaded context.
-2. Read by path only what the directive names as undelivered - every entry in
-   `rules_content_omitted` and `inline_context_omitted` (size-budget
-   overflow) - plus, after a fresh session resume mid-workflow, any roster
-   path whose content is in neither list and not already in context.
+2. The roster always partitions into content + omitted:
+   `inline_context_omitted` lists budget overflow AND earlier-delivered
+   files alike, so nothing is silently absent. Read by path every
+   `rules_content_omitted` entry and every `inline_context_omitted` entry
+   not already in context (skip what you already hold; after a fresh
+   session resume mid-workflow, re-read them).
 3. Apply every loaded perspective during execution. Do not omit support-agent
    perspectives on `inline` or the lead's on `mob`.
 

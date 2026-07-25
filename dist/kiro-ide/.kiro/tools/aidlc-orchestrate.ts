@@ -789,24 +789,62 @@ function readFilesWithBudget(
   return { content, omitted, bytesUsed: total };
 }
 
-// The inline persona/knowledge delivered-set - the deliver-once derivation.
+// Resolve the {rel, abs} read entries for a node's rules_in_context roster.
+// The roster paths are DISPLAY paths frozen at compile time pinned to the
+// `default` space (see aidlc-graph.ts MEMORY_SPACE); the CONTENT must come
+// from the ACTIVE space, so each entry's sub-path under memory/ is re-rooted
+// at the active space's memory dir. AIDLC_RULES_DIR outranks it - the same
+// env seam rulesDir() honours, so fixture-driven tests and the Codex
+// config.toml seam read the same tree the compile did. `rel` names the
+// active-space file (the file actually read), which at `default` is
+// byte-identical to the roster path. A roster path WITHOUT the memory
+// marker (a plugin-contributed rule with its own layout) is not re-rooted:
+// display paths are workspace-relative by definition, so it reads from the
+// project dir as-is.
+function rulesContentEntries(
+  node: GraphStage,
+  codekbCtx: CodekbCtx,
+): Array<{ rel: string; abs: string }> {
+  const memoryDir =
+    process.env.AIDLC_RULES_DIR ??
+    memoryDirFor(codekbCtx.projectDir, codekbCtx.space);
+  return (node.rules_in_context ?? []).map((r) => {
+    const marker = "/memory/";
+    const idx = r.path.indexOf(marker);
+    if (idx < 0) {
+      return { rel: r.path, abs: join(codekbCtx.projectDir, r.path) };
+    }
+    const sub = r.path.slice(idx + marker.length);
+    return {
+      rel: toPosix(
+        join("aidlc", "spaces", codekbCtx.space, "memory", sub),
+      ),
+      abs: join(memoryDir, sub),
+    };
+  });
+}
+
+// The inline persona/knowledge delivered-set - the content-priority signal.
 // Injecting every inline roster's content on every stage would re-send the
 // same personas stage after stage; like the conductor persona, content
 // delivered once persists in the session. The deterministic proxy for
-// "already delivered" is the same one D-E uses (state checkboxes): an agent
-// counts as delivered when some OTHER stage with that agent in its inline
-// roster has advanced past pending - a non-pending, non-skipped checkbox
-// means that stage's run-stage directive was emitted, so its roster content
-// went out with it. The current node excludes itself so a re-emitted `next`
-// for an in-flight stage carries the same content as the first emit
-// (idempotent, exactly like the persona re-delivering on the first stage).
-// The aidlc-shared knowledge tree belongs to every agent; it is delivered
-// with the first stage that had ANY inline roster.
+// "probably already in context" is the same one D-E uses (state checkboxes):
+// an agent counts as delivered when some OTHER stage with that agent in its
+// inline roster has advanced past pending - a non-pending, non-skipped
+// checkbox means that stage's run-stage directive was emitted. The current
+// node excludes itself so a re-emitted `next` for an in-flight stage carries
+// the same content as the first emit (idempotent). The aidlc-shared tree
+// belongs to every agent; it is delivered with the first inline stage.
 //
-// Same HONEST LIMITATION as the persona (SPIKE-6 contract): "delivered" means
-// "emitted earlier this workflow", not "still in this session's context" - a
-// fresh session resuming mid-workflow relies on the prior context or on the
-// paths roster (which every directive still carries) for re-reads.
+// This is a PRIORITY signal, not a correctness gate: "emitted" does not
+// prove the content fit that directive's budget, survived compaction, or
+// was read where it overflowed to the omitted list. injectSteeringContent
+// therefore keeps EVERY roster file visible - a file whose agent is marked
+// delivered is skipped for content but still listed in
+// inline_context_omitted, and the conductor re-reads any omitted path not
+// already in its context. An overcount here (a recomposed roster crediting
+// a past stage with an agent it never carried) costs one visible re-read,
+// never silent missing steering.
 function deliveredInlineContext(
   stateContent: string | null,
   currentSlug: string,
@@ -824,35 +862,6 @@ function deliveredInlineContext(
     for (const a of roster) agents.add(a);
   }
   return { agents, shared };
-}
-
-// Resolve the {rel, abs} read entries for a node's rules_in_context roster.
-// The roster paths are DISPLAY paths frozen at compile time pinned to the
-// `default` space (see aidlc-graph.ts MEMORY_SPACE); the CONTENT must come
-// from the ACTIVE space, so each entry's sub-path under memory/ is re-rooted
-// at the active space's memory dir. AIDLC_RULES_DIR outranks it - the same
-// env seam rulesDir() honours, so fixture-driven tests and the Codex
-// config.toml seam read the same tree the compile did. `rel` names the
-// active-space file (the file actually read), which at `default` is
-// byte-identical to the roster path.
-function rulesContentEntries(
-  node: GraphStage,
-  codekbCtx: CodekbCtx,
-): Array<{ rel: string; abs: string }> {
-  const memoryDir =
-    process.env.AIDLC_RULES_DIR ??
-    memoryDirFor(codekbCtx.projectDir, codekbCtx.space);
-  return (node.rules_in_context ?? []).map((r) => {
-    const marker = "/memory/";
-    const idx = r.path.indexOf(marker);
-    const sub = idx >= 0 ? r.path.slice(idx + marker.length) : r.path;
-    return {
-      rel: toPosix(
-        join("aidlc", "spaces", codekbCtx.space, "memory", sub),
-      ),
-      abs: join(memoryDir, sub),
-    };
-  });
 }
 
 // "First run-stage of the workflow" — the deterministic signal D-E delivery
@@ -1630,31 +1639,45 @@ function injectSteeringContent(
   if (rules.content.length > 0) directive.rules_content = rules.content;
   if (rules.omitted.length > 0) directive.rules_content_omitted = rules.omitted;
 
+  // Partition the FULL inline roster: content for not-yet-delivered agents
+  // (budget permitting), omitted for everything else - budget overflow AND
+  // the delivered-agent files alike. The roster is always content ∪ omitted,
+  // never silently absent: a file whose content overflowed on its delivery
+  // stage stays visible in omitted on every later stage (the conductor
+  // re-reads any omitted path not already in its context), so a budget miss
+  // costs a visible re-read, never permanently reverts that file to the
+  // discretionary path-read this injection exists to eliminate.
   const delivered = deliveredInlineContext(stateContent, node.slug);
-  const undelivered = inlineContextEntries(node, codekbCtx).filter((e) =>
-    e.agent === null ? !delivered.shared : !delivered.agents.has(e.agent),
+  const entries = inlineContextEntries(node, codekbCtx);
+  const isDelivered = (e: InlineContextEntry) =>
+    e.agent === null ? delivered.shared : delivered.agents.has(e.agent);
+  const inline = readFilesWithBudget(
+    entries.filter((e) => !isDelivered(e)),
+    Math.max(0, budget - baseBytes - rules.bytesUsed),
+    false, // knowledge roster: deliver verbatim (see readFilesWithBudget)
   );
-  if (undelivered.length > 0) {
-    const inline = readFilesWithBudget(
-      undelivered,
-      Math.max(0, budget - baseBytes - rules.bytesUsed),
-      false, // knowledge roster: deliver verbatim (see readFilesWithBudget)
-    );
-    if (inline.content.length > 0) {
-      directive.inline_context_content = inline.content;
-    }
-    if (inline.omitted.length > 0) {
-      directive.inline_context_omitted = inline.omitted;
-    }
+  const inlineOmitted = [
+    ...inline.omitted,
+    ...entries.filter(isDelivered).map((e) => e.rel),
+  ];
+  if (inline.content.length > 0) {
+    directive.inline_context_content = inline.content;
+  }
+  if (inlineOmitted.length > 0) {
+    directive.inline_context_omitted = inlineOmitted;
   }
 
-  // Exact-budget backstop. The per-entry accounting above excludes JSON
-  // overhead the emitted line still pays - field keys, separators, and the
-  // *_omitted path lists - so a full injection can land a few percent over.
-  // The budget is a harness-truncation bound, not a soft target: enforce it
-  // exactly by moving content entries (inline first - larger, lower-stakes -
-  // then rules) back to omitted until the line fits. Bounded: each pass
-  // shrinks the line by an entry's text, and both lists are finite.
+  // Budget backstop. The per-entry accounting above excludes JSON overhead
+  // the emitted line still pays - field keys, separators, and the *_omitted
+  // path lists - so a full injection can land a few percent over. The budget
+  // is a harness-truncation bound, not a soft target: move content entries
+  // (inline first - larger, lower-stakes - then rules) back to omitted until
+  // the line fits. Bounded: each pass pops one finite entry. LIMIT: the loop
+  // can only shed CONTENT; if the base directive plus the omitted path lists
+  // alone exceed the budget (a pathologically small AIDLC_DIRECTIVE_MAX_BYTES
+  // - the shipped base is ~18KB against a 28KB floor), the line stays over
+  // and the harness cap governs; content injection cannot fix a budget set
+  // below the directive's own routing fields.
   const overBudget = () =>
     Buffer.byteLength(JSON.stringify(directive), "utf-8") > budget;
   while (overBudget() && (directive.inline_context_content?.length ?? 0) > 0) {

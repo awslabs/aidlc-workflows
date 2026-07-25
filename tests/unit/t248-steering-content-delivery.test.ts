@@ -205,7 +205,7 @@ describe("t248 steering-content delivery", () => {
     expect((directive.inline_context_omitted ?? []).length).toBeGreaterThan(0);
   });
 
-  test("deliver-once: a later stage re-delivers rules but not prior agents' context", () => {
+  test("deliver-once: a later stage re-delivers rules; prior agents' files move to omitted, never vanish", () => {
     const proj = project();
     seedFeasibilityState(proj);
     const { directive } = next(proj, [], {
@@ -215,19 +215,48 @@ describe("t248 steering-content delivery", () => {
     // Rules re-deliver every stage (learnings can mutate them mid-workflow).
     const rulePaths = (directive.rules_content ?? []).map((e) => e.path);
     expect(rulePaths).toContain("aidlc/spaces/default/memory/org.md");
-    // intent-capture's roster (product lead + architect support) and the
-    // shared tree were delivered with that stage - not re-sent here.
-    const all = [
-      ...(directive.inline_context_content ?? []).map((e) => e.path),
-      ...(directive.inline_context_omitted ?? []),
-    ];
-    expect(all.some((p) => p.includes("aidlc-architect-agent"))).toBe(false);
-    expect(all.some((p) => p.includes("aidlc-product-agent"))).toBe(false);
-    expect(all.some((p) => p.includes("knowledge/aidlc-shared/"))).toBe(false);
-    // feasibility's NEW supports (aws-platform, compliance) do arrive.
-    expect(all.some((p) => p.includes("aidlc-aws-platform-agent"))).toBe(true);
-    expect(all.some((p) => p.includes("aidlc-compliance-agent"))).toBe(true);
+    const content = (directive.inline_context_content ?? []).map((e) => e.path);
+    const omitted = directive.inline_context_omitted ?? [];
+    // The architect (delivered with intent-capture, and feasibility's LEAD)
+    // is not re-sent as content - but every roster file stays VISIBLE in
+    // omitted: a prior delivery that overflowed or was compacted away must
+    // never leave a file silently absent from both lists.
+    expect(content.some((p) => p.includes("aidlc-architect-agent"))).toBe(false);
+    expect(omitted.some((p) => p.includes("aidlc-architect-agent"))).toBe(true);
+    expect(content.some((p) => p.includes("knowledge/aidlc-shared/"))).toBe(false);
+    expect(omitted.some((p) => p.includes("knowledge/aidlc-shared/"))).toBe(true);
+    // feasibility's NEW supports (aws-platform, compliance) arrive as content.
+    expect(content.some((p) => p.includes("aidlc-aws-platform-agent"))).toBe(true);
+    expect(content.some((p) => p.includes("aidlc-compliance-agent"))).toBe(true);
+    // The full roster partitions into content + omitted - nothing dropped.
+    for (const p of directive.inline_context_paths ?? []) {
+      expect(content.includes(p) || omitted.includes(p)).toBe(true);
+    }
     // No persona re-delivery mid-workflow (D-E unchanged).
     expect(directive.conductor_persona).toBeUndefined();
+  });
+
+  test("budget-starved delivery stage never permanently downgrades a file: stage 2 keeps it visible", () => {
+    // Stage 1 (intent-capture) at the DEFAULT budget with the persona aboard
+    // cannot fit the architect persona - it lands in omitted. Stage 2
+    // (feasibility, architect is LEAD) marks the architect delivered, so no
+    // content re-send - but the file must appear in stage 2's omitted list,
+    // not vanish from both (the silent-downgrade defect this partition
+    // prevents).
+    const proj = project();
+    seedFeasibilityState(proj);
+    const { directive } = next(proj, [], {}); // default 28KB budget
+    expect(directive.stage).toBe("feasibility");
+    const content = (directive.inline_context_content ?? []).map((e) => e.path);
+    const omitted = directive.inline_context_omitted ?? [];
+    const roster = directive.inline_context_paths ?? [];
+    const architectPersona = roster.find((p) =>
+      p.endsWith("agents/aidlc-architect-agent.md"),
+    );
+    expect(architectPersona).toBeDefined();
+    expect(
+      content.includes(architectPersona ?? "") ||
+        omitted.includes(architectPersona ?? ""),
+    ).toBe(true);
   });
 });

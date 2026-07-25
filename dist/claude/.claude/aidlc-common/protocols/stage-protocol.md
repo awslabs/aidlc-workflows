@@ -640,11 +640,12 @@ Each stage specifies its lead and supporting agents. To load a persona:
    existing knowledge files. On `mob`, the roster contains the lead only
    because supports are dispatched. An agent name by itself is not loaded
    context. The engine delivers each roster file's CONTENT once per workflow
-   in `inline_context_content` (files for agents already delivered on an
-   earlier stage are omitted - they persist in your session). Read by path
-   ONLY the files listed in `inline_context_omitted`, plus - after a fresh
-   session resume mid-workflow - any roster path whose content is in neither
-   list and not already in your context.
+   in `inline_context_content`; every other roster file - budget overflow
+   AND files delivered on an earlier stage alike - is listed in
+   `inline_context_omitted`, so the roster always partitions into content +
+   omitted with nothing silently absent. Read by path every omitted entry
+   NOT already in your context (skip what you already hold; after a fresh
+   session resume mid-workflow, re-read them).
 3. Do not silently omit any listed path. Apply each loaded inline perspective
    when executing the stage.
 

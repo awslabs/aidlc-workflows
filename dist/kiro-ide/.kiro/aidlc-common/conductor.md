@@ -45,10 +45,11 @@ first line, per `stage-protocol.md` §11); the lead alone edits the stage's
 - **`mode: subagent`** — hub-and-spoke. The lead runs behind a dispatch
   boundary that loads the persona for you. When the stage also declares
   `support_agents`, each support agent is a real spoke: after the lead's
-  draft returns, dispatch every support agent against the draft (paths-only
-  brief; they are mutually blind — no spoke's brief contains another's
-  contribution); each spoke writes its contribution file; then dispatch the
-  lead once more to integrate the contributions into the artifacts.
+  draft returns, dispatch every support agent against the draft (artifacts
+  by path, rules as the directive's pasted `rules_content`; they are
+  mutually blind: no spoke's brief contains another's contribution); each
+  spoke writes its contribution file; then dispatch the lead once more to
+  integrate the contributions into the artifacts.
   Practices Discovery is the shipped hub-and-spoke example on both greenfield
   and brownfield work: the pipeline-deploy lead drafts first; quality,
   developer, and devsecops inspect that draft as mutually blind spokes; the

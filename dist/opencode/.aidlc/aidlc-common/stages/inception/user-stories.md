@@ -134,9 +134,9 @@ participants, and the Product Leader reviews afterwards (§12a).
 - INVEST compliance notes
 
 **Round 1 — dispatch the mob.** Per stage-protocol.md §5 `mode: mob`,
-dispatch all three support agents in parallel against the draft (paths-only
-briefs: the two draft artifacts, the Q&A file, requirements.md), mutually
-blind. Each WRITES its contribution file at
+dispatch all three support agents in parallel against the draft (artifacts
+by path: the two draft artifacts, the Q&A file, requirements.md; rules as
+the directive's pasted `rules_content`), mutually blind. Each WRITES its contribution file at
 `<record>/inception/user-stories/contributions/<agent-slug>.md` (§11 format:
 identity-marker first line, Contribution, Positions): design on UX and
 persona fidelity, developer on implementability and story sizing, quality on

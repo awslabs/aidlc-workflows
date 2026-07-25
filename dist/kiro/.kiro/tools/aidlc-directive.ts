@@ -75,13 +75,15 @@ export interface RunStageDirective {
   // delivered this workflow (deliver-once, derived from state like
   // conductor_persona: an agent whose persona+knowledge were injected on an
   // earlier completed stage persists in the session, so only new agents'
-  // files are baked in). Roster paths without a content entry here and
-  // without an inline_context_omitted entry were delivered earlier. Absent
-  // when every roster agent was already delivered or on the ctx-less path.
+  // files are baked in). Absent when every roster agent was already
+  // delivered or on the ctx-less path.
   inline_context_content?: Array<{ path: string; text: string }>;
-  // inline_context_omitted - undelivered roster files NOT injected because
-  // the inline-content size cap was reached. The conductor must read these by
-  // path before stage work. Absent when nothing was capped.
+  // inline_context_omitted - every roster file NOT in inline_context_content:
+  // size-budget overflow AND earlier-delivered agents' files alike. The
+  // roster always partitions into content + omitted, so no file is ever
+  // silently absent; the conductor reads by path each omitted entry not
+  // already in its context. Absent only when content covers the full roster
+  // or the roster is empty.
   inline_context_omitted?: string[];
   // gate is a boolean for every deterministic case; the string sentinel
   // GATE_UNRESOLVED ("unresolved") appears ONLY for the first Construction Bolt's
@@ -778,6 +780,20 @@ if (import.meta.main) {
         "aidlc-project.md",
         "aidlc-phase-inception.md",
       ],
+      // The steering-content fields populated: rules + roster content with
+      // an omitted overflow entry each, so the self-check validates the
+      // populated shape, not just field absence.
+      rules_content: [
+        { path: "aidlc-org.md", text: "## Testing Posture\n\nTests are first-class.\n" },
+      ],
+      rules_content_omitted: ["aidlc-phase-inception.md"],
+      inline_context_content: [
+        {
+          path: ".claude/agents/aidlc-architect-agent.md",
+          text: "# Architect\n\nYou think in systems.\n",
+        },
+      ],
+      inline_context_omitted: [".claude/agents/aidlc-design-agent.md"],
       sensors_applicable: ["required-sections", "upstream-coverage"],
       stage_file: ".claude/aidlc-common/stages/inception/application-design.md",
       next_stage: "Units Generation",
