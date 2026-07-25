@@ -58,6 +58,17 @@ function currentStage(projectDir: string): string | null {
   }
 }
 
+// Resolve which stage a brief belongs to, most-authoritative signal first:
+// 1. An explicit stage-file path in the brief (the protocol tells dispatched
+//    briefs to name it) - unambiguous.
+// 2. The state file's Current Stage - dispatches happen DURING a stage, so
+//    when a workflow is live this is the stage whose rules apply. It outranks
+//    prose mentions: a brief that happens to name one OTHER stage's slug in
+//    passing ("after scope-definition completes...") must not bind that
+//    stage's bundle.
+// 3. A unique slug mention in the brief - last resort for stateless contexts
+//    (single-stage runner before state exists). Ambiguous mentions bind
+//    nothing.
 function promptStage(prompt: string, fallback: string | null): GraphStage | null {
   const graph = loadGraph();
   const bySlug = new Map(graph.map((node) => [node.slug, node]));
@@ -66,6 +77,8 @@ function promptStage(prompt: string, fallback: string | null): GraphStage | null
   );
   if (stagePath) return bySlug.get(stagePath[1]) ?? null;
 
+  if (fallback) return bySlug.get(fallback) ?? null;
+
   const named = graph.filter((node) => {
     const escaped = node.slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return new RegExp(`(?:^|[^a-z0-9-])${escaped}(?:$|[^a-z0-9-])`, "i").test(
@@ -73,7 +86,6 @@ function promptStage(prompt: string, fallback: string | null): GraphStage | null
     );
   });
   if (named.length === 1) return named[0];
-  if (fallback) return bySlug.get(fallback) ?? null;
   return null;
 }
 

@@ -570,6 +570,33 @@ describe("t248 deterministic steering delivery", () => {
     expect(second.stdout).toBe("");
   });
 
+  test("dispatch stage resolution: Current Stage outranks an incidental slug mention", () => {
+    // A live workflow's brief that happens to name ONE other stage's slug in
+    // prose must bind the ACTIVE stage's bundle (phase rule = ideation for
+    // feasibility), not the mentioned stage's (inception for user-stories).
+    // Only a stage-FILE path outranks the state file's Current Stage.
+    const proj = setupIntegrationProject({
+      withState: "state-mid-ideation.md", // Current Stage: feasibility
+    });
+    projects.push(proj);
+    const result = runDispatchHook(proj, "Task", {
+      subagent_type: "aidlc-architect-agent",
+      prompt:
+        "Assess platform fit for the draft. The user-stories elaboration " +
+        "will consume this later; write your contribution file now.",
+    });
+    expect(result.code, result.stderr).toBe(0);
+    const output = JSON.parse(result.stdout) as HookRewrite;
+    const prompt = String(output.hookSpecificOutput?.updatedInput?.prompt ?? "");
+    expect(prompt).toContain("stage:feasibility");
+    const ideation = readFileSync(
+      join(proj, "aidlc", "spaces", "default", "memory", "phases", "ideation.md"),
+      "utf-8",
+    );
+    expect(prompt).toContain(ideation);
+    expect(prompt).not.toContain("stage:user-stories");
+  });
+
   test("Codex item rewrites preserve existing items and append the exact bundle", () => {
     const proj = project();
     const original = {
