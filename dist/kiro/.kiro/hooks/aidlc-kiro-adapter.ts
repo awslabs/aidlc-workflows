@@ -569,10 +569,17 @@ if (target === "reviewer-scope") {
 // --- dispatch-rules: exact conductor-to-worker steering ---------------------
 //
 // Kiro exposes subagent arguments to preToolUse hooks but does not support
-// updated tool input. Run the shared augmenter as a validator: a complete
-// prompt passes; an incomplete one is blocked with a retry instruction. The
-// accumulated load-steering bundle remains in the conductor's context, and
-// every Kiro agent also has the active memory glob as an independent preload.
+// updated tool input, and a block-with-retry contract deadlocks live: the
+// conductor cannot reliably reproduce a multi-KB bundle byte-exactly, so
+// every retry re-blocks (observed on the ACP gate - zero dispatches
+// converged). Kiro is also the ONE harness where the rules invariant already
+// holds without the brief: every delegated agent's config preloads the full
+// active memory tree via its `resources` glob, so the worker holds the rules
+// before it reads the brief. Run the shared augmenter as an OBSERVER: a
+// complete brief passes silently; an incomplete one proceeds WITH a warning
+// (visible in the transcript and traces), never a block. The strict rewrite
+// path stays on the harnesses that support updatedInput (Claude, Codex,
+// opencode).
 if (target === "dispatch-rules") {
   if ((kiro.tool_name ?? "") !== "subagent") return 0;
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
@@ -587,15 +594,18 @@ if (target === "dispatch-rules") {
     env: projectEnv,
   });
   if (r.exitCode === 2) {
+    // A required rule file could not be loaded at all (missing/unreadable):
+    // that is real missing steering with no preload to fall back on - the
+    // one case that still blocks, with the core hook's repair guidance.
     process.stderr.write(r.stderr?.toString() ?? "");
     return 2;
   }
   if ((r.stdout?.toString().trim() ?? "") !== "") {
     process.stderr.write(
-      "The AIDLC subagent brief omitted required active-stage rule content, so the call was not run. " +
-        "Retry the same subagent call with the accumulated load-steering bundle pasted verbatim into every stage prompt_template.\n",
+      "Advisory: the AIDLC subagent brief did not carry the active-stage rule bundle verbatim. " +
+        "The dispatch proceeded - Kiro agents preload the active memory tree natively - but keep " +
+        "briefs aligned with the delivered load-steering content.\n",
     );
-    return 2;
   }
   return 0;
 }

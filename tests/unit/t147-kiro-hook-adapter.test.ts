@@ -234,7 +234,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("5b: subagent dispatch blocks incomplete rules and accepts exact rules", () => {
+  test("5b: subagent dispatch warns on incomplete rules (proceeds) and accepts exact rules", () => {
     const dir = scratchProject(true);
     try {
       cpSync(
@@ -260,15 +260,20 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         },
       });
 
+      // Incomplete brief: advisory warning, dispatch PROCEEDS (exit 0). A
+      // block-with-retry contract deadlocked live (byte-exact paste never
+      // converges); Kiro agents preload the memory tree natively, so the
+      // brief bundle is redundant defense there, not the delivery channel.
       const incomplete = runAdapter(
         dir,
         "dispatch-rules",
         payload(basePrompt),
       );
-      expect(incomplete.code).toBe(2);
+      expect(incomplete.code, incomplete.stderr).toBe(0);
       expect(incomplete.stderr).toContain(
-        "omitted required active-stage rule content",
+        "did not carry the active-stage rule bundle verbatim",
       );
+      expect(incomplete.stderr).toContain("The dispatch proceeded");
 
       const org = readFileSync(
         join(dir, "aidlc", "spaces", "default", "memory", "org.md"),
