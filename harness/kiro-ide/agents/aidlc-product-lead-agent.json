@@ -23,7 +23,6 @@
   },
   "resources": [
     "file://.kiro/agents/aidlc-product-lead-agent.md",
-    "file://.kiro/knowledge/aidlc-product-lead-agent/*.md",
     "file://.kiro/knowledge/aidlc-shared/*.md",
     "file://aidlc/spaces/default/memory/**/*.md"
   ],

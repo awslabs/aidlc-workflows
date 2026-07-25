@@ -21,6 +21,8 @@
   },
   "env": {
     "AWS_AIDLC_DEFAULT_SCOPE": "workshop",
+    "BASH_MAX_OUTPUT_LENGTH": "150000",
+    "AIDLC_DIRECTIVE_MAX_BYTES": "120000",
     "CLAUDE_CODE_USE_BEDROCK": "1",
     "AWS_REGION": "us-east-1",
     "ANTHROPIC_DEFAULT_FABLE_MODEL": "global.anthropic.claude-fable-5[1m]",

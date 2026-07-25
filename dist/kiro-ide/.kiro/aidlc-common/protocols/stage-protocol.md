@@ -630,17 +630,27 @@ Each stage specifies its lead and supporting agents. To load a persona:
 6. Prior stage artifacts as required by the current stage
 
 ### For inline stages and the inline lead of a mob:
-1. Read every path in the run-stage directive's `rules_in_context`.
-2. Read every path in `inline_context_paths`. On `inline`, the engine expands the
-   lead and every support agent into exact persona + existing knowledge files.
-   On `mob`, the roster contains the lead only because supports are dispatched.
-   An agent name by itself is not loaded context.
+1. The directive delivers the active-space rules AS CONTENT: `rules_content`
+   carries each substantive rule file's text (`rules_in_context` still lists
+   the paths). Apply the delivered rules; read a rule by path ONLY when it is
+   listed in `rules_content_omitted` (steering that exists but did not fit the
+   directive's size budget) - never re-read what was delivered.
+2. `inline_context_paths` is the full persona + knowledge roster. On `inline`,
+   the engine expands the lead and every support agent into exact persona +
+   existing knowledge files. On `mob`, the roster contains the lead only
+   because supports are dispatched. An agent name by itself is not loaded
+   context. The engine delivers each roster file's CONTENT once per workflow
+   in `inline_context_content` (files for agents already delivered on an
+   earlier stage are omitted - they persist in your session). Read by path
+   ONLY the files listed in `inline_context_omitted`, plus - after a fresh
+   session resume mid-workflow - any roster path whose content is in neither
+   list and not already in your context.
 3. Do not silently omit any listed path. Apply each loaded inline perspective
    when executing the stage.
 
 ### For subagent stages:
-1. Dispatch the agent named by the stage metadata; its harness agent config loads the persona automatically.
-2. Pass the exact `rules_in_context` paths, relevant artifact paths, and task instructions, not copied persona or knowledge prose.
+1. Dispatch the agent named by the stage metadata; its harness agent config loads the persona automatically (reviewer checklists are baked into the reviewer agents' own bodies at build time).
+2. Paste the directive's `rules_content` entries into every agent brief verbatim (rules are the one context class small enough to embed - the context-budget rule below covers artifacts and knowledge, which stay paths); include the `rules_content_omitted` paths for the agent to read. Artifact references stay exact paths; never copy persona or knowledge prose into a brief.
 3. Keep support briefs topology-correct (mutually blind for hub-and-spoke and first-round mob work).
 
 ### Multi-agent stages (ensemble topologies):
@@ -654,7 +664,7 @@ Some stages use multiple agents (e.g., Feasibility uses aidlc-architect-agent + 
 - On `pipeline`, the chain collectively authors the artifacts directly (serialized, so no conflict) — see the topology bullet.
 
 - **`mode: inline`** — the support agents are perspectives the orchestrator adopts in its own context: load each support agent's file + knowledge the same way you loaded the lead (see "For inline stages" above), produce the lead's output first, then layer in each support perspective, then synthesise. Do NOT dispatch a support agent on an inline stage; dispatch is reserved for the other modes. No contribution files.
-- **`mode: subagent`** — hub-and-spoke. Dispatch the lead for the draft. If the stage declares `support_agents`, dispatch each one against the returned draft (paths-only briefs per §11's context budget; spokes are mutually blind — no support agent's brief contains another's contribution); each spoke writes its contribution file; then dispatch the lead once more to integrate the contributions into the artifacts.
+- **`mode: subagent`** - hub-and-spoke. Dispatch the lead for the draft. If the stage declares `support_agents`, dispatch each one against the returned draft (artifacts by path per §11's context budget, rules as the pasted `rules_content` per "For subagent stages" above; spokes are mutually blind - no support agent's brief contains another's contribution); each spoke writes its contribution file; then dispatch the lead once more to integrate the contributions into the artifacts.
 - **`mode: pipeline`** — chain. The chain collectively authors the artifacts: dispatch the lead first, then each support agent one at a time in declared order, each link seeing everything upstream and advancing the work product directly — a link may edit the evolving artifacts in place (serialized, no conflict) or hand results down as context for the next link to build on, per the stage body. The FINAL link leaves the `produces[]` artifacts complete. Order is the point. No contribution files required — the chain's edits ARE the collaboration record.
 - **`mode: mob`** — mesh, run as bounded rounds. Round 1: dispatch all support agents in parallel against the lead's draft, mutually blind; each writes its contribution file. The lead integrates. Then TRIAGE unresolved objections by kind:
   - **Judgment calls** (both positions legitimate — scope, risk appetite, priority tradeoffs): surface to the HUMAN mid-stage as a structured question per §3 (write it to the stage's questions file with a blank `[Answer]:` tag BEFORE presenting, as §3 requires), then continue integration with the human's ruling. The human is a mob participant, not a post-hoc approver. Skipped under autonomous Construction — there the objection is recorded and surfaces at the final-batch gate.

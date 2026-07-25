@@ -48,9 +48,12 @@ MANDATORY: Follow stage-protocol.md for approval gates, question format, and com
 
 ### Step 1: Load the Lead Persona (mob stage)
 
-Read every path in `directive.inline_context_paths`. For this mob the roster
-contains the aidlc-product-agent persona and its shared/role knowledge only; the
-product manager owns the inline draft and integration work.
+Load the roster in `directive.inline_context_paths` - the directive delivers
+undelivered files as content in `inline_context_content`; read by path only the
+`inline_context_omitted` entries (per the stage protocol's loading rules). For
+this mob the roster contains the aidlc-product-agent persona and its
+shared/role knowledge only; the product manager owns the inline draft and
+integration work.
 
 This stage runs `mode: mob` (stage-protocol.md §5 "Multi-agent stages"): the support agents (aidlc-design-agent for user experience, aidlc-developer-agent for implementability, aidlc-quality-agent for testability) are NOT voices to adopt — they are dispatched as independent participants during PART 2. Do not load their personas into your own context.
 

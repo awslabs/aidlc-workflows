@@ -52,7 +52,7 @@ When every workflow in a project should start at the same scope — for example,
 }
 ```
 
-> The shipped `env` block also contains Bedrock model IDs (`CLAUDE_CODE_USE_BEDROCK`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, etc.). Those are listed separately — the example above only shows the scope key for clarity.
+> The shipped `env` block also contains Bedrock model IDs (`CLAUDE_CODE_USE_BEDROCK`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, etc.) and the steering-delivery sizing pair - `AIDLC_DIRECTIVE_MAX_BYTES` (the engine's total run-stage directive budget; rules and persona/knowledge content that does not fit is listed in the directive's `*_omitted` fields for the conductor to read by path) with `BASH_MAX_OUTPUT_LENGTH` raised to match, so the full directive line survives the harness's tool-output cap. Those are listed separately - the example above only shows the scope key for clarity.
 
 With this set, bare `/aidlc` invocations use `workshop` as the default scope. Participants don't need to remember `/aidlc workshop` on every run. The env var is read at workflow initialization only; once the intent's `aidlc-state.md` exists (under its record dir), the state file is authoritative and env changes don't affect an in-flight workflow.
 

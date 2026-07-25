@@ -50,6 +50,7 @@ import { dirname, isAbsolute, join, posix, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import type { HarnessManifest } from "./manifest-types.ts";
+import { absorbReviewerKnowledge, agentNameFromPath } from "./agent-knowledge.ts";
 import { renderOnboarding } from "./onboarding.ts";
 import {
   kiroModelDefaults,
@@ -243,7 +244,12 @@ function transform(
   harness?: "claude" | "codex" | "kiro" | "opencode",
 ): Buffer {
   if (srcPath.endsWith(".md")) {
-    let s = substituteToken(content.toString("utf-8"), harnessDir);
+    // Reviewer knowledge absorption runs FIRST (on the raw core text) so the
+    // token substitution below covers the absorbed prose like any core .md.
+    let s = content.toString("utf-8");
+    const agentName = agentNameFromPath(srcPath);
+    if (agentName) s = absorbReviewerKnowledge(s, agentName, CORE_ROOT);
+    s = substituteToken(s, harnessDir);
     s = applyRulesRename(s, harnessDir, rulesRename);
     if (harness) s = projectTierFrontmatter(s, srcPath, harness);
     return Buffer.from(s, "utf-8");

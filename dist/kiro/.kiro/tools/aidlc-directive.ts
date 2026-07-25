@@ -71,6 +71,18 @@ export interface RunStageDirective {
   // dispatched), and empty on fully-dispatched subagent/pipeline topologies.
   // Carrying paths makes persona loading observable and enforceable in traces.
   inline_context_paths: string[];
+  // inline_context_content - the TEXT of the roster files for agents NOT yet
+  // delivered this workflow (deliver-once, derived from state like
+  // conductor_persona: an agent whose persona+knowledge were injected on an
+  // earlier completed stage persists in the session, so only new agents'
+  // files are baked in). Roster paths without a content entry here and
+  // without an inline_context_omitted entry were delivered earlier. Absent
+  // when every roster agent was already delivered or on the ctx-less path.
+  inline_context_content?: Array<{ path: string; text: string }>;
+  // inline_context_omitted - undelivered roster files NOT injected because
+  // the inline-content size cap was reached. The conductor must read these by
+  // path before stage work. Absent when nothing was capped.
+  inline_context_omitted?: string[];
   // gate is a boolean for every deterministic case; the string sentinel
   // GATE_UNRESOLVED ("unresolved") appears ONLY for the first Construction Bolt's
   // walking-skeleton gate, which the conductor resolves via report (the
@@ -85,6 +97,19 @@ export interface RunStageDirective {
   // Exact active-space rule paths to read before work. On dispatched
   // topologies the conductor passes this roster to every agent brief.
   rules_in_context: string[];
+  // rules_content - the TEXT of each substantive rules_in_context file, read
+  // by the engine at directive-build time (same deterministic delivery as
+  // conductor_persona: content in the directive, not a path the conductor may
+  // skip). Empty-template files (every non-blank body line an HTML comment)
+  // and missing files are dropped; files past the size cap move to
+  // rules_content_omitted instead. Absent on the ctx-less emit path (no
+  // projectDir to read against).
+  rules_content?: Array<{ path: string; text: string }>;
+  // rules_content_omitted - substantive rule files the engine did NOT inject
+  // because the rules_content size cap was reached. The conductor must read
+  // these by path; an entry here is steering that exists but is not in the
+  // directive. Absent when nothing was capped.
+  rules_content_omitted?: string[];
   sensors_applicable: string[];
   stage_file: string;
   // reviewer — the agent to invoke as a separate sub-agent for quality review
@@ -147,11 +172,15 @@ export interface DispatchSubagentDirective {
   support_agents: string[];
   mode: "inline" | "subagent" | "pipeline" | "mob" | "agent-team";
   inline_context_paths: string[];
+  inline_context_content?: Array<{ path: string; text: string }>;
+  inline_context_omitted?: string[];
   gate: GateValue;
   memory_path: string;
   consumes: string[];
   produces: string[];
   rules_in_context: string[];
+  rules_content?: Array<{ path: string; text: string }>;
+  rules_content_omitted?: string[];
   sensors_applicable: string[];
   stage_file: string;
   worker: string;
@@ -284,11 +313,15 @@ const RUN_STAGE_FIELDS = [
   "mode",
   "single",
   "inline_context_paths",
+  "inline_context_content",
+  "inline_context_omitted",
   "gate",
   "memory_path",
   "consumes",
   "produces",
   "rules_in_context",
+  "rules_content",
+  "rules_content_omitted",
   "sensors_applicable",
   "stage_file",
   "reviewer",
@@ -448,11 +481,15 @@ function checkRunStageShared(
   checkString(o, "mode", kind, errors);
   checkEnum(o, "mode", VALID_MODES, kind, errors);
   checkStringArray(o, "inline_context_paths", kind, errors);
+  checkOptionalPathTextArray(o, "inline_context_content", kind, errors);
+  checkOptionalStringArray(o, "inline_context_omitted", kind, errors);
   checkGate(o, "gate", kind, errors);
   checkString(o, "memory_path", kind, errors);
   checkStringArray(o, "consumes", kind, errors);
   checkStringArray(o, "produces", kind, errors);
   checkStringArray(o, "rules_in_context", kind, errors);
+  checkOptionalPathTextArray(o, "rules_content", kind, errors);
+  checkOptionalStringArray(o, "rules_content_omitted", kind, errors);
   checkStringArray(o, "sensors_applicable", kind, errors);
   checkString(o, "stage_file", kind, errors);
   checkOptionalString(o, "conductor_persona", kind, errors);
@@ -581,6 +618,57 @@ function checkOptionalPositiveInteger(
       `${kind}: ${field} must be a positive integer, got ${describe(v)}`,
     );
   }
+}
+
+// checkOptionalStringArray - a field that may be absent, but if present must
+// be an array of strings (e.g. rules_content_omitted, present only when the
+// injection size cap dropped a file). Mirrors checkStringArray's per-element
+// error wording with the checkOptional* early-return idiom.
+function checkOptionalStringArray(
+  o: Record<string, unknown>,
+  field: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) return;
+  checkStringArray(o, field, kind, errors);
+}
+
+// checkOptionalPathTextArray - a field that may be absent, but if present must
+// be an array of {path: string, text: string} objects (rules_content /
+// inline_context_content, the engine-injected file contents). Mirrors
+// checkOptionalConsumesAbsent's shape checks.
+function checkOptionalPathTextArray(
+  o: Record<string, unknown>,
+  field: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) return;
+  const v: unknown = o[field];
+  if (!Array.isArray(v)) {
+    errors.push(`${kind}: ${field} must be array, got ${describe(v)}`);
+    return;
+  }
+  const arr: unknown[] = v;
+  arr.forEach((item: unknown, i: number) => {
+    if (!isPlainObject(item)) {
+      errors.push(
+        `${kind}: ${field}[${i}] must be object, got ${describe(item)}`,
+      );
+      return;
+    }
+    if (typeof item.path !== "string") {
+      errors.push(
+        `${kind}: ${field}[${i}].path must be string, got ${describe(item.path)}`,
+      );
+    }
+    if (typeof item.text !== "string") {
+      errors.push(
+        `${kind}: ${field}[${i}].text must be string, got ${describe(item.text)}`,
+      );
+    }
+  });
 }
 
 // checkOptionalConsumesAbsent — a field that may be absent, but if present

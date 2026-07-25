@@ -319,8 +319,8 @@ sequenceDiagram
     participant S as aidlc-state.md
     participant AU as audit/ shard
 
-    O->>A: 1. Read every inline_context_paths entry
-    Note over A: Inline lead/support — mob lead-only persona + knowledge paths
+    O->>A: 1. Load delivered steering (rules_content + inline_context_content)
+    Note over A: Content in the directive; read by path only the *_omitted entries
 
     O->>SF: 2. Read stage file
     Note over SF: directive.stage_file
@@ -362,7 +362,7 @@ Inline stages run directly in the orchestrator conversation. The user can intera
 
 The 6-step process:
 
-1. **Read every inline context path.** Before stage work, the conductor reads every file in `directive.inline_context_paths`. The engine supplies the exact lead and support persona and knowledge-file roster; agent names alone are not loaded context, and support-agent entries must not be omitted.
+1. **Load the delivered steering.** The directive carries the active-space rules (`rules_content`, re-delivered every stage) and the not-yet-delivered persona + knowledge files (`inline_context_content`, once per agent per workflow) as content; `inline_context_paths` remains the full roster. The conductor reads by path only the `rules_content_omitted` / `inline_context_omitted` entries (size-budget overflow). Agent names alone are not loaded context, and support-agent perspectives must not be omitted.
 2. **Read the stage file.** The conductor reads the exact `directive.stage_file`.
 3. **Read resolved inputs.** The conductor reads the existing artifacts in `directive.consumes`, applying the stage's documented fallback for expected absent inputs.
 4. **Execute steps directly in conversation.** The orchestrator performs the stage work inline: asking questions, analyzing answers, producing artifacts, and interacting with the user.
@@ -385,13 +385,18 @@ Workspace detection (0.2) used to be a subagent. It is now a deterministic rule-
 
 The 6-step process:
 
-1. **Read rules, stage, and inputs.** Use the exact directive paths.
+1. **Load delivered rules, read stage and inputs.** Apply the directive's
+   `rules_content`; read by path only `rules_content_omitted` entries. Use the
+   exact directive paths for the stage file and artifacts.
 2. **Load conductor-owned context.** A mob directive carries its lead's complete
-   roster in `inline_context_paths`; fully dispatched subagent/pipeline
-   directives carry an empty roster.
-3. **Prepare paths-only briefs.** Pass the exact rule and relevant artifact
-   paths plus task instructions. The named harness agent config loads persona
-   and knowledge; do not copy either into the prompt.
+   roster in `inline_context_paths` (content in `inline_context_content` per
+   the deliver-once rule); fully dispatched subagent/pipeline directives carry
+   an empty roster.
+3. **Prepare briefs: rules as content, artifacts as paths.** Paste the
+   directive's `rules_content` entries verbatim (plus the omitted paths to
+   read); pass relevant artifact paths and task instructions. The named
+   harness agent config loads persona and knowledge; do not copy either into
+   the prompt.
 4. **Apply the topology.** Use blind spokes for subagent supports, ordered links
    for pipeline, and blind support contributions plus the bounded objection
    round for mob.

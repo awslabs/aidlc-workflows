@@ -552,20 +552,29 @@ dynamic per workflow position.
 
 ### Inline Stages and Inline Mob Leads
 
-1. Read **every** file in `directive.inline_context_paths` before doing stage
-   work. The engine expands exact persona and existing knowledge-file paths:
+1. The directive delivers the roster as content: `inline_context_content`
+   carries each persona/knowledge file's text for agents not yet delivered
+   this workflow (deliver-once - files delivered on an earlier stage persist
+   in the session), and `rules_content` carries the active-space rules
+   (re-read every stage). `inline_context_paths` remains the full roster:
    lead + supports for `inline`, and the lead only for `mob` because mob
    supports are dispatched. Agent names alone are not loaded context.
-2. Preserve the directive's path order, which follows the 6-step knowledge
-   order. Do not omit support-agent entries on `inline` or the lead entries on
-   `mob`.
-3. Apply every loaded perspective during execution.
+2. Read by path only what the directive names as undelivered - every entry in
+   `rules_content_omitted` and `inline_context_omitted` (size-budget
+   overflow) - plus, after a fresh session resume mid-workflow, any roster
+   path whose content is in neither list and not already in context.
+3. Apply every loaded perspective during execution. Do not omit support-agent
+   perspectives on `inline` or the lead's on `mob`.
 
 ### Subagent Stages
 
-1. Dispatch the named harness agent; its config loads the persona and knowledge.
-2. Pass exact rule paths, relevant prior-artifact paths, and task instructions
-   rather than copied persona or knowledge prose.
+1. Dispatch the named harness agent; its config loads the persona and
+   knowledge (reviewer checklists are absorbed into the reviewer agents'
+   bodies at build time).
+2. Paste the directive's `rules_content` entries verbatim into the brief
+   (plus the `rules_content_omitted` paths to read); pass relevant
+   prior-artifact paths and task instructions rather than copied persona or
+   knowledge prose.
 3. Select the agent named by the stage metadata.
 
 ### Multi-Agent Stages (Ensemble Topologies)

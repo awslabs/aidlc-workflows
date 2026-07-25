@@ -21,6 +21,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { EmitContext } from "../../scripts/manifest-types.ts";
+import { absorbReviewerKnowledge } from "../../scripts/agent-knowledge.ts";
 import { projectTier } from "../../core/tools/aidlc-tiers.ts";
 
 // Rewrite a core persona .md into its opencode-native subagent twin. The
@@ -100,12 +101,17 @@ export default function emit(ctx: EmitContext): void {
     emissions.push({
       path: join(SHELL, "agents", f),
       content: () => {
+        // Reviewer knowledge absorption (scripts/agent-knowledge.ts) on the
+        // raw core text - this emission reads core/agents/*.md directly, so
+        // the packager's transform (which absorbs for the .aidlc twins)
+        // never runs on it.
+        const raw = absorbReviewerKnowledge(
+          readFileSync(join(agentsDir, f), "utf-8"),
+          f.replace(/\.md$/, ""),
+          coreRoot,
+        );
         const projected = substituteToken(
-          emitSubagentMd(
-            readFileSync(join(agentsDir, f), "utf-8"),
-            join(agentsDir, f),
-            tierCap,
-          ),
+          emitSubagentMd(raw, join(agentsDir, f), tierCap),
         );
         return projectActiveMemoryReferences(projected);
       },

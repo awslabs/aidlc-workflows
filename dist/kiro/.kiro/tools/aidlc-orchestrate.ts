@@ -126,6 +126,7 @@ import {
   type Consume,
   type GraphStage,
   loadGraph,
+  memoryDirFor,
   producersOf,
   subgraphForScope,
 } from "./aidlc-graph.ts";
@@ -670,6 +671,190 @@ function readConductorPersona(): string | null {
   }
 }
 
+// --- Steering-content injection (the rules_in_context deterministic anchor) ---
+//
+// The directive used to carry rule/knowledge PATHS only, with a prose
+// instruction to read them - a knowledge-in-the-LLM delivery of the steering
+// layer itself, observed to be skipped non-deterministically (0/4 memory rules
+// read across three consecutive live stages while the directive "delivered"
+// the paths). These helpers give the roster the same deterministic anchor the
+// conductor persona has had since SPIKE 6: the engine reads each file at
+// directive-build time and bakes the CONTENT into the directive. Paths stay
+// (backward-compatible, and still the brief currency on dispatched
+// topologies); content rides alongside.
+//
+// Delivery is best-effort per file, mirroring readConductorPersona: a missing
+// or unreadable file is dropped silently (an absent file is not withheld
+// steering) and the directive stays well-formed. Empty-template files - the
+// shipped team.md/project.md placeholders whose every substantive line is an
+// HTML comment - are dropped too; injecting comment-only scaffolding would be
+// noise, and the emptiness rule matches knowledge/aidlc-shared/
+// rules-reading.md §1.
+//
+// The size budget bounds the TOTAL emitted directive, not each roster: the
+// directive is one JSON line on stdout, and every harness caps tool output
+// somewhere. On Claude Code, Bash output beyond BASH_MAX_OUTPUT_LENGTH
+// (default 30 000 chars) is diverted to a session file with only a preview
+// in-context - the conductor would have to notice and re-read the file, i.e.
+// exactly the discretionary-read hole this injection exists to close. On
+// harnesses that hard-truncate instead, an over-budget directive is
+// unparseable JSON and bricks the forwarding loop. Either way the budget must
+// keep the whole line under the harness cap. The conservative default stays
+// under the tightest known cap with the first-stage persona (~12KB) already
+// aboard; the AIDLC_DIRECTIVE_MAX_BYTES env seam raises it per harness where
+// the cap is known and configurable (the shipped Claude settings.json sets
+// BASH_MAX_OUTPUT_LENGTH to its 150 000 ceiling and this seam to 120 000).
+// Injection under the budget is cost-neutral against a conductor that obeyed
+// the read instruction - the same bytes land in context either way; files
+// that don't fit go to the companion *_omitted lists - visible, never silent
+// - and the conductor falls back to reading exactly those paths. The fill is
+// greedy, not prefix: a later small file still fits after an oversized one
+// was omitted, maximising delivered steering.
+const DIRECTIVE_MAX_BYTES_DEFAULT = 28 * 1024;
+
+function directiveMaxBytes(): number {
+  const raw = process.env.AIDLC_DIRECTIVE_MAX_BYTES;
+  if (raw) {
+    const n = Number.parseInt(raw, 10);
+    if (Number.isInteger(n) && n > 0) return n;
+  }
+  return DIRECTIVE_MAX_BYTES_DEFAULT;
+}
+
+// True when the text carries at least one substantive line: not blank, not a
+// heading, not a blockquote, not a horizontal rule, and not inside an HTML
+// comment. The seed memory templates (title + blockquote preamble + section
+// headings + comment placeholders) are NOT substantive by this rule; a single
+// affirmed practice line flips the file to substantive.
+function isSubstantiveRuleText(text: string): boolean {
+  const stripped = text.replace(/<!--[\s\S]*?-->/g, "");
+  return stripped.split(/\r?\n/).some((line) => {
+    const t = line.trim();
+    if (t === "") return false;
+    if (t.startsWith("#")) return false;
+    if (t.startsWith(">")) return false;
+    if (/^-{3,}$/.test(t)) return false;
+    return true;
+  });
+}
+
+// Read a roster of files into {path, text} content entries under a byte
+// budget. `rel` is the workspace-relative POSIX path the directive names;
+// `abs` is where the file lives on this machine. Missing/unreadable files are
+// dropped; files past the budget are listed in `omitted`. Size is measured on
+// the JSON-encoded entry (the cost that actually lands on the emitted line,
+// escaping included), and `bytesUsed` reports the total so the caller can
+// spend one budget across consecutive rosters.
+//
+// `substantiveOnly` applies the rules-layer emptiness rule (drop files whose
+// body is all comment placeholders - the shipped team.md/project.md
+// templates). It is a RULES concept: the inline knowledge roster delivers
+// verbatim, because a roster path that is neither in content nor in omitted
+// would read as silently skipped - the exact failure mode this injection
+// removes.
+function readFilesWithBudget(
+  entries: Array<{ rel: string; abs: string }>,
+  maxBytes: number,
+  substantiveOnly: boolean,
+): {
+  content: Array<{ path: string; text: string }>;
+  omitted: string[];
+  bytesUsed: number;
+} {
+  const content: Array<{ path: string; text: string }> = [];
+  const omitted: string[] = [];
+  const seen = new Set<string>();
+  let total = 0;
+  for (const entry of entries) {
+    if (seen.has(entry.rel)) continue;
+    seen.add(entry.rel);
+    let text: string;
+    try {
+      text = readFileSync(entry.abs, "utf-8");
+    } catch {
+      continue;
+    }
+    if (substantiveOnly && !isSubstantiveRuleText(text)) continue;
+    const size = Buffer.byteLength(
+      JSON.stringify({ path: entry.rel, text }),
+      "utf-8",
+    );
+    if (total + size > maxBytes) {
+      omitted.push(entry.rel);
+      continue;
+    }
+    total += size;
+    content.push({ path: entry.rel, text });
+  }
+  return { content, omitted, bytesUsed: total };
+}
+
+// The inline persona/knowledge delivered-set - the deliver-once derivation.
+// Injecting every inline roster's content on every stage would re-send the
+// same personas stage after stage; like the conductor persona, content
+// delivered once persists in the session. The deterministic proxy for
+// "already delivered" is the same one D-E uses (state checkboxes): an agent
+// counts as delivered when some OTHER stage with that agent in its inline
+// roster has advanced past pending - a non-pending, non-skipped checkbox
+// means that stage's run-stage directive was emitted, so its roster content
+// went out with it. The current node excludes itself so a re-emitted `next`
+// for an in-flight stage carries the same content as the first emit
+// (idempotent, exactly like the persona re-delivering on the first stage).
+// The aidlc-shared knowledge tree belongs to every agent; it is delivered
+// with the first stage that had ANY inline roster.
+//
+// Same HONEST LIMITATION as the persona (SPIKE-6 contract): "delivered" means
+// "emitted earlier this workflow", not "still in this session's context" - a
+// fresh session resuming mid-workflow relies on the prior context or on the
+// paths roster (which every directive still carries) for re-reads.
+function deliveredInlineContext(
+  stateContent: string | null,
+  currentSlug: string,
+): { agents: Set<string>; shared: boolean } {
+  const agents = new Set<string>();
+  let shared = false;
+  if (!stateContent) return { agents, shared };
+  for (const c of parseCheckboxes(stateContent)) {
+    if (c.slug === currentSlug) continue;
+    if (c.state === "pending" || c.state === "skipped") continue;
+    const n = nodeForSlug(c.slug);
+    if (!n) continue;
+    const roster = inlineAgentsFor(n);
+    if (roster.length > 0) shared = true;
+    for (const a of roster) agents.add(a);
+  }
+  return { agents, shared };
+}
+
+// Resolve the {rel, abs} read entries for a node's rules_in_context roster.
+// The roster paths are DISPLAY paths frozen at compile time pinned to the
+// `default` space (see aidlc-graph.ts MEMORY_SPACE); the CONTENT must come
+// from the ACTIVE space, so each entry's sub-path under memory/ is re-rooted
+// at the active space's memory dir. AIDLC_RULES_DIR outranks it - the same
+// env seam rulesDir() honours, so fixture-driven tests and the Codex
+// config.toml seam read the same tree the compile did. `rel` names the
+// active-space file (the file actually read), which at `default` is
+// byte-identical to the roster path.
+function rulesContentEntries(
+  node: GraphStage,
+  codekbCtx: CodekbCtx,
+): Array<{ rel: string; abs: string }> {
+  const memoryDir =
+    process.env.AIDLC_RULES_DIR ??
+    memoryDirFor(codekbCtx.projectDir, codekbCtx.space);
+  return (node.rules_in_context ?? []).map((r) => {
+    const marker = "/memory/";
+    const idx = r.path.indexOf(marker);
+    const sub = idx >= 0 ? r.path.slice(idx + marker.length) : r.path;
+    return {
+      rel: toPosix(
+        join("aidlc", "spaces", codekbCtx.space, "memory", sub),
+      ),
+      abs: join(memoryDir, sub),
+    };
+  });
+}
+
 // "First run-stage of the workflow" — the deterministic signal D-E delivery
 // keys on. The engine is stateless per call, so it cannot track a "session";
 // the faithful, reproducible proxy is the WORKFLOW's opening move: no non-init
@@ -1208,40 +1393,65 @@ function computeGate(
   return true;
 }
 
-function markdownFilesUnder(absDir: string, relativeDir: string): string[] {
+// Walk a knowledge/persona dir into {abs, rel} pairs: `rel` is the
+// workspace-relative POSIX display path the directive names; `abs` is where
+// the file lives on this machine, so the content injection can read the same
+// file the roster lists without re-deriving the root.
+function markdownFilesUnder(
+  absDir: string,
+  relativeDir: string,
+): Array<{ abs: string; rel: string }> {
   let entries: Dirent[];
   try {
     entries = readdirSync(absDir, { withFileTypes: true });
   } catch {
     return [];
   }
-  const paths: string[] = [];
+  const files: Array<{ abs: string; rel: string }> = [];
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     const absPath = join(absDir, entry.name);
     const relativePath = toPosix(join(relativeDir, entry.name));
     if (entry.isDirectory()) {
-      paths.push(...markdownFilesUnder(absPath, relativePath));
+      files.push(...markdownFilesUnder(absPath, relativePath));
     } else if (entry.isFile() && entry.name.endsWith(".md")) {
-      paths.push(relativePath);
+      files.push({ abs: absPath, rel: relativePath });
     }
   }
-  return paths;
+  return files;
+}
+
+// The agents whose persona + knowledge the CONDUCTOR itself must hold for a
+// stage: lead + supports on inline stages, lead only on a mob (supports are
+// dispatched), none on fully-dispatched subagent/pipeline topologies. Shared
+// by the roster builder and the deliver-once derivation so both agree on
+// "who is inline here".
+function inlineAgentsFor(node: GraphStage): string[] {
+  const inlineAgents = node.mode === "inline"
+    ? [node.lead_agent, ...(node.support_agents ?? [])]
+    : node.mode === "mob"
+      ? [node.lead_agent]
+      : [];
+  return [...new Set(inlineAgents)].filter((agent) => agent !== "orchestrator");
 }
 
 // Conductor-owned context is a concrete file roster, not an instruction inferred
 // from lead/support names. Inline stages load lead + supports; mob stages keep the
 // lead inline but dispatch every support, so only the lead belongs in this roster.
 // Fully-dispatched subagent/pipeline stages carry no inline context.
-function inlineContextPaths(node: GraphStage, codekbCtx?: CodekbCtx): string[] {
-  const inlineAgents = node.mode === "inline"
-    ? [node.lead_agent, ...(node.support_agents ?? [])]
-    : node.mode === "mob"
-      ? [node.lead_agent]
-      : [];
-  if (inlineAgents.length === 0) return [];
+//
+// Returns {abs, rel, agent} entries: `rel` is the display path the directive
+// names, `abs` where the file lives, `agent` the roster member the file
+// belongs to (null for the aidlc-shared tree, which belongs to every agent) -
+// the deliver-once derivation filters on it. inlineContextPaths below is the
+// path-only projection the directive's roster field carries.
+type InlineContextEntry = { abs: string; rel: string; agent: string | null };
 
-  const agents = [...new Set(inlineAgents)]
-    .filter((agent) => agent !== "orchestrator");
+function inlineContextEntries(
+  node: GraphStage,
+  codekbCtx?: CodekbCtx,
+): InlineContextEntry[] {
+  const agents = inlineAgentsFor(node);
+  if (agents.length === 0) return [];
   // The resolver ladder, not raw import.meta.url: in a compiled binary this
   // module's URL is inside the bundle (/$bunfs), where no markdown ships —
   // a raw derivation returns [] and inline stages silently lose persona +
@@ -1249,26 +1459,30 @@ function inlineContextPaths(node: GraphStage, codekbCtx?: CodekbCtx): string[] {
   // distribution the same way readConductorPersona resolves conductor.md.
   const harnessRoot = resolveHarnessRoot();
   const harnessPrefix = harnessDir();
-  const paths: string[] = [];
+  const entries: InlineContextEntry[] = [];
 
   for (const agent of agents) {
     const persona = join(harnessRoot, "agents", `${agent}.md`);
     if (existsSync(persona)) {
-      paths.push(toPosix(join(harnessPrefix, "agents", `${agent}.md`)));
+      entries.push({
+        abs: persona,
+        rel: toPosix(join(harnessPrefix, "agents", `${agent}.md`)),
+        agent,
+      });
     }
   }
-  paths.push(
+  entries.push(
     ...markdownFilesUnder(
       join(harnessRoot, "knowledge", "aidlc-shared"),
       join(harnessPrefix, "knowledge", "aidlc-shared"),
-    ),
+    ).map((f) => ({ ...f, agent: null })),
   );
   for (const agent of agents) {
-    paths.push(
+    entries.push(
       ...markdownFilesUnder(
         join(harnessRoot, "knowledge", agent),
         join(harnessPrefix, "knowledge", agent),
-      ),
+      ).map((f) => ({ ...f, agent })),
     );
   }
 
@@ -1281,23 +1495,33 @@ function inlineContextPaths(node: GraphStage, codekbCtx?: CodekbCtx): string[] {
       "knowledge",
     );
     const customPrefix = join("aidlc", "spaces", codekbCtx.space, "knowledge");
-    paths.push(
+    entries.push(
       ...markdownFilesUnder(
         join(customRoot, "aidlc-shared"),
         join(customPrefix, "aidlc-shared"),
-      ),
+      ).map((f) => ({ ...f, agent: null })),
     );
     for (const agent of agents) {
-      paths.push(
+      entries.push(
         ...markdownFilesUnder(
           join(customRoot, agent),
           join(customPrefix, agent),
-        ),
+        ).map((f) => ({ ...f, agent })),
       );
     }
   }
 
-  return [...new Set(paths)];
+  // De-duplicate on rel (first wins), matching the old Set-of-paths shape.
+  const seen = new Set<string>();
+  return entries.filter((e) => {
+    if (seen.has(e.rel)) return false;
+    seen.add(e.rel);
+    return true;
+  });
+}
+
+function inlineContextPaths(node: GraphStage, codekbCtx?: CodekbCtx): string[] {
+  return inlineContextEntries(node, codekbCtx).map((e) => e.rel);
 }
 
 // Build a run-stage directive by reading the routing fields straight off the
@@ -1319,6 +1543,7 @@ function buildRunStageDirective(
   recordPrefix: string | null = null,
   codekbCtx?: CodekbCtx,
   unitKind: string | null = null,
+  forcePersona = false,
 ): RunStageDirective {
   const resolvedConsumes = resolveConsumes(
     node.consumes ?? [], node, projectType, unit, recordPrefix, codekbCtx,
@@ -1365,11 +1590,95 @@ function buildRunStageDirective(
   // workflow. The optional field is omitted on every later directive (the
   // persona persists in the session once delivered). A missing conductor.md is
   // best-effort — the directive stays well-formed without the field.
-  if (isFirstRunStageOfWorkflow(stateContent, node)) {
+  // `forcePersona` covers the isolated single-stage runner, whose directive is
+  // always the conductor's first of that run regardless of state - attached
+  // HERE (not by the caller after build) so the steering injection's byte
+  // budget accounts for the persona it shares the emitted line with.
+  if (forcePersona || isFirstRunStageOfWorkflow(stateContent, node)) {
     const persona = readConductorPersona();
     if (persona !== null) directive.conductor_persona = persona;
   }
+  injectSteeringContent(directive, node, stateContent, codekbCtx);
   return directive;
+}
+
+// Bake steering CONTENT into the directive (the deterministic anchor for the
+// rules_in_context and inline_context_paths rosters - see the injection block
+// comment above readFilesWithBudget). One byte budget covers the whole emitted
+// line: the base directive (persona included) spends first, the active-space
+// rules next (per-stage steering, small, mutated mid-workflow by §13
+// learnings - so re-read every stage), and the not-yet-delivered inline
+// persona/knowledge content last (large, delivered once per agent per
+// workflow). Whatever doesn't fit lands in the *_omitted lists for the
+// conductor to read by path. Requires codekbCtx (the ctx-less test path emits
+// paths-only directives, exactly as before).
+function injectSteeringContent(
+  directive: RunStageDirective,
+  node: GraphStage,
+  stateContent: string | null,
+  codekbCtx?: CodekbCtx,
+): void {
+  if (!codekbCtx) return;
+  const budget = directiveMaxBytes();
+  const baseBytes = Buffer.byteLength(JSON.stringify(directive), "utf-8");
+
+  const rules = readFilesWithBudget(
+    rulesContentEntries(node, codekbCtx),
+    Math.max(0, budget - baseBytes),
+    true, // rules layer: drop comment-only placeholder files
+  );
+  if (rules.content.length > 0) directive.rules_content = rules.content;
+  if (rules.omitted.length > 0) directive.rules_content_omitted = rules.omitted;
+
+  const delivered = deliveredInlineContext(stateContent, node.slug);
+  const undelivered = inlineContextEntries(node, codekbCtx).filter((e) =>
+    e.agent === null ? !delivered.shared : !delivered.agents.has(e.agent),
+  );
+  if (undelivered.length > 0) {
+    const inline = readFilesWithBudget(
+      undelivered,
+      Math.max(0, budget - baseBytes - rules.bytesUsed),
+      false, // knowledge roster: deliver verbatim (see readFilesWithBudget)
+    );
+    if (inline.content.length > 0) {
+      directive.inline_context_content = inline.content;
+    }
+    if (inline.omitted.length > 0) {
+      directive.inline_context_omitted = inline.omitted;
+    }
+  }
+
+  // Exact-budget backstop. The per-entry accounting above excludes JSON
+  // overhead the emitted line still pays - field keys, separators, and the
+  // *_omitted path lists - so a full injection can land a few percent over.
+  // The budget is a harness-truncation bound, not a soft target: enforce it
+  // exactly by moving content entries (inline first - larger, lower-stakes -
+  // then rules) back to omitted until the line fits. Bounded: each pass
+  // shrinks the line by an entry's text, and both lists are finite.
+  const overBudget = () =>
+    Buffer.byteLength(JSON.stringify(directive), "utf-8") > budget;
+  while (overBudget() && (directive.inline_context_content?.length ?? 0) > 0) {
+    const entries = directive.inline_context_content ?? [];
+    const moved = entries.pop();
+    if (entries.length === 0) delete directive.inline_context_content;
+    if (moved) {
+      directive.inline_context_omitted = [
+        ...(directive.inline_context_omitted ?? []),
+        moved.path,
+      ];
+    }
+  }
+  while (overBudget() && (directive.rules_content?.length ?? 0) > 0) {
+    const entries = directive.rules_content ?? [];
+    const moved = entries.pop();
+    if (entries.length === 0) delete directive.rules_content;
+    if (moved) {
+      directive.rules_content_omitted = [
+        ...(directive.rules_content_omitted ?? []),
+        moved.path,
+      ];
+    }
+  }
 }
 
 // Find the graph node for a slug. Composes loadGraph() (the one cached read).
@@ -2562,9 +2871,10 @@ function emitSingleRunStage(
     return;
   }
   // Build the directive from the graph node alone (stateContent: null → no main
-  // state read, no skeleton round-trip, no main-pointer persona signal), then
-  // attach the persona explicitly: this is the conductor's first directive of the
-  // single run, so D-E delivery applies.
+  // state read, no skeleton round-trip, no main-pointer persona signal), with
+  // forcePersona: this is the conductor's first directive of the single run,
+  // so D-E delivery applies (attached inside the builder so the steering
+  // injection budgets around it).
   const directive = buildRunStageDirective(
     node,
     projectType,
@@ -2573,14 +2883,12 @@ function emitSingleRunStage(
     null,
     recordPrefix,
     codekbCtx,
+    null,
+    true, // forcePersona: the single run's first (and only) directive
   );
   directive.single = true;
   directive.gate = false;
   directive.next_stage = null;
-  if (directive.conductor_persona === undefined) {
-    const persona = readConductorPersona();
-    if (persona !== null) directive.conductor_persona = persona;
-  }
   emit(directive);
 }
 

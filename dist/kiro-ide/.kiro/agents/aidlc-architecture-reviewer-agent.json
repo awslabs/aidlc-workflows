@@ -34,7 +34,6 @@
   },
   "resources": [
     "file://.kiro/agents/aidlc-architecture-reviewer-agent.md",
-    "file://.kiro/knowledge/aidlc-architecture-reviewer-agent/*.md",
     "file://.kiro/knowledge/aidlc-shared/*.md",
     "file://aidlc/spaces/default/memory/**/*.md"
   ],
