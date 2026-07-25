@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.14] - 2026-07-25
+
+Per-stage steering now reaches the workflow deterministically. The `run-stage` directive already listed the resolved rule paths in `rules_in_context`, but reading them was prose-only instruction, so an org or phase rule could be silently skipped and the stage's artifacts written without it. The engine now reads each resolved rule file at directive-build time and ships its contents in a new `rules_content` field, the same way `conductor_persona` is already injected. **Upgrade:** re-copy your `dist/<harness>/` shell into the project. No workflow, command, or file-layout change — rules you have already authored start arriving as content on the next stage.
+
+* The `run-stage` directive carries a new optional `rules_content` array of `{path, text}` entries — the on-disk contents of the rule files named in `rules_in_context`. `rules_in_context` is unchanged and remains the authoritative roster.
+* Rule files that hold only scaffolding (a heading, `>` guidance, or HTML-comment examples — the shape the shipped `team.md` and `project.md` seeds have before you affirm anything) are omitted, so an untouched install gains no directive noise. They appear as soon as they carry a real rule.
+* A missing or unreadable rule file is still not an error: the entry is dropped and the directive stays well-formed, with `rules_in_context` unaffected.
+
 ## [2.5.11] - 2026-07-24
 
 Intent Capture now keeps generated intent and stakeholder claims grounded in the user's description, confirmed answers, workflow-selected scope, or explicitly registered memory. Unsupported content is omitted, elicited, or surfaced as a human-owned assumption instead of being presented as fact. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated stage, Product Lead reviewer contract, and `claim-sources` sensor are installed.

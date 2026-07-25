@@ -78,6 +78,7 @@ import {
   type GateValue,
   type ParkedDirective,
   type PrintDirective,
+  type RuleContent,
   type RunStageDirective,
   validateDirective,
 } from "./aidlc-directive.ts";
@@ -1290,6 +1291,42 @@ function inlineContextPaths(node: GraphStage, codekbCtx?: CodekbCtx): string[] {
   return [...new Set(paths)];
 }
 
+// A rule file is "substantive" when it carries at least one content line —
+// something other than a blank line, a Markdown heading, an HTML comment, or a
+// blockquote. The shipped team.md / project.md seeds are pure scaffolding
+// (heading + `>` guidance + `<!-- ... -->` examples, no affirmed rules), so this
+// drops them; org.md / phases/<phase>.md, which carry real rules, pass. Keeping
+// placeholders out of rules_content avoids injecting empty noise into every
+// directive.
+function ruleTextIsSubstantive(text: string): boolean {
+  return text.split("\n").some((line) => {
+    const t = line.trim();
+    if (t === "") return false;
+    if (t.startsWith("#")) return false; // heading
+    if (t.startsWith(">")) return false; // blockquote (seed guidance)
+    if (t.startsWith("<!--") || t.startsWith("-->")) return false; // HTML comment fence
+    return true;
+  });
+}
+
+// Read one rules_in_context file (a projectDir-relative path) and return its
+// content, or null when the file is absent, unreadable, or placeholder-only.
+// Path resolution mirrors splitConsumesByPresence: join(projectDir, ...split("/"))
+// so it is OS-correct and cwd-independent. Best-effort by design — a missing or
+// placeholder rule is not a routing error; the directive stays well-formed
+// without its entry. See RunStageDirective.rules_content.
+function readRuleContent(projectDir: string, relPath: string): RuleContent | null {
+  const abs = join(projectDir, ...relPath.split("/"));
+  if (!existsSync(abs)) return null;
+  try {
+    const text = readFileSync(abs, "utf-8");
+    if (!ruleTextIsSubstantive(text)) return null;
+    return { path: relPath, text };
+  } catch {
+    return null;
+  }
+}
+
 // Build a run-stage directive by reading the routing fields straight off the
 // compiled graph node. consumes/produces carry resolved active-record paths:
 // the engine resolves the node's vocabulary names → paths at emit time (so the
@@ -1335,6 +1372,19 @@ function buildRunStageDirective(
     stage_file: stageFileFor(node.phase, node.slug),
   };
   if (absent.length > 0) directive.consumes_absent = absent;
+  // rules_content — deterministically inject the CONTENT of each rules_in_context
+  // file so per-stage steering reaches the conductor without depending on it
+  // reading each path (the read is prose-only and was observed skipped across
+  // whole stages). Only on the live path (codekbCtx present gives the projectDir
+  // base); the ctx-less test/default path stays byte-identical, mirroring
+  // splitConsumesByPresence's own no-ctx skip. Placeholder-only files (team.md /
+  // project.md seeds) are dropped by readRuleContent.
+  if (codekbCtx) {
+    const rulesContent = (node.rules_in_context ?? [])
+      .map((r) => readRuleContent(codekbCtx.projectDir, r.path))
+      .filter((r): r is RuleContent => r !== null);
+    if (rulesContent.length > 0) directive.rules_content = rulesContent;
+  }
   // next_stage: the display name of the in-scope stage that follows this one, so
   // the approval gate's Approve option reads "Continue to <next_stage>" verbatim
   // instead of a guessed constant. Computed here at emit time: the gate is

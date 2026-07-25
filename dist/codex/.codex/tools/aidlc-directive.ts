@@ -55,6 +55,14 @@ export type DirectiveKind =
 // are read straight off the compiled stage-graph.json node; consumes/produces
 // carry RESOLVED aidlc-docs/... paths (the engine resolves vocabulary names →
 // paths at emit time; the conductor never re-derives them).
+
+// One rules_in_context file, with its on-disk content baked in. `path` is the
+// same projectDir-relative path that appears in rules_in_context; `text` is the
+// file's full contents at emit time. See RunStageDirective.rules_content.
+export interface RuleContent {
+  path: string;
+  text: string;
+}
 export interface RunStageDirective {
   kind: "run-stage";
   stage: string;
@@ -100,6 +108,18 @@ export interface RunStageDirective {
   // in-context, with no skill referencing that file by path. Absent on every
   // later directive (the persona persists in the session once delivered).
   conductor_persona?: string;
+  // rules_content — the CONTENT of each rules_in_context file that exists on
+  // disk with substantive (non-placeholder) text, read by the engine at
+  // directive-build time and injected here so the conductor receives its
+  // per-stage steering in-context WITHOUT having to read each path itself
+  // (the read was prose-only and skipped non-deterministically in live runs).
+  // Mirrors conductor_persona's deterministic-injection pattern. rules_in_context
+  // (the paths) is unchanged and authoritative; rules_content is an additive
+  // superset covering the files that carried real content. Absent on the
+  // ctx-less emit path (no projectDir to resolve/read against) and whenever no
+  // resolved rule file has substantive content — the directive stays
+  // well-formed without it.
+  rules_content?: RuleContent[];
   // next_stage: the display name of the in-scope stage that FOLLOWS this one,
   // resolved by the engine so the approval gate's Approve option can read
   // "Continue to <next_stage>" verbatim. null = this is the final in-scope
@@ -294,6 +314,7 @@ const RUN_STAGE_FIELDS = [
   "reviewer",
   "reviewer_max_iterations",
   "conductor_persona",
+  "rules_content",
   "next_stage",
   "unit",
   "consumes_absent",
@@ -456,6 +477,9 @@ function checkRunStageShared(
   checkStringArray(o, "sensors_applicable", kind, errors);
   checkString(o, "stage_file", kind, errors);
   checkOptionalString(o, "conductor_persona", kind, errors);
+  // rules_content: optional (present only on the live emit path when at least one
+  // rules_in_context file had substantive content). Each entry {path, text}.
+  checkOptionalRulesContent(o, "rules_content", kind, errors);
   // next_stage: optional-nullable on a run-stage directive. Present as a string
   // names the following in-scope stage; null means this is the final in-scope
   // stage; absent carries no name. So string OR null validates; any other
@@ -615,6 +639,42 @@ function checkOptionalConsumesAbsent(
     if (typeof item.expected !== "boolean") {
       errors.push(
         `${kind}: ${field}[${i}].expected must be boolean, got ${describe(item.expected)}`,
+      );
+    }
+  });
+}
+
+// rules_content — optional (present only on the live emit path with at least
+// one substantive rule file). Each entry must be {path: string, text: string}.
+// Mirrors checkOptionalConsumesAbsent's shape discipline.
+function checkOptionalRulesContent(
+  o: Record<string, unknown>,
+  field: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) return;
+  const v: unknown = o[field];
+  if (!Array.isArray(v)) {
+    errors.push(`${kind}: ${field} must be array, got ${describe(v)}`);
+    return;
+  }
+  const arr: unknown[] = v;
+  arr.forEach((item: unknown, i: number) => {
+    if (!isPlainObject(item)) {
+      errors.push(
+        `${kind}: ${field}[${i}] must be object, got ${describe(item)}`,
+      );
+      return;
+    }
+    if (typeof item.path !== "string") {
+      errors.push(
+        `${kind}: ${field}[${i}].path must be string, got ${describe(item.path)}`,
+      );
+    }
+    if (typeof item.text !== "string") {
+      errors.push(
+        `${kind}: ${field}[${i}].text must be string, got ${describe(item.text)}`,
       );
     }
   });
