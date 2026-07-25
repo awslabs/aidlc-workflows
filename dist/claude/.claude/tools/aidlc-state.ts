@@ -1405,8 +1405,11 @@ function verifyReviewerPrecondition(
   // not brick. Off-switch: AIDLC_SKIP_SOURCE_FRESHNESS=1. Settled autonomous
   // swarm exempts this reconciliation entirely: receipts are stamped inside
   // per-unit Bolt worktrees, so a workspace-global fingerprint of the MAIN
-  // checkout is the wrong comparison basis until finalize merges the code
-  // back — aidlc-swarm.ts validates each receipt against its own worktree at
+  // checkout is the wrong comparison basis while the swarm's application
+  // source still lives only in each unit's own worktree - finalize's own
+  // merge-back (aidlc-bolt complete --merge) carries only the AIDLC data
+  // (state/audit/runtime fragment), never application source -
+  // aidlc-swarm.ts validates each receipt against its own worktree at
   // finalize instead (see reviewerReceiptError).
   let staleSourceReceipts = false;
   const fingerprintedReceipts: string[] = []; // chronological order (oldest first)

@@ -476,6 +476,75 @@ describe("t244 multi-unit sequential flow (reproduction, #646 review)", () => {
     expect(r.rc).not.toBe(0);
     expect(r.out).toContain("source-fingerprint mismatch");
   });
+
+  // Same bypass, but proves the additions-only chain walk is not just an
+  // adjacent-pair special case: the tamper sits between the 2nd and 3rd
+  // review in a 3-unit chain (alpha -> beta -> TAMPER alpha -> gamma), so a
+  // loop bug that only checked the first or last transition would miss it.
+  test("a 3-unit chain with a mid-chain tamper (alpha tampered between beta's and gamma's review) must still refuse", () => {
+    const dagDir = join(seededRecordDir(proj), "inception", "units-generation");
+    writeFileSync(
+      join(dagDir, "unit-of-work-dependency.md"),
+      "```yaml\nunits:\n  - name: alpha\n    depends_on: []\n  - name: beta\n    depends_on: []\n  - name: gamma\n    depends_on: []\n```\n",
+      "utf-8",
+    );
+
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha code"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha");
+
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "beta code"]);
+    recordReview(proj, "code-generation", REVIEWER, "beta");
+
+    // Tampered AFTER beta's review, before gamma's - no new review for alpha.
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 999; // snuck in after beta\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha TAMPERED between beta and gamma"]);
+
+    writeFileSync(join(proj, "gamma.ts"), "export const gamma = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "gamma code"]);
+    recordReview(proj, "code-generation", REVIEWER, "gamma");
+
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("source-fingerprint mismatch");
+  });
+
+  // #646 review (leandrodamascena, inline comment on aidlc-state.ts:1430) -
+  // the reviewer's own exact reproduction, distinct from the two above: it is
+  // an EARLIER unit (alpha) that gets RE-reviewed after a LATER unit (beta)
+  // is tampered, not a later unit's first review masking an earlier one. The
+  // reviewer's concern was that the newest fingerprint (stamped at alpha's
+  // second review) matches the workspace while beta's now-stale receipt
+  // remains in reviewedUnits. Must still refuse.
+  test("re-reviewing an earlier unit must not launder a later unit's untouched-since tamper", () => {
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha code"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha");
+
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "beta code"]);
+    recordReview(proj, "code-generation", REVIEWER, "beta");
+
+    // Tamper beta, no new review for beta.
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 999; // snuck in\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "beta TAMPERED"]);
+
+    // Re-review alpha (not beta) - alpha's own content is unchanged, but the
+    // tree now includes beta's unreviewed edit.
+    recordReview(proj, "code-generation", REVIEWER, "alpha");
+
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("source-fingerprint mismatch");
+  });
 });
 
 // Reproduction of the maintainer review on #646 (a1e4d67), P1 finding 2: the
