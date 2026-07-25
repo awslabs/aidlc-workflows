@@ -1239,18 +1239,29 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // permissions live there) plus settings/cli.json (activation). Codex CLI:
   // config.toml + hooks.json (the hook wiring) + rules/default.rules (permissions).
   if (harness === ".kiro") {
-    const agentPath = join(projectDir, harness, "agents", "aidlc.json");
+    // The conductor agent config carries the hook + permission wiring. Kiro CLI
+    // ships it as agents/aidlc.json; Kiro IDE reads the Markdown agent format
+    // (agents/aidlc.md) instead — either satisfies the wiring requirement, so
+    // accept whichever is present.
+    const jsonAgentPath = join(projectDir, harness, "agents", "aidlc.json");
+    const mdAgentPath = join(projectDir, harness, "agents", "aidlc.md");
     results.push({
-      pass: existsSync(agentPath),
-      label: "agents/aidlc.json present (hook + permission wiring)",
-      fix: "copy from `dist/kiro/.kiro/agents/aidlc.json`",
+      pass: existsSync(jsonAgentPath) || existsSync(mdAgentPath),
+      label: "agents/aidlc.{json,md} present (hook + permission wiring)",
+      fix: "copy from `dist/kiro/.kiro/agents/aidlc.json` (Kiro CLI) or `dist/kiro-ide/.kiro/agents/aidlc.md` (Kiro IDE)",
     });
-    const cliSettingsPath = join(projectDir, harness, "settings", "cli.json");
-    results.push({
-      pass: existsSync(cliSettingsPath),
-      label: "settings/cli.json present (workspace default-agent activation)",
-      fix: "copy from `dist/kiro/.kiro/settings/cli.json` (or use `kiro-cli chat --agent aidlc`)",
-    });
+    // settings/cli.json activates the default agent for Kiro CLI only. Kiro IDE
+    // activates via the agent selector and ships no settings file, so this check
+    // applies solely to a CLI install (aidlc.json present). Skip it for an IDE
+    // install (aidlc.md present, no aidlc.json).
+    if (existsSync(jsonAgentPath)) {
+      const cliSettingsPath = join(projectDir, harness, "settings", "cli.json");
+      results.push({
+        pass: existsSync(cliSettingsPath),
+        label: "settings/cli.json present (workspace default-agent activation)",
+        fix: "copy from `dist/kiro/.kiro/settings/cli.json` (or use `kiro-cli chat --agent aidlc`)",
+      });
+    }
   } else if (harness === ".codex") {
     for (const [file, what, from] of [
       ["config.toml", "model/provider/sandbox config", "dist/codex/.codex/config.toml"],

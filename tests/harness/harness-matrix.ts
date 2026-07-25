@@ -27,7 +27,7 @@ type HarnessCapabilities = {
     manifestDir: string;
     wiringFile: string;
   };
-  memoryInclude: "claude-import" | "codex-env" | "kiro-resources" | "opencode-instructions";
+  memoryInclude: "claude-import" | "codex-env" | "kiro-resources" | "kiro-ide-workspace" | "opencode-instructions";
   kiroAgentJson: boolean;
   ideAgentTools: boolean;
   reviewerScopeRegistration: ReviewerScopeRegistration;
@@ -89,8 +89,8 @@ const HARNESS_CAPABILITIES = {
       manifestDir: ".kiro-plugin",
       wiringFile: "hooks/aidlc-plugin-compose.kiro.hook",
     },
-    memoryInclude: "kiro-resources",
-    kiroAgentJson: true,
+    memoryInclude: "kiro-ide-workspace",
+    kiroAgentJson: false,
     ideAgentTools: true,
     reviewerScopeRegistration: "unsupported",
   },
@@ -218,6 +218,11 @@ function validateManifest(
   }
   if (
     (capabilities.memoryInclude === "kiro-resources") !== hasKiroAgentJson ||
+    // The Kiro IDE ships no agent JSON: the conductor is an authored
+    // agents/aidlc.md (IDE selector entry) and memory reaches the workflow via
+    // the workspace shell, not a CLI aidlc.json `resources:` surface.
+    (capabilities.memoryInclude === "kiro-ide-workspace") !==
+      manifest.harnessFiles.some((file) => file.dst === "agents/aidlc.md") ||
     (capabilities.memoryInclude === "claude-import") !==
       manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md") ||
     (capabilities.memoryInclude === "codex-env") !==

@@ -11,8 +11,19 @@ description: >
   indexed; only falls back to bounded workspace analysis when CodeKB is absent
   or not ready.
   Dispatched by the /aidlc orchestrator; never invoked directly by a stage.
-disallowedTools: Task
 tools: ["read", "write", "shell"]
+permissions:
+  rules:
+    - capability: shell
+      effect: allow
+      match:
+        - "bun *"
+        - "date -u *"
+    - capability: filesystem
+      effect: allow
+      match:
+        - ".kiro/scopes/**"
+        - ".kiro/tools/data/scope-grid.json"
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

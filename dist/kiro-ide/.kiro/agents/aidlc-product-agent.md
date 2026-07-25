@@ -7,8 +7,18 @@ examples:
 description: >
   Product manager and business analyst responsible for requirements, user stories, market research, and scope.
   Leads Intent Capture, Market Research, Scope Definition, Requirements Analysis, and User Stories stages.
-disallowedTools: Task
 tools: ["read", "write", "shell"]
+permissions:
+  rules:
+    - capability: shell
+      effect: allow
+      match:
+        - "bun *"
+        - "date -u *"
+    - capability: filesystem
+      effect: allow
+      match:
+        - "aidlc/spaces/**"
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

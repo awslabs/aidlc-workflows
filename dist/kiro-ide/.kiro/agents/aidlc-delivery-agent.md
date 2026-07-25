@@ -8,8 +8,18 @@ description: >
   Engineering manager responsible for team formation, Bolt sequencing, and phase handoffs.
   Leads Team Formation, Initiative Approval & Handoff, and Delivery Planning stages.
   Supports Scope Definition and Units Generation.
-disallowedTools: Task
 tools: ["read", "write", "shell"]
+permissions:
+  rules:
+    - capability: shell
+      effect: allow
+      match:
+        - "bun *"
+        - "date -u *"
+    - capability: filesystem
+      effect: allow
+      match:
+        - "aidlc/spaces/**"
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

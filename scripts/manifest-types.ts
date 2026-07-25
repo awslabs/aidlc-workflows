@@ -92,8 +92,28 @@ export type HarnessManifest = {
    * delegated subagent's tool grants from the agent .md frontmatter
    * (`tools: ["read", "write", "shell"]`), not from the CLI's agent-v1
    * JSON - without the injected line an IDE delegate runs toolless.
+   *
+   * A block spanning multiple YAML lines is supported: the FIRST line names
+   * the key (validated + collision-checked), and any following indented
+   * continuation lines (leading whitespace) ride along untouched. This lets a
+   * nested mapping/sequence ship as one addition, e.g. the Kiro IDE 1.0
+   * `permissions.rules` block:
+   *   lines: ["permissions:", "  rules:", "    - capability: shell", ...].
    */
   frontmatterAdditions?: Array<{ file: string; lines: string[] }>;
+  /**
+   * Per-file YAML frontmatter KEYS removed from a core-projected .md's
+   * frontmatter - the inverse seam of frontmatterAdditions, for expressing the
+   * ABSENCE of a harness-neutral field in one harness without forking the core
+   * file. `file` is the harness-relative output path; `keys` are top-level
+   * frontmatter keys to drop (with their indented continuation lines). Example:
+   * the Kiro IDE ignores the CLI's `disallowedTools` field, so its distributions
+   * remove it rather than shipping dead frontmatter. The packager errors on an
+   * unmatched file (typo guard), a missing frontmatter block, and a key the core
+   * file does not declare (so a stale removal that no longer matches core is a
+   * loud no-op, never a silent miss).
+   */
+  frontmatterRemovals?: Array<{ file: string; keys: string[] }>;
   /**
    * How to render this harness's onboarding doc from core/templates/onboarding.md.
    * null when the harness generates it elsewhere (codex, via emit) or ships none.

@@ -60,8 +60,10 @@ once). `/aidlc --doctor` fails its "workspace shell ready" check if it is missin
 Open `your-project/` in Kiro IDE. The install ships:
 
 - `.kiro/skills/aidlc/SKILL.md` — the conductor loaded when you invoke
-  `/aidlc`. The shipped `.kiro/settings/cli.json` and agent-v1 JSON files are
-  CLI-only compatibility surfaces; they do not select an IDE default agent.
+  `/aidlc`. The conductor also ships as `.kiro/agents/aidlc.md` so it appears in
+  the IDE agent selector. Every agent ships as Markdown (`.kiro/agents/*.md`);
+  the CLI's agent-v1 JSONs and `settings/cli.json` are not shipped here — those
+  are Kiro CLI surfaces the IDE does not read.
 - `.kiro/hooks/aidlc-*.json` — the framework hooks registered in the IDE's
   native v2 hook format. They appear in the IDE's Agent Hooks panel. (Kiro IDE
   1.x no longer executes the legacy `.kiro.hook` format the harness shipped
@@ -143,7 +145,7 @@ ways to enable it, either works:
 | Hook registration | `settings.json` `hooks` block | `.kiro/hooks/aidlc-*.json` v2 hook files (IDE >= 1.0) + `.kiro/hooks/aidlc-*.kiro.hook` legacy files (pre-1.0); both shipped, no double-firing |
 | Gates & questions | `AskUserQuestion` widget | Numbered prose options (reply with a number); the questions FILE with `[Answer]:` tags stays the source of truth |
 | Statusline | Current stage + model + context % | Not available — use `/aidlc --status` and the progress line at each gate |
-| Dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent) | `Task` tool | Kiro `subagent` tool → the agent configs (all 14 personas); the IDE reads a delegate's tool grants from the agent `.md` frontmatter (`tools:`), injected at packaging - the agent-v1 JSONs are CLI-only |
+| Dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent) | `Task` tool | Kiro `subagent` tool → the Markdown personas (all 14, `agents/*.md`); the IDE reads a delegate's tool grants from the agent `.md` frontmatter (`tools:`), injected at packaging |
 | Construction swarm | Parallel `Task` floor, optional ultracode Workflow | Subagent fan-out only; `AIDLC_USE_SWARM=1` is announced as a no-op |
 | Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` only on IDE 1.x (no genuine session-end trigger — `SESSION_ENDED` is recorded only by the legacy hook on pre-1.0 builds; no pre-compaction event) |
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped |
@@ -165,20 +167,25 @@ workflow.
 substituted to `.kiro` and the `rules/` → `steering/` rename). `bun
 scripts/package.ts --check` is the drift guard and runs in CI. The authored
 Kiro IDE surfaces live in `harness/kiro-ide/`: the orchestrator skill
-(`skills/aidlc/`), CLI-compatibility agent JSONs (`agents/`), the hook adapter
-and v2 hook JSON files (`hooks/`), CLI-only `settings/cli.json`, and
-`AGENTS.md` — edit those (or `core/`), never the generated `dist/kiro-ide`.
+(`skills/aidlc/`), the conductor `agents/aidlc.md` (the IDE selector entry), the
+hook adapter and hook manifests (`hooks/`), and `AGENTS.md` — edit those (or
+`core/`), never the generated `dist/kiro-ide`.
 
-The IDE harness differs from the CLI harness (`harness/kiro/`) in three ways:
-the `/aidlc` skill is its conductor rather than an agent selected through
-`settings/cli.json`; it ships v2 hook JSON files (the CLI relies on the
-agent-JSON `hooks` block, which the IDE ignores); and its manifest injects a
-`tools:` frontmatter grant into the delegation-target agent `.md` files
-(`frontmatterAdditions`), because the IDE resolves a delegated subagent's tools
-from the `.md` frontmatter rather than the agent-v1 JSON - without the grant an
-IDE delegate runs toolless. Note the frontmatter grant is unscoped (the IDE has
-no `allowedCommands`/`allowedPaths` equivalent there), wider than the CLI JSON
-sandbox.
+The IDE harness differs from the CLI harness (`harness/kiro/`) in three ways.
+First, agents ship as Markdown only: the manifest omits the CLI's agent-v1 JSONs
+and `settings/cli.json` (surfaces the IDE does not read), and the `/aidlc` skill
+is the conductor rather than an agent selected through `settings/cli.json` — the
+conductor still ships as `agents/aidlc.md` so it appears in the IDE selector.
+Second, it ships v2 hook JSON manifests (the CLI relies on the agent-JSON
+`hooks` block, which the IDE ignores). Third, its manifest injects a `tools:`
+frontmatter grant and a `permissions.rules` block into the delegation-target
+agent `.md` files (`frontmatterAdditions`) and drops the CLI-only
+`disallowedTools` field (`frontmatterRemovals`), because the IDE resolves a
+delegated subagent's tools from the `.md` frontmatter rather than the agent-v1
+JSON — without the grant an IDE delegate runs toolless. The IDE has no
+`allowedCommands`/`allowedPaths` equivalent for a delegate; its scoping rides
+the 1.0 `permissions.rules` capability/effect/match model instead, which is what
+the injected block carries.
 See [Porting to a New Harness](../../harness-engineering/09-porting-to-a-new-harness.md).
 
 ## Next steps

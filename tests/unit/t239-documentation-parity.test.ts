@@ -246,18 +246,19 @@ describe("documentation parity derives current behavior from authored implementa
 
     expect(ideCell("Agent personas")).toContain("`tools:` grants");
     expect(ideCell("Agent personas")).not.toContain("agent configs");
-    expect(ideCell("Standing rules")).toContain("resources glob");
-    expect(ideCell("Standing rules")).not.toContain("`rules_in_context`");
+    expect(ideCell("Standing rules")).toContain("workspace shell");
+    expect(ideCell("Standing rules")).not.toContain("resources glob");
     expect(ideCell("Permissions / config")).toContain("`tools:` frontmatter");
     expect(ideCell("Permissions / config")).not.toContain("settings/cli.json");
 
-    const ideAgent = JSON.parse(
-      read("harness", "kiro-ide", "agents", "aidlc.json"),
-    ) as { resources?: string[] };
-    expect(ideAgent.resources).toContain("file://aidlc/spaces/default/memory/**/*.md");
-    const includesSource = read("core", "tools", "aidlc-includes.ts");
-    expect(includesSource).toContain('if (harness === ".kiro")');
-    expect(includesSource).toContain("repointKiroAgentResources");
+    // The IDE conductor ships as authored Markdown (the CLI's aidlc.json is not
+    // read by the IDE). It carries no `resources:` glob — standing rules reach
+    // the workflow from the seeded workspace shell the IDE reads directly, not
+    // from an agent-embedded memory glob the way the Kiro CLI harness does.
+    const ideConductor = read("harness", "kiro-ide", "agents", "aidlc.md");
+    expect(ideConductor).toContain("name: aidlc");
+    expect(ideConductor).not.toMatch(/^resources:/m);
+    expect(existsSync(at("harness", "kiro-ide", "agents", "aidlc.json"))).toBe(false);
   });
 
   test("documented agent roster matches agent files and reviewer frontmatter", () => {

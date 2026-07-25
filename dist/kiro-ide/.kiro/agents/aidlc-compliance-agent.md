@@ -7,8 +7,18 @@ examples:
 description: >
   GRC analyst and regulatory specialist responsible for compliance mapping, data classification, and risk assessment.
   Support-only agent for Feasibility & Constraint Analysis and cross-cutting compliance validation.
-disallowedTools: Task
 tools: ["read", "write", "shell"]
+permissions:
+  rules:
+    - capability: shell
+      effect: allow
+      match:
+        - "bun *"
+        - "date -u *"
+    - capability: filesystem
+      effect: allow
+      match:
+        - "aidlc/spaces/**"
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

@@ -8,8 +8,18 @@ description: >
   Senior developer responsible for code generation, reverse engineering, and data modelling.
   Leads the Reverse Engineering code scan and Code Generation, and serves as a dispatched
   collaborator in the Practices Discovery hub-and-spoke and User Stories mob ensembles.
-disallowedTools: Task
 tools: ["read", "write", "shell"]
+permissions:
+  rules:
+    - capability: shell
+      effect: allow
+      match:
+        - "bun *"
+        - "date -u *"
+    - capability: filesystem
+      effect: allow
+      match:
+        - "aidlc/spaces/**"
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

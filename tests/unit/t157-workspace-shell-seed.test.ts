@@ -136,6 +136,16 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         const config = readFileSync(join(harness.engineRoot, "config.toml"), "utf-8");
         expect(config).toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
         expect(existsSync(harness.onboardingDist)).toBe(true);
+      } else if (harness.capabilities.memoryInclude === "kiro-ide-workspace") {
+        // Kiro IDE ships no agent JSON `resources:` surface — the conductor is
+        // an authored agents/aidlc.md and memory reaches the workflow via the
+        // workspace shell the IDE reads directly. The native include is the
+        // seeded memory tree itself, alongside the AGENTS.md rules file.
+        expect(
+          existsSync(join(harness.distRoot, "aidlc", "spaces", "default", "memory", "org.md")),
+          harness.name,
+        ).toBe(true);
+        expect(existsSync(harness.onboardingDist)).toBe(true);
       } else {
         // opencode: the instructions glob in the project-root opencode.json is
         // the native include surface; AGENTS.md is the auto-read rules file.

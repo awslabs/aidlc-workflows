@@ -197,30 +197,29 @@ describe("t-active-space-includes: Kiro IDE resources follow the active space", 
     process.env.AIDLC_HARNESS_DIR = ".kiro";
   });
 
-  test("re-points every IDE agent JSON memory glob while preserving the remaining config", () => {
+  test("re-point is a no-op on Kiro IDE — no agent JSON resources glob to follow (#555 §1)", () => {
+    // The Kiro IDE ships no agent JSON: the conductor is an authored aidlc.md
+    // (no `resources:` glob) and memory reaches the workflow via the workspace
+    // shell the IDE reads directly, keyed by the aidlc/active-space cursor. So
+    // there is no per-space include to rewrite — repointHarnessIncludes finds
+    // no agents/*.json and returns an empty write list, leaving the authored
+    // .md surfaces byte-identical.
     const root = freshRoot();
     seedSpaces(root);
     const agentsSrc = distSurface("kiro-ide", ".kiro", "agents");
     const agentsDst = join(root, ".kiro", "agents");
     mkdirSync(agentsDst, { recursive: true });
-    const agentFiles = readdirSync(agentsSrc).filter((name) => name.endsWith(".json")).sort();
+    const agentFiles = readdirSync(agentsSrc).sort();
     for (const name of agentFiles) cpSync(join(agentsSrc, name), join(agentsDst, name));
+    // The IDE tree ships zero agent JSON (§1).
+    expect(agentFiles.filter((n) => n.endsWith(".json"))).toHaveLength(0);
 
-    const conductorPath = join(agentsDst, "aidlc.json");
-    const before = JSON.parse(readFileSync(conductorPath, "utf-8")) as {
-      resources: string[];
-      [key: string]: unknown;
-    };
+    const conductorMd = join(agentsDst, "aidlc.md");
+    const before = readFileSync(conductorMd, "utf-8");
     const written = repointHarnessIncludes(root, "teamB");
-    expect(written).toHaveLength(agentFiles.length);
-
-    const after = JSON.parse(readFileSync(conductorPath, "utf-8")) as {
-      resources: string[];
-      [key: string]: unknown;
-    };
-    expect(after.resources).toContain("file://aidlc/spaces/teamB/memory/**/*.md");
-    expect(after.resources.some((resource) => resource.includes("/default/memory/"))).toBe(false);
-    expect({ ...after, resources: before.resources }).toEqual(before);
+    expect(written).toHaveLength(0);
+    // The authored conductor .md is untouched by a space switch.
+    expect(readFileSync(conductorMd, "utf-8")).toBe(before);
   });
 });
 

@@ -3,8 +3,18 @@ name: aidlc-architecture-reviewer-agent
 display_name: Architecture Reviewer
 description: >
   Senior solutions architect who reviews technical design artifacts for soundness, implementability, and coherence. Finds broken cross-references, hidden dependencies, unachievable quality targets, and designs that won't survive contact with reality.
-disallowedTools: Task
 tools: ["read", "write", "shell"]
+permissions:
+  rules:
+    - capability: shell
+      effect: allow
+      match:
+        - "bun *"
+        - "date -u *"
+    - capability: filesystem
+      effect: allow
+      match:
+        - "aidlc/spaces/**"
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated reviewer and must not spawn sub-agents.**

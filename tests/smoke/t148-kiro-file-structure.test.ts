@@ -136,42 +136,45 @@ describe("t148 dist/kiro file structure", () => {
     ).toBe(true);
   });
 
-  test("every dispatched graph writer has a space-scoped write grant on Kiro CLI and IDE", () => {
-    for (const harness of ["kiro", "kiro-ide"] as const) {
-      const agentsDir = join(REPO_ROOT, "dist", harness, ".kiro", "agents");
-      const writers = dispatchedSpaceWriters(harness);
-      expect(writers.length).toBeGreaterThan(0);
-      for (const agent of writers) {
-        const config = readJson(join(agentsDir, `${agent}.json`));
-        expect(config.tools as string[]).toContain("fs_write");
-        const settings = config.toolsSettings as Record<string, { allowedPaths?: string[] }>;
-        expect(settings.fs_write?.allowedPaths).toContain("aidlc/spaces/**");
-      }
+  test("every dispatched graph writer has a space-scoped write grant on Kiro CLI (JSON) and IDE (md permissions)", () => {
+    // Kiro CLI expresses the write grant in the agent-v1 JSON (tools +
+    // toolsSettings.allowedPaths); Kiro IDE expresses it in the agent .md
+    // frontmatter (tools: + permissions.rules), since the IDE ships no agent
+    // JSON. Both must scope every dispatched writer to aidlc/spaces/**.
+    const cliDir = join(REPO_ROOT, "dist", "kiro", ".kiro", "agents");
+    const cliWriters = dispatchedSpaceWriters("kiro");
+    expect(cliWriters.length).toBeGreaterThan(0);
+    for (const agent of cliWriters) {
+      const config = readJson(join(cliDir, `${agent}.json`));
+      expect(config.tools as string[]).toContain("fs_write");
+      const settings = config.toolsSettings as Record<string, { allowedPaths?: string[] }>;
+      expect(settings.fs_write?.allowedPaths).toContain("aidlc/spaces/**");
+    }
+    const ideDir = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "agents");
+    const ideWriters = dispatchedSpaceWriters("kiro-ide");
+    expect(ideWriters.length).toBeGreaterThan(0);
+    for (const agent of ideWriters) {
+      const md = readFileSync(join(ideDir, `${agent}.md`), "utf-8");
+      const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(md)?.[1] ?? "";
+      // tools: grants write; permissions.rules scopes filesystem to the space
+      // (the composer additionally reaches the scope grid, so match the shared
+      // space path every writer carries).
+      expect(fm).toContain(`"write"`);
+      expect(fm).toContain(`"aidlc/spaces/**"`);
     }
   });
 
-  test("shared Kiro CLI and IDE agent JSON sources remain byte-identical", () => {
-    const cliDir = join(REPO_ROOT, "harness", "kiro", "agents");
-    const ideDir = join(REPO_ROOT, "harness", "kiro-ide", "agents");
-    const intentionalReviewerDifferences = new Set([
-      "aidlc-architecture-reviewer-agent.json",
-      "aidlc-product-lead-agent.json",
-    ]);
-    const shared = readdirSync(cliDir)
-      .filter((name) => name.endsWith("-agent.json"))
-      .filter((name) => !intentionalReviewerDifferences.has(name))
-      .sort();
-    expect(
-      readdirSync(ideDir)
-        .filter((name) => name.endsWith("-agent.json"))
-        .filter((name) => !intentionalReviewerDifferences.has(name))
-        .sort(),
-    ).toEqual(shared);
-    for (const name of shared) {
-      expect(readFileSync(join(ideDir, name), "utf-8")).toBe(
-        readFileSync(join(cliDir, name), "utf-8"),
-      );
-    }
+  test("Kiro IDE ships NO agent JSON — agents resolve from Markdown only (#555 §1)", () => {
+    // The IDE reads agents from .md frontmatter, not the CLI's agent-v1 JSON.
+    // The kiro-ide tree therefore ships zero agent .json (persona or conductor);
+    // the CLI tree keeps its full JSON roster. This is the §1 shape.
+    const ideDir = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "agents");
+    expect(readdirSync(ideDir).filter((n) => n.endsWith(".json"))).toEqual([]);
+    // The conductor ships as an authored aidlc.md (IDE selector entry).
+    expect(existsSync(join(ideDir, "aidlc.md"))).toBe(true);
+    // The CLI tree is unaffected — its JSON roster still ships.
+    const cliDir = join(REPO_ROOT, "dist", "kiro", ".kiro", "agents");
+    expect(readdirSync(cliDir).filter((n) => n.endsWith(".json")).length).toBeGreaterThanOrEqual(14);
   });
 
   test("IDE-native tools: frontmatter grant on delegation targets - kiro-ide ONLY", () => {
@@ -183,34 +186,36 @@ describe("t148 dist/kiro file structure", () => {
     // agents (on Claude a `tools:` frontmatter field would RESTRICT the
     // agent to non-Claude tool names, breaking it).
     const IDE_AGENTS = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "agents");
+    // The IDE tree ships no agent JSON, so derive the delegation-target roster
+    // from the CLI (kiro) JSONs — the same hand-authored set (minus the
+    // conductor aidlc.json). A future delegate added without an IDE grant reds
+    // here instead of shipping toolless (the original field bug).
+    const CLI_AGENTS = join(REPO_ROOT, "dist", "kiro", ".kiro", "agents");
+    const fmBlockOf = (p: string): string =>
+      /^---\r?\n([\s\S]*?)\r?\n---/.exec(readFileSync(p, "utf-8"))?.[1] ?? "";
     const fmToolsOf = (p: string): string | undefined =>
-      /^tools:\s*(.+)$/m.exec(
-        /^---\r?\n([\s\S]*?)\r?\n---/.exec(readFileSync(p, "utf-8"))?.[1] ?? "",
-      )?.[1];
-    // The delegation-target roster IS the set of hand-authored agent JSONs
-    // (minus the conductor aidlc.json) - derive it from disk so a future
-    // delegate added without a grant reds here instead of shipping toolless
-    // (the original field bug). Every delegate carries fs_write in its CLI
-    // JSON (builders author artifacts; reviewers append `## Review` per 12a;
-    // ensemble collaborators (2.5.0) write their own contribution files per
-    // stage-protocol §11 - everyone writes, the lead owns the produces[]
-    // artifacts), so every delegate's IDE grant is read+write+shell. The
-    // grant is still DERIVED from the CLI JSON rather than hardcoded, so a
-    // future read-only delegate stays expressible. Every NON-delegate
-    // kiro-ide agent must have NO grant (catches the injection landing on
-    // the wrong file).
-    const delegates = readdirSync(IDE_AGENTS)
+      /^tools:\s*(.+)$/m.exec(fmBlockOf(p))?.[1];
+    const delegates = readdirSync(CLI_AGENTS)
       .filter((n) => n.endsWith("-agent.json"))
       .map((n) => n.replace(/\.json$/, ".md"));
     expect(delegates.length).toBeGreaterThanOrEqual(14);
     for (const f of readdirSync(IDE_AGENTS).filter((n) => n.endsWith(".md"))) {
       if (delegates.includes(f)) {
-        const cliJson = readJson(join(IDE_AGENTS, f.replace(/\.md$/, ".json")));
+        // Every delegate carries fs_write in its CLI JSON (builders author
+        // artifacts; reviewers append `## Review` per 12a; ensemble
+        // collaborators write their own contribution files per §11), so every
+        // delegate's IDE grant is read+write+shell PLUS a permissions.rules
+        // block scoping filesystem to the space it writes.
+        const cliJson = readJson(join(CLI_AGENTS, f.replace(/\.md$/, ".json")));
         const writes = ((cliJson.tools as string[]) ?? []).includes("fs_write");
-        expect(fmToolsOf(join(IDE_AGENTS, f))).toBe(
-          writes ? `["read", "write", "shell"]` : `["read", "shell"]`,
-        );
+        expect(writes, `${f}: expected a writing delegate`).toBe(true);
+        expect(fmToolsOf(join(IDE_AGENTS, f))).toBe(`["read", "write", "shell"]`);
+        expect(fmBlockOf(join(IDE_AGENTS, f))).toContain("permissions:");
       } else {
+        // The conductor aidlc.md carries its own authored grant; every OTHER
+        // non-delegate kiro-ide agent must have NO injected grant (catches the
+        // injection landing on the wrong file).
+        if (f === "aidlc.md") continue;
         expect(fmToolsOf(join(IDE_AGENTS, f))).toBeUndefined();
       }
     }

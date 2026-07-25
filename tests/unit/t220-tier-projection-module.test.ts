@@ -337,7 +337,9 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
   });
 
   test("kiro cli.json modelDefaults: authored conditional entries only, no tier-derived pins", () => {
-    for (const harness of ["kiro", "kiro-ide"]) {
+    // settings/cli.json is a Kiro CLI activation surface; the Kiro IDE ships no
+    // cli.json (it activates via the agent selector), so only the CLI tree here.
+    for (const harness of ["kiro"]) {
       const s = JSON.parse(
         readFileSync(dist(harness, ".kiro", "settings", "cli.json"), "utf-8"),
       ) as Record<string, Record<string, { output_config?: { effort?: string } }>>;

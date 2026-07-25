@@ -3926,7 +3926,14 @@ export function loadAgents(): AgentMetadata[] {
     const dir = agentsDir();
     const slugToFile = new Map<string, string>();
     const agents: AgentMetadata[] = [];
-    const files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+    // aidlc.md is the conductor MAIN (IDE custom-agent selector entry), not a
+    // stage lead/support agent — it carries no name/display_name/examples and
+    // must not enter the domain-agent roster (it would fail schema validation
+    // and pollute knownAgents used for stage lead_agent checks). Exclude it.
+    // No-op for harnesses that ship no aidlc.md (every tree but the Kiro IDE).
+    const files = readdirSync(dir)
+      .filter((f) => f.endsWith(".md") && f !== "aidlc.md")
+      .sort();
     for (const f of files) {
       const filePath = join(dir, f);
       const agent = parseAgentFrontmatter(filePath);

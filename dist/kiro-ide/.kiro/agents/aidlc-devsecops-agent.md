@@ -8,8 +8,18 @@ description: >
   Security engineer and DevSecOps specialist responsible for threat modelling, security requirements, secure design review,
   and security pipeline integration. Supports NFR Requirements, Infrastructure Design, Build and Test, and Environment
   Provisioning, and serves as a dispatched collaborator in the Practices Discovery hub-and-spoke ensemble.
-disallowedTools: Task
 tools: ["read", "write", "shell"]
+permissions:
+  rules:
+    - capability: shell
+      effect: allow
+      match:
+        - "bun *"
+        - "date -u *"
+    - capability: filesystem
+      effect: allow
+      match:
+        - "aidlc/spaces/**"
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

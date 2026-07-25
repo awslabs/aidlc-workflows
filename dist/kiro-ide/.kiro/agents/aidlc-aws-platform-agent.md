@@ -8,8 +8,18 @@ description: >
   AWS solutions architect responsible for infrastructure design, environment provisioning, and cloud-native architecture.
   Leads Infrastructure Design and Environment Provisioning stages.
   Supports Feasibility, Application Design, NFR Design, and Feedback & Optimization.
-disallowedTools: Task
 tools: ["read", "write", "shell"]
+permissions:
+  rules:
+    - capability: shell
+      effect: allow
+      match:
+        - "bun *"
+        - "date -u *"
+    - capability: filesystem
+      effect: allow
+      match:
+        - "aidlc/spaces/**"
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**

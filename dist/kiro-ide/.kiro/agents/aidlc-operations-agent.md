@@ -8,8 +8,18 @@ description: >
   SRE and reliability engineer responsible for observability, incident response, and operational optimization.
   Leads Observability Setup, Incident Response, and Feedback & Optimization stages.
   Supports Performance Validation.
-disallowedTools: Task
 tools: ["read", "write", "shell"]
+permissions:
+  rules:
+    - capability: shell
+      effect: allow
+      match:
+        - "bun *"
+        - "date -u *"
+    - capability: filesystem
+      effect: allow
+      match:
+        - "aidlc/spaces/**"
 ---
 
 **IMPORTANT: Do NOT use the Task tool. You operate as a delegated agent and must not spawn sub-agents.**
