@@ -9,7 +9,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 - **Model/provider**: the shipped `opencode.json` pins no model — your global opencode configuration (`~/.config/opencode/opencode.json`) supplies the default. Tiered personas pin `amazon-bedrock/global.anthropic.claude-sonnet-4-6`; override per agent under `agent:` in the project `opencode.json` if your provider differs.
 - **Permissions**: the shipped project `opencode.json` pre-approves ONLY single invocations of the tool and hook entrypoints embedded at package time; the adapter rejects unshipped filenames, chaining, redirection, expansion, and command substitution. Edits under `.aidlc/tools/` and `.aidlc/hooks/` prompt. Every other bash command prompts. There is no blanket shell trust. In `opencode run` non-interactive sessions, pass `--auto` only if you accept auto-approval of the remaining prompts; prefer interactive sessions for gated workflows.
 - **Locking**: Audit log file locking is handled portably using mkdir-based locking in the system temp directory (no external dependencies).
-- **Hook permissions**: All 13 hooks are TypeScript (`.ts`) and run via `bun`. No executable bits required — works identically on macOS, Linux, and native Windows PowerShell.
+- **Hook permissions**: All 14 hooks are TypeScript (`.ts`) and run via `bun`. No executable bits required — works identically on macOS, Linux, and native Windows PowerShell.
 
 ## AI-DLC Structure
 

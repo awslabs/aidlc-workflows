@@ -12,7 +12,8 @@
 //   ------------------------------------------------------------------------
 //   chat.message (first per session)     → aidlc-session-start.ts  (SessionStart)
 //   chat.message (every human turn)      → aidlc-mint-presence.ts  (UserPromptSubmit)
-//   tool.execute.before                  → entrypoint boundary + aidlc-reviewer-scope.ts (PreToolUse)
+//   tool.execute.before task             → aidlc-dispatch-rules.ts (PreToolUse rewrite)
+//   tool.execute.before other tools      → entrypoint boundary + aidlc-reviewer-scope.ts (PreToolUse)
 //   tool.execute.after write|edit|patch  → aidlc-audit-logger.ts + aidlc-sensor-fire.ts (PostToolUse Write|Edit)
 //   tool.execute.after bash              → aidlc-runtime-compile.ts (PostToolUse Bash)
 //   tool.execute.after todowrite         → aidlc-sync-statusline.ts (PostToolUse TaskUpdate)
@@ -119,6 +120,7 @@ const AIDLC_ENTRYPOINT = /^\.aidlc\/(tools|hooks)\/([A-Za-z0-9][A-Za-z0-9._-]*\.
 const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
   /* @aidlc-shipped-entrypoints@ */ [
     "hooks/aidlc-audit-logger.ts",
+    "hooks/aidlc-dispatch-rules.ts",
     "hooks/aidlc-log-subagent.ts",
     "hooks/aidlc-mint-presence.ts",
     "hooks/aidlc-reviewer-scope.ts",
@@ -155,6 +157,7 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
     "tools/aidlc-sensor.ts",
     "tools/aidlc-stage-schema.ts",
     "tools/aidlc-state.ts",
+    "tools/aidlc-steering.ts",
     "tools/aidlc-swarm.ts",
     "tools/aidlc-tiers.ts",
     "tools/aidlc-utility.ts",
@@ -403,6 +406,40 @@ export default async ({
       output: { args: Record<string, unknown> },
     ) => {
       const args = output.args ?? {};
+      if (input.tool === "task") {
+        const dispatch = await runCore(
+          "aidlc-dispatch-rules.ts",
+          {
+            hook_event_name: "PreToolUse",
+            tool_name: "task",
+            tool_input: args,
+            cwd: directory,
+          },
+          directory,
+        );
+        if (dispatch.code === 2) {
+          throw new Error(
+            dispatch.stderr.trim() ||
+              "required active-stage rules could not be loaded for subagent dispatch",
+          );
+        }
+        if (dispatch.stdout.trim()) {
+          try {
+            const parsed = JSON.parse(dispatch.stdout) as {
+              hookSpecificOutput?: {
+                updatedInput?: Record<string, unknown>;
+              };
+            };
+            if (parsed.hookSpecificOutput?.updatedInput) {
+              output.args = parsed.hookSpecificOutput.updatedInput;
+            }
+          } catch {
+            throw new Error(
+              "AIDLC dispatch-rules hook returned invalid rewrite output",
+            );
+          }
+        }
+      }
       if (input.tool === "bash") {
         const command = (args.command as string) ?? "";
         const violation = aidlcBashBoundaryViolation(command, aidlcEntrypoints);

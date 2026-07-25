@@ -25,6 +25,15 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bun .codex/hooks/aidlc-codex-adapter.ts dispatch-rules"
+          }
+        ],
+        "matcher": "spawn_agent"
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "bun .codex/hooks/aidlc-codex-adapter.ts state-transition-guard"
           }
         ]

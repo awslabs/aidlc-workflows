@@ -41,6 +41,7 @@
 // where <target> ∈ session-start | audit-and-sensors | state-sync |
 //                  runtime-compile | validate-state | log-subagent | stop |
 //                  mint | state-transition-guard | reviewer-scope
+//                  | dispatch-rules
 
 import { createHash } from "node:crypto";
 import {
@@ -449,6 +450,21 @@ switch (target) {
       }
     }
     persistResponse("", 0);
+    return 0;
+  }
+
+  case "dispatch-rules": {
+    // Codex 0.145 consumes the same PreToolUse hookSpecificOutput.updatedInput
+    // contract as Claude. The core hook recognizes spawn_agent and appends the
+    // exact active-stage bundle to message/items without adapter re-shaping.
+    const r = runCoreWithStderr("aidlc-dispatch-rules.ts", rawInput);
+    const answeredCode = r.code === 2 ? 2 : 0;
+    persistResponse(r.stdout, answeredCode, r.stderr);
+    if (r.stdout) process.stdout.write(r.stdout);
+    if (r.code === 2) {
+      process.stderr.write(r.stderr);
+      return 2;
+    }
     return 0;
   }
 

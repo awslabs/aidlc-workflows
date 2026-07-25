@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue, hook:aidlc-dispatch-rules
 //
 // Deterministic stage-rule delivery. Rules cross the engine boundary through
 // bounded load-steering directives before run-stage; optional persona/knowledge
@@ -18,12 +18,19 @@ import {
 import { join } from "node:path";
 import {
   cleanupTestProject,
+  REPO_ROOT,
   seededStateFile,
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
+import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
+import { resolveCapturedToolInput } from "../harness/sdk-drive.ts";
 
 const BUN = process.execPath;
 const MAX_DIRECTIVE_BYTES = 28 * 1024;
+const REVIEWER_AGENTS = [
+  "aidlc-architecture-reviewer-agent",
+  "aidlc-product-lead-agent",
+] as const;
 
 type RuleContent = { path: string; text: string };
 type WireDirective = {
@@ -38,6 +45,14 @@ type WireDirective = {
   inline_context_paths?: string[];
   context_warnings?: string[];
   message?: string;
+};
+
+type HookRewrite = {
+  hookSpecificOutput?: {
+    permissionDecision?: string;
+    permissionDecisionReason?: string;
+    updatedInput?: Record<string, unknown>;
+  };
 };
 
 const projects: string[] = [];
@@ -106,6 +121,46 @@ function reconstructed(contents: RuleContent[], path: string): string {
     .filter((entry) => entry.path === path)
     .map((entry) => entry.text)
     .join("");
+}
+
+function runDispatchHook(
+  proj: string,
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): { code: number; stdout: string; stderr: string } {
+  const result = spawnSync(
+    BUN,
+    [join(proj, ".claude", "hooks", "aidlc-dispatch-rules.ts")],
+    {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: toolName,
+        tool_input: toolInput,
+        cwd: proj,
+      }),
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+    },
+  );
+  return {
+    code: result.status ?? -1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
+}
+
+function reviewerExecutionSurface(
+  harness: (typeof HARNESS_MATRIX)[number],
+  reviewer: (typeof REVIEWER_AGENTS)[number],
+): string {
+  if (harness.name === "codex") {
+    return join(harness.engineRoot, "agents", `${reviewer}.toml`);
+  }
+  if (harness.name === "opencode") {
+    return join(harness.distRoot, ".opencode", "agents", `${reviewer}.md`);
+  }
+  return join(harness.engineRoot, "agents", `${reviewer}.md`);
 }
 
 describe("t248 deterministic steering delivery", () => {
@@ -371,6 +426,31 @@ describe("t248 deterministic steering delivery", () => {
     ).toBe(true);
   });
 
+  test("readable optional knowledge is listed for inline loading", () => {
+    const proj = project();
+    const knowledgeDir = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "knowledge",
+      "aidlc-product-agent",
+    );
+    mkdirSync(knowledgeDir, { recursive: true });
+    writeFileSync(
+      join(knowledgeDir, "delivery-evidence.md"),
+      "# Delivery Evidence\n\nA readable knowledge file.\n",
+      "utf-8",
+    );
+
+    const result = drive(proj);
+    const rel =
+      "aidlc/spaces/default/knowledge/aidlc-product-agent/delivery-evidence.md";
+    expect(result.final.kind).toBe("run-stage");
+    expect(result.final.inline_context_paths).toContain(rel);
+    expect(result.final.context_warnings?.join("\n") ?? "").not.toContain(rel);
+  });
+
   test("unreadable optional knowledge warns and is omitted without blocking", () => {
     const proj = project();
     const knowledgeDir = join(
@@ -446,4 +526,116 @@ describe("t248 deterministic steering delivery", () => {
       "additional optional persona/knowledge warning(s)",
     );
   });
+
+  test("Claude dispatch rewrites carry exact rules once", () => {
+    const proj = project();
+    const original = {
+      subagent_type: "aidlc-product-agent",
+      prompt:
+        "Run .claude/aidlc-common/stages/inception/user-stories.md and write the requested contribution.",
+    };
+    const first = runDispatchHook(proj, "Task", original);
+    expect(first.code, first.stderr).toBe(0);
+
+    const output = JSON.parse(first.stdout) as HookRewrite;
+    expect(output.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    expect(output.hookSpecificOutput?.permissionDecisionReason).toBeUndefined();
+    const updated = output.hookSpecificOutput?.updatedInput;
+    const prompt = String(updated?.prompt ?? "");
+    const org = readFileSync(
+      join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+      "utf-8",
+    );
+    const inception = readFileSync(
+      join(
+        proj,
+        "aidlc",
+        "spaces",
+        "default",
+        "memory",
+        "phases",
+        "inception.md",
+      ),
+      "utf-8",
+    );
+
+    expect(prompt).toContain(org);
+    expect(prompt).toContain(inception);
+    expect(prompt).toContain("first-class");
+    expect(prompt).toContain("Given/When/Then");
+    expect(prompt.match(/AIDLC_DISPATCH_RULES_BEGIN/g)?.length).toBe(1);
+
+    const second = runDispatchHook(proj, "Task", updated ?? {});
+    expect(second.code, second.stderr).toBe(0);
+    expect(second.stdout).toBe("");
+  });
+
+  test("Codex item rewrites preserve existing items and append the exact bundle", () => {
+    const proj = project();
+    const original = {
+      agent_type: "aidlc-product-agent",
+      items: [
+        {
+          type: "text",
+          text:
+            "Run .codex/aidlc-common/stages/inception/user-stories.md.",
+        },
+      ],
+    };
+    const result = runDispatchHook(proj, "spawn_agent", original);
+    expect(result.code, result.stderr).toBe(0);
+
+    const output = JSON.parse(result.stdout) as HookRewrite;
+    const items = output.hookSpecificOutput?.updatedInput?.items;
+    expect(Array.isArray(items)).toBe(true);
+    expect((items as unknown[])[0]).toEqual(original.items[0]);
+    const suffix = String(
+      (items as Array<{ text?: string }>)[1]?.text ?? "",
+    );
+    expect(suffix).toContain("first-class");
+    expect(suffix).toContain("Given/When/Then");
+  });
+
+  test("SDK capture prefers the Agent prompt executed after hook rewriting", () => {
+    const proposed = {
+      subagent_type: "aidlc-developer-agent",
+      prompt: "Review the user stories using Given/When/Then.",
+    };
+    const executedPrompt =
+      `${proposed.prompt}\n\nAIDLC_DISPATCH_RULES_BEGIN\n` +
+      "Tests are a first-class deliverable.";
+
+    expect(
+      resolveCapturedToolInput(
+        "Agent",
+        proposed,
+        undefined,
+        { agentType: proposed.subagent_type, prompt: executedPrompt },
+      ),
+    ).toEqual({ ...proposed, prompt: executedPrompt });
+  });
+});
+
+describe("t248 reviewer knowledge absorption", () => {
+  for (const harness of HARNESS_MATRIX) {
+    test(`${harness.name} embeds each reviewer checklist in its execution surface`, () => {
+      for (const reviewer of REVIEWER_AGENTS) {
+        const sourcePath = join(
+          REPO_ROOT,
+          "core",
+          "knowledge",
+          reviewer,
+          "reviewing.md",
+        );
+        const source = readFileSync(sourcePath, "utf-8").trim();
+        const surfacePath = reviewerExecutionSurface(harness, reviewer);
+        const surface = readFileSync(surfacePath, "utf-8");
+
+        expect(surface).toContain(
+          `Absorbed at build time from knowledge/${reviewer}/reviewing.md`,
+        );
+        expect(surface).toContain(source);
+      }
+    });
+  }
 });

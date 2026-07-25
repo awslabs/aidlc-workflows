@@ -19,7 +19,7 @@
 // of the same name would fail. existsSync alone would pass on a dir, so this
 // twin is equal-or-stronger by pinning .isFile().
 //
-// Source under test: the 10 framework hooks shipped under
+// Source under test: the framework hooks shipped under
 // dist/claude/.claude/hooks/ (all .ts, run via bun — no executable bit needed,
 // per the .sh's own subject line). The expected set matches the hooks the
 // project CLAUDE.md and t01-file-structure.sh:20-29 enumerate.
@@ -59,6 +59,8 @@ const HOOKS = [
   "aidlc-stop.ts",
   // Records a HUMAN_TURN on UserPromptSubmit.
   "aidlc-mint-presence.ts",
+  // Attaches exact active-stage rules at the subagent dispatch boundary.
+  "aidlc-dispatch-rules.ts",
   // Blocks direct lifecycle mutations that bypass orchestrate report.
   "aidlc-state-transition-guard.ts",
   // Enforces the per-unit reviewer read-scope bound on PreToolUse.

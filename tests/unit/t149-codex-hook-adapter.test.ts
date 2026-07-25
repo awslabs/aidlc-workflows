@@ -237,6 +237,39 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("2b: spawn_agent dispatch carries the exact active-stage rule bundle", () => {
+    const dir = scratchProject(true);
+    try {
+      cpSync(
+        join(REPO_ROOT, "dist", "codex", "aidlc"),
+        join(dir, "aidlc"),
+        { recursive: true },
+      );
+      const r = runAdapter(dir, "dispatch-rules", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "spawn_agent",
+        tool_input: {
+          agent_type: "aidlc-product-agent",
+          message:
+            "Run .codex/aidlc-common/stages/inception/user-stories.md.",
+        },
+      });
+      expect(r.code, r.stderr).toBe(0);
+      const out = JSON.parse(r.stdout) as {
+        hookSpecificOutput?: {
+          updatedInput?: { message?: string };
+        };
+      };
+      const message = out.hookSpecificOutput?.updatedInput?.message ?? "";
+      expect(message).toContain("first-class");
+      expect(message).toContain("Given/When/Then");
+      expect(message).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("3: session-start emits the Codex hookSpecificOutput wrapper with workflow context", () => {
     const dir = scratchProject(true);
     try {
@@ -492,7 +525,14 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   test("12: malformed stdin fails open (exit 0, no output) on every target", () => {
     const dir = scratchProject(true);
     try {
-      for (const t of ["stop", "session-start", "audit-and-sensors", "state-sync", "log-subagent"]) {
+      for (const t of [
+        "stop",
+        "session-start",
+        "audit-and-sensors",
+        "state-sync",
+        "log-subagent",
+        "dispatch-rules",
+      ]) {
         const r = runAdapter(dir, t, "{not json");
         expect(r.code).toBe(0);
         expect(r.stdout.trim()).toBe("");

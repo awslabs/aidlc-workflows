@@ -234,6 +234,70 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  test("5b: subagent dispatch blocks incomplete rules and accepts exact rules", () => {
+    const dir = scratchProject(true);
+    try {
+      cpSync(
+        join(REPO_ROOT, "dist", "kiro", "aidlc"),
+        join(dir, "aidlc"),
+        { recursive: true },
+      );
+      const basePrompt =
+        "Run .kiro/aidlc-common/stages/inception/user-stories.md.";
+      const payload = (promptTemplate: string) => ({
+        cwd: dir,
+        tool_name: "subagent",
+        tool_input: {
+          mode: "blocking",
+          task: "Draft the user stories contribution.",
+          stages: [
+            {
+              name: "product",
+              role: "aidlc-product-agent",
+              prompt_template: promptTemplate,
+            },
+          ],
+        },
+      });
+
+      const incomplete = runAdapter(
+        dir,
+        "dispatch-rules",
+        payload(basePrompt),
+      );
+      expect(incomplete.code).toBe(2);
+      expect(incomplete.stderr).toContain(
+        "omitted required active-stage rule content",
+      );
+
+      const org = readFileSync(
+        join(dir, "aidlc", "spaces", "default", "memory", "org.md"),
+        "utf-8",
+      );
+      const inception = readFileSync(
+        join(
+          dir,
+          "aidlc",
+          "spaces",
+          "default",
+          "memory",
+          "phases",
+          "inception.md",
+        ),
+        "utf-8",
+      );
+      const complete = runAdapter(
+        dir,
+        "dispatch-rules",
+        payload(`${basePrompt}\n\n${org}\n\n${inception}`),
+      );
+      expect(complete.code, complete.stderr).toBe(0);
+      expect(complete.stdout).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("6: log-subagent emits SUBAGENT_COMPLETED to the audit", () => {
     const dir = scratchProject(true);
     try {
@@ -336,6 +400,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         "audit-and-sensors",
         "runtime-compile",
         "log-subagent",
+        "dispatch-rules",
       ]) {
         const r = runAdapter(dir, target, "{not json");
         expect(`${target}:${r.code}`).toBe(`${target}:0`);

@@ -28,6 +28,7 @@
 // where <target> ∈ session-start | audit-and-sensors | runtime-compile |
 //                  state-sync | log-subagent | stop | verb-intercept |
 //                  pretool-block | state-transition-guard | reviewer-scope
+//                  | dispatch-rules
 
 import {
   existsSync,
@@ -561,6 +562,40 @@ if (target === "reviewer-scope") {
   if (r.exitCode === 2) {
     process.stderr.write(stderrText);
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
+  }
+  return 0;
+}
+
+// --- dispatch-rules: exact conductor-to-worker steering ---------------------
+//
+// Kiro exposes subagent arguments to preToolUse hooks but does not support
+// updated tool input. Run the shared augmenter as a validator: a complete
+// prompt passes; an incomplete one is blocked with a retry instruction. The
+// accumulated load-steering bundle remains in the conductor's context, and
+// every Kiro agent also has the active memory glob as an independent preload.
+if (target === "dispatch-rules") {
+  if ((kiro.tool_name ?? "") !== "subagent") return 0;
+  const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
+  const command = executable
+    ? [executable, "hook", "dispatch-rules"]
+    : [process.execPath, join(HOOKS_DIR, "aidlc-dispatch-rules.ts")];
+  const r = Bun.spawnSync(command, {
+    stdin: Buffer.from(input, "utf-8"),
+    cwd: projectDir,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: projectEnv,
+  });
+  if (r.exitCode === 2) {
+    process.stderr.write(r.stderr?.toString() ?? "");
+    return 2;
+  }
+  if ((r.stdout?.toString().trim() ?? "") !== "") {
+    process.stderr.write(
+      "The AIDLC subagent brief omitted required active-stage rule content, so the call was not run. " +
+        "Retry the same subagent call with the accumulated load-steering bundle pasted verbatim into every stage prompt_template.\n",
+    );
+    return 2;
   }
   return 0;
 }

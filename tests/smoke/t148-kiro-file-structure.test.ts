@@ -249,6 +249,11 @@ describe("t148 dist/kiro file structure", () => {
     for (const h of all) {
       expect(h.command).toContain("aidlc-kiro-adapter.ts");
     }
+    const preMatchers = (hooks.preToolUse ?? []).map((h) => h.matcher).sort();
+    expect(preMatchers).toEqual(["execute_bash", "execute_bash", "subagent"]);
+    expect(
+      (hooks.preToolUse ?? []).find((h) => h.matcher === "subagent")?.command,
+    ).toContain("aidlc-kiro-adapter.ts dispatch-rules");
     const matchers = (hooks.postToolUse ?? []).map((h) => h.matcher).sort();
     expect(matchers).toEqual(["execute_bash", "fs_write", "subagent", "todo_list"]);
   });

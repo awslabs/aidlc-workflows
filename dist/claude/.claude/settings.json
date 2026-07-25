@@ -33,6 +33,15 @@
   "hooks": {
     "PreToolUse": [
       {
+        "matcher": "Task|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-dispatch-rules.ts\""
+          }
+        ]
+      },
+      {
         "matcher": "Read|NotebookRead|Edit|MultiEdit|Write|NotebookEdit|LS|Glob|Grep|Bash",
         "hooks": [
           {

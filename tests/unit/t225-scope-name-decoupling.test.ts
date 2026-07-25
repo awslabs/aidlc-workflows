@@ -5,7 +5,6 @@ import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
-  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,

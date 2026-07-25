@@ -30,7 +30,6 @@
 // with units [alpha, beta]. All temp dirs cleaned in afterEach.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -48,7 +47,6 @@ import {
 
 resetAidlcEnv();
 
-const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 
 const FD_PRODUCES = [

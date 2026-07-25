@@ -21,6 +21,7 @@ import createAdapter, {
 } from "../../harness/opencode/plugin/aidlc-opencode-adapter.ts";
 import {
   createTestProject,
+  seedAidlcMemory,
   seededAuditDir,
   seededAuditShard,
   seededRecordDir,
@@ -274,6 +275,32 @@ describe("t241 OpenCode adapter state-transition guard", () => {
     await expect(
       invoke("engine", "bun .aidlc/tools/aidlc-orchestrate.ts next"),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("t241 OpenCode adapter dispatch rules", () => {
+  test("task input is rewritten with exact active-stage rules", async () => {
+    const root = freshInstalledProject();
+    seedAidlcMemory(root);
+    const { client } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+    const output = {
+      args: {
+        subagent_type: "aidlc-product-agent",
+        prompt:
+          "Run .aidlc/aidlc-common/stages/inception/user-stories.md.",
+      },
+    };
+
+    await adapter["tool.execute.before"](
+      { tool: "task", sessionID: "main", callID: "rules" },
+      output,
+    );
+
+    const prompt = String(output.args.prompt ?? "");
+    expect(prompt).toContain("first-class");
+    expect(prompt).toContain("Given/When/Then");
+    expect(prompt).toContain("AIDLC_DISPATCH_RULES_BEGIN");
   });
 });
 

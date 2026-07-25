@@ -128,7 +128,6 @@ import {
   type Consume,
   type GraphStage,
   loadGraph,
-  memoryDirFor,
   producersOf,
   subgraphForScope,
 } from "./aidlc-graph.ts";
@@ -139,6 +138,11 @@ import {
 // and utility never imports this module - no cycle).
 import { inferScopeFromText } from "./aidlc-utility.ts";
 import { resolveHarnessPath, resolveHarnessRoot } from "./aidlc-runtime-paths.ts";
+import {
+  readRuleBundle,
+  rulesContentEntries,
+  type RuleContent,
+} from "./aidlc-steering.ts";
 
 // Read the workflow state file if it exists, else null. The engine's `next` is
 // a pure read: an absent state file is a legitimate branch (no workflow yet),
@@ -697,9 +701,6 @@ const DIRECTIVE_MAX_BYTES = 28 * 1024;
 const STEERING_TEXT_TARGET_BYTES = 20 * 1024;
 const CONTEXT_WARNINGS_MAX_BYTES = 6 * 1024;
 
-type RuleEntry = { rel: string; abs: string };
-type RuleContent = { path: string; text: string };
-
 type RunStageRoute = {
   node: GraphStage;
   scope: string;
@@ -732,58 +733,6 @@ type SteeringTokenPayload = {
 
 const runStageRoutes = new WeakMap<RunStageDirective, RunStageRoute>();
 let requestedSteeringContinuation: SteeringTokenPayload | null = null;
-
-// True when the text carries at least one substantive line: not blank, not a
-// heading, not a blockquote, not a horizontal rule, and not inside an HTML
-// comment. The seed memory templates (title + blockquote preamble + section
-// headings + comment placeholders) are NOT substantive by this rule; a single
-// affirmed practice line flips the file to substantive.
-function isSubstantiveRuleText(text: string): boolean {
-  const stripped = text.replace(/<!--[\s\S]*?-->/g, "");
-  return stripped.split(/\r?\n/).some((line) => {
-    const t = line.trim();
-    if (t === "") return false;
-    if (t.startsWith("#")) return false;
-    if (t.startsWith(">")) return false;
-    if (/^-{3,}$/.test(t)) return false;
-    return true;
-  });
-}
-
-// Resolve the {rel, abs} read entries for a node's rules_in_context roster.
-// The roster paths are DISPLAY paths frozen at compile time pinned to the
-// `default` space (see aidlc-graph.ts MEMORY_SPACE); the CONTENT must come
-// from the ACTIVE space, so each entry's sub-path under memory/ is re-rooted
-// at the active space's memory dir. AIDLC_RULES_DIR outranks it - the same
-// env seam rulesDir() honours, so fixture-driven tests and the Codex
-// config.toml seam read the same tree the compile did. `rel` names the
-// active-space file (the file actually read), which at `default` is
-// byte-identical to the roster path. A roster path WITHOUT the memory
-// marker (a plugin-contributed rule with its own layout) is not re-rooted:
-// display paths are workspace-relative by definition, so it reads from the
-// project dir as-is.
-function rulesContentEntries(
-  node: GraphStage,
-  codekbCtx: CodekbCtx,
-): RuleEntry[] {
-  const memoryDir =
-    process.env.AIDLC_RULES_DIR ??
-    memoryDirFor(codekbCtx.projectDir, codekbCtx.space);
-  return (node.rules_in_context ?? []).map((r) => {
-    const marker = "/memory/";
-    const idx = r.path.indexOf(marker);
-    if (idx < 0) {
-      return { rel: r.path, abs: join(codekbCtx.projectDir, r.path) };
-    }
-    const sub = r.path.slice(idx + marker.length);
-    return {
-      rel: toPosix(
-        join("aidlc", "spaces", codekbCtx.space, "memory", sub),
-      ),
-      abs: join(memoryDir, sub),
-    };
-  });
-}
 
 // "First run-stage of the workflow" — the deterministic signal D-E delivery
 // keys on. The engine is stateless per call, so it cannot track a "session";
@@ -1559,7 +1508,9 @@ function buildRunStageDirective(
   );
   const { present, absent } = splitConsumesByPresence(resolvedConsumes, scope, codekbCtx);
   const inlineContext = inlineContextRoster(node, codekbCtx);
-  const ruleEntries = codekbCtx ? rulesContentEntries(node, codekbCtx) : null;
+  const ruleEntries = codekbCtx
+    ? rulesContentEntries(node, codekbCtx.projectDir, codekbCtx.space)
+    : null;
   const directive: RunStageDirective = {
     kind: "run-stage",
     stage: node.slug,
@@ -1630,31 +1581,6 @@ function buildRunStageDirective(
 
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf-8").digest("hex");
-}
-
-function readRuleBundle(
-  entries: RuleEntry[],
-): { content: RuleContent[]; error: string | null } {
-  const content: RuleContent[] = [];
-  const seen = new Set<string>();
-  for (const entry of entries) {
-    if (seen.has(entry.rel)) continue;
-    seen.add(entry.rel);
-    let text: string;
-    try {
-      const bytes = readFileSync(entry.abs);
-      text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    } catch (e) {
-      return {
-        content: [],
-        error:
-          `Cannot load required stage rule "${entry.rel}" (${errorMessage(e)}). ` +
-          "The stage has not started. Restore the file or fix its permissions/UTF-8 encoding, then run `next` again.",
-      };
-    }
-    if (isSubstantiveRuleText(text)) content.push({ path: entry.rel, text });
-  }
-  return { content, error: null };
 }
 
 // Split a rule at Markdown heading boundaries first. Oversized sections are
@@ -1834,7 +1760,13 @@ function transportRunStage(
   directive: RunStageDirective,
   route: RunStageRoute,
 ): Directive {
-  const loaded = readRuleBundle(rulesContentEntries(route.node, route.codekbCtx));
+  const loaded = readRuleBundle(
+    rulesContentEntries(
+      route.node,
+      route.codekbCtx.projectDir,
+      route.codekbCtx.space,
+    ),
+  );
   if (loaded.error) return errorDirective(loaded.error);
 
   directive.rules_in_context = [

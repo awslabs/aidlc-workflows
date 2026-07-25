@@ -33,7 +33,9 @@ const SUBJECTS = [
 const PROJECT_DIR = "$CLAUDE_PROJECT_DIR";
 const PROJECT_DIR_RE = /\$CLAUDE_PROJECT_DIR/g;
 const BUG_SHAPE_RE = /(^|[\s(])\$CLAUDE_PROJECT_DIR\b/;
-const EXPECTED_PROJECT_DIR_REFERENCES = 15; // 13 + both PreToolUse guards
+// Fifteen command registrations (mint-presence is wired to two events) plus
+// the executable permission glob.
+const EXPECTED_PROJECT_DIR_REFERENCES = 16;
 const EXPECTED_PERMISSION_GLOB = 'Bash(bun "$CLAUDE_PROJECT_DIR/.claude/tools/"*)';
 
 interface Settings {

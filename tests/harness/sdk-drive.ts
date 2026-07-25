@@ -440,6 +440,7 @@ export async function driveAidlc(
     string,
     { toolName: string; input: Record<string, unknown> }
   >();
+  const permissionToolInputs = new Map<string, Record<string, unknown>>();
   let assistantText = "";
   let resultEvent: ResultEvent | undefined;
   let askMenuIndex = 0;
@@ -491,7 +492,11 @@ export async function driveAidlc(
       abortController,
       ...(sdkSettings.model ? { model: sdkSettings.model } : {}),
       ...(Object.keys(sdkSettings.env).length > 0 ? { env: sdkSettings.env } : {}),
-      canUseTool: async (toolName, input) => {
+      canUseTool: async (toolName, input, permissionOptions) => {
+        // PreToolUse rewrites have already run when this callback receives the
+        // input. Retain it as a fallback, but allowed tools can bypass this
+        // callback; Agent/Task tool results carry their executed prompt.
+        permissionToolInputs.set(permissionOptions.toolUseID, input);
         if (toolName === "AskUserQuestion") {
           const questions =
             (input as { questions?: AskUserQuestionItem[] }).questions ?? [];
@@ -581,9 +586,12 @@ export async function driveAidlc(
       } else if (msg.type === "user") {
         // tool_result blocks arrive as a synthetic 'user' message. The
         // content is byte-identical to the tool's stdout (verified in the
-        // toolout spike) before the LLM rewords it.
+        // toolout spike) before the LLM rewords it. Agent/Task results also
+        // expose the executed prompt after PreToolUse rewrites.
         const content = (msg as { message?: { content?: unknown } }).message
           ?.content;
+        const toolUseResult = (msg as { tool_use_result?: unknown })
+          .tool_use_result;
         if (Array.isArray(content)) {
           for (const block of content as Array<Record<string, unknown>>) {
             if (block.type === "tool_result") {
@@ -593,11 +601,17 @@ export async function driveAidlc(
               const pending = pendingTools.get(toolUseId);
               toolResults.push({
                 toolName: pending?.toolName ?? "",
-                input: pending?.input ?? {},
+                input: resolveCapturedToolInput(
+                  pending?.toolName ?? "",
+                  pending?.input ?? {},
+                  permissionToolInputs.get(toolUseId),
+                  toolUseResult,
+                ),
                 toolUseId,
                 resultText,
                 isError: block.is_error === true,
               });
+              permissionToolInputs.delete(toolUseId);
               writeSdkTrace(tracePath, "tool_result", {
                 toolUseId,
                 toolName: pending?.toolName ?? "",
@@ -716,6 +730,35 @@ export function extractToolResultText(content: unknown): string {
       .join("");
   }
   return "";
+}
+
+/**
+ * Resolve the input a tool actually executed. Agent/Task calls allowed by
+ * settings may bypass canUseTool, but their SDK tool result reports the final
+ * prompt after PreToolUse rewrites.
+ */
+export function resolveCapturedToolInput(
+  toolName: string,
+  proposedInput: Record<string, unknown>,
+  permissionInput: Record<string, unknown> | undefined,
+  toolUseResult: unknown,
+): Record<string, unknown> {
+  const input = permissionInput ?? proposedInput;
+  if (
+    toolName !== "Agent" &&
+    toolName !== "Task"
+  ) {
+    return input;
+  }
+  if (
+    !toolUseResult ||
+    typeof toolUseResult !== "object" ||
+    !("prompt" in toolUseResult) ||
+    typeof toolUseResult.prompt !== "string"
+  ) {
+    return input;
+  }
+  return { ...input, prompt: toolUseResult.prompt };
 }
 
 // ---------------------------------------------------------------------------

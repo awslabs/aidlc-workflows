@@ -81,6 +81,11 @@
         "matcher": "execute_bash",
         "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts pretool-block",
         "timeout_ms": 15000
+      },
+      {
+        "matcher": "subagent",
+        "command": "bun .kiro/hooks/aidlc-kiro-adapter.ts dispatch-rules",
+        "timeout_ms": 15000
       }
     ],
     "postToolUse": [

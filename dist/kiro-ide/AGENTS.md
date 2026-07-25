@@ -9,7 +9,7 @@ This project uses AI-DLC (AI-Driven Development Life Cycle) for structured devel
 - **Activation**: Open the project in Kiro IDE and invoke `/aidlc`; the command loads the shipped `skills/aidlc/SKILL.md` conductor. The `.kiro/hooks/aidlc-*.json` v2 hook files register in the IDE's Agent Hooks panel.
 - **Permissions**: delegation-target agent `.md` files receive the IDE-native read/write/shell grants they need. The conductor's approval gates and your IDE permission settings remain the control boundary.
 - **Locking**: Audit log file locking is handled portably using mkdir-based locking in the system temp directory (no external dependencies).
-- **Hook permissions**: All 13 hooks are TypeScript (`.ts`) and run via `bun`. No executable bits required — works identically on macOS, Linux, and native Windows PowerShell.
+- **Hook permissions**: All 14 hooks are TypeScript (`.ts`) and run via `bun`. No executable bits required — works identically on macOS, Linux, and native Windows PowerShell.
 
 ## AI-DLC Structure
 

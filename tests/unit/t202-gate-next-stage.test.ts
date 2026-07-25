@@ -36,7 +36,6 @@
 // - exactly the label the issue expects. All temp dirs are cleaned in afterEach.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -51,7 +50,6 @@ import {
 
 resetAidlcEnv();
 
-const BUN = process.execPath; // the bun running this test
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 
 // The checkbox-row separator the state format uses (parseCheckboxes /
