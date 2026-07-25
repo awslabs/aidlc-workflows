@@ -22,6 +22,7 @@ import {
   holdsAuditLock,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
+  fingerprintChainIsAdditionsOnly,
   intentRepos,
   workspaceSourceFingerprint,
   isAutonomousMode,
@@ -1383,13 +1384,21 @@ function verifyReviewerPrecondition(
   // the normal multi-unit flow (unit A reviewed, unit B code generated, unit B
   // reviewed, one approve) - A's receipt was stamped before B's code existed,
   // so it never matches the final tree, and gets discarded even though
-  // nothing was edited after A's own review (reported against #646). Only the
+  // nothing was edited after A's own review (reported against #646). The
   // CHRONOLOGICALLY NEWEST fingerprinted receipt is therefore compared
-  // against the current tree: if it matches, nothing has changed since the
-  // last review was performed, so every receipt collected below stands; if it
-  // mismatches, we cannot attribute WHICH unit's code changed from a
-  // workspace-global hash, so every receipt is discarded (mirrors the
-  // ambiguous-artifact clear-all precedent above, for the same reason).
+  // against the current tree first: a mismatch means we cannot attribute
+  // WHICH unit's code changed from a workspace-global hash, so every receipt
+  // is discarded (mirrors the ambiguous-artifact clear-all precedent above).
+  // A newest-match alone is NOT sufficient proof for a MULTI-receipt chain,
+  // though (reported against this same #646 by a second reviewer): unit A
+  // reviewed, A's file silently edited with no new review, unit B reviewed -
+  // B's receipt stamps a fingerprint over the CURRENT tree, which already
+  // contains A's unreviewed edit, so newest-matches-current alone would pass
+  // even though nobody reviewed A's edit. Every consecutive transition in the
+  // chain is therefore additionally required to be a pure addition
+  // (fingerprintChainIsAdditionsOnly, aidlc-lib.ts) - the only diff shape a
+  // legitimate sequential multi-unit flow produces; any modified/deleted
+  // pre-existing path fails closed, same rationale as the mismatch case.
   //
   // Legacy receipts without the field (or an unbindable workspace - null
   // fingerprint) keep today's fail-open behaviour, so in-flight upgrades do
@@ -1400,7 +1409,7 @@ function verifyReviewerPrecondition(
   // back — aidlc-swarm.ts validates each receipt against its own worktree at
   // finalize instead (see reviewerReceiptError).
   let staleSourceReceipts = false;
-  let newestFingerprintedFp: string | null = null;
+  const fingerprintedReceipts: string[] = []; // chronological order (oldest first)
   const sourceFreshnessOff = process.env.AIDLC_SKIP_SOURCE_FRESHNESS === "1";
   const settledSwarm = isSettledSwarmForArtifactGuard(pd, stage, content);
   for (let i = floorIdx + 1; i < events.length; i++) {
@@ -1427,18 +1436,36 @@ function verifyReviewerPrecondition(
     if (verdict !== "READY" && verdict !== "NOT-READY") continue;
     const recordedFp = auditBlockField(e.block, "Source Fingerprint");
     if (recordedFp && stage.workspace_requires && !sourceFreshnessOff && !settledSwarm) {
-      newestFingerprintedFp = recordedFp;
+      fingerprintedReceipts.push(recordedFp);
     }
     sawStageReview = true;
     const unit = auditBlockField(e.block, "Unit");
     if (unit) reviewedUnits.add(unit);
   }
-  if (newestFingerprintedFp !== null) {
+  if (fingerprintedReceipts.length > 0) {
     const currentSourceFp = workspaceSourceFingerprint(pd);
-    if (currentSourceFp !== null && currentSourceFp !== newestFingerprintedFp) {
+    const newestFp = fingerprintedReceipts[fingerprintedReceipts.length - 1];
+    if (currentSourceFp !== null && currentSourceFp !== newestFp) {
       staleSourceReceipts = true;
       reviewedUnits.clear();
       sawStageReview = false;
+    } else if (currentSourceFp !== null && fingerprintedReceipts.length > 1) {
+      // #646 review (leandrodamascena) - the newest receipt matching current
+      // is not by itself proof every EARLIER receipt's content went
+      // unreviewed-then-modified: unit A reviewed, A's file silently edited
+      // with no new review, unit B reviewed (stamps a fingerprint over the
+      // CURRENT tree, which already contains A's unreviewed edit) - the
+      // newest-only check above passes even though nobody reviewed A's edit.
+      // Require every consecutive fingerprint transition to be a pure
+      // addition (the only shape a legitimate sequential multi-unit flow
+      // produces); any modified/deleted pre-existing path - or an
+      // unverifiable transition (multi-repo/submodule composite hash, a
+      // pruned tree object) - is ambiguous attribution and fails closed.
+      if (!fingerprintChainIsAdditionsOnly(pd, fingerprintedReceipts)) {
+        staleSourceReceipts = true;
+        reviewedUnits.clear();
+        sawStageReview = false;
+      }
     }
   }
 

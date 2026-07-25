@@ -245,13 +245,52 @@ describe("t244 workspace source fingerprint (in-process)", () => {
     }
   }, 20000); // git submodule add is a real clone op - slower than bun's 5000ms default under load
 
-  // #646 review P2 - the aidlc-workspace exclusion (`aidlc`/`.aidlc`/
-  // `.aidlc-worktrees`/`.aidlc-sensors`) was top-level only; a monorepo
-  // subpackage nesting one of these (e.g. the type-check sensor's
-  // `.aidlc-sensors/.tsbuildinfo`, anchored at the tsconfig dir per
-  // aidlc-sensor-type-check.ts's sensorsDir) still altered the fingerprint on
-  // engine-written churn with no real source change.
-  test("excludes the aidlc workspace family at any depth, but not real nested source", () => {
+  // #646 review (leandrodamascena) - reproduction. Without `-z`, git's
+  // default core.quotePath wraps a path containing a non-ASCII byte (or other
+  // "unusual" character) in double quotes and C-escapes it in `ls-files -s`
+  // output (e.g. `"vendor/caf\303\251"`); parsed as a literal string, that
+  // quoted-and-escaped text never resolves to the real on-disk directory, so
+  // the submodule is silently skipped and a reviewed-then-edited submodule at
+  // such a path ships unreviewed.
+  test("detects a submodule at a non-ASCII path (git core.quotePath) via -z, not the default quoted form", () => {
+    const subDir = mkdtempSync(join(tmpdir(), "t244-fp-sub-"));
+    try {
+      git(subDir, ["init", "-q"]);
+      git(subDir, ["config", "user.email", "t@test"]);
+      git(subDir, ["config", "user.name", "t"]);
+      writeFileSync(join(subDir, "lib.ts"), "export const v = 1;\n", "utf-8");
+      git(subDir, ["add", "-A"]);
+      git(subDir, ["commit", "-qm", "sub init"]);
+
+      seedGitRepo(dir);
+      git(dir, [
+        "-c", "protocol.file.allow=always",
+        "submodule", "add", "-q", subDir, "vendor/café-módulo",
+      ]);
+      git(dir, ["commit", "-qm", "add accented-path submodule"]);
+
+      const fp1 = workspaceSourceFingerprint(dir);
+      expect(fp1).not.toBeNull();
+
+      // Edit the submodule's tracked file WITHOUT committing inside it.
+      writeFileSync(
+        join(dir, "vendor", "café-módulo", "lib.ts"),
+        "export const v = 2;\n",
+        "utf-8",
+      );
+      const fp2 = workspaceSourceFingerprint(dir);
+      expect(fp2).not.toBe(fp1);
+    } finally {
+      rmSync(subDir, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  // #646 review P2 (apackeer) - the aidlc-workspace exclusion was top-level
+  // only; the type-check sensor anchors `.aidlc-sensors/.tsbuildinfo` at the
+  // tsconfig dir (aidlc-sensor-type-check.ts's sensorsDir), which a monorepo
+  // subpackage can nest arbitrarily deep, so nested engine-written churn
+  // there altered the fingerprint with no real source change.
+  test("excludes a nested .aidlc-sensors cache (any depth), but not real nested source", () => {
     const src = seedGitRepo(dir);
     const fp1 = workspaceSourceFingerprint(dir);
 
@@ -265,24 +304,55 @@ describe("t244 workspace source fingerprint (in-process)", () => {
     );
     expect(workspaceSourceFingerprint(dir)).toBe(fp1);
 
-    // The other three workspace-family names, also nested (not at the root).
-    mkdirSync(join(dir, "services", "backend", "aidlc"), { recursive: true });
-    writeFileSync(join(dir, "services", "backend", "aidlc", "x.md"), "record\n", "utf-8");
-    mkdirSync(join(dir, "services", "backend", ".aidlc-worktrees"), { recursive: true });
-    writeFileSync(join(dir, "services", "backend", ".aidlc-worktrees", "x.md"), "wt\n", "utf-8");
-    mkdirSync(join(dir, "services", "backend", ".aidlc"), { recursive: true });
-    writeFileSync(join(dir, "services", "backend", ".aidlc", "x.md"), "shell\n", "utf-8");
-    expect(workspaceSourceFingerprint(dir)).toBe(fp1);
-
     // A REAL nested source file at the same depth DOES change the fingerprint
-    // - proves the exclusion targets exactly the 4 workspace names, not the
-    // whole subdirectory tree.
+    // - proves the exclusion targets exactly .aidlc-sensors, not the whole
+    // subdirectory tree.
     writeFileSync(join(dir, "services", "backend", "main.ts"), "export const x = 1;\n", "utf-8");
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
 
     // Sanity: the original top-level tracked file is still part of the tree
     // (the exclusion did not accidentally swallow real root-level content).
     expect(existsSync(src)).toBe(true);
+  });
+
+  // #646 review (leandrodamascena) - reproduction. Unlike .aidlc-sensors,
+  // `aidlc`/`.aidlc`/`.aidlc-worktrees` are ROOT-anchored (worktreePath,
+  // repoDir): they never legitimately nest inside application source. An
+  // earlier fix applied the any-depth glob to all four names alike, which
+  // silently dropped REAL application source that happens to live under a
+  // directory coincidentally named `aidlc` (e.g. a feature module named
+  // after the methodology itself) - a source-freshness bypass, since an edit
+  // under that path would never invalidate a stale receipt. Root-level
+  // occurrences of all three still exclude correctly (they ARE the
+  // framework's own shell there); only the nested, coincidentally-named case
+  // is no longer swallowed.
+  test("excludes aidlc/.aidlc/.aidlc-worktrees only at the workspace root, never nested application source", () => {
+    seedGitRepo(dir);
+    const fp1 = workspaceSourceFingerprint(dir);
+
+    // Root-level occurrences of all three - genuinely the framework's own
+    // shell here - are still excluded.
+    mkdirSync(join(dir, "aidlc"), { recursive: true });
+    writeFileSync(join(dir, "aidlc", "x.md"), "record\n", "utf-8");
+    mkdirSync(join(dir, ".aidlc", "worktrees"), { recursive: true });
+    writeFileSync(join(dir, ".aidlc", "worktrees", "x.md"), "shell\n", "utf-8");
+    mkdirSync(join(dir, ".aidlc-worktrees"), { recursive: true });
+    writeFileSync(join(dir, ".aidlc-worktrees", "x.md"), "wt\n", "utf-8");
+    expect(workspaceSourceFingerprint(dir)).toBe(fp1);
+
+    // REAL application source nested under a directory coincidentally named
+    // `aidlc` (not the workspace root) DOES change the fingerprint - the bug
+    // this test guards was: it did not.
+    mkdirSync(join(dir, "src", "aidlc"), { recursive: true });
+    writeFileSync(join(dir, "src", "aidlc", "parser.ts"), "export function parse() {}\n", "utf-8");
+    const fp2 = workspaceSourceFingerprint(dir);
+    expect(fp2).not.toBe(fp1);
+
+    // Same for a nested `.aidlc-worktrees`-named directory that is real
+    // application content, not the framework's own worktree tree.
+    mkdirSync(join(dir, "src", ".aidlc-worktrees"), { recursive: true });
+    writeFileSync(join(dir, "src", ".aidlc-worktrees", "real.ts"), "export const x = 1;\n", "utf-8");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(fp2);
   });
 });
 
@@ -378,6 +448,33 @@ describe("t244 multi-unit sequential flow (reproduction, #646 review)", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
+  });
+
+  // #646 review (leandrodamascena) - reproduction of the newest-receipt-only
+  // bypass: alpha is reviewed, then TAMPERED (edited with no new review), then
+  // beta is coded and reviewed - beta's receipt stamps a fingerprint over the
+  // CURRENT tree, which already contains alpha's unreviewed edit. Comparing
+  // only the newest receipt to the current tree passes here even though
+  // nobody ever reviewed alpha's edit. Must refuse.
+  test("a unit tampered after its own review, then masked by a later unit's review, must still refuse", () => {
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha code v1"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha");
+
+    // Tampered with NO new review recorded for alpha.
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 999; // snuck in\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha TAMPERED, no re-review"]);
+
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "beta code"]);
+    recordReview(proj, "code-generation", REVIEWER, "beta");
+
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc).not.toBe(0);
+    expect(r.out).toContain("source-fingerprint mismatch");
   });
 });
 

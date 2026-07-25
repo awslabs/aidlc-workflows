@@ -360,13 +360,15 @@ function reviewerReceiptError(
   // approve/advance re-verify the main checkout's fingerprint against the
   // newest stage-level receipt, but that reconciliation is deliberately
   // skipped for a settled swarm (isSettledSwarmForArtifactGuard in
-  // aidlc-state.ts) because the worktree code has not been merged back yet -
-  // so this is the only place a converged unit's receipt is actually bound to
-  // the source it reviewed. An absent field (legacy receipt, or a stage that
-  // never stamps one) and a null current fingerprint (not a git checkout, git
-  // unavailable) both keep the existing fail-open behaviour rather than
-  // stranding a receipt on an unbindable worktree. Off-switch:
-  // AIDLC_SKIP_SOURCE_FRESHNESS=1.
+  // aidlc-state.ts) because the swarm's application source lives only in the
+  // unit's own worktree - finalize's own merge-back (aidlc-bolt complete
+  // --merge) carries only the AIDLC data (state/audit/runtime fragment),
+  // never application source - so this is the only place a converged unit's
+  // receipt is actually bound to the source it reviewed. An absent field
+  // (legacy receipt, or a stage that never stamps one) and a null current
+  // fingerprint (not a git checkout, git unavailable) both keep the existing
+  // fail-open behaviour rather than stranding a receipt on an unbindable
+  // worktree. Off-switch: AIDLC_SKIP_SOURCE_FRESHNESS=1.
   const recordedFp = auditBlockField(latestTerminal, "Source Fingerprint");
   if (recordedFp && process.env.AIDLC_SKIP_SOURCE_FRESHNESS !== "1") {
     const currentFp = workspaceSourceFingerprint(worktreePath(projectDir, unit));

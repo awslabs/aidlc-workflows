@@ -3276,17 +3276,34 @@ export function repoDir(projectDir: string, repoName: string): string {
 // treat null as "no binding available" and keep today's behaviour (fail-open),
 // which also grandfathers receipts recorded before this shipped.
 
-// The literal directory names that hold AIDLC's own workspace state rather
-// than application source: the record tree, the CLI/IDE workspace shell, Bolt
-// swarm worktrees, and the sensor cache (e.g. the type-check sensor's
-// `.tsbuildinfo`, which a monorepo's per-package tsconfig anchors OUTSIDE the
-// record tree - core/tools/aidlc-sensor-type-check.ts's `sensorsDir`). Matched
-// via `**/<name>/**` pathspec glob magic so a nested occurrence (a monorepo
-// subpackage) is excluded exactly like the workspace root's own copy, not
-// just the top level - a plain pathspec (no glob magic) implicitly prefix-
-// matches as a directory ONLY relative to repoDir, so `aidlc` alone never
-// reaches `services/backend/aidlc`.
-const AIDLC_WORKSPACE_DIR_NAMES = ["aidlc", ".aidlc", ".aidlc-worktrees", ".aidlc-sensors"];
+// The record tree, the CLI/IDE workspace shell, and Bolt swarm worktrees are
+// ROOT-anchored: `aidlc/` and `.aidlc/` (worktreePath) live only at the
+// fingerprinted repoDir's own top level (for a multi-repo intent, `aidlc/` is
+// a SIBLING of the repo dirs, never nested inside one - resolveConstructionRepo
+// / repoDir). A plain pathspec (no glob magic) implicitly prefix-matches as a
+// directory ONLY relative to repoDir, which is exactly the scope wanted here.
+const AIDLC_ROOT_ONLY_DIR_NAMES = ["aidlc", ".aidlc", ".aidlc-worktrees"];
+
+// The sensor cache is the one member of the family that is NOT root-anchored:
+// the type-check sensor anchors `.aidlc-sensors/.tsbuildinfo` at the tsconfig
+// dir (core/tools/aidlc-sensor-type-check.ts's `sensorsDir`), which a
+// monorepo's per-package tsconfig can put anywhere under repoDir. This alone
+// is matched via `**/<name>/**` pathspec glob magic (any depth).
+//
+// #646 review (leandrodamascena) - the root-only/any-depth split above is
+// deliberate, not an oversight: an earlier fix applied `**/<name>/**` to ALL
+// four names to close a *reported* nested-.aidlc-sensors leak, but that
+// pathspec matches the literal directory name at ANY depth - including a
+// directory that is genuinely part of the application, coincidentally named
+// `aidlc`/`.aidlc`/`.aidlc-worktrees` for reasons unrelated to this
+// framework's own shell (e.g. `src/aidlc/parser.ts`, a real feature named
+// after the methodology). That silently dropped real source from the
+// fingerprint - reproduced: `workspaceSourceFingerprint` was unchanged after
+// adding tracked content under `src/aidlc/`. Scoping the other three names
+// back to root-only (their only legitimate location) closes that hole while
+// keeping the `.aidlc-sensors` any-depth match that was the actual, narrower
+// gap reported.
+const AIDLC_ANY_DEPTH_DIR_NAMES = [".aidlc-sensors"];
 
 function gitTreeFingerprint(repoDir: string): string | null {
   if (!isGitRepoDir(repoDir)) return null;
@@ -3313,7 +3330,8 @@ function gitTreeFingerprint(repoDir: string): string | null {
       "git",
       [
         "-C", repoDir, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--",
-        ...AIDLC_WORKSPACE_DIR_NAMES.map((name) => `:(glob)**/${name}/**`),
+        ...AIDLC_ROOT_ONLY_DIR_NAMES,
+        ...AIDLC_ANY_DEPTH_DIR_NAMES.map((name) => `:(glob)**/${name}/**`),
       ],
       { env, encoding: "utf-8" },
     );
@@ -3334,14 +3352,25 @@ function gitTreeFingerprint(repoDir: string): string | null {
     // status`, which spawns the submodule subsystem and measured 1s+ per call
     // on Windows - a cost this fingerprint (recomputed on every completion
     // route) cannot afford.
-    const lsFiles = spawnSync("git", ["-C", repoDir, "ls-files", "-s"], { env, encoding: "utf-8" });
+    //
+    // `-z` is required, not cosmetic (#646 review, leandrodamascena): without
+    // it, git's default `core.quotePath` wraps a path containing a non-ASCII
+    // byte or other "unusual" character in double quotes and C-escapes it
+    // (e.g. `"vendor/caf\303\251"` for `vendor/café`) - parsed as a literal
+    // string, that quoted-and-escaped text never resolves to the real
+    // on-disk path, so `isGitRepoDir` silently reports "not a submodule" and
+    // the fingerprint drops it entirely (a reviewed-then-edited submodule at
+    // such a path would ship unreviewed). `-z` disables quoting and
+    // NUL-terminates each record instead of newline-terminating it, so the
+    // path bytes come back exactly as they are on disk.
+    const lsFiles = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], { env, encoding: "utf-8" });
     const subLines: string[] = [];
     if (lsFiles.status === 0) {
-      for (const line of lsFiles.stdout.split("\n")) {
-        if (!line.startsWith("160000 ")) continue;
-        const tabIdx = line.indexOf("\t");
+      for (const record of lsFiles.stdout.split("\0")) {
+        if (!record.startsWith("160000 ")) continue;
+        const tabIdx = record.indexOf("\t");
         if (tabIdx === -1) continue;
-        const subPath = line.slice(tabIdx + 1).trim();
+        const subPath = record.slice(tabIdx + 1);
         if (!subPath) continue;
         const subDir = join(repoDir, subPath);
         if (!isGitRepoDir(subDir)) continue;
@@ -3368,6 +3397,42 @@ export function workspaceSourceFingerprint(projectDir: string): string | null {
     lines.push(`${name}=${sha}`);
   }
   return createHash("sha256").update(lines.join("\n")).digest("hex");
+}
+
+// #646 review (leandrodamascena) - the multi-unit "compare only the newest
+// receipt" reconciliation proved a genuine bypass: unit A reviewed, A's file
+// silently edited with NO new review, unit B coded and reviewed - B's receipt
+// stamps a fingerprint over the CURRENT tree, which already contains A's
+// unreviewed edit, so the newest-matches-current check alone passes even
+// though nobody ever reviewed A's edit. A workspace-global hash cannot
+// attribute a changed file to a specific unit, so per the issue's own
+// acceptance criterion ("ambiguous attribution ... fails closed"), a chain of
+// receipts is only trusted when every consecutive transition is a PURE
+// ADDITION - the one shape a legitimate sequential multi-unit flow actually
+// produces (each unit's own new files; nothing pre-existing touched). A
+// receipt whose fingerprint is a single-repo tree with no submodules is a raw
+// git tree object, diffable directly with `git diff <sha> <sha>` even though
+// neither side is a commit; `fps` must be in chronological (oldest-first)
+// order. Returns false - fail CLOSED - on any modified/deleted/renamed
+// pre-existing path, on a multi-repo or submodule-folded composite hash
+// (not a diffable git object), or on a tree object git can no longer read
+// (e.g. pruned by gc after a long-idle workflow) - an unverifiable chain is
+// exactly the ambiguous case the acceptance criterion requires to refuse,
+// not silently trust.
+export function fingerprintChainIsAdditionsOnly(projectDir: string, fps: string[]): boolean {
+  for (let i = 1; i < fps.length; i++) {
+    const diff = spawnSync(
+      "git",
+      ["-C", projectDir, "diff", "--name-status", "--no-renames", fps[i - 1], fps[i]],
+      { encoding: "utf-8" },
+    );
+    if (diff.status !== 0) return false;
+    for (const line of diff.stdout.split("\n")) {
+      if (!line.trim()) continue;
+      if (!line.startsWith("A\t")) return false;
+    }
+  }
+  return true;
 }
 
 // True iff `dir` looks like a git checkout: it holds a `.git` (a directory for a
