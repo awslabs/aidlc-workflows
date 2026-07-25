@@ -1964,7 +1964,7 @@ function printSlugs(stages: GraphStage[]): void {
   for (const s of stages) console.log(s.slug);
 }
 
-// --- ARS (Autonomy Risk Score) deterministic scoring (#618) ---
+// --- ARS (Autonomy Risk Score) deterministic scoring ---
 //
 // The composer persona scores the five entropy components from evidence (the
 // knowledge half); THIS code owns every downstream number: the weighted
@@ -1980,6 +1980,17 @@ const ARS_COMPONENTS = ["iae", "csu", "ve", "r", "ua"] as const;
 export type ArsComponent = (typeof ARS_COMPONENTS)[number];
 type ArsBand = "LOW" | "MED" | "HIGH";
 type ArsDecision = "EXECUTE" | "SKIP" | "COMPLETED";
+const ARS_PROJECT_TYPES = ["brownfield", "greenfield"] as const;
+type ArsProjectType = (typeof ARS_PROJECT_TYPES)[number];
+
+/** IEEE summation of the weighted terms can land a hair under an exact
+ *  half-point - 0.75 + 12.45 + 7.3 evaluates to 20.499999999999996, which
+ *  Math.round would drop into the band BELOW the one the documented formula
+ *  computes exactly, and the band label is the one thing the gate table
+ *  bolds. Normalising the sum at a precision far above the accumulated
+ *  error (~1e-14 at composite magnitudes) makes the rounded total agree
+ *  with exact arithmetic and keeps `raw` free of 62.74999999999999 noise. */
+const ARS_RAW_PRECISION = 9;
 
 interface ArsPriors {
   schemaVersion: number;
@@ -1988,7 +1999,18 @@ interface ArsPriors {
   componentBands: { lowMax: number; medMax: number };
   compositeBands: Array<{ min: number; max: number; label: string; shape: string }>;
   evThresholds: Record<string, number>;
-  stages: Record<string, { targets: ArsComponent[]; cost: number | null; role?: string }>;
+  stages: Record<
+    string,
+    {
+      targets: ArsComponent[];
+      cost: number | null;
+      role?: string;
+      // Present only on stages whose compiled `condition:` restricts them to
+      // one kind of project (today: reverse-engineering, brownfield-only).
+      // Absent = the stage runs on either project type.
+      projectTypes?: ArsProjectType[];
+    }
+  >;
 }
 
 export interface ArsScreenRow {
@@ -2001,6 +2023,7 @@ export interface ArsScreenRow {
     | "core"
     | "phase-gate"
     | "structural"
+    | "project-type"
     | "no-cost-prior"
     | "no-prior"
     | "completed";
@@ -2019,7 +2042,7 @@ export interface ArsResult {
   screenGrid: Record<string, "EXECUTE" | "SKIP">;
   nearestScopes: Array<{ scope: string; diff: number; differs: string[] }>;
   completed: string[];
-  projectType: "brownfield" | "greenfield" | null;
+  projectType: ArsProjectType | null;
   tables: { arsScores: string; stageDecisions: string };
 }
 
@@ -2102,8 +2125,27 @@ export function loadArsPriors(): ArsPriors {
         `ars priors: stages.${slug}.targets must be a subset of {${ARS_COMPONENTS.join(", ")}}.`
       );
     }
+    // Type before lookup: `String(cost) in evThresholds` alone accepts the
+    // STRING "1", which then leaks into the result JSON's cost fields and
+    // breaks the `number | null` contract this interface declares.
+    if (st.cost !== null && typeof st.cost !== "number") {
+      throw new Error(
+        `ars priors: stages.${slug}.cost must be a number or null (got ${typeof st.cost}).`
+      );
+    }
     if (st.cost !== null && !(String(st.cost) in (priors.evThresholds ?? {}))) {
       throw new Error(`ars priors: stages.${slug}.cost ${String(st.cost)} has no evThresholds entry.`);
+    }
+    if (st.projectTypes !== undefined) {
+      if (
+        !Array.isArray(st.projectTypes) ||
+        st.projectTypes.length === 0 ||
+        st.projectTypes.some((t) => !ARS_PROJECT_TYPES.includes(t))
+      ) {
+        throw new Error(
+          `ars priors: stages.${slug}.projectTypes must be a non-empty subset of {${ARS_PROJECT_TYPES.join(", ")}}.`
+        );
+      }
     }
   }
   return priors;
@@ -2115,7 +2157,7 @@ export function loadArsPriors(): ArsPriors {
  *  slugs (same typo discipline as validate-grid). */
 export function computeArs(
   scores: Record<ArsComponent, number>,
-  opts?: { completed?: string[]; projectType?: "brownfield" | "greenfield" }
+  opts?: { completed?: string[]; projectType?: ArsProjectType }
 ): ArsResult {
   const priors = loadArsPriors();
   for (const c of ARS_COMPONENTS) {
@@ -2133,9 +2175,15 @@ export function computeArs(
     }
   }
   // Same discipline for the priors themselves: an entry naming a stage the
-  // compiled graph does not know is stale data, not a screening input.
+  // compiled graph does not know is stale data, not a screening input. The
+  // check runs against the UNFILTERED graph on purpose - loadGraph() drops
+  // stages a plugin selection marked `enabled: false`, and the shipped
+  // priors name every core stage, so screening against the filtered set
+  // would make every `ars` call exit 1 on an install that disabled one.
+  // A slug missing from the unfiltered graph is still stale and still throws.
+  const compiledSlugs = new Set(loadStageGraphAll().map((s) => s.slug));
   for (const slug of Object.keys(priors.stages)) {
-    if (!knownSlugs.has(slug)) {
+    if (!compiledSlugs.has(slug)) {
       throw new Error(`ars priors: stages.${slug} is not in the compiled stage graph.`);
     }
   }
@@ -2149,7 +2197,11 @@ export function computeArs(
   for (const c of ARS_COMPONENTS) {
     components[c] = { name: priors.componentInfo[c].name, score: scores[c], band: band(scores[c]) };
   }
-  const raw = 100 * ARS_COMPONENTS.reduce((acc, c) => acc + priors.weights[c] * scores[c], 0);
+  const raw = Number(
+    (100 * ARS_COMPONENTS.reduce((acc, c) => acc + priors.weights[c] * scores[c], 0)).toFixed(
+      ARS_RAW_PRECISION
+    )
+  );
   const total = Math.round(raw);
   const compositeBand = priors.compositeBands.find((b) => total >= b.min && total <= b.max);
   if (!compositeBand) {
@@ -2160,12 +2212,24 @@ export function computeArs(
   // decisions in their phase). COMPLETED (in-flight context) wins over any
   // screen: the stage already ran, so it stays EXECUTE in the derived grid.
   const completedSet = new Set(completed);
+  const projectType = opts?.projectType;
+  // A stage whose compiled `condition:` restricts it to one project type is
+  // decided by that condition, not by the component arithmetic: without this
+  // the screen could emit `reverse-engineering EXECUTE` on a greenfield
+  // project, contradicting the stage the composer would have to run. Only a
+  // COMPLETED stage outranks it (it already ran; in-flight evidence wins).
+  const offProjectType = (p?: { projectTypes?: ArsProjectType[] }): boolean =>
+    projectType !== undefined &&
+    p?.projectTypes !== undefined &&
+    !p.projectTypes.includes(projectType);
   const decisionOf = new Map<string, ArsDecision>();
   const deferred = new Set<string>();
   for (const s of graph) {
     const p = priors.stages[s.slug];
     if (completedSet.has(s.slug)) {
       decisionOf.set(s.slug, "COMPLETED");
+    } else if (offProjectType(p)) {
+      decisionOf.set(s.slug, "SKIP");
     } else if (p?.role === "phase-gate") {
       deferred.add(s.slug);
     } else if (p?.role === "initialization" || p?.role === "core") {
@@ -2215,6 +2279,12 @@ export function computeArs(
         ...base,
         screen: "no-prior",
         reason: "no entry in ars-priors.json - not screenable",
+      });
+    } else if (offProjectType(p)) {
+      evScreen.push({
+        ...base,
+        screen: "project-type",
+        reason: `project is ${String(projectType)} - the stage's compiled condition restricts it to ${(p.projectTypes ?? []).join("/")} projects`,
       });
     } else if (p.role === "initialization") {
       evScreen.push({ ...base, screen: "initialization", reason: "initialization - always runs" });
@@ -2343,14 +2413,17 @@ const COMMANDS: Record<string, Handler> = {
     }
   },
   // ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>]
-  // [--project-type <bg>] - the deterministic ARS arithmetic (#618): weighted
+  // [--project-type <bg>] - the deterministic ARS arithmetic: weighted
   // composite + band labels, the per-stage EV screen against the cost-prior
   // table, nearest stock scopes by grid diff count, and the two gate tables
   // pre-rendered as markdown - all constants read from
   // tools/data/ars-priors.json. The composer scores the five components from
   // evidence, runs this, and copies the output verbatim; a model never does
-  // the multiplication. Prints a JSON ArsResult on stdout; exit 1 on
-  // out-of-range scores, unknown stage slugs (same typo discipline as
+  // the multiplication. --project-type screens out the stages whose compiled
+  // condition restricts them to the other kind of project (greenfield ->
+  // reverse-engineering SKIPs) so the mechanical screen cannot contradict a
+  // stage's own execution condition. Prints a JSON ArsResult on stdout; exit
+  // 1 on out-of-range scores, unknown stage slugs (same typo discipline as
   // validate-grid), or a priors-schema violation. The composite is advisory:
   // nothing deterministic routes on it.
   ars: (args) => {
@@ -2376,7 +2449,7 @@ const COMMANDS: Record<string, Handler> = {
         : compRaw.split(",").map((s) => s.trim()).filter(Boolean);
     const ptIdx = args.indexOf("--project-type");
     const ptRaw = ptIdx >= 0 ? args[ptIdx + 1] : undefined;
-    let projectType: "brownfield" | "greenfield" | undefined;
+    let projectType: ArsProjectType | undefined;
     if (ptRaw !== undefined) {
       const lowered = ptRaw.toLowerCase();
       if (lowered !== "brownfield" && lowered !== "greenfield") {

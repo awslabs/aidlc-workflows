@@ -1,6 +1,6 @@
 // covers: function:computeArs, function:loadArsPriors, subcommand:aidlc-graph:ars
 //
-// t244 - deterministic ARS arithmetic (#618).
+// t244 - deterministic ARS arithmetic.
 //
 // The composer persona used to carry the ARS arithmetic as prose — the same
 // five component scores could render different composites across runs because
@@ -13,11 +13,19 @@
 //      the Table 1 composite row the persona documents.
 //   2. BAND EDGES — component bands are continuous with no gaps: 0.29 LOW,
 //      0.30 MED, 0.69 MED, 0.70 HIGH; composite 20 Near-direct vs 21 Focused.
+//      A composite that is EXACTLY a half-point rounds by the documented
+//      formula, not by the IEEE sum's drift below it.
 //   3. PRIORS SCHEMA — the shipped ars-priors.json loads, weights sum to 1.0,
 //      and every compiled graph stage has a priors entry (no `no-prior` rows).
 //   4. INVALID INPUT — out-of-range scores, unknown --completed slugs, and a
-//      corrupted priors file (weights not summing to 1, wrong schemaVersion)
-//      exit 1 with a naming error, never a silent fallback.
+//      corrupted priors file (weights not summing to 1, wrong schemaVersion,
+//      a string cost, an unknown projectTypes value) exit 1 with a naming
+//      error, never a silent fallback.
+//   5. CONDITION AGREEMENT — --project-type screens out a stage whose
+//      compiled condition restricts it to the other project type, so the
+//      mechanical screen cannot contradict the stage it would have to run.
+//   6. INSTALL TOLERANCE — an install whose plugin selection disables a core
+//      stage still runs `ars`: priors validate against the unfiltered graph.
 //
 // Mechanism: MIXED — in-process imports for the arithmetic/band/schema pins,
 // spawns for the CLI exit-code rows (cli). Priors fault-injection rides the
@@ -34,6 +42,7 @@ import { AIDLC_SRC } from "../harness/fixtures.ts";
 const BUN = process.execPath;
 const GRAPH_TOOL = join(AIDLC_SRC, "tools", "aidlc-graph.ts");
 const PRIORS_PATH = join(AIDLC_SRC, "tools", "data", "ars-priors.json");
+const STAGE_GRAPH_PATH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 
 // The persona's worked example (Step 8a, Table 1): 0.20*0.55 + 0.30*0.75 +
 // 0.25*0.65 + 0.15*0.50 + 0.10*0.55 = 0.6275 -> raw 62.75 -> total 63.
@@ -77,6 +86,52 @@ describe("t244 ars arithmetic pin (in-process)", () => {
     expect(flat(0.21).label).toBe("Focused");
     expect(flat(1).total).toBe(100);
     expect(flat(1).label).toBe("Full ceremony");
+  });
+
+  test("exact half-point composite rounds by the formula, not by IEEE drift", () => {
+    // 0.25*0.03 + 0.15*0.83 + 0.10*0.73 = 0.75 + 12.45 + 7.3 = 20.5 exactly,
+    // but the IEEE sum of those terms is 20.499999999999996 - rounding the
+    // raw sum would report 20 / Near-direct, one band below the documented
+    // arithmetic, on the one figure the gate table bolds.
+    const r = computeArs({ iae: 0, csu: 0, ve: 0.03, r: 0.83, ua: 0.73 });
+    expect(r.composite.raw).toBe(20.5);
+    expect(r.composite.total).toBe(21);
+    expect(r.composite.label).toBe("Focused");
+    // Same normalisation keeps the shipped JSON free of representation noise.
+    expect(computeArs(PERSONA_EXAMPLE).composite.raw).toBe(62.75);
+  });
+
+  test("--project-type screens a brownfield-only stage out of a greenfield run", () => {
+    // CSU 0.80 clears reverse-engineering's cost-4 threshold, so the
+    // component screen alone says EXECUTE on every project type.
+    const scores = { iae: 0, csu: 0.8, ve: 0, r: 0, ua: 0 };
+    const unset = computeArs(scores);
+    expect(unset.screenGrid["reverse-engineering"]).toBe("EXECUTE");
+    expect(unset.evScreen.find((x) => x.stage === "reverse-engineering")?.screen).toBe("component");
+
+    const brownfield = computeArs(scores, { projectType: "brownfield" });
+    expect(brownfield.screenGrid["reverse-engineering"]).toBe("EXECUTE");
+
+    const greenfield = computeArs(scores, { projectType: "greenfield" });
+    expect(greenfield.screenGrid["reverse-engineering"]).toBe("SKIP");
+    const row = greenfield.evScreen.find((x) => x.stage === "reverse-engineering");
+    expect(row?.decision).toBe("SKIP");
+    expect(row?.screen).toBe("project-type");
+    expect(row?.reason).toContain("project is greenfield");
+    expect(greenfield.projectType).toBe("greenfield");
+    // Unrestricted stages are untouched by the flag.
+    expect(greenfield.screenGrid["practices-discovery"]).toBe(
+      brownfield.screenGrid["practices-discovery"]
+    );
+  });
+
+  test("--completed outranks the project-type screen (the stage already ran)", () => {
+    const r = computeArs(
+      { iae: 0, csu: 0.8, ve: 0, r: 0, ua: 0 },
+      { projectType: "greenfield", completed: ["reverse-engineering"] }
+    );
+    expect(r.evScreen.find((x) => x.stage === "reverse-engineering")?.decision).toBe("COMPLETED");
+    expect(r.screenGrid["reverse-engineering"]).toBe("EXECUTE");
   });
 
   test("EV screen: spine always executes, all-zero scores collapse the ideation gate", () => {
@@ -178,6 +233,71 @@ describe("t244 ars CLI (spawn)", () => {
       const r2 = runArs(SCORE_FLAGS, { AIDLC_ARS_PRIORS: badVersionPath });
       expect(r2.status).toBe(1);
       expect(r2.stderr).toContain("unsupported schemaVersion 2");
+
+      // A STRING cost passes a bare `String(cost) in evThresholds` lookup and
+      // then leaks into the result JSON's `cost` fields, which the ArsPriors
+      // and ArsScreenRow contracts both declare `number | null`.
+      const stringCost = {
+        ...shipped,
+        stages: {
+          ...shipped.stages,
+          "market-research": { ...shipped.stages["market-research"], cost: "1" },
+        },
+      };
+      const stringCostPath = join(dir, "string-cost.json");
+      writeFileSync(stringCostPath, JSON.stringify(stringCost));
+      const r3 = runArs(SCORE_FLAGS, { AIDLC_ARS_PRIORS: stringCostPath });
+      expect(r3.status).toBe(1);
+      expect(r3.stderr).toContain("stages.market-research.cost must be a number or null");
+
+      const badProjectTypes = {
+        ...shipped,
+        stages: {
+          ...shipped.stages,
+          "reverse-engineering": {
+            ...shipped.stages["reverse-engineering"],
+            projectTypes: ["purplefield"],
+          },
+        },
+      };
+      const badProjectTypesPath = join(dir, "bad-project-types.json");
+      writeFileSync(badProjectTypesPath, JSON.stringify(badProjectTypes));
+      const r4 = runArs(SCORE_FLAGS, { AIDLC_ARS_PRIORS: badProjectTypesPath });
+      expect(r4.status).toBe(1);
+      expect(r4.stderr).toContain("stages.reverse-engineering.projectTypes");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an install with a disabled stage still screens (priors validate against the unfiltered graph)", () => {
+    // The plugin-selection recompile marks deselected stages `enabled: false`;
+    // loadGraph() filters those out, but the shipped priors still name all of
+    // them. Validating the priors against the FILTERED graph would exit 1 on
+    // every `ars` call on such an install.
+    const dir = mkdtempSync(join(tmpdir(), "t244-graph-"));
+    try {
+      const graph = JSON.parse(readFileSync(STAGE_GRAPH_PATH, "utf-8"));
+      const disabled = graph.map((s: { slug: string }) =>
+        s.slug === "market-research" ? { ...s, enabled: false } : s
+      );
+      const graphPath = join(dir, "stage-graph.json");
+      writeFileSync(graphPath, JSON.stringify(disabled));
+      const r = runArs(SCORE_FLAGS, { AIDLC_STAGE_GRAPH: graphPath });
+      expect(r.status).toBe(0);
+      const out = JSON.parse(r.stdout);
+      expect(out.screenGrid["market-research"]).toBeUndefined();
+      expect(out.screenGrid["intent-capture"]).toBeDefined();
+      // A slug in the priors that no longer exists ANYWHERE is still stale
+      // data and still exits 1 - the tolerance is for disabled, not unknown.
+      const renamed = graph.map((s: { slug: string }) =>
+        s.slug === "market-research" ? { ...s, slug: "market-research-renamed" } : s
+      );
+      const renamedPath = join(dir, "renamed-graph.json");
+      writeFileSync(renamedPath, JSON.stringify(renamed));
+      const r2 = runArs(SCORE_FLAGS, { AIDLC_STAGE_GRAPH: renamedPath });
+      expect(r2.status).toBe(1);
+      expect(r2.stderr).toContain("stages.market-research is not in the compiled stage graph");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

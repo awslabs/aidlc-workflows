@@ -7,7 +7,8 @@ The adaptive composer's ARS arithmetic is now deterministic: the new `aidlc-grap
 
 * `aidlc-graph.ts ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]` prints a JSON result: the advisory composite with its band, LOW/MED/HIGH component bands at the shipped 0.30/0.70 boundaries, the per-stage EV screen against the cost priors, nearest stock scopes by grid diff count, and the two gate tables pre-rendered as markdown.
 * Component weights (0.20/0.30/0.25/0.15/0.10), band boundaries, stage cost priors, and EV thresholds move to `tools/data/ars-priors.json` (schemaVersion 1); the composer persona's tables now document that file instead of being the source.
-* Out-of-range scores, unknown stage slugs (`--completed`), and priors-schema violations exit 1 with a naming error — same typo discipline as `validate-grid`, never a silent fallback.
+* `--project-type brownfield|greenfield` screens out the stages whose compiled `condition:` restricts them to the other kind of project (today Reverse Engineering, brownfield-only), so the mechanical screen never proposes a stage that stage's own condition would skip; `--completed` keeps already-run stages EXECUTE in the derived grid and outranks that screen.
+* Out-of-range scores, unknown stage slugs (`--completed`), and priors-schema violations — including a non-numeric stage `cost` or an unknown `projectTypes` value — exit 1 with a naming error, same typo discipline as `validate-grid`, never a silent fallback. Priors validate against the unfiltered stage graph, so an install whose plugin selection disables a core stage still runs `ars`.
 
 ## [2.5.17] - 2026-07-29
 

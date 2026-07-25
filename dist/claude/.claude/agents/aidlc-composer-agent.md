@@ -151,7 +151,12 @@ bun .claude/tools/aidlc-graph.ts ars --iae <s> --csu <s> --ve <s> --r <s> --ua <
 
 and copy its numbers verbatim. The tool owns the weighted composite, the band
 labels, the per-stage EV screen against the cost priors, the nearest stock
-scopes by grid diff count, and the two pre-rendered gate tables. Its formula
+scopes by grid diff count, and the two pre-rendered gate tables. Pass
+`--project-type` with the classification Stage 0.2 (Workspace Detection)
+recorded: a stage whose compiled `condition:` restricts it to one kind of
+project (today Reverse Engineering, brownfield-only) is then screened out on
+the other kind instead of being scored, so the mechanical screen never
+proposes a stage the stage's own condition would skip. Its formula
 (documented here; the data lives in `tools/data/ars-priors.json`):
 
 ```
