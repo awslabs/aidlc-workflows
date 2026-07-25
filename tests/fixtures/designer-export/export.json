@@ -153,6 +153,7 @@
       "consumes": [],
       "requires_stage": [],
       "sensors": [
+        "claim-sources",
         "required-sections",
         "upstream-coverage"
       ],
@@ -162,6 +163,8 @@
         "mvp",
         "poc"
       ],
+      "reviewer": "aidlc-product-lead-agent",
+      "reviewer_max_iterations": 2,
       "inputs": "User's project description ($ARGUMENTS), scope selection",
       "outputs": "intent-statement.md, stakeholder-map.md, intent-capture-questions.md (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
@@ -183,6 +186,11 @@
         }
       ],
       "sensors_applicable": [
+        {
+          "id": "claim-sources",
+          "path": ".claude/sensors/aidlc-claim-sources.md",
+          "matches": "**/{aidlc-docs,intents}/**"
+        },
         {
           "id": "required-sections",
           "path": ".claude/sensors/aidlc-required-sections.md",
@@ -594,6 +602,10 @@
       "consumes": [
         {
           "artifact": "intent-statement",
+          "required": true
+        },
+        {
+          "artifact": "stakeholder-map",
           "required": true
         },
         {
