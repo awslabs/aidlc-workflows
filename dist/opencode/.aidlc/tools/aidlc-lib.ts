@@ -3290,7 +3290,7 @@ const AIDLC_ROOT_ONLY_DIR_NAMES = ["aidlc", ".aidlc", ".aidlc-worktrees"];
 // monorepo's per-package tsconfig can put anywhere under repoDir. This alone
 // is matched via `**/<name>/**` pathspec glob magic (any depth).
 //
-// #646 review (leandrodamascena) - the root-only/any-depth split above is
+// #646 review - the root-only/any-depth split above is
 // deliberate, not an oversight: an earlier fix applied `**/<name>/**` to ALL
 // four names to close a *reported* nested-.aidlc-sensors leak, but that
 // pathspec matches the literal directory name at ANY depth - including a
@@ -3353,7 +3353,7 @@ function gitTreeFingerprint(repoDir: string): string | null {
     // on Windows - a cost this fingerprint (recomputed on every completion
     // route) cannot afford.
     //
-    // `-z` is required, not cosmetic (#646 review, leandrodamascena): without
+    // `-z` is required, not cosmetic (#646 review): without
     // it, git's default `core.quotePath` wraps a path containing a non-ASCII
     // byte or other "unusual" character in double quotes and C-escapes it
     // (e.g. `"vendor/caf\303\251"` for `vendor/café`) - parsed as a literal
@@ -3399,7 +3399,7 @@ export function workspaceSourceFingerprint(projectDir: string): string | null {
   return createHash("sha256").update(lines.join("\n")).digest("hex");
 }
 
-// #646 review (leandrodamascena) - the multi-unit "compare only the newest
+// #646 review - the multi-unit "compare only the newest
 // receipt" reconciliation proved a genuine bypass: unit A reviewed, A's file
 // silently edited with NO new review, unit B coded and reviewed - B's receipt
 // stamps a fingerprint over the CURRENT tree, which already contains A's

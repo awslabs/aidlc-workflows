@@ -1406,7 +1406,7 @@ function verifyReviewerPrecondition(
       reviewedUnits.clear();
       sawStageReview = false;
     } else if (currentSourceFp !== null && fingerprintedReceipts.length > 1) {
-      // #646 review (leandrodamascena) - the newest receipt matching current
+      // #646 review - the newest receipt matching current
       // is not by itself proof every EARLIER receipt's content went
       // unreviewed-then-modified: unit A reviewed, A's file silently edited
       // with no new review, unit B reviewed (stamps a fingerprint over the

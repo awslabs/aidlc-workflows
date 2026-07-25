@@ -245,7 +245,7 @@ describe("t244 workspace source fingerprint (in-process)", () => {
     }
   }, 20000); // git submodule add is a real clone op - slower than bun's 5000ms default under load
 
-  // #646 review (leandrodamascena) - reproduction. Without `-z`, git's
+  // #646 review - reproduction. Without `-z`, git's
   // default core.quotePath wraps a path containing a non-ASCII byte (or other
   // "unusual" character) in double quotes and C-escapes it in `ls-files -s`
   // output (e.g. `"vendor/caf\303\251"`); parsed as a literal string, that
@@ -285,7 +285,7 @@ describe("t244 workspace source fingerprint (in-process)", () => {
     }
   }, 20000);
 
-  // #646 review P2 (apackeer) - the aidlc-workspace exclusion was top-level
+  // #646 review P2 - the aidlc-workspace exclusion was top-level
   // only; the type-check sensor anchors `.aidlc-sensors/.tsbuildinfo` at the
   // tsconfig dir (aidlc-sensor-type-check.ts's sensorsDir), which a monorepo
   // subpackage can nest arbitrarily deep, so nested engine-written churn
@@ -315,7 +315,7 @@ describe("t244 workspace source fingerprint (in-process)", () => {
     expect(existsSync(src)).toBe(true);
   });
 
-  // #646 review (leandrodamascena) - reproduction. Unlike .aidlc-sensors,
+  // #646 review - reproduction. Unlike .aidlc-sensors,
   // `aidlc`/`.aidlc`/`.aidlc-worktrees` are ROOT-anchored (worktreePath,
   // repoDir): they never legitimately nest inside application source. An
   // earlier fix applied the any-depth glob to all four names alike, which
@@ -450,7 +450,7 @@ describe("t244 multi-unit sequential flow (reproduction, #646 review)", () => {
     expect(r.rc).toBe(0);
   });
 
-  // #646 review (leandrodamascena) - reproduction of the newest-receipt-only
+  // #646 review - reproduction of the newest-receipt-only
   // bypass: alpha is reviewed, then TAMPERED (edited with no new review), then
   // beta is coded and reviewed - beta's receipt stamps a fingerprint over the
   // CURRENT tree, which already contains alpha's unreviewed edit. Comparing
@@ -514,7 +514,7 @@ describe("t244 multi-unit sequential flow (reproduction, #646 review)", () => {
     expect(r.out).toContain("source-fingerprint mismatch");
   });
 
-  // #646 review (leandrodamascena, inline comment on aidlc-state.ts:1430) -
+  // #646 review (inline comment on aidlc-state.ts:1430) -
   // the reviewer's own exact reproduction, distinct from the two above: it is
   // an EARLIER unit (alpha) that gets RE-reviewed after a LATER unit (beta)
   // is tampered, not a later unit's first review masking an earlier one. The
