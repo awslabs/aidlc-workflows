@@ -45,11 +45,17 @@ const SUPPORT_AGENTS = [
   "aidlc-developer-agent",
   "aidlc-quality-agent",
 ] as const;
-const RULE_PATHS = [
-  "aidlc/spaces/default/memory/org.md",
-  "aidlc/spaces/default/memory/team.md",
-  "aidlc/spaces/default/memory/project.md",
-  "aidlc/spaces/default/memory/phases/inception.md",
+// One distinctive token per SUBSTANTIVE shipped rule file (the seeded
+// workspace uses the dist memory tree verbatim), paired with the file's
+// workspace path. A support brief must carry the rule steering - the token
+// (chosen to survive both a verbatim paste of the directive's rules_content
+// AND a faithful summary, since the conductor composes briefs in its own
+// words; live runs show both) - or, for a file the directive listed as
+// omitted, the exact path. team.md/project.md ship as comment-only
+// placeholders - no marker, legitimately absent.
+const RULE_MARKERS = [
+  { marker: "first-class", path: "aidlc/spaces/default/memory/org.md" },
+  { marker: "Given/When/Then", path: "aidlc/spaces/default/memory/phases/inception.md" },
 ] as const;
 
 const APPROVE_ALL = {
@@ -427,7 +433,10 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         ).toBe(true);
 
         // Round 1 dispatched every declared support. Each brief names the
-        // shared draft/input and exact rule paths, plus only that participant's
+        // shared draft/input, carries the active-space rules (the directive's
+        // rules_content pasted into the brief - the steering-delivery
+        // contract; a rule PATH also satisfies the check, covering the
+        // rules_content_omitted fallback), plus only that participant's
         // contribution filename, never a sibling's contribution.
         const roundOne = new Map<string, CapturedToolResult>();
         for (const agent of SUPPORT_AGENTS) {
@@ -442,8 +451,16 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           expect(prompt).toContain("personas.md");
           expect(prompt).toContain("requirements.md");
           expect(prompt).toContain(`${agent}.md`);
-          for (const rulePath of RULE_PATHS) {
-            expect(prompt).toContain(rulePath);
+          // Rule steering reached the brief: a distinctive marker from each
+          // substantive seeded rule file (org.md, phases/inception.md) that
+          // any faithful content transfer preserves, or that file's exact
+          // path (the omitted-file fallback). The placeholder team.md /
+          // project.md are comment-only and legitimately absent.
+          for (const { marker, path } of RULE_MARKERS) {
+            expect(
+              prompt.includes(marker) || prompt.includes(path),
+              `brief for ${agent} carries neither the "${marker}" rule content nor ${path}`,
+            ).toBe(true);
           }
           for (const sibling of SUPPORT_AGENTS) {
             if (sibling === agent) continue;
