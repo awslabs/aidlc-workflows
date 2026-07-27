@@ -160,7 +160,7 @@ Source of truth: one file per scope under `{{HARNESS_DIR}}/scopes/aidlc-<name>.m
 
 ## Harness notes (GitHub Copilot)
 
-- **Stage visibility rides `$aidlc --status`.** There is no custom statusline and no welcome message; workflow position is available on demand via `/aidlc --status`. Keep the user oriented by naming the running stage and phase in your turn text.
+- **Stage visibility rides `/aidlc --status`.** There is no custom statusline and no welcome message; workflow position is available on demand via `/aidlc --status`. Keep the user oriented by naming the running stage and phase in your turn text.
 - **Gates**: questions render as numbered chat prompts (VS Code Copilot agent mode has no dedicated question widget); the markdown Q&A file is always the source of truth. Gate semantics live in the engine either way.
 - **Subagent delegation**: all 14 agent personas are transposed into `{{HARNESS_DIR}}/agents/aidlc-<role>-agent.agent.md`. The orchestrator addresses them through Copilot's native subagent delegation (the `agent` tool + the orchestrator's `agents:` roster); the four dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent), reviewer passes, and composer requests all run through that mechanism.
 - **Hooks**: framework hooks register in `{{HARNESS_DIR}}/hooks/hooks.json` and fire on `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, `SubagentStop`, and `Stop`. The `aidlc-copilot-adapter.ts` shim normalizes Copilot's tool vocabulary (`runTerminalCommand` → `Bash`, `editFiles` → `Edit`, …) and camelCase `tool_input` keys to what the core hooks expect.
