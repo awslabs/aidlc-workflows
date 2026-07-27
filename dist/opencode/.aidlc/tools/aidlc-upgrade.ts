@@ -49,6 +49,7 @@ const HARNESSES: ReadonlyArray<{ dir: string; distSubpath: string; label: string
   { dir: ".claude", distSubpath: "dist/claude/.claude", label: "Claude Code" },
   { dir: ".kiro", distSubpath: "dist/kiro/.kiro", label: "Kiro / Kiro IDE" },
   { dir: ".codex", distSubpath: "dist/codex/.codex", label: "Codex" },
+  { dir: ".aidlc", distSubpath: "dist/opencode/.aidlc", label: "opencode" },
 ];
 
 export interface UpgradeOptions {
