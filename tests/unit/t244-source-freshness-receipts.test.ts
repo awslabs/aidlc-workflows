@@ -23,6 +23,14 @@
 //      source edit refuses with the source-fingerprint-mismatch message; the
 //      AIDLC_SKIP_SOURCE_FRESHNESS=1 off-switch restores the legacy pass;
 //      receipts without the field (legacy rows) keep passing (fail-open).
+//   4. MULTI-UNIT POLICY (cli) - what the workspace-global hash proves and
+//      what it does not. It proves source-state equality against the NEWEST
+//      recorded review, so the ordinary sequential run, the §12a rework loop
+//      and shared-file integration all pass. It does NOT prove per-unit
+//      attribution: an earlier unit's edit masked by a later unit's review,
+//      and an addition no reviewer was shown, are accepted - the documented
+//      policy #629's acceptance criterion allows. Those rows assert the
+//      limitation deliberately and go red when attribution lands.
 //
 // Mechanism: MIXED - in-process import for the fingerprint pins, spawns of the
 // real dist tools (log, state) for the stamping + guard rows. The guard rows
@@ -112,6 +120,7 @@ function recordReview(
   stage = "code-generation",
   reviewer = REVIEWER,
   unit?: string,
+  verdict = "READY",
 ): void {
   const args = [
     LOG,
@@ -123,7 +132,7 @@ function recordReview(
     "--iteration",
     "1",
     "--verdict",
-    "READY",
+    verdict,
     "--project-dir",
     proj,
   ];
@@ -529,11 +538,25 @@ describe("t244 receipt stamping + completion guard (cli)", () => {
   });
 });
 
-// Reproduction of the maintainer review on #646 (a1e4d67): a workspace-global,
-// time-of-stamp fingerprint compared per-receipt is fundamentally the wrong
-// shape for a for_each: unit-of-work stage, where receipts are per-unit but
-// the engine presents ONE stage-level gate after ALL units are built.
-describe("t244 multi-unit sequential flow (reproduction, #646 review)", () => {
+// What the workspace-global fingerprint does and does not prove on a
+// for_each: unit-of-work stage, where receipts are per-unit but the engine
+// presents ONE stage-level gate after ALL units are built (#646 review).
+//
+// It proves SOURCE-STATE EQUALITY: the current tree is identical to the one
+// the newest recorded review inspected. It does NOT prove PER-UNIT
+// ATTRIBUTION - one hash cannot say which unit wrote a given file, so source
+// changed before that newest review passes, and a fresh receipt re-validates
+// every earlier one. An earlier revision tried to recover attribution from the
+// diff SHAPE (every consecutive transition a pure addition); it was removed
+// after being reproduced failing in both directions - refusing the §12a rework
+// loop and ordinary shared-file integration, while still admitting an
+// addition nobody reviewed. #629's acceptance criterion allows this via
+// "ambiguous attribution fails closed OR FOLLOWS AN EXPLICITLY DOCUMENTED
+// POLICY"; the policy is stated in the CHANGELOG, docs/reference/
+// 12-state-machine.md and verifyReviewerPrecondition's own comment block, and
+// pinned by the two limitation tests below. When per-unit attribution lands
+// those two turn red on purpose.
+describe("t244 multi-unit flow: what the workspace-global fingerprint does and does not prove", () => {
   let proj: string;
 
   beforeEach(() => {
@@ -566,22 +589,24 @@ describe("t244 multi-unit sequential flow (reproduction, #646 review)", () => {
     expect(r.rc).toBe(0);
   });
 
-  // #646 review - reproduction of the newest-receipt-only
-  // bypass: alpha is reviewed, then TAMPERED (edited with no new review), then
-  // beta is coded and reviewed - beta's receipt stamps a fingerprint over the
-  // CURRENT tree, which already contains alpha's unreviewed edit. Comparing
-  // only the newest receipt to the current tree passes here even though
-  // nobody ever reviewed alpha's edit. Must refuse.
-  test("a unit tampered after its own review, then masked by a later unit's review, must still refuse", () => {
+  // #646 review - the protocol's own rework loop. stage-protocol.md §12a
+  // requires recording a NOT-READY receipt, re-invoking the lead to fix the
+  // artifact IN PLACE, then re-reviewing. Fixing in place is an `M` transition
+  // between the two receipts, which the removed additions-only rule refused -
+  // even though the newest fingerprint EQUALS the current tree, i.e. the
+  // reviewer inspected exactly the source being completed. Nothing here is
+  // tampered; refusing this refuses the documented repair loop.
+  test("the stage-protocol §12a rework loop (NOT-READY, fix in place, re-review) must not refuse", () => {
     writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
     git(proj, ["add", "-A"]);
     git(proj, ["commit", "-qm", "alpha code v1"]);
-    recordReview(proj, "code-generation", REVIEWER, "alpha");
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "NOT-READY");
 
-    // Tampered with NO new review recorded for alpha.
-    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 999; // snuck in\n", "utf-8");
+    // §12a step 3: the lead addresses the findings and updates the artifact.
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1; // finding addressed\n", "utf-8");
     git(proj, ["add", "-A"]);
-    git(proj, ["commit", "-qm", "alpha TAMPERED, no re-review"]);
+    git(proj, ["commit", "-qm", "alpha v2 addresses review findings"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha");
 
     writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
     git(proj, ["add", "-A"]);
@@ -589,55 +614,68 @@ describe("t244 multi-unit sequential flow (reproduction, #646 review)", () => {
     recordReview(proj, "code-generation", REVIEWER, "beta");
 
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
-    expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("source-fingerprint mismatch");
+    expect(r.out).not.toContain("source-fingerprint mismatch");
+    expect(r.rc).toBe(0);
   });
 
-  // Same bypass, but proves the additions-only chain walk is not just an
-  // adjacent-pair special case: the tamper sits between the 2nd and 3rd
-  // review in a 3-unit chain (alpha -> beta -> TAMPER alpha -> gamma), so a
-  // loop bug that only checked the first or last transition would miss it.
-  test("a 3-unit chain with a mid-chain tamper (alpha tampered between beta's and gamma's review) must still refuse", () => {
-    const dagDir = join(seededRecordDir(proj), "inception", "units-generation");
-    writeFileSync(
-      join(dagDir, "unit-of-work-dependency.md"),
-      "```yaml\nunits:\n  - name: alpha\n    depends_on: []\n  - name: beta\n    depends_on: []\n  - name: gamma\n    depends_on: []\n```\n",
-      "utf-8",
-    );
-
+  // #646 review - the second `M`-shaped legitimate transition: a unit that
+  // wires itself into a file an earlier unit already created. Ordinary
+  // integration, not tampering - beta's own reviewer saw the wiring.
+  test("a second unit modifying a pre-existing shared file must not refuse", () => {
+    writeFileSync(join(proj, "index.ts"), "export const wired: string[] = [];\n", "utf-8");
     writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
     git(proj, ["add", "-A"]);
-    git(proj, ["commit", "-qm", "alpha code"]);
+    git(proj, ["commit", "-qm", "alpha code + index"]);
     recordReview(proj, "code-generation", REVIEWER, "alpha");
 
-    writeFileSync(join(proj, "beta.ts"), "export const beta = 1;\n", "utf-8");
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    writeFileSync(join(proj, "index.ts"), "export const wired = ['alpha', 'beta'];\n", "utf-8");
     git(proj, ["add", "-A"]);
-    git(proj, ["commit", "-qm", "beta code"]);
+    git(proj, ["commit", "-qm", "beta code + wire into index"]);
     recordReview(proj, "code-generation", REVIEWER, "beta");
-
-    // Tampered AFTER beta's review, before gamma's - no new review for alpha.
-    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 999; // snuck in after beta\n", "utf-8");
-    git(proj, ["add", "-A"]);
-    git(proj, ["commit", "-qm", "alpha TAMPERED between beta and gamma"]);
-
-    writeFileSync(join(proj, "gamma.ts"), "export const gamma = 1;\n", "utf-8");
-    git(proj, ["add", "-A"]);
-    git(proj, ["commit", "-qm", "gamma code"]);
-    recordReview(proj, "code-generation", REVIEWER, "gamma");
 
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
-    expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("source-fingerprint mismatch");
+    expect(r.out).not.toContain("source-fingerprint mismatch");
+    expect(r.rc).toBe(0);
   });
 
-  // #646 review (inline comment on aidlc-state.ts:1430) -
-  // the reviewer's own exact reproduction, distinct from the two above: it is
-  // an EARLIER unit (alpha) that gets RE-reviewed after a LATER unit (beta)
-  // is tampered, not a later unit's first review masking an earlier one. The
-  // reviewer's concern was that the newest fingerprint (stamped at alpha's
-  // second review) matches the workspace while beta's now-stale receipt
-  // remains in reviewedUnits. Must still refuse.
-  test("re-reviewing an earlier unit must not launder a later unit's untouched-since tamper", () => {
+  // DOCUMENTED LIMITATION (#646 review, first reported as a laundering bypass
+  // on aidlc-state.ts). alpha is reviewed, then edited with NO new review,
+  // then beta is coded and reviewed - beta's receipt stamps a fingerprint over
+  // the CURRENT tree, which already contains alpha's unreviewed edit, so the
+  // newest-matches-current comparison passes. The finding is real and is NOT
+  // fixed here: a workspace-global hash cannot attribute the changed file to
+  // alpha. Per #629's "explicitly documented policy" branch this is accepted
+  // and written down rather than guessed at; see the describe comment. This
+  // test asserts the documented behaviour so the policy is visible in code,
+  // and goes red when per-unit attribution lands.
+  test("a unit edited after its own review, then masked by a later unit's review, is accepted (documented limitation)", () => {
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha code v1"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha");
+
+    // Edited with NO new review recorded for alpha.
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 999; // no re-review\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha edited, no re-review"]);
+
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "beta code"]);
+    recordReview(proj, "code-generation", REVIEWER, "beta");
+
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.out).not.toContain("source-fingerprint mismatch");
+    expect(r.rc).toBe(0);
+  });
+
+  // DOCUMENTED LIMITATION, the inverse ordering (#646 review, inline comment
+  // on aidlc-state.ts): an EARLIER unit is RE-reviewed after a LATER unit was
+  // edited, so the newest fingerprint (stamped at alpha's second review)
+  // matches the workspace while beta's now-stale receipt survives. Same root
+  // cause, same accepted policy, same red-on-attribution intent.
+  test("re-reviewing an earlier unit carries a later unit's stale receipt (documented limitation)", () => {
     writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
     git(proj, ["add", "-A"]);
     git(proj, ["commit", "-qm", "alpha code"]);
@@ -648,18 +686,78 @@ describe("t244 multi-unit sequential flow (reproduction, #646 review)", () => {
     git(proj, ["commit", "-qm", "beta code"]);
     recordReview(proj, "code-generation", REVIEWER, "beta");
 
-    // Tamper beta, no new review for beta.
-    writeFileSync(join(proj, "beta.ts"), "export const beta = 999; // snuck in\n", "utf-8");
+    // Edit beta, no new review for beta.
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 999; // no re-review\n", "utf-8");
     git(proj, ["add", "-A"]);
-    git(proj, ["commit", "-qm", "beta TAMPERED"]);
+    git(proj, ["commit", "-qm", "beta edited"]);
 
     // Re-review alpha (not beta) - alpha's own content is unchanged, but the
     // tree now includes beta's unreviewed edit.
     recordReview(proj, "code-generation", REVIEWER, "alpha");
 
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
-    expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("source-fingerprint mismatch");
+    expect(r.out).not.toContain("source-fingerprint mismatch");
+    expect(r.rc).toBe(0);
+  });
+
+  // DOCUMENTED LIMITATION - the `A`-shaped case, which the removed rule never
+  // blocked either: an added file is exactly as unreviewed as a modified one.
+  // Reachable in practice because the per-unit reviewer is briefed with only
+  // its own unit's artifacts (stage-protocol §12a), so beta's reviewer is
+  // never pointed at this file. Asserting rc 0 states the policy explicitly
+  // rather than leaving the gap undocumented.
+  test("an addition nobody reviewed is accepted by the workspace-global binding (documented limitation)", () => {
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha code"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha");
+
+    writeFileSync(join(proj, "unreviewed.ts"), "export const extra = () => process.env;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "addition no reviewer was shown"]);
+
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "beta code"]);
+    recordReview(proj, "code-generation", REVIEWER, "beta");
+
+    const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(r.rc).toBe(0);
+  });
+
+  // #646 review - the recorded-repo layout is the DEFAULT (sibling
+  // auto-discovery populates `repos` at intent birth via resolveBirthRepoSet
+  // -> discoverSiblingRepos), and its fingerprint is a sha256 composite over
+  // the roof's child repos rather than a single tree object. The removed rule
+  // could never consume that shape at all. What must hold: a clean two-unit
+  // run passes, and an edit after the last review still refuses.
+  test("a recorded-repo two-unit run passes clean and refuses after a post-review edit", () => {
+    const repoA = join(proj, "repo-a");
+    mkdirSync(repoA, { recursive: true });
+    seedGitRepo(repoA);
+    const regPath = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
+    const rows = JSON.parse(readFileSync(regPath, "utf-8")) as Array<Record<string, unknown>>;
+    rows[0].repos = ["repo-a"];
+    writeFileSync(regPath, `${JSON.stringify(rows, null, 2)}\n`, "utf-8");
+
+    writeFileSync(join(repoA, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    recordReview(proj, "code-generation", REVIEWER, "alpha");
+    writeFileSync(join(repoA, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    recordReview(proj, "code-generation", REVIEWER, "beta");
+
+    const clean = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(clean.out).not.toContain("source-fingerprint mismatch");
+    expect(clean.rc).toBe(0);
+
+    // Now edit inside the recorded repo after the last review: must refuse.
+    guarded(proj, ["checkbox", "code-generation=in-progress"]);
+    guarded(proj, ["gate-start", "code-generation"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha");
+    recordReview(proj, "code-generation", REVIEWER, "beta");
+    writeFileSync(join(repoA, "alpha.ts"), "export const alpha = 999;\n", "utf-8");
+    const dirty = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(dirty.rc).not.toBe(0);
+    expect(dirty.out).toContain("source-fingerprint mismatch");
   });
 });
 

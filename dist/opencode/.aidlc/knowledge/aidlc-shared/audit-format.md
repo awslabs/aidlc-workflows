@@ -82,7 +82,7 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 | `GATE_REJECTED` | Human requested changes | Timestamp, Stage, Feedback, optional `Recovered=true` (backfilled by the approve-time revision backstop) | `tools/aidlc-state.ts reject`, `tools/aidlc-state.ts approve` (backstop backfill) |
 | `QUESTION_ANSWERED` | Non-gate question answered by user | Timestamp, Stage, Details | `tools/aidlc-log.ts answer` |
 | `REVIEW_REQUESTED` | Conductor dispatches the §12a reviewer sub-agent | Timestamp, Stage, Reviewer, optional Unit (per-unit stages), optional Iteration | `tools/aidlc-log.ts review` |
-| `REVIEW_COMPLETED` | Reviewer verdict read; gates the approval of a reviewer-bearing stage | Timestamp, Stage, Reviewer, Verdict, optional Unit (per-unit stages), optional Iteration, optional Source Fingerprint (`workspace_requires` stages only — a git-native content hash of the workspace source the reviewer inspected; binds the receipt to that source state so a later edit invalidates it. Off-switch: `AIDLC_SKIP_SOURCE_FRESHNESS=1`) | `tools/aidlc-log.ts review --verdict` |
+| `REVIEW_COMPLETED` | Reviewer verdict read; gates the approval of a reviewer-bearing stage | Timestamp, Stage, Reviewer, Verdict, optional Unit (per-unit stages), optional Iteration, optional Source Fingerprint (`workspace_requires` stages only — a git-native content hash of the workspace source the reviewer inspected; completion routes refuse while the current source differs from the newest recorded fingerprint for the stage. Off-switch: `AIDLC_SKIP_SOURCE_FRESHNESS=1`) | `tools/aidlc-log.ts review --verdict` |
 
 ### Artifact Events (3 events — hook-emitted)
 

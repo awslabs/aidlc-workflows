@@ -22,7 +22,6 @@ import {
   holdsAuditLock,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
-  fingerprintChainIsAdditionsOnly,
   intentRepos,
   workspaceSourceFingerprint,
   isAutonomousMode,
@@ -1389,16 +1388,21 @@ function verifyReviewerPrecondition(
   // against the current tree first: a mismatch means we cannot attribute
   // WHICH unit's code changed from a workspace-global hash, so every receipt
   // is discarded (mirrors the ambiguous-artifact clear-all precedent above).
-  // A newest-match alone is NOT sufficient proof for a MULTI-receipt chain,
-  // though (reported against this same #646 by a second reviewer): unit A
-  // reviewed, A's file silently edited with no new review, unit B reviewed -
-  // B's receipt stamps a fingerprint over the CURRENT tree, which already
-  // contains A's unreviewed edit, so newest-matches-current alone would pass
-  // even though nobody reviewed A's edit. Every consecutive transition in the
-  // chain is therefore additionally required to be a pure addition
-  // (fingerprintChainIsAdditionsOnly, aidlc-lib.ts) - the only diff shape a
-  // legitimate sequential multi-unit flow produces; any modified/deleted
-  // pre-existing path fails closed, same rationale as the mismatch case.
+  // The check is source-state equality, not per-unit attribution: a match
+  // proves the current tree is identical to the one the NEWEST recorded review
+  // inspected, not that every unit was reviewed against its own code. Because
+  // the hash is workspace-global while receipts are per unit, source added or
+  // changed before that newest review - including an earlier unit's file, and
+  // including code no reviewer was shown - is inside the matching tree and
+  // passes, and one fresh receipt re-validates every earlier receipt. An
+  // earlier revision required every consecutive fingerprint transition to be a
+  // pure addition; it was removed because it refused the §12a rework loop and
+  // ordinary shared-file integration (both `M`-shaped), could not be cleared by
+  // re-reviewing, and could never be satisfied by the recorded-repo layout
+  // (a composite hash is not a diffable git object). Attributing a change to
+  // the unit that wrote it needs a machine-readable per-unit path manifest the
+  // engine does not produce today; #629's acceptance criterion is met by
+  // documenting this policy, not by guessing attribution from the diff shape.
   //
   // Legacy receipts without the field (or an unbindable workspace - null
   // fingerprint) keep today's fail-open behaviour, so in-flight upgrades do
@@ -1452,23 +1456,6 @@ function verifyReviewerPrecondition(
       staleSourceReceipts = true;
       reviewedUnits.clear();
       sawStageReview = false;
-    } else if (currentSourceFp !== null && fingerprintedReceipts.length > 1) {
-      // #646 review - the newest receipt matching current
-      // is not by itself proof every EARLIER receipt's content went
-      // unreviewed-then-modified: unit A reviewed, A's file silently edited
-      // with no new review, unit B reviewed (stamps a fingerprint over the
-      // CURRENT tree, which already contains A's unreviewed edit) - the
-      // newest-only check above passes even though nobody reviewed A's edit.
-      // Require every consecutive fingerprint transition to be a pure
-      // addition (the only shape a legitimate sequential multi-unit flow
-      // produces); any modified/deleted pre-existing path - or an
-      // unverifiable transition (multi-repo/submodule composite hash, a
-      // pruned tree object) - is ambiguous attribution and fails closed.
-      if (!fingerprintChainIsAdditionsOnly(pd, fingerprintedReceipts)) {
-        staleSourceReceipts = true;
-        reviewedUnits.clear();
-        sawStageReview = false;
-      }
     }
   }
 
@@ -1507,9 +1494,11 @@ function verifyReviewerPrecondition(
   const missing = reviewUnits.filter((u) => !reviewedUnits.has(u));
   if (missing.length > 0) {
     const staleNote = staleSourceReceipts
-      ? ` At least one recorded review was discarded because the workspace source ` +
-        `changed after its verdict (source-fingerprint mismatch) — the current ` +
-        `source tree was never reviewed.`
+      ? ` Every recorded review for this stage was discarded because the workspace ` +
+        `source no longer matches the newest recorded fingerprint (source-fingerprint ` +
+        `mismatch); recording one fresh verdict against the current source restores ` +
+        `them, since the check compares only the newest fingerprinted receipt against ` +
+        `the current tree.`
       : "";
     error(
       `Refusing to complete "${stage.slug}": it declares a reviewer (${reviewer}) but ` +
@@ -1524,11 +1513,13 @@ function verifyReviewerPrecondition(
 function reviewerPreconditionError(slug: string, reviewer: string, staleSource = false): never {
   if (staleSource) {
     error(
-      `Refusing to complete "${slug}": the workspace source changed after the ` +
-        `recorded review (source-fingerprint mismatch), so the current source tree ` +
-        `was never reviewed. Re-invoke the reviewer (stage-protocol §12a) against ` +
-        `the current source and record a fresh verdict with \`aidlc-log.ts review ` +
-        `--stage ${slug} --reviewer ${reviewer} --verdict <READY|NOT-READY>\` before completing.`
+      `Refusing to complete "${slug}": the workspace source no longer matches the ` +
+        `state of the most recent recorded review (source-fingerprint mismatch). ` +
+        `Re-invoke the reviewer (stage-protocol §12a) against the current source and ` +
+        `record a fresh verdict with \`aidlc-log.ts review --stage ${slug} --reviewer ` +
+        `${reviewer} --verdict <READY|NOT-READY>\`, or revert the source change (the ` +
+        `fingerprint is content-addressed, so an undone edit restores the original ` +
+        `value), before completing.`
     );
   }
   error(

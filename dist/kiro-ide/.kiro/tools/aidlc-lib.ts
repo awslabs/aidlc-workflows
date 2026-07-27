@@ -3410,42 +3410,6 @@ export function workspaceSourceFingerprint(projectDir: string): string | null {
   return createHash("sha256").update(lines.join("\n")).digest("hex");
 }
 
-// #646 review - the multi-unit "compare only the newest
-// receipt" reconciliation proved a genuine bypass: unit A reviewed, A's file
-// silently edited with NO new review, unit B coded and reviewed - B's receipt
-// stamps a fingerprint over the CURRENT tree, which already contains A's
-// unreviewed edit, so the newest-matches-current check alone passes even
-// though nobody ever reviewed A's edit. A workspace-global hash cannot
-// attribute a changed file to a specific unit, so per the issue's own
-// acceptance criterion ("ambiguous attribution ... fails closed"), a chain of
-// receipts is only trusted when every consecutive transition is a PURE
-// ADDITION - the one shape a legitimate sequential multi-unit flow actually
-// produces (each unit's own new files; nothing pre-existing touched). A
-// receipt whose fingerprint is a single-repo tree with no submodules is a raw
-// git tree object, diffable directly with `git diff <sha> <sha>` even though
-// neither side is a commit; `fps` must be in chronological (oldest-first)
-// order. Returns false - fail CLOSED - on any modified/deleted/renamed
-// pre-existing path, on a multi-repo or submodule-folded composite hash
-// (not a diffable git object), or on a tree object git can no longer read
-// (e.g. pruned by gc after a long-idle workflow) - an unverifiable chain is
-// exactly the ambiguous case the acceptance criterion requires to refuse,
-// not silently trust.
-export function fingerprintChainIsAdditionsOnly(projectDir: string, fps: string[]): boolean {
-  for (let i = 1; i < fps.length; i++) {
-    const diff = spawnSync(
-      "git",
-      ["-C", projectDir, "diff", "--name-status", "--no-renames", fps[i - 1], fps[i]],
-      { encoding: "utf-8" },
-    );
-    if (diff.status !== 0) return false;
-    for (const line of diff.stdout.split("\n")) {
-      if (!line.trim()) continue;
-      if (!line.startsWith("A\t")) return false;
-    }
-  }
-  return true;
-}
-
 // True iff `dir` looks like a git checkout: it holds a `.git` (a directory for a
 // normal clone, OR a file for a submodule / linked worktree). Workspace-internal
 // dirs that are never code repos are excluded by the discovery scan, not here.
