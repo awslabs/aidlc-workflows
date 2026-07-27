@@ -150,7 +150,7 @@ The routing table above gives the counts; this matrix shows exactly **which** st
 
 <!-- END scope-stage-matrix -->
 
-A ✓ marks scope membership, not a guarantee of execution: CONDITIONAL stages can still be skipped at runtime when their condition does not hold (for example, Reverse Engineering only runs for brownfield projects), and you can skip any stage at its approval gate or reshape pending stages with [the composer](#the-adaptive-composer). Composed (custom) scopes are not listed here — their grids live in `scope-grid.json` alongside the stock ones.
+A ✓ marks static scope membership — it means the stage is included in the scope's plan, not that it will unconditionally execute. CONDITIONAL stages may be skipped at runtime when their condition does not hold (for example, Reverse Engineering only runs for brownfield projects), and pending stages can be reshaped through an approved composer proposal (see [the composer](#the-adaptive-composer)). Composed (custom) scopes are not listed here — their grids live in `scope-grid.json` alongside the stock ones.
 
 ---
 
@@ -394,7 +394,7 @@ You can change the test strategy at three points:
 | Regulated feature requiring compliance | `enterprise` |
 | AI-DLC workshop or training lab | `workshop` |
 
-When in doubt, start with `feature` — it includes all 32 stages, and you can skip individual stages at their approval gates.
+When in doubt, start with `feature` — it includes all 32 stages, and CONDITIONAL stages will self-skip when their conditions do not apply to your project.
 
 ---
 

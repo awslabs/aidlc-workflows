@@ -80,6 +80,12 @@ function extractRegion(): string {
   if (begin === -1 || end === -1 || end < begin) {
     throw new Error("scope-stage-matrix markers missing or out of order");
   }
+  // Validate the BEGIN marker line is a complete HTML comment (ends with -->).
+  const beginLineEnd = doc.indexOf("\n", begin);
+  const beginLine = doc.slice(begin, beginLineEnd === -1 ? undefined : beginLineEnd);
+  if (!beginLine.trimEnd().endsWith("-->")) {
+    throw new Error("BEGIN marker is not a complete HTML comment (missing closing -->)");
+  }
   // A second BEGIN would mean a stale duplicate of the table elsewhere.
   if (doc.indexOf(BEGIN_MARKER, begin + 1) !== -1) {
     throw new Error("duplicate scope-stage-matrix BEGIN marker");
@@ -111,10 +117,20 @@ function validateSeparator(line: string, expectedColumns: number): void {
 }
 
 function parseDocTable(): DocTable {
-  const lines = extractRegion()
-    .split("\n")
-    .filter((l) => l.trim().startsWith("|"));
-  if (lines.length < 3) throw new Error("matrix table not found inside markers");
+  const allLines = extractRegion().split("\n");
+  const pipeIndices = allLines
+    .map((l, i) => (l.trim().startsWith("|") ? i : -1))
+    .filter((i) => i !== -1);
+  if (pipeIndices.length < 3) throw new Error("matrix table not found inside markers");
+  // The table must be one contiguous block — no blank lines mid-table.
+  for (let i = 1; i < pipeIndices.length; i++) {
+    if (pipeIndices[i] !== pipeIndices[i - 1] + 1) {
+      throw new Error(
+        `table is not contiguous: gap at line ${pipeIndices[i - 1] + 1} — blank or non-pipe line interrupts the Markdown table`,
+      );
+    }
+  }
+  const lines = pipeIndices.map((i) => allLines[i]);
 
   const header = cells(lines[0]);
   // Validate the fixed header columns.
