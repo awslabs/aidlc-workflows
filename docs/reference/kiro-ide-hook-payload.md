@@ -24,11 +24,13 @@ A live 1.0.165 PostToolUse capture, field-verbatim:
 
 The adapter uses a non-empty `USER_PROMPT` immediately (the 0.12 channel,
 whose stdin never closes). When that variable is empty, it reads stdin for the
-1.x channel, raced against a 2s broken-channel timeout. Both field spellings
-are accepted. Acquisition is gated to the two payload-dependent targets
-(`audit-and-sensors`, `log-subagent`); every other target (including the
-per-tool-call `block` floor) touches neither channel and keeps its zero-latency
-path.
+1.x channel, raced against a broken-channel timeout. The production default is
+2s; a positive `AIDLC_IDE_STDIN_TIMEOUT_MS` value overrides the ceiling in
+milliseconds for diagnostics and deterministic latency tests. Both field
+spellings are accepted. Acquisition is gated to the two payload-dependent
+targets (`audit-and-sensors`, `log-subagent`); every other target (including
+the per-tool-call `block` floor) touches neither channel and keeps its
+zero-latency path.
 
 `VSCODE_IPC_HOOK` / `VSCODE_PID` are also present in the IDE (absent on the
 CLI), but the adapter keys off the payload channels above.
@@ -52,10 +54,14 @@ Result prose is identical on both channels (`toolResult` on 0.12,
    and the shell command is absent (only stdout + exit code is present). This is
    not a universal IDE rule: later 1.x builds populate some PreToolUse inputs
    and delegation inputs (#543).
-2. **1.x carries no success flag.** Only the 0.12 channel's explicit
-   `toolSuccess: false` drops a write from the audit (#417); a 1.x payload
-   falls through to the path check, and error prose that matches no known
-   pattern records a visible hook-drop.
+2. **1.x carries no success flag.** Only the 0.12 channel's explicit boolean
+   `toolSuccess: false` drops a well-formed write from the audit (#417); a 1.x
+   payload with the field absent falls through to the path check, and error
+   prose that matches no known pattern records a visible hook-drop. A present
+   non-null payload field with the wrong runtime type is treated as malformed:
+   the advisory hook exits successfully, records a visible drop, and forwards
+   no audit or subagent event. `null` is treated like an unavailable field,
+   matching the channel's existing absent-value contract.
 3. **Paths in the result prose are workspace-RELATIVE**, but the core hooks
    compare against an absolute record root — so the adapter resolves them to
    absolute before forwarding.
@@ -82,8 +88,9 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   is therefore broad (`^(subagent_.+|invoke_sub_agent)$`) so every delegate name
   reaches the adapter, and the adapter drops `subagent_response` — that shell
   carries prose but no identity, so forwarding it would fabricate a
-  `SUBAGENT_COMPLETED` row with `Agent Type: unknown`. Identity is recovered
-  from the result prose (#459/#543).
+  `SUBAGENT_COMPLETED` row with `Agent Type: unknown`. Identity prefers the
+  result prose marker from #459 and falls back to the 1.x `subagent_<agent>`
+  tool name for domain-expert results that do not self-identify (#543).
 - **session-start / session-end / stop / mint / block** — need no payload;
   they never read stdin.
 

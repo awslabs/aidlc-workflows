@@ -40,8 +40,8 @@
 //     filter and always forward — the core hook self-gates on the audit tail.
 //   - state-sync: payload-independent — the core hook reads the latest
 //     STAGE_STARTED slug from the audit tail (no task payload needed).
-//   - log-subagent: recovers the delegate's identity + message from the
-//     result prose (payload-dependent, #459).
+//   - log-subagent: recovers the delegate's identity from the result prose or
+//     the 1.x `subagent_<agent>` tool name, plus the message (#459/#543).
 //   - session-start/session-end/stop: no payload needed; build the same
 //     fixed inputs as before.
 //
@@ -83,6 +83,11 @@ interface IdeHookContext {
   toolArgs?: Record<string, unknown>;
   toolResult?: string;
   toolSuccess?: boolean;
+  malformedFields?: string[];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 // The two targets whose forward depends on the tool payload. Every other
@@ -113,21 +118,43 @@ if (PAYLOAD_TARGETS.has(target)) {
   if (raw.trim().length === 0) raw = process.env.USER_PROMPT ?? "";
   if (raw.trim().length > 0) {
     try {
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      const rawResult = parsed.toolResult ?? parsed.tool_response;
-      ide = {
-        toolName: (parsed.toolName ?? parsed.tool_name) as string | undefined,
-        toolArgs: (parsed.toolArgs ?? parsed.tool_input) as
-          | Record<string, unknown>
-          | undefined,
-        toolResult: typeof rawResult === "string" ? rawResult : "",
-        toolSuccess: (parsed.toolSuccess ?? parsed.tool_success) as
-          | boolean
-          | undefined,
-      };
+      const parsed: unknown = JSON.parse(raw);
+      if (!isRecord(parsed)) {
+        ide = { malformedFields: ["payload"] };
+      } else {
+        const rawName = parsed.toolName ?? parsed.tool_name;
+        const rawArgs = parsed.toolArgs ?? parsed.tool_input;
+        const rawResult = parsed.toolResult ?? parsed.tool_response;
+        const rawSuccess = parsed.toolSuccess ?? parsed.tool_success;
+        const malformedFields: string[] = [];
+        if (rawName !== null && rawName !== undefined && typeof rawName !== "string") {
+          malformedFields.push("toolName");
+        }
+        if (rawArgs !== null && rawArgs !== undefined && !isRecord(rawArgs)) {
+          malformedFields.push("toolArgs");
+        }
+        if (rawResult !== null && rawResult !== undefined && typeof rawResult !== "string") {
+          malformedFields.push("toolResult");
+        }
+        if (
+          rawSuccess !== null &&
+          rawSuccess !== undefined &&
+          typeof rawSuccess !== "boolean"
+        ) {
+          malformedFields.push("toolSuccess");
+        }
+        ide = {
+          toolName: typeof rawName === "string" ? rawName : undefined,
+          toolArgs: isRecord(rawArgs) ? rawArgs : undefined,
+          toolResult: typeof rawResult === "string" ? rawResult : "",
+          toolSuccess: typeof rawSuccess === "boolean" ? rawSuccess : undefined,
+          malformedFields: malformedFields.length > 0 ? malformedFields : undefined,
+        };
+      }
     } catch {
-      // Malformed context — advisory hooks fail open.
-      ide = {};
+      // Malformed context — advisory hooks fail open without forwarding an
+      // event whose fields cannot be trusted.
+      ide = { malformedFields: ["JSON"] };
     }
   }
 }
@@ -231,17 +258,20 @@ function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
 }
 
 // Recover the delegated agent's identity from its result text (#459). The IDE
-// surfaces no structured subagent roster, but the framework's delegation-target
-// agents self-identify on the first non-empty line as `**Reviewer:** <name>` or
-// `**Agent:** <name>` (the workaround pinned in issue #459). Scan the first few
-// lines for that marker; return "unknown" when none is present so the core
-// hook's default still applies. The captured name is trimmed of any trailing
-// markdown emphasis.
-function extractAgentIdentity(toolResult: string): string {
+// surfaces no structured subagent roster, but reviewer personas self-identify
+// near the top of their result as `**Reviewer:** <name>` or `**Agent:** <name>`.
+// Prefer that prose because it survives tool renames. IDE 1.x also encodes the
+// delegate in `subagent_<agent>` (#543), so use that known identity when a
+// domain-expert result has no self-identification line. The 0.12
+// `invoke_sub_agent` shape has no equivalent fallback and remains "unknown".
+function extractAgentIdentity(toolResult: string, toolName = ""): string {
   const lines = toolResult.split("\n").slice(0, 8);
   for (const line of lines) {
     const m = line.match(/^\s*\*\*(?:Reviewer|Agent)\s*:\*\*\s*(.+?)\s*$/);
     if (m) return m[1].replace(/\*+$/, "").trim() || "unknown";
+  }
+  if (toolName.startsWith("subagent_") && toolName !== "subagent_response") {
+    return toolName.slice("subagent_".length).trim() || "unknown";
   }
   return "unknown";
 }
@@ -249,6 +279,15 @@ function extractAgentIdentity(toolResult: string): string {
 type Forward = { hook: string; input: Record<string, unknown> } | null;
 
 function buildForward(): Forward {
+  if ((ide.malformedFields?.length ?? 0) > 0) {
+    recordHookDrop(
+      projectDir,
+      "kiro-adapter",
+      `${target}: malformed hook context fields (${ide.malformedFields?.join(", ")}) — event not forwarded`,
+    );
+    return null;
+  }
+
   switch (target) {
     case "session-start":
       // UserPromptSubmit carries no source discrimination — every submit is a
@@ -363,21 +402,33 @@ function buildForward(): Forward {
       // also covers the direct and dispatcher entry points that bypass the
       // matcher entirely.
       const toolName = ide.toolName ?? "";
+      const result = ide.toolResult ?? "";
+      // A completely empty context means acquisition failed on both channels.
+      // Check it before the tool-name gate; otherwise the empty name returns as
+      // a legitimate non-delegate no-op and the broken channel stays invisible.
+      if (toolName === "" && result.trim() === "") {
+        recordHookDrop(
+          projectDir,
+          "kiro-adapter",
+          "log-subagent: empty hook context (no stdin payload, no USER_PROMPT) — SUBAGENT_COMPLETED not recorded",
+        );
+        return null;
+      }
+
       const isSubagentCompletion =
         toolName === "invoke_sub_agent" ||
         (toolName.startsWith("subagent_") && toolName !== "subagent_response");
       if (!isSubagentCompletion) return null;
 
-      // The delegate self-identifies on the first line of its result
-      // (`**Reviewer:** <name>` / `**Agent:** <name>`, #459). Recover that
-      // identity rather than hardcoding "unknown", and forward the result text
-      // so SUBAGENT_COMPLETED carries the real agent and an output snippet.
+      // Reviewer personas self-identify in their result (`**Reviewer:**` /
+      // `**Agent:**`, #459). Domain-expert delegates need not do so, but IDE
+      // 1.x also carries their identity in `subagent_<agent>`; prefer the prose
+      // and fall back to that tool name. Forward the result text so
+      // SUBAGENT_COMPLETED also carries an output snippet.
       //
-      // An EMPTY result (defensive: stdin timeout on a broken channel, or a
-      // fallback to an empty USER_PROMPT on a version that doesn't populate it)
-      // must NOT fabricate a real SUBAGENT_COMPLETED row with unknown identity.
-      // No-op with a visible drop so --doctor can surface the degradation.
-      const result = ide.toolResult ?? "";
+      // An EMPTY result on an otherwise recognized completion must NOT
+      // fabricate a real SUBAGENT_COMPLETED row. Record a visible drop so
+      // --doctor can surface the degradation.
       if (result.trim() === "") {
         recordHookDrop(
           projectDir,
@@ -390,7 +441,7 @@ function buildForward(): Forward {
         hook: "aidlc-log-subagent.ts",
         input: {
           hook_event_name: "SubagentStop",
-          agent_type: extractAgentIdentity(result),
+          agent_type: extractAgentIdentity(result, toolName),
           agent_id: "",
           last_assistant_message: result,
         },

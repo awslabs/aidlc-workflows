@@ -618,19 +618,20 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     }
   });
 
-  test("N5a: log-subagent accepts the captured subagent_<agent> completion and recovers identity", () => {
+  test("N5a: log-subagent falls back to the captured subagent_<agent> tool name", () => {
     const dir = scratchProject(true);
     try {
-      const result = "**Reviewer:** aidlc-product-lead-agent\n\nVerdict: READY";
+      const result = "Implementation complete. All files written and tests pass.";
       const r = runIdeStdin(
         dir,
         "log-subagent",
-        ctx1x("subagent_aidlc-product-lead-agent", result),
+        ctx1x("subagent_aidlc-developer-agent", result),
       );
       expect(r.code).toBe(0);
       const audit = readAudit(dir);
       expect(audit).toContain("SUBAGENT_COMPLETED");
-      expect(audit).toContain("aidlc-product-lead-agent");
+      expect(audit).toContain("**Agent Type**: aidlc-developer-agent");
+      expect(audit).not.toContain("**Agent Type**: unknown");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -755,22 +756,24 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
     }
   }, 30_000);
 
-  test("N10: an empty context on a payload target records a VISIBLE hook drop", async () => {
-    // P2-3: both channels empty means a broken channel, not a no-op. Without
-    // the drop, `--doctor` cannot surface exactly the decay this harness exists
-    // to eliminate.
-    const dir = scratchProject(true);
-    try {
-      const r = await runIdeOpenStdin(dir, "audit-and-sensors", null, 20_000, {
-        AIDLC_IDE_STDIN_TIMEOUT_MS: "500",
-      });
-      expect(r.timedOut).toBe(false);
-      expect(r.code).toBe(0);
-      const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
-      expect(existsSync(dropFile)).toBe(true);
-      expect(readFileSync(dropFile, "utf-8")).toContain("empty hook context");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+  test("N10: an empty context on either payload target records a VISIBLE hook drop", async () => {
+    // Both channels empty means a broken channel, not a no-op. Keep both
+    // payload-dependent legs in the same regression so their diagnostics
+    // cannot drift apart again.
+    for (const target of ["audit-and-sensors", "log-subagent"] as const) {
+      const dir = scratchProject(true);
+      try {
+        const r = await runIdeOpenStdin(dir, target, null, 20_000, {
+          AIDLC_IDE_STDIN_TIMEOUT_MS: "500",
+        });
+        expect(`${target}:timedOut=${r.timedOut}`).toBe(`${target}:timedOut=false`);
+        expect(`${target}:code=${r.code}`).toBe(`${target}:code=0`);
+        const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+        expect(`${target}:drops=${existsSync(dropFile)}`).toBe(`${target}:drops=true`);
+        expect(readFileSync(dropFile, "utf-8")).toContain(`${target}: empty hook context`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   }, 30_000);
 
@@ -800,6 +803,53 @@ describe("t218 IDE 1.x stdin channel (snake_case payload, USER_PROMPT empty)", (
       rmSync(dir, { recursive: true, force: true });
     }
   }, 90_000);
+
+  test("N12: non-string tool names fail open on both channels and entry paths", () => {
+    const result = "Implementation complete.";
+    const snakeCasePayload = JSON.stringify({
+      tool_name: 7,
+      tool_input: {},
+      tool_response: result,
+    });
+    const camelCasePayload = JSON.stringify({
+      toolName: ["subagent_aidlc-developer-agent"],
+      toolArgs: {},
+      toolResult: result,
+      toolSuccess: true,
+    });
+    const scenarios = [
+      {
+        label: "1.x direct",
+        invoke: (dir: string) => runIdeStdin(dir, "log-subagent", snakeCasePayload),
+      },
+      {
+        label: "1.x dispatcher",
+        invoke: (dir: string) => runIdeDispatcherStdin(dir, "log-subagent", snakeCasePayload),
+      },
+      {
+        label: "0.12 direct",
+        invoke: (dir: string) => runIde(dir, "log-subagent", camelCasePayload),
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const dir = scratchProject(true);
+      try {
+        const r = scenario.invoke(dir);
+        expect(`${scenario.label}:code=${r.code}`).toBe(`${scenario.label}:code=0`);
+        expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
+        const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+        expect(`${scenario.label}:drops=${existsSync(dropFile)}`).toBe(
+          `${scenario.label}:drops=true`,
+        );
+        expect(readFileSync(dropFile, "utf-8")).toContain(
+          "malformed hook context fields (toolName)",
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
 });
 
 // ============================================================
@@ -1047,6 +1097,107 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
       expect(readAudit(dir)).toContain("ARTIFACT_CREATED");
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("T3: present non-boolean success flags fail open without auditing the write", () => {
+    const scenarios = [
+      {
+        label: "1.x string false",
+        invoke: (dir: string, file: string) =>
+          runIdeStdin(
+            dir,
+            "audit-and-sensors",
+            JSON.stringify({
+              tool_name: "fs_write",
+              tool_input: {},
+              tool_response: `Created the ${file} file.`,
+              tool_success: "false",
+            }),
+          ),
+      },
+      {
+        label: "0.12 numeric false",
+        invoke: (dir: string, file: string) =>
+          runIde(
+            dir,
+            "audit-and-sensors",
+            JSON.stringify({
+              toolName: "fs_write",
+              toolArgs: {},
+              toolResult: `Created the ${file} file.`,
+              toolSuccess: 0,
+            }),
+          ),
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const dir = scratchProject(true);
+      try {
+        const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, "# intent\n");
+        const r = scenario.invoke(dir, file);
+        expect(`${scenario.label}:code=${r.code}`).toBe(`${scenario.label}:code=0`);
+        expect(readAudit(dir)).not.toContain("ARTIFACT_");
+        const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+        expect(`${scenario.label}:drops=${existsSync(dropFile)}`).toBe(
+          `${scenario.label}:drops=true`,
+        );
+        expect(readFileSync(dropFile, "utf-8")).toContain(
+          "malformed hook context fields (toolSuccess)",
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("T4: a null success flag follows the existing absent-value contract", () => {
+    const scenarios = [
+      {
+        label: "1.x null",
+        invoke: (dir: string, file: string) =>
+          runIdeStdin(
+            dir,
+            "audit-and-sensors",
+            JSON.stringify({
+              tool_name: "fs_write",
+              tool_input: {},
+              tool_response: `Created the ${file} file.`,
+              tool_success: null,
+            }),
+          ),
+      },
+      {
+        label: "0.12 null",
+        invoke: (dir: string, file: string) =>
+          runIde(
+            dir,
+            "audit-and-sensors",
+            JSON.stringify({
+              toolName: "fs_write",
+              toolArgs: {},
+              toolResult: `Created the ${file} file.`,
+              toolSuccess: null,
+            }),
+          ),
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const dir = scratchProject(true);
+      try {
+        const file = join(seededRecordDir(dir), "ideation", "intent-capture", "intent.md");
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, "# intent\n");
+        const r = scenario.invoke(dir, file);
+        expect(`${scenario.label}:code=${r.code}`).toBe(`${scenario.label}:code=0`);
+        expect(readAudit(dir)).toContain("ARTIFACT_CREATED");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 });
