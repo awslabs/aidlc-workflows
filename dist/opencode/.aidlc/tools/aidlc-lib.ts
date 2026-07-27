@@ -3276,13 +3276,15 @@ export function repoDir(projectDir: string, repoName: string): string {
 // treat null as "no binding available" and keep today's behaviour (fail-open),
 // which also grandfathers receipts recorded before this shipped.
 
-// The record tree, the CLI/IDE workspace shell, and Bolt swarm worktrees are
-// ROOT-anchored: `aidlc/` and `.aidlc/` (worktreePath) live only at the
-// fingerprinted repoDir's own top level (for a multi-repo intent, `aidlc/` is
-// a SIBLING of the repo dirs, never nested inside one - resolveConstructionRepo
-// / repoDir). A plain pathspec (no glob magic) implicitly prefix-matches as a
-// directory ONLY relative to repoDir, which is exactly the scope wanted here.
-const AIDLC_ROOT_ONLY_DIR_NAMES = ["aidlc", ".aidlc", ".aidlc-worktrees"];
+// The record tree and the CLI/IDE workspace shell are anchored at the top level
+// of the dir that CARRIES the shell: the workspace roof, or a Bolt worktree
+// (which holds its own record mirror). For a multi-repo intent `aidlc/` is a
+// SIBLING of the repo dirs (resolveConstructionRepo / repoDir) and
+// `.aidlc/worktrees/` (worktreePath) hangs off the roof - neither is ever
+// legitimately inside a fingerprinted repo or submodule, where a directory of
+// those names is application source (#646 review). The trailing slash keeps the
+// pathspec a directory match, so a root FILE named `aidlc` stays in the walk.
+const AIDLC_SHELL_DIR_NAMES = ["aidlc/", ".aidlc/"];
 
 // The sensor cache is the one member of the family that is NOT root-anchored:
 // the type-check sensor anchors `.aidlc-sensors/.tsbuildinfo` at the tsconfig
@@ -3290,22 +3292,24 @@ const AIDLC_ROOT_ONLY_DIR_NAMES = ["aidlc", ".aidlc", ".aidlc-worktrees"];
 // monorepo's per-package tsconfig can put anywhere under repoDir. This alone
 // is matched via `**/<name>/**` pathspec glob magic (any depth).
 //
-// #646 review - the root-only/any-depth split above is
+// #646 review - the shell/any-depth split above is
 // deliberate, not an oversight: an earlier fix applied `**/<name>/**` to ALL
 // four names to close a *reported* nested-.aidlc-sensors leak, but that
 // pathspec matches the literal directory name at ANY depth - including a
 // directory that is genuinely part of the application, coincidentally named
-// `aidlc`/`.aidlc`/`.aidlc-worktrees` for reasons unrelated to this
-// framework's own shell (e.g. `src/aidlc/parser.ts`, a real feature named
-// after the methodology). That silently dropped real source from the
-// fingerprint - reproduced: `workspaceSourceFingerprint` was unchanged after
-// adding tracked content under `src/aidlc/`. Scoping the other three names
-// back to root-only (their only legitimate location) closes that hole while
+// `aidlc`/`.aidlc` for reasons unrelated to this framework's own shell (e.g.
+// `src/aidlc/parser.ts`, a real feature named after the methodology). That
+// silently dropped real source from the fingerprint - reproduced:
+// `workspaceSourceFingerprint` was unchanged after adding tracked content
+// under `src/aidlc/`. Scoping the other two names back to the shell-carrying
+// dir's own top level (their only legitimate location) closes that hole while
 // keeping the `.aidlc-sensors` any-depth match that was the actual, narrower
 // gap reported.
 const AIDLC_ANY_DEPTH_DIR_NAMES = [".aidlc-sensors"];
 
-function gitTreeFingerprint(repoDir: string): string | null {
+// `carriesWorkspaceShell` is REQUIRED, never defaulted: a new call site must
+// decide, so the shell exclusion cannot leak into a derived dir by omission.
+function gitTreeFingerprint(repoDir: string, carriesWorkspaceShell: boolean): string | null {
   if (!isGitRepoDir(repoDir)) return null;
   const idx = join(
     tmpdir(),
@@ -3326,15 +3330,17 @@ function gitTreeFingerprint(repoDir: string): string | null {
     // freshness is already covered by the audit-event invalidation; this
     // fingerprint is the APPLICATION SOURCE binding. --ignore-unmatch keeps
     // this a no-op when nothing matches (sibling repos with no aidlc tree).
-    spawnSync(
-      "git",
-      [
-        "-C", repoDir, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--",
-        ...AIDLC_ROOT_ONLY_DIR_NAMES,
-        ...AIDLC_ANY_DEPTH_DIR_NAMES.map((name) => `:(glob)**/${name}/**`),
-      ],
-      { env, encoding: "utf-8" },
-    );
+    const excluded = [
+      ...(carriesWorkspaceShell ? AIDLC_SHELL_DIR_NAMES : []),
+      ...AIDLC_ANY_DEPTH_DIR_NAMES.map((name) => `:(glob)**/${name}/**`),
+    ];
+    if (excluded.length > 0) {
+      spawnSync(
+        "git",
+        ["-C", repoDir, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ...excluded],
+        { env, encoding: "utf-8" },
+      );
+    }
     const wt = spawnSync("git", ["-C", repoDir, "write-tree"], { env, encoding: "utf-8" });
     if (wt.status !== 0) return null;
     const sha = wt.stdout.trim();
@@ -3374,7 +3380,8 @@ function gitTreeFingerprint(repoDir: string): string | null {
         if (!subPath) continue;
         const subDir = join(repoDir, subPath);
         if (!isGitRepoDir(subDir)) continue;
-        const subFp = gitTreeFingerprint(subDir);
+        // A submodule's own `aidlc/` is the submodule's application source.
+        const subFp = gitTreeFingerprint(subDir, false);
         if (subFp === null) return null;
         subLines.push(`${subPath}=${subFp}`);
       }
@@ -3389,10 +3396,14 @@ function gitTreeFingerprint(repoDir: string): string | null {
 
 export function workspaceSourceFingerprint(projectDir: string): string | null {
   const repos = intentRepos(projectDir);
-  if (repos.length === 0) return gitTreeFingerprint(projectDir);
+  // No recorded repos: projectDir IS the checkout (legacy single-repo, or a Bolt
+  // worktree - see aidlc-swarm.ts finalize) and carries the shell at its top.
+  if (repos.length === 0) return gitTreeFingerprint(projectDir, true);
   const lines: string[] = [];
   for (const name of [...repos].sort()) {
-    const sha = gitTreeFingerprint(repoDir(projectDir, name));
+    // A sibling repo is a child of the roof; the shell is its SIBLING, never
+    // nested inside it, so nothing there belongs to the framework.
+    const sha = gitTreeFingerprint(repoDir(projectDir, name), false);
     if (sha === null) return null;
     lines.push(`${name}=${sha}`);
   }

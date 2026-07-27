@@ -164,6 +164,25 @@ function stripFingerprintFields(proj: string): void {
   }
 }
 
+// Seed the minimum an intent registry needs for intentRepos() to resolve a
+// recorded repo set: the default space's intents dir, an active-intent cursor
+// naming a record that holds an aidlc-state.md, and one registry row carrying
+// `repos`. This is the layout sibling auto-discovery produces at intent birth
+// (resolveBirthRepoSet -> discoverSiblingRepos), so it is the DEFAULT shape,
+// not an exotic one - which is what makes the exclusion scope matter.
+function registerRepos(projectDir: string, repos: string[]): void {
+  const intents = join(projectDir, "aidlc", "spaces", "default", "intents");
+  const record = "fixture-intent";
+  mkdirSync(join(intents, record), { recursive: true });
+  writeFileSync(join(intents, record, "aidlc-state.md"), "# state\n", "utf-8");
+  writeFileSync(join(intents, "active-intent"), `${record}\n`, "utf-8");
+  writeFileSync(
+    join(intents, "intents.json"),
+    `${JSON.stringify([{ dirName: record, slug: "fixture", repos }], null, 2)}\n`,
+    "utf-8",
+  );
+}
+
 describe("t244 workspace source fingerprint (in-process)", () => {
   let dir: string;
   beforeEach(() => {
@@ -315,44 +334,141 @@ describe("t244 workspace source fingerprint (in-process)", () => {
     expect(existsSync(src)).toBe(true);
   });
 
-  // #646 review - reproduction. Unlike .aidlc-sensors,
-  // `aidlc`/`.aidlc`/`.aidlc-worktrees` are ROOT-anchored (worktreePath,
-  // repoDir): they never legitimately nest inside application source. An
-  // earlier fix applied the any-depth glob to all four names alike, which
-  // silently dropped REAL application source that happens to live under a
-  // directory coincidentally named `aidlc` (e.g. a feature module named
-  // after the methodology itself) - a source-freshness bypass, since an edit
-  // under that path would never invalidate a stale receipt. Root-level
-  // occurrences of all three still exclude correctly (they ARE the
+  // #646 review - reproduction. Unlike .aidlc-sensors, `aidlc`/`.aidlc` are
+  // anchored at the top level of the dir that CARRIES the workspace shell:
+  // they never legitimately nest inside application source. An earlier fix
+  // applied the any-depth glob to all four names alike, which silently
+  // dropped REAL application source that happens to live under a directory
+  // coincidentally named `aidlc` (e.g. a feature module named after the
+  // methodology itself) - a source-freshness bypass, since an edit under that
+  // path would never invalidate a stale receipt. Occurrences at the
+  // shell-carrying dir's own top level still exclude correctly (they ARE the
   // framework's own shell there); only the nested, coincidentally-named case
   // is no longer swallowed.
-  test("excludes aidlc/.aidlc/.aidlc-worktrees only at the workspace root, never nested application source", () => {
+  test("excludes aidlc/.aidlc only where the workspace shell lives, never nested application source", () => {
     seedGitRepo(dir);
     const fp1 = workspaceSourceFingerprint(dir);
 
-    // Root-level occurrences of all three - genuinely the framework's own
-    // shell here - are still excluded.
+    // Top-level occurrences - genuinely the framework's own shell here - are
+    // still excluded. `.aidlc/worktrees/` is where Bolt worktrees live
+    // (worktreePath), covered by the `.aidlc/` entry.
     mkdirSync(join(dir, "aidlc"), { recursive: true });
     writeFileSync(join(dir, "aidlc", "x.md"), "record\n", "utf-8");
     mkdirSync(join(dir, ".aidlc", "worktrees"), { recursive: true });
     writeFileSync(join(dir, ".aidlc", "worktrees", "x.md"), "shell\n", "utf-8");
-    mkdirSync(join(dir, ".aidlc-worktrees"), { recursive: true });
-    writeFileSync(join(dir, ".aidlc-worktrees", "x.md"), "wt\n", "utf-8");
     expect(workspaceSourceFingerprint(dir)).toBe(fp1);
 
     // REAL application source nested under a directory coincidentally named
-    // `aidlc` (not the workspace root) DOES change the fingerprint - the bug
-    // this test guards was: it did not.
+    // `aidlc` (not the shell's own top level) DOES change the fingerprint -
+    // the bug this test guards was: it did not.
     mkdirSync(join(dir, "src", "aidlc"), { recursive: true });
     writeFileSync(join(dir, "src", "aidlc", "parser.ts"), "export function parse() {}\n", "utf-8");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
+  });
+
+  // #646 review - the pathspecs are directory-anchored (trailing slash). A
+  // plain pathspec also matches a FILE of that name, so a root file named
+  // `aidlc` - a plausible CLI wrapper - was being dropped from the walk with
+  // no framework reason at all.
+  test("a root FILE named aidlc is application source; only the directory is the shell", () => {
+    seedGitRepo(dir);
+    const fp1 = workspaceSourceFingerprint(dir);
+
+    writeFileSync(join(dir, "aidlc"), "#!/bin/sh\nexec bun ./cli.ts \"$@\"\n", "utf-8");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
+  });
+
+  // #646 review - the exclusion was applied relative to EVERY fingerprinted
+  // repo dir, so for a recorded sibling repo it stripped `repo-a/aidlc/**`.
+  // But the record tree is the SIBLING `<workspace>/aidlc/` (repoDir /
+  // resolveConstructionRepo) and Bolt worktrees are `<workspace>/.aidlc/
+  // worktrees/` (worktreePath) - neither ever legitimately lives inside a
+  // repo, where a directory of that name is application source. Reproduced:
+  // the fingerprint was byte-identical after writing repo-a/aidlc/*.
+  test("a directory named aidlc inside a REGISTERED sibling repo is application source", () => {
+    const repoA = join(dir, "repo-a");
+    mkdirSync(repoA, { recursive: true });
+    seedGitRepo(repoA);
+    registerRepos(dir, ["repo-a"]);
+
+    const fp1 = workspaceSourceFingerprint(dir);
+    expect(fp1).not.toBeNull();
+
+    mkdirSync(join(repoA, "aidlc"), { recursive: true });
+    writeFileSync(join(repoA, "aidlc", "application.ts"), "export const real = 1;\n", "utf-8");
     const fp2 = workspaceSourceFingerprint(dir);
     expect(fp2).not.toBe(fp1);
 
-    // Same for a nested `.aidlc-worktrees`-named directory that is real
-    // application content, not the framework's own worktree tree.
-    mkdirSync(join(dir, "src", ".aidlc-worktrees"), { recursive: true });
-    writeFileSync(join(dir, "src", ".aidlc-worktrees", "real.ts"), "export const x = 1;\n", "utf-8");
-    expect(workspaceSourceFingerprint(dir)).not.toBe(fp2);
+    // Same for `.aidlc` one level in, and a control that ordinary source
+    // still moves the hash (so the assertion above is not vacuous).
+    mkdirSync(join(repoA, ".aidlc"), { recursive: true });
+    writeFileSync(join(repoA, ".aidlc", "config.ts"), "export const cfg = 1;\n", "utf-8");
+    const fp3 = workspaceSourceFingerprint(dir);
+    expect(fp3).not.toBe(fp2);
+
+    writeFileSync(join(repoA, "control.ts"), "export const control = 1;\n", "utf-8");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(fp3);
+  });
+
+  // The same defect one level further down: the recursion fingerprinted each
+  // submodule with the shell exclusion applied to the submodule's own root.
+  test("a directory named aidlc inside an initialized submodule is that submodule's source", () => {
+    const subDir = mkdtempSync(join(tmpdir(), "t244-fp-sub-"));
+    try {
+      git(subDir, ["init", "-q"]);
+      git(subDir, ["config", "user.email", "t@test"]);
+      git(subDir, ["config", "user.name", "t"]);
+      writeFileSync(join(subDir, "lib.ts"), "export const v = 1;\n", "utf-8");
+      git(subDir, ["add", "-A"]);
+      git(subDir, ["commit", "-qm", "sub init"]);
+
+      seedGitRepo(dir);
+      git(dir, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", subDir, "vendor/lib"]);
+      git(dir, ["commit", "-qm", "add submodule"]);
+
+      const fp1 = workspaceSourceFingerprint(dir);
+      mkdirSync(join(dir, "vendor", "lib", "aidlc"), { recursive: true });
+      writeFileSync(
+        join(dir, "vendor", "lib", "aidlc", "application.ts"),
+        "export const real = 1;\n",
+        "utf-8",
+      );
+      expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
+    } finally {
+      rmSync(subDir, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  // The nested-source regression from the same review round must hold in the
+  // multi-repo layout too, not just the legacy single-repo one.
+  test("nested source under a coincidentally-named dir holds in the multi-repo layout", () => {
+    const repoA = join(dir, "repo-a");
+    mkdirSync(repoA, { recursive: true });
+    seedGitRepo(repoA);
+    registerRepos(dir, ["repo-a"]);
+
+    const fp1 = workspaceSourceFingerprint(dir);
+    mkdirSync(join(repoA, "src", "aidlc"), { recursive: true });
+    writeFileSync(join(repoA, "src", "aidlc", "engine.ts"), "export const e = 1;\n", "utf-8");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
+  });
+
+  // The any-depth `.aidlc-sensors` match is orthogonal to the shell split and
+  // must survive it inside a registered repo, where no shell exclusion applies.
+  test("a nested .aidlc-sensors cache inside a registered sibling repo is still excluded", () => {
+    const repoA = join(dir, "repo-a");
+    mkdirSync(repoA, { recursive: true });
+    seedGitRepo(repoA);
+    registerRepos(dir, ["repo-a"]);
+
+    const fp1 = workspaceSourceFingerprint(dir);
+    mkdirSync(join(repoA, "packages", "pkg", ".aidlc-sensors"), { recursive: true });
+    writeFileSync(
+      join(repoA, "packages", "pkg", ".aidlc-sensors", "tsbuildinfo"),
+      "cache\n",
+      "utf-8",
+    );
+    expect(workspaceSourceFingerprint(dir)).toBe(fp1);
   });
 });
 
