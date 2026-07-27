@@ -175,6 +175,8 @@ convergence ledger is the evidence); `report --single` checks stage-level
 evidence only. Bypass with `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1`, intended only
 for recovering a legitimately-run stage whose contribution files were lost.
 
+**Source-freshness binding (#629/#646).** On a `workspace_requires` stage, the reviewer's terminal receipt carries a `Source Fingerprint` of the workspace source the reviewer inspected, and `approve`, `advance`, `finalize`, and `complete-workflow` refuse while the current source differs from the newest recorded fingerprint for that stage. `AIDLC_SKIP_SOURCE_FRESHNESS=1` turns the whole feature off — both the newest-matches-current comparison at those four routes and `aidlc-swarm.ts finalize`'s per-worktree check — rather than waiving a single invocation. It is check-time only: `review --verdict` still stamps the field with the switch set, so a receipt recorded under the bypass is not durably poisoned and is honoured again once the switch is unset. See the `REVIEW_COMPLETED` row above for what the comparison does and does not prove.
+
 **Gate-revision backstop.** If the conductor revises an artifact at an open
 gate without first reporting rejection, the `approved` report reconciles the
 missing `GATE_REJECTED` + `STAGE_REVISING` pair before completion when audit
