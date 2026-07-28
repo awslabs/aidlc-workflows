@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.40] - 2026-08-05
+
+Adds per-stage and per-workflow token-usage and cost tracking plus an opt-in metrics emission seam. On Claude Code, a new PostToolUse fold hook records transcript usage in a durable, gitignored `.aidlc-sessions/usage-ledger.json`; the statusline gains a current-session `↑in ↓out $cost` segment, and `STAGE_COMPLETED` / `WORKFLOW_COMPLETED` audit events gain correctly scoped token and cost rollups. Everything remains off by default and additive: unknown models record tokens with a null cost, metrics emit only when `AIDLC_METRICS_ENDPOINT` is set, and non-Claude harnesses simply have no producer. **Upgrade:** re-copy your `dist/<harness>/` shell into the project. No action is required to stay silent; opt into metrics with `AIDLC_METRICS_ENDPOINT`, and override rates with `AIDLC_MODEL_RATES` or the installed `tools/data/model-rates.json`.
+
+* New Claude-only `aidlc-fold-usage.ts` PostToolUse hook folds complete transcript usage into a session- and intent-scoped ledger every LLM call; the Stop hook flushes a complete final JSONL record even when it has no trailing newline.
+* Ledger updates serialize across processes, use writer-unique atomic temporary files, retain stage identity at the transcript-message boundary, and flush before lifecycle completion events so concurrent sessions and stage transitions cannot lose or misattribute usage.
+* The statusline reports only the active session, `STAGE_COMPLETED` reports the completed stage, and `WORKFLOW_COMPLETED` reports the full active intent. Unknown-price models remain tokens-only rather than emitting a fabricated `$0`.
+* Model normalization enforces provider/model token boundaries and resolves exact generation keys from the effective rate table, including generations added through `AIDLC_MODEL_RATES`.
+* Metrics emission is opt-in via `AIDLC_METRICS_ENDPOINT`; custom HTTP headers from `AIDLC_METRICS_HEADERS` are passed to curl through a protected temporary config rather than process arguments. Batch audit appends use the same metrics tap as single events.
 ## [2.5.39] - 2026-08-05
 
 Fixes a live-session wedge at reviewer-bearing approval gates. A conductor that applied reviewer recommendations after recording the terminal review receipt invalidated its own receipt, then re-reviewed, re-edited, and oscillated instead of reaching the gate. The protocol now states the terminal ordering explicitly, and deterministic enforcement covers direct file tools, shell writes, compiled dispatch, and delegated Kiro writers. **Upgrade:** re-copy your selected `dist/<harness>/` shell into the project so the updated protocol, skills, hooks, tools, and agent configs are installed.

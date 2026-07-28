@@ -356,6 +356,29 @@ export function appendAuditEntryUnlocked(
   const path = ensureAuditFile(projectDir, intent, space);
   appendFileSync(path, renderAuditBlock(entry, ts), "utf-8");
 
+  // Metrics emission (opt-in). Lazily loaded and env-gated so aidlc-audit.ts
+  // carries no load-time dependency on aidlc-metrics.ts - the module only
+  // resolves when AIDLC_METRICS_ENDPOINT is set, keeping the audit path (and any
+  // test fixture that copies aidlc-audit.ts without the metrics module)
+  // byte-unchanged when metrics are off. Never throws: a metric failure must not
+  // break an audit write. All of this stays microsecond-cheap and under the
+  // audit lock (aidlc-metrics does only string parsing + a detached curl spawn,
+  // reading the pre-computed usage rollup fields aidlc-state.ts merged in).
+  if (process.env.AIDLC_METRICS_ENDPOINT) {
+    try {
+      const metrics = require("./aidlc-metrics.ts") as {
+        emitMetricForAuditEvent: (
+          eventType: string,
+          fields: Record<string, string>,
+          projectDir: string,
+        ) => void;
+      };
+      metrics.emitMetricForAuditEvent(eventType, fields, projectDir);
+    } catch {
+      // Metrics module missing or emit failed - never propagate.
+    }
+  }
+
   return { appended: true, event: eventType, timestamp: ts };
 }
 

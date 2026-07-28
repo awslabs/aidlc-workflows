@@ -121,6 +121,7 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
   /* @aidlc-shipped-entrypoints@ */ [
     "hooks/aidlc-audit-logger.ts",
     "hooks/aidlc-dispatch-rules.ts",
+    "hooks/aidlc-fold-usage.ts",
     "hooks/aidlc-log-subagent.ts",
     "hooks/aidlc-mint-presence.ts",
     "hooks/aidlc-review-freeze.ts",
@@ -144,6 +145,7 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
     "tools/aidlc-learnings.ts",
     "tools/aidlc-lib.ts",
     "tools/aidlc-log.ts",
+    "tools/aidlc-metrics.ts",
     "tools/aidlc-orchestrate.ts",
     "tools/aidlc-rule-schema.ts",
     "tools/aidlc-runner-gen.ts",
@@ -161,6 +163,7 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
     "tools/aidlc-steering.ts",
     "tools/aidlc-swarm.ts",
     "tools/aidlc-tiers.ts",
+    "tools/aidlc-usage.ts",
     "tools/aidlc-utility.ts",
     "tools/aidlc-validate.ts",
     "tools/aidlc-version.ts",

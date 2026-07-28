@@ -132,6 +132,15 @@
             "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-runtime-compile.ts\""
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/aidlc-fold-usage.ts\""
+          }
+        ]
       }
     ],
     "PreCompact": [

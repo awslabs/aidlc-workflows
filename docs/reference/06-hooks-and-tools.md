@@ -1,6 +1,6 @@
 # Hooks and Tools
 
-This chapter documents the hook system architecture, all fifteen hook scripts, the audit event taxonomy, CLI tool configuration, and the deterministic utility tool.
+This chapter documents the hook system architecture, all sixteen hook scripts, the audit event taxonomy, CLI tool configuration, and the deterministic utility tool.
 
 > **Path convention.** State, audit, and artifacts live under the active intent's **record dir** — `aidlc/spaces/<space>/intents/<YYMMDD>-<label>/`, written `<record>/` below (a compact UTC date prefix plus a short kebab-case label so record dirs sort chronologically; the canonical id is the UUIDv7 in the `intents.json` registry row). The audit trail is a directory of per-clone shards under `<record>/audit/`, not a single file.
 
@@ -8,9 +8,9 @@ This chapter documents the hook system architecture, all fifteen hook scripts, t
 
 ## Hook System Architecture
 
-This implementation uses fifteen hook scripts in `.claude/hooks/`. All fifteen are TypeScript (run via `bun`). All fifteen are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other fourteen via the `hooks` block), they fire regardless of which skill is active. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block.
+This implementation uses sixteen hook scripts in `.claude/hooks/`. All sixteen are TypeScript (run via `bun`). All sixteen are **project-wide** — registered in `settings.json` (the statusline via the top-level `statusLine` key, the other fifteen via the `hooks` block), they fire regardless of which skill is active. They were previously split (six declared in `aidlc/SKILL.md` frontmatter as skill-scoped, the rest project-wide); v0.6.0 moved the skill-scoped six into `settings.json` so every entry point — the orchestrator, each packaged scope/stage runner, and any hand-written customer runner — inherits the deterministic spine with no per-runner `hooks:` block.
 
-Ten of the fifteen are **non-blocking**. Five are **flow-altering**: the `Stop` hook keeps the forwarding loop running, the dispatch-rules hook attaches exact active-stage rules to subagent briefs where the harness supports input rewriting, the reviewer-scope hook refuses sibling-unit reviewer access, the review-freeze hook refuses a produces[] write that would void a fresh READY review receipt before the gate, and the state-transition guard refuses direct lifecycle calls that bypass `aidlc-orchestrate.ts report`.
+Eleven of the sixteen are **non-blocking**. Five are **flow-altering**: the `Stop` hook keeps the forwarding loop running, the dispatch-rules hook attaches exact active-stage rules to subagent briefs where the harness supports input rewriting, the reviewer-scope hook refuses sibling-unit reviewer access, the review-freeze hook refuses a produces[] write that would void a fresh READY review receipt before the gate, and the state-transition guard refuses direct lifecycle calls that bypass `aidlc-orchestrate.ts report`.
 
 ```
 .claude/hooks/
@@ -23,6 +23,7 @@ Ten of the fifteen are **non-blocking**. Five are **flow-altering**: the `Stop` 
 +-- sensor-fire.ts       # PostToolUse Write|Edit (project-wide, settings.json, TypeScript)
 +-- sync-statusline.ts   # PostToolUse TaskUpdate (project-wide, settings.json, TypeScript)
 +-- runtime-compile.ts   # PostToolUse Bash (project-wide, settings.json, TypeScript)
++-- fold-usage.ts        # PostToolUse (project-wide, settings.json, TypeScript, Claude-only producer)
 +-- validate-state.ts    # PreCompact (project-wide, settings.json, TypeScript)
 +-- log-subagent.ts      # SubagentStop (project-wide, settings.json, TypeScript)
 +-- aidlc-stop.ts        # Stop (project-wide, settings.json, TypeScript, flow-altering)
@@ -44,6 +45,7 @@ Ten of the fifteen are **non-blocking**. Five are **flow-altering**: the `Stop` 
 | `sensor-fire.ts` | PostToolUse | Project-wide (settings.json) | `Write\|Edit` | Fire the active stage's resolved Sensors on matching writes (advisory; never blocks) |
 | `sync-statusline.ts` | PostToolUse | Project-wide (settings.json) | `TaskUpdate` | Auto-sync state file on stage task activation |
 | `runtime-compile.ts` | PostToolUse | Project-wide (settings.json) | `Bash` | Recompile `runtime-graph.json` on transition-class audit emits |
+| `fold-usage.ts` | PostToolUse | Project-wide (settings.json) | (empty) | **Claude-only.** Fold the transcript's new token usage into the durable usage ledger every llm call (mid-turn), so the statusline cost segment and the audit rollup stay current. Observe-only, never blocks; the Claude-Code transcript reader is wired only in the Claude harness, so on Kiro/Codex/opencode no producer runs and the ledger stays empty (every usage consumer degrades to no-data). See "Token usage and cost tracking" below |
 | `validate-state.ts` | PreCompact | Project-wide (settings.json) | (empty) | Validate state file, write recovery breadcrumb |
 | `log-subagent.ts` | SubagentStop | Project-wide (settings.json) | (empty) | Log subagent completion events |
 | `aidlc-stop.ts` | Stop | Project-wide (settings.json) | (empty) | **Flow-altering.** Enforce the forwarding loop on turn-end: run `aidlc-orchestrate next`; on `done` or `parked` allow the stop, on a pending directive block the stop and inject the next move back via `reason`. Allows the stop (human-wait carve-out) when the current stage is awaiting approval (`[?]`), being revised (`[R]`), `[-]` in-progress with an unanswered question in its canonical or active per-unit `<slug>-questions.md`, or the ending turn was conversational (the human's last prompt was answered with no workflow-engine call, read from the harness transcript) - the last two suppressed under autonomous Construction. Recursion-bounded (no-progress counter + `stop_hook_active` under `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`; default 2 in an interactive run and 8 under autonomous Construction). No-op outside an AIDLC workflow |
@@ -53,7 +55,7 @@ Ten of the fifteen are **non-blocking**. Five are **flow-altering**: the `Stop` 
 
 ### Shared Characteristics
 
-All fifteen TypeScript hooks:
+All sixteen TypeScript hooks:
 
 - Written in TypeScript, run via `bun`
 - Do not need executable permissions — work identically on macOS, Linux, and native Windows PowerShell
@@ -227,7 +229,7 @@ Workspace detection (0.2) used to be a subagent; it now runs deterministically i
 **Trigger:** When the conductor tries to end its turn (matcher: empty = always, while `/aidlc` is active)
 **Purpose:** Enforce the interactive forwarding loop — keep it running until the engine reports the workflow is `done`
 
-This is one of the framework's five flow-altering hooks, alongside the four PreToolUse controls below. It may return `{"decision":"block"}` to stop the turn from ending; the other ten hooks observe and exit 0. On the gated, conversational path the conductor (the LLM) holds the loop because only it can ask the human a question — so if it forgets to consult the engine, the workflow drifts. This hook removes that dependency on the LLM's diligence: the loop is enforced by the harness.
+This is one of the framework's five flow-altering hooks, alongside the four PreToolUse controls below. It may return `{"decision":"block"}` to stop the turn from ending; the other eleven hooks observe and exit 0. On the gated, conversational path the conductor (the LLM) holds the loop because only it can ask the human a question — so if it forgets to consult the engine, the workflow drifts. This hook removes that dependency on the LLM's diligence: the loop is enforced by the harness.
 
 **Processing steps:**
 
@@ -580,6 +582,57 @@ Materialises the intent's `runtime-graph.json`, the data-plane mirror of `stage-
 | `fragment-merge --slug <slug>` | Remove the worktree fragment (idempotent). Called by `aidlc-bolt.ts complete --merge` | — |
 
 Re-running `compile` against the same audit produces a byte-equivalent graph. It is invoked automatically by the `aidlc-runtime-compile.ts` PostToolUse Bash hook on every transition-class audit emit (`GATE_APPROVED`, `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `AUDIT_MERGED`, `WORKFLOW_COMPLETED`); manual invocation is a debug surface. The `fragment-fork` / `fragment-merge` primitives ride on the existing fork/merge audit boundaries (`STATE_FORKED` + `AUDIT_FORKED`, `STATE_MERGED` + `AUDIT_MERGED`) and emit no events of their own. All subcommands accept `--project-dir <path>`.
+
+---
+
+## Token Usage and Cost Tracking
+
+AI-DLC records per-stage token usage and (when priceable) cost, surfaces a cumulative cost segment in the statusline, and can emit token/cost metrics to an external collector. Everything here is **additive and off-by-default**: an untouched install writes no metrics and, on any harness other than Claude Code, produces no ledger and no statusline cost segment.
+
+### The seam (`aidlc-usage.ts`)
+
+One module owns the rate table, the Claude-Code transcript readers, the pure cost math, and the durable ledger. Every consumer (the audit rollup, the statusline segment, the metrics magnitude lines) reads this module and never re-parses a transcript itself.
+
+- **Robustness.** Nothing throws on malformed or missing input; a half-written transcript line is skipped, an absent/corrupt ledger yields a fresh empty one, and an **unknown model records its tokens with a `null` cost** — never a fabricated number.
+- **Split-line dedup + per-file cursors.** Claude Code writes one llm call as several contiguous JSONL lines sharing a `message.id`; the reader collapses each run to one row so usage is counted once. Sub-agents write separate `subagents/agent-<id>.jsonl` files whose `uuid`s collide with the main transcript's, so the ledger's incremental cursor is keyed **per source file** (`(file, byteOffset)`), not by a global uuid — this is what keeps concurrent sub-agent turns from being dropped or double-counted.
+
+### The durable ledger
+
+The producer hooks fold transcript usage into a gitignored `aidlc/.aidlc-sessions/usage-ledger.json` (schema-versioned; a stale pre-current-schema ledger is discarded and rebuilt rather than added onto). It carries whole-session `totals`, stage-scoped `byStage`, and `byModel` / `byAgent` breakdowns, plus a per-source-file cursor so each fold reads only the bytes appended since the last one. The PostToolUse `aidlc-fold-usage.ts` hook folds mid-turn (holding back the last, not-yet-complete message-id group per file); the `Stop` hook flushes it at turn-end.
+
+### Rate table and overrides
+
+Rates are USD per 1,000,000 tokens, keyed **per model generation** (`opus-5`, `opus-4-8`, `sonnet-5`, `haiku-4-5`, `fable-5`, …) so a new generation is never silently mis-priced onto an old family row. Bedrock/converse model ids (`converse/us.anthropic.claude-opus-4-8`, region-prefixed forms, the `[1m]` settings alias) are normalized before lookup. The table is built in three layers, each overlaying the previous **per model** (a partial file only changes the models it names):
+
+1. Hardcoded defaults in `aidlc-usage.ts` — PUBLIC Anthropic list prices, shipped as defaults, used as the floor.
+2. The shipped `<harness>/tools/data/model-rates.json` — the framework default an install can edit.
+3. `$AIDLC_MODEL_RATES` — a user/project-supplied rates file (same shape) layered on top.
+
+The public list prices are defaults, not a claim about what you are billed; a gateway or partner platform with different pricing overrides them via layer 2 or 3. A malformed rates file contributes nothing (the layers below stand).
+
+### Statusline segment
+
+The statusline reads only the rolled-up ledger (never the transcript) and appends `↑<in> ↓<out> $<usd>` when the ledger has data. When the cost is unknown (only unknown-price models) it shows tokens only — never a fake `$0` — and when no ledger exists (a non-Claude harness, or a Claude session before the first fold) it renders nothing, so the line is byte-unchanged from before this feature.
+
+### Audit rollup fields
+
+`STAGE_COMPLETED` and `WORKFLOW_COMPLETED` gain optional fields computed from the ledger **before the audit lock opens** (a ledger read, never transcript I/O, and try/caught so usage can never block or delay a completion event): `Tokens In`, `Tokens Out`, `Cache Read`, `Cache Write`, `Cost USD` (the literal `null` when the stage used only unknown-price models), and the `By Model` / `By Agent` cost breakdowns plus the `Tokens By Model` / `Tokens By Agent` token quads (`input/output/cacheRead/cacheWrite`, compact form). These are **fields on existing events** — no new event types, so the audit taxonomy count is unchanged.
+
+### Metrics emission (opt-in, `aidlc-metrics.ts`)
+
+A single tap in the audit append path (`appendAuditEntryUnlocked`) POSTs a StatsD-line-over-HTTP body via a detached, fire-and-forget `curl`. It is **disabled unless `AIDLC_METRICS_ENDPOINT` is set** — no endpoint ships in any harness's settings, so with the var unset the audit path is byte-untouched and nothing leaves the machine. It never throws into the audit write. Environment seams:
+
+| Env var | Effect |
+|---------|--------|
+| `AIDLC_METRICS_ENDPOINT` | The HTTP collector URL. **Unset = metrics disabled** (the default). |
+| `AIDLC_METRICS_PREFIX` | The StatsD metric-name prefix (default `aidlc`, e.g. `aidlc.tokens.input`). |
+| `AIDLC_METRICS_HEADERS` | Optional extra HTTP headers, one `Header-Name: value` per line (e.g. an Authorization bearer for a gated collector). |
+
+Every audit event emits a `<prefix>.<event_type>:1|c` counter; `STAGE_COMPLETED` / `WORKFLOW_COMPLETED` additionally emit token counters and a cost gauge (aggregate plus per-model and per-agent variants), parsed purely from the pre-computed rollup fields — no transcript I/O and no ledger read on the metrics path, so it stays cheap under the audit lock.
+
+### Harness scoping
+
+The transcript reader is **Claude-Code-format-specific**, and only the Claude harness wires a producer (the fold hook + the Stop-hook flush). Kiro, Codex, and opencode wire no producer: their ledger is never written, so the statusline shows no cost segment, the audit rollup adds no fields, and the metrics path (if an endpoint is set) still emits the per-event counters but no token/cost magnitude lines. Every consumer degrades silently to no-data rather than erroring.
 
 ---
 

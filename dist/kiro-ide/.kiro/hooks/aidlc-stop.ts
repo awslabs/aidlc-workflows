@@ -106,6 +106,10 @@ import {
   stopHookDir,
   harnessDir,
 } from "../tools/aidlc-lib.ts";
+import {
+  foldTranscriptIntoLedger,
+  writeCurrentTranscriptPath,
+} from "../tools/aidlc-usage.ts";
 
 const HOOK_NAME = "stop";
 
@@ -890,6 +894,11 @@ try {
 // handles chat instead).
 let stopHookActive = false;
 let transcriptPath: string | null = null;
+// The conversation id Claude Code stamps on Stop input - used to key the
+// session-scoped `<sessionId>.transcript` pointer written below. "" when absent
+// (a TTY/empty invocation or a host that omits it); writeCurrentTranscriptPath
+// still writes the unscoped `current.transcript` fallback in that case.
+let sessionId = "";
 // Transcript format: Codex's rollout JSONL lives under a `.../sessions/<date>/
 // rollout-*.jsonl` path and uses a {type,payload} shape; Claude's is message-
 // shaped JSONL. Default to Claude; switch to Codex when the path looks like a
@@ -901,6 +910,7 @@ try {
   if (raw !== null && typeof raw === "object") {
     const obj = raw as Record<string, unknown>;
     if ("stop_hook_active" in obj) stopHookActive = obj.stop_hook_active === true;
+    if (typeof obj.session_id === "string") sessionId = obj.session_id;
     if (typeof obj.transcript_path === "string" && obj.transcript_path.length > 0) {
       transcriptPath = obj.transcript_path;
       if (/[/\\]rollout-[^/\\]*\.jsonl$/.test(transcriptPath)) transcriptFormat = "codex";
@@ -910,6 +920,29 @@ try {
   // Malformed JSON (or empty): proceed with stopHookActive=false and no
   // transcript. The engine read below still governs whether work is pending; the
   // counter still bounds any block. We never crash on bad input.
+}
+
+// Usage bookkeeping - persist the live transcript path and fold its new turns
+// into the durable usage ledger under the current stage. This is THE turn-end
+// producer of usage-ledger.json alongside the mid-turn PostToolUse fold hook:
+// without it the statusline cost segment lags the final turn. Both calls are
+// cheap (the fold advances per-file cursors, so only new turns are read) and
+// BOTH are fully guarded - a usage failure must NEVER break or delay the Stop
+// hook, so any throw is swallowed here rather than propagated. Only Claude
+// transcripts are folded (the reader is Claude-format-specific); a Codex rollout
+// path is left alone. currentStage is the same Current Stage slug the rest of
+// this hook reads; null when absent so byStage isn't polluted.
+if (transcriptPath && transcriptFormat === "claude") {
+  try {
+    writeCurrentTranscriptPath(projectDir, sessionId, transcriptPath);
+    const currentStage = currentStageSlug(stateContent) || null;
+    // flush=true: the turn is ending, so every file's last message-id group is
+    // complete and must be counted now (the PostToolUse fold holds it back
+    // mid-turn; the Stop fold is the one that closes it).
+    foldTranscriptIntoLedger(projectDir, transcriptPath, currentStage, true);
+  } catch {
+    // best-effort - usage never breaks the hook
+  }
 }
 
 // Consult the engine for the next move. A null directive (engine unavailable /

@@ -62,6 +62,7 @@ import {
   writeStateFile,
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
+import { stageUsageAuditFields } from "./aidlc-usage.ts";
 
 // All valid checkbox states (lib.ts adds [?] awaiting-approval and [R] revising)
 const VALID_CHECKBOX_STATES: CheckboxState[] = [
@@ -124,6 +125,25 @@ function emitAudit(
     return appendAuditEntryUnlocked(eventType, fields, projectDir).timestamp;
   }
   return appendAuditEntry(eventType, fields, projectDir).timestamp;
+}
+
+// Per-stage token/cost rollup fields for STAGE_COMPLETED / WORKFLOW_COMPLETED.
+// Wraps aidlc-usage's ledger-read helper (a ledger read only: NO transcript
+// I/O) in a try/catch so any failure returns {} (no fields). Usage must NEVER
+// block, delay, or break a completion event, so the caller computes this into a
+// const ABOVE the withAuditLock(...) call and only merges the resulting strings
+// into the emit `fields`. "Before emitAudit" is NOT far enough - emitAudit runs
+// UNDER the held lock (see emitAudit above), so a ledger read there would still
+// happen inside the lock; computing it before the lock opens keeps the
+// completion path lock-clean. When no ledger exists (Kiro/Codex/opencode, or a
+// Claude session that never folded) this returns {} and the completion event is
+// unchanged.
+function stageRollupFields(pd: string, stageSlug: string): Record<string, string> {
+  try {
+    return stageUsageAuditFields(pd, stageSlug);
+  } catch {
+    return {};
+  }
 }
 
 function auditField(block: string, fieldName: string): string | null {
@@ -1321,6 +1341,13 @@ function handleAdvance(args: string[]): void {
   const completedSlug = positional[0];
 
   const pd = resolveProjectDir(projectDir);
+  // Per-stage token/cost rollup - computed BEFORE withAuditLock opens (a ledger
+  // read, never transcript I/O, and try/caught so it never blocks a completion).
+  // "Before emitAudit" is not far enough: emitAudit runs UNDER the held lock, so
+  // the read must happen above the lock. Merged into STAGE_COMPLETED's fields
+  // inside the arrow below. {} when no ledger exists (non-Claude harness, or a
+  // Claude session that never folded) - the event is then unchanged.
+  const usageFields = stageRollupFields(pd, completedSlug);
   // C2b lost-update safety: the whole read→decide→emit-audit→write critical
   // section runs under one audit lock so the next-stage derivation, the 5 audit
   // rows, and the state write all commit atomically against a single snapshot
@@ -1496,6 +1523,7 @@ function handleAdvance(args: string[]): void {
       emitAudit(pd, "STAGE_COMPLETED", {
         Stage: completedSlug,
         Details: `Stage ${completedStage.name} completed`,
+        ...usageFields,
       });
     }
     if (crossesPhaseBoundary) {
@@ -1653,6 +1681,11 @@ function handleCompleteWorkflow(args: string[]): void {
   }
 
   const pd = resolveProjectDir(projectDir);
+  // Per-stage token/cost rollup - computed BEFORE withAuditLock opens (ledger
+  // read only, try/caught) and merged into the completing stage's
+  // STAGE_COMPLETED and the WORKFLOW_COMPLETED event. The final stage's usage
+  // is the completing stage's rollup. {} when no ledger exists.
+  const usageFields = stageRollupFields(pd, completedSlug);
   // C2b lost-update safety: read→decide→emit-audit (4 rows)→write under one
   // lock so the 4 audit rows and the completion state commit atomically against
   // a single snapshot (audit-first / decide-inside-lock). emitAudit uses the
@@ -1722,6 +1755,7 @@ function handleCompleteWorkflow(args: string[]): void {
       emitAudit(pd, "STAGE_COMPLETED", {
         Stage: completedSlug,
         Details: `Final stage ${completedStage.name} completed`,
+        ...usageFields,
       });
     }
     emitAudit(pd, "PHASE_COMPLETED", {
@@ -1735,6 +1769,7 @@ function handleCompleteWorkflow(args: string[]): void {
     const workflowFields: Record<string, string> = {
       Scope: scope,
       Details: `Scope: ${scope}, ${completedCount} stages completed`,
+      ...usageFields,
     };
     if (reason) workflowFields.Reason = reason;
     emitAudit(pd, "WORKFLOW_COMPLETED", workflowFields);
@@ -1845,6 +1880,11 @@ function handleApprove(args: string[]): void {
   const { userInput } = parseApproveFlags(args.slice(1));
 
   const pd = resolveProjectDir(projectDir);
+  // Per-stage token/cost rollup - computed BEFORE the lock opens (ledger read
+  // only, try/caught). Approve is the STAGE_COMPLETED that fires in the normal
+  // gate flow (the nested advance/complete-workflow suppress their own once this
+  // one is audited), so the usage rollup attaches here. {} when no ledger exists.
+  const usageFields = stageRollupFields(pd, slug);
   // C2b lost-update safety: the ENTIRE approve transaction — including the
   // nested handleAdvance / handleCompleteWorkflow calls below — runs under one
   // outer lock. withAuditLock is REENTRANT (per-pd depth counter): the nested
@@ -1981,6 +2021,7 @@ function handleApprove(args: string[]): void {
     emitAudit(pd, "STAGE_COMPLETED", {
       Stage: slug,
       Details: `Stage ${stage.name} approved by gate`,
+      ...usageFields,
     });
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);

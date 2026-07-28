@@ -1738,7 +1738,10 @@ export function setActiveSpaceCursor(projectDir: string, name: string): void {
 // harness-neutral artifact; the session merely enriches the cursor on resume.
 export const SESSIONS_DIR = ".aidlc-sessions";
 
-function sessionsDir(projectDir: string): string {
+// The gitignored runtime scratch dir `aidlc/.aidlc-sessions/`. Exported because
+// aidlc-usage.ts writes the usage ledger and the persisted-transcript-path
+// pointers here, and the statusline/state consumers read the ledger back.
+export function sessionsDir(projectDir: string): string {
   return join(workspaceRoot(projectDir), SESSIONS_DIR);
 }
 
@@ -4657,6 +4660,17 @@ function stageGraphPath(): string {
 // installed tool, which a prose agent cannot derive itself).
 export function scopeGridPath(): string {
   return process.env.AIDLC_SCOPE_GRID ?? join(resolveDataDir(), "scope-grid.json");
+}
+
+// The SHIPPED framework-default model-rates table read by aidlc-usage.ts:
+// `tools/data/model-rates.json`, beside the compiled stage-graph. This is the
+// default layer only - the AIDLC_MODEL_RATES override is read separately by
+// aidlc-usage.ts loadRates and layered ON TOP, so an install can both edit the
+// shipped file AND point AIDLC_MODEL_RATES at another. Absent in a dev checkout
+// (authored core/ carries no path resolution failure - the caller falls back to
+// the hardcoded DEFAULT_RATES).
+export function modelRatesPath(): string {
+  return join(resolveDataDir(), "model-rates.json");
 }
 
 // scope-mapping.json is retired. It survives ONLY as a test
