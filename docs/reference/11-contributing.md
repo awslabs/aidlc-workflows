@@ -165,7 +165,7 @@ A scope is authored as a file (its identity) plus a per-stage membership tag. Th
 
 7. **Verify plan parity (optional but recommended)** — `AIDLC_GRAPH_RESOLVE=1 bun .claude/tools/aidlc-graph.ts resolve hotfix --stdout` emits the scope's plan; eyeball that the EXECUTE set matches what you tagged.
 
-8. **Update scope-aware documentation** — `docs/guide/05-scopes-and-depth.md` (full scope reference), `docs/guide/13-customization.md` (valid values list and scope table), and `docs/reference/03-orchestrator.md` (scope-to-stage mapping) all enumerate scopes explicitly. Per the documentation policy at the end of this chapter, update them in the same PR.
+8. **Update scope-aware documentation** — `docs/guide/05-scopes-and-depth.md` (full scope reference, including the Stage-by-Scope Matrix — its cells are drift-guarded against the compiled `scope-grid.json` by `tests/unit/t244-scope-matrix-doc-sync.test.ts`), `docs/guide/13-customization.md` (valid values list and scope table), and `docs/reference/03-orchestrator.md` (scope-to-stage mapping) all enumerate scopes explicitly. Per the documentation policy at the end of this chapter, update them in the same PR.
 
 9. **Add a scope-routing workflow test** — if the scope has behavior that differs from existing scopes (new phase skipping pattern, new depth combination), add a routed journey test modeled after `tests/e2e/t53.test.ts` (sdk scope routing) or `tests/e2e/t-tui-t50-bugfix-scope.serial.test.ts` (tui scope run-through).
 
@@ -197,7 +197,7 @@ A stage is authored as a Markdown file with YAML frontmatter under `core/aidlc-c
 
 4. **Verify the stage routes** — drive `bun .claude/tools/aidlc-orchestrate.ts next` over a workflow whose scope includes the stage, and confirm the engine emits a `run-stage` directive naming your slug with the resolved `lead_agent`, gate, `consumes`, and `produces`.
 
-5. **Update scope-aware and stage-aware documentation** — a new stage changes the stage count and the per-scope plans. Update `docs/reference/16-artifact-vocabulary.md` (the non-initialisation stage count), the Harness Engineer Guide's stage chapters, and any scope reference that enumerates the plan. Per the documentation policy at the end of this chapter, do it in the same PR.
+5. **Update scope-aware and stage-aware documentation** — a new stage changes the stage count and the per-scope plans. Update `docs/guide/05-scopes-and-depth.md` (the Stage-by-Scope Matrix — its cells are drift-guarded by `tests/unit/t244-scope-matrix-doc-sync.test.ts`), `docs/reference/16-artifact-vocabulary.md` (the non-initialisation stage count), the Harness Engineer Guide's stage chapters, and any scope reference that enumerates the plan. Per the documentation policy at the end of this chapter, do it in the same PR.
 
 6. **Add a test and refresh coverage** — author a `t*.test.ts` for the stage's behaviour (the suite is discovered, so dropping the file under the right level directory is all the runner needs — there is no registry row to add). Then regenerate the coverage index with `bun tests/gen-coverage-registry.ts` and confirm `bun tests/gen-coverage-registry.ts --check` is clean. The stage-runner drift guard `tests/unit/t129-stage-runner-drift.test.ts` asserts the generated runner set equals the compiled stage set, and `tests/integration/t55-test-suite-drift.test.ts` sweeps for stale paths and markers.
 

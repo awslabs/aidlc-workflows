@@ -132,7 +132,7 @@ flowchart TD
 | 1.6 | Rough Mockups | aidlc-design-agent | aidlc-product-agent | Wireframes, user flows, concept deck | CONDITIONAL |
 | 1.7 | Approval & Handoff | aidlc-delivery-agent | aidlc-product-agent | Initiative brief, decision log | ALWAYS |
 
-**Stage colors:** Green = ALWAYS (runs for every scope). Yellow = CONDITIONAL (skipped for some scopes).
+**Stage colors:** Green = ALWAYS (runs whenever the selected scope includes it). Yellow = CONDITIONAL (may skip based on scope, project type, or plan). For the exact per-scope stage membership, see the [Stage-by-Scope Matrix](05-scopes-and-depth.md#stage-by-scope-matrix).
 
 Intent Capture records the initial description, workflow-selected scope, and
 used memory rules in its questions file. Claims in the intent statement and
@@ -420,7 +420,7 @@ Across all 32 stages, the topology count is **28 inline / 2 subagent / 1 pipelin
 
 ## Next Steps
 
-- [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) — how scopes control which stages execute
+- [Scopes, Depth, and Test Strategy](05-scopes-and-depth.md) — how scopes control which stages execute, including the full [Stage-by-Scope Matrix](05-scopes-and-depth.md#stage-by-scope-matrix)
 - [Agents](06-agents.md) — the 14-agent roster and its domain, review, and composition roles
 - [Your First Workflow](02-your-first-workflow.md) — annotated walkthrough
 - [Glossary](glossary.md) — terminology reference

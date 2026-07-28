@@ -225,7 +225,7 @@ sequenceDiagram
     T-->>O: Return structured summary
     O->>U: Present completion summary
     U->>O: Approval gate response
-    O->>O: Report outcome; engine updates state + advances
+    O->>O: Report outcome — engine updates state + advances
 ```
 
 <!-- Text fallback: The conductor reads the stage file, prepares context, and delegates via the Task tool. The subagent executes autonomously without user interaction and returns a structured summary. The conductor presents the summary to you, you respond at the approval gate, and the conductor reports the outcome so the engine advances state. -->
