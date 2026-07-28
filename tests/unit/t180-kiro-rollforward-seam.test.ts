@@ -122,6 +122,29 @@ describe("t180 verb-intercept turn-clock + read-only/nav latch", () => {
     }
   });
 
+  test("2b: plugin list dispatches off-band and stamps the plugin-verb latch", () => {
+    const dir = scratchProject();
+    try {
+      const r = runAdapter(dir, "verb-intercept", {
+        prompt: promptWithNext("plugin list --json"),
+        cwd: dir,
+      });
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("SYSTEM (deterministic harness dispatch)");
+      expect(r.stdout).toContain("/aidlc plugin list --json");
+      const latch = JSON.parse(readFileSync(latchPath(dir), "utf-8")) as {
+        turn?: number;
+        flag?: string;
+        source?: string;
+      };
+      expect(latch.turn).toBe(1);
+      expect(latch.source).toBe("plugin-verb");
+      expect(latch.flag).toBe("plugin list --json");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("3: non-terminal freeform input stamps a turn-bound forwarding latch", () => {
     const dir = scratchProject();
     try {

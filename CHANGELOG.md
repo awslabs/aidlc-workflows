@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.45] - 2026-08-06
+
+Plugin management commands now route deterministically through every `/aidlc` slash-command harness instead of being misread as freeform workflow requests. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the shared plugin parser and harness routing updates are installed.
+
+* `/aidlc plugin list [--json]`, `/aidlc plugin sync`, and `/aidlc plugin select [names]` now dispatch to their existing utility handlers without asking to compose a scope or advancing an active workflow.
+* `/aidlc plugin help`, a missing plugin verb, and unknown plugin verbs now produce deterministic help or errors across the dispatcher, orchestrator, and Kiro pre-LLM interceptor.
+* Kiro terminal-command interception now latches plugin utilities for the current turn, preventing a conductor retry from rolling the workflow forward after the plugin command completes.
+
 ## [2.5.44] - 2026-08-06
 
 Human-readable AI-DLC artifacts now follow the conversation language instead of defaulting to English. The framework rule layer gains four `## Mandated` rules in `org.md` that define how the conversation language is resolved, why it stays stable across short turns like `Approve`, which artifacts are localized, and which protocol tokens stay English. The rules travel to delegated agents and reviewers inside the active-stage rule bundle the dispatch-rules hook already delivers, so a subagent that never sees the conversation can still resolve the language from the rule layer, `aidlc-state.md`, or the upstream artifacts it consumes. **Upgrade:** fresh installs receive the rules with their seeded `default` space. An existing workspace keeps its own memory tree — runtime self-healing intentionally does not overwrite one — so merge the four rules into each `aidlc/spaces/<space>/memory/org.md` by hand and start a fresh session for them to load.
@@ -166,7 +174,6 @@ Closes the payload boundary 2.5.10 left open on Kiro IDE 1.x: the hook adapter n
 * Payload acquisition is gated to `audit-and-sensors` and `log-subagent`; every other target - including the per-tool-call `block` floor - touches neither channel. `SUBAGENT_COMPLETED` is recorded again on IDE 1.x: that generation sends `subagent_<agent>` rather than the 0.12 `invoke_sub_agent`, so the registration matcher reaches any delegate name, the adapter drops the `subagent_response` shell, and the row's `Agent Type` comes from the platform-provided `subagent_<agent>` tool name - agent-authored result prose can no longer misattribute a completion to another persona, and the `**Reviewer:**` / `**Agent:**` marker remains the identity source on the 0.12 `invoke_sub_agent` shape (#459/#543).
 * Both payload-dependent targets record a visible hook drop when neither channel yields a payload, so a broken context channel surfaces in `/aidlc --doctor` instead of exiting as a silent no-op.
 * Docs updated (`docs/reference/kiro-ide-hook-payload.md` documents both context channels, the timeout override, and scopes empty inputs to captured PostToolUse events; `docs/guide/harnesses/kiro-ide.md`; `docs/reference/06-hooks-and-tools.md`; `docs/roadmap.md` marks only #555's hook-registration portion resolved). No command or flag changes; no breaking change for CI or scripts.
-
 ## [2.5.11] - 2026-07-24
 
 Intent Capture now keeps generated intent and stakeholder claims grounded in the user's description, confirmed answers, workflow-selected scope, or explicitly registered memory. Unsupported content is omitted, elicited, or surfaced as a human-owned assumption instead of being presented as fact. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated stage, Product Lead reviewer contract, and `claim-sources` sensor are installed.

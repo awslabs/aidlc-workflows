@@ -1,4 +1,4 @@
-// covers: function:classifyTerminalCommand function:RESERVED_RECORD_NAMES
+// covers: function:classifyTerminalCommand function:parsePluginCommand function:RESERVED_RECORD_NAMES
 // covers: function:READ_ONLY_FLAGS function:WORKSPACE_VERBS
 //
 // t178 — classifyTerminalCommand() in aidlc-lib.ts, plus the two exported sets
@@ -217,6 +217,46 @@ describe("classifyTerminalCommand() - sole bare help tokens are terminal", () =>
   test("`help` inside a longer description stays freeform -> null", () => {
     expect(classifyTerminalCommand(["help", "me", "build", "auth"])).toBeNull();
     expect(classifyTerminalCommand(["build", "a", "help", "desk"])).toBeNull();
+  });
+});
+
+describe("classifyTerminalCommand() - plugin utilities", () => {
+  test("list, sync, and select map to their utility subcommands", () => {
+    expect(classifyTerminalCommand(["plugin", "list", "--json"])).toEqual({
+      subcommand: "plugin-list",
+      args: ["--json"],
+      display: "plugin list --json",
+      source: "plugin-verb",
+    });
+    expect(classifyTerminalCommand(["plugin", "sync"])).toEqual({
+      subcommand: "plugin-sync",
+      display: "plugin sync",
+      source: "plugin-verb",
+    });
+    expect(classifyTerminalCommand(["plugin", "select", "aidlc,test-pro"])).toEqual({
+      subcommand: "select-plugins",
+      args: ["aidlc,test-pro"],
+      display: "plugin select aidlc,test-pro",
+      source: "plugin-verb",
+    });
+  });
+
+  test("plugin help and malformed forms stay terminal", () => {
+    expect(classifyTerminalCommand(["plugin", "help"])).toEqual({
+      subcommand: "help",
+      display: "plugin help",
+      source: "plugin-verb",
+    });
+    expect(classifyTerminalCommand(["plugin"])).toMatchObject({
+      subcommand: "error",
+      display: "plugin",
+      source: "plugin-verb",
+    });
+    expect(classifyTerminalCommand(["plugin", "remove"])).toMatchObject({
+      subcommand: "error",
+      display: "plugin remove",
+      source: "plugin-verb",
+    });
   });
 });
 

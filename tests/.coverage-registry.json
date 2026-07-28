@@ -2347,6 +2347,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:parsePluginCommand",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t178-classify-terminal-command.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:parseRefsList",
       "minMechanism": "none",
       "coveredBy": [],

@@ -318,30 +318,28 @@ if (target === "verb-intercept") {
   // seam ran the tool; the conductor only relays). Stamp the latch with the
   // CURRENT turn counter so the engine done-guard + preToolUse backstop know a
   // bare advancing `next` THIS SAME turn is the spurious roll-forward and must
-  // be neutralized. Read-only flags (--status/--doctor/--help/--version) and
-  // workspace verbs (space/space-create/intent) both arm it, so the same guard
-  // catches the read-only AND the nav roll-forward. Best-effort; fails open.
-  if (cmd.source === "read-only-flag" || cmd.source === "workspace-verb") {
-    try {
-      const cwd = projectDir;
-      mkdirSync(join(cwd, "aidlc"), { recursive: true });
-      const flag = cmd.source === "read-only-flag"
-        ? cmd.subcommand
-        : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
-      writeFileSync(
-        join(cwd, "aidlc", ".aidlc-readonly-latch"),
-        JSON.stringify({ turn, flag, source: cmd.source, ts: Date.now() }) + "\n",
-        "utf-8",
-      );
-    } catch { /* latch best-effort */ }
-  }
+  // be neutralized. Every classified terminal family arms it, including plugin
+  // utilities, so the same guard catches a spurious workflow roll-forward.
+  // Best-effort; fails open.
+  try {
+    const cwd = projectDir;
+    mkdirSync(join(cwd, "aidlc"), { recursive: true });
+    const flag = cmd.source === "read-only-flag"
+      ? cmd.subcommand
+      : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
+    writeFileSync(
+      join(cwd, "aidlc", ".aidlc-readonly-latch"),
+      JSON.stringify({ turn, flag, source: cmd.source, ts: Date.now() }) + "\n",
+      "utf-8",
+    );
+  } catch { /* latch best-effort */ }
   // Echo the command the way the user typed it (verb + arg, or the --flag) so the
   // short-circuit message is legible.
   const typed = cmd.source === "read-only-flag"
     ? `--${cmd.subcommand}`
     : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
   process.stdout.write(
-    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness — it is a read-only/navigation command that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n--- OUTPUT ---\n${out}\n--- END OUTPUT ---\n`,
+    `SYSTEM (deterministic harness dispatch): The command \`/aidlc ${typed}\` has ALREADY been run by the harness — it is a terminal utility that carries NO workflow work. Its verbatim output is below. Your ONLY action this turn: relay that output to the user, then STOP. Do NOT run \`aidlc-orchestrate.ts next\`. Do NOT advance, resume, or run any workflow stage.\n\n--- OUTPUT ---\n${out}\n--- END OUTPUT ---\n`,
   );
   return 0;
 }

@@ -680,7 +680,64 @@ export interface TerminalCommand {
   args?: string[];
   error?: string;
   display?: string;
-  source: "read-only-flag" | "workspace-verb";
+  source: "read-only-flag" | "workspace-verb" | "plugin-verb";
+}
+
+export type PluginCommand =
+  | { kind: "not-plugin" }
+  | { kind: "help" }
+  | { kind: "error"; message: string }
+  | { kind: "run"; argv: string[] };
+
+// Parse the public `plugin` noun once for every entrypoint. The slash
+// orchestrator, Kiro's pre-LLM interceptor, and the binary dispatcher must all
+// agree that these are terminal utilities rather than freeform workflow text.
+export function parsePluginCommand(args: string[]): PluginCommand {
+  if (args[0] !== "plugin") return { kind: "not-plugin" };
+  const verb = args[1];
+  if (verb === "help" || verb === "-h" || verb === "--help") {
+    return { kind: "help" };
+  }
+  const target = verb === "select"
+    ? "select-plugins"
+    : verb === "list"
+      ? "plugin-list"
+      : verb === "sync"
+        ? "plugin-sync"
+        : undefined;
+  if (target !== undefined) {
+    return { kind: "run", argv: [target, ...args.slice(2)] };
+  }
+  const detail = verb ? `unknown verb '${verb}'` : "missing verb";
+  return {
+    kind: "error",
+    message: `aidlc: ${detail} for noun 'plugin'; try 'aidlc help --all'`,
+  };
+}
+
+function terminalCommandFromPluginCommand(
+  command: PluginCommand,
+  originalArgs: string[],
+): TerminalCommand | null {
+  if (command.kind === "not-plugin") return null;
+  if (command.kind === "help") {
+    return { subcommand: "help", display: originalArgs.join(" "), source: "plugin-verb" };
+  }
+  if (command.kind === "error") {
+    return {
+      subcommand: "error",
+      error: command.message,
+      display: originalArgs.join(" "),
+      source: "plugin-verb",
+    };
+  }
+  const [subcommand, ...tail] = command.argv;
+  return {
+    subcommand,
+    ...(tail.length > 0 ? { args: tail } : {}),
+    display: originalArgs.join(" "),
+    source: "plugin-verb",
+  };
 }
 
 // The allowlisted trailing flags `--doctor` accepts (diagnostic export). Kept
@@ -753,6 +810,10 @@ export function classifyTerminalCommand(args: string[]): TerminalCommand | null 
   // "help". Sole-token only: `help` inside a longer description stays freeform.
   if (args.length === 1 && (args[0] === "help" || args[0] === "-h")) {
     return { subcommand: "help", source: "read-only-flag" };
+  }
+  const pluginCommand = parsePluginCommand(args);
+  if (pluginCommand.kind !== "not-plugin") {
+    return terminalCommandFromPluginCommand(pluginCommand, args);
   }
   // Leading workspace nouns own the command. Any later read-only-looking token
   // is part of that workspace command's argv, not a mode switch, because the

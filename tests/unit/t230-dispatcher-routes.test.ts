@@ -631,6 +631,18 @@ describe("t230 dispatcher help and errors", () => {
     expect(res.stderr.toString("utf-8")).toBe("aidlc: unknown verb 'bogus' for noun 'state'; try 'aidlc help --all'\n");
   });
 
+  test("plugin help and invalid plugin verbs use the shared noun grammar", () => {
+    const help = viaDispatcher(["plugin", "help"], REPO_ROOT);
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout.toString("utf-8")).toContain("plugin select [names]");
+
+    const invalid = viaDispatcher(["plugin", "remove"], REPO_ROOT);
+    expect(invalid.exitCode).toBe(1);
+    expect(invalid.stderr.toString("utf-8")).toBe(
+      "aidlc: unknown verb 'remove' for noun 'plugin'; try 'aidlc help --all'\n",
+    );
+  });
+
   test("formerly stubbed routes now reach utility handlers", () => {
     const projectDir = makeProject();
     writeMinimalState(projectDir);

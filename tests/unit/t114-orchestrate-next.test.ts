@@ -306,6 +306,50 @@ describe("t114 help-request routing", () => {
   });
 });
 
+describe("t114 plugin terminal routing", () => {
+  test("plugin list preserves --json and never enters the workflow funnel", () => {
+    proj = createTestProject();
+    seedStateFile(proj, MID_IDEATION);
+    const out = runNext(proj, ["plugin", "list", "--json"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-utility.ts plugin-list --json");
+    expect(out).not.toContain('"kind":"run-stage"');
+  });
+
+  test("plugin sync routes to the terminal utility", () => {
+    proj = createTestProject();
+    const out = runNext(proj, ["plugin", "sync"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-utility.ts plugin-sync");
+  });
+
+  test("plugin select preserves the selected names", () => {
+    proj = createTestProject();
+    const out = runNext(proj, ["plugin", "select", "aidlc,test-pro"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-utility.ts select-plugins aidlc,test-pro");
+  });
+
+  test("plugin help routes to global help", () => {
+    proj = createTestProject();
+    const out = runNext(proj, ["plugin", "help"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("aidlc-utility.ts help");
+    expect(out).not.toContain('"kind":"ask"');
+  });
+
+  test("missing and unknown plugin verbs are deterministic errors", () => {
+    proj = createTestProject();
+    const missing = runNext(proj, ["plugin"]).out;
+    const unknown = runNext(proj, ["plugin", "remove"]).out;
+    expect(missing).toContain('"kind":"error"');
+    expect(missing).toContain("missing verb for noun 'plugin'");
+    expect(unknown).toContain('"kind":"error"');
+    expect(unknown).toContain("unknown verb 'remove' for noun 'plugin'");
+    expect(`${missing}${unknown}`).not.toContain('"kind":"ask"');
+  });
+});
+
 // ===========================================================================
 // With-state jump commits via an `execute` print directive (.sh test 12)
 // ===========================================================================

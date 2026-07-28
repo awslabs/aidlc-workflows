@@ -218,6 +218,7 @@ Utilities:
   config get <key>  Show active workflow config (depth, test-strategy)
   config set <key> <value>  Change active workflow config (depth, test-strategy)
   config list       List active workflow config (--json for structured output)
+  plugin select [names]  Show or set the enabled plugin list
   plugin list       List installed plugins and enabled state (--json for structured output)
   plugin sync       Compose installed plugins into the current install
   --doctor          Run health check on hooks, settings, and directory structure

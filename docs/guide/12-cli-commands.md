@@ -37,11 +37,12 @@ All AI-DLC commands start with the orchestrator invocation. This chapter is a co
 | `/aidlc config get <key>` | Print active workflow config (`depth`, `test-strategy`) |
 | `/aidlc config set <key> <value>` | Change active workflow config (`depth`, `test-strategy`) |
 | `/aidlc config list` | List active workflow config (`--json` for structured output) |
+| `/aidlc plugin select [names]` | Show or set the enabled plugin list for this install |
 | `/aidlc plugin list` | List installed plugins and enabled state |
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
-| `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct-only: show or set the enabled plugin list for this install |
+| `bun .claude/tools/aidlc-utility.ts select-plugins [names]` | Direct utility form of plugin selection |
 
 ---
 
@@ -666,7 +667,8 @@ doctor exit code.
 ### `aidlc-utility select-plugins` - install plugin selection
 
 `/aidlc plugin list` prints installed plugin names and whether each is enabled.
-`select-plugins` is a **direct utility invocation**, not an `/aidlc select-plugins` command.
+`/aidlc plugin select [names]` is the public command. `select-plugins` is its
+direct utility form; it is not an `/aidlc select-plugins` command.
 `bun .claude/tools/aidlc-utility.ts select-plugins` prints the current selection
 (`all enabled (no selection)` when the `plugins` key is absent) and the known
 plugin names. Pass a comma-separated list to set it:
