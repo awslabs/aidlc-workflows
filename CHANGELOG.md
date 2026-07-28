@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.30] - 2026-07-30
+
+The default-scope resolver is now bundle-aware, so an install that disables the core scopes through plugin selection (a plugin-only install) no longer crashes or routes to a disabled scope when a default is needed. A scope can nominate itself as the install's freeform default with a new `freeform_default: true` frontmatter key; when the core preferred default (feature/poc) is not enabled the resolver picks the nominated scope, else the sole enabled plugin's alphabetically-first scope, else surfaces a descriptive error. Agent-facing prose that stated fixed stage and persona counts now points at the compiled graph and `--doctor` so it stays true under plugin selection. **Upgrade:** re-copy your `dist/<harness>/` shell into the project. No action is needed for a stock (no-plugin) install; behavior there is unchanged.
+
+* New `freeform_default: true` scope frontmatter key lets a plugin nominate its own default scope for plugin-only installs.
+* `intent-birth` with no `--scope`, the orchestrator's default scope, and the freeform inference fallback now resolve through the bundle-aware resolver instead of hardcoding `poc`/`feature`, so a plugin-only install resolves to a valid enabled scope instead of erroring with "Unknown scope".
+* Explicit `AWS_AIDLC_DEFAULT_SCOPE` typos still fail with `Invalid AWS_AIDLC_DEFAULT_SCOPE`; only an installed scope disabled by plugin selection can enter bundle-aware fallback. Graph compilation also rejects multiple enabled `freeform_default` claimants instead of choosing one alphabetically.
+* Onboarding, the stage protocol, the shared principles, and the per-harness `SKILL.md` agent-roster notes no longer assert fixed stage/persona counts that a plugin install would falsify; they point at the compiled stage graph and `/aidlc --doctor` for the live enabled set.
+
 ## [2.5.26] - 2026-07-29
 
 The shipped workspace scaffold data and the Workspace Scaffold stage prose no longer advertise a per-intent `inception/reverse-engineering/` folder that nothing writes; the guides now describe where Reverse Engineering output actually lands. The stage writes its nine deliverables to the space-level per-repo store `aidlc/spaces/<space>/codekb/<repo>/`, one shared view per repo that each brownfield rerun overwrites; the intent record only ever receives the stage's own `memory.md` diary, created on demand. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; on installs that predate the shipped shell, an empty `inception/reverse-engineering/` directory left in an existing intent record can be deleted.

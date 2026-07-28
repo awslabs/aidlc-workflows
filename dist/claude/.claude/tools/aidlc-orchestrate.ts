@@ -94,6 +94,7 @@ import {
   isPerUnitStage,
   listIntents,
   loadScopeMetadata,
+  loadScopeMetadataAll,
   loadScopeMapping,
   nextInScopeStage,
   parseCheckboxes,
@@ -111,6 +112,7 @@ import {
   resolveProjectDir,
   scopeCostSummary,
   selectionAwareDefaultScope,
+  resolveDefaultScope,
   type StageEntry,
   stateFilePath,
   swarmConvergedUnits,
@@ -147,6 +149,8 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 // The default scope when neither the state file, a --scope flag, nor the
 // AWS_AIDLC_DEFAULT_SCOPE env var supplies one. Mirrors the prose
 // orchestrator's freeform-fallback default (SKILL.md detect-scope fallback).
+// selectionAwareDefaultScope() maps this to the sole enabled plugin's
+// nominated default on a plugin-only install where "feature" is deselected.
 const DEFAULT_SCOPE = "feature";
 
 // READ_ONLY_FLAGS (--status/--help/--doctor/--version) and the shared workspace
@@ -602,6 +606,12 @@ function resolveScope(
   const envScope = (process.env.AWS_AIDLC_DEFAULT_SCOPE || "").trim();
   if (envScope.length > 0) {
     if (validScopes().has(envScope)) return { scope: envScope, source: "env" };
+    // Only installed-but-disabled scopes participate in selection-aware
+    // fallback. The resolve-env-scope validator below owns the canonical error
+    // for an explicit unknown value.
+    if (loadScopeMetadataAll()[envScope] === undefined) {
+      return { scope: envScope, source: "env" };
+    }
     const fallback = selectionAwareDefaultScope(envScope);
     if (!fallback.error && fallback.note) {
       process.stderr.write(
@@ -1304,7 +1314,7 @@ function buildRunStageDirective(
   node: GraphStage,
   projectType: "brownfield" | "greenfield" | null = null,
   unit: string = UNIT_NAME_PLACEHOLDER,
-  scope: string = DEFAULT_SCOPE,
+  scope: string = resolveDefaultScope(DEFAULT_SCOPE),
   stateContent: string | null = null,
   recordPrefix: string | null = null,
   codekbCtx?: CodekbCtx,
@@ -2144,7 +2154,7 @@ function tryEmitSwarm(
 function emitRunStageForSlug(
   slug: string,
   projectType: "brownfield" | "greenfield" | null = null,
-  scope: string = DEFAULT_SCOPE,
+  scope: string = resolveDefaultScope(DEFAULT_SCOPE),
   stateContent: string | null = null,
   recordPrefix: string | null = null,
   codekbCtx?: CodekbCtx,

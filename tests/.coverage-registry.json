@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 480,
+    "total": 481,
     "enumeratedByClass": {
-      "function": 248,
+      "function": 249,
       "audit": 74,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 103,
+      "function": 104,
       "audit": 33,
       "scope": 9,
       "stage": 9,
@@ -1976,6 +1976,10 @@
         {
           "file": "tests/unit/t225-scope-name-decoupling.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t257-default-scope-resolver.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -2599,6 +2603,18 @@
         {
           "file": "tests/integration/t166-multi-repo-construction.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveDefaultScope",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t257-default-scope-resolver.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"

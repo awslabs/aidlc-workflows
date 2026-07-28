@@ -3650,6 +3650,10 @@ interface ScopeMetadata {
   testStrategy?: string;
   runner?: boolean;
   skeleton: boolean;
+  /** When true, this scope is the enabled plugin's freeform/default fallback
+   *  (plugin-only installs where the core `feature`/`poc` defaults are
+   *  deselected). At most one enabled scope should set this. */
+  freeformDefault?: boolean;
 }
 
 let _scopeMetadata: Record<string, ScopeMetadata> | null = null;
@@ -3743,6 +3747,7 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
       }
       meta.skeleton = skeleton === "on";
     }
+    if (scalarField(fm, "freeform_default") === "true") meta.freeformDefault = true;
     out[name] = meta;
   }
   _scopeMetadataAll = out;
@@ -3753,17 +3758,23 @@ export function loadScopeMetadata(): Record<string, ScopeMetadata> {
   if (_scopeMetadata !== null) return _scopeMetadata;
   const all = loadScopeMetadataAll();
   const selected = pluginsEnabled();
-  if (selected === null) {
-    _scopeMetadata = all;
-    return all;
-  }
-  const out: Record<string, ScopeMetadata> = {};
+  const enabled: Record<string, ScopeMetadata> = {};
   for (const [name, meta] of Object.entries(all)) {
     const owner = meta.plugin ?? "aidlc";
-    if (selected.has(owner)) out[name] = meta;
+    if (selected === null || selected.has(owner)) enabled[name] = meta;
   }
-  _scopeMetadata = out;
-  return out;
+  const nominated = Object.values(enabled)
+    .filter((meta) => meta.freeformDefault === true)
+    .map((meta) => meta.name)
+    .sort();
+  if (nominated.length > 1) {
+    throw new Error(
+      `Multiple enabled scopes declare freeform_default: true (${nominated.join(", ")}). ` +
+        "At most one enabled scope may nominate the freeform default."
+    );
+  }
+  _scopeMetadata = enabled;
+  return enabled;
 }
 
 // loadScopeMapping reconstructs the legacy `Record<scope, ScopeDefinition>`
@@ -3866,6 +3877,20 @@ export function selectionAwareDefaultScope(preferred = "feature"): DefaultScopeR
   const scopes = [...validScopes()];
   if (scopes.includes(preferred)) return { scope: preferred };
 
+  // An explicit nomination wins whenever `preferred` is not enabled, regardless
+  // of plugin bucketing: a scope with frontmatter `freeform_default: true` is
+  // the install's declared lean default (e.g. a plugin's lightweight scope over
+  // its heavier full-lifecycle scope). Checked before the sole-plugin heuristic
+  // below so it also holds in mixed installs.
+  const meta = loadScopeMetadata();
+  const nominatedGlobal = scopes.find((s) => meta[s]?.freeformDefault === true);
+  if (nominatedGlobal) {
+    return {
+      scope: nominatedGlobal,
+      note: `scope "${preferred}" is not an enabled scope; using "${nominatedGlobal}" (nominated freeform default)`,
+    };
+  }
+
   const mapping = loadScopeMapping();
   const scopesByPlugin = new Map<string, string[]>();
   for (const scope of scopes) {
@@ -3897,6 +3922,18 @@ export function selectionAwareDefaultScope(preferred = "feature"): DefaultScopeR
           ? `No default scope is available: scope "${preferred}" is disabled or absent while core scopes are enabled. Pass --scope explicitly.`
           : `No default scope is available: core scope "${preferred}" is disabled or absent and multiple plugin scope owners are enabled (${pluginOwners.join(", ")}). Pass --scope explicitly.`,
   };
+}
+
+/**
+ * Thin string-returning wrapper over {@link selectionAwareDefaultScope} for
+ * callers that just need the resolved scope name. `preferred` is the caller's
+ * core-era literal ("feature" for freeform inference, "poc" for intent birth).
+ * When `preferred` is enabled it wins (stock behaviour preserved); otherwise
+ * the nominated freeform default (or the sole enabled plugin's first scope) is
+ * returned, falling back to `preferred` when nothing can be chosen.
+ */
+export function resolveDefaultScope(preferred: string): string {
+  return selectionAwareDefaultScope(preferred).scope;
 }
 
 // Agent metadata derived from `.claude/agents/*.md` frontmatter. Adding a

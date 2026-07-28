@@ -241,10 +241,13 @@ projection remains deferred (doc 18 §8 Status).
   `scopes/<plugin>-<name>.md`. The plugin prefix replaces core's `aidlc-`
   filename prefix, and the filename stem must equal frontmatter `name` (for
   example, `scopes/test-pro-validation.md` has `name: test-pro-validation`).
-  Membership for plugin-authored stages is their `scopes:` frontmatter list. A
-  contribution's `adds.scopes` (§3) is still deferred and drop-logged rather than
-  merged, so do not rely on it to add your scope to an existing core stage yet.
-  See [Scopes](04-scopes.md).
+  Set `freeform_default: true` to nominate a plugin scope as the fallback when
+  the core `feature`/`poc` default is disabled; at most one enabled scope across
+  the selected core/plugin set may claim it, and graph compilation rejects an
+  ambiguous set. Membership for plugin-authored stages is their `scopes:`
+  frontmatter list. A contribution's `adds.scopes` (§3) is still deferred and
+  drop-logged rather than merged, so do not rely on it to add your scope to an
+  existing core stage yet. See [Scopes](04-scopes.md).
 
 ## 5. Distribution + install
 

@@ -28,7 +28,7 @@ skeleton: on
 Prose intent: why these stages, why skip those.
 ```
 
-The frontmatter fields divide into one required field and three optional knobs:
+The scope frontmatter fields are:
 
 | Field | Required | What it does |
 |-------|----------|--------------|
@@ -38,9 +38,25 @@ The frontmatter fields divide into one required field and three optional knobs:
 | `keywords` | No | Natural-language triggers for `/aidlc <freeform text>` auto-detection. Empty list opts out. |
 | `description` | No | The one-liner rendered in `/aidlc --help`. (The compiled scope-table in SKILL.md shows only Scope / Depth / TestStrategy / EXECUTE / Total, leaving the description out.) |
 | `skeleton` | No | `on` opts the scope into the walking-skeleton ceremony when practices are scope-dependent; `off` or absence opts out. |
+| `runner` | No | `true` includes the scope in the default generated scope-runner set. |
+| `freeform_default` | No | `true` nominates this scope as the selection-aware fallback when the preferred core default (`feature` or `poc`) is not enabled. |
 
 The loader rejects duplicate scope `name` values across files and names both
 files in the error.
+
+### Freeform default
+
+`freeform_default: true` lets an install nominate the scope used when an
+internal default such as `feature` or `poc` is unavailable after plugin
+selection. The nomination is checked before the sole-enabled-plugin fallback,
+so a plugin with several scopes can choose its lean default instead of accepting
+the alphabetically first scope.
+
+At most one **enabled** scope may declare `freeform_default: true`. Graph
+compilation fails and names every claimant when the selected core/plugin set
+contains more than one. Claims on disabled plugins do not conflict until those
+plugins are enabled together. The field does not repair explicit typos:
+an unknown `AWS_AIDLC_DEFAULT_SCOPE` value still fails validation.
 
 ### Walking-skeleton default
 
@@ -85,7 +101,7 @@ Suppose your team wants a `hotfix` scope — leaner than `bugfix`, for the urgen
 
 ### Steps
 
-1. **Drop `core/scopes/aidlc-hotfix.md`.** Copy `aidlc-bugfix.md` (the closest existing scope) and edit the frontmatter: set `name: hotfix`, pick `depth`, add `keywords` if you want freeform auto-detection (`[hotfix, urgent]`), a `description` for the help text, `skeleton: on|off` for the scope-dependent Construction ceremony default, and `testStrategy` only if it should diverge from `depth`. Write a short prose body explaining the intent.
+1. **Drop `core/scopes/aidlc-hotfix.md`.** Copy `aidlc-bugfix.md` (the closest existing scope) and edit the frontmatter: set `name: hotfix`, pick `depth`, add `keywords` if you want freeform auto-detection (`[hotfix, urgent]`), a `description` for the help text, `skeleton: on|off` for the scope-dependent Construction ceremony default, `freeform_default: true` only if this is the selected install's unique fallback nomination, and `testStrategy` only if it should diverge from `depth`. Write a short prose body explaining the intent.
 
 2. **Tag the stages that should run under `hotfix`.** In each stage you want `EXECUTE` (under `core/aidlc-common/stages/<phase>/`), add `hotfix` to its frontmatter `scopes:` list. A stage you don't tag is `SKIP` for the scope. The 3 initialization stages must include it (they always run).
 

@@ -216,7 +216,7 @@ The engine reads the compiled `data/stage-graph.json` directly for all routing; 
 
 - **Adaptive scope**: Scope determines which stages execute and at what depth — from 7-stage bugfix to 32-stage enterprise. The engine owns the resolution; you run the stages it hands you.
 - **User control**: The user can override any stage decision at any approval gate.
-- **11 domain experts**: Each stage leverages the appropriate agent persona (product, design, delivery, architect, aws-platform, compliance, devsecops, developer, quality, pipeline-deploy, operations).
+- **Domain experts**: Each stage leverages the appropriate agent persona; the enabled set is discovered from the `agents/` directory (a plugin install may add or narrow it).
 - **Approval gates**: Every stage except the bootstrap initialization stages presents an approval gate (the engine signals this via `run-stage`'s `gate` field).
 - **Questions in markdown files**: All questions go in markdown files using `[Answer]:` tags with A-E + X (Other) options — the file is always the source of truth.
 - **Tri-mode interaction**: The user chooses guided, self-guided, or chat mode for answering questions.

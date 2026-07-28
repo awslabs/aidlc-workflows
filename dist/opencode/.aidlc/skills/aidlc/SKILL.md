@@ -164,7 +164,7 @@ The engine resolves scope-level stage routing internally (it reads the compiled 
 
 ## Stage Graph
 
-The engine reads the compiled `data/stage-graph.json` directly for all routing; this table is the human-readable mirror of that graph (the 32 stages, their phase, execution mode, lead/support agents, and run mode) — data, not dispatch logic.
+The engine reads the compiled `data/stage-graph.json` directly for all routing; this table is the human-readable mirror of that graph (each compiled stage, its phase, execution mode, lead/support agents, and run mode) — data, not dispatch logic.
 
 | Slug | # | Stage | Phase | Execution | Lead Agent | Support Agents | Mode |
 |------|---|-------|-------|-----------|------------|----------------|------|
@@ -209,7 +209,7 @@ The engine reads the compiled `data/stage-graph.json` directly for all routing; 
 - **STAGE RITUAL IS ATOMIC**: Once a stage starts, EVERY step fires: questions → artifact → reviewer (§12a, if declared) → learnings (§13) → gate. No step is skippable. "Skip to stage X" skips INTERMEDIATE stages, NOT the target stage's ritual. Complete the current stage fully (including learnings) before jumping.
 - **AUTONOMY IS NEVER INFERRED**: A user saying "go with recommended" for one stage is a one-time instruction for THAT stage. The next stage starts fresh. NEVER carry forward autonomy. NEVER self-answer questions without explicit permission for THIS specific stage.
 - **User control**: The user can override any stage decision at any approval gate.
-- **11 domain experts**: Each stage leverages the appropriate agent persona; inline framing loads from `.aidlc/agents/`, while dispatched work targets the native `.opencode/agents/` roster.
+- **Domain experts**: Each stage leverages the appropriate agent persona; inline framing loads from `.aidlc/agents/`, while dispatched work targets the native `.opencode/agents/` roster. The enabled set is discovered from the `agents/` directory (a plugin install may add or narrow it).
 - **Approval gates**: Every stage except the bootstrap initialization stages presents an approval gate.
 - **Questions in markdown files**: All questions go in markdown files using `[Answer]:` tags with A-E + X (Other) options — the file is always the source of truth.
 - **Tri-mode interaction**: The user chooses guided, self-guided, or chat mode for answering questions.

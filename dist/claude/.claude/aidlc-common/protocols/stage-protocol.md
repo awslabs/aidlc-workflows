@@ -433,7 +433,7 @@ Rules:
 - The `[slug]` suffix in `activeForm` is required. A PostToolUse hook parses it to automatically sync the state file (Lifecycle Phase, Current Stage, Active Agent, checkbox `[-]`).
 - The task MUST be `in_progress` for the activeForm spinner to display — `pending` tasks show nothing.
 - Update BEFORE reading the stage file or doing any stage work.
-- This applies to all 32 stages. No exceptions.
+- This applies to **every stage in the compiled graph. No exceptions.**
 - If task IDs are not in context (e.g., after compaction), use `TaskList` to find by subject.
 - For skipped stages, mark completed with skip note: TaskUpdate({ taskId: [ID], status: "completed", description: "[original] — Skipped: [reason]" })
 

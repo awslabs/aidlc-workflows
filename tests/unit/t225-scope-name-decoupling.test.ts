@@ -395,4 +395,27 @@ describe("t225 env-scope fallback under plugin-only selection", () => {
       'AWS_AIDLC_DEFAULT_SCOPE="feature" is not an enabled scope; using test-pro-validation (sole enabled plugin\'s first scope)',
     );
   });
+
+  test("unknown AWS_AIDLC_DEFAULT_SCOPE still fails under plugin-only selection", () => {
+    const project = makePluginOnlyInstall();
+    const tool = join(project, ".claude", "tools", "aidlc-orchestrate.ts");
+    const result = spawnSync(
+      BUN,
+      [tool, "next", "--project-dir", project],
+      {
+        cwd: project,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_HARNESS_DIR: ".claude",
+          AWS_AIDLC_DEFAULT_SCOPE: "featre",
+        },
+      },
+    );
+    const out = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+    const directive = JSON.parse(result.stdout) as { kind: string; message: string };
+    expect(directive.kind).toBe("error");
+    expect(directive.message).toContain('Invalid AWS_AIDLC_DEFAULT_SCOPE "featre"');
+    expect(out).not.toContain("using test-pro-validation");
+  });
 });

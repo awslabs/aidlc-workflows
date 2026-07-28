@@ -326,7 +326,10 @@ plugin neither ships nor seeds.
 under `scopes/<plugin>-<name>.md`, with frontmatter `name` equal to the filename
 stem and `plugin: <plugin>`. Compose copies it into `<harness>/scopes/` without
 clobbering. Membership on plugin-authored stages works through those stages'
-`scopes:` frontmatter. Adding a plugin scope to an existing core stage via
+`scopes:` frontmatter. A plugin scope may set `freeform_default: true` to
+nominate itself when the preferred core default is disabled; at most one
+enabled scope may claim the nomination, and graph compilation rejects an
+ambiguous selected set. Adding a plugin scope to an existing core stage via
 `adds.scopes` remains deferred and is logged-not-merged (§6).
 
 **Activation (`when:`)** *(⚠️ parsed, not evaluated).* A stage may carry a structured `when:` predicate; `{producer-in-plan: X}` is schema-validated and parsed, but **no engine consumer evaluates it yet** — `aidlc-graph` names itself the future home. So a stage carrying `when:` is today EXECUTE under its declared scopes unconditionally. A plugin's own stages exist only when the plugin is in the chosen set, so "is this plugin active" is already a compose-time fact.

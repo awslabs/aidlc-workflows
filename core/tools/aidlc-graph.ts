@@ -1565,6 +1565,10 @@ export function compileStageGraph(): {
   gridJson: string;
   stages: GraphStage[];
 } {
+  // Load selected scope metadata up front so scope authoring invariants, such
+  // as a single enabled freeform default, fail during compile.
+  loadScopeMetadata();
+
   // Harvest number + name mappings from existing JSON. A slug already in
   // the JSON keeps its pinned number + name (the "computed not authored,
   // stable thereafter" contract); a NEW slug is auto-seeded below.

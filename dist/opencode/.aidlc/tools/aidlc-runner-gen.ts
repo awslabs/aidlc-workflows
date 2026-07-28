@@ -198,8 +198,7 @@ description: >
   Start an AI-DLC workflow — run the whole Initialization phase (mint the
   intent, detect the workspace, build state) in one step, without typing a
   stage. The engine normally auto-births the first intent; this is opt-in
-  packaging over that move. Pass \`--scope <name>\` to seed the initial scope
-  (defaults to poc), or a freeform description of what to build.
+  packaging over that move. Pass \`--scope <name>\` to seed the initial scope, or a freeform description of what to build.
 argument-hint: "[--scope <name>] [description]"
 user-invocable: true
 ---
@@ -230,10 +229,10 @@ no standalone meaning.
    tool then falls back to the scope token):
 
    \`\`\`bash
-   bun ${harnessDir()}/tools/aidlc-utility.ts intent-birth --scope <name> --arguments "<description>" --label "<2-3 word essence>"
+   bun ${harnessDir()}/tools/aidlc-utility.ts intent-birth --arguments "<description>" --label "<2-3 word essence>"
    \`\`\`
 
-   \`--scope\` seeds the initial scope (defaults to \`poc\`); omit \`--arguments\`
+   Pass \`--scope <name>\` **only if the user named one**; otherwise omit it and the engine picks the install's default scope. Omit \`--arguments\`
    and \`--label\` when the user gave no description. Print the tool's output and
    stop. This does not advance a stage; run \`/aidlc\` afterwards to continue.
 `;
