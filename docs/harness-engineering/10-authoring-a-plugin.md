@@ -223,8 +223,14 @@ projection remains deferred (doc 18 §8 Status).
   [Adding an Agent](03-adding-an-agent.md).
 - **Sensors.** Ship the manifest `sensors/aidlc-<id>.md` **and** its script under
   `tools/` (both — a manifest alone is discoverable but its script must live in
-  `tools/` to run). Bind it to your own stages via `sensors:`, or to a core stage
-  via a contribution's `adds.sensors`. See [Sensors](06-sensors.md).
+  `tools/` to run). The `aidlc-<id>.md` name at the top of `sensors/` is a hard
+  requirement, not a convention: sensor discovery flatly scans `sensors/` and
+  indexes only basenames matching `aidlc-<id>.md`, so a manifest under any other
+  name (or one nested in a subdirectory) would compose but never fire. Compose
+  now rejects such a manifest with a degraded drop (surfaced by `--doctor`) that
+  names the file and the required shape, rather than letting it land dead. Bind
+  the sensor to your own stages via `sensors:`, or to a core stage via a
+  contribution's `adds.sensors`. See [Sensors](06-sensors.md).
 - **Method/rules.** *(⏳ deferred.)* Ship a `memory/` subtree — `memory/phases/<phase>.md` (or
   `memory/{org,team,project}.md`) — via `contributes.memory`. It **merges into
   the default-space method seed** (`aidlc/spaces/default/memory/`) in the design,

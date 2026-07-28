@@ -882,6 +882,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t243-doctor-bundle.test.ts",
     "unit/t247-claim-sources-sensor.test.ts",
     "unit/t258-ars-subcommand.test.ts",
+    "unit/t262-plugin-sensor-name-guard.test.ts",
     "unit/t27.test.ts",
     "unit/t29.test.ts",
     "unit/t30-hook-session-end.test.ts",

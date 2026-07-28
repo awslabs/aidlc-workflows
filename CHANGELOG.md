@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.32] - 2026-07-31
+
+Closes a silent-failure trap in the plugin mechanism: a plugin that shipped a sensor manifest under any name other than `aidlc-<id>.md` (or nested it in a subdirectory) composed successfully but was never discovered by graph compile or sensor dispatch, giving the author no signal at all. The compose hook now validates a plugin's `sensors/` manifests against the discovery contract and records a degraded drop naming the file and the required shape when a manifest could never fire; `/aidlc --doctor` surfaces that drop. **Upgrade:** re-copy your `dist/<harness>/` shell so the updated plugin compose hook is installed; if you author a plugin sensor, name its manifest `sensors/aidlc-<id>.md` at the top of `sensors/`.
+
+* Plugin `sensors/` manifests are now checked at compose time: a manifest whose basename lacks the `aidlc-` prefix, or that sits in a subdirectory the flat sensor scan never reads, is not copied and is recorded as a degraded compose drop (surfaced by `/aidlc --doctor`) naming the file and the required `aidlc-<id>.md` shape.
+* An undiscoverable sensor manifest an older compose hook already landed is reported the same way on the next compose, so an upgrade never leaves a dead sensor silently on disk.
+
 ## [2.5.31] - 2026-07-31
 
 Sensor output parsing now tolerates leading stdout noise. When a sensor runs against a sibling repository, that repo's package manager (pnpm and similar) can print a run banner or lockfile warning before the wrapped tool's JSON; previously the dispatcher and the linter sensor did a bare parse of that stdout, so any preamble made the parse throw and the sensor's real verdict was silently discarded as an advisory PASS. Both parse sites now slice stdout to the first structural JSON character before parsing, and still degrade gracefully when even the sliced output is not JSON. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated `aidlc-sensor` dispatcher and `linter` sensor are installed. No configuration or command changes.

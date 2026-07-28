@@ -440,6 +440,52 @@ function installedNameCollisionPrecheck(dst: string, kind: "agents" | "scopes"):
   };
 }
 
+// Sensor manifests are discovered by a FLAT scan of <harness>/sensors/ that
+// indexes ONLY basenames matching `aidlc-<id>.md` (aidlc-graph.ts loadSensors /
+// SENSOR_FILE_REGEX; anything else is silently skipped). Unlike stages/scopes/
+// agents, the sensor copy shipped no precheck, so a plugin manifest under any
+// other name - or nested in a subdirectory the flat scan never reads - composed
+// successfully but was never picked up by graph compile or sensor dispatch, so
+// the author received no signal that the installed sensor could not fire.
+// Reject such a manifest here - skip-and-drop with the required shape named, so
+// the dead file never lands and --doctor surfaces the degraded drop.
+const SENSOR_MANIFEST_NAME = /^aidlc-[a-z][a-z0-9-]*\.md$/;
+function sensorManifestNamePrecheck(): CopyPrecheck {
+  const sensorsRoot = join(PLUGIN_ROOT, "sensors");
+  const targetRoot = join(HARNESS_DIR, "sensors");
+  // null = the name is discoverable; otherwise the reason it is not.
+  const undiscoverableReason = (relPosix: string): string | null => {
+    const base = relPosix.split("/").pop()!;
+    if (!relPosix.includes("/") && SENSOR_MANIFEST_NAME.test(base)) return null;
+    return relPosix.includes("/")
+      ? "it is nested in a subdirectory that the flat sensor scan never reads"
+      : `"${base}" lacks the required "aidlc-" prefix`;
+  };
+  const drop = (relPosix: string, why: string, landed: boolean): void => {
+    recordDrop(
+      `plugin "${PLUGIN_NAME}" sensor manifest "${relPosix}" ${landed ? "is composed but never fires" : "would compose but never fire"}: ${why}, and sensor discovery indexes only "aidlc-<id>.md" manifests at the top of sensors/; rename it to "aidlc-<id>.md" (with a matching id)${landed ? ", remove the dead file, and re-run compose" : " and re-run compose - not copied"}`,
+      "degraded",
+    );
+  };
+  // copyTreeNoClobber skips prechecks when the destination already exists, so an
+  // undiscoverable manifest an OLDER (pre-guard) compose already landed would
+  // never reach the precheck below. Audit those up front - otherwise an upgrade
+  // leaves the dead sensor silently on disk forever (mirrors the stage guards).
+  for (const file of walk(sensorsRoot).filter((p) => p.endsWith(".md"))) {
+    const relPosix = relative(sensorsRoot, file).replace(/\\/g, "/");
+    const why = undiscoverableReason(relPosix);
+    if (why && existsSync(join(targetRoot, relPosix))) drop(relPosix, why, true);
+  }
+  return ({ file, rel }) => {
+    if (!file.endsWith(".md")) return true;
+    const relPosix = rel.replace(/\\/g, "/");
+    const why = undiscoverableReason(relPosix);
+    if (!why) return true;
+    drop(relPosix, why, false);
+    return false;
+  };
+}
+
 function projectOpencodeAgentMemory(raw: string): string {
   return raw
     .replaceAll(".aidlc/rules/aidlc-org.md", "aidlc/spaces/default/memory/org.md")
@@ -1194,7 +1240,7 @@ try {
     }
   }
   changed = copyTreeNoClobber(join(PLUGIN_ROOT, "knowledge"), join(HARNESS_DIR, "knowledge"), "knowledge") || changed;
-  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "sensors"), join(HARNESS_DIR, "sensors"), "sensor") || changed;
+  changed = copyTreeNoClobber(join(PLUGIN_ROOT, "sensors"), join(HARNESS_DIR, "sensors"), "sensor", sensorManifestNamePrecheck()) || changed;
   changed = copyTreeNoClobber(join(PLUGIN_ROOT, "tools"), join(HARNESS_DIR, "tools"), "tool") || changed;
 
   // 2. Merge contributions into stage SOURCE (structural + prose fragments).
