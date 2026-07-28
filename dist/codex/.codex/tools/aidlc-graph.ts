@@ -21,23 +21,25 @@
 //
 // Compile is the YAML -> JSON transform. It bootstraps number + name
 // from today's stage-graph.json so YAML stays the authored source of
-// truth for everything else while computed fields stay computed. number
-// and name are NOT authorable frontmatter keys (the stage schema rejects
-// them as unknown), they are derived, then pinned in the JSON so they
-// stay byte-stable across recompiles.
+// truth for everything else while computed fields stay computed. Core
+// stages author no number/name (derived, then pinned in the JSON so they
+// stay byte-stable across recompiles); a plugin stage MAY author them
+// (optional schema fields) to order its sub-DAG within a phase.
 //
 // A NEW stage slug (a .md on disk with no row in stage-graph.json yet) is
-// auto-seeded on compile rather than rejected: its number is the next free
-// index in its phase (`<PHASES.indexOf(phase)>.<maxIndexInPhase + 1>`) and
-// its name defaults to the title-cased slug. Both are written into the
+// seeded on compile rather than rejected: its authored `number:`/`name:`
+// frontmatter wins when present (phase-prefix agreement enforced,
+// duplicate numbers rejected); otherwise number = the next free index in
+// its phase (`<PHASES.indexOf(phase)>.<maxIndexInPhase + 1>`) and name
+// defaults to the title-cased slug. Both are written into the
 // regenerated JSON, so the FIRST compile assigns them and every subsequent
 // compile harvests the pinned values, the assignment happens once and is
 // stable thereafter. An author who wants a hand-tuned display name (e.g.
 // "NFR Requirements", "CI Pipeline") edits that one JSON field after the
 // seeding compile; the next compile preserves it. Renumbering an existing
-// stage is still an explicit JSON edit. (Auto-seed only ever ADDS rows and
-// fills the next free per-phase index, it never renumbers a stage that
-// already has a row, so an in-flight workflow's slug-keyed state is safe.)
+// stage is still an explicit JSON edit. (Seeding only ever ADDS rows, it
+// never renumbers a stage that already has a row, so an in-flight
+// workflow's slug-keyed state is safe.)
 //
 // See docs/reference/16-artifact-vocabulary.md for artifact naming.
 
@@ -1590,6 +1592,12 @@ export function compileStageGraph(): {
       Math.max(maxIndexByPhasePrefix.get(prefix) ?? 0, index)
     );
   }
+  // Numbers already claimed (pinned rows + numbers seeded this compile), so an
+  // authored `number:` colliding with an existing stage fails loud instead of
+  // silently corrupting the numeric ordering two stages now share.
+  const usedNumbers = new Map<string, string>(
+    existing.map((s) => [s.number, s.slug])
+  );
 
   const stages: GraphStage[] = [];
   // Track slug-to-first-file so duplicate-slug errors name both files.
@@ -1676,8 +1684,14 @@ export function compileStageGraph(): {
       }
       slugToFile.set(slug, filePath);
 
-      // Existing slug -> keep its pinned number + name. New slug -> auto-seed
-      // both: number = next free index in this phase, name = title-cased slug.
+      // Existing slug -> keep its pinned number + name (the "computed once,
+      // stable thereafter" contract). New slug -> the stage's own authored
+      // `number:`/`name:` frontmatter wins the seed when present (the plugin
+      // mechanism's display-number story: a multi-stage plugin orders its
+      // sub-DAG within a phase, where alphabetical auto-seed would misorder
+      // flow and trip the lower-numbered-dependency invariant); otherwise
+      // auto-seed: number = next free index in this phase, name = title-cased
+      // slug. Either way the value pins into the JSON on first compile.
       let number = numberBySlug.get(slug);
       let name = nameBySlug.get(slug);
       if (!number || !name) {
@@ -1691,10 +1705,38 @@ export function compileStageGraph(): {
               `"${phase}". Stage phase directories must be one of: ${PHASES.join(", ")}.`
           );
         }
-        const nextIndex = (maxIndexByPhasePrefix.get(prefix) ?? 0) + 1;
-        maxIndexByPhasePrefix.set(prefix, nextIndex);
-        number = number ?? `${prefix}.${nextIndex}`;
-        name = name ?? titleCaseSlug(slug);
+        const authored = validation.data.number;
+        if (!number && authored) {
+          const [aPrefix, aIndex] = authored.split(".").map((n) => parseInt(n, 10));
+          if (aPrefix !== prefix) {
+            throw new Error(
+              `${filePath}: stage "${slug}" authors number "${authored}" whose ` +
+                `phase prefix ${aPrefix} does not match its phase directory ` +
+                `"${phase}" (prefix ${prefix}). Fix the number or move the file.`
+            );
+          }
+          const holder = usedNumbers.get(authored);
+          if (holder && holder !== slug) {
+            throw new Error(
+              `${filePath}: stage "${slug}" authors number "${authored}", ` +
+                `already held by stage "${holder}". Pick a free number.`
+            );
+          }
+          number = authored;
+          // Bump the phase's high-water mark so a later auto-seeded stage in
+          // the same compile can't collide with the authored index.
+          maxIndexByPhasePrefix.set(
+            prefix,
+            Math.max(maxIndexByPhasePrefix.get(prefix) ?? 0, aIndex)
+          );
+        }
+        if (!number) {
+          const nextIndex = (maxIndexByPhasePrefix.get(prefix) ?? 0) + 1;
+          maxIndexByPhasePrefix.set(prefix, nextIndex);
+          number = `${prefix}.${nextIndex}`;
+        }
+        usedNumbers.set(number, slug);
+        name = name ?? validation.data.name ?? titleCaseSlug(slug);
       }
 
       stages.push(buildGraphStage(validation.data, phase, number, name));
