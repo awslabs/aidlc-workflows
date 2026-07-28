@@ -9,8 +9,19 @@ render the question through the harness's question-rendering annex —
 `question-rendering.md` beside the orchestrator SKILL.md. Question specs in
 this protocol are written as fenced ` ```question ` blocks (`prompt`, `header`,
 `multiSelect`, `options[].label`, `options[].description`); the annex is the
-single place that binds that spec to the harness's native UI. Stage files and
-this protocol never name a harness tool.
+single place that binds that spec to the harness's question rendering. Stage
+files and this protocol never name a harness tool.
+
+**A ` ```question ` fence is a SPEC to be rendered THROUGH the annex-defined
+mechanism: a native question tool when one is available, or the annex's
+numbered-prose fallback. It is NEVER printed verbatim to the user.** The fenced
+block and its field lines are authoring input, not chat output. Echoing the raw
+spec into the transcript is a protocol violation: it yields a non-interactive
+wall of text and drops the answerable options and "Other" escape supplied by
+the tool or numbered-prose format. The same "spec in, answerable prompt out;
+never echo the fence" rule holds for every harness. The ` ```question ` blocks
+that appear in THIS protocol are illustrative specs being documented, not
+questions to present.
 
 ### Critical Compliance Checklist (most commonly missed steps)
 Before and during EVERY stage, verify:

@@ -6,6 +6,41 @@ The protocol and stage files are harness-neutral: they say *present a
 structured question* and carry a fenced ` ```question ` spec block. This annex
 is the one place that binds that contract to a concrete mechanism.
 
+## Never echo the spec (non-negotiable)
+
+A ` ```question ` fenced block is **INPUT to this annex's rendering, never
+output to paste**. The orchestrator MUST render every ` ```question ` spec as
+the numbered prose the Mechanism below defines, and MUST NEVER echo, print,
+paste, or "quote back" the fenced block, or any of its field lines (`prompt:`,
+`header:`, `multiSelect:`, `options:`, `label:`, `description:`), into the chat
+transcript. The user must never see the raw fence; they see only the numbered
+prose rendering.
+
+Echoing the fence as literal text is a **protocol violation**, not a stylistic
+choice. It:
+
+- produces an unanswerable block instead of numbered options the user can pick;
+- drops the "Other" escape the numbered rendering appends;
+- is inconsistent with every correct rendering elsewhere in the same session.
+
+If you find yourself about to write a triple-backtick `question` block into your
+reply, STOP: that content is a spec to render as numbered prose, not message
+body.
+
+This applies to **every** structured-question site, including but not limited to:
+
+- approval gates (every stage completion);
+- the questions interaction-mode choice (Guide me / I'll edit the file / Chat);
+- the ladder prompt (autonomy mode after the walking skeleton);
+- halt-and-ask on Bolt failure (Retry / Skip / Abort);
+- consolidated-summary confirmation before artifact generation;
+- the §13 learnings gate (keep / heading / promote-to-team).
+
+(The one place ` ```question ` fences legitimately appear as literal text is
+documentation like THIS file and the stage-protocol, where the fence is being
+described as an authoring spec, not presented to a user. Those illustrative
+examples stay; the prohibition is about live orchestration turns.)
+
 ## Mechanism
 
 Kiro IDE has no structured-question tool, so every structured question renders

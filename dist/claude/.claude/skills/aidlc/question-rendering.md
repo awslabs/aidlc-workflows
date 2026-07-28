@@ -6,10 +6,46 @@ The protocol and stage files are harness-neutral: they say *present a
 structured question* and carry a fenced ` ```question ` spec block. This annex
 is the one place that binds that contract to a concrete mechanism.
 
+## Never echo the spec (non-negotiable)
+
+A ` ```question ` fenced block is **INPUT to the `AskUserQuestion` tool, never
+output to render**. The orchestrator MUST translate every ` ```question ` spec
+into an actual `AskUserQuestion` tool call, and MUST NEVER echo, print, paste,
+or "quote back" the fenced block, or any of its field lines (`prompt:`,
+`header:`, `multiSelect:`, `options:`, `label:`, `description:`), into the chat
+transcript. The user must never see the raw fence; they see only the native
+`AskUserQuestion` prompt.
+
+Echoing the fence as literal text is a **protocol violation**, not a stylistic
+choice. It:
+
+- produces a non-interactive wall of text the user cannot click or select;
+- loses the built-in "Other" escape hatch that `AskUserQuestion` provides;
+- is inconsistent with every correct rendering elsewhere in the same session.
+
+If you find yourself about to write a triple-backtick `question` block into your
+reply, STOP: that content belongs inside an `AskUserQuestion` tool call, not in
+the message body.
+
+This applies to **every** structured-question site, including but not limited to:
+
+- approval gates (every stage completion);
+- the questions interaction-mode choice (Guide me / I'll edit the file / Chat);
+- the ladder prompt (autonomy mode after the walking skeleton);
+- halt-and-ask on Bolt failure (Retry / Skip / Abort);
+- consolidated-summary confirmation before artifact generation;
+- the §13 learnings gate (keep / heading / promote-to-team).
+
+(The one place ` ```question ` fences legitimately appear as literal text is
+documentation like THIS file and the stage-protocol, where the fence is being
+described as an authoring spec, not presented to a user. Those illustrative
+examples stay; the prohibition is about live orchestration turns.)
+
 ## Mechanism
 
 On Claude Code, every structured question renders via the **`AskUserQuestion`
-tool**. Map the spec fields 1:1:
+tool**: the fenced ` ```question ` spec is the input, the tool call is the
+output, never the other way around. Map the spec fields 1:1:
 
 | Spec field | AskUserQuestion field |
 |------------|----------------------|

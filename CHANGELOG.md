@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.37] - 2026-08-03
+
+The orchestrator must never echo a fenced ` ```question ` block as literal chat text: the fence is an authoring spec rendered through each harness's question mechanism, never printed verbatim. Dumping the raw fence yields a non-interactive wall of text and drops the answerable options and "Other" escape supplied by the harness's native tool or numbered-prose fallback. This tightens the harness-neutral stage protocol and every per-harness question-rendering annex (Claude, Codex, Kiro CLI, Kiro IDE, opencode). Documentation-only illustrative fences in those files are explicitly carved out so the rule does not forbid its own examples. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated protocol and question-rendering annex are installed. Behavior is a documentation and contract change only; no command, flag, or state format changes.
+
+* The harness-neutral `stage-protocol.md` section "Structured questions" now states that a ` ```question ` fence is a spec rendered through the annex and is never printed verbatim ("spec in, answerable prompt out; never echo the fence"), whether the harness uses a native tool or numbered prose.
+* Each harness question-rendering annex gains a non-negotiable "Never echo the spec" section naming the failure a protocol violation, listing representative structured-question sites including consolidated-summary confirmation, and preserving the documentation carve-out for illustrative example fences.
+
 ## [2.5.36] - 2026-08-03
 
 Adds an optional declared workspace manifest for multi-repo teams. AI-DLC already auto-discovers sibling code repos on disk at intent birth; this release lets a team also declare that expected set in a `repos.json` file at the workspace root and reconcile it with a new `aidlc-workspace-sync` tool that clones missing repos, maintains a managed `.gitignore` block, and generates a VSCode multi-root workspace. The manifest is a convenience layer only: disk discovery remains the runtime source of truth, so a repo works the moment it is cloned whether or not it is declared. `--doctor` gains three advisory rows about manifest state. **Upgrade:** re-copy your `dist/<harness>/` shell to pick up the new tool; without `repos.json`, sync stays dormant and doctor adds only the advisory workspace-records row.
