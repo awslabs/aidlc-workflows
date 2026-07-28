@@ -12,7 +12,7 @@ This chapter is the canonical reference for the **AIDLC plugin** system: an opti
 
 A plugin is a directory (and a git repository) with a declarative manifest and core-shaped subtrees. It can:
 
-- **add** new stages (in their own display-number range), agents, scopes, method/rules (into the space memory seed), and sensors; and
+- **add** new stages (numbered by the engine on first compile — a plugin claims no display-number range), agents, scopes, method/rules (into the space memory seed), and sensors; and
 - **modify** existing core stages **additively** via the contribution seam (§6) — enriching what a stage produces, consumes, checks, and instructs, without editing it.
 
 First-party plugins (shipped by the AIDLC team) and third-party plugins (anyone else) are **mechanically identical** — same structure, same seams, same composer, same host-install path. The only difference is provenance: whose repository the plugin lives in and who reviewed it. `plugins/test-pro/` is the reference fixture.
@@ -176,7 +176,7 @@ explicit `--scope`.
 
 Disabling a plugin also removes what it merged into core stages, not just its
 own files. Compose records the structural adds it actually applied (produces /
-sensors / consumes / required_sections, per target stage) in a per-plugin
+sensors / consumes / scopes / required_sections, per target stage) in a per-plugin
 sidecar at `tools/data/plugin-contrib-<key>.json`; spliced prose fragments carry
 their own sentinel markers. On disable, `select-plugins` strips both from the
 installed stage source inside the same rollback transaction, so a disabled
@@ -245,7 +245,7 @@ fragments:                    # PROSE — spliced into the stage body
 
 **Merge semantics:**
 
-- **Structural surfaces** — **set union** into the target stage's source frontmatter. Commutative, order-independent, safe across uncoordinated authors. *Implemented today:* `produces`, `consumes` (artifact + `required` + `conditional_on`, each preserved), `sensors`, `scopes`, `required_sections`. `adds.scopes` carries two guard rails: a contribution may only add scopes its own plugin ships (the bare plugin name or `<plugin>-` prefixed — putting a core stage under a core or foreign-plugin scope changes selection semantics the other owner never agreed to), and the scope's identity file must already be installed (a name with no `scopes/<name>.md` would resolve as an all-SKIP phantom); a violating entry is dropped-with-log, never merged. *Not yet merged (deferred):* `adds.requires_stage` — a contribution may declare it, but the compose hook records it to the drops log (`--doctor` surfaces it) rather than merging, so its absence is visible, never silent. When it graduates it set-unions like the others.
+- **Structural surfaces** — **set union** into the target stage's source frontmatter. Commutative, order-independent, safe across uncoordinated authors. *Implemented today:* `produces`, `consumes` (artifact + `required` + `conditional_on`, each preserved), `sensors`, `scopes`, `required_sections`. `adds.scopes` carries two guard rails: the scope's identity file must already be installed (a name with no `scopes/<name>.md` would resolve as an all-SKIP phantom), and that installed file's `plugin:` frontmatter must name the contributing plugin exactly — putting a core stage under a core or foreign-plugin scope changes selection semantics the other owner never agreed to, and ownership comes from the file's declared owner, not a name-prefix rule (dash prefixes overlap across plugin names; a core scope declares no `plugin:` and never merges); a violating entry is dropped-with-log, never merged. *Not yet merged (deferred):* `adds.requires_stage` — a contribution may declare it, but the compose hook records it to the drops log (`--doctor` surfaces it) rather than merging, so its absence is visible, never silent. When it graduates it set-unions like the others.
 - **Prose fragments** (`fragments` of step/question prose) — spliced into the stage body at the declared anchor, ordered deterministically by `(order, plugin)`. Each spliced block is wrapped in a content-hashed sentinel, so re-composing is idempotent, an upgraded fragment replaces its prior block, and blocks from separate plugins interleave by `(order, plugin)` regardless of hook-firing order. The agent reads base body + ordered fragments at runtime.
 - **No override, ever.** A contribution can only add. It cannot change a stage's `lead_agent`, relax a `consumes[].required`, remove a field, or replace existing step prose. A genuine need to *change* upstream behavior is a framework-level decision, never a quiet patch inside a plugin.
 

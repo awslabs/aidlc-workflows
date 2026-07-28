@@ -12,10 +12,11 @@ import { isPlainObject, UNIT_KINDS } from "./aidlc-lib.ts";
 
 export interface StageFrontmatter {
   slug: string;
-  // number — authored display order, `<phase-prefix>.<index>` (e.g. "2.7", "4.50").
-  // Optional at the schema layer (shape-checked when present). Display/ordering
-  // only; slug is identity. A plugin authors its own numbers without renumbering
-  // core (plugin mechanism — see docs/reference/18-plugin-mechanism.md §2).
+  // number — authored ordering hint, `<phase-prefix>.<index>` (e.g. "2.7", "4.50").
+  // Optional at the schema layer (shape-checked when present). Slug is identity;
+  // compiled number values are assigned by the engine (an authored value only
+  // breaks ties among a plugin's independent new stages — its absolute value
+  // never lands in the graph; see docs/reference/18-plugin-mechanism.md §2).
   number?: string;
   // name — authored human-readable display name. Optional; shape-checked (string)
   // when present.
@@ -175,8 +176,9 @@ const KNOWN_FIELDS = new Set<string>([...REQUIRED_FIELDS, ...OPTIONAL_FIELDS]);
 const SLUG_RE = /^[a-z][a-z0-9-]*$/;
 
 // Stage display number: `<int>.<int>` (e.g. "0.1", "2.7", "4.50"). Shape only —
-// numericStageOrder (aidlc-graph.ts) parses it; a plugin authors numbers in its
-// own range. Phase-prefix/phase agreement is a separate compile cross-check.
+// numericStageOrder (aidlc-graph.ts) parses it; an authored value is an
+// ordering hint, the engine assigns all compiled values. Phase-prefix/phase
+// agreement is a separate compile cross-check.
 const NUMBER_RE = /^\d+\.\d+$/;
 
 // Lowercase-kebab artifact names — see docs/reference/16-artifact-vocabulary.md

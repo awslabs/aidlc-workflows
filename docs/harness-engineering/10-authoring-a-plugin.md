@@ -176,13 +176,14 @@ marks what the compose hook merges today vs. designed-but-deferred (mirrors doc 
   sensor derives its expectations from templates, so nothing yet fails a stage for
   a missing section. Treat it as declarative intent for now.
 - `adds.scopes` — ✅ set-unioned into the target stage's `scopes:` list, with
-  two guard rails (each violation dropped-with-log, never merged): the scope
-  must belong to YOUR plugin (the bare plugin name or `<plugin>-` prefixed —
-  you cannot put a core stage under a core or foreign-plugin scope), and its
+  two guard rails (each violation dropped-with-log, never merged): the scope's
   identity file must be installed (`scopes/<name>.md` ships in the same
-  plugin). Use it to route existing core stages under your plugin's scope —
-  e.g. a methodology plugin whose scope carries its own discovery stages plus
-  core Inception onward.
+  plugin), and that file's `plugin:` frontmatter must name YOUR plugin exactly
+  — you cannot put a core stage under a core or foreign-plugin scope, and
+  ownership is read from the installed file's declared owner, not inferred
+  from a name prefix. Use it to route existing core stages under your
+  plugin's scope — e.g. a methodology plugin whose scope carries its own
+  discovery stages plus core Inception onward.
 - `adds.requires_stage` — ⏳ **deferred**: a contribution may declare it, but
   compose records it to the drops log rather than merging (it is not yet a
   DAG edge). Don't rely on it to gate behavior yet.

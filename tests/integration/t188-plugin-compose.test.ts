@@ -365,7 +365,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     ].join("\n");
     const contrib = [
       "---", "target: build-and-test", "plugin: syn-scope",
-      // Both owned-name shapes: the bare plugin name AND the prefixed form.
+      // Both conventional name shapes (bare plugin name AND prefixed) merge;
+      // ownership comes from each installed file's plugin: frontmatter.
       "adds:", "  scopes:", "    - syn-scope", "    - syn-scope-extra", "---", "",
     ].join("\n");
     const { drops, proj } = composeSynthetic("syn-scope", {
@@ -413,6 +414,9 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // Alphabetical: assemble < middle < zstart. Flow: zstart -> middle ->
     // assemble. Alphabetical seeding would number assemble lowest and fail
     // the lower-numbered-dependency invariant; edge-aware seeding must not.
+    // assemble declares its dep TWICE: the schema shape-checks but does not
+    // dedupe requires_stage, and a per-occurrence indegree count would strand
+    // the stage and misreport the copy-paste duplicate as a cycle.
     const mk = (slug: string, deps: string[], produces: string, consumes: string[]) => [
       "---", `slug: ${slug}`, "plugin: syn-order", "phase: ideation",
       "execution: ALWAYS", "condition: always",
@@ -425,7 +429,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "inputs: x", "outputs: y", "---", "", `# ${slug}`, "", "## Steps", "body", "",
     ].join("\n");
     const { drops, proj } = composeSynthetic("syn-order", {
-      "stages/ideation/syn-order-assemble.md": mk("syn-order-assemble", ["syn-order-middle"], "syn-order-doc", ["syn-order-mid"]),
+      "stages/ideation/syn-order-assemble.md": mk("syn-order-assemble", ["syn-order-middle", "syn-order-middle"], "syn-order-doc", ["syn-order-mid"]),
       "stages/ideation/syn-order-middle.md": mk("syn-order-middle", ["syn-order-zstart"], "syn-order-mid", ["syn-order-first"]),
       "stages/ideation/syn-order-zstart.md": mk("syn-order-zstart", [], "syn-order-first", []),
     });
@@ -434,6 +438,58 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const num = (slug: string) => parseFloat((g.find((s) => s.slug === slug)?.number ?? "").split(".")[1]);
     expect(num("syn-order-zstart")).toBeLessThan(num("syn-order-middle"));
     expect(num("syn-order-middle")).toBeLessThan(num("syn-order-assemble"));
+  });
+
+  test("a requires_stage cycle among new stages is a loud compile error, not a seeded graph", () => {
+    const mk = (slug: string, dep: string, produces: string) => [
+      "---", `slug: ${slug}`, "plugin: syn-cycle", "phase: ideation",
+      "execution: ALWAYS", "condition: always",
+      "lead_agent: aidlc-product-agent", "support_agents: []", "mode: inline",
+      "produces:", `  - ${produces}`, "consumes: []",
+      "requires_stage:", `  - ${dep}`,
+      "inputs: x", "outputs: y", "---", "", `# ${slug}`, "", "## Steps", "body", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-cycle", {
+      "stages/ideation/syn-cycle-a.md": mk("syn-cycle-a", "syn-cycle-b", "syn-cycle-doc-a"),
+      "stages/ideation/syn-cycle-b.md": mk("syn-cycle-b", "syn-cycle-a", "syn-cycle-doc-b"),
+    });
+    // Compose is fail-open (rc 0); the compile failure surfaces as a drop
+    // naming the cycle, and neither stage reaches the compiled graph.
+    expect(drops).toContain("compile failed");
+    expect(drops).toContain("requires_stage cycle among new stages");
+    const g = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "stage-graph.json"), "utf-8")) as Array<{ slug: string }>;
+    expect(g.some((s) => s.slug.startsWith("syn-cycle-"))).toBe(false);
+  });
+
+  test("adds.scopes ownership is the installed file's plugin: field, not a name prefix", () => {
+    // Plugin "syn-prefix" contributes the scope of plugin "syn-prefix-foreign":
+    // the scope name starts with "syn-prefix-", so a prefix rule would merge a
+    // foreign plugin's scope. Ownership must come from the installed scope
+    // file's plugin: frontmatter, so this drops instead.
+    const foreignScope = [
+      "---", "name: syn-prefix-foreign", "plugin: syn-prefix-foreign",
+      "depth: Standard", "keywords:", "  - synthetic",
+      "description: scope owned by a different plugin whose name overlaps by prefix",
+      "skeleton: off", "---", "",
+      "# syn-prefix-foreign scope", "", "## Membership", "synthetic", "",
+    ].join("\n");
+    const contrib = [
+      "---", "target: build-and-test", "plugin: syn-prefix",
+      "adds:", "  scopes:", "    - syn-prefix-foreign", "---", "",
+    ].join("\n");
+    // The victim's scope file is pre-installed (mutateInstall), as if plugin
+    // syn-prefix-foreign composed first; then plugin syn-prefix contributes.
+    const { drops, proj } = composeSynthetic("syn-prefix", {
+      "contributions/construction/build-and-test.md": contrib,
+    }, ".claude", (_proj, harnessDir) => {
+      writeFileSync(join(harnessDir, "scopes", "syn-prefix-foreign.md"), foreignScope);
+    });
+    expect(drops).toContain('adds.scopes "syn-prefix-foreign" is not owned by plugin "syn-prefix"');
+    expect(drops).toContain('declares plugin "syn-prefix-foreign"');
+    const fm = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8")
+      .match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
+    expect(fm).not.toContain("- syn-prefix-foreign");
+    expect(existsSync(join(proj, ".claude", "tools", "data", "plugin-contrib-syn-prefix.json"))).toBe(false);
   });
 
   test("adds.scopes naming a foreign or uninstalled scope is dropped-with-log, not merged", () => {

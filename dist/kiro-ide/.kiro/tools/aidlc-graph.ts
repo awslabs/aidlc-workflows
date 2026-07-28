@@ -1727,9 +1727,13 @@ export function compileStageGraph(): {
   for (const prefix of [...newByPrefix.keys()].sort((a, b) => a - b)) {
     const batch = newByPrefix.get(prefix)!;
     const inBatch = new Map(batch.map((e) => [e.data.slug, e]));
+    // Dedupe each stage's edges: the decrement below fires once per
+    // dependent, so a duplicated requires_stage entry would strand the
+    // stage at indegree > 0 and misreport a copy-paste duplicate as a
+    // cycle (the schema shape-checks the list but does not dedupe it).
     const indegree = new Map(batch.map((e) => [e.data.slug, 0]));
     for (const e of batch) {
-      for (const dep of e.data.requires_stage ?? []) {
+      for (const dep of new Set(e.data.requires_stage ?? [])) {
         if (inBatch.has(dep)) indegree.set(e.data.slug, (indegree.get(e.data.slug) ?? 0) + 1);
       }
     }
@@ -1757,10 +1761,13 @@ export function compileStageGraph(): {
       }
     }
     if (seeded.length < batch.length) {
+      // The unseeded set = the cycle's members plus anything downstream of
+      // them, so name it "stuck", not "the cycle" — a stage can appear here
+      // solely because its dependency is cyclic.
       const stuck = batch.filter((e) => !seeded.includes(e)).map((e) => e.data.slug);
       throw new Error(
         `Cannot seed stage numbers for phase "${batch[0].phase}": ` +
-          `requires_stage cycle among new stages ${stuck.join(", ")}. Break the cycle.`
+          `requires_stage cycle among new stages (stuck: ${stuck.join(", ")}). Break the cycle.`
       );
     }
     for (const e of seeded) {

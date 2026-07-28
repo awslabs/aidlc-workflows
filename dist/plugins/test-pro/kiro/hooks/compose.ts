@@ -28,7 +28,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const PLUGIN_ROOT =
@@ -1285,6 +1285,12 @@ try {
   // disable-time strip on the very next session start). The advisory drop at
   // the top of this run already names the select-plugins command to enable.
   const contribPhases = pluginEnabledBySelection() && existsSync(contribRoot) ? readdirSync(contribRoot) : [];
+  // Installed scope roster for the adds.scopes guards, keyed by frontmatter
+  // `name:` (the runtime's scope identity — core files carry the `aidlc-`
+  // stem prefix, so filename lookup would miss them). Snapshotted once here:
+  // this plugin's own scope files were already copied in above, and
+  // contributions must not conjure new scope files.
+  const installedScopes = installedNameRoster(join(HARNESS_DIR, "scopes"));
   for (const phase of contribPhases) {
     const phaseDir = join(contribRoot, phase);
     let files: string[];
@@ -1400,19 +1406,26 @@ try {
       const addedProduces: string[] = [], addedSensors: string[] = [], addedConsumes: string[] = [], addedScopes: string[] = [], addedSections: string[] = [];
       const sectionsMeta: { created?: boolean } = {};
       // adds.scopes — set-union the target stage into this plugin's scopes.
-      // Two guard rails, both drop-logged: a contribution may only add scopes
-      // its OWN plugin ships (the bare plugin name or `<plugin>-` prefixed —
-      // welding a core stage into a core or foreign-plugin scope changes
-      // selection semantics the other owner never agreed to), and the scope's
-      // identity file must already be installed (a scope name with no
-      // scopes/<name>.md resolves as an all-SKIP phantom with no diagnostic).
+      // Two guard rails, both drop-logged: the scope's identity file must
+      // already be installed (a name with no scopes/*.md declaring it
+      // resolves as an all-SKIP phantom with no diagnostic), and that file's
+      // `plugin:` frontmatter must name THIS plugin exactly — welding a core
+      // stage into a core or foreign-plugin scope changes selection semantics
+      // the other owner never agreed to. Ownership comes from the installed
+      // file's declared owner, NOT a name-prefix rule: a plugin named `a`
+      // must not pass for plugin `a-b`'s scope `a-b-x` (dash prefixes overlap
+      // across plugin names). A core scope declares no `plugin:` and never
+      // merges. Resolution is by frontmatter `name:` (the runtime's scope
+      // identity), not filename — core files carry the `aidlc-` stem prefix.
       const mergeableScopes = listOf("scopes").filter((s) => {
-        if (s !== PLUGIN_NAME && !s.startsWith(`${PLUGIN_NAME}-`)) {
-          recordDrop(`contribution to ${target}: adds.scopes "${s}" is not owned by plugin "${PLUGIN_NAME}" (only "${PLUGIN_NAME}" or ${PLUGIN_NAME}-prefixed scopes merge); dropped`);
+        const scopeFile = installedScopes.get(s);
+        if (!scopeFile) {
+          recordDrop(`contribution to ${target}: adds.scopes "${s}" has no installed scope file (no scopes/*.md declares name "${s}"); dropped`);
           return false;
         }
-        if (!existsSync(join(HARNESS_DIR, "scopes", `${s}.md`))) {
-          recordDrop(`contribution to ${target}: adds.scopes "${s}" has no installed scope file (scopes/${s}.md); dropped`);
+        const owner = frontmatter(readFileSync(scopeFile, "utf-8")).match(/^plugin:\s*(.+)$/m)?.[1].trim();
+        if (owner !== PLUGIN_NAME) {
+          recordDrop(`contribution to ${target}: adds.scopes "${s}" is not owned by plugin "${PLUGIN_NAME}" (installed ${basename(scopeFile)} declares ${owner ? `plugin "${owner}"` : "no plugin: field (core-owned)"}; only this plugin's own scopes merge); dropped`);
           return false;
         }
         return true;
