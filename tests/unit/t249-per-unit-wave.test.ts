@@ -1,7 +1,7 @@
 // covers: file:aidlc-common/protocols/stage-protocol.md §3 §5,
 // file:skills/aidlc/SKILL.md per-unit wave paragraph
 //
-// t244 - batch-parallel per-unit waves (#610, floor version). The conductor
+// t249 - batch-parallel per-unit waves (#610, floor version). The conductor
 // MAY widen a gate:false per-unit design directive into a Bolt-DAG batch wave
 // (one concurrent stage-body dispatch per uncovered batch unit) with §12a
 // reviewers dispatched at wave end as parallel FOREGROUND tasks where no
@@ -16,17 +16,35 @@
 //   (b) the unit-major exclusion (waves apply to the stage-major walk only),
 //   (c) the builder write confinement to construction/<unit>/<stage>/ (the
 //       sentence that keeps a wave from racing shared files) + the
-//       no-stage-level-diary rule (conductor consolidates per wave),
+//       no-stage-level-diary rule (conductor consolidates per wave, carrying
+//       every unit's memory-note content verbatim),
 //   (d) the never-present-the-gate-with-an-outstanding-reviewer rule (the
 //       wait is deferred, not skipped),
 //   (e) the enforcement constraint: parallel foreground reviewers only where
 //       no reviewer-scope dispatch record is active - the record is a single
-//       file, so enforcement harnesses serialize per-unit reviews.
+//       file, so enforcement harnesses serialize per-unit reviews,
+//   (f) wave eligibility is carved down to the four inline per-unit design
+//       stages - any `workspace_requires: true` stage (code-generation) is
+//       NEVER wave-eligible (shared-workspace collision + the Step 3 Plan
+//       Approval hard stop can't fold into a builder's return message),
+//   (g) sibling-unit membership and per-sibling derivation are kind-aware -
+//       a sibling only joins the wave if its kind actually requires this
+//       stage's produces (produces_kinds vs. bolt_dag.units[].kind), and
+//       each sibling's paths/produces are derived from ITS OWN kind, never
+//       by substituting its name into the one resolved directive,
+//   (h) crash re-entry runs the §12a reviewer step for any wave unit that
+//       reads as covered but carries no verdict yet, before the gate - the
+//       disk-scan coverage predicate proves artifact existence, not review,
+//   (i) a builder with a human-blocking question must withhold at least one
+//       required produce so the engine still reads its unit as uncovered.
 //
 // Mechanism: none (readFileSync over authored + dist prose; zero spawn, zero
 // LLM). Style follows t217: iterate HARNESS_MATRIX so a new harness cannot
 // ship without the wave paragraph, and read dist through each harness's
 // matrix roots so byte-parity drift in a generated copy also reds here.
+// (f)-(g) are additionally grounded against real stage frontmatter (below)
+// so the prose's factual claims about workspace_requires and produces_kinds
+// cannot silently drift from the stages they describe.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -35,6 +53,7 @@ import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
 const SKILL = "skills/aidlc/SKILL.md";
 const PROTOCOL = join("aidlc-common", "protocols", "stage-protocol.md");
+const CORE_STAGES = join("core", "aidlc-common", "stages", "construction");
 
 /** The load-bearing wave sentences every conductor SKILL must carry. */
 function expectWaveParagraph(labelled: string): void {
@@ -49,22 +68,53 @@ function expectWaveParagraph(labelled: string): void {
   expect(labelled).toMatch(
     /On the default stage-major walk only — when `Construction Iteration: unit-major` is recorded the walk stays serial/,
   );
-  // The wave source: bolt_dag.batches from the intent's runtime-graph.json,
-  // filtered to units whose artifacts for THIS stage are not yet on disk.
-  expect(labelled).toMatch(/read `bolt_dag\.batches` from the intent's `runtime-graph\.json`/);
+  // (f) eligibility is carved down to the four inline design stages; a
+  // workspace_requires stage (code-generation) is never wave-eligible.
   expect(labelled).toMatch(
-    /the wave = that batch's units whose artifacts for THIS stage are not yet on disk/,
+    /but ONLY on one of the four inline design stages \(functional-design, nfr-requirements, nfr-design, infrastructure-design\)/,
   );
-  // (c) builder write confinement + no stage-level diary + questions surface
-  // in the return message (never a mid-dispatch stop).
+  expect(labelled).toMatch(
+    /Code-generation \(`workspace_requires: true`\) is NEVER wave-eligible/,
+  );
+  expect(labelled).toMatch(/collide in the working tree/);
+  expect(labelled).toMatch(/Step 3 Plan Approval is a mandatory hard stop/);
+  // The wave source: bolt_dag.batches from the intent's runtime-graph.json,
+  // filtered to kind-eligible units whose artifacts for THIS stage are not
+  // yet on disk.
+  expect(labelled).toMatch(/read `bolt_dag\.batches` from the intent's `runtime-graph\.json`/);
+  // (g) kind-aware sibling membership + per-sibling derivation.
+  expect(labelled).toMatch(
+    /take the wave = that batch's units whose KIND actually requires this stage's produces/,
+  );
+  expect(labelled).toMatch(
+    /cross-reference the stage's `produces_kinds` map against each unit's `bolt_dag\.units\[\]\.kind`/,
+  );
+  expect(labelled).toMatch(
+    /vacuously covered and never a wave member/,
+  );
+  expect(labelled).toMatch(
+    /and whose artifacts for THIS stage are not yet on disk/,
+  );
+  expect(labelled).toMatch(
+    /Resolve each sibling unit's own paths and kind-filtered produces\/consumes from ITS OWN kind — never by substituting the sibling's name into `directive`'s already-resolved fields/,
+  );
+  // (c) builder write confinement + no stage-level diary (verbatim carry) +
+  // questions surface in the return message (never a mid-dispatch stop).
   expect(labelled).toMatch(
     /Each builder is confined to its own `construction\/<unit>\/<stage>\/`/,
   );
   expect(labelled).toMatch(
-    /builders must NOT write any stage-level diary \(the conductor appends one consolidated diary entry per wave\)/,
+    /builders must NOT write any stage-level diary — the conductor appends one consolidated diary entry per wave that carries every unit's memory-note content VERBATIM, not a paraphrase/,
   );
   expect(labelled).toMatch(
-    /human-blocking question surfaces in the builder's return message/,
+    /the question surfaces in the builder's return message/,
+  );
+  // (i) blocking question => withhold at least one required produce.
+  expect(labelled).toMatch(
+    /A builder with a human-blocking question MUST withhold at least one of the stage's required produces so its unit still reads as uncovered/,
+  );
+  expect(labelled).toMatch(
+    /once a builder has written every required produce for its unit it MUST NOT raise a blocking question/,
   );
   // (d) the gate is never presented with a reviewer outstanding.
   expect(labelled).toMatch(
@@ -72,11 +122,19 @@ function expectWaveParagraph(labelled: string): void {
   );
   // The loop re-entry stays engine-owned: re-run next, never report-approve.
   expect(labelled).toMatch(/re-run `next` exactly as above \(do NOT report-approve/);
-  // Crash recovery rides the same stateless disk scan.
+  // (h) crash recovery: disk-scan proves build coverage only; the §12a
+  // reviewer step still runs for any covered-but-unreviewed wave unit before
+  // the gate is presented.
   expect(labelled).toMatch(/`next` re-hands whatever is still uncovered/);
+  expect(labelled).toMatch(
+    /that scan is artifact-existence only and proves nothing about review/,
+  );
+  expect(labelled).toMatch(
+    /run the §12a reviewer step for any wave unit that reads as covered but whose primary artifact carries no `## Review` verdict yet/,
+  );
 }
 
-describe("t244 per-unit wave paragraph on every conductor SKILL surface", () => {
+describe("t249 per-unit wave paragraph on every conductor SKILL surface", () => {
   test("authored harness SKILL.md files carry the wave paragraph", () => {
     for (const harness of HARNESS_MATRIX) {
       const path = join(harness.authoredRoot, SKILL);
@@ -127,12 +185,34 @@ function expectProtocolWave(labelled: string): void {
   expect(labelled).toMatch(
     /When `Construction Iteration: unit-major` is recorded, the walk stays serial — waves apply to the default stage-major walk only\./,
   );
-  // Confinement + consolidated diary.
+  // (f) eligibility carve-out at the protocol level.
+  expect(labelled).toMatch(
+    /but ONLY for the four inline per-Unit design stages \(functional-design, nfr-requirements, nfr-design, infrastructure-design\)/,
+  );
+  expect(labelled).toMatch(
+    /A stage with `workspace_requires: true` \(code-generation\) is NEVER wave-eligible/,
+  );
+  // (g) kind-aware sibling membership + per-sibling derivation.
+  expect(labelled).toMatch(
+    /take the wave = that batch's Units whose KIND actually requires this stage's produces/,
+  );
+  expect(labelled).toMatch(
+    /cross-reference the stage's `produces_kinds` map against each Unit's `bolt_dag\.units\[\]\.kind`/,
+  );
+  expect(labelled).toMatch(/vacuously covered by that stage and is never a wave member/);
+  expect(labelled).toMatch(
+    /Resolve each sibling Unit's own paths and kind-filtered produces\/consumes set from ITS OWN kind — never by substituting the sibling's name into `directive`'s already-resolved fields/,
+  );
+  // Confinement + consolidated diary (verbatim carry-over).
   expect(labelled).toMatch(
     /Each builder is confined to its own `construction\/<unit>\/<stage>\/`/,
   );
   expect(labelled).toMatch(
-    /no builder writes a stage-level diary \(the orchestrator appends one consolidated diary entry per wave\)/,
+    /no builder writes a stage-level diary — the orchestrator appends one consolidated diary entry per wave that carries every Unit's memory-note content VERBATIM, not a paraphrase/,
+  );
+  // (i) blocking question => withhold at least one required produce.
+  expect(labelled).toMatch(
+    /A builder with a human-blocking question MUST withhold at least one of the stage's required produces so its Unit still reads as uncovered/,
   );
   // Gate discipline.
   expect(labelled).toMatch(
@@ -145,6 +225,13 @@ function expectProtocolWave(labelled: string): void {
   );
   expect(labelled).toMatch(
     /the single-file record serializes per-Unit reviews \(write record → review → delete → next\)/,
+  );
+  // (h) crash re-entry: build coverage only, §12a check before the gate.
+  expect(labelled).toMatch(
+    /that scan is artifact-existence only and proves nothing about review/,
+  );
+  expect(labelled).toMatch(
+    /the orchestrator MUST run the §12a reviewer step for any wave Unit that reads as covered but whose primary artifact carries no `## Review` verdict yet/,
   );
 }
 
@@ -164,7 +251,7 @@ function expectTopologyCarveOut(labelled: string): void {
   );
 }
 
-describe("t244 stage-protocol §3 wave paragraph + §5 carve-out", () => {
+describe("t249 stage-protocol §3 wave paragraph + §5 carve-out", () => {
   test("authored core stage-protocol.md carries the §3 wave paragraph and §5 carve-out", () => {
     const repoRoot = join(import.meta.dir, "..", "..");
     const path = join(repoRoot, "core", PROTOCOL);
@@ -202,5 +289,81 @@ describe("t244 stage-protocol §3 wave paragraph + §5 carve-out", () => {
     expect(multiAgent).toBeGreaterThan(-1);
     expect(carveOut).toBeGreaterThan(multiAgent);
     expect(carveOut).toBeLessThan(section11);
+  });
+});
+
+// Grounding: the wave prose's eligibility claim (f) and kind-membership claim
+// (g) name real facts about real stage frontmatter. If a future edit to the
+// stage files drifts from what the prose asserts - e.g. code-generation loses
+// `workspace_requires: true`, or an inline design stage gains it, or a
+// produces_kinds map stops exempting any kind - this drifts silently unless
+// pinned against the actual frontmatter, not just the prose describing it.
+describe("t249 wave-eligibility and kind-membership claims are grounded in real stage frontmatter", () => {
+  const INLINE_WAVE_STAGES = [
+    "functional-design",
+    "nfr-requirements",
+    "nfr-design",
+    "infrastructure-design",
+  ];
+
+  function frontmatter(slug: string): string {
+    const repoRoot = join(import.meta.dir, "..", "..");
+    const path = join(repoRoot, CORE_STAGES, `${slug}.md`);
+    const body = readFileSync(path, "utf-8");
+    const end = body.indexOf("\n---", 3);
+    return body.slice(0, end === -1 ? undefined : end);
+  }
+
+  test("(f) the four inline wave-eligible stages carry no workspace_requires", () => {
+    for (const slug of INLINE_WAVE_STAGES) {
+      const fm = frontmatter(slug);
+      expect(fm).toMatch(/^mode:\s*inline\s*$/m);
+      expect(fm).not.toMatch(/workspace_requires:\s*true/);
+    }
+  });
+
+  test("(f) code-generation - the excluded stage - actually carries workspace_requires: true and mode: subagent", () => {
+    const fm = frontmatter("code-generation");
+    expect(fm).toMatch(/^mode:\s*subagent\s*$/m);
+    expect(fm).toMatch(/workspace_requires:\s*true/);
+  });
+
+  test("(g) mixed-kind batch: infrastructure-design's produces_kinds vacuously exempts a real kind (spec) from every required produce while a service-kind unit stays fully required", () => {
+    // This is the exact scenario apackeer's finding names: "a spec unit is
+    // vacuously covered by infrastructure-design". Ground it against the
+    // real produces_kinds map rather than asserting it only in prose.
+    const fm = frontmatter("infrastructure-design");
+    const producesMatch = fm.match(/^produces:\n([\s\S]*?)\n(?:optional_produces|produces_kinds):/m);
+    expect(producesMatch).not.toBeNull();
+    const requiredProduces = (producesMatch as RegExpMatchArray)[1]
+      .split("\n")
+      .map((l) => l.trim().replace(/^- /, ""))
+      .filter(Boolean);
+    expect(requiredProduces.length).toBeGreaterThan(0);
+
+    const kindsBlockMatch = fm.match(/^produces_kinds:\n([\s\S]*?)\nconsumes:/m);
+    expect(kindsBlockMatch).not.toBeNull();
+    const kindsBlock = (kindsBlockMatch as RegExpMatchArray)[1];
+
+    // A "spec" unit must be absent from EVERY required produce's kind list -
+    // i.e., a spec-kind sibling is exempt from all of this stage's produces
+    // and is therefore vacuously covered (never a wave member for this
+    // stage), exactly as the wave prose (g) claims for kind-exempt units.
+    for (const produce of requiredProduces) {
+      const line = kindsBlock
+        .split("\n")
+        .find((l) => l.trim().startsWith(`${produce}:`));
+      expect(line).toBeDefined();
+      expect(line as string).not.toMatch(/\bspec\b/);
+    }
+
+    // A "service" unit, by contrast, is named on every required produce's
+    // kind list, so a service-kind sibling IS a genuine wave member.
+    for (const produce of requiredProduces) {
+      const line = kindsBlock
+        .split("\n")
+        .find((l) => l.trim().startsWith(`${produce}:`)) as string;
+      expect(line).toMatch(/\bservice\b/);
+    }
   });
 });
