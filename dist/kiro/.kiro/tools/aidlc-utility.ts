@@ -3740,6 +3740,20 @@ function ensureWorkspaceDirs(projectDir: string, scope: string): void {
 // the BORN intent's record (the active-intent cursor set first makes the
 // default-resolving state/audit helpers resolve there).
 function handleIntentCreate(projectDir: string, flags: Record<string, string>): void {
+  // FAIL CLOSED on a truly-bare invocation. Creation mutates the intent registry
+  // and active cursor, so a call with no description or scope is almost always
+  // a routing error rather than a deliberate default-scope request.
+  if (!flags.scope && !flags.arguments && !flags.label) {
+    die(
+      "intent-create refused: no --scope, --arguments, or --label given. Creation " +
+        "is a mutation and a bare invocation mints a garbage default-scope " +
+        "intent. Start work via `/aidlc \"<what to build>\"` (the engine names " +
+        "the create move for you) or `/aidlc-init [--scope <name>] <description>`; " +
+        "to invoke this tool directly, pass at least `--scope <name>` (and " +
+        "ideally `--arguments \"<description>\" --label \"<2-3 word essence>\"`).",
+    );
+  }
+
   // Default when --scope is omitted; selection-aware so a plugin-only install
   // (where the core "poc" default is deselected) resolves to its nominated
   // freeform default instead of crashing with "Unknown scope".

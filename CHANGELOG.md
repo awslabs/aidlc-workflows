@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.62] - 2026-08-08
+
+`intent-create` now fails closed when invoked without meaningful work details, and starting a second unrelated intent hands the conductor to a fresh session so the new work does not inherit the prior intent's transcript. Scope runners (`/aidlc-<scope>`) now offer the same explicit second-intent path instead of dead-ending at a completed workflow. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated tools, hooks, orchestrator skill, and scope runners are installed.
+
+* A bare `aidlc-utility.ts intent-create` invocation now errors without mutating the workspace; callers must provide a scope or description.
+* Completed workflows advertise the human-confirmed `next --new-intent --scope <scope> "<description>"` route for unrelated work.
+* A confirmed second intent is created on disk, then the current conductor stops and hands off through the harness-native fresh-session flow before AI-DLC resumes.
+* Every generated scope runner carries the same recognize, confirm, create, and fresh-session handoff contract.
+
 ## [2.5.60] - 2026-08-09
 
 Adds GitHub Copilot as a first-class harness for both Copilot CLI and VS Code agent mode, with native skills, custom agents, normalized hooks, plugin composition, and deterministic workflow safeguards. **Upgrade:** copy `dist/copilot/.aidlc/`, `dist/copilot/aidlc/`, and merge `dist/copilot/.github/` plus `AGENTS.md` into the project; trust the folder in `~/.copilot/config.json`, and set `GITHUB_COPILOT_PROMPT_MODE_REPO_HOOKS=1` for headless `copilot -p` runs.

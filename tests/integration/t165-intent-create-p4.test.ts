@@ -20,7 +20,9 @@ import { join } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
+  FIXTURES_DIR,
   removeWorkspaceRecord,
+  seedStateFile,
   seededStateFile,
 } from "../harness/fixtures.ts";
 import {
@@ -160,6 +162,113 @@ describe("t164 auto-birth (intent-create) on an empty workspace", () => {
     // next is read-only: it must NOT have birthed anything.
     expect(existsSync(intentsDir(proj))).toBe(false);
     expect(existsSync(seededStateFile(proj))).toBe(false);
+  });
+});
+
+// ============================================================
+// intent-birth fails CLOSED on a truly-bare invocation
+// ============================================================
+describe("t164 intent-birth fails closed on a bare invocation", () => {
+  // A bare `intent-birth` (no --scope, no --arguments, no --label) used to
+  // silently mint a garbage default-scope intent (scope resolved to the install
+  // default, slug == the scope token, empty description), a routing fumble that
+  // became actual corrupt workspace state. Birth is a mutation; a bare call is
+  // almost always a mistake, so it must REFUSE, mutate nothing, and point at the
+  // blessed entry points.
+  test("bare intent-birth is refused (exit 1) and mints NOTHING", () => {
+    const r = util(["intent-birth"]);
+    expect(r.status).toBe(1);
+    // Actionable refusal naming the missing flags + the blessed paths.
+    expect(r.out).toContain("intent-birth refused");
+    expect(r.out).toContain("--scope");
+    // No mutation: no intents dir, no state file, no registry.
+    expect(existsSync(intentsDir(proj))).toBe(false);
+    expect(existsSync(seededStateFile(proj))).toBe(false);
+    expect(readIntentRegistry(proj).length).toBe(0);
+  });
+
+  // The guard keys on "no scope AND no args AND no label"; each of the three
+  // signals independently satisfies it, so every blessed path still births.
+  test("any one of --scope / --arguments / --label satisfies the guard (births)", () => {
+    // --scope alone: the engine's birth print directive always supplies it.
+    expect(util(["intent-birth", "--scope", "poc"]).status).toBe(0);
+    removeWorkspaceRecord(proj);
+    // --arguments alone: the init runner forwards a freeform description here;
+    // scope falls back to the install default (a legitimate, described birth).
+    expect(util(["intent-birth", "--arguments", "build a thing"]).status).toBe(0);
+    removeWorkspaceRecord(proj);
+    // --label alone: a described birth with an explicit dir-name essence.
+    expect(util(["intent-birth", "--label", "some work"]).status).toBe(0);
+  });
+});
+
+// ============================================================
+// The `done` directive on a COMPLETED intent hints at the new-work escape
+// hatch. A scope-runner's forwarding loop stops at `done`; without the hint the
+// conductor dead-ends there with no cue that genuinely new, unrelated work is
+// startable via `next --new-intent`.
+// ============================================================
+describe("t164 done-on-completed carries the new-work hint", () => {
+  test("next on a completed intent returns done whose reason names next --new-intent", () => {
+    // beforeEach left an empty workspace; seed a single completed intent (Current
+    // Stage = final stage, Status = Completed) so next finds no in-scope stage and
+    // emits `done` (the engine is read-only; it never auto-births alongside it).
+    seedStateFile(proj, join(FIXTURES_DIR, "state-completed.md"));
+    const r = next([]);
+    const d = JSON.parse(r.stdout.trim());
+    expect(d.kind).toBe("done");
+    // The completion reason is preserved AND the new-work hint is appended.
+    expect(d.reason).toContain("Workflow complete");
+    expect(d.reason).toContain("next --new-intent --scope");
+    // It's a HINT, not an auto-birth: the reason still frames it as an offer
+    // gated on a human yes, and next mutated nothing. seedStateFile writes only
+    // the state file (no intents.json row), so the registry starts empty, and
+    // next being read-only, it stays empty (no second intent auto-born).
+    expect(d.reason.toLowerCase()).toContain("never auto-birth");
+    expect(readIntentRegistry(proj).length).toBe(0);
+  });
+});
+
+// ============================================================
+// The birth directive has TWO tails: a fresh-start birth re-enters the loop in
+// the same session ("re-run `next` to continue"), while a --new-intent birth (a
+// 2nd, unrelated intent alongside an active/completed one) tells the conductor
+// to STOP and hand off to a fresh session so the new intent doesn't inherit the
+// prior intent's context.
+// ============================================================
+describe("t164 --new-intent birth directive hands off to a fresh session", () => {
+  test("next --new-intent emits a birth print that STOPs and points at a fresh session (/clear)", () => {
+    // Seed an active intent so this mirrors the real 'second intent while one is
+    // live' path; Branch 4a fires before any continuation branch regardless.
+    seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    const r = next(["--new-intent", "--scope", "bugfix", "fix the flaky login test"]);
+    const d = JSON.parse(r.stdout.trim());
+    expect(d.kind).toBe("print");
+    // Names the birth move for the CONFIRMED scope (not the active intent's scope).
+    expect(d.message).toContain("intent-birth --scope bugfix");
+    // The hand-off: STOP, don't continue in-session; start fresh, then /aidlc.
+    expect(d.message).toContain("STOP");
+    expect(d.message).toContain("/clear");
+    expect(d.message).toContain("/aidlc");
+    // It must NOT carry the fresh-start continuation tail (that would keep the
+    // new intent in the polluted session).
+    expect(d.message).not.toContain("re-run `next` to continue");
+    // next is read-only: naming the birth move mutates nothing.
+    expect(readIntentRegistry(proj).length).toBe(0);
+  });
+
+  test("a fresh-start birth (no --new-intent) keeps the same-session continuation tail", () => {
+    // Empty workspace (beforeEach stripped the record): a named scope on a fresh
+    // workspace is the fresh-start birth, it should re-enter the loop in-session.
+    const r = next(["--scope", "bugfix"]);
+    const d = JSON.parse(r.stdout.trim());
+    expect(d.kind).toBe("print");
+    expect(d.message).toContain("intent-birth --scope bugfix");
+    // Fresh-start tail is unchanged (the birth-directive pins expect this too):
+    // continue in-session, no fresh-session hand-off.
+    expect(d.message).toContain("re-run `next` to continue");
+    expect(d.message).not.toContain("STOP");
+    expect(d.message).not.toContain("/clear");
   });
 });
 

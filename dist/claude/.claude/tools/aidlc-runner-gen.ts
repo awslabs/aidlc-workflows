@@ -232,9 +232,12 @@ no standalone meaning.
    bun ${harnessDir()}/tools/aidlc-utility.ts intent-create --arguments "<description>" --label "<2-3 word essence>"
    \`\`\`
 
-   Pass \`--scope <name>\` **only if the user named one**; otherwise omit it and the engine picks the install's default scope. Omit \`--arguments\`
-   and \`--label\` when the user gave no description. Print the tool's output and
-   stop. This does not advance a stage; run \`/aidlc\` afterwards to continue.
+   Pass \`--scope <name>\` only if the user named one; otherwise omit it and the
+   engine picks the install's default scope. If the user gave neither a scope nor
+   a description, do not run a bare \`intent-birth\`: ask what they want to build
+   or which scope to use. When only a scope was supplied, omit \`--arguments\` and
+   \`--label\`. Print the tool's output and stop. This does not advance a stage;
+   run \`/aidlc\` afterwards to continue.
 `;
 }
 
@@ -605,6 +608,44 @@ Pass \`$ARGUMENTS\` through verbatim after \`--scope ${scope}\`; the engine pars
 any flags (\`--status\`, \`--stage\`, …) and the \`--scope\` from the
 state file always wins on an existing workflow, so re-running a started workflow
 resumes it. To run a different scope, use \`/aidlc --scope <other>\` instead.
+
+## Starting unrelated new work?
+
+Before you forward \`$ARGUMENTS\` on step 1, make the SAME recognise-vs-route
+judgment the \`/aidlc\` orchestrator makes: does this input **continue** the
+active intent, or does it describe a **genuinely new, unrelated** piece of work?
+This matters most when the active intent is already **complete**: then \`next\`
+correctly returns \`done\` (the engine is read-only and never births alongside a
+live intent), and the loop above would simply stop. New work is NOT a
+continuation; the escape hatch is \`next --new-intent\`.
+
+- **Default to CONTINUATION.** Treat the input as new-work ONLY when it clearly
+  names a distinct feature/bug/unit unrelated to the active intent's subject
+  (\`bun ${harnessDir()}/tools/aidlc-utility.ts intent --json\` gives its \`slug\` and
+  \`status\`). When in doubt, continue: false-positive offers are the main risk.
+- **On genuine new-work, OFFER, never auto-birth.** Surface an
+  \`AskUserQuestion\` showing the active intent and the proposed new one, **including
+  the scope you'd give the new intent**. Default that scope to this runner's baked
+  \`${scope}\` (the new work is likely the same flavour that made the user reach for
+  this command), but if the new work clearly fits a DIFFERENT scope, propose that
+  instead, and name it so the human can correct it. **Lead the affirmative option
+  with "Yes"** (e.g. "Yes, start a second intent"). Starting a workflow is a
+  mutation gated on a human yes.
+- **On CONFIRM**, re-run \`next\` with \`--new-intent\`, the confirmed scope, and the
+  new-work text:
+
+  \`\`\`bash
+  bun ${harnessDir()}/tools/aidlc-orchestrate.ts next --new-intent --scope <the confirmed scope> "<the new-work description>"
+  \`\`\`
+
+  The engine returns a \`print\` directive naming the \`intent-birth\` command
+  (with the \`--label "<2-3 word kebab essence>"\` placeholder). Act on it exactly
+  as the loop's \`print\` handling describes: run the birth, then, because this is
+  a NEW, unrelated intent and this session still carries the previous intent's
+  context, **STOP** and follow the directive's hand-off: tell the user to start a
+  fresh session (\`/clear\`, or restart the CLI) and run \`/aidlc\` to begin the new
+  intent with a clean slate. Nothing is lost; the intent is saved on disk.
+- **On DECLINE**, proceed with the active intent, the normal loop above.
 `;
 }
 
