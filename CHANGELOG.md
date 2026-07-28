@@ -1,6 +1,12 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.31] - 2026-07-31
+
+Sensor output parsing now tolerates leading stdout noise. When a sensor runs against a sibling repository, that repo's package manager (pnpm and similar) can print a run banner or lockfile warning before the wrapped tool's JSON; previously the dispatcher and the linter sensor did a bare parse of that stdout, so any preamble made the parse throw and the sensor's real verdict was silently discarded as an advisory PASS. Both parse sites now slice stdout to the first structural JSON character before parsing, and still degrade gracefully when even the sliced output is not JSON. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated `aidlc-sensor` dispatcher and `linter` sensor are installed. No configuration or command changes.
+
+* The sensor dispatcher (`aidlc-sensor fire`) and the `linter` sensor now strip package-manager banners and lockfile warnings that precede a wrapped tool's JSON, so a real FAILED or clean PASS verdict is no longer masked as `script-error: bad-output` when firing against a sibling repo.
+
 ## [2.5.30] - 2026-07-30
 
 The default-scope resolver is now bundle-aware, so an install that disables the core scopes through plugin selection (a plugin-only install) no longer crashes or routes to a disabled scope when a default is needed. A scope can nominate itself as the install's freeform default with a new `freeform_default: true` frontmatter key; when the core preferred default (feature/poc) is not enabled the resolver picks the nominated scope, else the sole enabled plugin's alphabetically-first scope, else surfaces a descriptive error. Agent-facing prose that stated fixed stage and persona counts now points at the compiled graph and `--doctor` so it stays true under plugin selection. **Upgrade:** re-copy your `dist/<harness>/` shell into the project. No action is needed for a stock (no-plugin) install; behavior there is unchanged.

@@ -293,6 +293,18 @@ function runEslint(
 
 // --- result parsing ---------------------------------------------------------
 
+// Slice leading stdout noise down to the first structural JSON character
+// (startChar). `bunx` and the project's package manager can print run banners
+// or lockfile warnings (pnpm etc.) before eslint's `--format json` array when
+// the sensor fires against a sibling repo; without this the payload never
+// parses and the linter verdict is silently discarded. When startChar is
+// absent the string is returned unchanged so the caller's JSON.parse still
+// throws and the graceful eslint-bad-output degradation holds.
+export function stripStdoutNoise(stdout: string, startChar: string): string {
+	const idx = stdout.indexOf(startChar);
+	return idx >= 0 ? stdout.slice(idx) : stdout;
+}
+
 function buildViolations(results: ESLintResult[]): Violation[] {
 	const out: Violation[] = [];
 	for (const r of results) {
@@ -337,7 +349,7 @@ export function main(argv: string[]): void {
 	// — eslint always writes JSON to stdout on either path.
 	let parsed: ESLintResult[];
 	try {
-		parsed = JSON.parse(stdout);
+		parsed = JSON.parse(stripStdoutNoise(stdout, "["));
 	} catch {
 		process.stderr.write("eslint-bad-output\n");
 		process.exit(1);
