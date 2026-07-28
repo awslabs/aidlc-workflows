@@ -1,6 +1,6 @@
 // covers: doc:aidlc-common/protocols/stage-protocol.md, doc:aidlc-common/protocols/stage-protocol-recovery.md, file:aidlc-common/stages/construction/build-and-test.md
 //
-// t245 — Build-and-Test failure loop-back PROSE-PIN (issue #611). t34-style:
+// t250 — Build-and-Test failure loop-back PROSE-PIN (issue #611). t34-style:
 // mechanism = none. Every assertion is readFileSync + a string / regex check
 // over the real bytes of the shipped documents — no spawn, no LLM, zero
 // tokens, no process boundary. The bytes on disk ARE the contract.
@@ -15,11 +15,14 @@
 //      subsection (sibling of the pinned "Halt-and-ask on failure" block:
 //      t34 + t76 pin the pre-existing §1 content; this addition is purely
 //      additive), the artifact-ledger paragraph, the ENGINE-routed jump
-//      procedure, the swarm cheap path, the priced halt-and-ask template, the
-//      NO EMERGENT BEHAVIOR carve-out sentence, the checklist-item-5
-//      EXCEPTION sentence, and the Artifact Re-use auto-decision rule.
+//      procedure, the swarm cheap path, the priced + no-fix halt-and-ask
+//      templates, the NO EMERGENT BEHAVIOR carve-out sentence, the
+//      checklist-item-5 EXCEPTION sentence, the second-autonomous-stop-case
+//      sentence on the Bolt halt-and-ask, and the Artifact Re-use
+//      auto-decision rule for both the autonomous AND gated replay paths.
 //   3. dist/claude/.claude/aidlc-common/protocols/stage-protocol-recovery.md
-//      — the crash-resume bullet (logged-but-not-jumped detection).
+//      — the crash-resume bullet (logged-but-not-jumped detection), now under
+//      "Session resume" rather than "Stage re-run".
 //   4. Every harness conductor SKILL (authored harness/<h>/skills/aidlc/
 //      SKILL.md AND its dist copy via the harness matrix) — the parenthetical
 //      exception on the "STAGE RITUAL IS ATOMIC" Key Principles bullet.
@@ -49,7 +52,7 @@ const STAGE = readFileSync(
   "utf-8",
 );
 
-describe("t245 build-and-test.md — Step 10 failure-escalation ladder", () => {
+describe("t250 build-and-test.md — Step 10 failure-escalation ladder", () => {
   test("On-failure block is the ladder, not the old flat retry list", () => {
     expect(STAGE).toContain(
       "**On failure**: If build or tests fail, run the failure-escalation ladder:",
@@ -110,7 +113,7 @@ describe("t245 build-and-test.md — Step 10 failure-escalation ladder", () => {
   });
 });
 
-describe("t245 stage-protocol.md §1 — Build-and-Test failure loop-back subsection", () => {
+describe("t250 stage-protocol.md §1 — Build-and-Test failure loop-back subsection", () => {
   test('the "### Build-and-Test failure loop-back (3.6 → 3.5)" heading exists (anchored H3)', () => {
     expect(/^### Build-and-Test failure loop-back \(3\.6 → 3\.5\)$/m.test(PROTOCOL)).toBe(true);
   });
@@ -207,7 +210,7 @@ describe("t245 stage-protocol.md §1 — Build-and-Test failure loop-back subsec
       "presenting an unpriced give-up option is a\nprotocol violation",
     );
     expect(PROTOCOL).toContain(
-      "a\nhuman-approved retry does count an entry in the Loop-Back Log, and the human\nmay override the bound explicitly",
+      "A\nhuman-approved retry does count an entry in the Loop-Back Log, and the human\nmay override the bound explicitly",
     );
   });
 
@@ -221,29 +224,164 @@ describe("t245 stage-protocol.md §1 — Build-and-Test failure loop-back subsec
     expect(tail).toContain("**Keep** for all other units");
     expect(tail).toContain("**Modify** for build-and-test itself");
     expect(tail).toContain("Redo is forbidden there — it would erase the Loop-Back Log");
-    expect(tail).toContain("aidlc-state.ts reuse-artifact --decision");
+    // Nit fix: the audit call is spelled out in full (positional slug +
+    // --artifacts), never abbreviated to a form that errors if run literally.
+    expect(tail).toContain(
+      'aidlc-state.ts reuse-artifact <slug>\n--decision <keep|modify> --artifacts "<comma-separated list of existing\nartifacts found>"',
+    );
+  });
+
+  test("Finding 1 (must-fix): Gated failure loop-back mirrors the autonomous override", () => {
+    const tailIdx = PROTOCOL.indexOf("### Artifact Re-use (backward jump / redo)");
+    const tail = PROTOCOL.slice(tailIdx);
+    const gatedIdx = tail.indexOf("**Gated failure loop-back**");
+    expect(gatedIdx).toBeGreaterThan(-1);
+    const gated = tail.slice(gatedIdx);
+    expect(gated).toContain('"Retry with fix" at the Build-and-Test halt-and-ask');
+    expect(gated).toContain(
+      'the\nre-entry `next` call answers with a `gate: true` directive straight to the\napproval gate — the stage body never runs',
+    );
+    expect(gated).toContain("Do not accept that directive at face value:\nBEFORE presenting the gate it names, apply the planned fix");
+    expect(gated).toContain("**Modify** for the unit(s) the fix targets, **Keep**\nfor all other units, **Modify** for build-and-test itself on re-entry");
+    expect(gated).toContain(
+      'aidlc-state.ts reuse-artifact <slug> --decision <keep|modify>\n--artifacts "<comma-separated list of existing artifacts found>"',
+    );
+    expect(gated).toContain('this\nis not a second, silent autonomy inference.');
+  });
+
+  test("Finding 1 (must-fix): the halt-and-ask 'Retry with fix' text names the same gate:true override BEFORE the gate", () => {
+    const retryIdx = PROTOCOL.indexOf('"Retry with fix" runs the same procedure as the autonomous loop-back');
+    expect(retryIdx).toBeGreaterThan(-1);
+    const retry = PROTOCOL.slice(retryIdx, retryIdx + 900);
+    expect(retry).toContain('including its re-entry gate override (see "Gated failure loop-back" under');
+    expect(retry).toContain('a `gate: true` directive straight to the');
+    expect(retry).toContain(
+      "The planned fix MUST be applied — via that\noverride — BEFORE the gate it names is presented, never after.",
+    );
   });
 });
 
-describe("t245 stage-protocol-recovery.md — crash-resume bullet", () => {
+describe("t250 Finding 3 (must-fix): rung 4 is a second autonomous-stop case", () => {
+  test("the Bolt halt-and-ask sentence names rung 4 as the second case, not 'the one case'", () => {
+    expect(PROTOCOL).not.toContain(
+      "This is the one case where `autonomous` mode stops to consult the user.",
+    );
+    expect(PROTOCOL).toContain(
+      "This is one of two cases where `autonomous` mode stops to consult the user — the other is the Build-and-Test failure loop-back's rung 4",
+    );
+  });
+});
+
+describe("t250 Finding 4 (should-fix): no-fix halt-and-ask variant", () => {
+  test("a distinct no-fix template exists with no Candidate fix slot and no Retry with fix option", () => {
+    const headingIdx = PROTOCOL.indexOf("**Halt-and-ask, no-fix variant");
+    expect(headingIdx).toBeGreaterThan(-1);
+    // Only the fenced question TEMPLATE itself must lack the slot/option —
+    // the preceding prose legitimately names "Retry with fix" to explain
+    // why it's omitted, so the template fence is isolated first.
+    const fenceStart = PROTOCOL.indexOf("```question", headingIdx);
+    const fenceEnd = PROTOCOL.indexOf("```", fenceStart + 10) + 3;
+    expect(fenceStart).toBeGreaterThan(-1);
+    const block = PROTOCOL.slice(fenceStart, fenceEnd);
+    expect(block).toContain(
+      'prompt: "Build and Test failed: [short error]. Root cause: [diagnosis]. No identifiable fix exists in any swappable dimension',
+    );
+    expect(block).not.toContain("Candidate fix:");
+    expect(block).not.toContain("Retry with fix");
+    const lines = block.split("\n");
+    const acceptIdx = lines.findIndex((l) => /^\s*- label: Accept failure$/.test(l));
+    expect(acceptIdx).toBeGreaterThan(-1);
+    const abortIdx = lines.findIndex((l) => /^\s*- label: Abort$/.test(l));
+    expect(abortIdx).toBeGreaterThan(acceptIdx);
+  });
+
+  test("the priced variant is explicitly named as the other option, keyed on rung 2's outcome", () => {
+    expect(PROTOCOL).toContain("**Halt-and-ask, priced variant");
+    expect(PROTOCOL).toContain(
+      "Choose the variant by whether rung 2's classify-and-price step actually\nproduced a priced candidate fix",
+    );
+  });
+
+  test("build-and-test.md's rung 4 names both variants", () => {
+    expect(STAGE).toContain(
+      "When rung 2 found no identifiable fix at all, present\n   stage-protocol.md §1's no-fix variant instead",
+    );
+  });
+});
+
+describe("t250 Finding 5 (should-fix): isolated-run summary, not a workflow gate", () => {
+  test("build-and-test.md's single-stage carve-out says isolated-run summary, not 'this run's gate'", () => {
+    expect(STAGE).toContain(
+      "test-results.md, and present them in this run's isolated-run summary.",
+    );
+    expect(STAGE).not.toContain("presented at this run's gate");
+    expect(STAGE).not.toContain("presented at that run's gate");
+  });
+
+  test("no stray 'at this/that run's gate' phrasing remains anywhere in the pinned protocol or stage files", () => {
+    expect(PROTOCOL).not.toContain("run's gate");
+    expect(STAGE).not.toContain("run's gate");
+  });
+});
+
+describe("t250 Finding 6 (should-fix): crash-resume bullet lives under Session resume, not Stage re-run", () => {
+  test("the logged-but-not-jumped detection is under Session resume", () => {
+    const sessionResumeIdx = RECOVERY.indexOf("### Session resume\n");
+    const stageRerunIdx = RECOVERY.indexOf("### Stage re-run");
+    const detectionIdx = RECOVERY.indexOf(
+      "Build-and-Test failure loop-back, logged-but-not-jumped detection",
+    );
+    expect(sessionResumeIdx).toBeGreaterThan(-1);
+    expect(stageRerunIdx).toBeGreaterThan(sessionResumeIdx);
+    expect(detectionIdx).toBeGreaterThan(sessionResumeIdx);
+    expect(detectionIdx).toBeLessThan(stageRerunIdx);
+  });
+
+  test("Stage re-run no longer duplicates the crash-resume bullet, but cross-references it", () => {
+    const stageRerunIdx = RECOVERY.indexOf("### Stage re-run");
+    const nextHeadingIdx = RECOVERY.indexOf("### Context compaction");
+    const stageRerunBlock = RECOVERY.slice(stageRerunIdx, nextHeadingIdx);
+    expect(stageRerunBlock).not.toContain("## Loop-Back Log");
+    expect(stageRerunBlock).toContain("is handled\nunder \"Session resume\" above");
+  });
+});
+
+describe("t250 Finding 7 (should-fix): swarm cheap-path premises are handled, not silently assumed", () => {
+  test("prepare-collision handling: discard or adopt stale worktrees/branches before calling prepare", () => {
+    expect(PROTOCOL).toContain(
+      "`prepare` hard-errors on collision, so discard the stale\nworktrees/branches, or adopt them if their code is still wanted, before\ncalling it",
+    );
+  });
+
+  test("the already-green premise is softened: depends on the prior attempt's code merge completing", () => {
+    expect(PROTOCOL).toContain(
+      "true only once that attempt's git code\nmerge actually completed",
+    );
+    expect(PROTOCOL).toContain(
+      "the cheap path degrades\ngracefully to full re-dispatch rather than silently claiming unbuilt units",
+    );
+  });
+});
+
+describe("t250 stage-protocol-recovery.md — crash-resume bullet", () => {
   test("logged-but-not-jumped detection re-executes the jump instead of re-diagnosing", () => {
     expect(RECOVERY).toContain(
-      "`## Loop-Back Log` whose latest entry has a planned fix but the audit shows no matching `STAGE_JUMPED` (Target: code-generation) after it",
+      "`## Loop-Back Log` whose latest entry has a planned fix but the audit shows\nno matching `STAGE_JUMPED` (Target: code-generation) after it",
     );
-    expect(RECOVERY).toContain("the session died between logging and jumping");
+    expect(RECOVERY).toContain("the session\ndied between logging and jumping");
     expect(RECOVERY).toContain(
-      're-execute the jump per stage-protocol.md §1 "Build-and-Test failure loop-back" rather than re-diagnosing',
+      're-execute the jump per stage-protocol.md\n§1 "Build-and-Test failure loop-back" rather than re-diagnosing',
     );
   });
 
   test("on any resume the loop-back count is the ledger's entry count, never zero", () => {
     expect(RECOVERY).toContain(
-      "On any resume, the loop-back count is the ledger's entry count, never zero.",
+      "On any\nresume, the loop-back count is the ledger's entry count, never zero.",
     );
   });
 });
 
-describe("t245 conductor SKILLs — STAGE RITUAL IS ATOMIC exception (authored + dist, every harness)", () => {
+describe("t250 conductor SKILLs — STAGE RITUAL IS ATOMIC exception (authored + dist, every harness)", () => {
   const EXCEPTION_SENTENCE =
     "(One exception: the Build-and-Test failure loop-back — stage-protocol.md §1 — jumps back to code-generation from a deliberately in-flight failed stage; its learnings ritual fires on the eventual passing run.)";
 

@@ -125,7 +125,7 @@ For Bolts after the walking skeleton, the Bolt-level gate is presented only if `
 
 **Halt-and-ask on failure**
 
-When a Bolt's code-generation returns failure, **always halt and present the halt-and-ask prompt regardless of autonomy mode**. This is the one case where `autonomous` mode stops to consult the user.
+When a Bolt's code-generation returns failure, **always halt and present the halt-and-ask prompt regardless of autonomy mode**. This is one of two cases where `autonomous` mode stops to consult the user — the other is the Build-and-Test failure loop-back's rung 4 (below: "Build-and-Test failure loop-back (3.6 → 3.5)"), which halts when the loop-back bound is exhausted or no identifiable fix exists.
 
 - Solo Bolt failure: halt immediately, emit `BOLT_FAILED` (with `--slug` for halt-and-ask correlation), present retry / skip / abort.
 - Parallel batch partial failure: wait for all parallel Tasks to return, preserve successful Bolts' artifacts, emit `BOLT_FAILED` for the failed Bolt with `Succeeded=[names]`, present `"Bolts [X, Y] succeeded, Bolt [Z] failed with: [error]. Options: retry Z, skip Z, abort Construction."`
@@ -202,17 +202,26 @@ priced fix identified):
 `invoke-swarm`, the jump's fresh `STAGE_STARTED` floors the convergence
 ledger (each `SWARM_UNIT_CONVERGED` row is stamped with its attempt's run
 floor, so prior-attempt rows no longer count) — all units re-dispatch by
-default. Do not spend a worker turn per unit: after `prepare`, run
+default. Before `prepare`, check for worktrees or `bolt-<slug>` branches left
+by the prior attempt (a crash or a halt-and-ask mid-swarm leaves them in
+place): `prepare` hard-errors on collision, so discard the stale
+worktrees/branches, or adopt them if their code is still wanted, before
+calling it — do not call `prepare` on a replay without checking first. Do not
+spend a worker turn per unit: after `prepare`, run
 `check <unit> --check-cmd "<the project's convergence check>"` on every unit
-FIRST — units already green (the prior run's code is in the base the
-worktrees forked from) are claimed at `finalize` without any worker turn
+FIRST — units already green are claimed at `finalize` without any worker turn
 (`finalize` re-verifies every claimed unit, so the claim is safe); dispatch
 workers only for the unit(s) the Loop-Back Log's planned fix targets or that
-fail the check. On the inline per-unit path all artifacts still exist, so the
-fix is applied through the Artifact Re-use ritual per unit.
+fail the check. The cheap path assumes the prior attempt's code is in the
+base the worktrees forked from — true only once that attempt's git code
+merge actually completed; if it did not (the attempt halted before
+finalizing), every `check` comes back red and the cheap path degrades
+gracefully to full re-dispatch rather than silently claiming unbuilt units. On
+the inline per-unit path all artifacts still exist, so the fix is applied
+through the Artifact Re-use ritual per unit.
 
-**Halt-and-ask (gated or unset mode, bound exhausted, or no identifiable
-fix):**
+**Halt-and-ask, priced variant (gated or unset mode, or bound exhausted, WITH
+a candidate fix identified):**
 
 ```question
 prompt: "Build and Test failed: [short error]. Root cause: [diagnosis]. Candidate fix: [fix] — estimated price: [effort/cost/risk]. Loop-backs used: [N]/3. How would you like to proceed?"
@@ -227,9 +236,37 @@ options:
     description: Stop here; the workflow can resume later.
 ```
 
-"Retry with fix" runs the same procedure as the autonomous loop-back (a
+**Halt-and-ask, no-fix variant (no identifiable fix exists in any swappable
+dimension):** omit "Retry with fix" entirely — presenting it without a
+candidate fix would itself be the unpriced give-up option this protocol
+forbids in the other direction (a fabricated fix to retry with). Use:
+
+```question
+prompt: "Build and Test failed: [short error]. Root cause: [diagnosis]. No identifiable fix exists in any swappable dimension (library/version, container image, instance type, algorithm, flag). Loop-backs used: [N]/3. How would you like to proceed?"
+header: Build Failure
+multiSelect: false
+options:
+  - label: Accept failure
+    description: Log the failure in test-results.md and proceed to this stage's approval gate.
+  - label: Abort
+    description: Stop here; the workflow can resume later.
+```
+
+Choose the variant by whether rung 2's classify-and-price step actually
+produced a priced candidate fix — never render the priced template's
+`Candidate fix` / `Retry with fix` slots with placeholder or invented
+content just to keep the template shape.
+
+"Retry with fix" runs the same procedure as the autonomous loop-back,
+including its re-entry gate override (see "Gated failure loop-back" under
+Artifact Re-use, below): backward jumps preserve artifacts, so every
+code-generation unit is still "covered" on disk after the jump, and the
+re-entry `next` call answers with a `gate: true` directive straight to the
+approval gate — skipping the stage body, and with it the ordinary Artifact
+Re-use question, entirely. The planned fix MUST be applied — via that
+override — BEFORE the gate it names is presented, never after. A
 human-approved retry does count an entry in the Loop-Back Log, and the human
-may override the bound explicitly). Every option's description must carry its
+may override the bound explicitly. Every option's description must carry its
 price where one is known — presenting an unpriced give-up option is a
 protocol violation.
 
@@ -1238,5 +1275,22 @@ without the human). The conductor decides deterministically from the
 Loop-Back Log's planned fix: **Modify** for the unit(s) the fix targets,
 **Keep** for all other units, **Modify** for build-and-test itself on
 re-entry (Redo is forbidden there — it would erase the Loop-Back Log). Every
-auto-decision is still audited via `aidlc-state.ts reuse-artifact --decision
-<keep|modify>`.
+auto-decision is still audited via `aidlc-state.ts reuse-artifact <slug>
+--decision <keep|modify> --artifacts "<comma-separated list of existing
+artifacts found>"`.
+
+**Gated failure loop-back**: the same override applies when the human chose
+"Retry with fix" at the Build-and-Test halt-and-ask (§1) under `Construction
+Autonomy Mode: gated`. Because backward jumps preserve artifacts, every
+code-generation unit is still "covered" on disk after the jump, so the
+re-entry `next` call answers with a `gate: true` directive straight to the
+approval gate — the stage body never runs, and with it the ordinary Artifact
+Re-use question never fires. Do not accept that directive at face value:
+BEFORE presenting the gate it names, apply the planned fix the same way the
+autonomous case does — **Modify** for the unit(s) the fix targets, **Keep**
+for all other units, **Modify** for build-and-test itself on re-entry (Redo
+is forbidden there — it would erase the Loop-Back Log) — audited via the
+same `aidlc-state.ts reuse-artifact <slug> --decision <keep|modify>
+--artifacts "<comma-separated list of existing artifacts found>"` call. The
+human already gave the confirming decision by choosing "Retry with fix"; this
+is not a second, silent autonomy inference.

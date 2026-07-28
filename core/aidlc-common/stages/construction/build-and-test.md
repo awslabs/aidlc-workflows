@@ -141,12 +141,14 @@ Attempt to execute the build and test commands documented in the instruction fil
    test-results.md and present the priced halt-and-ask question defined in
    stage-protocol.md §1 "Build-and-Test failure loop-back", listing every
    candidate fix WITH ITS PRICE. Giving up is the human's decision to make,
-   never the agent's.
+   never the agent's. When rung 2 found no identifiable fix at all, present
+   stage-protocol.md §1's no-fix variant instead — it drops the "Retry with
+   fix" option entirely rather than inventing a fix to retry with.
 
 **Single-stage runs**: in a `--single` run (`/aidlc --stage build-and-test
 --single`) rungs 3-4 never execute a jump — there is no main-workflow position
 to move. Stop at rung 2, log the diagnosis + priced options in
-test-results.md, and present them at this run's gate.
+test-results.md, and present them in this run's isolated-run summary.
 
 **On success**: Update the Build and Test Summary with actual results (not just instructions).
 

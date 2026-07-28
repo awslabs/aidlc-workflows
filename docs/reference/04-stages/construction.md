@@ -895,13 +895,15 @@ testing expertise.
        failed run's gate is not presented; its learnings ritual defers to the
        eventual passing run.
     4. **Halt-and-ask** -- gated/unset mode, bound exhausted, or no
-       identifiable fix: log the failure and present the priced 3-option
-       question (Retry with fix [price] / Accept failure / Abort) from
-       stage-protocol.md Section 1.
+       identifiable fix: log the failure and present the halt-and-ask
+       question from stage-protocol.md Section 1 -- the priced 3-option
+       variant (Retry with fix [price] / Accept failure / Abort) when a
+       candidate fix exists, or the no-fix 2-option variant (Accept
+       failure / Abort) when rung 2 found none.
 
     Single-stage runs (`--single`) stop at rung 2 -- there is no
     main-workflow position to move; the priced options are logged and
-    presented at that run's gate.
+    presented in that run's isolated-run summary.
 
     **On success:** Update the Build and Test Summary with actual results (not
     just instructions).
