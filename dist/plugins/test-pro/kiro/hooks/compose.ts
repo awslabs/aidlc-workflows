@@ -1401,14 +1401,14 @@ try {
       const sectionsMeta: { created?: boolean } = {};
       // adds.scopes — set-union the target stage into this plugin's scopes.
       // Two guard rails, both drop-logged: a contribution may only add scopes
-      // its OWN plugin ships (`<plugin>-` prefixed — welding a core stage into
-      // a core or foreign-plugin scope changes selection semantics the other
-      // owner never agreed to), and the scope's identity file must already be
-      // installed (a scope name with no scopes/<name>.md resolves as an
-      // all-SKIP phantom with no diagnostic).
+      // its OWN plugin ships (the bare plugin name or `<plugin>-` prefixed —
+      // welding a core stage into a core or foreign-plugin scope changes
+      // selection semantics the other owner never agreed to), and the scope's
+      // identity file must already be installed (a scope name with no
+      // scopes/<name>.md resolves as an all-SKIP phantom with no diagnostic).
       const mergeableScopes = listOf("scopes").filter((s) => {
-        if (!s.startsWith(`${PLUGIN_NAME}-`)) {
-          recordDrop(`contribution to ${target}: adds.scopes "${s}" is not owned by plugin "${PLUGIN_NAME}" (only ${PLUGIN_NAME}-prefixed scopes merge); dropped`);
+        if (s !== PLUGIN_NAME && !s.startsWith(`${PLUGIN_NAME}-`)) {
+          recordDrop(`contribution to ${target}: adds.scopes "${s}" is not owned by plugin "${PLUGIN_NAME}" (only "${PLUGIN_NAME}" or ${PLUGIN_NAME}-prefixed scopes merge); dropped`);
           return false;
         }
         if (!existsSync(join(HARNESS_DIR, "scopes", `${s}.md`))) {

@@ -357,34 +357,39 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   // the sidecar for disable-time strip, guarded against foreign/phantom scope
   // names. Uses a synthetic plugin (test-pro ships no adds.scopes).
   test("adds.scopes set-unions the plugin's own installed scope into the target stage", () => {
-    const scope = [
-      "---", "name: syn-scope-extra", "plugin: syn-scope",
+    const mkScope = (name: string) => [
+      "---", `name: ${name}`, "plugin: syn-scope",
       "depth: Standard", "keywords:", "  - synthetic",
       "description: synthetic scope for the adds.scopes merge", "skeleton: off", "---", "",
-      "# syn-scope-extra scope", "", "## Membership", "synthetic", "",
+      `# ${name} scope`, "", "## Membership", "synthetic", "",
     ].join("\n");
     const contrib = [
       "---", "target: build-and-test", "plugin: syn-scope",
-      "adds:", "  scopes:", "    - syn-scope-extra", "---", "",
+      // Both owned-name shapes: the bare plugin name AND the prefixed form.
+      "adds:", "  scopes:", "    - syn-scope", "    - syn-scope-extra", "---", "",
     ].join("\n");
     const { drops, proj } = composeSynthetic("syn-scope", {
-      "scopes/syn-scope-extra.md": scope,
+      "scopes/syn-scope.md": mkScope("syn-scope"),
+      "scopes/syn-scope-extra.md": mkScope("syn-scope-extra"),
       "contributions/construction/build-and-test.md": contrib,
     });
     const fm = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8")
       .match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
     const scopesBlock = fm.match(/^scopes:\n((?: {2}- .+\n)*)/m)?.[1] ?? "";
+    expect(scopesBlock).toContain("- syn-scope\n");
     expect(scopesBlock).toContain("- syn-scope-extra");
     // Core memberships untouched by the union.
     expect(scopesBlock).toContain("- enterprise");
     // No drop for the merged surface...
     expect(drops).not.toContain("adds.scopes is not yet an implemented merge surface");
+    expect(drops).not.toContain("is not owned by plugin");
     // ...recorded in the sidecar for disable-time strip...
     const sidecar = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "plugin-contrib-syn-scope.json"), "utf-8"));
-    expect(sidecar["build-and-test"]?.scopes).toEqual(["syn-scope-extra"]);
+    expect(sidecar["build-and-test"]?.scopes).toEqual(["syn-scope", "syn-scope-extra"]);
     // ...and the recompiled scope grid routes the core stage under the plugin scope.
     const grid = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "scope-grid.json"), "utf-8"));
     expect(grid["syn-scope-extra"]?.stages?.["build-and-test"]).toBe("EXECUTE");
+    expect(grid["syn-scope"]?.stages?.["build-and-test"]).toBe("EXECUTE");
     expect(grid["syn-scope-extra"]?.stages?.["code-generation"]).toBe("SKIP");
 
     // Disable-time strip: select-plugins removes the merged scope membership
@@ -398,7 +403,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(strip.status).toBe(0);
     const strippedFm = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8")
       .match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
-    expect(strippedFm).not.toContain("- syn-scope-extra");
+    expect(strippedFm).not.toContain("- syn-scope");
     expect(strippedFm).toContain("- enterprise");
     expect(existsSync(join(proj, ".claude", "tools", "data", "plugin-contrib-syn-scope.json"))).toBe(false);
   });
