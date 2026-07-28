@@ -89,8 +89,10 @@ Result prose is identical on both channels (`toolResult` on 0.12,
   reaches the adapter, and the adapter drops `subagent_response` — that shell
   carries prose but no identity, so forwarding it would fabricate a
   `SUBAGENT_COMPLETED` row with `Agent Type: unknown`. Identity prefers the
-  result prose marker from #459 and falls back to the 1.x `subagent_<agent>`
-  tool name for domain-expert results that do not self-identify (#543).
+  structured 1.x `subagent_<agent>` tool name (#543) — it is platform-provided,
+  so agent-authored result prose cannot misattribute the audit row — and falls
+  back to the `**Reviewer:**` / `**Agent:**` result marker from #459, which is
+  the only identity signal on the 0.12 `invoke_sub_agent` shape.
 - **session-start / session-end / stop / mint / block** — need no payload;
   they never read stdin.
 

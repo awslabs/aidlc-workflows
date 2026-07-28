@@ -257,21 +257,29 @@ function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
   return "";
 }
 
-// Recover the delegated agent's identity from its result text (#459). The IDE
-// surfaces no structured subagent roster, but reviewer personas self-identify
-// near the top of their result as `**Reviewer:** <name>` or `**Agent:** <name>`.
-// Prefer that prose because it survives tool renames. IDE 1.x also encodes the
-// delegate in `subagent_<agent>` (#543), so use that known identity when a
-// domain-expert result has no self-identification line. The 0.12
-// `invoke_sub_agent` shape has no equivalent fallback and remains "unknown".
+// Recover the delegated agent's identity from the hook payload.
+//
+// PRECEDENCE IS AN AUDIT-INTEGRITY PROPERTY, NOT A STYLE CHOICE. On IDE 1.x the
+// tool name itself carries the delegate as `subagent_<agent>` (#543) — a
+// platform-provided identity the delegate cannot author. It therefore WINS over
+// the result prose: an incorrect or prompt-injected `**Agent:** <other>` line in
+// agent-written output must not be able to misattribute a SUBAGENT_COMPLETED row
+// to a different persona while a more authoritative identity is available.
+//
+// The prose markers (`**Reviewer:** <name>` / `**Agent:** <name>`, #459) stay as
+// the fallback because they are the ONLY signal on the 0.12 `invoke_sub_agent`
+// shape, which carries no structured identity. They also still cover a
+// degenerate `subagent_` whose suffix is empty. With neither, "unknown".
 function extractAgentIdentity(toolResult: string, toolName = ""): string {
+  const structured =
+    toolName.startsWith("subagent_") && toolName !== "subagent_response"
+      ? toolName.slice("subagent_".length).trim()
+      : "";
+  if (structured !== "") return structured;
   const lines = toolResult.split("\n").slice(0, 8);
   for (const line of lines) {
     const m = line.match(/^\s*\*\*(?:Reviewer|Agent)\s*:\*\*\s*(.+?)\s*$/);
     if (m) return m[1].replace(/\*+$/, "").trim() || "unknown";
-  }
-  if (toolName.startsWith("subagent_") && toolName !== "subagent_response") {
-    return toolName.slice("subagent_".length).trim() || "unknown";
   }
   return "unknown";
 }
@@ -420,10 +428,11 @@ function buildForward(): Forward {
         (toolName.startsWith("subagent_") && toolName !== "subagent_response");
       if (!isSubagentCompletion) return null;
 
-      // Reviewer personas self-identify in their result (`**Reviewer:**` /
-      // `**Agent:**`, #459). Domain-expert delegates need not do so, but IDE
-      // 1.x also carries their identity in `subagent_<agent>`; prefer the prose
-      // and fall back to that tool name. Forward the result text so
+      // Identity comes from the structured `subagent_<agent>` tool name when the
+      // platform supplies one, and only otherwise from the result's
+      // `**Reviewer:**` / `**Agent:**` prose (#459) — the sole signal on the 0.12
+      // `invoke_sub_agent` shape. Agent-authored prose must not override a
+      // platform-provided identity. Forward the result text so
       // SUBAGENT_COMPLETED also carries an output snippet.
       //
       // An EMPTY result on an otherwise recognized completion must NOT

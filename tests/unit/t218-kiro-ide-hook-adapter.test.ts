@@ -1059,6 +1059,48 @@ describe("t218 log-subagent identity extraction (#459)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("S4: a conflicting prose marker cannot override the structured subagent_<agent> identity", () => {
+    // AUDIT INTEGRITY. The result prose is agent-authored and can be wrong or
+    // prompt-injected; `subagent_<agent>` is platform-provided. When the two
+    // disagree, the row must be attributed to the tool name, never to the prose.
+    const dir = scratchProject(true);
+    try {
+      const result = "**Agent:** aidlc-product-lead-agent\n\nDone";
+      const r = runIdeStdin(
+        dir,
+        "log-subagent",
+        ctx1x("subagent_aidlc-developer-agent", result),
+      );
+      expect(r.code).toBe(0);
+      const audit = readAudit(dir);
+      expect(audit).toContain("SUBAGENT_COMPLETED");
+      expect(audit).toContain("**Agent Type**: aidlc-developer-agent");
+      expect(audit).not.toContain("**Agent Type**: aidlc-product-lead-agent");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("S5: a degenerate subagent_ with an empty suffix still falls back to the prose marker", () => {
+    // The tool name only wins when it actually carries an identity; an empty
+    // suffix is no identity, so the 0.12-era prose contract still applies.
+    const dir = scratchProject(true);
+    try {
+      const r = runIdeStdin(
+        dir,
+        "log-subagent",
+        ctx1x("subagent_", "**Reviewer:** aidlc-product-lead-agent\n\nVerdict: READY"),
+      );
+      expect(r.code).toBe(0);
+      const audit = readAudit(dir);
+      expect(audit).toContain("SUBAGENT_COMPLETED");
+      expect(audit).toContain("**Agent Type**: aidlc-product-lead-agent");
+      expect(audit).not.toContain("**Agent Type**: unknown");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("t218 failed tool calls are not audited as writes (#417)", () => {
