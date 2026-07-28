@@ -9,7 +9,7 @@ The plugin contribution seam now merges `adds.scopes`: a plugin can put an exist
 * Two guard rails, both dropped-with-log (visible in `/aidlc --doctor`), never merged: the scope must belong to the contributing plugin (named exactly `<plugin>` or `<plugin>-` prefixed), and its `scopes/<name>.md` identity file must already be installed.
 * `/aidlc --select-plugins` now strips merged scope memberships when a plugin is disabled (recorded in the per-plugin contribution sidecar); re-enabling and recomposing restores them.
 * `adds.requires_stage` remains deferred (declared entries are still drop-logged, not merged).
-* Graph compile now honors a NEW stage's authored `number:`/`name:` frontmatter when seeding it into `stage-graph.json` (phase-prefix agreement enforced; a number already held by another stage is a compile error), so a multi-stage plugin can order its sub-DAG within a phase instead of relying on alphabetical auto-seed. Already-pinned rows keep their JSON values unchanged.
+* Graph compile now seeds NEW stage numbers in dependency order: each phase's batch of new stages is ordered by its own `requires_stage` edges before next-free indices are assigned (ties break by the authored `number:` hint, then slug; a cycle among new stages is a compile error). The engine owns all number values - a plugin's authored `number:` is a relative-ordering hint, never an absolute claim - so a multi-stage plugin's flow seeds validly regardless of filenames and uncoordinated plugins cannot collide on numbers. Already-pinned rows keep their JSON values unchanged; authored `name:` seeds the display name.
 
 ## [2.5.33] - 2026-08-01
 

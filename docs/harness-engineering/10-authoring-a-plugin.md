@@ -105,11 +105,17 @@ A plugin stage is an ordinary stage file (see
 `bundle:` was the pre-rename ownership key and is rejected with an error naming the fix - write `plugin:`. The word is reserved for a possible future collection-of-plugins concept.
 
 Stage **identity is the slug**, everywhere that matters (edges, jumps,
-resolution). The `number:` is a **display hint** only — it orders the stage in
-status output and the SKILL.md stage table, but a stage's graph position comes
-from its slug-based `requires_stage` edges. So you author a `number:` that reads
-sensibly (`test-pro-integration` is `3.85`, after `build-and-test` at `3.6`), but
-inserting it never renumbers core and you claim no range.
+resolution). The `number:` is a **display hint** only — a stage's graph
+position comes from its slug-based `requires_stage` edges, and the compiled
+number values are assigned by the ENGINE, never by you: on first compile,
+your plugin's new stages are ordered by their own `requires_stage` edges,
+using your authored `number:` values only to break ties among independent
+stages, and given the next free indices in their phase. So author numbers
+that read sensibly and agree with your edges (`test-pro-integration` is
+`3.85`, after `build-and-test` at `3.6`) — the RELATIVE order is what
+carries — but the absolute values never land in the graph, inserting a stage
+never renumbers core, and you claim no range (which is why two uncoordinated
+plugins can never collide on numbers).
 
 Gate a stage onto a scope with `scopes:` (it is SKIP everywhere else), and
 optionally declare a `when:` predicate. `test-pro-full-suite` is *intended* to run

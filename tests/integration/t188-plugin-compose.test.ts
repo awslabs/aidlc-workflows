@@ -408,6 +408,34 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(existsSync(join(proj, ".claude", "tools", "data", "plugin-contrib-syn-scope.json"))).toBe(false);
   });
 
+  // --- Number seeding: edge-aware, engine-owned (multi-stage plugins) ---
+  test("new stages whose filename order contradicts their edges seed in flow order", () => {
+    // Alphabetical: assemble < middle < zstart. Flow: zstart -> middle ->
+    // assemble. Alphabetical seeding would number assemble lowest and fail
+    // the lower-numbered-dependency invariant; edge-aware seeding must not.
+    const mk = (slug: string, deps: string[], produces: string, consumes: string[]) => [
+      "---", `slug: ${slug}`, "plugin: syn-order", "phase: ideation",
+      "execution: ALWAYS", "condition: always",
+      "lead_agent: aidlc-product-agent", "support_agents: []", "mode: inline",
+      "produces:", `  - ${produces}`,
+      consumes.length ? "consumes:" : "consumes: []",
+      ...consumes.flatMap((c) => [`  - artifact: ${c}`, "    required: true"]),
+      deps.length ? "requires_stage:" : "requires_stage: []",
+      ...deps.map((d) => `  - ${d}`),
+      "inputs: x", "outputs: y", "---", "", `# ${slug}`, "", "## Steps", "body", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-order", {
+      "stages/ideation/syn-order-assemble.md": mk("syn-order-assemble", ["syn-order-middle"], "syn-order-doc", ["syn-order-mid"]),
+      "stages/ideation/syn-order-middle.md": mk("syn-order-middle", ["syn-order-zstart"], "syn-order-mid", ["syn-order-first"]),
+      "stages/ideation/syn-order-zstart.md": mk("syn-order-zstart", [], "syn-order-first", []),
+    });
+    expect(drops).not.toContain("compile failed");
+    const g = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "stage-graph.json"), "utf-8")) as Array<{ slug: string; number: string }>;
+    const num = (slug: string) => parseFloat((g.find((s) => s.slug === slug)?.number ?? "").split(".")[1]);
+    expect(num("syn-order-zstart")).toBeLessThan(num("syn-order-middle"));
+    expect(num("syn-order-middle")).toBeLessThan(num("syn-order-assemble"));
+  });
+
   test("adds.scopes naming a foreign or uninstalled scope is dropped-with-log, not merged", () => {
     const contrib = [
       "---", "target: build-and-test", "plugin: syn-scope-guard",
