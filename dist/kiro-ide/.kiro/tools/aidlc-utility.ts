@@ -532,6 +532,7 @@ interface StageContribRecord {
   produces?: string[];
   sensors?: string[];
   consumes?: string[];
+  scopes?: string[];
   required_sections?: string[];
   required_sections_created?: boolean;
 }
@@ -637,6 +638,7 @@ function stripDisabledPluginContributions(
         if (record) {
           if (record.produces?.length) content = removeListValues(content, "produces", new Set(record.produces), false);
           if (record.sensors?.length) content = removeListValues(content, "sensors", new Set(record.sensors), false);
+          if (record.scopes?.length) content = removeListValues(content, "scopes", new Set(record.scopes), false);
           if (record.consumes?.length) content = removeConsumesEntries(content, new Set(record.consumes));
           if (record.required_sections?.length) {
             content = removeListValues(content, "required_sections", new Set(record.required_sections), record.required_sections_created === true);

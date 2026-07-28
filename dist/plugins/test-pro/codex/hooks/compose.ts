@@ -1255,7 +1255,7 @@ try {
   // produces/sensors/consumes welded into enabled core stages. Accumulated
   // across re-runs: entries this run added are unioned into any prior record
   // (an idempotent re-compose adds nothing and must not erase the record).
-  type StageContribRecord = { produces?: string[]; sensors?: string[]; consumes?: string[]; required_sections?: string[]; required_sections_created?: boolean };
+  type StageContribRecord = { produces?: string[]; sensors?: string[]; consumes?: string[]; scopes?: string[]; required_sections?: string[]; required_sections_created?: boolean };
   const contribManifestPath = join(HARNESS_DIR, "tools", "data", `plugin-contrib-${PLUGIN_KEY}.json`);
   const contribManifest: Record<string, StageContribRecord> = (() => {
     try {
@@ -1363,14 +1363,15 @@ try {
       })();
 
       // Drop-log any adds.* key compose does not implement — no silent no-op.
-      // Implemented merge surfaces: produces / sensors / consumes / required_sections.
-      // A documented-but-deferred surface (e.g. scopes) is recorded as a drop so an
-      // author sees it had no effect, per the no-silent-failures contract. (When a
-      // surface graduates, add it to IMPLEMENTED_ADDS + a merge call below.)
-      const IMPLEMENTED_ADDS = new Set(["produces", "sensors", "consumes", "required_sections"]);
+      // Implemented merge surfaces: produces / sensors / consumes / scopes /
+      // required_sections. A documented-but-deferred surface (e.g.
+      // requires_stage) is recorded as a drop so an author sees it had no
+      // effect, per the no-silent-failures contract. (When a surface
+      // graduates, add it to IMPLEMENTED_ADDS + a merge call below.)
+      const IMPLEMENTED_ADDS = new Set(["produces", "sensors", "consumes", "scopes", "required_sections"]);
       for (const km of addsBlock.matchAll(/^ {2}([a-z_]+):/gm)) {
         if (!IMPLEMENTED_ADDS.has(km[1])) {
-          recordDrop(`contribution to ${target}: adds.${km[1]} is not yet an implemented merge surface (only produces/sensors/consumes/required_sections); ignored`, "advisory");
+          recordDrop(`contribution to ${target}: adds.${km[1]} is not yet an implemented merge surface (only produces/sensors/consumes/scopes/required_sections); ignored`, "advisory");
         }
       }
 
@@ -1396,10 +1397,29 @@ try {
       // stage (mixed endings). Contribution content is already normalized above.
       let stageContent = readFileSync(stageFile, "utf-8").replace(/\r\n/g, "\n");
       const before = stageContent;
-      const addedProduces: string[] = [], addedSensors: string[] = [], addedConsumes: string[] = [], addedSections: string[] = [];
+      const addedProduces: string[] = [], addedSensors: string[] = [], addedConsumes: string[] = [], addedScopes: string[] = [], addedSections: string[] = [];
       const sectionsMeta: { created?: boolean } = {};
+      // adds.scopes — set-union the target stage into this plugin's scopes.
+      // Two guard rails, both drop-logged: a contribution may only add scopes
+      // its OWN plugin ships (`<plugin>-` prefixed — welding a core stage into
+      // a core or foreign-plugin scope changes selection semantics the other
+      // owner never agreed to), and the scope's identity file must already be
+      // installed (a scope name with no scopes/<name>.md resolves as an
+      // all-SKIP phantom with no diagnostic).
+      const mergeableScopes = listOf("scopes").filter((s) => {
+        if (!s.startsWith(`${PLUGIN_NAME}-`)) {
+          recordDrop(`contribution to ${target}: adds.scopes "${s}" is not owned by plugin "${PLUGIN_NAME}" (only ${PLUGIN_NAME}-prefixed scopes merge); dropped`);
+          return false;
+        }
+        if (!existsSync(join(HARNESS_DIR, "scopes", `${s}.md`))) {
+          recordDrop(`contribution to ${target}: adds.scopes "${s}" has no installed scope file (scopes/${s}.md); dropped`);
+          return false;
+        }
+        return true;
+      });
       stageContent = mergeListField(stageContent, "produces", listOf("produces"), target, addedProduces);
       stageContent = mergeListField(stageContent, "sensors", listOf("sensors"), target, addedSensors);
+      stageContent = mergeListField(stageContent, "scopes", mergeableScopes, target, addedScopes);
       stageContent = mergeConsumes(stageContent, consumes, target, addedConsumes);
       // Only merge required_sections if the installed engine accepts the key —
       // otherwise skip + drop-log rather than break the install's next compile.
@@ -1411,12 +1431,13 @@ try {
       recordContrib(target, "produces", addedProduces);
       recordContrib(target, "sensors", addedSensors);
       recordContrib(target, "consumes", addedConsumes);
+      recordContrib(target, "scopes", addedScopes);
       recordContrib(target, "required_sections", addedSections);
       if (sectionsMeta.created) {
         contribManifest[target] ??= {};
         contribManifest[target].required_sections_created = true;
       }
-      if (addedProduces.length || addedSensors.length || addedConsumes.length || addedSections.length) {
+      if (addedProduces.length || addedSensors.length || addedConsumes.length || addedScopes.length || addedSections.length) {
         contribManifestDirty = true;
       }
 

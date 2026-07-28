@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.12] - 2026-07-28
+
+The plugin contribution seam now merges `adds.scopes`: a plugin can put an existing core stage under one of its OWN scopes, so a single plugin scope can carry a run through both the plugin's stages and the core stages it routes onto. Previously the surface was declared-but-deferred (drop-logged, never merged). **Upgrade:** re-copy your `dist/<harness>/` shell and re-install/re-sync your plugins so the updated compose hook and `select-plugins` strip are in place; already-installed plugins recompose automatically on the next session start.
+
+* A contribution's `adds.scopes` set-unions into the target stage's `scopes:` frontmatter and lands in the recompiled scope grid, exactly like `adds.produces`/`adds.consumes`/`adds.sensors`.
+* Two guard rails, both dropped-with-log (visible in `/aidlc --doctor`), never merged: the scope must belong to the contributing plugin (`<plugin>-` prefixed), and its `scopes/<name>.md` identity file must already be installed.
+* `/aidlc --select-plugins` now strips merged scope memberships when a plugin is disabled (recorded in the per-plugin contribution sidecar); re-enabling and recomposing restores them.
+* `adds.requires_stage` remains deferred (declared entries are still drop-logged, not merged).
+
 ## [2.5.33] - 2026-08-01
 
 Stage rules are now delivered deterministically instead of depending on the conductor choosing to read paths. The engine emits the active-space rule bundle as bounded `load-steering` directives before `run-stage`, and reviewer checklists are absorbed into reviewer agent bodies at build time - closing the observed skip where stages ran with none of their org/phase memory applied. **Upgrade:** re-copy your `dist/<harness>/` shell into the project so the updated engine, skills, agents, and hooks are installed.
@@ -32,7 +41,6 @@ The default-scope resolver is now bundle-aware, so an install that disables the 
 * `intent-birth` with no `--scope`, the orchestrator's default scope, and the freeform inference fallback now resolve through the bundle-aware resolver instead of hardcoding `poc`/`feature`, so a plugin-only install resolves to a valid enabled scope instead of erroring with "Unknown scope".
 * Explicit `AWS_AIDLC_DEFAULT_SCOPE` typos still fail with `Invalid AWS_AIDLC_DEFAULT_SCOPE`; only an installed scope disabled by plugin selection can enter bundle-aware fallback. Graph compilation also rejects multiple enabled `freeform_default` claimants instead of choosing one alphabetically.
 * Onboarding, the stage protocol, the shared principles, and the per-harness `SKILL.md` agent-roster notes no longer assert fixed stage/persona counts that a plugin install would falsify; they point at the compiled stage graph and `/aidlc --doctor` for the live enabled set.
-
 ## [2.5.26] - 2026-07-29
 
 The shipped workspace scaffold data and the Workspace Scaffold stage prose no longer advertise a per-intent `inception/reverse-engineering/` folder that nothing writes; the guides now describe where Reverse Engineering output actually lands. The stage writes its nine deliverables to the space-level per-repo store `aidlc/spaces/<space>/codekb/<repo>/`, one shared view per repo that each brownfield rerun overwrites; the intent record only ever receives the stage's own `memory.md` diary, created on demand. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; on installs that predate the shipped shell, an empty `inception/reverse-engineering/` directory left in an existing intent record can be deleted.

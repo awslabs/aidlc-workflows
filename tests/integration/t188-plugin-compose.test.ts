@@ -351,6 +351,79 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     }
   });
 
+  // --- Contribution seam: adds.scopes (graduated surface) ---
+  // A contribution may put an existing core stage under a scope the SAME
+  // plugin ships: set-union into the stage's scopes: frontmatter, recorded in
+  // the sidecar for disable-time strip, guarded against foreign/phantom scope
+  // names. Uses a synthetic plugin (test-pro ships no adds.scopes).
+  test("adds.scopes set-unions the plugin's own installed scope into the target stage", () => {
+    const scope = [
+      "---", "name: syn-scope-extra", "plugin: syn-scope",
+      "depth: Standard", "keywords:", "  - synthetic",
+      "description: synthetic scope for the adds.scopes merge", "skeleton: off", "---", "",
+      "# syn-scope-extra scope", "", "## Membership", "synthetic", "",
+    ].join("\n");
+    const contrib = [
+      "---", "target: build-and-test", "plugin: syn-scope",
+      "adds:", "  scopes:", "    - syn-scope-extra", "---", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-scope", {
+      "scopes/syn-scope-extra.md": scope,
+      "contributions/construction/build-and-test.md": contrib,
+    });
+    const fm = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8")
+      .match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
+    const scopesBlock = fm.match(/^scopes:\n((?: {2}- .+\n)*)/m)?.[1] ?? "";
+    expect(scopesBlock).toContain("- syn-scope-extra");
+    // Core memberships untouched by the union.
+    expect(scopesBlock).toContain("- enterprise");
+    // No drop for the merged surface...
+    expect(drops).not.toContain("adds.scopes is not yet an implemented merge surface");
+    // ...recorded in the sidecar for disable-time strip...
+    const sidecar = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "plugin-contrib-syn-scope.json"), "utf-8"));
+    expect(sidecar["build-and-test"]?.scopes).toEqual(["syn-scope-extra"]);
+    // ...and the recompiled scope grid routes the core stage under the plugin scope.
+    const grid = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "scope-grid.json"), "utf-8"));
+    expect(grid["syn-scope-extra"]?.stages?.["build-and-test"]).toBe("EXECUTE");
+    expect(grid["syn-scope-extra"]?.stages?.["code-generation"]).toBe("SKIP");
+
+    // Disable-time strip: select-plugins removes the merged scope membership
+    // and the sidecar, exactly like the other structural surfaces. (This
+    // project's known plugins are aidlc + syn-scope; selecting aidlc alone
+    // disables syn-scope.)
+    const strip = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"], {
+      cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(strip.status).toBe(0);
+    const strippedFm = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8")
+      .match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
+    expect(strippedFm).not.toContain("- syn-scope-extra");
+    expect(strippedFm).toContain("- enterprise");
+    expect(existsSync(join(proj, ".claude", "tools", "data", "plugin-contrib-syn-scope.json"))).toBe(false);
+  });
+
+  test("adds.scopes naming a foreign or uninstalled scope is dropped-with-log, not merged", () => {
+    const contrib = [
+      "---", "target: build-and-test", "plugin: syn-scope-guard",
+      "adds:", "  scopes:", "    - enterprise", "    - syn-scope-guard-phantom", "---", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-scope-guard", {
+      "contributions/construction/build-and-test.md": contrib,
+    });
+    const fm = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8")
+      .match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
+    // The foreign core scope is refused (ownership guard)...
+    expect(drops).toContain('adds.scopes "enterprise" is not owned by plugin "syn-scope-guard"');
+    // ...and the own-prefixed but uninstalled scope is refused (phantom guard).
+    expect(drops).toContain('adds.scopes "syn-scope-guard-phantom" has no installed scope file');
+    const scopesBlock = fm.match(/^scopes:\n((?: {2}- .+\n)*)/m)?.[1] ?? "";
+    expect(scopesBlock).not.toContain("- syn-scope-guard-phantom");
+    // enterprise appears exactly once (core's own membership, no dup union).
+    expect((scopesBlock.match(/- enterprise$/gm) ?? []).length).toBe(1);
+    expect(existsSync(join(proj, ".claude", "tools", "data", "plugin-contrib-syn-scope-guard.json"))).toBe(false);
+  });
+
   // --- Contribution seam: prose fragments ---
   test("prose fragments are spliced into the target stage body", () => {
     const body = stageBody(project, "construction", "build-and-test");

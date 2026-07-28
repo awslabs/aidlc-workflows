@@ -169,9 +169,16 @@ marks what the compose hook merges today vs. designed-but-deferred (mirrors doc 
   does not reach the compiled graph node, and the shipped `required-sections`
   sensor derives its expectations from templates, so nothing yet fails a stage for
   a missing section. Treat it as declarative intent for now.
-- `adds.requires_stage` / `adds.scopes` — ⏳ **deferred**: a contribution may
-  declare them, but compose records them to the drops log rather than merging
-  (they are not yet DAG/scope edges). Don't rely on them to gate behavior yet.
+- `adds.scopes` — ✅ set-unioned into the target stage's `scopes:` list, with
+  two guard rails (each violation dropped-with-log, never merged): the scope
+  must belong to YOUR plugin (`<plugin>-` prefixed — you cannot put a core
+  stage under a core or foreign-plugin scope), and its identity file must be
+  installed (`scopes/<name>.md` ships in the same plugin). Use it to route
+  existing core stages under your plugin's scope — e.g. a methodology plugin
+  whose scope carries its own discovery stages plus core Inception onward.
+- `adds.requires_stage` — ⏳ **deferred**: a contribution may declare it, but
+  compose records it to the drops log rather than merging (it is not yet a
+  DAG edge). Don't rely on it to gate behavior yet.
 - `fragments` — ✅ prose blocks spliced into the stage body. Each fragment's prose
   is the `## fragment: <anchor>` block in the contribution file.
 
@@ -251,9 +258,8 @@ projection remains deferred (doc 18 §8 Status).
   the core `feature`/`poc` default is disabled; at most one enabled scope across
   the selected core/plugin set may claim it, and graph compilation rejects an
   ambiguous set. Membership for plugin-authored stages is their `scopes:`
-  frontmatter list. A contribution's `adds.scopes` (§3) is still deferred and
-  drop-logged rather than merged, so do not rely on it to add your scope to an
-  existing core stage yet. See [Scopes](04-scopes.md).
+  frontmatter list; a contribution's `adds.scopes` (§3) adds YOUR scope to an
+  existing core stage. See [Scopes](04-scopes.md).
 
 ## 5. Distribution + install
 
