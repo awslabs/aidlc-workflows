@@ -109,6 +109,15 @@ describe("t148 dist/kiro file structure", () => {
     const ts = a.toolsSettings as Record<string, { allowedCommands?: string[] }>;
     const cmds = ts.execute_bash?.allowedCommands ?? [];
     expect(cmds.some((c) => c.includes(".kiro/tools/"))).toBe(true);
+    // No `.kiro/tools/` grant may end in an open wildcard: Kiro matches the
+    // whole command string, so a trailing `.*` after the directory swallows
+    // path traversal (`bun .kiro/tools/../../anything.ts` ran unprompted before
+    // 2.5.16). t252 asserts the resulting accept/reject behaviour in full.
+    for (const c of cmds) {
+      if (!c.includes(".kiro/tools/")) continue;
+      expect(c, `open wildcard after .kiro/tools/: ${c}`)
+        .not.toMatch(/\.kiro\/tools\/\.\*/);
+    }
   });
 
   test("delegation targets cannot nest (no subagent tool)", () => {

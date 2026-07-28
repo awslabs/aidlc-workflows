@@ -76,6 +76,21 @@ navigation uses `/aidlc intent [name]`, `/aidlc space [name]`, and
 `/aidlc space-create <name>`. The per-stage (`/aidlc-application-design`) and
 per-scope (`/aidlc-feature`) runner skills are installed too.
 
+**Start the session from the project root.** The conductor's engine calls are
+pre-approved as project-relative `bun .kiro/tools/<tool>.ts` commands, so a
+session whose working directory is elsewhere pushes the conductor toward
+command forms that need approval. A `cd <dir> && bun .kiro/tools/...` prefix and
+an absolute path to the project's own `.kiro/tools/` are both pre-approved as
+fallbacks, but running from the root avoids the question entirely.
+
+**Sessions with no approver stall rather than prompt.** Anything outside the
+pre-approved set needs an interactive answer. Under `kiro-cli chat
+--no-interactive` there is nobody to ask, so Kiro refuses the command outright
+with `non-interactive mode (no user to approve)` — use `--trust-all-tools` for
+unattended runs. Over ACP, your client must answer `session/request_permission`
+(or spawn with `--trust-all-tools`); a client that ignores those requests looks
+exactly like a permission failure.
+
 ## What's different on Kiro
 
 | Area | Claude Code | Kiro CLI |
@@ -86,7 +101,7 @@ per-scope (`/aidlc-feature`) runner skills are installed too.
 | Construction swarm | Parallel `Task` floor, optional ultracode Workflow | Subagent fan-out only; `AIDLC_USE_SWARM=1` is announced as a no-op |
 | Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` only (Kiro has no session-end / pre-compaction hooks) |
 | Forwarding-loop enforcement (Stop hook) | Interactive + headless | Interactive sessions only — `--no-interactive` runs do not honor the stop-hook block |
-| Permissions | `settings.json` allowlist | `aidlc` agent config: only `bun .kiro/tools/*` is pre-approved; other shell commands prompt |
+| Permissions | `settings.json` allowlist | `aidlc` agent config: only the framework's own `bun .kiro/tools/<tool>.ts` calls (plus `cd` and `date -u`) are pre-approved; other shell commands prompt |
 | Welcome message | Rendered at session start from `settings.json` `companyAnnouncements` | None — Kiro has no welcome-render equivalent; the session-start hook injects resume context only |
 | MCP servers | Ships 5 (`.mcp.json`: `context7` + four AWS servers) | None shipped, and the Kiro MCP config mechanism is not yet documented here — Claude-only today in practice |
 

@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.16] - 2026-07-28
+
+Hardens the Kiro CLI and Kiro IDE shell permission lists. Kiro matches each `execute_bash` pattern as a full string, which made the shipped patterns both too narrow (they denied command forms the framework itself instructs, stalling a workflow when no approver is available) and too broad in one place (the trailing wildcard let path traversal run anything on the machine unprompted). **Upgrade:** re-copy your `dist/kiro/` or `dist/kiro-ide/` shell into the project so the corrected agent configs are installed.
+
+* Framework commands that previously hit an approval prompt now run as intended: `bun run .kiro/tools/<tool>.ts`, a quoted script path, an absolute `/path/to/project/.kiro/tools/<tool>.ts`, a `cd <dir> && bun .kiro/tools/<tool>.ts` prefix (needed when the session's working directory is not the project root), and a bare `date -u` (the old `date -u .*` could not match it).
+* Closed a permission bypass: `bun .kiro/tools/../../anything.ts` was pre-approved by the old `bun \.kiro/tools/.*` pattern and executed without a prompt. Approved script paths are now a single filename under `.kiro/tools/`, so `../` cannot appear.
+* Fixed an inert pattern in the Kiro IDE conductor config: its `KIRO_PROJECT_DIR` entry had unescaped braces, making it an invalid regex that Kiro silently discarded, so that command form was never actually pre-approved.
+* The 14 delegated persona agents now carry the same shell surface as the conductor on both harnesses. They previously lacked the `KIRO_PROJECT_DIR`, absolute-path, and `cd` forms and could be refused mid-stage.
+* `deniedCommands` now also catches `rm -rf ~/x`, `rm -rf *`, `rm -fr <path>`, and a bare `git push` — full-string matching meant the old `rm -rf /.*` and `git push .*` missed all of these.
+
 ## [2.5.12] - 2026-07-24
 
 Closes the payload boundary 2.5.10 left open on Kiro IDE 1.x: the hook adapter now reads the IDE's stdin context channel for the two payload-dependent hooks (`audit-and-sensors`, `log-subagent`). Artifact audit rows and sensor firing were verified live on Kiro IDE 1.0.165 (same session, no restart). Subagent tracking uses the live 1.0.89-1.0.138 evidence in #543 plus adapter regression coverage; no real delegate completion was captured on 1.0.165. **Upgrade:** copy the tree CONTENTS - `mkdir -p your-project/.kiro && cp -R dist/kiro-ide/.kiro/. your-project/.kiro/` into your project.
