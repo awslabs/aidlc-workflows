@@ -449,4 +449,42 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(explicitOff.status).toBe(0);
     expect(explicitOff.out).toContain("Live TUI coverage: AIDLC_TUI_LIVE=0 (explicit");
   }, PER_TEST_TIMEOUT);
+
+  // --- --no-llm forces the Claude gate closed -------------------------------
+  // run-tests.ts: --no-llm (and AIDLC_NO_LLM=1) sets claudeGateOpen=false even
+  // when the claude CLI is present, so a claude-required integration file lands
+  // on the per-file SKIP path (=== DONE <name> (SKIP) ===) while a deterministic
+  // sibling in the same tier still RUNs to completion. The filter selects one of
+  // each: t141-enterprise-scope-routing is claude-required (SKIPs), and
+  // t12-state-fixture-validation is deterministic (runs). Using --filter also
+  // means the live preflight (t19) does NOT run, so this stays deterministic and
+  // needs no claude substrate regardless of whether the CLI is on PATH.
+  const NO_LLM_FILTER = "t141-enterprise-scope-routing|t12-state-fixture-validation";
+  const NO_LLM_LIVE = "t141-enterprise-scope-routing.test.ts";
+  const NO_LLM_DETERMINISTIC = "t12-state-fixture-validation.test.ts";
+
+  test("--no-llm skips claude-required integration files while deterministic ones run", () => {
+    const r = run(["--integration", "--no-llm", "--filter", NO_LLM_FILTER]);
+    // The gate-closed banner is emitted.
+    expect(r.out).toContain("--no-llm: forcing Claude gate closed");
+    // The claude-required file is SKIPPED (per-file SKIP done marker).
+    expect(r.out).toContain(`=== DONE ${NO_LLM_LIVE} (SKIP) ===`);
+    // The deterministic file actually RAN (its START marker fired and it did not
+    // take the SKIP path).
+    expect(r.out).toContain(`=== START ${NO_LLM_DETERMINISTIC} ===`);
+    expect(r.out).not.toContain(`=== DONE ${NO_LLM_DETERMINISTIC} (SKIP) ===`);
+    // A gate-closed run over deterministic content still passes and exits 0.
+    expect(r.status).toBe(0);
+    expect(r.out.split("\n").some((l) => l.startsWith("RESULT: PASS"))).toBe(true);
+  }, PER_TEST_TIMEOUT);
+
+  test("AIDLC_NO_LLM=1 forces the Claude gate closed like --no-llm", () => {
+    const r = run(["--integration", "--filter", NO_LLM_FILTER], {
+      AIDLC_NO_LLM: "1",
+    });
+    expect(r.out).toContain("--no-llm: forcing Claude gate closed");
+    expect(r.out).toContain(`=== DONE ${NO_LLM_LIVE} (SKIP) ===`);
+    expect(r.out).toContain(`=== START ${NO_LLM_DETERMINISTIC} ===`);
+    expect(r.status).toBe(0);
+  }, PER_TEST_TIMEOUT);
 });

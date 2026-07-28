@@ -27,6 +27,10 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..");
 const BUN = process.execPath;
 
+// Platform null device, for pointing GIT_CONFIG_GLOBAL/SYSTEM at nothing so
+// spawned git ignores the developer's ~/.gitconfig (see the env block below).
+const NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
+
 type Level = "smoke" | "unit" | "integration" | "e2e";
 type Status = "PASS" | "FAIL" | "SKIP";
 
@@ -40,6 +44,9 @@ interface ParsedArgs {
   filter: string;
   parallel: number;
   fullProfile: boolean;
+  // Force the Claude gate closed so real-LLM integration/e2e files SKIP while
+  // deterministic tests in those tiers still run. Also via AIDLC_NO_LLM=1.
+  noLlm: boolean;
 }
 
 interface ResultRow {
@@ -68,6 +75,9 @@ PROFILE FLAGS (shortcuts -- map to test pyramid layers):
 
 OUTPUT MODIFIERS (combinable with any tier/profile):
   --verbose       Write per-test logs to tests/logs/
+  --no-llm        Force the Claude gate closed: real-LLM integration/e2e files
+                  SKIP while deterministic tests in those tiers still run.
+                  Also via AIDLC_NO_LLM=1.
   --debug         Implies --verbose; streams per-test output and writes SDK/TUI
                   driver traces to tests/logs/
   --filter PAT    Only run tests whose filename matches extended regex PAT
@@ -106,6 +116,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     filter: "",
     parallel: 1,
     fullProfile: false,
+    noLlm: process.env.AIDLC_NO_LLM === "1",
   };
   let levelSelected = false;
 
@@ -145,6 +156,9 @@ function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--verbose":
         out.verbose = true;
+        break;
+      case "--no-llm":
+        out.noLlm = true;
         break;
       case "--debug":
         out.debug = true;
@@ -271,7 +285,17 @@ if (args.fullProfile && args.debug) {
 }
 
 let claudeGateOpen = true;
-if (needsLlm && !commandExists("claude")) {
+if (needsLlm && args.noLlm) {
+  // --no-llm (or AIDLC_NO_LLM=1) forces the Claude gate closed even when the
+  // claude CLI is present, so real-LLM integration/e2e files SKIP while the
+  // deterministic tests in those tiers still run. This is the full-tier
+  // deterministic CI profile: complete deterministic coverage without incurring
+  // live-LLM cost or flakiness.
+  process.stdout.write(
+    "--no-llm: forcing Claude gate closed -- real-LLM integration/e2e files will SKIP; deterministic tests still run\n",
+  );
+  claudeGateOpen = false;
+} else if (needsLlm && !commandExists("claude")) {
   process.stdout.write("WARNING: claude CLI not found -- live integration/e2e tests may fail or skip\n");
   claudeGateOpen = false;
 }
@@ -500,12 +524,26 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
   // against bare fixtures and must not have their Revision Count / audit trail
   // reconciled out from under them. The dedicated test (t205-gate-revision-
   // backstop) clears this var in its own tool spawns to exercise the backfill.
+  //
+  // Hermetic git for the whole suite. Several tiers (worktree/Bolt/swarm/
+  // multi-repo) drive REAL `git` against throwaway temp repos, and every spawned
+  // git otherwise inherits the developer's ~/.gitconfig. On a machine that sets
+  // commit.gpgsign=true with an SSH/GPG signer (e.g. 1Password's op-ssh-sign),
+  // a fixture's seed `commit` tries to sign, and dies "Could not connect to
+  // socket" whenever the agent is down, failing the suite for a reason that has
+  // nothing to do with the code under test. Pointing GIT_CONFIG_GLOBAL/SYSTEM at
+  // the null device makes git read NO user/system config, so no signing, no
+  // identity leakage, deterministic on any machine or CI box. Fixtures already
+  // pass their own `-c user.email/-c user.name` per commit, so identity is still
+  // satisfied.
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     AIDLC_TEST_NAME: base,
     AIDLC_SKIP_ARTIFACT_GUARD: "1",
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
     AIDLC_SKIP_REVISION_BACKSTOP: "1",
+    GIT_CONFIG_GLOBAL: NULL_DEVICE,
+    GIT_CONFIG_SYSTEM: NULL_DEVICE,
   };
   process.stdout.write(`\n=== START ${base} ===\n`);
 
