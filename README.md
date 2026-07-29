@@ -96,6 +96,18 @@ On Windows, use *either* PowerShell *or* CMD, not both — your prompt shows `PS
 
 Every harness runs on **AWS Bedrock**, so set Bedrock up before your first run — enable model access in your AWS account and make sure the harness can see working AWS credentials. Each harness section below has the specifics.
 
+### Get the code
+
+Every install below copies from this repository's `dist/<harness>/` trees, so clone it and switch to the `v2` branch first:
+
+```bash
+git clone https://github.com/awslabs/aidlc-workflows.git
+cd aidlc-workflows
+git checkout v2
+```
+
+Run the `cp` commands in the sections below from this repository's root.
+
 ### Install a harness
 
 With bun in place, pick your harness below and expand it — each section installs that CLI, sets up your project, and walks the first run end to end.
@@ -221,7 +233,7 @@ The `aidlc/` shell ships the pre-built `aidlc/spaces/default/memory/` method tre
 After copying, apply the `.gitignore` entries from the shipped `AGENTS.md` before your first workflow, pre-seed hook trust, then verify:
 
 ```bash
-bun .codex/tools/aidlc-utility.ts doctor
+cd your-project && bun .codex/tools/aidlc-utility.ts doctor
 ```
 
 Invoke the orchestrator with `$aidlc` (or `/skills` → aidlc) followed by a scope or description. The [Codex guide](docs/guide/harnesses/codex-cli.md) covers the trust dialog, config merge, and sandbox/git notes in full.
@@ -254,7 +266,7 @@ The engine deliberately lives in `.aidlc/`, NOT `.opencode/` — opencode auto-i
 After copying, apply the `.gitignore` entries from the shipped `AGENTS.md` before your first workflow, then verify:
 
 ```bash
-bun .aidlc/tools/aidlc-utility.ts doctor
+cd your-project && bun .aidlc/tools/aidlc-utility.ts doctor
 ```
 
 Invoke the orchestrator with `/aidlc` followed by a scope or description. The [opencode guide](docs/guide/harnesses/opencode.md) covers the split layout, the adapter plugin, and what differs on this harness in full.

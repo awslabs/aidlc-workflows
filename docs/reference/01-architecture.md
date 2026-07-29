@@ -224,7 +224,7 @@ sequenceDiagram
     O->>O: Log to audit.md
     O->>U: Present completion + approval gate
     U-->>O: Approve / Request Changes
-    O->>ST: Report approved; engine marks [x] and routes
+    O->>ST: Report approved — engine marks [x] and routes
     O->>O: Advance to next stage
 ```
 
@@ -246,7 +246,7 @@ sequenceDiagram
     O->>O: Validate summary, check Issues/Concerns
     O->>U: Present completion + approval gate
     U-->>O: Approve / Request Changes
-    O->>O: Report outcome; engine completes and advances
+    O->>O: Report outcome — engine completes and advances
 ```
 
 ## Source vs distribution (one core, many harnesses)

@@ -24,6 +24,16 @@ never hand-edit it (the drift guard fails CI).
 
 ## Install
 
+The copies below come from a clone of the
+[aidlc-workflows](https://github.com/awslabs/aidlc-workflows) repository on the
+`v2` branch:
+
+```bash
+git clone https://github.com/awslabs/aidlc-workflows.git
+cd aidlc-workflows
+git checkout v2
+```
+
 1. Copy the distribution into your project (which must be a **git
    repository** — Codex only discovers a project `.codex/hooks.json` inside
    one):
@@ -80,10 +90,12 @@ never hand-edit it (the drift guard fails CI).
    do not append a second copy because duplicate TOML tables invalidate the
    entire config.
 
-4. Merge the shipped `.codex/config.toml` into your `~/.codex/config.toml`
-   (or keep it project-level — trusted projects read it). Verify with:
+4. Back in `your-project/` (step 3 ran from the AI-DLC source checkout), merge
+   the shipped `.codex/config.toml` into your `~/.codex/config.toml` (or keep
+   it project-level — trusted projects read it). Verify with:
 
    ```bash
+   cd your-project
    bun .codex/tools/aidlc-utility.ts doctor
    ```
 
