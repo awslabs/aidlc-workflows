@@ -616,13 +616,42 @@ function pluginShipsViableOpencodeAgent(agent: string): boolean {
 // surface. Markdown personas remain composable for accepted inline stages.
 //
 // KIRO CLI vs KIRO IDE. Both install under `.kiro`, so HARNESS_LEAF alone cannot
-// tell them apart — the discriminator is the conductor's own shape, which is what
-// the requirement is about: the CLI ships `agents/aidlc.json` (agent-v1, carrying
-// the trustedAgents roster), while the IDE reads Markdown agents and ships
-// `agents/aidlc.md` with no JSON at all. On the IDE the agent-v1 + trustedAgents
-// requirement does not exist, and demanding it would reject every plugin-
-// dispatched stage even when the Markdown persona is present and dispatchable.
-// So on an IDE install this precheck no-ops, exactly as it does on Claude Code.
+// tell them apart — the discriminator is the conductor's own shape: the CLI ships
+// `agents/aidlc.json` (agent-v1, carrying the trustedAgents roster), while the IDE
+// reads Markdown agents and ships `agents/aidlc.md` with no JSON at all.
+//
+// The IDE's dispatch surface is NOT "a Markdown persona exists". IDE 1.0 delegation
+// needs a `tools:` grant AND a `permissions.rules` block on the target agent
+// (harness/kiro-ide/manifest.ts:71-72 appends both to every core persona). A plugin
+// agent ships neither, and compose applies no IDE projection when it copies one
+// (unlike `.aidlc`, where projectOpencodeAgentMemory rewrites the twin). Copying it
+// verbatim yields an agent that is dispatched but cannot read, write, or run
+// anything — a silent capability hole, not support.
+//
+// So the IDE requirement is real, just different from the CLI's, and compose cannot
+// satisfy it today: deciding which grants to inject is the packager's job
+// (frontmatterAdditions), not the composer's. Until an IDE projection exists, the
+// IDE follows the documented contract for every other harness whose surface a
+// plugin cannot ship — REJECT the dispatched stage and drop-log it
+// (docs/reference/18-plugin-mechanism.md). Rejecting is the honest state: it tells
+// the plugin author the stage will not dispatch, instead of composing a stage that
+// fails at runtime.
+// Is an INSTALLED Kiro IDE agent `.md` actually dispatchable? IDE 1.0 delegation
+// needs a `tools:` grant and a `permissions.rules` block; the packager appends both
+// to every core persona (harness/kiro-ide/manifest.ts:71-72). A file that lacks
+// them is dispatched with no capabilities, which is why existence alone is not the
+// surface on this harness. Missing file → not dispatchable (same verdict).
+function installedIdeAgentIsDispatchable(agentsDir: string, agent: string): boolean {
+  let content: string;
+  try {
+    content = readFileSync(join(agentsDir, `${agent}.md`), "utf-8");
+  } catch {
+    return false;
+  }
+  const fm = frontmatter(content);
+  return /^tools:/m.test(fm) && /^permissions:/m.test(fm);
+}
+
 async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | null> {
   if (
     HARNESS_LEAF !== ".kiro" &&
@@ -631,17 +660,21 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
   ) {
     return null;
   }
-  // A `.kiro` tree with no agent-v1 conductor is a Kiro IDE install: the
-  // JSON/trustedAgents dispatch surface it would be checked against is not part
-  // of that distribution.
+  // A `.kiro` tree with no agent-v1 conductor is a Kiro IDE install. Its dispatch
+  // surface is the agent `.md` itself — but only one carrying the IDE 1.0 grants
+  // (`tools:` + `permissions.rules`). A plugin agent ships neither and compose
+  // applies no IDE projection, so no installed file can satisfy this on the IDE:
+  // every dispatched plugin stage is rejected until a projection exists.
   const isKiroCli =
     HARNESS_LEAF === ".kiro" && existsSync(join(HARNESS_DIR, "agents", "aidlc.json"));
-  if (HARNESS_LEAF === ".kiro" && !isKiroCli) return null;
-  const surfaceExt = HARNESS_LEAF === ".kiro"
-    ? ".json"
-    : HARNESS_LEAF === ".codex"
-      ? ".toml"
-      : ".md";
+  const isKiroIde = HARNESS_LEAF === ".kiro" && !isKiroCli;
+  const surfaceExt = isKiroIde
+    ? ".md"
+    : HARNESS_LEAF === ".kiro"
+      ? ".json"
+      : HARNESS_LEAF === ".codex"
+        ? ".toml"
+        : ".md";
   const surfaceDir = HARNESS_LEAF === ".aidlc"
     ? join(PROJECT_DIR, ".opencode", "agents")
     : join(HARNESS_DIR, "agents");
@@ -672,11 +705,13 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
     const requirements: string[] = [];
     if (gap.missingSurface) {
       requirements.push(
-        HARNESS_LEAF === ".kiro"
-          ? `author ${HARNESS_LEAF}/agents/${gap.agent}.json (agent-v1 JSON)`
-          : HARNESS_LEAF === ".codex"
-            ? `author ${HARNESS_LEAF}/agents/${gap.agent}.toml (the shipped aidlc-*-agent.toml shape)`
-            : `author .opencode/agents/${gap.agent}.md (an OpenCode subagent with closed frontmatter)`,
+        isKiroIde
+          ? `author ${HARNESS_LEAF}/agents/${gap.agent}.md with an IDE 1.0 dispatch surface (a tools: grant and a permissions.rules block) — compose applies no IDE projection to plugin agents, so it cannot add them for you`
+          : HARNESS_LEAF === ".kiro"
+            ? `author ${HARNESS_LEAF}/agents/${gap.agent}.json (agent-v1 JSON)`
+            : HARNESS_LEAF === ".codex"
+              ? `author ${HARNESS_LEAF}/agents/${gap.agent}.toml (the shipped aidlc-*-agent.toml shape)`
+              : `author .opencode/agents/${gap.agent}.md (an OpenCode subagent with closed frontmatter)`,
       );
     }
     if (gap.missingTrust) {
@@ -780,8 +815,13 @@ async function kiroPluginAgentPrechecks(): Promise<KiroPluginAgentPrechecks | nu
       if (!agent || gaps.has(agent)) continue;
       const gap = {
         agent,
-        missingSurface: !existsSync(join(surfaceDir, `${agent}${surfaceExt}`)) &&
-          !(HARNESS_LEAF === ".aidlc" && pluginShipsViableOpencodeAgent(agent)),
+        missingSurface: isKiroIde
+          // IDE: existence is not the surface — the grants are. An installed
+          // `.md` without `tools:` + `permissions.rules` is dispatched but
+          // capability-less, so it counts as missing.
+          ? !installedIdeAgentIsDispatchable(surfaceDir, agent)
+          : !existsSync(join(surfaceDir, `${agent}${surfaceExt}`)) &&
+            !(HARNESS_LEAF === ".aidlc" && pluginShipsViableOpencodeAgent(agent)),
         missingTrust: isKiroCli && !trustedAgents.has(agent),
       };
       if (gap.missingSurface || gap.missingTrust) gaps.set(agent, gap);

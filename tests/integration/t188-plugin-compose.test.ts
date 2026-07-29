@@ -637,14 +637,14 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(drops).not.toContain('agent "aidlc-product-agent"');
   });
 
-  test("Kiro IDE composes the same ensemble stage — the agent-v1 requirement is CLI-only (#555 §1)", () => {
+  test("Kiro IDE rejects a plugin-dispatched stage — no IDE projection, so no dispatch surface (#555 §1)", () => {
     // Same synthetic stage as the Kiro CLI case above, composed into a Kiro IDE
-    // install. The IDE reads Markdown agents and ships no agent-v1 JSON, so the
-    // JSON + trustedAgents dispatch surface the CLI precheck demands does not
-    // exist on this harness — requiring it would reject every plugin-dispatched
-    // stage even though the Markdown persona is present and dispatchable. Both
-    // installs live under `.kiro`, so the precheck keys on the conductor's shape
-    // (agents/aidlc.json present = CLI) rather than the harness leaf.
+    // install. Both installs live under `.kiro`, so the precheck keys on the
+    // conductor's shape (agents/aidlc.json present = CLI) rather than the harness
+    // leaf. The IDE requirement is real but different from the CLI's: delegation
+    // needs the agent's IDE 1.0 grants, which compose cannot inject into a plugin
+    // agent (deciding the grants is the packager's job). So the stage is rejected
+    // and drop-logged, per docs/reference/18-plugin-mechanism.md.
     const stage = [
       "---",
       "slug: syn-ide-ensemble",
@@ -693,8 +693,10 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     // Precondition: this really is an IDE install (Markdown conductor, no JSON).
     expect(existsSync(join(proj, ".kiro", "agents", "aidlc.md"))).toBe(true);
     expect(existsSync(join(proj, ".kiro", "agents", "aidlc.json"))).toBe(false);
-    // The stage composed instead of being dropped, and its Markdown persona
-    // landed alongside the core roster.
+    // The IDE's dispatch surface is the agent's GRANTS, not the file's existence:
+    // IDE 1.0 delegation needs `tools:` + `permissions.rules` (the packager appends
+    // both to every core persona). A plugin agent ships neither and compose applies
+    // no IDE projection, so the stage cannot dispatch and is rejected.
     expect(existsSync(join(
       proj,
       ".kiro",
@@ -702,17 +704,23 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "stages",
       "inception",
       "syn-ide-ensemble.md",
-    ))).toBe(true);
-    expect(existsSync(join(
-      proj,
-      ".kiro",
-      "agents",
-      "syn-ide-collaborator-agent.md",
-    ))).toBe(true);
-    // No dispatch-surface drop was logged for it.
-    expect(drops).not.toContain('stage "syn-ide-ensemble"');
+    ))).toBe(false);
+    expect(drops).toContain('stage "syn-ide-ensemble"');
+    expect(drops).toContain("syn-ide-collaborator-agent");
+    expect(drops).toContain("permissions.rules");
+    // Rejection is IDE-shaped: it must not advise the CLI's agent-v1 remedy.
     expect(drops).not.toContain("agent-v1 JSON");
     expect(drops).not.toContain("toolsSettings.subagent.trustedAgents");
+
+    // Contrast — a core persona IS dispatchable on the IDE because the shipped
+    // roster carries the grants. Same harness, same compose: the verdict tracks
+    // the surface, not the harness leaf.
+    const corePersona = readFileSync(
+      join(proj, ".kiro", "agents", "aidlc-product-agent.md"),
+      "utf-8",
+    );
+    expect(corePersona).toMatch(/^tools:/m);
+    expect(corePersona).toMatch(/^permissions:/m);
   });
 
   test("Kiro rejects an agent JSON that is missing conductor trust registration", () => {

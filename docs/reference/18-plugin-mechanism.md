@@ -307,6 +307,18 @@ plugin's own files never satisfy those checks. Hand-authoring the missing
 surface and re-running compose accepts the stage. The Markdown persona remains
 composed for any accepted inline stage that also uses it.
 
+On **Kiro IDE** the surface is the agent's own Markdown, but existence is not
+enough: IDE 1.0 delegation requires a `tools:` grant and a `permissions.rules`
+block on the target agent, which the packager appends to every core persona. A
+plugin agent ships neither, and compose applies no IDE projection when it copies
+one (unlike OpenCode, whose native twin it rewrites) — copying it verbatim would
+yield an agent that dispatches but can neither read, write, nor run anything.
+Deciding which grants to inject belongs to the packager, not the composer, so
+until an IDE projection exists compose **rejects** plugin-dispatched stages on
+this harness and drop-logs the remediation (author the agent `.md` carrying both
+blocks, or change the stage to `mode: inline`). Inline plugin stages are
+unaffected on the IDE, as on every other harness.
+
 `agent-team` is schema-reserved but has no runtime consumer, so compose rejects
 plugin stages that select it on every harness instead of silently treating them
 as inline. If the installed stage parser is unavailable, Kiro/Codex/OpenCode
