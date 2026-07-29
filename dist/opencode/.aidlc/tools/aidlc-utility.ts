@@ -1298,6 +1298,53 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       label:
         "hook trust: ensure [hooks.state] entries are pre-seeded in $CODEX_HOME/config.toml (`bun scripts/package.ts codex trust --project <dir>`) or run one TUI trust pass",
     });
+  } else if (harness === ".cursor") {
+    // Cursor IDE: the wiring config is hooks.json (the v1 hook registry) plus
+    // the required install surfaces — SKILL.md (the /aidlc entry point), at
+    // least one folder-per-rule `.cursor/rules/<name>/<name>.mdc` layer, the
+    // project-root AGENTS.md, and the default-space memory tree. Mirrors the
+    // Codex required-files branch (hooks.json + surface probes).
+    results.push({
+      pass: existsSync(join(projectDir, harness, "hooks.json")),
+      label: "hooks.json present (hook wiring)",
+      fix: "copy from `dist/cursor/.cursor/hooks.json`",
+    });
+    results.push({
+      pass: existsSync(join(projectDir, harness, "skills", "aidlc", "SKILL.md")),
+      label: ".cursor/skills/aidlc/SKILL.md present (/aidlc entry point)",
+      fix: "copy from `dist/cursor/.cursor/skills/aidlc/SKILL.md`",
+    });
+    // At least one folder-per-rule `.cursor/rules/<name>/<name>.mdc` layer: scan
+    // the rules dir's subdirectories for any .mdc file (the method + phase rules).
+    let hasMdc = false;
+    try {
+      const rulesRoot = join(projectDir, harness, "rules");
+      for (const name of readdirSync(rulesRoot)) {
+        const sub = join(rulesRoot, name);
+        if (!statSync(sub).isDirectory()) continue;
+        if (readdirSync(sub).some((f) => f.endsWith(".mdc"))) {
+          hasMdc = true;
+          break;
+        }
+      }
+    } catch {
+      // missing/unreadable rules dir → no .mdc found
+    }
+    results.push({
+      pass: hasMdc,
+      label: "at least one .cursor/rules/*/*.mdc rule present (method + phase rules)",
+      fix: "copy the `.cursor/rules/` tree from `dist/cursor/.cursor/rules/`",
+    });
+    results.push({
+      pass: existsSync(join(projectDir, "AGENTS.md")),
+      label: "AGENTS.md present (method-include onboarding)",
+      fix: "copy from `dist/cursor/AGENTS.md`",
+    });
+    results.push({
+      pass: existsSync(memoryDirFor(projectDir, DEFAULT_SPACE)),
+      label: "aidlc/spaces/default/memory/ present (rule/method layer)",
+      fix: "copy the `aidlc/` workspace shell from `dist/cursor/`",
+    });
   } else if (harness === ".aidlc") {
     // opencode: the wiring config is the project-root opencode.json/jsonc
     // (permissions + the method-include instructions glob) plus the /aidlc
@@ -1326,7 +1373,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // 4b. Dual-harness coexistence (D-11): another harness tree installed AND a
   // workflow active is supported-but-untested — warn (advisory pass with a
   // visible label), never block.
-  const otherTrees = [".claude", ".kiro", ".codex", ".aidlc"].filter(
+  const otherTrees = [".claude", ".kiro", ".codex", ".cursor", ".aidlc"].filter(
     (h) => h !== harness && existsSync(join(projectDir, h, "tools", "aidlc-lib.ts")),
   );
   if (

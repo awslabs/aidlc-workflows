@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts session-start"
+      }
+    ],
+    "stop": [
+      {
+        "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts stop",
+        "loop_limit": 3
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts state-transition-guard",
+        "failClosed": true
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts reviewer-scope",
+        "failClosed": true,
+        "matcher": "Read|LS|Glob|Grep"
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts audit-and-sensors"
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts log-subagent"
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "bun .cursor/hooks/aidlc-cursor-adapter.ts validate-state"
+      }
+    ]
+  }
+}

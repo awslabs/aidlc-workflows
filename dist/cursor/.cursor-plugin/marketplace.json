@@ -1,0 +1,15 @@
+{
+  "name": "aidlc-plugins",
+  "owner": {
+    "name": "AWS AIDLC"
+  },
+  "description": "AIDLC plugin catalogue.",
+  "plugins": [
+    {
+      "name": "aidlc",
+      "source": ".",
+      "version": "2.5.11",
+      "description": "AI-DLC (AI-Driven Development Life Cycle) orchestrator for Cursor - 14 agents, 32 stages across 5 phases, shipped from a single ready-to-copy distribution."
+    }
+  ]
+}

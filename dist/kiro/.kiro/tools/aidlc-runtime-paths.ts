@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const MODULE_TOOLS_DIR = dirname(fileURLToPath(import.meta.url));
 const MODULE_HARNESS_ROOT = join(MODULE_TOOLS_DIR, "..");
-const KNOWN_HARNESSES = [".claude", ".kiro", ".codex"] as const;
+const KNOWN_HARNESSES = [".claude", ".kiro", ".codex", ".cursor"] as const;
 
 export interface HarnessLocation {
   harnessDir?: string;

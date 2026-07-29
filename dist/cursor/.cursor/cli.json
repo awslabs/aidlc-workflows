@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Write",
+      "Edit",
+      "Shell(bun *)",
+      "Shell(git add *)",
+      "Shell(git commit *)",
+      "Shell(git status *)",
+      "Shell(git log *)",
+      "Shell(git diff *)"
+    ],
+    "deny": [
+      "Shell(rm -rf *)",
+      "Shell(git push *)",
+      "Shell(git reset --hard *)",
+      "Shell(curl *)",
+      "Shell(wget *)",
+      "Shell(sudo *)"
+    ]
+  }
+}
