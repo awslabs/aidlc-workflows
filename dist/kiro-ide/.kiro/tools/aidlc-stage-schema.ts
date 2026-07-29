@@ -177,8 +177,8 @@ const SLUG_RE = /^[a-z][a-z0-9-]*$/;
 
 // Stage display number: `<int>.<int>` (e.g. "0.1", "2.7", "4.50"). Shape only —
 // numericStageOrder (aidlc-graph.ts) parses it; an authored value is an
-// ordering hint, the engine assigns all compiled values. Phase-prefix/phase
-// agreement is a separate compile cross-check.
+// ordering hint (only its index segment is read, as a tiebreak), the engine
+// assigns all compiled values.
 const NUMBER_RE = /^\d+\.\d+$/;
 
 // Lowercase-kebab artifact names — see docs/reference/16-artifact-vocabulary.md

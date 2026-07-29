@@ -25,6 +25,7 @@ import {
   acquireAuditLock,
   auditLockDir,
   auditLockIdentity,
+  auditLockOwnedByProcess,
   detectLeakedLocks,
   holdsAuditLock,
   releaseAuditLock,
@@ -78,6 +79,16 @@ describe("t161 keying invariants", () => {
 });
 
 describe("t161 per-intent lock independence", () => {
+  test("lock ownership requires the live PID stamped into the requested lock", () => {
+    expect(auditLockOwnedByProcess(PD, process.pid)).toBe(false);
+    expect(acquireAuditLock(PD, 0, 1)).toBe(true);
+    expect(auditLockOwnedByProcess(PD, process.pid)).toBe(true);
+    expect(auditLockOwnedByProcess(PD, process.pid + 1)).toBe(false);
+    expect(auditLockOwnedByProcess(PD, 0)).toBe(false);
+    releaseAuditLock(PD);
+    expect(auditLockOwnedByProcess(PD, process.pid)).toBe(false);
+  });
+
   test("two intents can be held concurrently in-process without contention", () => {
     expect(acquireAuditLock(PD, 0, 1, "auth-aaaaaaaa", "default")).toBe(true);
     // A DIFFERENT intent acquires immediately (0 retries) — no shared lock.

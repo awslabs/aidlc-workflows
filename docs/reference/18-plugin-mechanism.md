@@ -183,6 +183,12 @@ installed stage source inside the same rollback transaction, so a disabled
 plugin's contributions stop steering enabled stages. Re-enabling restores them
 on the next session start: the plugin's compose hook re-merges, byte-identical.
 
+Compose hooks and `select-plugins` serialize these mutations on the same
+workspace lock. The lock spans installed stage edits, per-plugin sidecars,
+selection writes, graph/grid compilation, and selection rollback, so concurrent
+plugin hooks cannot lose one another's set-union updates and a disable cannot
+race with compose to leave an untracked contribution active.
+
 Selection is closure-checked at compile time: an enabled stage may not require
 an artifact whose only producer stages are disabled. The error names the
 consuming stage, the artifact, the disabled producer stage(s), and the plugin(s)

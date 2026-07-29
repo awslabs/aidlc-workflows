@@ -28,13 +28,14 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const PLUGIN_ROOT =
   process.env.CLAUDE_PLUGIN_ROOT || process.env.PLUGIN_ROOT || process.env.AIDLC_PLUGIN_ROOT || "";
-const PROJECT_DIR =
-  process.env.CLAUDE_PROJECT_DIR || process.env.AIDLC_PROJECT_DIR || process.env.PWD || process.cwd();
+const PROJECT_DIR = resolve(
+  process.env.CLAUDE_PROJECT_DIR || process.env.AIDLC_PROJECT_DIR || process.env.PWD || process.cwd(),
+);
 const HARNESS_LEAF = process.env.AIDLC_HARNESS_DIR || ".claude";
 const HARNESS_DIR = join(PROJECT_DIR, HARNESS_LEAF);
 const STAGES_DIR = join(HARNESS_DIR, "aidlc-common", "stages");
@@ -50,6 +51,12 @@ type ParseStageFrontmatter = (raw: string) => Record<string, unknown>;
 interface InstalledAidlcLib {
   hooksHealthDir?: (projectDir: string) => string;
   parseStageFrontmatter?: ParseStageFrontmatter;
+  acquireAuditLock?: (
+    projectDir: string,
+    maxRetries?: number,
+    retryMs?: number,
+  ) => boolean;
+  releaseAuditLock?: (projectDir: string) => void;
 }
 interface InstalledStageSchema {
   validateStageFrontmatter?: (
@@ -59,6 +66,7 @@ interface InstalledStageSchema {
 
 let installedLibPromise: Promise<InstalledAidlcLib | null> | null = null;
 let installedSchemaPromise: Promise<InstalledStageSchema | null> | null = null;
+let composeOwnsWorkspaceLock = false;
 
 function installedAidlcLib(): Promise<InstalledAidlcLib | null> {
   installedLibPromise ??= import(join(HARNESS_DIR, "tools", "aidlc-lib.ts"))
@@ -72,6 +80,17 @@ function installedStageSchema(): Promise<InstalledStageSchema | null> {
     .then((module) => module as InstalledStageSchema)
     .catch(() => null);
   return installedSchemaPromise;
+}
+
+function installedGraphSupportsInheritedLock(): boolean {
+  try {
+    return readFileSync(
+      join(HARNESS_DIR, "tools", "aidlc-graph.ts"),
+      "utf-8",
+    ).includes("AIDLC_WORKSPACE_LOCK_OWNER_PID");
+  } catch {
+    return false;
+  }
 }
 
 function slugFromPath(path: string): string {
@@ -240,6 +259,12 @@ function installedToolCommand(tool: "utility" | "graph" | "runner", args: string
 function installedToolEnv(): NodeJS.ProcessEnv {
   return {
     ...process.env,
+    // Pin the RESOLVED project dir for spawned tools: a relative
+    // CLAUDE_PROJECT_DIR inherited via process.env would re-resolve against
+    // the child's cwd (landing on <proj>/<proj>), and a path-variant spelling
+    // would key a different workspace-lock hash than the one this hook holds.
+    // AIDLC_PROJECT_DIR outranks CLAUDE_PROJECT_DIR in resolveProjectDir.
+    AIDLC_PROJECT_DIR: PROJECT_DIR,
     AIDLC_HARNESS_DIR: HARNESS_LEAF,
     AIDLC_STAGE_GRAPH: join(HARNESS_DIR, "tools", "data", "stage-graph.json"),
     AIDLC_SCOPE_GRID: join(HARNESS_DIR, "tools", "data", "scope-grid.json"),
@@ -248,6 +273,9 @@ function installedToolEnv(): NodeJS.ProcessEnv {
     AIDLC_SCOPES_DIR: join(HARNESS_DIR, "scopes"),
     AIDLC_AGENTS_DIR: join(HARNESS_DIR, "agents"),
     AIDLC_RULES_DIR: join(PROJECT_DIR, "aidlc", "spaces", "default", "memory"),
+    ...(composeOwnsWorkspaceLock
+      ? { AIDLC_WORKSPACE_LOCK_OWNER_PID: String(process.pid) }
+      : {}),
   };
 }
 
@@ -347,6 +375,25 @@ if (!existsSync(PLUGIN_ROOT)) {
   return;
 }
 
+const lockLib = await installedAidlcLib();
+if (
+  typeof lockLib?.acquireAuditLock !== "function" ||
+  typeof lockLib.releaseAuditLock !== "function" ||
+  !installedGraphSupportsInheritedLock()
+) {
+  recordDrop(
+    "plugin compose skipped: installed engine lacks shared compose/graph workspace-lock support; re-copy the current dist/<harness>/ shell and retry",
+  );
+  await flushDrops();
+  return;
+}
+if (!lockLib.acquireAuditLock(PROJECT_DIR)) {
+  recordDrop("plugin compose skipped: could not acquire the shared workspace lock");
+  await flushDrops();
+  return;
+}
+composeOwnsWorkspaceLock = true;
+try {
 if (!pluginEnabledBySelection()) {
   recordDrop(
     `plugin "${PLUGIN_NAME}" composed but is not enabled by tools/data/harness.json; run \`${selectCommandForPlugin()}\` to expose its stages, scopes, and runners`,
@@ -372,8 +419,7 @@ type CopyPrecheck = (ctx: CopyContext & { dest: string }) => boolean;
 type CopyTransform = (ctx: CopyContext) => string;
 
 function frontmatterName(content: string): string | null {
-  const name = frontmatter(content).match(/^name:\s*(.+)$/m)?.[1].trim();
-  return name || null;
+  return frontmatterScalar(content, "name");
 }
 
 // Read one top-level frontmatter scalar for parser-unavailable safety checks.
@@ -1252,7 +1298,7 @@ try {
   // (structural adds carry no in-file provenance, unlike the sentinel-marked
   // prose fragments), keyed by target stage. select-plugins reads it to strip
   // a disabled plugin's merged entries - without it, disable left the plugin's
-  // produces/sensors/consumes welded into enabled core stages. Accumulated
+  // produces/sensors/consumes/scopes welded into enabled core stages. Accumulated
   // across re-runs: entries this run added are unioned into any prior record
   // (an idempotent re-compose adds nothing and must not erase the record).
   type StageContribRecord = { produces?: string[]; sensors?: string[]; consumes?: string[]; scopes?: string[]; required_sections?: string[]; required_sections_created?: boolean };
@@ -1423,7 +1469,7 @@ try {
           recordDrop(`contribution to ${target}: adds.scopes "${s}" has no installed scope file (no scopes/*.md declares name "${s}"); dropped`);
           return false;
         }
-        const owner = frontmatter(readFileSync(scopeFile, "utf-8")).match(/^plugin:\s*(.+)$/m)?.[1].trim();
+        const owner = frontmatterScalar(readFileSync(scopeFile, "utf-8"), "plugin");
         if (owner !== PLUGIN_NAME) {
           recordDrop(`contribution to ${target}: adds.scopes "${s}" is not owned by plugin "${PLUGIN_NAME}" (installed ${basename(scopeFile)} declares ${owner ? `plugin "${owner}"` : "no plugin: field (core-owned)"}; only this plugin's own scopes merge); dropped`);
           return false;
@@ -1649,6 +1695,10 @@ try {
 } catch (e) {
   recordDrop(`compose threw: ${e instanceof Error ? e.message : String(e)}`);
   // Non-fatal: never break the user's session over a compose failure.
+}
+} finally {
+  composeOwnsWorkspaceLock = false;
+  lockLib.releaseAuditLock(PROJECT_DIR);
 }
 
 // Flush any recorded drops to the installed hooks-health dir (--doctor surfaces

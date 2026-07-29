@@ -58,6 +58,7 @@ import {
   _resetScopeMappingForTests,
   _resetStageGraphForTests,
   activeSpace,
+  auditLockOwnedByProcess,
   type AgentMetadata,
   errorMessage,
   gridCostSummary,
@@ -1900,7 +1901,10 @@ function buildGraphStage(
   // (parseStageFrontmatter normalises empty).
   const support_agents = parsed.support_agents ?? [];
   const produces = parsed.produces ?? [];
-  const requires_stage = parsed.requires_stage ?? [];
+  // Dependency edges are set-valued. Normalize copy-paste duplicates here so
+  // every graph consumer, including topoSort's indegree accounting, observes
+  // the same edge cardinality as the compile-time number seeder.
+  const requires_stage = [...new Set(parsed.requires_stage ?? [])];
   const consumesRaw = parsed.consumes ?? [];
   const consumes: Consume[] = consumesRaw.map((c) => {
     const out: Consume = {
@@ -2641,11 +2645,26 @@ const COMMANDS: Record<string, Handler> = {
     // written under the one lock so they never diverge.
     const pd = resolveProjectDir();
     requireInstalledHarness(pd);
-    withAuditLock(pd, () => {
+    const writeCompiledGraph = (): void => {
       const { json, gridJson } = compileStageGraph();
       writeFileAtomic(mutableStageGraphPath(pd), json);
       writeFileAtomic(mutableScopeGridPath(pd), gridJson);
-    });
+    };
+    const inheritedOwnerRaw = process.env.AIDLC_WORKSPACE_LOCK_OWNER_PID;
+    if (inheritedOwnerRaw !== undefined) {
+      const inheritedOwner = Number(inheritedOwnerRaw);
+      if (
+        inheritedOwner !== process.ppid ||
+        !auditLockOwnedByProcess(pd, inheritedOwner)
+      ) {
+        throw new Error(
+          "Refusing inherited workspace lock: the declared owner is not this process's live parent lock holder."
+        );
+      }
+      writeCompiledGraph();
+    } else {
+      withAuditLock(pd, writeCompiledGraph);
+    }
   },
   resolve: (args) => {
     // resolve <scope> — emit the active scope's plan (.aidlc-plan.json) to

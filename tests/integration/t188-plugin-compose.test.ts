@@ -21,6 +21,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { auditLockDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   HARNESS_MATRIX,
   type ShippedHarnessName,
@@ -409,6 +410,25 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(existsSync(join(proj, ".claude", "tools", "data", "plugin-contrib-syn-scope.json"))).toBe(false);
   });
 
+  test("adds.scopes accepts quoted scope identity scalars", () => {
+    const scope = [
+      "---", 'name: "syn-quoted"', 'plugin: "syn-quoted"',
+      "depth: Standard", "keywords:", "  - synthetic",
+      "description: quoted scope identity", "skeleton: off", "---", "",
+      "# syn-quoted scope", "",
+    ].join("\n");
+    const contribution = [
+      "---", "target: build-and-test", "plugin: syn-quoted",
+      "adds:", "  scopes:", "    - syn-quoted", "---", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-quoted", {
+      "scopes/syn-quoted.md": scope,
+      "contributions/construction/build-and-test.md": contribution,
+    });
+    expect(drops).not.toContain('adds.scopes "syn-quoted"');
+    expect(stageBody(proj, "construction", "build-and-test")).toContain("- syn-quoted");
+  });
+
   // --- Number seeding: edge-aware, engine-owned (multi-stage plugins) ---
   test("new stages whose filename order contradicts their edges seed in flow order", () => {
     // Alphabetical: assemble < middle < zstart. Flow: zstart -> middle ->
@@ -434,10 +454,17 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "stages/ideation/syn-order-zstart.md": mk("syn-order-zstart", [], "syn-order-first", []),
     });
     expect(drops).not.toContain("compile failed");
-    const g = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "stage-graph.json"), "utf-8")) as Array<{ slug: string; number: string }>;
+    const g = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "stage-graph.json"), "utf-8")) as Array<{ slug: string; number: string; requires_stage?: string[] }>;
     const num = (slug: string) => parseFloat((g.find((s) => s.slug === slug)?.number ?? "").split(".")[1]);
     expect(num("syn-order-zstart")).toBeLessThan(num("syn-order-middle"));
     expect(num("syn-order-middle")).toBeLessThan(num("syn-order-assemble"));
+    expect(g.find((s) => s.slug === "syn-order-assemble")?.requires_stage)
+      .toEqual(["syn-order-middle"]);
+    const topo = spawnSync(BUN, [join(proj, ".claude", "tools", "aidlc-graph.ts"), "topo"], {
+      cwd: proj, encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+    });
+    expect(topo.status).toBe(0);
   });
 
   test("a requires_stage cycle among new stages is a loud compile error, not a seeded graph", () => {
@@ -512,6 +539,153 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect((scopesBlock.match(/- enterprise$/gm) ?? []).length).toBe(1);
     expect(existsSync(join(proj, ".claude", "tools", "data", "plugin-contrib-syn-scope-guard.json"))).toBe(false);
   });
+
+  test("concurrent plugin composes preserve every scope merge and sidecar", async () => {
+    const proj = mkdtempSync(join(tmp, "syn-concurrent-compose-"));
+    cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    const filesFor = (name: string): Record<string, string> => ({
+      [`scopes/${name}.md`]: [
+        "---", `name: ${name}`, `plugin: ${name}`,
+        "depth: Standard", "keywords:", "  - synthetic",
+        `description: ${name} scope`, "skeleton: off", "---", "",
+        `# ${name} scope`, "",
+      ].join("\n"),
+      "contributions/construction/build-and-test.md": [
+        "---", "target: build-and-test", `plugin: ${name}`,
+        "adds:", "  scopes:", `    - ${name}`, "---", "",
+      ].join("\n"),
+    });
+    const roots = ["syn-race-a", "syn-race-b"].map((name) => ({
+      name,
+      root: prepareSyntheticPlugin(proj, name, filesFor(name)),
+    }));
+    const processes = roots.map(({ root }) => Bun.spawn({
+      cmd: [BUN, join(root, "hooks", "compose.ts")],
+      cwd: proj,
+      stdout: "ignore",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: root,
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_HARNESS_DIR: ".claude",
+      },
+    }));
+    expect(await Promise.all(processes.map((proc) => proc.exited))).toEqual([0, 0]);
+    const body = stageBody(proj, "construction", "build-and-test");
+    for (const { name } of roots) {
+      expect(body).toContain(`- ${name}`);
+      const sidecar = join(proj, ".claude", "tools", "data", `plugin-contrib-${name}.json`);
+      expect(JSON.parse(readFileSync(sidecar, "utf-8"))["build-and-test"]?.scopes)
+        .toEqual([name]);
+    }
+    expect(existsSync(auditLockDir(proj))).toBe(false);
+  }, TIMEOUT_MS);
+
+  test("relative project env keeps compose and graph on the same workspace lock", () => {
+    const proj = mkdtempSync(join(tmp, "syn-relative-project-"));
+    cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    const name = "syn-relative-project";
+    const root = prepareSyntheticPlugin(proj, name, {
+      [`scopes/${name}.md`]: [
+        "---", `name: ${name}`, `plugin: ${name}`,
+        "depth: Standard", "keywords:", "  - synthetic",
+        "description: relative project scope", "skeleton: off", "---", "",
+        `# ${name} scope`, "",
+      ].join("\n"),
+      "contributions/construction/build-and-test.md": [
+        "---", "target: build-and-test", `plugin: ${name}`,
+        "adds:", "  scopes:", `    - ${name}`, "---", "",
+      ].join("\n"),
+    });
+    const result = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
+      cwd: dirname(proj),
+      encoding: "utf-8",
+      timeout: TIMEOUT_MS - 5_000,
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: root,
+        CLAUDE_PROJECT_DIR: proj.slice(dirname(proj).length + 1),
+        AIDLC_HARNESS_DIR: ".claude",
+      },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(stageBody(proj, "construction", "build-and-test")).toContain(`- ${name}`);
+    // The SPAWNED tools must resolve the same project dir as the hook: a
+    // relative CLAUDE_PROJECT_DIR re-resolved against a child's cwd lands on
+    // <proj>/<proj> and the compile drop-logs "requires an installed project
+    // harness" while the frontmatter merge above still succeeds - so assert
+    // the whole chain: zero drops AND the scope present in the recompiled grid.
+    let drops = "";
+    const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
+    if (existsSync(hd)) {
+      for (const f of readdirSync(hd)) {
+        if (f.startsWith("plugin-compose") && f.endsWith(".drops")) drops += readFileSync(join(hd, f), "utf-8");
+      }
+    }
+    expect(drops).toBe("");
+    const grid = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "scope-grid.json"), "utf-8"));
+    expect(grid[name]?.stages?.["build-and-test"]).toBe("EXECUTE");
+    expect(existsSync(auditLockDir(proj))).toBe(false);
+  }, TIMEOUT_MS);
+
+  test("select-plugins waits for compose and cannot leave a disabled scope orphaned", async () => {
+    const proj = mkdtempSync(join(tmp, "syn-compose-select-"));
+    cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    const name = "syn-select-race";
+    const root = prepareSyntheticPlugin(proj, name, {
+      [`scopes/${name}.md`]: [
+        "---", `name: ${name}`, `plugin: ${name}`,
+        "depth: Standard", "keywords:", "  - synthetic",
+        "description: selection race scope", "skeleton: off", "---", "",
+        `# ${name} scope`, "",
+      ].join("\n"),
+      "contributions/construction/build-and-test.md": [
+        "---", "target: build-and-test", `plugin: ${name}`,
+        "adds:", "  scopes:", `    - ${name}`, "---", "",
+      ].join("\n"),
+    });
+    const env = {
+      ...process.env,
+      CLAUDE_PROJECT_DIR: proj,
+      AIDLC_HARNESS_DIR: ".claude",
+    };
+    const compose = Bun.spawn({
+      cmd: [BUN, join(root, "hooks", "compose.ts")],
+      cwd: proj,
+      stdout: "ignore",
+      stderr: "pipe",
+      env: { ...env, CLAUDE_PLUGIN_ROOT: root },
+    });
+    let observedLock = false;
+    for (let i = 0; i < 200; i++) {
+      if (existsSync(auditLockDir(proj))) {
+        observedLock = true;
+        break;
+      }
+      if (compose.exitCode !== null) break;
+      await Bun.sleep(5);
+    }
+    expect(observedLock).toBe(true);
+    const select = Bun.spawn({
+      cmd: [BUN, join(proj, ".claude", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"],
+      cwd: proj,
+      stdout: "ignore",
+      stderr: "pipe",
+      env,
+    });
+    expect(await Promise.all([compose.exited, select.exited])).toEqual([0, 0]);
+    const harness = JSON.parse(
+      readFileSync(join(proj, ".claude", "tools", "data", "harness.json"), "utf-8"),
+    );
+    expect(harness.plugins).toEqual(["aidlc"]);
+    expect(stageBody(proj, "construction", "build-and-test")).not.toContain(`- ${name}`);
+    expect(existsSync(
+      join(proj, ".claude", "tools", "data", `plugin-contrib-${name}.json`),
+    )).toBe(false);
+    expect(existsSync(auditLockDir(proj))).toBe(false);
+  }, TIMEOUT_MS);
 
   // --- Contribution seam: prose fragments ---
   test("prose fragments are spliced into the target stage body", () => {
@@ -662,6 +836,26 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   });
 
   // --- Silent-failure seams (round-4): each must DROP-LOG, never silently no-op ---
+  function prepareSyntheticPlugin(
+    proj: string,
+    name: string,
+    files: Record<string, string>,
+  ): string {
+    const root = join(proj, `_plugin-${name}`);
+    cpSync(join(pluginBuilt, ".claude-plugin"), join(root, ".claude-plugin"), { recursive: true });
+    cpSync(join(pluginBuilt, "hooks"), join(root, "hooks"), { recursive: true });
+    const mf = join(root, ".claude-plugin", "plugin.json");
+    const manifest = JSON.parse(readFileSync(mf, "utf-8"));
+    manifest.name = name;
+    writeFileSync(mf, JSON.stringify(manifest));
+    for (const [rel, body] of Object.entries(files)) {
+      const path = join(root, rel);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, body);
+    }
+    return root;
+  }
+
   // Helper: compose a hand-built synthetic plugin into a fresh copy of the base
   // install, returning { drops, projectDir } so a test can assert on the drops.
   function composeSynthetic(
@@ -682,19 +876,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     }
     const harnessDir = join(proj, harnessLeaf);
     mutateInstall?.(proj, harnessDir);
-    const root = join(proj, "_plugin");
-    // minimal projection: manifest + the one working compose hook + given files
-    cpSync(join(pluginBuilt, ".claude-plugin"), join(root, ".claude-plugin"), { recursive: true });
-    cpSync(join(pluginBuilt, "hooks"), join(root, "hooks"), { recursive: true });
-    // rewrite the manifest name so the synthetic plugin has its own identity
-    const mf = join(root, ".claude-plugin", "plugin.json");
-    const m = JSON.parse(readFileSync(mf, "utf-8")); m.name = name; writeFileSync(mf, JSON.stringify(m));
-    for (const [rel, body] of Object.entries(files)) {
-      const p = join(root, rel);
-      cpSync(join(pluginBuilt, "hooks", "compose.ts"), join(root, "hooks", "compose.ts")); // ensure hook present
-      require("node:fs").mkdirSync(dirname(p), { recursive: true });
-      writeFileSync(p, body);
-    }
+    const root = prepareSyntheticPlugin(proj, name, files);
     const r = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
       cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
       env: { ...process.env, CLAUDE_PLUGIN_ROOT: root, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: harnessLeaf },
@@ -1465,9 +1647,10 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   });
 
   test("parser-unavailable fallback accepts only explicit inline reviewer-free stages", () => {
-    // Finding-2 regression guard: with the installed aidlc-lib.ts removed the
-    // guard cannot resolve agent references, but an inline-only plugin must
-    // still compose fully - fail-closed is scoped to dispatched topologies.
+    // Finding-2 regression guard: when the installed lib exposes the required
+    // compose lock but not the stage parser, the guard cannot resolve agent
+    // references. An inline-only plugin must still compose - fail-closed is
+    // scoped to dispatched topologies.
     const inlineStage = [
       "---",
       "slug: syn-noparse-inline",
@@ -1520,11 +1703,19 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       "",
     ].join("\n");
 
-    // composeSynthetic runs the hook itself, so build the project by hand to
-    // delete the installed lib BEFORE composing.
+    // composeSynthetic runs the hook itself, so build the project by hand and
+    // replace the installed lib with a lock-only compatibility shim.
     const proj = mkdtempSync(join(tmp, "syn-noparse-"));
     cpSync(KIRO_DIST, join(proj, ".kiro"), { recursive: true });
-    rmSync(join(proj, ".kiro", "tools", "aidlc-lib.ts"));
+    const installedLib = join(proj, ".kiro", "tools", "aidlc-lib.ts");
+    cpSync(installedLib, join(proj, ".kiro", "tools", "aidlc-lib-real.ts"));
+    writeFileSync(
+      installedLib,
+      [
+        'export { acquireAuditLock, releaseAuditLock, hooksHealthDir } from "./aidlc-lib-real.ts";',
+        "",
+      ].join("\n"),
+    );
     const root = join(proj, "_plugin");
     cpSync(join(pluginBuilt, ".claude-plugin"), join(root, ".claude-plugin"), { recursive: true });
     cpSync(join(pluginBuilt, "hooks"), join(root, "hooks"), { recursive: true });
