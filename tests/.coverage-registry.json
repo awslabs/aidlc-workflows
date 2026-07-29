@@ -1229,7 +1229,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t244-ars-subcommand.test.ts",
+          "file": "tests/unit/t258-ars-subcommand.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1899,7 +1899,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t244-ars-subcommand.test.ts",
+          "file": "tests/unit/t258-ars-subcommand.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4324,7 +4324,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/unit/t244-ars-subcommand.test.ts",
+          "file": "tests/unit/t258-ars-subcommand.test.ts",
           "mechanism": "cli"
         }
       ],

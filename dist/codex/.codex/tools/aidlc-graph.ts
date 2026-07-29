@@ -2165,6 +2165,14 @@ export function computeArs(
     if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1) {
       throw new Error(`--${c} must be a number in [0.00, 1.00] (got ${String(v)}).`);
     }
+    // The rubric and every rendered table speak in two decimals. Banding reads
+    // the EXACT value while `fmt` renders it rounded, so a finer input makes
+    // the two disagree in print: 0.299 renders "0.30 | LOW" against the
+    // documented LOW < 0.30, and 0.4004 yields "reduces CSU=0.40 > threshold
+    // 0.4". Rejecting here keeps table and band incapable of contradicting.
+    if (Number(v.toFixed(2)) !== v) {
+      throw new Error(`--${c} must have at most two decimals (got ${String(v)}).`);
+    }
   }
   const graph = loadGraph();
   const knownSlugs = new Set(graph.map((s) => s.slug));
@@ -2435,6 +2443,10 @@ const COMMANDS: Record<string, Handler> = {
         console.error(`ars: --${c} must be a number in [0.00, 1.00] (got "${rawScore}").`);
         process.exit(1);
       }
+      if (Number(v.toFixed(2)) !== v) {
+        console.error(`ars: --${c} must have at most two decimals (got "${rawScore}").`);
+        process.exit(1);
+      }
       scores[c] = v;
     }
     const compIdx = args.indexOf("--completed");
@@ -2449,6 +2461,15 @@ const COMMANDS: Record<string, Handler> = {
         : compRaw.split(",").map((s) => s.trim()).filter(Boolean);
     const ptIdx = args.indexOf("--project-type");
     const ptRaw = ptIdx >= 0 ? args[ptIdx + 1] : undefined;
+    // Same shape as the --completed guard one screen up: a trailing flag with
+    // no value must not fall through to "unset". Silently ignoring it would
+    // report EXECUTE for a stage the caller believes the screen excluded.
+    // (A flag-as-value, `--project-type --completed x`, is already rejected by
+    // the enum check below, which names what it read.)
+    if (ptIdx >= 0 && ptRaw === undefined) {
+      console.error("ars: --project-type requires a value (brownfield or greenfield).");
+      process.exit(1);
+    }
     let projectType: ArsProjectType | undefined;
     if (ptRaw !== undefined) {
       const lowered = ptRaw.toLowerCase();
