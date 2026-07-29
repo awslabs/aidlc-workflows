@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, appendFileSync, constants as fsConstants, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, constants as fsConstants, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2961,11 +2961,18 @@ function lockStaleMs(): number {
 // given, the space is default-resolved (a per-intent lock is meaningless without
 // its space) but activeIntent() is NEVER consulted here.
 export function auditLockIdentity(projectDir: string, intent?: string, space?: string): string {
+  let canonicalProjectDir = resolvePath(projectDir);
+  try {
+    canonicalProjectDir = realpathSync(canonicalProjectDir);
+  } catch {
+    // Birth and diagnostics can lock before the project exists. The absolute
+    // lexical path is stable until realpath can resolve filesystem aliases.
+  }
   if (intent === undefined) {
-    return `${projectDir}\x00${WORKSPACE_LOCK_SENTINEL}`;
+    return `${canonicalProjectDir}\x00${WORKSPACE_LOCK_SENTINEL}`;
   }
   const sp = space ?? activeSpace(projectDir);
-  return `${projectDir}\x00${sp}\x00${intent}`;
+  return `${canonicalProjectDir}\x00${sp}\x00${intent}`;
 }
 
 export function auditLockDir(projectDir: string, intent?: string, space?: string): string {

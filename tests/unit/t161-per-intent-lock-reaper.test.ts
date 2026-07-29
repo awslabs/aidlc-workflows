@@ -18,7 +18,7 @@
 //   WORKSPACE_LOCK_SENTINEL / DEFAULT_LOCK_STALE_MS (AIDLC_LOCK_STALE_MS env).
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -66,6 +66,23 @@ describe("t161 keying invariants", () => {
     const ws = auditLockDir(PD);
     expect(ws).not.toBe(a);
     expect(ws).not.toBe(b);
+  });
+
+  test("physical and symlink project paths share one lock identity", () => {
+    const parent = mkdtempSync(join(tmpdir(), `aidlc-t161-alias-${process.pid}-`));
+    const real = join(parent, "real");
+    const alias = join(parent, "alias");
+    mkdirSync(real);
+    symlinkSync(real, alias, "dir");
+    try {
+      expect(auditLockIdentity(alias)).toBe(auditLockIdentity(real));
+      expect(auditLockDir(alias)).toBe(auditLockDir(real));
+      expect(acquireAuditLock(real, 0, 1)).toBe(true);
+      expect(acquireAuditLock(alias, 0, 1)).toBe(false);
+      releaseAuditLock(real);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
   });
 
   test("intent-omitted does NOT resolve activeIntent() (stable even with intents on disk)", () => {

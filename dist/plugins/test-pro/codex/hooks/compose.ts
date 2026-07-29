@@ -100,40 +100,25 @@ function slugFromPath(path: string): string {
 
 function pluginNameFromRoot(): string {
   if (!PLUGIN_ROOT) return "plugin";
-  const fromContent = firstPluginFieldInPlugin();
-  if (fromContent) return fromContent;
-  for (const md of [".claude-plugin", ".codex-plugin", ".kiro-plugin"]) {
+  for (const md of [
+    ".claude-plugin",
+    ".codex-plugin",
+    ".opencode-plugin",
+    ".plugin",
+    ".kiro-plugin",
+  ]) {
     try {
       const m = JSON.parse(readFileSync(join(PLUGIN_ROOT, md, "plugin.json"), "utf-8"));
-      if (typeof m?.name === "string" && m.name) return m.name;
+      if (typeof m?.name === "string" && m.name.trim()) {
+        const hostName = m.name.trim();
+        // Emitted AIDLC plugins use aidlc-<name> as the host package ID while
+        // stage/scope ownership uses the logical <name>.
+        return hostName.startsWith("aidlc-") ? hostName.slice("aidlc-".length) : hostName;
+      }
     } catch { /* try next / fall through */ }
   }
   const parts = PLUGIN_ROOT.replace(/\\/g, "/").replace(/\/+$/, "").split("/");
   return parts[parts.length - 2] || parts[parts.length - 1] || "plugin";
-}
-
-function firstPluginFieldInPlugin(): string | null {
-  const roots = ["stages", "scopes", "contributions"];
-  const visit = (dir: string): string | null => {
-    if (!existsSync(dir)) return null;
-    for (const entry of readdirSync(dir).sort()) {
-      const path = join(dir, entry);
-      if (statSync(path).isDirectory()) {
-        const nested = visit(path);
-        if (nested) return nested;
-        continue;
-      }
-      if (!entry.endsWith(".md")) continue;
-      const m = readFileSync(path, "utf-8").match(/^plugin:\s*([a-z][a-z0-9-]*)\s*$/m);
-      if (m) return m[1];
-    }
-    return null;
-  };
-  for (const root of roots) {
-    const found = visit(join(PLUGIN_ROOT, root));
-    if (found) return found;
-  }
-  return null;
 }
 
 // The plugin's stable IDENTITY, computed once up front so every per-plugin
@@ -397,6 +382,36 @@ if (!lockLib.acquireAuditLock(PROJECT_DIR, COMPOSE_LOCK_RETRIES)) {
 }
 composeOwnsWorkspaceLock = true;
 try {
+const composeFileSnapshots = new Map<string, Buffer | null>();
+let composeTransactionOpen = true;
+function writeComposeFile(path: string, data: string | Buffer): void {
+  if (composeTransactionOpen && !composeFileSnapshots.has(path)) {
+    composeFileSnapshots.set(path, existsSync(path) ? readFileSync(path) : null);
+  }
+  writeFileSync(path, data);
+}
+function commitComposeWrites(): void {
+  composeTransactionOpen = false;
+  composeFileSnapshots.clear();
+}
+function rollbackComposeWrites(): void {
+  if (!composeTransactionOpen) return;
+  const failures: string[] = [];
+  for (const [path, before] of [...composeFileSnapshots.entries()].reverse()) {
+    try {
+      if (before === null) rmSync(path, { force: true });
+      else writeFileSync(path, before);
+    } catch (e) {
+      failures.push(`${relative(PROJECT_DIR, path)}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  composeTransactionOpen = false;
+  composeFileSnapshots.clear();
+  if (failures.length > 0) {
+    recordDrop(`compose rollback could not restore ${failures.join("; ")}`);
+  }
+}
+
 if (!pluginEnabledBySelection()) {
   recordDrop(
     `plugin "${PLUGIN_NAME}" composed but is not enabled by tools/data/harness.json; run \`${selectCommandForPlugin()}\` to expose its stages, scopes, and runners`,
@@ -425,6 +440,22 @@ function frontmatterName(content: string): string | null {
   return frontmatterScalar(content, "name");
 }
 
+function yamlScalarValue(raw: string): string | null {
+  const value = raw.trim();
+  const doubleQuoted = value.match(/^"((?:\\.|[^"])*)"(?:\s+#.*)?$/);
+  if (doubleQuoted) {
+    try {
+      return JSON.parse(`"${doubleQuoted[1]}"`) as string;
+    } catch {
+      return doubleQuoted[1];
+    }
+  }
+  const singleQuoted = value.match(/^'((?:''|[^'])*)'(?:\s+#.*)?$/);
+  if (singleQuoted) return singleQuoted[1].replaceAll("''", "'");
+  const bare = value.replace(/\s+#.*$/, "").trim();
+  return bare || null;
+}
+
 // Read one top-level frontmatter scalar for parser-unavailable safety checks.
 // Handles the quoted and unquoted forms accepted by the real YAML parser.
 function frontmatterScalar(content: string, key: string): string | null {
@@ -432,17 +463,7 @@ function frontmatterScalar(content: string, key: string): string | null {
     new RegExp(`^${escapeRegExp(key)}:\\s*(.*?)\\s*$`, "m"),
   );
   if (!match) return null;
-  let value = match[1].trim();
-  if (
-    value.length >= 2 &&
-    ((value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'")))
-  ) {
-    value = value.slice(1, -1);
-  } else {
-    value = value.replace(/\s+#.*$/, "").trim();
-  }
-  return value;
+  return yamlScalarValue(match[1]);
 }
 
 function installedNameRoster(dir: string): Map<string, string> {
@@ -469,7 +490,7 @@ function installedNameCollisionPrecheck(dst: string, kind: "agents" | "scopes"):
     // `aidlc-` is core's namespace: a scope declaring an aidlc--prefixed
     // plugin: would generate a runner dir on core's `aidlc-<name>` path and
     // silently clobber it. Reject the file, mirroring the compile-side guard.
-    const declaredPlugin = frontmatter(content).match(/^plugin:\s*(.+)$/m)?.[1].trim();
+    const declaredPlugin = frontmatterScalar(content, "plugin");
     if (declaredPlugin?.startsWith("aidlc-")) {
       recordDrop(
         `plugin "${PLUGIN_NAME}" ${kind} file "${relative(PLUGIN_ROOT, file)}" declares plugin "${declaredPlugin}"; the "aidlc-" prefix is reserved for core (it collides with core runner paths); not copied`,
@@ -477,15 +498,25 @@ function installedNameCollisionPrecheck(dst: string, kind: "agents" | "scopes"):
       );
       return false;
     }
+    if (declaredPlugin !== PLUGIN_NAME) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" ${kind} file "${relative(PLUGIN_ROOT, file)}" declares ${declaredPlugin ? `plugin "${declaredPlugin}"` : "no plugin identity"}; owned plugin content must match the host manifest identity; not copied`,
+        "degraded",
+      );
+      return false;
+    }
     const name = frontmatterName(content);
     if (!name) return true;
     const collidingFile = installedByName.get(name);
-    if (!collidingFile || collidingFile === dest) return true;
-    recordDrop(
-      `plugin "${PLUGIN_NAME}" ${kind} file "${relative(PLUGIN_ROOT, file)}" declares name "${name}", colliding with installed file "${relative(PROJECT_DIR, collidingFile)}"; not copied`,
-      "degraded",
-    );
-    return false;
+    if (collidingFile && collidingFile !== dest) {
+      recordDrop(
+        `plugin "${PLUGIN_NAME}" ${kind} file "${relative(PLUGIN_ROOT, file)}" declares name "${name}", colliding with installed file "${relative(PROJECT_DIR, collidingFile)}"; not copied`,
+        "degraded",
+      );
+      return false;
+    }
+    installedByName.set(name, dest);
+    return true;
   };
 }
 
@@ -922,13 +953,15 @@ async function installedStageSchemaPrecheck(): Promise<CopyPrecheck> {
     validate = schema.validateStageFrontmatter;
   }
   return ({ file, rel, content }) => {
-    if (!file.endsWith(".md") || !parse || !validate) return true;
-    let errors: string[];
-    try {
-      const res = validate(parse(content));
-      errors = res.valid ? [] : (res.errors ?? ["schema validation failed"]);
-    } catch (e) {
-      errors = [e instanceof Error ? e.message : String(e)];
+    if (!file.endsWith(".md")) return true;
+    let errors: string[] = [];
+    if (parse && validate) {
+      try {
+        const res = validate(parse(content));
+        errors = res.valid ? [] : (res.errors ?? ["schema validation failed"]);
+      } catch (e) {
+        errors = [e instanceof Error ? e.message : String(e)];
+      }
     }
     if (errors.length === 0) {
       const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
@@ -940,13 +973,14 @@ async function installedStageSchemaPrecheck(): Promise<CopyPrecheck> {
     // compile-time THROWS, so a landed file violating them bricks the whole
     // graph compile exactly like a schema-invalid one.
     if (errors.length === 0) {
-      const fmBlock = frontmatter(content);
-      const declaredPlugin = fmBlock.match(/^plugin:\s*(.+)$/m)?.[1].trim();
-      const declaredSlug = fmBlock.match(/^slug:\s*(.+)$/m)?.[1].trim() ?? "";
+      const declaredPlugin = frontmatterScalar(content, "plugin");
+      const declaredSlug = frontmatterScalar(content, "slug") ?? "";
       if (declaredPlugin === "aidlc") {
         errors = ['declares plugin "aidlc"; omit plugin for core stages'];
       } else if (declaredPlugin?.startsWith("aidlc-")) {
         errors = [`declares plugin "${declaredPlugin}"; the "aidlc-" prefix is reserved for core (a plugin named aidlc-<x> collides with core runner paths)`];
+      } else if (declaredPlugin !== PLUGIN_NAME) {
+        errors = [`declares ${declaredPlugin ? `plugin "${declaredPlugin}"` : "no plugin identity"}; owned plugin content must match the host manifest identity "${PLUGIN_NAME}"`];
       } else if (declaredPlugin && !declaredSlug.startsWith(`${declaredPlugin}-`)) {
         errors = [`slug "${declaredSlug}" does not start with "${declaredPlugin}-" (plugin-owned stage slugs must carry the plugin prefix)`];
       }
@@ -1013,7 +1047,7 @@ function copyTreeNoClobber(
       buf = Buffer.from(transform({ file, rel, content: buf.toString("utf-8") }));
     }
     mkdirSync(join(dest, ".."), { recursive: true });
-    writeFileSync(dest, buf);
+    writeComposeFile(dest, buf);
     wrote = true;
   }
   return wrote;
@@ -1043,6 +1077,7 @@ function frontmatter(content: string): string {
 // contribution sidecar records actually-added entries, never declared ones, so
 // a later removal can't strip a value core (or another plugin) already had.
 function mergeListField(content: string, field: string, items: string[], target: string, added?: string[]): string {
+  items = [...new Set(items)];
   if (items.length === 0) return content;
   const emptyRe = new RegExp(`^${field}:\\s*\\[\\s*\\]\\s*$`, "m");
   if (emptyRe.test(content)) {
@@ -1055,7 +1090,11 @@ function mergeListField(content: string, field: string, items: string[], target:
     recordDrop(`contribution to ${target}: no '${field}:' field to append to (adds dropped)`);
     return content;
   }
-  const existing = new Set([...m[1].matchAll(/^ {2}- (.+)$/gm)].map((x) => x[1].trim()));
+  const existing = new Set(
+    [...m[1].matchAll(/^ {2}- (.+)$/gm)]
+      .map((x) => yamlScalarValue(x[1]))
+      .filter((value): value is string => value !== null),
+  );
   const toAdd = items.filter((i) => !existing.has(i));
   if (toAdd.length === 0) return content;
   added?.push(...toAdd);
@@ -1354,12 +1393,12 @@ try {
       const content = readFileSync(join(phaseDir, file), "utf-8")
         .replace(/\r\n/g, "\n").replace(/^﻿/, "").replace(/^\n+/, "");
       const fm = frontmatter(content);
-      const target = fm.match(/^target:\s*(.+)$/m)?.[1].trim();
+      const target = frontmatterScalar(content, "target");
       // A .md in contributions/ with no parseable `target:` is a malformed
       // contribution — log it (a present-but-unknown target is already logged
       // below; a missing one was a silent bare continue).
       if (!target) { recordDrop(`contribution "${file}" has no parseable frontmatter target: — skipped (check for a BOM, a leading blank line, or a missing target: key)`); continue; }
-      const plugin = fm.match(/^plugin:\s*(.+)$/m)?.[1].trim() ?? "";
+      const plugin = frontmatterScalar(content, "plugin") ?? "";
       // `bundle:` was the pre-rename ownership key. It is dead, not aliased —
       // drop-log with the fix named so a stale plugin tree fails visibly
       // instead of composing under wrong or ambiguous ownership.
@@ -1371,6 +1410,12 @@ try {
       // so a plugin containing `:` would break the peer-block scan's `[^:]+` and
       // silently misorder splices. Reject it up front (round-6).
       if (plugin.includes(":")) { recordDrop(`contribution "${file}" has an invalid plugin "${plugin}" (must not contain ':'); skipped`); continue; }
+      if (plugin !== PLUGIN_NAME) {
+        recordDrop(
+          `contribution "${file}" declares ${plugin ? `plugin "${plugin}"` : "no plugin identity"}; owned plugin content must match the host manifest identity "${PLUGIN_NAME}"; skipped`,
+        );
+        continue;
+      }
       const stageFile = findStageFile(target);
       if (!stageFile) { recordDrop(`contribution "${file}" targets missing stage "${target}"`); continue; }
 
@@ -1380,9 +1425,12 @@ try {
       // regex stops at the first non-4-space entry, so a mis-indented line
       // silently truncated the list (entries after it vanished with no log).
       const listOf = (f: string): string[] => {
-        const s = addsBlock.match(new RegExp(`^ {2}${f}:\\n((?: {4}- [\\w-]+\\n?)*)`, "m"));
-        const parsed = s ? [...s[1].matchAll(/^ {4}- ([\w-]+)/gm)].map((x) => x[1]) : [];
         const declaredBlock = addsBlock.match(new RegExp(`^ {2}${f}:\\n((?:\\s+- .*\\n?)*)`, "m"))?.[1] ?? "";
+        const parsed: string[] = [];
+        for (const entry of declaredBlock.matchAll(/^ {4}- (.+?)\s*$/gm)) {
+          const value = yamlScalarValue(entry[1]);
+          if (value && /^[\w-]+$/.test(value)) parsed.push(value);
+        }
         const declared = (declaredBlock.match(/^\s+- /gm) ?? []).length;
         if (declared > parsed.length) {
           recordDrop(`contribution to ${target}: parsed ${parsed.length} of ${declared} adds.${f} entries (check indentation - entries must be 4-space "    - kebab-name"); some dropped`);
@@ -1572,7 +1620,7 @@ try {
       }
 
       if (stageContent !== before) { // compare-before-write (review #11)
-        writeFileSync(stageFile, stageContent);
+        writeComposeFile(stageFile, stageContent);
         changed = true;
       }
     }
@@ -1584,7 +1632,7 @@ try {
   if (contribManifestDirty) {
     try {
       mkdirSync(join(HARNESS_DIR, "tools", "data"), { recursive: true });
-      writeFileSync(contribManifestPath, `${JSON.stringify(contribManifest, null, 2)}\n`);
+      writeComposeFile(contribManifestPath, `${JSON.stringify(contribManifest, null, 2)}\n`);
     } catch (e) {
       recordDrop(`could not write the contribution sidecar ${relative(PROJECT_DIR, contribManifestPath)}: ${e instanceof Error ? e.message : String(e)} - disabling this plugin will not strip its merged contributions`, "advisory");
     }
@@ -1659,10 +1707,12 @@ try {
     });
     if (r.status !== 0) {
       recordDrop(`aidlc-graph compile failed: ${(r.stderr || "").slice(0, 400)}`);
+      rollbackComposeWrites();
       if (pluginKeySafe) {
         try { mkdirSync(join(PROJECT_DIR, "aidlc"), { recursive: true }); writeFileSync(retryMarker, new Date().toISOString() + "\n"); } catch { /* best-effort */ }
       }
     } else {
+      commitComposeWrites();
       recompiled = true;
       if (retryPending) {
         try { rmSync(retryMarker, { force: true }); } catch { /* best-effort */ }
@@ -1695,7 +1745,9 @@ try {
       if (pluginShipsScopes) runRunnerGen(["scopes"], "scopes");
     }
   }
+  commitComposeWrites();
 } catch (e) {
+  rollbackComposeWrites();
   recordDrop(`compose threw: ${e instanceof Error ? e.message : String(e)}`);
   // Non-fatal: never break the user's session over a compose failure.
 }

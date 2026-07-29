@@ -423,7 +423,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     ].join("\n");
     const contribution = [
       "---", "target: build-and-test", "plugin: syn-quoted",
-      "adds:", "  scopes:", "    - syn-quoted", "---", "",
+      "adds:", "  scopes:", '    - "syn-quoted"', "---", "",
     ].join("\n");
     const { drops, proj } = composeSynthetic("syn-quoted", {
       "scopes/syn-quoted.md": scope,
@@ -471,13 +471,13 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(topo.status).toBe(0);
   });
 
-  test("a requires_stage cycle among new stages is a loud compile error, not a seeded graph", () => {
-    const mk = (slug: string, dep: string, produces: string) => [
+  test("a requires_stage cycle rolls back copied stages so a corrected retry can land", () => {
+    const mk = (slug: string, dep: string | null, produces: string) => [
       "---", `slug: ${slug}`, "plugin: syn-cycle", "phase: ideation",
       "execution: ALWAYS", "condition: always",
       "lead_agent: aidlc-product-agent", "support_agents: []", "mode: inline",
       "produces:", `  - ${produces}`, "consumes: []",
-      "requires_stage:", `  - ${dep}`,
+      ...(dep ? ["requires_stage:", `  - ${dep}`] : ["requires_stage: []"]),
       "inputs: x", "outputs: y", "---", "", `# ${slug}`, "", "## Steps", "body", "",
     ].join("\n");
     const { drops, proj } = composeSynthetic("syn-cycle", {
@@ -490,6 +490,158 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(drops).toContain("requires_stage cycle among new stages");
     const g = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "stage-graph.json"), "utf-8")) as Array<{ slug: string }>;
     expect(g.some((s) => s.slug.startsWith("syn-cycle-"))).toBe(false);
+    const aInstalled = stageSourcePath(proj, "ideation", "syn-cycle-a");
+    const bInstalled = stageSourcePath(proj, "ideation", "syn-cycle-b");
+    expect(existsSync(aInstalled)).toBe(false);
+    expect(existsSync(bInstalled)).toBe(false);
+    const retryMarker = join(proj, "aidlc", ".plugin-compose-retry-syn-cycle");
+    expect(existsSync(retryMarker)).toBe(true);
+
+    const root = join(proj, "_plugin-syn-cycle");
+    writeFileSync(
+      join(root, "stages", "ideation", "syn-cycle-b.md"),
+      mk("syn-cycle-b", null, "syn-cycle-doc-b"),
+    );
+    const retry = spawnSync(BUN, [join(root, "hooks", "compose.ts")], {
+      cwd: proj,
+      encoding: "utf-8",
+      timeout: TIMEOUT_MS - 5_000,
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: root,
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_HARNESS_DIR: ".claude",
+      },
+    });
+    expect(retry.status).toBe(0);
+    expect(existsSync(aInstalled)).toBe(true);
+    expect(existsSync(bInstalled)).toBe(true);
+    const repaired = graph(proj);
+    expect(repaired.some((s) => s.slug === "syn-cycle-a")).toBe(true);
+    expect(repaired.some((s) => s.slug === "syn-cycle-b")).toBe(true);
+    expect(existsSync(retryMarker)).toBe(false);
+  });
+
+  test("host manifest identity cannot be spoofed by plugin content", () => {
+    const victimScope = [
+      "---", "name: victim-scope", "plugin: victim",
+      "depth: Standard", "keywords:", "  - synthetic",
+      "description: spoofed victim scope", "skeleton: off", "---", "",
+      "# victim scope", "",
+    ].join("\n");
+    const contribution = [
+      "---", "target: build-and-test", "plugin: victim",
+      "adds:", "  scopes:", "    - victim-scope", "---", "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("attacker", {
+      "scopes/victim-scope.md": victimScope,
+      "contributions/construction/build-and-test.md": contribution,
+    });
+    expect(drops).toContain('plugin "attacker" scopes file');
+    expect(drops).toContain('declares plugin "victim"');
+    expect(drops).toContain('host manifest identity "attacker"');
+    expect(stageBody(proj, "construction", "build-and-test")).not.toContain("- victim-scope");
+    expect(existsSync(join(proj, ".claude", "scopes", "victim-scope.md"))).toBe(false);
+    expect(existsSync(
+      join(proj, ".claude", "tools", "data", "plugin-contrib-attacker.json"),
+    )).toBe(false);
+  });
+
+  test("duplicate incoming scope identities are rejected within one plugin tree", () => {
+    const scope = (label: string) => [
+      "---", "name: duplicate-scope", "plugin: syn-duplicate-scope",
+      "depth: Standard", "keywords:", "  - synthetic",
+      `description: ${label}`, "skeleton: off", "---", "",
+      `# ${label}`, "",
+    ].join("\n");
+    const { drops, proj } = composeSynthetic("syn-duplicate-scope", {
+      "scopes/alpha.md": scope("alpha"),
+      "scopes/beta.md": scope("beta"),
+    });
+    const installed = ["alpha.md", "beta.md"].filter((file) =>
+      existsSync(join(proj, ".claude", "scopes", file))
+    );
+    expect(installed).toHaveLength(1);
+    expect(drops).toContain('declares name "duplicate-scope", colliding with installed file');
+    expect(drops).not.toContain("scope-table failed");
+    expect(drops).not.toContain("runner-gen scopes failed");
+    const compile = spawnSync(
+      BUN,
+      [join(proj, ".claude", "tools", "aidlc-graph.ts"), "compile"],
+      {
+        cwd: proj,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".claude" },
+      },
+    );
+    expect(compile.status).toBe(0);
+  });
+
+  test("disable preserves quoted scope membership that predates the plugin", () => {
+    const name = "syn-preserve-quoted";
+    const scope = [
+      "---", `name: ${name}`, `plugin: ${name}`,
+      "depth: Standard", "keywords:", "  - synthetic",
+      "description: quoted authored membership", "skeleton: off", "---", "",
+      `# ${name}`, "",
+    ].join("\n");
+    const contribution = [
+      "---", "target: build-and-test", `plugin: ${name}`,
+      "adds:", "  scopes:", `    - ${name}`, "---", "",
+    ].join("\n");
+    const { proj } = composeSynthetic(name, {
+      [`scopes/${name}.md`]: scope,
+      "contributions/construction/build-and-test.md": contribution,
+    }, ".claude", (_proj, harnessDir) => {
+      const path = join(
+        harnessDir,
+        "aidlc-common",
+        "stages",
+        "construction",
+        "build-and-test.md",
+      );
+      const before = readFileSync(path, "utf-8");
+      writeFileSync(path, before.replace(/^scopes:\n/m, `scopes:\n  - "${name}"\n`));
+    });
+    const stagePath = stageSourcePath(proj, "construction", "build-and-test");
+    const sidecar = join(
+      proj,
+      ".claude",
+      "tools",
+      "data",
+      `plugin-contrib-${name}.json`,
+    );
+    let composed = readFileSync(stagePath, "utf-8");
+    expect((composed.match(new RegExp(name, "g")) ?? []).length).toBe(1);
+    expect(composed).toContain(`- "${name}"`);
+    expect(existsSync(sidecar)).toBe(false);
+
+    composed = composed.replace(`  - "${name}"`, `  - "${name}"\n  - ${name}`);
+    writeFileSync(stagePath, composed);
+    writeFileSync(
+      sidecar,
+      `${JSON.stringify({ "build-and-test": { scopes: [name] } }, null, 2)}\n`,
+    );
+    const disable = spawnSync(
+      BUN,
+      [join(proj, ".claude", "tools", "aidlc-utility.ts"), "select-plugins", "aidlc"],
+      {
+        cwd: proj,
+        encoding: "utf-8",
+        timeout: TIMEOUT_MS - 5_000,
+        env: {
+          ...process.env,
+          CLAUDE_PROJECT_DIR: proj,
+          AIDLC_HARNESS_DIR: ".claude",
+        },
+      },
+    );
+    expect(disable.status).toBe(0);
+    const stripped = readFileSync(stagePath, "utf-8");
+    expect(stripped).toContain(`- "${name}"`);
+    expect(stripped).not.toContain(`  - ${name}\n`);
+    expect(existsSync(sidecar)).toBe(false);
   });
 
   test("adds.scopes ownership is the installed file's plugin: field, not a name prefix", () => {
@@ -1763,6 +1915,21 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         "",
       ].join("\n"),
     );
+    // Keep the spawned compile usable while compose itself observes the
+    // parser-limited compatibility module above. A compile failure now
+    // correctly rolls all copied files back, so this fallback test must isolate
+    // parser availability from transaction recovery.
+    const installedTools = join(proj, ".kiro", "tools");
+    for (const file of readdirSync(installedTools).filter((name) => name.endsWith(".ts"))) {
+      if (file === "aidlc-lib.ts" || file === "aidlc-lib-real.ts") continue;
+      const path = join(installedTools, file);
+      const source = readFileSync(path, "utf-8");
+      const isolated = source.replaceAll(
+        'from "./aidlc-lib.ts"',
+        'from "./aidlc-lib-real.ts"',
+      );
+      if (isolated !== source) writeFileSync(path, isolated);
+    }
     const root = join(proj, "_plugin");
     cpSync(join(pluginBuilt, ".claude-plugin"), join(root, ".claude-plugin"), { recursive: true });
     cpSync(join(pluginBuilt, "hooks"), join(root, "hooks"), { recursive: true });
@@ -1783,11 +1950,6 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     });
     expect(r.status).toBe(0);
 
-    const stages = join(proj, ".kiro", "aidlc-common", "stages", "inception");
-    expect(existsSync(join(stages, "syn-noparse-inline.md"))).toBe(true);
-    expect(existsSync(join(stages, "syn-noparse-mob.md"))).toBe(false);
-    expect(existsSync(join(proj, ".kiro", "agents", "syn-noparse-agent.md"))).toBe(true);
-
     let drops = "";
     const hd = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-hooks-health");
     if (existsSync(hd)) {
@@ -1795,6 +1957,10 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         if (f.startsWith("plugin-compose") && f.endsWith(".drops")) drops += readFileSync(join(hd, f), "utf-8");
       }
     }
+    const stages = join(proj, ".kiro", "aidlc-common", "stages", "inception");
+    expect(existsSync(join(stages, "syn-noparse-inline.md"))).toBe(true);
+    expect(existsSync(join(stages, "syn-noparse-mob.md"))).toBe(false);
+    expect(existsSync(join(proj, ".kiro", "agents", "syn-noparse-agent.md"))).toBe(true);
     expect(drops).toContain("syn-noparse-mob.md");
     expect(drops).toContain("stage parser is unavailable");
     expect(drops).not.toContain("syn-noparse-inline.md");

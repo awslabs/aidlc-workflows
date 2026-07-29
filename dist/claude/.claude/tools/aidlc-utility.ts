@@ -558,12 +558,26 @@ function removeListValues(content: string, field: string, values: ReadonlySet<st
   const blockRe = new RegExp(`^${field}:\\n((?:  - .+\\n)*)`, "m");
   const m = content.match(blockRe);
   if (!m) return content;
-  const kept = [...m[1].matchAll(/^ {2}- (.+)$/gm)]
-    .map((x) => x[1])
-    .filter((v) => {
-      const bare = v.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
-      return !values.has(bare) && !values.has(v.trim());
+  const entries = [...m[1].matchAll(/^ {2}- (.+)$/gm)].map((x) => x[1]);
+  const removeIndexes = new Set<number>();
+  const remaining = new Set(values);
+  // Compose renders ordinary structural additions unquoted. Prefer that exact
+  // spelling so a legacy sidecar cannot remove an equivalent quoted membership
+  // that predated the plugin.
+  for (let i = 0; i < entries.length; i++) {
+    if (remaining.delete(entries[i].trim())) removeIndexes.add(i);
+  }
+  // required_sections are rendered quoted while their sidecar values are bare.
+  // Remove at most one canonical match for each recorded addition.
+  for (const value of remaining) {
+    const index = entries.findIndex((entry, i) => {
+      if (removeIndexes.has(i)) return false;
+      const bare = entry.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
+      return bare === value;
     });
+    if (index !== -1) removeIndexes.add(index);
+  }
+  const kept = entries.filter((_, i) => !removeIndexes.has(i));
   const replacement = kept.length > 0
     ? `${field}:\n${kept.map((v) => `  - ${v}`).join("\n")}\n`
     : dropEmptyField ? "" : `${field}: []\n`;

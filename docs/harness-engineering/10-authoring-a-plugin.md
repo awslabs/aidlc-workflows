@@ -102,6 +102,12 @@ A plugin stage is an ordinary stage file (see
 - Any artifact it `produces:` must be prefixed `<plugin>-` (e.g.
   `test-pro-integration-test-results`).
 
+The same logical plugin name must appear in every owned stage, scope, agent,
+and contribution. Compose derives that identity from the emitted host manifest
+(`aidlc-<name>` at the host layer, `<name>` in AIDLC frontmatter); content cannot
+rename or impersonate its package. A mismatch is skipped and recorded for
+`/aidlc --doctor`.
+
 `bundle:` was the pre-rename ownership key and is rejected with an error naming the fix - write `plugin:`. The word is reserved for a possible future collection-of-plugins concept.
 
 Stage **identity is the slug**, everywhere that matters (edges, jumps,
