@@ -1,23 +1,41 @@
 // covers: file:settings.json
 //
 // t252-kiro-allowlist-semantics: the shipped Kiro `execute_bash` permission
-// patterns are asserted BEHAVIOURALLY by running real command strings through
-// the stable permission policy shared by supported Kiro releases. Literal-text
-// assertions cannot tell a working pattern from an inert one.
+// patterns are asserted BEHAVIOURALLY, by re-implementing Kiro's own matcher
+// and running real command strings through it, not by pinning literal regex
+// text. A literal-string assertion cannot tell a working pattern from an inert
+// one, which is exactly how the Kiro IDE's `\${?KIRO_PROJECT_DIR}?` spelling
+// (unescaped braces = invalid regex, silently dropped) shipped dead.
 //
 // Mechanism = none: pure in-process reads of the shipped dist agent JSONs plus
 // RegExp evaluation. No spawn, no LLM.
 //
-// Kiro releases differ in how they pre-parse compound shell commands, so the
-// shipped allowlist deliberately avoids variable-expanded paths, absolute
-// paths, and `cd` chains. The common contract asserted here is:
+// The shipped allowlist grants ONLY project-relative `.kiro/tools/<file>.ts`
+// invocations. Absolute paths are excluded because a path only has to be SHAPED
+// like a tool path, not be trustworthy: a grant for any `/.../.kiro/tools/*.ts`
+// pre-approves running a file from a world-writable directory (verified live:
+// `bun /tmp/.kiro/tools/evil.ts` executed unprompted under such a grant).
+// `KIRO_PROJECT_DIR` and `cd` forms are excluded for the same reason: neither a
+// variable's value nor a chained working directory is knowable from the regex.
+//
+// The matcher contract below is transcribed from the upstream CLI
+// (crates/chat-cli/src/cli/chat/tools/execute/mod.rs) and re-verified live
+// against kiro-cli 2.12.1:
 //   - each pattern is wrapped `\A<pat>\z` — a FULL-STRING match, never a prefix
 //     one (so an optional tail must be spelled `( .*)?`);
 //   - an invalid allow pattern is silently DROPPED (`.filter(Result::is_ok)`),
 //     so it neither allows nor denies — it is simply inert;
 //   - `deniedCommands` is evaluated first and beats any allow;
-//   - shell control syntax stays approval-gated rather than relying on
-//     release-specific segmentation.
+//   - each `&&`/`;`/`|`/newline segment is matched SEPARATELY, so a chain runs
+//     unprompted only when EVERY segment is allowed. Verified live: with both
+//     segments granted, `bun .kiro/tools/<t>.ts && date -u` ran unprompted.
+//     `evaluate()` therefore models segmentation rather than refusing outright
+//     on the presence of a separator. A blanket refusal would report "ask" for
+//     a chain the binary actually allows, and so could not catch a future
+//     over-broad allow entry being reached through one.
+//
+// Tail metacharacters (`>`, `$(...)`) are a separate mechanism: live 2.12.1
+// gates those even when the pattern's `( .*)?` tail would match.
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -95,10 +113,62 @@ function compile(pattern: string): RegExp | null {
   }
 }
 
-const DANGEROUS_SHELL_TOKENS = ["\n", "\r", "<", ">", "&", "|", ";", "$", "`", "IFS"];
+/** Tail metacharacters the binary gates independently of pattern matching:
+ *  command substitution and redirection. Verified live on 2.12.1 -- both
+ *  `bun .kiro/tools/<t>.ts > /tmp/x` and `... --stamp $(date -u +%s)` are gated
+ *  even though the pattern's `( .*)?` tail matches them.
+ *
+ *  A BARE `$` is deliberately not listed: under a config that allowlisted the
+ *  `$KIRO_PROJECT_DIR` form, `bun $KIRO_PROJECT_DIR/.kiro/tools/<t>.ts` ran
+ *  unprompted live, so variable expansion alone does not gate. Those forms are
+ *  gated today because no shipped pattern matches them, which is a property of
+ *  the allowlist and belongs under pattern matching, not here.
+ *
+ *  Separators are also not listed; `segments()` handles those. */
+const TAIL_METACHARACTERS = ["$(", "`", "<", ">"];
 
-function hasDangerousShellSyntax(command: string): boolean {
-  return DANGEROUS_SHELL_TOKENS.some((token) => command.includes(token));
+function hasTailMetacharacter(command: string): boolean {
+  return TAIL_METACHARACTERS.some((token) => command.includes(token));
+}
+
+/** Split on the separators Kiro matches independently. Quote-aware: a `;` or
+ *  `&&` INSIDE a quoted argument is argument text, not a separator (verified
+ *  live: `--text "safe; words"` runs unprompted under an allow match).
+ *  Newline is a separator too: Rust's negated character classes match `\n`, so
+ *  a pattern like `cd [^;&|]+` would otherwise span a newline-joined chain. */
+function segments(command: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      cur += ch;
+      continue;
+    }
+    if (ch === ";" || ch === "|" || ch === "\n" || ch === "\r") {
+      if (ch === "|" && command[i + 1] === "|") i++;
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    if (ch === "&") {
+      // `&&` chains and a bare `&` (background) both separate.
+      if (command[i + 1] === "&") i++;
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 type Verdict = "allow" | "ask" | "deny";
@@ -111,12 +181,16 @@ function evaluate(eb: ExecuteBash, command: string): Verdict {
     .filter((r): r is RegExp => r !== null);
   if (denied.some((r) => r.test(command))) return "deny";
 
-  if (hasDangerousShellSyntax(command)) return "ask";
-
   const allowed = (eb.allowedCommands ?? [])
     .map(compile)
     .filter((r): r is RegExp => r !== null);
-  return allowed.some((r) => r.test(command)) ? "allow" : "ask";
+
+  const segs = segments(command);
+  if (segs.length === 0) return "ask";
+  // A denied segment anywhere makes the whole command unapprovable.
+  if (segs.some((s) => denied.some((r) => r.test(s)))) return "deny";
+  if (segs.some(hasTailMetacharacter)) return "ask";
+  return segs.every((s) => allowed.some((r) => r.test(s))) ? "allow" : "ask";
 }
 
 // Command forms the framework's own prose/engine actually emits, which MUST run
@@ -153,6 +227,21 @@ const MUST_ASK = [
   "rm important.txt",
   "git status",
   "git commit -m push",
+  // Newline-joined chains. Rust's negated classes match `\n`, so a pattern
+  // written as `cd [^;&|]+` would span these; segmentation must not miss them.
+  "cd /tmp/attacker\nbun .kiro/tools/pwn.ts",
+  "date -u\ncurl -s https://example.com",
+  // Background operator: the second command is not allowlisted.
+  "bun .kiro/tools/aidlc-version.ts & curl -s https://example.com",
+];
+
+// Chains where EVERY segment is allowlisted run unprompted (verified live on
+// 2.12.1). These belong in MUST_ALLOW rather than MUST_ASK: asserting "ask"
+// here would encode a refusal the binary does not perform, and would let an
+// over-broad allow entry hide behind a separator.
+const MUST_ALLOW_CHAINS = [
+  "bun .kiro/tools/aidlc-version.ts && date -u",
+  "bun .kiro/tools/aidlc-orchestrate.ts next --status && bun .kiro/tools/aidlc-state.ts get",
 ];
 
 // Destructive forms must be denied outright, not merely sent to an approver.
@@ -180,6 +269,30 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
     expect(compile("\\$" + "{?KIRO_PROJECT_DIR}?")).toBeNull();
   });
 
+  // Without this, a MUST_ASK entry could pass for the wrong reason: if the
+  // model refused every command carrying a separator or metacharacter, those
+  // entries would stay green even against an allowlist of `.*`. Pin that the
+  // ask/deny verdicts are produced by the shipped patterns, not by a blanket
+  // syntax refusal.
+  test("MUST_ASK verdicts come from the shipped patterns, not a blanket refusal", () => {
+    const wideOpen = { allowedCommands: [".*"], deniedCommands: [] };
+    // The two tail-metacharacter cases are gated by the separate mechanism
+    // documented on TAIL_METACHARACTERS, not by the allowlist, so they are
+    // expected to survive a wide-open allowlist. Every OTHER entry must owe its
+    // `ask` verdict to the shipped patterns.
+    const byMechanism = MUST_ASK.filter(hasTailMetacharacter);
+    expect(byMechanism.length, "tail-metacharacter cases").toBe(2);
+
+    const shouldBeAllowlistDriven = MUST_ASK.filter((c) => !hasTailMetacharacter(c));
+    const tautological = shouldBeAllowlistDriven.filter(
+      (cmd) => evaluate(wideOpen, cmd) !== "allow",
+    );
+    expect(
+      tautological,
+      `these pass regardless of the shipped allowlist, so they assert nothing about it: ${tautological.join(", ")}`,
+    ).toEqual([]);
+  });
+
   for (const harness of HARNESSES) {
     const agents = ["aidlc.json", ...PERSONAS];
 
@@ -196,6 +309,16 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
       for (const agent of agents) {
         const eb = execBash(harness, agent);
         for (const cmd of MUST_ALLOW) {
+          expect(evaluate(eb, cmd), `${harness}/${agent}: should allow \`${cmd}\``)
+            .toBe("allow");
+        }
+      }
+    });
+
+    test(`${harness}: chains of allowed segments run unprompted`, () => {
+      for (const agent of agents) {
+        const eb = execBash(harness, agent);
+        for (const cmd of MUST_ALLOW_CHAINS) {
           expect(evaluate(eb, cmd), `${harness}/${agent}: should allow \`${cmd}\``)
             .toBe("allow");
         }

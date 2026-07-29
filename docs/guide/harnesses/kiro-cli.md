@@ -80,9 +80,11 @@ per-scope (`/aidlc-feature`) runner skills are installed too.
 pre-approved as project-relative `bun .kiro/tools/<tool>.ts` commands, so a
 session whose working directory is elsewhere pushes the conductor toward
 command forms that need approval. Absolute paths, `KIRO_PROJECT_DIR` expansion,
-and `cd <dir> && bun .kiro/tools/...` chains deliberately remain gated: a static
-agent regex cannot prove that those forms still target this project's installed
-tools across supported Kiro releases.
+and `cd <dir> && bun .kiro/tools/...` chains deliberately remain gated. A path
+only has to be shaped like a tool path to match a pattern, not be trustworthy:
+pre-approving any `/.../.kiro/tools/*.ts` would also pre-approve a file planted
+in a world-writable directory, and neither a variable's value nor a chained
+working directory is knowable from the pattern.
 
 **Sessions with no approver stall rather than prompt.** Anything outside the
 pre-approved set needs an interactive answer. Under `kiro-cli chat
