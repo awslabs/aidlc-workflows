@@ -136,7 +136,7 @@ flowchart LR
 
 <!-- Text fallback: Stage creates artifact, reviewed at approval gate, committed to version control, consumed by downstream stages, verified at phase boundary. -->
 
-1. **Created** — The lead agent produces the artifact during stage execution and writes it to the appropriate subdirectory of the intent's record dir
+1. **Created** — The lead agent produces the artifact during stage execution and writes it to the appropriate subdirectory of the intent's record dir (with the space-level exceptions noted above: Reverse Engineering writes to the per-repo codekb store, team knowledge to `knowledge/`)
 2. **Reviewed** — You review the artifact at the approval gate and either approve or request changes
 3. **Committed** — After approval, the artifact is ready for version control (see git policy below)
 4. **Consumed** — Downstream stages read the artifact as input (see the inputs table below)

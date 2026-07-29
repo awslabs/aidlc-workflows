@@ -3,10 +3,10 @@ All notable changes to this project will be documented in this file.
 
 ## [2.5.26] - 2026-07-29
 
-The workspace skeleton no longer pre-creates an `inception/reverse-engineering/` folder in every intent record, and the guides now describe where Reverse Engineering output actually lands. The stage writes its nine deliverables to the space-level per-repo store `aidlc/spaces/<space>/codekb/<repo>/`, one shared view per repo that each brownfield rerun overwrites; the intent record only ever receives the stage's own `memory.md` diary, created on demand. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; an empty `inception/reverse-engineering/` directory left in an existing intent record can be deleted.
+The shipped workspace scaffold data and the Workspace Scaffold stage prose no longer advertise a per-intent `inception/reverse-engineering/` folder that nothing writes; the guides now describe where Reverse Engineering output actually lands. The stage writes its nine deliverables to the space-level per-repo store `aidlc/spaces/<space>/codekb/<repo>/`, one shared view per repo that each brownfield rerun overwrites; the intent record only ever receives the stage's own `memory.md` diary, created on demand. **Upgrade:** re-copy your `dist/<harness>/` shell into the project; on installs that predate the shipped shell, an empty `inception/reverse-engineering/` directory left in an existing intent record can be deleted.
 
 * Removed the empty `inception/reverse-engineering/` directory from the shipped workspace scaffold, where it read as "the nine artifacts belong here" and never received a file.
-* Stage 0.3 Workspace Scaffold and `docs/guide/14-artifacts-reference.md` now state that the codekb store is refreshed by rerunning the scan and overwriting it (last write wins), not cached per intent, and that the record dir holds only the stage diary.
+* Stage 0.1 Workspace Scaffold and `docs/guide/14-artifacts-reference.md` now state that the codekb store is refreshed by rerunning the scan and overwriting it (last write wins), not cached per intent, and that the record dir holds only the stage diary.
 
 ## [2.5.25] - 2026-07-29
 
