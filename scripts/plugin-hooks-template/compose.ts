@@ -41,6 +41,7 @@ const HARNESS_DIR = join(PROJECT_DIR, HARNESS_LEAF);
 const STAGES_DIR = join(HARNESS_DIR, "aidlc-common", "stages");
 const SKILLS_DIR = join(HARNESS_DIR, "skills");
 const PHASES = ["initialization", "ideation", "inception", "construction", "operation"];
+const COMPOSE_LOCK_RETRIES = 600;
 const SCOPE_TABLE_BEGIN =
   "<!-- BEGIN: compiled scope grid via `bun aidlc-utility.ts scope-table` - do NOT hand-edit -->";
 const SCOPE_TABLE_END = "<!-- END: compiled scope grid -->";
@@ -387,7 +388,9 @@ if (
   await flushDrops();
   return;
 }
-if (!lockLib.acquireAuditLock(PROJECT_DIR)) {
+// A sibling compose can legitimately hold the lock for compile + runner
+// regeneration, so queue for ~60s rather than skipping after the default ~5s.
+if (!lockLib.acquireAuditLock(PROJECT_DIR, COMPOSE_LOCK_RETRIES)) {
   recordDrop("plugin compose skipped: could not acquire the shared workspace lock");
   await flushDrops();
   return;

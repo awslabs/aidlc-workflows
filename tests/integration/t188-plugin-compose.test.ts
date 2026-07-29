@@ -21,7 +21,11 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { auditLockDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  acquireAuditLock,
+  auditLockDir,
+  releaseAuditLock,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   HARNESS_MATRIX,
   type ShippedHarnessName,
@@ -579,6 +583,49 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       expect(JSON.parse(readFileSync(sidecar, "utf-8"))["build-and-test"]?.scopes)
         .toEqual([name]);
     }
+    expect(existsSync(auditLockDir(proj))).toBe(false);
+  }, TIMEOUT_MS);
+
+  test("compose waits beyond the default lock budget instead of skipping the plugin", async () => {
+    const proj = mkdtempSync(join(tmp, "syn-compose-wait-"));
+    cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    const name = "syn-compose-wait";
+    const root = prepareSyntheticPlugin(proj, name, {
+      [`scopes/${name}.md`]: [
+        "---", `name: ${name}`, `plugin: ${name}`,
+        "depth: Standard", "keywords:", "  - synthetic",
+        "description: slow compose scope", "skeleton: off", "---", "",
+        `# ${name} scope`, "",
+      ].join("\n"),
+      "contributions/construction/build-and-test.md": [
+        "---", "target: build-and-test", `plugin: ${name}`,
+        "adds:", "  scopes:", `    - ${name}`, "---", "",
+      ].join("\n"),
+    });
+    expect(acquireAuditLock(proj, 0, 1)).toBe(true);
+    const compose = Bun.spawn({
+      cmd: [BUN, join(root, "hooks", "compose.ts")],
+      cwd: proj,
+      stdout: "ignore",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: root,
+        CLAUDE_PROJECT_DIR: proj,
+        AIDLC_HARNESS_DIR: ".claude",
+      },
+    });
+    let waitedPastDefault = false;
+    try {
+      await Bun.sleep(5_500);
+      waitedPastDefault = compose.exitCode === null;
+    } finally {
+      releaseAuditLock(proj);
+    }
+    expect(await compose.exited).toBe(0);
+    expect(waitedPastDefault).toBe(true);
+    expect(stageBody(proj, "construction", "build-and-test")).toContain(`- ${name}`);
+    expect(hookDrops(proj)).toBe("");
     expect(existsSync(auditLockDir(proj))).toBe(false);
   }, TIMEOUT_MS);
 
