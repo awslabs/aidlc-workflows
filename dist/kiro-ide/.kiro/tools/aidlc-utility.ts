@@ -1976,7 +1976,7 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         );
       }
       label = `Orphan worktrees: ${orphanActive.length + cleanupOrphans.length} drift`;
-      fix = `${parts.join("; ")}. Inspect and remove via 'aidlc-worktree discard --slug <slug>' or 'rm -rf .aidlc/worktrees/bolt-<slug>'.`;
+      fix = `${parts.join("; ")}. Inspect, then remove via 'aidlc-worktree discard --slug <slug>'.`;
     }
     results.push({ pass, label, fix });
   } catch (e) {

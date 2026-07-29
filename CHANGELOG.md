@@ -5,11 +5,11 @@ All notable changes to this project will be documented in this file.
 
 Hardens the Kiro CLI and Kiro IDE shell permission lists. Kiro matches each `execute_bash` pattern as a full string, which made the shipped patterns both too narrow (they denied command forms the framework itself instructs, stalling a workflow when no approver is available) and too broad in one place (the trailing wildcard let path traversal run anything on the machine unprompted). **Upgrade:** re-copy your `dist/kiro/` or `dist/kiro-ide/` shell into the project so the corrected agent configs are installed.
 
-* Framework commands that previously hit an approval prompt now run as intended: `bun run .kiro/tools/<tool>.ts`, a quoted script path, an absolute `/path/to/project/.kiro/tools/<tool>.ts`, a `cd <dir> && bun .kiro/tools/<tool>.ts` prefix (needed when the session's working directory is not the project root), and a bare `date -u` (the old `date -u .*` could not match it).
-* Closed a permission bypass: `bun .kiro/tools/../../anything.ts` was pre-approved by the old `bun \.kiro/tools/.*` pattern and executed without a prompt. Approved script paths are now a single filename under `.kiro/tools/`, so `../` cannot appear.
-* Fixed an inert pattern in the Kiro IDE conductor config: its `KIRO_PROJECT_DIR` entry had unescaped braces, making it an invalid regex that Kiro silently discarded, so that command form was never actually pre-approved.
-* The 14 delegated persona agents now carry the same shell surface as the conductor on both harnesses. They previously lacked the `KIRO_PROJECT_DIR`, absolute-path, and `cd` forms and could be refused mid-stage.
-* `deniedCommands` now also catches `rm -rf ~/x`, `rm -rf *`, `rm -fr <path>`, and a bare `git push` — full-string matching meant the old `rm -rf /.*` and `git push .*` missed all of these.
+* Framework commands that previously hit an approval prompt now run as intended from the project root: `bun run .kiro/tools/<tool>.ts`, a quoted project-relative script path, and a bare `date -u` (the old `date -u .*` could not match it).
+* Closed the traversal bypass in the old `bun \.kiro/tools/.*` grant. Approved script paths are now one project-relative filename under `.kiro/tools/`; absolute paths, `KIRO_PROJECT_DIR` expansion, and `cd` chains remain gated so the allowlist cannot switch to another project's tools.
+* The 14 delegated persona agents now carry the same allow and deny policy as the conductor on both Kiro harnesses.
+* `deniedCommands` now catches recursive `rm` variants regardless of flag grouping or executable path, plus bare, option-prefixed, and path-qualified `git push` commands. The behavioral tests distinguish an approvable command from an unconditional denial.
+* Kiro guidance now recommends ACP permission responses for unattended clients and warns that `--trust-all-tools` bypasses the deny list; the doctor cleanup hint uses the supported `aidlc-worktree discard` command instead of a denied recursive `rm`.
 
 ## [2.5.12] - 2026-07-24
 
