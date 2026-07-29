@@ -102,6 +102,33 @@ describe("t148 dist/kiro file structure", () => {
     expect(existsSync(join(KIRO, "AGENTS.md"))).toBe(true);
   });
 
+  test("Kiro IDE ships always-included active-memory steering for delegates", () => {
+    const path = join(
+      REPO_ROOT,
+      "dist",
+      "kiro-ide",
+      ".kiro",
+      "steering",
+      "aidlc-active-memory.md",
+    );
+    expect(existsSync(path)).toBe(true);
+    const steering = readFileSync(path, "utf-8");
+    expect(steering).toMatch(/^---\ninclusion: always\n---/);
+    for (const file of [
+      "org.md",
+      "team.md",
+      "project.md",
+      "phases/ideation.md",
+      "phases/inception.md",
+      "phases/construction.md",
+      "phases/operation.md",
+    ]) {
+      expect(steering).toContain(
+        `#[[file:aidlc/spaces/default/memory/${file}]]`,
+      );
+    }
+  });
+
   test("conductor agent: allowedCommands-only shell grant (findings 0.9b)", () => {
     const a = readJson(join(K, "agents", "aidlc.json"));
     const allowed = (a.allowedTools as string[]) ?? [];

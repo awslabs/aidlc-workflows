@@ -46,7 +46,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, posix, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, posix, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import type { HarnessManifest } from "./manifest-types.ts";
@@ -950,7 +950,19 @@ function buildPluginProjection(pluginName: string, harnessName: string, outDir: 
     for (const file of walk(srcDir)) {
       const outPath = join(outDir, dir, relative(srcDir, file));
       mkdirSync(dirname(outPath), { recursive: true });
-      writeFileSync(outPath, readFileSync(file));
+      let content = readFileSync(file);
+      if (dir === "agents" && file.endsWith("-agent.md")) {
+        content = Buffer.from(
+          absorbReviewerKnowledge(
+            content.toString("utf-8"),
+            basename(file, ".md"),
+            CORE_ROOT,
+            pluginSrc,
+          ),
+          "utf-8",
+        );
+      }
+      writeFileSync(outPath, content);
     }
   }
 }

@@ -18,8 +18,9 @@
 //       (§5.1), yet SHIPPED as part of the shell (the dist .gitignore ignores
 //       it for the END USER; our repo commits it once via git add -f).
 //   (4) the per-harness NATIVE INCLUDE that points the CLI at the method tree
-//       (Claude @-stub, Kiro resources glob, Codex AGENTS.md/AIDLC_RULES_DIR) —
-//       P5 authored these; SEED proves a FRESH COPY resolves through them.
+//       (Claude @-stub, Kiro CLI resources, Kiro IDE steering, Codex
+//       AGENTS.md/AIDLC_RULES_DIR, OpenCode instructions) — P5 authored these;
+//       SEED proves a FRESH COPY resolves through them.
 //
 // Plus the re-rooted .gitignore — now a PER-HARNESS artifact (net-new for
 // Kiro/Codex, which shipped none): the committed-vs-ignored split re-rooted
@@ -131,6 +132,15 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         ) as { resources: string[] };
         expect(agent.resources, harness.name).toContain(
           "file://aidlc/spaces/default/memory/**/*.md",
+        );
+      } else if (harness.capabilities.memoryInclude === "kiro-steering") {
+        const steering = readFileSync(
+          join(harness.engineRoot, "steering", "aidlc-active-memory.md"),
+          "utf-8",
+        );
+        expect(steering).toMatch(/^---\ninclusion: always\n---/);
+        expect(steering).toContain(
+          "#[[file:aidlc/spaces/default/memory/org.md]]",
         );
       } else if (harness.capabilities.memoryInclude === "codex-env") {
         const config = readFileSync(join(harness.engineRoot, "config.toml"), "utf-8");

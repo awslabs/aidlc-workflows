@@ -116,6 +116,12 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
         expect(existsSync(join(tree.dir, "aidlc-session-end.json"))).toBe(false);
       });
 
+      test("dispatch-rules has NO IDE registration (always-included steering is the delivery channel)", () => {
+        expect(existsSync(join(tree.dir, "aidlc-dispatch-rules.json"))).toBe(
+          false,
+        );
+      });
+
       test("no unexpected v2 hook JSONs beyond the pinned set", () => {
         const allJsons = readdirSync(tree.dir).filter(
           (f) => f.startsWith("aidlc-") && f.endsWith(".json"),

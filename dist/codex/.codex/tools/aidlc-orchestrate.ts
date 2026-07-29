@@ -67,7 +67,7 @@
 // per the tool/agent/human split (routing string-building to an LLM would
 // invert the whole thesis).
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { type Dirent, existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -700,6 +700,7 @@ function readConductorPersona(): string | null {
 const DIRECTIVE_MAX_BYTES = 28 * 1024;
 const STEERING_TEXT_TARGET_BYTES = 20 * 1024;
 const CONTEXT_WARNINGS_MAX_BYTES = 6 * 1024;
+const INLINE_CONTEXT_PATHS_MAX_BYTES = 8 * 1024;
 
 type RunStageRoute = {
   node: GraphStage;
@@ -1447,7 +1448,26 @@ function inlineContextRoster(
   codekbCtx?: CodekbCtx,
 ): { paths: string[]; warnings: string[] } {
   const warnings: string[] = [];
-  const paths = inlineContextEntries(node, codekbCtx, warnings).map((e) => e.rel);
+  const allPaths = inlineContextEntries(node, codekbCtx, warnings).map((e) => e.rel);
+  const paths: string[] = [];
+  for (const path of allPaths) {
+    const candidate = [...paths, path];
+    if (
+      Buffer.byteLength(JSON.stringify(candidate), "utf-8") >
+        INLINE_CONTEXT_PATHS_MAX_BYTES
+    ) {
+      break;
+    }
+    paths.push(path);
+  }
+  const omitted = allPaths.length - paths.length;
+  if (omitted > 0) {
+    warnings.push(
+      `Warning: ${omitted} optional persona/knowledge path(s) were omitted because ` +
+        `inline_context_paths exceeded its ${INLINE_CONTEXT_PATHS_MAX_BYTES}-byte transport budget. ` +
+        "Reduce the configured knowledge file count; this stage will continue without the omitted optional context.",
+    );
+  }
   return { paths, warnings: boundedContextWarnings(warnings) };
 }
 
@@ -1675,23 +1695,64 @@ function steeringChunks(content: RuleContent[]): RuleContent[][] {
   return chunks;
 }
 
-function encodeSteeringToken(payload: SteeringTokenPayload): string {
-  return Buffer.from(JSON.stringify(payload), "utf-8").toString("base64url");
+type SteeringTokenEnvelope = {
+  p: SteeringTokenPayload;
+  m: string;
+};
+
+function steeringTokenMac(
+  payload: SteeringTokenPayload,
+  projectDir: string,
+): string {
+  const key = sha256(`aidlc-steering-token-v1\0${projectDir}`);
+  return createHmac("sha256", key)
+    .update(JSON.stringify(payload), "utf-8")
+    .digest("base64url");
 }
 
-function decodeSteeringToken(token: string): SteeringTokenPayload | null {
+function encodeSteeringToken(
+  payload: SteeringTokenPayload,
+  projectDir: string,
+): string {
+  const envelope: SteeringTokenEnvelope = {
+    p: payload,
+    m: steeringTokenMac(payload, projectDir),
+  };
+  return Buffer.from(JSON.stringify(envelope), "utf-8").toString("base64url");
+}
+
+function decodeSteeringToken(
+  token: string,
+  projectDir: string,
+): SteeringTokenPayload | null {
   try {
-    const value: unknown = JSON.parse(
+    const decoded: unknown = JSON.parse(
       Buffer.from(token, "base64url").toString("utf-8"),
     );
     if (
-      value === null ||
-      typeof value !== "object" ||
-      !("v" in value) ||
-      value.v !== 1
+      decoded === null ||
+      typeof decoded !== "object" ||
+      !("p" in decoded) ||
+      !("m" in decoded) ||
+      typeof (decoded as { m?: unknown }).m !== "string"
     ) {
       return null;
     }
+    const envelope = decoded as { p: unknown; m: string };
+    if (envelope.p === null || typeof envelope.p !== "object") return null;
+    const expected = Buffer.from(
+      steeringTokenMac(envelope.p as SteeringTokenPayload, projectDir),
+      "base64url",
+    );
+    const actual = Buffer.from(envelope.m, "base64url");
+    if (
+      expected.length !== actual.length ||
+      !timingSafeEqual(expected, actual)
+    ) {
+      return null;
+    }
+    const value = envelope.p;
+    if (!("v" in value) || value.v !== 1) return null;
     const p = value as Partial<SteeringTokenPayload>;
     if (
       typeof p.s !== "string" ||
@@ -1812,7 +1873,10 @@ function transportRunStage(
     part: index + 1,
     parts: chunks.length,
     rules_content: chunks[index],
-    continue_token: encodeSteeringToken(payload),
+    continue_token: encodeSteeringToken(
+      payload,
+      route.codekbCtx.projectDir,
+    ),
   };
   if (Buffer.byteLength(JSON.stringify(load), "utf-8") > DIRECTIVE_MAX_BYTES) {
     return errorDirective(
@@ -4420,14 +4484,14 @@ function handlePark(_args: string[], projectDir: string | undefined): void {
 // fail with a restart instruction instead of combining old and new steering.
 function handleContinue(args: string[], projectDir: string | undefined): void {
   const token = args[0] ?? "";
-  const payload = decodeSteeringToken(token);
+  const pd = resolveProjectDir(projectDir);
+  const payload = decodeSteeringToken(token, pd);
   if (!payload || args.length !== 1) {
     emit(errorDirective(
       "Invalid steering continuation token. Run a fresh `next` to restart delivery from part 1.",
     ));
     return;
   }
-  const pd = resolveProjectDir(projectDir);
   const liveState = loadStateFileIfPresent(pd);
   const liveStateHash = liveState === null ? null : sha256(liveState);
   if (payload.a && payload.h !== liveStateHash) {

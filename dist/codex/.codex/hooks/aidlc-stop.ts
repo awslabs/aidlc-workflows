@@ -738,6 +738,7 @@ interface EngineDirective {
   kind: string;
   unit?: string;
   continueToken?: string;
+  rulesContent?: Array<{ path: string; text: string }>;
 }
 
 // Run `aidlc-orchestrate.ts next` and return the parsed directive fields the
@@ -783,10 +784,28 @@ function runEngineNextDirective(projectDir: string): EngineDirective | null {
           typeof (parsed as { continue_token?: unknown }).continue_token === "string"
           ? (parsed as { continue_token: string }).continue_token.trim()
           : "";
+      const rawRulesContent =
+        "rules_content" in parsed
+          ? (parsed as { rules_content?: unknown }).rules_content
+          : undefined;
+      const rulesContent =
+        Array.isArray(rawRulesContent) &&
+          rawRulesContent.every(
+            (entry) =>
+              entry !== null &&
+              typeof entry === "object" &&
+              "path" in entry &&
+              typeof (entry as { path?: unknown }).path === "string" &&
+              "text" in entry &&
+              typeof (entry as { text?: unknown }).text === "string",
+          )
+          ? rawRulesContent as Array<{ path: string; text: string }>
+          : undefined;
       return {
         kind,
         ...(unit.length > 0 ? { unit } : {}),
         ...(continueToken.length > 0 ? { continueToken } : {}),
+        ...(rulesContent ? { rulesContent } : {}),
       };
     }
   } catch {
@@ -804,12 +823,15 @@ function continuationReason(
   kind: string,
   stage: string,
   continueToken?: string,
+  rulesContent?: Array<{ path: string; text: string }>,
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
   if (kind === "load-steering" && continueToken) {
+    const exactContent = JSON.stringify(rulesContent ?? []);
     return (
       `The AIDLC workflow has pending rule delivery${where}. ` +
-      "Apply the load-steering content already returned, then run " +
+      "Apply every path/text entry in this exact `rules_content` payload before continuing:\n\n" +
+      `${exactContent}\n\nThen run ` +
       `\`bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"\` ` +
       "and keep following load-steering continuations until the engine emits `run-stage`. " +
       "Do not report or narrate steering chunks."
@@ -1031,6 +1053,7 @@ return blockStop(
     kind,
     currentStageSlug(stateContent),
     directive.continueToken,
+    directive.rulesContent,
   ),
 );
 }

@@ -6,6 +6,8 @@
 //     registration on IDE >=1.0.1xx, plus legacy .kiro.hook files for pre-1.0
 //     IDE builds (coexistence: no double-firing on any generation tested)
 //   - The aidlc.json agent config omits the `hooks` field (dead weight in IDE)
+//   - Ships an always-included IDE steering file whose live file references
+//     preload the active-space memory tree for the conductor and delegates
 //   - Injects a `tools:` frontmatter grant into the delegation-target agent
 //     .md files (frontmatterAdditions below) - the IDE resolves a delegated
 //     subagent's tools from the agent .md frontmatter, not from the agent-v1
@@ -45,6 +47,7 @@ const manifest: HarnessManifest = {
   harnessFiles: [
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
+    { src: "steering/aidlc-active-memory.md", dst: "steering/aidlc-active-memory.md" },
     { src: "agents/aidlc.json", dst: "agents/aidlc.json" },
     { src: "agents/aidlc-architect-agent.json", dst: "agents/aidlc-architect-agent.json" },
     { src: "agents/aidlc-developer-agent.json", dst: "agents/aidlc-developer-agent.json" },

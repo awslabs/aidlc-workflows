@@ -62,6 +62,9 @@ Open `your-project/` in Kiro IDE. The install ships:
 - `.kiro/skills/aidlc/SKILL.md` — the conductor loaded when you invoke
   `/aidlc`. The shipped `.kiro/settings/cli.json` and agent-v1 JSON files are
   CLI-only compatibility surfaces; they do not select an IDE default agent.
+- `.kiro/steering/aidlc-active-memory.md` — always-included IDE steering whose
+  live file references preload the active-space memory files for both the
+  conductor and delegated agents.
 - `.kiro/hooks/aidlc-*.json` — the framework hooks registered in the IDE's
   native v2 hook format. They appear in the IDE's Agent Hooks panel. (Kiro IDE
   1.x no longer executes the legacy `.kiro.hook` format the harness shipped
@@ -168,15 +171,17 @@ workflow.
 substituted to `.kiro` and the `rules/` → `steering/` rename). `bun
 scripts/package.ts --check` is the drift guard and runs in CI. The authored
 Kiro IDE surfaces live in `harness/kiro-ide/`: the orchestrator skill
-(`skills/aidlc/`), CLI-compatibility agent JSONs (`agents/`), the hook adapter
-and v2 hook JSON files (`hooks/`), CLI-only `settings/cli.json`, and
-`AGENTS.md` — edit those (or `core/`), never the generated `dist/kiro-ide`.
+(`skills/aidlc/`), always-included active-memory steering (`steering/`),
+CLI-compatibility agent JSONs (`agents/`), the hook adapter and v2 hook JSON
+files (`hooks/`), CLI-only `settings/cli.json`, and `AGENTS.md` — edit those
+(or `core/`), never the generated `dist/kiro-ide`.
 
-The IDE harness differs from the CLI harness (`harness/kiro/`) in three ways:
+The IDE harness differs from the CLI harness (`harness/kiro/`) in four ways:
 the `/aidlc` skill is its conductor rather than an agent selected through
 `settings/cli.json`; it ships v2 hook JSON files (the CLI relies on the
-agent-JSON `hooks` block, which the IDE ignores); and its manifest injects a
-`tools:` frontmatter grant into the delegation-target agent `.md` files
+agent-JSON `hooks` block, which the IDE ignores); it preloads standing rules
+through always-included steering rather than CLI-only agent resources; and its
+manifest injects a `tools:` frontmatter grant into delegation-target agent `.md` files
 (`frontmatterAdditions`), because the IDE resolves a delegated subagent's tools
 from the `.md` frontmatter rather than the agent-v1 JSON - without the grant an
 IDE delegate runs toolless. Note the frontmatter grant is unscoped (the IDE has

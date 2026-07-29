@@ -6,7 +6,8 @@
 // adapter consumes the same output and mutates output.args. Kiro CLI has no
 // input-rewrite channel, so its adapter treats a proposed rewrite as a retry
 // guard; the next attempt must contain the exact bundle. Kiro IDE cannot expose
-// tool arguments and instead preloads active memory through agent resources.
+// tool arguments and instead preloads active memory through always-included
+// workspace steering with live file references.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -38,6 +39,10 @@ export type DispatchRuleResult = {
 
 const DISPATCH_TOOLS = new Set(["task", "agent", "spawn_agent", "subagent"]);
 const EXEMPT_AGENTS = new Set(["aidlc-composer-agent"]);
+// Keep hook stdout comfortably below the smallest observed subprocess capture
+// ceiling. Oversized bundles fail before writing so callers receive complete
+// repair guidance instead of a truncated, invalid JSON response.
+const DISPATCH_HOOK_OUTPUT_MAX_BYTES = 512 * 1024;
 
 function isAidlcAgent(value: unknown): value is string {
   return (
@@ -265,14 +270,23 @@ export async function run(input: string): Promise<number> {
     return 2;
   }
   if (!result.changed || !result.updatedInput) return 0;
-  process.stdout.write(
-    `${JSON.stringify({
+  const output = `${JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         updatedInput: result.updatedInput,
       },
-    })}\n`,
-  );
+    })}\n`;
+  const outputBytes = Buffer.byteLength(output, "utf-8");
+  if (outputBytes > DISPATCH_HOOK_OUTPUT_MAX_BYTES) {
+    process.stderr.write(
+      `The active-stage rule bundle would produce a ${outputBytes}-byte dispatch hook response, ` +
+        `exceeding the safe ${DISPATCH_HOOK_OUTPUT_MAX_BYTES}-byte output limit. ` +
+        "The subagent dispatch was refused before writing partial JSON. Shorten or split the " +
+        "active rule files, then retry the dispatch.\n",
+    );
+    return 2;
+  }
+  process.stdout.write(output);
   return 0;
 }
 

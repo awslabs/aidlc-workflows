@@ -23,18 +23,17 @@
 // transform).
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, sep } from "node:path";
+import { dirname, join, sep } from "node:path";
 
-// Walk core/aidlc-common/stages/**/*.md and collect every frontmatter
-// `reviewer:` value. Cached per coreRoot - the packager calls this once per
-// projected agent file.
+// Walk core and owned-plugin stages and collect every frontmatter `reviewer:`
+// value. Cached per coreRoot - the packager calls this once per projected
+// agent file.
 const reviewerSetCache = new Map<string, Set<string>>();
 
 export function reviewerAgentSet(coreRoot: string): Set<string> {
   const cached = reviewerSetCache.get(coreRoot);
   if (cached) return cached;
   const set = new Set<string>();
-  const stagesDir = join(coreRoot, "aidlc-common", "stages");
   const walk = (dir: string): void => {
     if (!existsSync(dir)) return;
     for (const entry of readdirSync(dir).sort()) {
@@ -47,7 +46,13 @@ export function reviewerAgentSet(coreRoot: string): Set<string> {
       }
     }
   };
-  walk(stagesDir);
+  walk(join(coreRoot, "aidlc-common", "stages"));
+  const pluginsRoot = join(dirname(coreRoot), "plugins");
+  if (existsSync(pluginsRoot)) {
+    for (const plugin of readdirSync(pluginsRoot).sort()) {
+      walk(join(pluginsRoot, plugin, "stages"));
+    }
+  }
   reviewerSetCache.set(coreRoot, set);
   return set;
 }
@@ -63,9 +68,10 @@ export function absorbReviewerKnowledge(
   content: string,
   agentName: string,
   coreRoot: string,
+  sourceRoot: string = coreRoot,
 ): string {
   if (!reviewerAgentSet(coreRoot).has(agentName)) return content;
-  const knowledgeDir = join(coreRoot, "knowledge", agentName);
+  const knowledgeDir = join(sourceRoot, "knowledge", agentName);
   if (!existsSync(knowledgeDir)) return content;
   const files = readdirSync(knowledgeDir)
     .filter((f) => f.endsWith(".md"))

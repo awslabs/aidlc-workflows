@@ -5,7 +5,8 @@
 // harness reads it via its OWN native include, evaluated by the CLI *before*
 // AIDLC's engine runs:
 //   • Claude — an @-import stub at <harness>/rules/aidlc.md naming each method file.
-//   • Kiro / Kiro-IDE — a `resources` glob in each agents/*.json.
+//   • Kiro CLI — a `resources` glob in each agents/*.json.
+//   • Kiro IDE — an always-included steering file with live file references.
 //   • Codex — the AIDLC_RULES_DIR env var in config.toml.
 //   • opencode — the `instructions` glob in the project-root opencode.json.
 //
@@ -95,6 +96,16 @@ function repointKiroAgentResources(raw: string, space: string): string | null {
   return `${JSON.stringify(json, null, 2)}\n`;
 }
 
+/** Rewrite live memory references in Kiro IDE's always-included steering file. */
+function repointKiroSteeringReferences(raw: string, space: string): string | null {
+  const target = spaceMemoryRel(space);
+  const next = raw.replace(
+    /(#\[\[file:)aidlc\/spaces\/[^/]+\/memory\//g,
+    `$1${target}/`,
+  );
+  return next === raw ? null : next;
+}
+
 /** Rewrite the AIDLC_RULES_DIR value in a Codex config.toml to the given space's
  *  memory dir, preserving the rest of the file verbatim. Returns null when the
  *  line is absent or already correct. */
@@ -179,7 +190,7 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
   }
 
   if (harness === ".kiro") {
-    // Kiro / Kiro-IDE — rewrite each agents/*.json that carries a memory glob.
+    // Kiro CLI compatibility surface: rewrite each agents/*.json memory glob.
     const agentsDir = join(harnessRoot, "agents");
     if (existsSync(agentsDir)) {
       for (const name of readdirSync(agentsDir).sort()) {
@@ -188,6 +199,26 @@ export function repointHarnessIncludes(projectDir: string, space?: string): stri
         const raw = readSafe(p);
         if (raw === null) continue;
         repointFile(p, join(harness, "agents", name), raw, sp, repointKiroAgentResources, written);
+      }
+    }
+    // Kiro IDE binding surface: workspace steering is inherited by delegated
+    // agents; live file references carry the exact active memory files.
+    const steeringPath = join(
+      harnessRoot,
+      "steering",
+      "aidlc-active-memory.md",
+    );
+    if (existsSync(steeringPath)) {
+      const raw = readSafe(steeringPath);
+      if (raw !== null) {
+        repointFile(
+          steeringPath,
+          join(harness, "steering", "aidlc-active-memory.md"),
+          raw,
+          sp,
+          repointKiroSteeringReferences,
+          written,
+        );
       }
     }
     return written;

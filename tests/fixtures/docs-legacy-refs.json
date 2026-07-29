@@ -1,10 +1,10 @@
 {
-  "_comment": "Docs legacy-ref allowlist gate (t174). The gate scans docs/**/*.md + core/templates/*.md + each harness/<h>/skills/aidlc/SKILL.md (derived FROM DISK) and FAILS unless every surviving retired-token line is pinned here by exact file + line text, with the pinned count <= ceiling. FOUR retired-token lanes: (1) `aidlc-docs` \u2014 the flat record layout relocated to aidlc/spaces/<space>/intents/<slug>-<id8>/; (2) bare `--init` \u2014 the retired aidlc command; (3) dotted rules dirs `.claude/rules/` | `.kiro/steering/` | `.codex/aidlc-rules/` \u2014 the method/rules layer relocated to aidlc/spaces/<space>/memory/ (graph.ts MEMORY_SEGMENTS), so these survive ONLY in native-include prose (the `.claude/rules/aidlc.md` @-import stub, the Kiro `.kiro/steering/` resources glob, the packager rename narrative); (4) `*-learnings.md` filename \u2014 learnings collapsed into practices in memory/{team,project}.md (aidlc-learnings.ts), so there are ZERO legitimate survivors. EXCLUDES dist/** (generated; package.ts --check proves parity) and core/aidlc-common/** (the engine-parsed stage tree's aidlc-docs reroot is a separate deferred sweep). Adding an entry requires a visible diff here; blanket-allowlisting trips the ceiling. See docs/reference/07-sensor-system.md, docs/reference/14-claude-features.md, docs/harness-engineering/06-sensors.md.",
-  "ceiling": 14,
+  "_comment": "Docs legacy-ref allowlist gate (t174). The gate scans docs/**/*.md + core/templates/*.md + each harness/<h>/skills/aidlc/SKILL.md (derived FROM DISK) and FAILS unless every surviving retired-token line is pinned here by exact file + line text, with the pinned count <= ceiling. FOUR retired-token lanes: (1) `aidlc-docs` \u2014 the flat record layout relocated to aidlc/spaces/<space>/intents/<slug>-<id8>/; (2) bare `--init` \u2014 the retired aidlc command; (3) dotted rules dirs `.claude/rules/` | `.kiro/steering/` | `.codex/aidlc-rules/` \u2014 the method/rules layer relocated to aidlc/spaces/<space>/memory/ (graph.ts MEMORY_SEGMENTS), so these survive ONLY in native-include prose (the `.claude/rules/aidlc.md` @-import stub, Kiro IDE's `.kiro/steering/aidlc-active-memory.md`, the packager rename narrative); (4) `*-learnings.md` filename \u2014 learnings collapsed into practices in memory/{team,project}.md (aidlc-learnings.ts), so there are ZERO legitimate survivors. EXCLUDES dist/** (generated; package.ts --check proves parity) and core/aidlc-common/** (the engine-parsed stage tree's aidlc-docs reroot is a separate deferred sweep). Adding an entry requires a visible diff here; blanket-allowlisting trips the ceiling. See docs/reference/07-sensor-system.md, docs/reference/14-claude-features.md, docs/harness-engineering/06-sensors.md.",
+  "ceiling": 15,
   "allowed": [
     {
       "file": "docs/reference/14-claude-features.md",
-      "text": "| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<active-space>/memory/` (via Kiro resources glob) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) |",
+      "text": "| **Standing rules** (the layer chain) | `aidlc/spaces/<active-space>/memory/` (via `.claude/rules/aidlc.md` @-import stub) | `aidlc/spaces/<active-space>/memory/` (via agent resources) | `aidlc/spaces/<active-space>/memory/` (via always-included steering live references) | `aidlc/spaces/<active-space>/memory/` (via `AIDLC_RULES_DIR`) | `aidlc/spaces/<active-space>/memory/` (via `instructions` glob) |",
       "why": "native-include mapping: names the .claude/rules/aidlc.md @-import stub that pulls the relocated memory tree (correct, not stale)"
     },
     {
@@ -21,6 +21,16 @@
       "file": "docs/reference/14-claude-features.md",
       "text": "| Rules | `aidlc/spaces/<active-space>/memory/*.md` (via `.claude/rules/aidlc.md` @-stub) | Every conversation | Minimal guardrails; self-learning corrections |",
       "why": "names the .claude/rules/aidlc.md @-import stub (the native include, correct)"
+    },
+    {
+      "file": "docs/reference/06-hooks-and-tools.md",
+      "text": "Claude and Codex consume `hookSpecificOutput.updatedInput`; the opencode adapter applies that rewrite to `output.args`. The hook serializes the complete response before writing and refuses an oversized response with repair guidance, so a transport ceiling cannot turn it into truncated JSON. Kiro CLI exposes subagent arguments but has no rewrite channel, so its adapter observes the proposed rewrite and emits an advisory warning while allowing dispatch; its agent-v1 `resources` preload the memory tree. Kiro IDE exposes no tool arguments to hooks and does not register this hook; `.kiro/steering/aidlc-active-memory.md` is always included and uses live file references to preload the active memory tree for the conductor and delegated agents. A missing, unreadable, or invalid UTF-8 required rule refuses dispatch with repair guidance instead of starting a worker with partial policy.",
+      "why": "names Kiro IDE's native always-included steering file that loads the relocated active-space memory tree"
+    },
+    {
+      "file": "docs/guide/harnesses/kiro-ide.md",
+      "text": "- `.kiro/steering/aidlc-active-memory.md` \u2014 always-included IDE steering whose",
+      "why": "documents Kiro IDE's native always-included steering file"
     },
     {
       "file": "docs/reference/01-architecture.md",

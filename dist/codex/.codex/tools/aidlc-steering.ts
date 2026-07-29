@@ -20,14 +20,33 @@ import {
 export type RuleEntry = { rel: string; abs: string };
 export type RuleContent = { path: string; text: string };
 
+// These are explanatory preambles in the shipped empty team/project templates,
+// not policy. Match exact lines so any authored blockquote remains substantive.
+const TEMPLATE_PREAMBLE_LINES = new Set([
+  "> This team's affirmed practices and corrections. Loaded after `org.md` as",
+  "> strict-additive guidance; contradictions with broader policy are rejected.",
+  "> Populated by the practices-discovery affirmation gate. Edit at the gate,",
+  "> not directly.",
+  "> Project-specific specialisation and corrections. Loaded after `org.md` and",
+  "> `team.md` as strict-additive guidance; contradictions with broader policy",
+  "> are rejected. Populated by practices-discovery and the self-learning loop.",
+  ">",
+  "> Use sparingly: most teams don't need a project layer. Reach for it",
+  "> only when this specific project needs stable, durable guidance beyond the",
+  "> team practice (for example, package-specific release checks or an additional",
+  "> regression suite for a legacy component).",
+]);
+
 // A rule template is substantive once it contains a non-comment body line.
+// Blockquotes are policy-capable Markdown and count unless they are one of the
+// exact shipped template preamble lines above.
 export function isSubstantiveRuleText(text: string): boolean {
   const stripped = text.replace(/<!--[\s\S]*?-->/g, "");
   return stripped.split(/\r?\n/).some((line) => {
     const trimmed = line.trim();
     if (trimmed === "") return false;
     if (trimmed.startsWith("#")) return false;
-    if (trimmed.startsWith(">")) return false;
+    if (TEMPLATE_PREAMBLE_LINES.has(trimmed)) return false;
     if (/^-{3,}$/.test(trimmed)) return false;
     return true;
   });

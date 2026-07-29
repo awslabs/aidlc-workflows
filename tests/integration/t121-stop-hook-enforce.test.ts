@@ -183,6 +183,12 @@ if (kind === "done") {
   console.log(JSON.stringify({
     kind,
     stage,
+    rules_content: [
+      {
+        path: "aidlc/spaces/default/memory/org.md",
+        text: "# Org Rules\\n\\nALWAYS preserve this exact stop-recovered policy.\\n",
+      },
+    ],
     continue_token: "steering-token-495",
   }));
 } else {
@@ -656,7 +662,7 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
     expect(/ignore|override|disregard|bypass/i.test(reason)).toBe(false);
   }, 30000);
 
-  test("(a) load-steering reason continues the exact token without narrating chunks", () => {
+  test("(a) load-steering reason carries exact content and continues the exact token", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
     const r = runHook(proj, '{"stop_hook_active":false}', "load-steering");
@@ -666,6 +672,12 @@ describe("t121 aidlc-stop hook — forwarding-loop enforcement (migrated from t1
     };
     expect(parsed.decision).toBe("block");
     expect(parsed.reason).toContain('continue "steering-token-495"');
+    expect(parsed.reason).toContain(
+      "ALWAYS preserve this exact stop-recovered policy.",
+    );
+    expect(parsed.reason).toContain(
+      '"path":"aidlc/spaces/default/memory/org.md"',
+    );
     expect(parsed.reason).toContain("keep following load-steering continuations");
     expect(parsed.reason).toContain("Do not report or narrate steering chunks");
   }, 30000);

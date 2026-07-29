@@ -27,7 +27,12 @@ type HarnessCapabilities = {
     manifestDir: string;
     wiringFile: string;
   };
-  memoryInclude: "claude-import" | "codex-env" | "kiro-resources" | "opencode-instructions";
+  memoryInclude:
+    | "claude-import"
+    | "codex-env"
+    | "kiro-resources"
+    | "kiro-steering"
+    | "opencode-instructions";
   kiroAgentJson: boolean;
   ideAgentTools: boolean;
   reviewerScopeRegistration: ReviewerScopeRegistration;
@@ -89,7 +94,7 @@ const HARNESS_CAPABILITIES = {
       manifestDir: ".kiro-plugin",
       wiringFile: "hooks/aidlc-plugin-compose.kiro.hook",
     },
-    memoryInclude: "kiro-resources",
+    memoryInclude: "kiro-steering",
     kiroAgentJson: true,
     ideAgentTools: true,
     reviewerScopeRegistration: "unsupported",
@@ -217,7 +222,12 @@ function validateManifest(
     fail(name, "kiroAgentJson does not agree with manifest harnessFiles");
   }
   if (
-    (capabilities.memoryInclude === "kiro-resources") !== hasKiroAgentJson ||
+    (capabilities.memoryInclude === "kiro-resources") !==
+      (hasKiroAgentJson && !capabilities.ideAgentTools) ||
+    (capabilities.memoryInclude === "kiro-steering") !==
+      manifest.harnessFiles.some(
+        (file) => file.dst === "steering/aidlc-active-memory.md",
+      ) ||
     (capabilities.memoryInclude === "claude-import") !==
       manifest.harnessFiles.some((file) => file.dst === "rules/aidlc.md") ||
     (capabilities.memoryInclude === "codex-env") !==

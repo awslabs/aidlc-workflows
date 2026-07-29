@@ -10,12 +10,18 @@ import {
   appendFileSync,
   cpSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  absorbReviewerKnowledge,
+  reviewerAgentSet,
+} from "../../scripts/agent-knowledge.ts";
 import {
   cleanupTestProject,
   REPO_ROOT,
@@ -215,6 +221,31 @@ describe("t248 deterministic steering delivery", () => {
     ).toBe(readFileSync(teamPath, "utf-8"));
   });
 
+  test("a blockquoted policy is substantive and delivered verbatim", () => {
+    const proj = project();
+    const teamPath = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "memory",
+      "team.md",
+    );
+    const policy = "> ALWAYS encrypt production backups.\n";
+    writeFileSync(teamPath, policy, "utf-8");
+
+    const result = drive(proj);
+    expect(
+      reconstructed(
+        result.contents,
+        "aidlc/spaces/default/memory/team.md",
+      ),
+    ).toBe(policy);
+    expect(result.final.rules_in_context).toContain(
+      "aidlc/spaces/default/memory/team.md",
+    );
+  });
+
   test("large rules are automatically chunked and every directive fits 28 KiB", () => {
     const proj = project();
     const orgPath = join(
@@ -295,6 +326,46 @@ describe("t248 deterministic steering delivery", () => {
     expect(restarted.part).toBe(1);
     expect(restarted.bundle).toBe(first.bundle);
     expect(restarted.continue_token).toBe(first.continue_token);
+  });
+
+  test("altering a continuation index invalidates the token instead of skipping chunks", () => {
+    const proj = project();
+    const orgPath = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "memory",
+      "org.md",
+    );
+    writeFileSync(
+      orgPath,
+      Array.from(
+        { length: 180 },
+        (_, i) => `## Policy ${i}\n\n${"x".repeat(320)}\n\n`,
+      ).join(""),
+      "utf-8",
+    );
+    const first = invoke(proj, "next", [
+      "--scope",
+      "mvp",
+      "--stage",
+      "intent-capture",
+    ]).directive;
+    expect(first.parts ?? 0).toBeGreaterThan(2);
+    const envelope = JSON.parse(
+      Buffer.from(first.continue_token ?? "", "base64url").toString("utf-8"),
+    ) as { p: { i: number }; m: string };
+    envelope.p.i = first.parts ?? 0;
+    const tampered = Buffer.from(
+      JSON.stringify(envelope),
+      "utf-8",
+    ).toString("base64url");
+
+    const result = invoke(proj, "continue", [tampered]).directive;
+    expect(result.kind).toBe("error");
+    expect(result.message).toContain("Invalid steering continuation token");
+    expect(result.message).toContain("Run a fresh `next`");
   });
 
   test("a changed rule invalidates an in-flight continuation", () => {
@@ -527,6 +598,42 @@ describe("t248 deterministic steering delivery", () => {
     );
   });
 
+  test("many readable knowledge paths are bounded with a visible omission warning", () => {
+    const proj = project();
+    const knowledgeDir = join(
+      proj,
+      "aidlc",
+      "spaces",
+      "default",
+      "knowledge",
+      "aidlc-product-agent",
+    );
+    mkdirSync(knowledgeDir, { recursive: true });
+    for (let i = 0; i < 260; i++) {
+      writeFileSync(
+        join(
+          knowledgeDir,
+          `readable-${String(i).padStart(3, "0")}-${"context".repeat(5)}.md`,
+        ),
+        `# Knowledge ${i}\n\nReadable optional context.\n`,
+        "utf-8",
+      );
+    }
+
+    const result = drive(proj);
+    expect(result.final.kind).toBe("run-stage");
+    expect(result.sizes.every((bytes) => bytes <= MAX_DIRECTIVE_BYTES)).toBe(
+      true,
+    );
+    expect(result.final.inline_context_paths?.length ?? 0).toBeLessThan(260);
+    expect(result.final.context_warnings?.join("\n")).toContain(
+      "optional persona/knowledge path(s) were omitted",
+    );
+    expect(result.final.context_warnings?.join("\n")).toContain(
+      "inline_context_paths",
+    );
+  });
+
   test("Claude dispatch rewrites carry exact rules once", () => {
     const proj = project();
     const original = {
@@ -568,6 +675,26 @@ describe("t248 deterministic steering delivery", () => {
     const second = runDispatchHook(proj, "Task", updated ?? {});
     expect(second.code, second.stderr).toBe(0);
     expect(second.stdout).toBe("");
+  });
+
+  test("oversized dispatch bundles fail before emitting partial JSON", () => {
+    const proj = project();
+    writeFileSync(
+      join(proj, "aidlc", "spaces", "default", "memory", "org.md"),
+      `# Organization\n\n${"x".repeat(1_190_000)}\n`,
+      "utf-8",
+    );
+    const result = runDispatchHook(proj, "Task", {
+      subagent_type: "aidlc-product-agent",
+      prompt:
+        "Run .claude/aidlc-common/stages/inception/user-stories.md.",
+    });
+
+    expect(result.code).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("dispatch hook response");
+    expect(result.stderr).toContain("output limit");
+    expect(result.stderr).toContain("refused before writing partial JSON");
   });
 
   test("dispatch stage resolution: Current Stage outranks an incidental slug mention", () => {
@@ -665,4 +792,49 @@ describe("t248 reviewer knowledge absorption", () => {
       }
     });
   }
+
+  test("plugin stage reviewers absorb knowledge from their plugin source", () => {
+    const root = mkdtempSync(join(tmpdir(), "t248-plugin-reviewer-"));
+    try {
+      const coreRoot = join(root, "core");
+      const pluginRoot = join(root, "plugins", "example");
+      const stages = join(pluginRoot, "stages", "operation");
+      const knowledge = join(
+        pluginRoot,
+        "knowledge",
+        "example-reviewer-agent",
+      );
+      mkdirSync(join(coreRoot, "aidlc-common", "stages"), {
+        recursive: true,
+      });
+      mkdirSync(stages, { recursive: true });
+      mkdirSync(knowledge, { recursive: true });
+      writeFileSync(
+        join(stages, "release-review.md"),
+        "---\nslug: release-review\nreviewer: example-reviewer-agent\n---\n",
+        "utf-8",
+      );
+      writeFileSync(
+        join(knowledge, "reviewing.md"),
+        "# Plugin Review Checklist\n\nVerify release evidence.\n",
+        "utf-8",
+      );
+
+      expect(reviewerAgentSet(coreRoot)).toContain(
+        "example-reviewer-agent",
+      );
+      const absorbed = absorbReviewerKnowledge(
+        "---\nname: example-reviewer-agent\n---\n\n# Reviewer\n",
+        "example-reviewer-agent",
+        coreRoot,
+        pluginRoot,
+      );
+      expect(absorbed).toContain(
+        "Absorbed at build time from knowledge/example-reviewer-agent/reviewing.md",
+      );
+      expect(absorbed).toContain("Verify release evidence.");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

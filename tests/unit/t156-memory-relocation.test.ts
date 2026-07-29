@@ -200,17 +200,13 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     expect(rulesDirFiles).toEqual(["aidlc.md"]);
   });
 
-  test("7: EVERY Kiro-family agent resources glob points at the active space's memory tree (not the now-empty steering dir)", () => {
-    // Select Kiro agent-JSON distributions from explicit matrix capabilities,
-    // then derive the agent list from each shipped tree.
-    // A closed list let the kiro-ide harness + the two reviewer personas ship
-    // pointing at the empty `.kiro/steering/*.md` glob (loading zero method files)
-    // because they were absent from the enumerated set. Every dist tree that ships
-    // `.kiro/agents/*.json` (kiro CLI + kiro IDE) and every agent in it that
-    // declares a `resources` array must resolve the method via the relocated
-    // memory glob, and none may still point at the retired steering glob.
+  test("7: EVERY Kiro CLI agent resources glob points at the active space's memory tree", () => {
+    // Select the CLI resource binding from explicit matrix capabilities, then
+    // derive the agent list from each shipped tree. Kiro IDE uses its native
+    // always-included steering file instead; its agent JSONs are compatibility
+    // surfaces, not the IDE binding.
     const kiroTrees = HARNESS_MATRIX.filter(
-      (harness) => harness.capabilities.kiroAgentJson,
+      (harness) => harness.capabilities.memoryInclude === "kiro-resources",
     );
     expect(kiroTrees.length).toBeGreaterThan(0);
 
@@ -244,6 +240,26 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
       expect(harnessChecked, `${harness.name}: agents with resources`).toBeGreaterThan(0);
     }
     expect(checkedAgents).toBe(expectedAgents);
+  });
+
+  test("7b: Kiro IDE standing rules use always-included live file references", () => {
+    const ide = HARNESS_MATRIX.find((harness) => harness.name === "kiro-ide");
+    expect(ide?.capabilities.memoryInclude).toBe("kiro-steering");
+    const steering = readFileSync(
+      join(
+        ide?.engineRoot ?? "",
+        "steering",
+        "aidlc-active-memory.md",
+      ),
+      "utf-8",
+    );
+    expect(steering).toMatch(/^---\ninclusion: always\n---/);
+    expect(steering).toContain(
+      "#[[file:aidlc/spaces/default/memory/org.md]]",
+    );
+    expect(steering).toContain(
+      "#[[file:aidlc/spaces/default/memory/phases/operation.md]]",
+    );
   });
 
   test("8: Codex include is wired (AIDLC_RULES_DIR seam + AGENTS.md)", () => {

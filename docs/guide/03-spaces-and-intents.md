@@ -193,7 +193,7 @@ When you switch spaces, two things follow the cursor automatically:
 1. **AI-DLC's own resolvers** — the next intent you start, and the practices and
    knowledge agents load, all come from the space you switched into.
 2. **The rules your harness loads into context** — switching re-points your
-   harness's native rule include (Claude's `@`-import, Kiro's resources glob,
+   harness's native rule include (Claude's `@`-import, Kiro CLI resources or IDE steering,
    Codex's rules dir) at the new space's `memory/`, so the next turn works under
    that team's method.
 
