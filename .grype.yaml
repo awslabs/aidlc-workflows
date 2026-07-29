@@ -19,4 +19,22 @@ fail-on-severity: high
 #       name: "package-name"
 #       version: "1.2.3"
 #     reason: "only affects feature X which we don't use"
-ignore: []
+ignore:
+  # mcp 1.23.3 is a transitive, dev-only dependency hard-pinned by semgrep
+  # (semgrep requires `mcp==1.23.3`, including the latest release), so it
+  # cannot be upgraded without breaking the semgrep dev tool. All three
+  # advisories affect the MCP Python SDK's HTTP/WebSocket *server* transports,
+  # which are never exercised: mcp is only pulled in via semgrep's CLI, we run
+  # no MCP server, and nothing in this repo imports mcp.
+  - vulnerability: GHSA-jpw9-pfvf-9f58
+    package:
+      name: mcp
+    reason: "Transitive dev-only dep pinned by semgrep (==1.23.3); server-transport auth issue not reachable — no MCP server is run."
+  - vulnerability: GHSA-hvrp-rf83-w775
+    package:
+      name: mcp
+    reason: "Transitive dev-only dep pinned by semgrep (==1.23.3); experimental task-handler issue not reachable — no MCP server is run."
+  - vulnerability: GHSA-vj7q-gjh5-988w
+    package:
+      name: mcp
+    reason: "Transitive dev-only dep pinned by semgrep (==1.23.3); WebSocket Host/Origin issue not reachable — no MCP server is run."
