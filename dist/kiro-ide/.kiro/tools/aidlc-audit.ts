@@ -348,13 +348,15 @@ function refuseProtectedEvent(eventType: string): never {
   );
 }
 
-// Field keys the emitter itself writes into every block. A caller-supplied
-// value would land as a SECOND `**Event**:` / `**Timestamp**:` line, and the
-// multiline regexes in findAllEvents match ANY line of a block — so a smuggled
-// `--field Event=HUMAN_TURN` on a harmless event type would register as a
-// forged event in every query. Refused for all callers (no legitimate emitter
-// passes these keys).
-const RESERVED_FIELD_KEYS = new Set(["Event", "Timestamp"]);
+// Field keys that can spoof event queries. A caller-supplied `Event` field
+// lands as a SECOND `**Event**:` line, and the multiline regex in
+// findAllEvents matches ANY line of a block — so a smuggled `--field
+// Event=HUMAN_TURN` on a harmless event type would register as a forged event
+// in every query. `Timestamp` is deliberately NOT reserved: several owning
+// emitters pass it as a documented field (park/unpark rows), and it cannot
+// spoof — the emitter's own `**Timestamp**:` line is written first and every
+// parser takes the first match.
+const RESERVED_FIELD_KEYS = new Set(["Event"]);
 
 function validateAuditEntry(entry: AuditEntryInput): void {
   if (!VALID_EVENT_TYPES.has(entry.eventType)) {
@@ -366,7 +368,7 @@ function validateAuditEntry(entry: AuditEntryInput): void {
     if (RESERVED_FIELD_KEYS.has(key)) {
       throw new Error(
         `Reserved field key: ${key}. The emitter writes **${key}**: itself; a caller-supplied ` +
-          "value would forge a second one and spoof event queries."
+          "value would forge a second matching line and spoof multiline event queries."
       );
     }
   }

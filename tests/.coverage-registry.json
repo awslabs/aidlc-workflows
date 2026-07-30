@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 510,
+    "total": 518,
     "enumeratedByClass": {
-      "function": 269,
-      "audit": 78,
+      "function": 272,
+      "audit": 82,
       "scope": 9,
       "stage": 32,
       "hook": 17,
-      "subcommand": 98,
+      "subcommand": 99,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 120,
-      "audit": 36,
+      "function": 123,
+      "audit": 40,
       "scope": 9,
       "stage": 9,
       "hook": 17,
-      "subcommand": 86,
+      "subcommand": 87,
       "render-surface": 7
     }
   },
@@ -713,6 +713,54 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "UNIT_COMPLETED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "UNIT_PAUSED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "UNIT_RESUMED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "UNIT_STARTED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "WORKFLOW_COMPLETED",
       "minMechanism": "none",
       "coveredBy": [
@@ -920,6 +968,18 @@
         {
           "file": "tests/unit/t160-workspace-record-resolution.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:activeUnitCheckpoint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1727,6 +1787,10 @@
         {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
           "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t259-audit-authority-floor.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1853,6 +1917,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isNonAnswer",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-audit-authority-floor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3321,6 +3397,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:unitCompletedReceipts",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:unitDependencyPath",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4652,6 +4740,10 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
+          "file": "tests/unit/t259-audit-authority-floor.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t33.test.ts",
           "mechanism": "cli"
         }
@@ -5416,6 +5508,18 @@
         },
         {
           "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state unit",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
