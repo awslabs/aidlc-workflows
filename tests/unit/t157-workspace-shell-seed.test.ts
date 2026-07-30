@@ -136,6 +136,17 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         const config = readFileSync(join(harness.engineRoot, "config.toml"), "utf-8");
         expect(config).toContain('AIDLC_RULES_DIR = "aidlc/spaces/default/memory"');
         expect(existsSync(harness.onboardingDist)).toBe(true);
+      } else if (harness.capabilities.memoryInclude === "cursor-rules") {
+        // cursor: no include-POINTER surface — the method is TRANSPOSED into the
+        // always-applied .cursor/rules/aidlc-method rule (org + team + project),
+        // and the project-root AGENTS.md names the hand-editable source tree.
+        expect(
+          existsSync(join(harness.engineRoot, "rules", "aidlc-method", "aidlc-method.mdc")),
+          harness.name,
+        ).toBe(true);
+        expect(readFileSync(harness.onboardingDist, "utf-8"), harness.name).toContain(
+          "aidlc/spaces/<active-space>/memory/",
+        );
       } else {
         // opencode: the instructions glob in the project-root opencode.json is
         // the native include surface; AGENTS.md is the auto-read rules file.

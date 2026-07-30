@@ -1,0 +1,110 @@
+{
+  "_provenance": "Synthetic snake_case payloads authored from the DOCUMENTED Cursor hook schema (system-architecture.md §4.1 event-mapping table + the cursor-native-surfaces research, which confirmed Cursor stdin is snake_case, NOT camelCase — §293). These are NOT live captures: Cursor 3.11 has no tee-everything capture rig in this repo, so field NAMES mirror the documented schema and values are generic placeholders. The adapter under test (aidlc-cursor-adapter.ts) reads exactly these fields.",
+  "beforeSubmitPrompt": {
+    "hook_event_name": "beforeSubmitPrompt",
+    "conversation_id": "conv-abc123",
+    "generation_id": "gen-0001",
+    "cwd": "/tmp/example-project",
+    "workspace_roots": ["/tmp/example-project"],
+    "prompt": "Say exactly HELLO and nothing else."
+  },
+  "stop": {
+    "hook_event_name": "stop",
+    "conversation_id": "conv-abc123",
+    "generation_id": "gen-0002",
+    "cwd": "/tmp/example-project",
+    "status": "completed",
+    "loop_count": 0
+  },
+  "beforeShellExecution": {
+    "hook_event_name": "beforeShellExecution",
+    "conversation_id": "conv-abc123",
+    "generation_id": "gen-0003",
+    "cwd": "/tmp/example-project",
+    "command": "bun .cursor/tools/aidlc-state.ts approve feasibility"
+  },
+  "beforeShellExecution_safe": {
+    "hook_event_name": "beforeShellExecution",
+    "conversation_id": "conv-abc123",
+    "generation_id": "gen-0004",
+    "cwd": "/tmp/example-project",
+    "command": "git status"
+  },
+  "afterFileEdit": {
+    "hook_event_name": "afterFileEdit",
+    "conversation_id": "conv-abc123",
+    "generation_id": "gen-0005",
+    "cwd": "/tmp/example-project",
+    "file_path": "aidlc-docs/ideation/intent-capture/intent-statement.md",
+    "edits": [{ "old_string": "", "new_string": "PROBE" }]
+  },
+  "subagentStop": {
+    "hook_event_name": "subagentStop",
+    "conversation_id": "conv-abc123",
+    "generation_id": "gen-0006",
+    "cwd": "/tmp/example-project",
+    "subagent_id": "sub-0001",
+    "subagent_type": "aidlc-developer-agent"
+  },
+  "beforeShellExecution_advance": {
+    "hook_event_name": "beforeShellExecution",
+    "conversation_id": "conv-abc123",
+    "generation_id": "gen-0007",
+    "cwd": "/tmp/example-project",
+    "command": "bun .cursor/tools/aidlc-state.ts advance"
+  },
+  "beforeShellExecution_finalize": {
+    "hook_event_name": "beforeShellExecution",
+    "conversation_id": "conv-abc123",
+    "generation_id": "gen-0008",
+    "cwd": "/tmp/example-project",
+    "command": "bun .cursor/tools/aidlc-state.ts finalize --stage feasibility"
+  },
+  "beforeShellExecution_query": {
+    "hook_event_name": "beforeShellExecution",
+    "conversation_id": "conv-abc123",
+    "generation_id": "gen-0009",
+    "cwd": "/tmp/example-project",
+    "command": "bun .cursor/tools/aidlc-state.ts show"
+  },
+  "preToolUse_read_sibling": {
+    "hook_event_name": "preToolUse",
+    "conversation_id": "conv-abc123",
+    "generation_id": "gen-0010",
+    "cwd": "/tmp/example-project",
+    "tool_name": "Read",
+    "tool_input": { "file_path": "construction/U01-infra/functional-design/design.md" }
+  },
+  "preToolUse_read_current": {
+    "hook_event_name": "preToolUse",
+    "conversation_id": "conv-abc123",
+    "generation_id": "gen-0011",
+    "cwd": "/tmp/example-project",
+    "tool_name": "Read",
+    "tool_input": { "file_path": "construction/U03-scoring/nfr-requirements/nfr.md" }
+  },
+  "preToolUse_grep_sibling_sweep": {
+    "hook_event_name": "preToolUse",
+    "conversation_id": "conv-abc123",
+    "generation_id": "gen-0012",
+    "cwd": "/tmp/example-project",
+    "tool_name": "Grep",
+    "tool_input": { "pattern": "endpoint", "path": "construction/U01-infra" }
+  },
+  "preToolUse_ls_sibling": {
+    "hook_event_name": "preToolUse",
+    "conversation_id": "conv-abc123",
+    "generation_id": "gen-0013",
+    "cwd": "/tmp/example-project",
+    "tool_name": "LS",
+    "tool_input": { "path": "construction/U05-api" }
+  },
+  "preToolUse_glob_current": {
+    "hook_event_name": "preToolUse",
+    "conversation_id": "conv-abc123",
+    "generation_id": "gen-0014",
+    "cwd": "/tmp/example-project",
+    "tool_name": "Glob",
+    "tool_input": { "pattern": "construction/U03-scoring/**/*.md" }
+  }
+}

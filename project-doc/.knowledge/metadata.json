@@ -1,0 +1,39 @@
+{
+  "version": "1.0.0",
+  "generated_at": "2026-07-29T17:30:00.000Z",
+  "manifest_hash": "sha256:1315ff48338316f974b10370447b9ef4a5295f54d872d90efc8160a9d99b1df3",
+  "document_count": 3,
+  "skill_version": "1.0.0",
+  "extraction_mode": "full",
+  "stats": {
+    "entity_count": 12,
+    "relationship_count": 8,
+    "fact_count": 17,
+    "conflict_count": 0,
+    "avg_facts_per_doc": 5.67,
+    "entity_dedup_ratio": 1.0
+  },
+  "documents_processed": [
+    {
+      "path": "project-doc/project-context/vision.md",
+      "hash": "sha256:63641b6614dfb9d07366a42f83afebee472ae60f19fa5ec021d6cff6f696d563",
+      "extracted_at": "2026-07-29T17:30:00.000Z",
+      "entity_ids": ["aidlc-framework", "cursor-ide", "packager", "emit-ts", "cursor-hook-adapter"],
+      "fact_ids": ["F-001", "F-002", "F-011", "F-012", "F-013", "F-014"]
+    },
+    {
+      "path": "project-doc/project-context/cursor-platform-research.md",
+      "hash": "sha256:e989a2151541b09aa1d4bc2ee34acf9a33795c56689ad585c1c43b381b36ab11",
+      "extracted_at": "2026-07-29T17:30:00.000Z",
+      "entity_ids": ["cursor-ide", "cursor-rules", "cursor-skills", "cursor-hooks", "cursor-commands", "cursor-hook-adapter", "cursor-cli-permissions", "cursor-plugin-manifest"],
+      "fact_ids": ["F-003", "F-004", "F-005", "F-006", "F-007", "F-008", "F-015", "F-017"]
+    },
+    {
+      "path": "project-doc/project-context/technical-environment.md",
+      "hash": "sha256:cdbdff748263bf31619a4f386e6c23e1a0bae4d00094562cc86230224b635e35",
+      "extracted_at": "2026-07-29T17:30:00.000Z",
+      "entity_ids": ["aidlc-framework", "packager", "harness-manifest-contract", "emit-ts", "cursor-plugin-manifest"],
+      "fact_ids": ["F-009", "F-010", "F-016"]
+    }
+  ]
+}

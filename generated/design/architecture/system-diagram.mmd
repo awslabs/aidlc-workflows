@@ -1,0 +1,35 @@
+%%{init: {'theme':'base', 'themeVariables': {'primaryColor':'#8dd3c7','primaryTextColor':'#333','lineColor':'#5a9bd4'}}}%%
+flowchart TB
+    subgraph Authored["Authored Layer (harness/cursor/)"]
+        Manifest["manifest.ts<br/>(HarnessManifest)"]
+        EmitTS["emit.ts<br/>(Rule/Hook/Command generator)"]
+        Adapter["aidlc-cursor-adapter.ts<br/>(Hook contract bridge)"]
+        SkillMD["skills/aidlc/SKILL.md<br/>(Orchestrator entry point)"]
+        OnboardingFills["onboarding.fills.ts<br/>(AGENTS.md slot fills)"]
+    end
+
+    subgraph Build["Build Pipeline (scripts/package.ts)"]
+        Packager["Packager<br/>(5-step pipeline)"]
+    end
+
+    subgraph Dist["Distributed Layer (dist/cursor/)"]
+        DotCursor[".cursor/<br/>(harness engine dir)"]
+        AIDLCShell["aidlc/<br/>(workspace shell)"]
+        AgentsMD["AGENTS.md<br/>(onboarding)"]
+    end
+
+    Manifest --> Packager
+    EmitTS --> Packager
+    OnboardingFills --> Packager
+    Packager --> DotCursor
+    Packager --> AIDLCShell
+    Packager --> AgentsMD
+    Adapter -.->|"copied into"| DotCursor
+    SkillMD -.->|"copied into"| DotCursor
+
+    classDef authored fill:#d4edda,stroke:#28a745,color:#333
+    classDef build fill:#fff3cd,stroke:#ffc107,color:#333
+    classDef dist fill:#cce5ff,stroke:#004085,color:#333
+    class Manifest,EmitTS,Adapter,SkillMD,OnboardingFills authored
+    class Packager build
+    class DotCursor,AIDLCShell,AgentsMD dist

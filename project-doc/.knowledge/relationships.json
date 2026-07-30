@@ -1,0 +1,91 @@
+{
+  "version": "1.0.0",
+  "relationships": [
+    {
+      "id": "packager--produces--cursor-ide",
+      "source_entity_id": "packager",
+      "relationship_type": "produces",
+      "target_entity_id": "cursor-ide",
+      "description": "Packager (bun scripts/package.ts) consumes harness/cursor/ and core/ to generate dist/cursor/ — the complete Cursor harness distribution.",
+      "mechanism": "Reads harness/cursor/manifest.ts, applies coreDirs mappings, runs emit.ts for structural divergence, writes output to dist/cursor/",
+      "constraints": ["Auto-discovers harness by scanning for manifest.ts", "Byte-parity enforced via --check flag"],
+      "source_doc": "project-doc/project-context/technical-environment.md",
+      "confidence": 1.0
+    },
+    {
+      "id": "emit-ts--produces--cursor-rules",
+      "source_entity_id": "emit-ts",
+      "relationship_type": "produces",
+      "target_entity_id": "cursor-rules",
+      "description": "Emitter generates .cursor/rules/*/RULE.md files from core method knowledge (memory/org.md, memory/team.md, memory/phases/) by adding YAML frontmatter with activation types.",
+      "mechanism": "Transposes core memory/ content into RULE.md format with alwaysApply/description/globs frontmatter fields based on content category",
+      "constraints": ["Under 500 lines per rule", "Only new .cursor/rules/*/RULE.md format — no .cursorrules"],
+      "source_doc": "project-doc/project-context/cursor-platform-research.md",
+      "confidence": 1.0
+    },
+    {
+      "id": "emit-ts--produces--cursor-hooks",
+      "source_entity_id": "emit-ts",
+      "relationship_type": "produces",
+      "target_entity_id": "cursor-hooks",
+      "description": "Emitter generates .cursor/hooks.json registry file pointing to hook script files in .cursor/hooks/.",
+      "mechanism": "Assembles JSON registry mapping AI-DLC lifecycle events to Cursor hook events with appropriate handler scripts",
+      "constraints": ["Must set failClosed:true for security-critical gates"],
+      "source_doc": "project-doc/project-context/cursor-platform-research.md",
+      "confidence": 1.0
+    },
+    {
+      "id": "emit-ts--produces--cursor-commands",
+      "source_entity_id": "emit-ts",
+      "relationship_type": "produces",
+      "target_entity_id": "cursor-commands",
+      "description": "Emitter generates .cursor/commands/*.md from the CLI utility handlers in core.",
+      "mechanism": "Creates plain Markdown command files where filename becomes the /command-name slash command",
+      "source_doc": "project-doc/project-context/cursor-platform-research.md",
+      "confidence": 1.0
+    },
+    {
+      "id": "emit-ts--produces--cursor-cli-permissions",
+      "source_entity_id": "emit-ts",
+      "relationship_type": "produces",
+      "target_entity_id": "cursor-cli-permissions",
+      "description": "Emitter generates .cursor/cli.json with safe default permission set for cursor-agent headless execution.",
+      "mechanism": "Creates JSON with allow/deny lists using Shell(), Read(), Write() permission tokens",
+      "source_doc": "project-doc/project-context/cursor-platform-research.md",
+      "confidence": 1.0
+    },
+    {
+      "id": "cursor-hook-adapter--integrates-with--cursor-hooks",
+      "source_entity_id": "cursor-hook-adapter",
+      "relationship_type": "integrates_with",
+      "target_entity_id": "cursor-hooks",
+      "description": "Hook adapter normalizes Cursor's camelCase JSON payloads to AI-DLC core's snake_case contract and translates permission:deny to exit code 2.",
+      "mechanism": "TypeScript script receives Cursor JSON stdin, transforms field names and permission semantics, forwards to core hook logic, translates response back",
+      "constraints": ["Must handle all 10 Cursor lifecycle events", "Must detect first-prompt for session init (cloud agents lack sessionStart)"],
+      "source_doc": "project-doc/project-context/cursor-platform-research.md",
+      "section": "Key Design Decisions",
+      "confidence": 1.0
+    },
+    {
+      "id": "cursor-skills--enables--aidlc-framework",
+      "source_entity_id": "cursor-skills",
+      "relationship_type": "enables",
+      "target_entity_id": "aidlc-framework",
+      "description": "The /aidlc skill (SKILL.md) serves as the entry point that launches the full AI-DLC orchestrator workflow inside Cursor.",
+      "mechanism": "User invokes /aidlc slash command → Cursor loads SKILL.md content into context → orchestrator instructions drive the 32-stage workflow",
+      "constraints": ["Same SKILL.md standard as Claude Code and Codex — high reuse potential"],
+      "source_doc": "project-doc/project-context/cursor-platform-research.md",
+      "confidence": 1.0
+    },
+    {
+      "id": "harness-manifest-contract--constrains--emit-ts",
+      "source_entity_id": "harness-manifest-contract",
+      "relationship_type": "constrains",
+      "target_entity_id": "emit-ts",
+      "description": "HarnessManifest type defines the emit field signature that the Cursor emitter must satisfy: (ctx: EmitContext) => void.",
+      "mechanism": "manifest.ts exports a HarnessManifest object with emit property pointing to the emitter function",
+      "source_doc": "project-doc/project-context/technical-environment.md",
+      "confidence": 1.0
+    }
+  ]
+}

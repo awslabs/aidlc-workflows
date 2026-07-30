@@ -620,6 +620,30 @@ describe("t221 (c) harness registration and protocol prose", () => {
     }
   });
 
+  test("Cursor hooks.json wires the adapter's reviewer-scope target on preToolUse, fail-closed", () => {
+    const harnesses = HARNESS_MATRIX.filter(
+      (harness) => harness.capabilities.reviewerScopeRegistration === "cursor-hooks",
+    );
+    expect(harnesses.length).toBeGreaterThan(0);
+    for (const harness of harnesses) {
+      const wiring = JSON.parse(
+        readFileSync(join(harness.engineRoot, "hooks.json"), "utf-8"),
+      ) as {
+        hooks: Record<string, Array<{ command: string; failClosed?: boolean; matcher?: string }>>;
+      };
+      const pre = wiring.hooks.preToolUse ?? [];
+      const entry = pre.find(
+        (h) =>
+          h.command ===
+          `bun ${harness.manifest.harnessDir}/hooks/aidlc-cursor-adapter.ts reviewer-scope`,
+      );
+      expect(entry, harness.name).toBeDefined();
+      // The read-scope gate fails CLOSED and matches the file-reading tools.
+      expect(entry?.failClosed).toBe(true);
+      expect(entry?.matcher).toBe("Read|LS|Glob|Grep");
+    }
+  });
+
   test("stage-protocol 12a carries the dispatch-record write (step 1) and delete (step 3)", () => {
     const body = readFileSync(
       join(AIDLC_SRC, "aidlc-common", "protocols", "stage-protocol.md"),

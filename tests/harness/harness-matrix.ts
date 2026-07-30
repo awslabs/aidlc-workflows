@@ -9,6 +9,7 @@ const HARNESS_ROOT = join(REPO_ROOT, "harness");
 type ReviewerScopeRegistration =
   | "claude-settings"
   | "codex-hooks"
+  | "cursor-hooks"
   | "kiro-agent-json"
   | "opencode-plugin"
   | "unsupported";
@@ -27,7 +28,12 @@ type HarnessCapabilities = {
     manifestDir: string;
     wiringFile: string;
   };
-  memoryInclude: "claude-import" | "codex-env" | "kiro-resources" | "opencode-instructions";
+  memoryInclude:
+    | "claude-import"
+    | "codex-env"
+    | "cursor-rules"
+    | "kiro-resources"
+    | "opencode-instructions";
   kiroAgentJson: boolean;
   ideAgentTools: boolean;
   reviewerScopeRegistration: ReviewerScopeRegistration;
@@ -112,6 +118,30 @@ const HARNESS_CAPABILITIES = {
     kiroAgentJson: true,
     ideAgentTools: false,
     reviewerScopeRegistration: "kiro-agent-json",
+  },
+  cursor: {
+    harnessDir: ".cursor",
+    onboarding: {
+      mode: "manifest",
+      fills: "onboarding.fills.ts",
+      dist: "AGENTS.md",
+    },
+    rootFiles: [".gitignore", "AGENTS.md"],
+    skillsRoot: ".cursor/skills",
+    plugin: {
+      kind: "store",
+      manifestDir: ".cursor-plugin",
+      wiringFile: "hooks/hooks.json",
+    },
+    // The method is transposed into .cursor/rules/*.mdc layers by emit.ts — there
+    // is no separate include-pointer surface (no rules/aidlc.md import, no env
+    // var, no resources array, no instructions glob). Its own memoryInclude value.
+    memoryInclude: "cursor-rules",
+    kiroAgentJson: false,
+    ideAgentTools: false,
+    // preToolUse in .cursor/hooks.json routes Read|LS|Glob|Grep through the
+    // adapter's reviewer-scope target, fail-closed.
+    reviewerScopeRegistration: "cursor-hooks",
   },
   opencode: {
     harnessDir: ".aidlc",

@@ -738,6 +738,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
   // a new spawning test still cannot land without a human edit here.
   const EXPECTED_NONE_TO_CLI = [
     "unit/t150-codex-packaging.test.ts",
+    "unit/t248-cursor-packaging.test.ts",
     "unit/t220-tier-projection-module.test.ts",
     "unit/t233-upstream-coverage-matching.test.ts",
     "unit/t231-handler-additions.test.ts",
@@ -774,6 +775,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t185-stage-artifact-guard.test.ts",
     "integration/t188-plugin-compose.test.ts",
     "integration/t224-plugin-selection.test.ts",
+    "integration/t250-cursor-guard-logic.test.ts",
     "integration/t21b.test.ts",
     "integration/t31-help.test.ts",
     "integration/t32-stage-graph-consistency.test.ts",
@@ -832,6 +834,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t144-harness-seam.test.ts",
     "unit/t147-kiro-hook-adapter.test.ts",
     "unit/t149-codex-hook-adapter.test.ts",
+    "unit/t249-cursor-hook-adapter.test.ts",
     "unit/t155-template-override.test.ts",
     "unit/t158-memory-writer-reader-seam.test.ts",
     "unit/t168-statusline-orientation.test.ts",

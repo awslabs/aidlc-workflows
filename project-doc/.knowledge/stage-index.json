@@ -1,0 +1,158 @@
+{
+  "version": "1.0.0",
+  "stages": {
+    "requirements": {
+      "components": {
+        "general": {
+          "relevant_fact_ids": ["F-001", "F-002", "F-011", "F-013", "F-014"],
+          "relevant_relationship_ids": ["packager--produces--cursor-ide"],
+          "decisions": [],
+          "load_docs_for_detail": []
+        },
+        "cursor-surfaces": {
+          "relevant_fact_ids": ["F-003", "F-005", "F-006", "F-007", "F-008", "F-012", "F-016"],
+          "relevant_relationship_ids": ["emit-ts--produces--cursor-rules", "emit-ts--produces--cursor-hooks", "emit-ts--produces--cursor-commands", "emit-ts--produces--cursor-cli-permissions"],
+          "decisions": [],
+          "load_docs_for_detail": [
+            {
+              "doc": "project-doc/project-context/cursor-platform-research.md",
+              "reason": "Exact YAML frontmatter fields and activation type logic for RULE.md format; full hook JSON schema with all event fields; CLI permission token syntax"
+            }
+          ]
+        }
+      },
+      "skip_docs": [],
+      "open_questions": [
+        {
+          "question": "What specific shell commands should be pre-allowed in cli.json for safe cursor-agent execution?",
+          "context": "The CLI permissions file needs a default allow/deny list but no specific commands are enumerated in the input documents.",
+          "affected_components": ["cursor-surfaces"]
+        },
+        {
+          "question": "Should the aidlc-method rule be a single always-apply rule or split into multiple (org, team, project)?",
+          "context": "Core memory/ has org.md, team.md, project.md, and phases/*.md. The 500-line rule limit may require splitting.",
+          "affected_components": ["cursor-surfaces"]
+        }
+      ]
+    },
+    "architecture": {
+      "components": {
+        "manifest-and-packager": {
+          "relevant_fact_ids": ["F-001", "F-002", "F-003", "F-004", "F-005", "F-009", "F-010"],
+          "relevant_relationship_ids": ["packager--produces--cursor-ide", "harness-manifest-contract--constrains--emit-ts"],
+          "decisions": [],
+          "load_docs_for_detail": [
+            {
+              "doc": "project-doc/project-context/technical-environment.md",
+              "reason": "Exact HarnessManifest TypeScript type signature and coreDirs/harnessFiles mapping structure; existing harness manifest examples for pattern reference"
+            }
+          ]
+        },
+        "emitter": {
+          "relevant_fact_ids": ["F-002", "F-005", "F-012", "F-016"],
+          "relevant_relationship_ids": ["emit-ts--produces--cursor-rules", "emit-ts--produces--cursor-hooks", "emit-ts--produces--cursor-commands", "emit-ts--produces--cursor-cli-permissions"],
+          "decisions": [],
+          "load_docs_for_detail": [
+            {
+              "doc": "project-doc/project-context/cursor-platform-research.md",
+              "reason": "Exact RULE.md frontmatter schema, hooks.json version 1 schema structure, command file format details"
+            }
+          ]
+        },
+        "hook-adapter": {
+          "relevant_fact_ids": ["F-007", "F-008", "F-015"],
+          "relevant_relationship_ids": ["cursor-hook-adapter--integrates-with--cursor-hooks"],
+          "decisions": [],
+          "load_docs_for_detail": [
+            {
+              "doc": "project-doc/project-context/cursor-platform-research.md",
+              "reason": "Full hook I/O contract (stdin JSON fields), permission response format, stop hook followup_message schema, event-by-event mapping table"
+            }
+          ]
+        },
+        "orchestrator-skill": {
+          "relevant_fact_ids": ["F-006", "F-017"],
+          "relevant_relationship_ids": ["cursor-skills--enables--aidlc-framework"],
+          "decisions": [],
+          "load_docs_for_detail": []
+        },
+        "distribution-layout": {
+          "relevant_fact_ids": ["F-003", "F-016"],
+          "relevant_relationship_ids": [],
+          "decisions": [],
+          "load_docs_for_detail": [
+            {
+              "doc": "project-doc/project-context/technical-environment.md",
+              "reason": "Complete proposed dist/cursor/ tree with all paths and file purposes"
+            }
+          ]
+        }
+      },
+      "skip_docs": [],
+      "open_questions": [
+        {
+          "question": "What is the exact EmitContext type signature available to the emit function?",
+          "context": "The emitter receives an EmitContext parameter but its fields are not documented in the input files. Need to inspect scripts/manifest-types.ts at implementation time.",
+          "affected_components": ["emitter"]
+        },
+        {
+          "question": "How do existing harness emitters (codex/emit.ts, opencode/emit.ts) read core memory/ files and transform them?",
+          "context": "The Cursor emitter must transform core memory/ into .cursor/rules/*/RULE.md. Understanding existing emitter patterns would inform implementation.",
+          "affected_components": ["emitter"]
+        }
+      ]
+    },
+    "security": {
+      "components": {
+        "hook-security": {
+          "relevant_fact_ids": ["F-007", "F-008"],
+          "relevant_relationship_ids": ["cursor-hook-adapter--integrates-with--cursor-hooks"],
+          "decisions": [],
+          "load_docs_for_detail": [
+            {
+              "doc": "project-doc/project-context/cursor-platform-research.md",
+              "reason": "failClosed behavior details, hook permission model (allow/deny/ask), enterprise hook locations"
+            }
+          ]
+        },
+        "cli-permissions": {
+          "relevant_fact_ids": ["F-016"],
+          "relevant_relationship_ids": ["emit-ts--produces--cursor-cli-permissions"],
+          "decisions": [],
+          "load_docs_for_detail": [
+            {
+              "doc": "project-doc/project-context/cursor-platform-research.md",
+              "reason": "CLI permission token syntax and deny pattern examples"
+            }
+          ]
+        },
+        "subagent-gating": {
+          "relevant_fact_ids": ["F-006", "F-017"],
+          "relevant_relationship_ids": [],
+          "decisions": [],
+          "load_docs_for_detail": []
+        }
+      },
+      "skip_docs": [],
+      "open_questions": [
+        {
+          "question": "What should the default deny list contain for cli.json to prevent dangerous operations?",
+          "context": "cli.json controls what cursor-agent can do without prompting. Security-critical operations (rm -rf, git push --force, etc.) should be denied by default.",
+          "affected_components": ["cli-permissions"]
+        }
+      ]
+    },
+    "documentation": {
+      "components": {
+        "general": {
+          "relevant_fact_ids": ["F-001", "F-002", "F-011", "F-013"],
+          "relevant_relationship_ids": [],
+          "decisions": [],
+          "load_docs_for_detail": []
+        }
+      },
+      "skip_docs": [],
+      "open_questions": []
+    }
+  }
+}

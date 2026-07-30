@@ -1,0 +1,224 @@
+{
+  "version": "1.0.0",
+  "entities": [
+    {
+      "id": "cursor-ide",
+      "name": "Cursor IDE",
+      "type": "external_system",
+      "layer": "context",
+      "aliases": ["Cursor", "Cursor 3.11+"],
+      "description": "VS Code fork rebuilt as an agent-first IDE by Anysphere, Inc. Supports file-based customization surfaces (Rules, Skills, Hooks, Commands, AGENTS.md, MCP, CLI permissions) that map to AI-DLC harness contracts. Ships headless CLI (cursor-agent) and cloud agents reading the same config.",
+      "purpose": "The target platform this harness enables AI-DLC to run inside. Its native surfaces define the integration contract.",
+      "key_attributes": {
+        "vendor": "Anysphere, Inc.",
+        "version": "3.11+",
+        "execution_environments": ["IDE", "cursor-agent CLI", "cloud agents"],
+        "native_surfaces": ["Rules", "Skills", "Hooks", "Commands", "AGENTS.md", "MCP", "CLI permissions"],
+        "model_selection": "user-governed via UI picker, not file-configurable"
+      },
+      "source_docs": ["project-doc/project-context/cursor-platform-research.md", "project-doc/project-context/vision.md"],
+      "mentions": [
+        {
+          "doc": "project-doc/project-context/cursor-platform-research.md",
+          "section": "Overview",
+          "layer": "context",
+          "context_summary": "Cursor is a VS Code fork (Anysphere, Inc.) with agent-first design. As of July 2026 (3.11+), supports rich file-based customization that maps directly to AI-DLC harness contract. Same .cursor/ files work across IDE, cursor-agent CLI, and cloud agents."
+        }
+      ]
+    },
+    {
+      "id": "aidlc-framework",
+      "name": "AI-DLC Multi-Harness Framework",
+      "type": "external_system",
+      "layer": "context",
+      "aliases": ["AI-DLC", "AI-DLC Workflows 2.0"],
+      "description": "Multi-harness framework with 14 agents, 32 stages, and 5 phases enabling adaptive software development. Currently ships to Claude, Kiro, Codex, and opencode harnesses from a single hand-authored source in core/.",
+      "purpose": "The framework this project extends by adding a Cursor harness. Its architecture (core/ + harness/ + dist/) defines the integration pattern.",
+      "key_attributes": {
+        "agents": 14,
+        "stages": 32,
+        "phases": 5,
+        "existing_harnesses": ["claude", "kiro", "kiro-ide", "codex", "opencode"],
+        "build_tool": "bun scripts/package.ts",
+        "source_of_truth": "core/"
+      },
+      "source_docs": ["project-doc/project-context/vision.md", "project-doc/project-context/technical-environment.md"],
+      "mentions": []
+    },
+    {
+      "id": "packager",
+      "name": "Packager (package.ts)",
+      "type": "technology",
+      "layer": "context",
+      "aliases": ["bun scripts/package.ts", "package.ts"],
+      "description": "Build entry point that regenerates all dist/<harness>/ trees from core/ + harness/<name>/. Supports per-harness generation, byte-parity drift guard (--check), and harness auto-discovery by scanning harness/ for manifest.ts files.",
+      "purpose": "The build system that consumes the new harness/cursor/ surface and produces dist/cursor/. Must not require edits to support the new harness.",
+      "key_attributes": {
+        "runtime": "bun",
+        "language": "TypeScript",
+        "commands": ["bun scripts/package.ts", "bun scripts/package.ts <name>", "bun scripts/package.ts --check"],
+        "discovery": "scans harness/ for manifest.ts — zero edits needed",
+        "drift_guard": "--check flag for byte-parity CI gate"
+      },
+      "source_docs": ["project-doc/project-context/technical-environment.md", "project-doc/project-context/vision.md"],
+      "mentions": []
+    },
+    {
+      "id": "harness-manifest-contract",
+      "name": "HarnessManifest",
+      "type": "api",
+      "layer": "context",
+      "aliases": ["manifest.ts", "HarnessManifest type"],
+      "description": "TypeScript type contract that every harness must implement. Defines: name, harnessDir, tierFlavor, coreDirs, harnessFiles, onboarding, rulesRename, emit, plugin. Located in scripts/manifest-types.ts.",
+      "purpose": "The interface contract the new Cursor harness must satisfy. Defines all configuration points available.",
+      "key_attributes": {
+        "fields": ["name", "harnessDir", "tierFlavor", "coreDirs", "harnessFiles", "frontmatterAdditions", "onboarding", "rulesRename", "skipRunnerGen", "emit", "plugin"],
+        "file": "scripts/manifest-types.ts",
+        "language": "TypeScript"
+      },
+      "source_docs": ["project-doc/project-context/technical-environment.md"],
+      "mentions": []
+    },
+    {
+      "id": "cursor-rules",
+      "name": "Cursor Rules",
+      "type": "feature",
+      "layer": "context",
+      "aliases": [".cursor/rules/*/RULE.md"],
+      "description": "Persistent system-level instructions injected at start of model context. Each rule is a folder with RULE.md (Markdown + YAML frontmatter). Four activation types: Always (alwaysApply:true), Auto Attached (globs set), Agent Requested (description set), Manual (neither).",
+      "purpose": "Primary surface for projecting AI-DLC method knowledge (org.md, team.md, project.md) and phase-specific knowledge into Cursor's native format.",
+      "key_attributes": {
+        "path": ".cursor/rules/*/RULE.md",
+        "format": "Markdown with YAML frontmatter",
+        "activation_types": ["Always", "Auto Attached", "Agent Requested", "Manual"],
+        "precedence": "Team Rules > Project Rules > User Rules > Legacy .cursorrules > AGENTS.md",
+        "best_practice": "under 500 lines per rule"
+      },
+      "source_docs": ["project-doc/project-context/cursor-platform-research.md"],
+      "mentions": []
+    },
+    {
+      "id": "cursor-skills",
+      "name": "Cursor Skills",
+      "type": "feature",
+      "layer": "context",
+      "aliases": [".cursor/skills/*/SKILL.md"],
+      "description": "Follow the open SKILL.md standard identical to Claude Code and Codex. Invoked via slash command (filename becomes command name). Skill folder can contain scripts, references, and assets alongside SKILL.md. High reuse potential across harnesses.",
+      "purpose": "Hosts the /aidlc orchestrator entry point. Same SKILL.md standard means the orchestrator is nearly byte-compatible with Claude/Codex.",
+      "key_attributes": {
+        "path": ".cursor/skills/aidlc/SKILL.md",
+        "invocation": "/aidlc slash command",
+        "standard": "open SKILL.md (shared with Claude Code, Codex)",
+        "scope": "repo-scoped in .cursor/skills/ or user-scoped in ~/.cursor/skills/"
+      },
+      "source_docs": ["project-doc/project-context/cursor-platform-research.md"],
+      "mentions": []
+    },
+    {
+      "id": "cursor-hooks",
+      "name": "Cursor Hooks",
+      "type": "feature",
+      "layer": "context",
+      "aliases": [".cursor/hooks.json"],
+      "description": "Shell commands executed at agent lifecycle points. JSON registry (version 1 schema) with events: beforeSubmitPrompt, beforeShellExecution, beforeMCPExecution, beforeReadFile, afterFileEdit, subagentStart, subagentStop, afterAgentThought, afterAgentResponse, stop. I/O: JSON stdin/stdout with permission allow/deny/ask model.",
+      "purpose": "Maps to AI-DLC core hooks (audit, gates, state transitions, session management). Requires an adapter to normalize Cursor's camelCase JSON payloads to core's Claude-shaped contract.",
+      "key_attributes": {
+        "path": ".cursor/hooks.json",
+        "format": "JSON version 1 schema",
+        "events": ["beforeSubmitPrompt", "beforeShellExecution", "beforeMCPExecution", "beforeReadFile", "afterFileEdit", "subagentStart", "subagentStop", "afterAgentThought", "afterAgentResponse", "stop"],
+        "io_contract": "JSON on stdin (conversation_id, generation_id, hook_event_name, workspace_roots), JSON on stdout",
+        "permission_model": "allow/deny/ask",
+        "fail_mode": "fail-open by default; failClosed:true for security gates",
+        "locations": [".cursor/hooks.json (project)", "~/.cursor/hooks.json (user)", "/etc/cursor/hooks.json (enterprise)"],
+        "cloud_agent_note": "Cloud agents run project-level hooks only; user-level hooks excluded"
+      },
+      "source_docs": ["project-doc/project-context/cursor-platform-research.md"],
+      "mentions": []
+    },
+    {
+      "id": "cursor-commands",
+      "name": "Cursor Commands",
+      "type": "feature",
+      "layer": "context",
+      "aliases": [".cursor/commands/*.md"],
+      "description": "Custom slash commands as plain Markdown files. Filename (without .md) becomes command name. Support parameterized arguments via $1, $2, etc. No YAML frontmatter. Invoked via /command-name in chat.",
+      "purpose": "Maps AI-DLC utility commands (/aidlc-status, /aidlc-jump, /aidlc-scope) to Cursor-native slash commands.",
+      "key_attributes": {
+        "path": ".cursor/commands/*.md",
+        "format": "plain Markdown, no frontmatter",
+        "invocation": "/command-name in chat",
+        "parameters": "$1, $2, etc."
+      },
+      "source_docs": ["project-doc/project-context/cursor-platform-research.md"],
+      "mentions": []
+    },
+    {
+      "id": "cursor-hook-adapter",
+      "name": "Cursor Hook Adapter",
+      "type": "feature",
+      "layer": "context",
+      "aliases": ["aidlc-cursor-adapter.ts"],
+      "description": "TypeScript adapter that normalizes Cursor's camelCase hook payloads to the core hook contract (Claude-shaped). Maps permission deny to exit code 2 (or vice versa). Handles field naming differences and event mapping between Cursor lifecycle events and AI-DLC hook events.",
+      "purpose": "Bridge between Cursor's hook I/O contract and AI-DLC's harness-neutral core hooks. Required because of structural differences in field naming, block mechanism, and event taxonomy.",
+      "key_attributes": {
+        "file": "harness/cursor/hooks/aidlc-cursor-adapter.ts",
+        "differences_handled": {
+          "block_mechanism": "Cursor: permission:deny in JSON stdout vs Core: exit code 2",
+          "field_naming": "Cursor: camelCase vs Core: snake_case",
+          "session_start": "Cursor: beforeSubmitPrompt (first prompt) vs Core: SessionStart event",
+          "file_audit": "Cursor: afterFileEdit (explicit) vs Core: PostToolUse Write tool",
+          "self_correction": "Cursor: stop hook with followup_message vs Core: Stop hook answer"
+        }
+      },
+      "source_docs": ["project-doc/project-context/cursor-platform-research.md", "project-doc/project-context/vision.md"],
+      "mentions": []
+    },
+    {
+      "id": "emit-ts",
+      "name": "Cursor Emitter (emit.ts)",
+      "type": "feature",
+      "layer": "context",
+      "aliases": ["harness/cursor/emit.ts"],
+      "description": "Imperative emitter for structural divergence that the declarative manifest cannot express. Generates: .cursor/rules/*/RULE.md with YAML frontmatter, .cursor/hooks.json registry, .cursor/commands/*.md from CLI utility handlers, .cursor/cli.json permissions.",
+      "purpose": "Handles Cursor-specific output generation that goes beyond simple file copying. Required because Rules need frontmatter generation, hooks need registry assembly, and commands are a Cursor-native concept.",
+      "key_attributes": {
+        "generates": [".cursor/rules/*/RULE.md", ".cursor/hooks.json", ".cursor/commands/*.md", ".cursor/cli.json"],
+        "pattern": "same as codex/emit.ts and opencode/emit.ts"
+      },
+      "source_docs": ["project-doc/project-context/technical-environment.md", "project-doc/project-context/cursor-platform-research.md", "project-doc/project-context/vision.md"],
+      "mentions": []
+    },
+    {
+      "id": "cursor-cli-permissions",
+      "name": "Cursor CLI Permissions",
+      "type": "feature",
+      "layer": "context",
+      "aliases": [".cursor/cli.json"],
+      "description": "Controls what cursor-agent CLI can do without prompting. Permission tokens: Shell(command), Read(path), Write(path), Delete(path), Grep(path), LS(path). Allows allow/deny lists.",
+      "purpose": "Provides safe default permission set for cursor-agent headless execution. Needs generation by the emitter.",
+      "key_attributes": {
+        "path": ".cursor/cli.json",
+        "format": "JSON with allow/deny arrays",
+        "permission_tokens": ["Shell(command)", "Read(path)", "Write(path)", "Delete(path)", "Grep(path)", "LS(path)"]
+      },
+      "source_docs": ["project-doc/project-context/cursor-platform-research.md"],
+      "mentions": []
+    },
+    {
+      "id": "cursor-plugin-manifest",
+      "name": "Cursor Plugin Manifest",
+      "type": "feature",
+      "layer": "context",
+      "aliases": [".cursor-plugin/"],
+      "description": "Plugin marketplace manifest for the AIDLC plugin system projection into Cursor's native format. Contains marketplace.json and plugin.json.",
+      "purpose": "Enables the AIDLC plugin system to project into Cursor's Plugin Marketplace format.",
+      "key_attributes": {
+        "path": ".cursor-plugin/",
+        "files": ["marketplace.json", "plugin.json"],
+        "plugin_config": {"manifestDir": ".cursor-plugin", "kind": "store"}
+      },
+      "source_docs": ["project-doc/project-context/technical-environment.md", "project-doc/project-context/cursor-platform-research.md"],
+      "mentions": []
+    }
+  ]
+}
