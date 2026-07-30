@@ -874,6 +874,19 @@ function handleUnit(args: string[]): void {
   // `unit start` calls could both pass the single-active-unit check.
   withAuditLock(pd, () => {
     let content = readStateFile(pd);
+
+    // Autonomous Construction keeps its own per-unit ledger (the swarm
+    // referee's SWARM_UNIT_* rows); interactive receipts must not interleave
+    // with it, and an unattended run has no human to resume a pause — the
+    // same rule park applies.
+    if (isAutonomousMode(content)) {
+      error(
+        `Refusing unit ${action}: Construction Autonomy Mode is autonomous. The swarm referee ` +
+          "owns per-unit bookkeeping (SWARM_UNIT_* receipts); interactive unit receipts apply " +
+          "only to gated Construction.",
+      );
+    }
+
     const checkpoint = activeUnitCheckpoint(pd, slug);
 
     if (action === "start") {
@@ -2700,6 +2713,12 @@ function handleResume(_args: string[]): void {
     // will use the standard resume flow.
   }
 
+  // Unit-level checkpoint (issue 681 claim 2): a resumed session must land on
+  // the exact unit stopping point, not just the stage. Read from the runtime
+  // mirror fields the `unit` verb maintains; absent on stage-level workflows.
+  const activeUnit = getField(content, "Active Unit");
+  const unitState = getField(content, "Unit State");
+
   console.log(
     JSON.stringify({
       resumed: true,
@@ -2711,6 +2730,14 @@ function handleResume(_args: string[]): void {
       next_stage: nextStage,
       gate_state: gateState,
       compaction_pending: compactionPending,
+      ...(activeUnit
+        ? {
+            active_unit: activeUnit,
+            unit_state: unitState ?? "in-progress",
+            unit_pause_reason: getField(content, "Unit Pause Reason") ?? undefined,
+            unit_next_action: getField(content, "Unit Next Action") ?? undefined,
+          }
+        : {}),
     })
   );
 }

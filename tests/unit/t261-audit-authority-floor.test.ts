@@ -1,6 +1,6 @@
 // covers: cli:aidlc-audit(append-protected,append-batch-protected,append-raw-event-line,reserved-field-keys), subcommand:aidlc-bolt:set-autonomy, function:humanActedSinceGate, function:isNonAnswer
 //
-// t259 — the authority floor on the audit surface (issue 681, claims 3/4/7/8).
+// t261 — the authority floor on the audit surface (issue 681, claims 3/4/7/8).
 // Four related guarantees, each with a REFUSE case and an ALLOW case so the
 // floor neither leaks nor over-blocks:
 //
@@ -96,7 +96,7 @@ afterEach(() => {
   proj = "";
 });
 
-describe("t259 public audit CLI refuses authority-bearing receipts", () => {
+describe("t261 public audit CLI refuses authority-bearing receipts", () => {
   const PROTECTED = [
     "HUMAN_TURN",
     "GATE_APPROVED",
@@ -106,6 +106,10 @@ describe("t259 public audit CLI refuses authority-bearing receipts", () => {
     "REVIEW_COMPLETED",
     "SWARM_UNIT_CONVERGED",
     "AUTONOMY_MODE_SET",
+    "UNIT_STARTED",
+    "UNIT_PAUSED",
+    "UNIT_RESUMED",
+    "UNIT_COMPLETED",
   ];
 
   test("append refuses every protected event type", () => {
@@ -171,7 +175,7 @@ describe("t259 public audit CLI refuses authority-bearing receipts", () => {
   });
 });
 
-describe("t259 set-autonomy escalation requires and consumes a human turn", () => {
+describe("t261 set-autonomy escalation requires and consumes a human turn", () => {
   function constructionProject(): string {
     const p = createTestProject();
     seedStateFile(p, join(FIXTURES, "state-construction.md"));
@@ -223,7 +227,7 @@ describe("t259 set-autonomy escalation requires and consumes a human turn", () =
   });
 });
 
-describe("t259 humanActedSinceGate cross-shard same-second ambiguity", () => {
+describe("t261 humanActedSinceGate cross-shard same-second ambiguity", () => {
   const TS = "2026-07-30T10:00:00Z";
   function block(event: string, ts = TS, fields = ""): string {
     return `\n## ${event}\n**Timestamp**: ${ts}\n**Event**: ${event}\n${fields}\n---\n`;
@@ -283,7 +287,7 @@ describe("t259 humanActedSinceGate cross-shard same-second ambiguity", () => {
   });
 });
 
-describe("t259 cancellation boilerplate is not a decision", () => {
+describe("t261 cancellation boilerplate is not a decision", () => {
   function ideationProject(): string {
     const p = createTestProject();
     seedStateFile(p, join(FIXTURES, "state-mid-ideation.md"));

@@ -861,6 +861,10 @@ const STATE_ALLOWLIST = [
   "Revision Count",
   "Parked",
   "Parked At Stage",
+  "Active Unit",
+  "Unit State",
+  "Unit Pause Reason",
+  "Unit Next Action",
 ] as const;
 
 // Audit event types that carry routing/gate signal. Other event types (and all

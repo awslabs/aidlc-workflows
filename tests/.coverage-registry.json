@@ -1789,7 +1789,7 @@
           "mechanism": "cli"
         },
         {
-          "file": "tests/unit/t259-audit-authority-floor.test.ts",
+          "file": "tests/unit/t261-audit-authority-floor.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1924,7 +1924,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t259-audit-authority-floor.test.ts",
+          "file": "tests/unit/t261-audit-authority-floor.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4740,7 +4740,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/unit/t259-audit-authority-floor.test.ts",
+          "file": "tests/unit/t261-audit-authority-floor.test.ts",
           "mechanism": "cli"
         },
         {

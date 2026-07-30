@@ -902,7 +902,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t243-doctor-bundle.test.ts",
     "unit/t247-claim-sources-sensor.test.ts",
     "unit/t258-ars-subcommand.test.ts",
-    "unit/t259-audit-authority-floor.test.ts",
+    "unit/t261-audit-authority-floor.test.ts",
     "unit/t260-unit-lifecycle-receipts.test.ts",
     "unit/t262-plugin-sensor-name-guard.test.ts",
     "unit/t265-plan-approval-guard.test.ts",

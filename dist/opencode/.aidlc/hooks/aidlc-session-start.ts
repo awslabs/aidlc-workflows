@@ -224,6 +224,17 @@ const next = getField(content, "Next Action") ?? "resume current stage";
 const agent = getField(content, "Active Agent") ?? "unknown";
 const scope = getField(content, "Scope") ?? "unknown";
 
+// Unit-level checkpoint (issue 681 claim 2): when a per-unit stage stopped
+// mid-unit, name the exact unit, its state, and — for a paused unit — the
+// recorded reason and next action, so a fresh session lands on the stopping
+// point instead of re-deriving it from disk coverage.
+const activeUnit = getField(content, "Active Unit");
+const unitLine = activeUnit
+  ? `Active Unit: ${activeUnit} (${getField(content, "Unit State") ?? "in-progress"}` +
+    `${getField(content, "Unit Pause Reason") ? `; reason: ${getField(content, "Unit Pause Reason")}` : ""}` +
+    `${getField(content, "Unit Next Action") ? `; next: ${getField(content, "Unit Next Action")}` : ""})\n`
+  : "";
+
 // Check for compaction recovery breadcrumb
 const recoveryFile = recoveryFilePath(projectDir);
 const recovery = existsSync(recoveryFile)
@@ -256,7 +267,7 @@ Status: ${status}
 Active Agent: ${agent}
 Last Completed: ${last}
 Next Action: ${next}
-${recovery}${driftNote}On resume: offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Check the active intent's aidlc-state.md for full context.
+${unitLine}${recovery}${driftNote}On resume: offer the user the standard resume options (Resume / Redo / Jump / Start Fresh). Check the active intent's aidlc-state.md for full context.
 
 FORWARDING-LOOP DISCIPLINE (non-negotiable — the engine owns ALL routing):
 - The engine binary (\`aidlc-orchestrate.ts\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, you commit with \`report\`, you repeat. You never re-derive routing yourself.

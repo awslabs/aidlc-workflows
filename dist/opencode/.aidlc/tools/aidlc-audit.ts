@@ -333,6 +333,14 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "REVIEW_COMPLETED",
   "SWARM_UNIT_CONVERGED",
   "AUTONOMY_MODE_SET",
+  // Unit lifecycle receipts: routing trusts UNIT_COMPLETED as the completion
+  // signal (unitSettled) and UNIT_PAUSED as the hard-stop checkpoint, and the
+  // owning verb verifies artifacts before committing — a CLI-forged receipt
+  // would skip that verification. Owned by `aidlc-state.ts unit`.
+  "UNIT_STARTED",
+  "UNIT_PAUSED",
+  "UNIT_RESUMED",
+  "UNIT_COMPLETED",
 ]);
 
 function directAuditEventsAllowed(): boolean {
