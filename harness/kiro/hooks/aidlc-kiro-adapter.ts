@@ -591,7 +591,10 @@ if (target === "dispatch-rules") {
     cwd: projectDir,
     stdout: "pipe",
     stderr: "pipe",
-    env: projectEnv,
+    env: {
+      ...projectEnv,
+      AIDLC_DISPATCH_RULES_PRELOAD_FALLBACK: "1",
+    },
   });
   if (r.exitCode === 2) {
     // A required rule file could not be loaded at all (missing/unreadable):
@@ -599,6 +602,13 @@ if (target === "dispatch-rules") {
     // one case that still blocks, with the core hook's repair guidance.
     process.stderr.write(r.stderr?.toString() ?? "");
     return 2;
+  }
+  if (r.exitCode === 3) {
+    // The bundle is valid but too large for the hook rewrite channel. Kiro's
+    // agent-v1 resources preload the same active memory files, so this is the
+    // advisory fallback case rather than an unloadable-rule block.
+    process.stderr.write(r.stderr?.toString() ?? "");
+    return 0;
   }
   if ((r.stdout?.toString().trim() ?? "") !== "") {
     process.stderr.write(

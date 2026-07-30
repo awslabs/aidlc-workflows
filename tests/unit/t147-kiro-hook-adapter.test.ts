@@ -147,6 +147,28 @@ function runAdapter(
   };
 }
 
+function runDispatchCore(
+  projectDir: string,
+  payload: unknown,
+): { stdout: string; stderr: string; code: number } {
+  const r = spawnSync(
+    "bun",
+    [join(projectDir, ".kiro", "hooks", "aidlc-dispatch-rules.ts")],
+    {
+      cwd: projectDir,
+      input: JSON.stringify(payload),
+      encoding: "utf-8",
+      env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+      timeout: 30_000,
+    },
+  );
+  return {
+    stdout: r.stdout ?? "",
+    stderr: r.stderr ?? "",
+    code: r.status ?? -1,
+  };
+}
+
 describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   test("1: stop blocks with a reason while the workflow has pending work", () => {
     const dir = scratchProject(true);
@@ -275,31 +297,102 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       );
       expect(incomplete.stderr).toContain("The dispatch proceeded");
 
-      const org = readFileSync(
-        join(dir, "aidlc", "spaces", "default", "memory", "org.md"),
-        "utf-8",
-      );
-      const inception = readFileSync(
-        join(
-          dir,
-          "aidlc",
-          "spaces",
-          "default",
-          "memory",
-          "phases",
-          "inception.md",
-        ),
-        "utf-8",
-      );
+      const proposed = runDispatchCore(dir, payload(basePrompt));
+      expect(proposed.code, proposed.stderr).toBe(0);
+      const rewrite = JSON.parse(proposed.stdout) as {
+        hookSpecificOutput?: {
+          updatedInput?: {
+            stages?: Array<{ prompt_template?: string }>;
+          };
+        };
+      };
+      const exactPrompt =
+        rewrite.hookSpecificOutput?.updatedInput?.stages?.[0]?.prompt_template ??
+        "";
+      expect(exactPrompt).toContain("AIDLC_DISPATCH_RULES_BEGIN");
       const complete = runAdapter(
         dir,
         "dispatch-rules",
-        payload(`${basePrompt}\n\n${org}\n\n${inception}`),
+        payload(exactPrompt),
       );
       expect(complete.code, complete.stderr).toBe(0);
       expect(complete.stdout).toBe("");
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("5c: oversized valid rules use Kiro preload while unloadable rules still block", () => {
+    const oversizedDir = scratchProject(true);
+    try {
+      cpSync(
+        join(REPO_ROOT, "dist", "kiro", "aidlc"),
+        join(oversizedDir, "aidlc"),
+        { recursive: true },
+      );
+      writeFileSync(
+        join(
+          oversizedDir,
+          "aidlc",
+          "spaces",
+          "default",
+          "memory",
+          "org.md",
+        ),
+        `# Organization\n\n${"x".repeat(600_000)}\n`,
+        "utf-8",
+      );
+      const oversized = runAdapter(oversizedDir, "dispatch-rules", {
+        cwd: oversizedDir,
+        tool_name: "subagent",
+        tool_input: {
+          stages: [{
+            role: "aidlc-product-agent",
+            prompt_template:
+              "Run .kiro/aidlc-common/stages/inception/user-stories.md.",
+          }],
+        },
+      });
+      expect(oversized.code, oversized.stderr).toBe(0);
+      expect(oversized.stdout).toBe("");
+      expect(oversized.stderr).toContain("exceeds the safe");
+      expect(oversized.stderr).toContain("active-memory preload fallback");
+    } finally {
+      rmSync(oversizedDir, { recursive: true, force: true });
+    }
+
+    const missingDir = scratchProject(true);
+    try {
+      cpSync(
+        join(REPO_ROOT, "dist", "kiro", "aidlc"),
+        join(missingDir, "aidlc"),
+        { recursive: true },
+      );
+      rmSync(
+        join(
+          missingDir,
+          "aidlc",
+          "spaces",
+          "default",
+          "memory",
+          "org.md",
+        ),
+      );
+      const missing = runAdapter(missingDir, "dispatch-rules", {
+        cwd: missingDir,
+        tool_name: "subagent",
+        tool_input: {
+          stages: [{
+            role: "aidlc-product-agent",
+            prompt_template:
+              "Run .kiro/aidlc-common/stages/inception/user-stories.md.",
+          }],
+        },
+      });
+      expect(missing.code).toBe(2);
+      expect(missing.stderr).toContain("Cannot load required stage rule");
+    } finally {
+      rmSync(missingDir, { recursive: true, force: true });
     }
   });
 

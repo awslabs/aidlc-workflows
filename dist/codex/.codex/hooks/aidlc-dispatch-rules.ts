@@ -4,15 +4,16 @@
 //
 // Claude and Codex consume the emitted updatedInput directly. OpenCode's
 // adapter consumes the same output and mutates output.args. Kiro CLI has no
-// input-rewrite channel, so its adapter treats a proposed rewrite as a retry
-// guard; the next attempt must contain the exact bundle. Kiro IDE cannot expose
-// tool arguments and instead preloads active memory through always-included
-// workspace steering with live file references.
+// input-rewrite channel, so its adapter observes the proposed rewrite and
+// relies on native agent resource preload. Kiro IDE cannot expose tool arguments
+// and instead preloads active memory through always-included workspace steering
+// with live file references.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import {
+  agentsDir,
   getField,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
@@ -43,12 +44,13 @@ const EXEMPT_AGENTS = new Set(["aidlc-composer-agent"]);
 // ceiling. Oversized bundles fail before writing so callers receive complete
 // repair guidance instead of a truncated, invalid JSON response.
 const DISPATCH_HOOK_OUTPUT_MAX_BYTES = 512 * 1024;
+const PRELOAD_FALLBACK_ENV = "AIDLC_DISPATCH_RULES_PRELOAD_FALLBACK";
 
 function isAidlcAgent(value: unknown): value is string {
   return (
     typeof value === "string" &&
-    value.startsWith("aidlc-") &&
-    value.endsWith("-agent") &&
+    /^[a-z0-9][a-z0-9-]*-agent$/.test(value) &&
+    existsSync(join(agentsDir(), `${value}.md`)) &&
     !EXEMPT_AGENTS.has(value)
   );
 }
@@ -80,7 +82,10 @@ function promptStage(prompt: string, fallback: string | null): GraphStage | null
   const stagePath = prompt.match(
     /(?:^|[/\\])stages[/\\](?:initialization|ideation|inception|construction|operation)[/\\]([a-z0-9][a-z0-9-]*)\.md\b/i,
   );
-  if (stagePath) return bySlug.get(stagePath[1]) ?? null;
+  if (stagePath) {
+    const explicit = bySlug.get(stagePath[1]);
+    if (explicit) return explicit;
+  }
 
   if (fallback) return bySlug.get(fallback) ?? null;
 
@@ -110,8 +115,12 @@ function bundleBlock(stage: string, content: RuleContent[]): string {
   );
 }
 
-function hasExactBundle(prompt: string, content: RuleContent[]): boolean {
-  return content.every(({ text }) => prompt.includes(text));
+function hasExactBundle(
+  prompt: string,
+  stage: string,
+  content: RuleContent[],
+): boolean {
+  return prompt.includes(bundleBlock(stage, content));
 }
 
 function augmentText(
@@ -125,7 +134,7 @@ function augmentText(
   if (bundle.error) return { prompt, changed: false, error: bundle.error };
   if (
     bundle.content.length === 0 ||
-    hasExactBundle(prompt, bundle.content)
+    hasExactBundle(prompt, node.slug, bundle.content)
   ) {
     return { prompt, changed: false };
   }
@@ -278,6 +287,14 @@ export async function run(input: string): Promise<number> {
     })}\n`;
   const outputBytes = Buffer.byteLength(output, "utf-8");
   if (outputBytes > DISPATCH_HOOK_OUTPUT_MAX_BYTES) {
+    if (process.env[PRELOAD_FALLBACK_ENV] === "1") {
+      process.stderr.write(
+        `Advisory: the ${outputBytes}-byte active-stage rule bundle exceeds the safe ` +
+          `${DISPATCH_HOOK_OUTPUT_MAX_BYTES}-byte dispatch rewrite limit. No partial JSON was ` +
+          "written; continue only through the harness-native active-memory preload fallback.\n",
+      );
+      return 3;
+    }
     process.stderr.write(
       `The active-stage rule bundle would produce a ${outputBytes}-byte dispatch hook response, ` +
         `exceeding the safe ${DISPATCH_HOOK_OUTPUT_MAX_BYTES}-byte output limit. ` +

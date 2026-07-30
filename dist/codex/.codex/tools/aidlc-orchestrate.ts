@@ -67,8 +67,20 @@
 // per the tool/agent/human split (routing string-building to an LLM would
 // invert the whole thesis).
 
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { type Dirent, existsSync, readFileSync, readdirSync } from "node:fs";
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
+import {
+  type Dirent,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -1700,11 +1712,92 @@ type SteeringTokenEnvelope = {
   m: string;
 };
 
+const STEERING_TOKEN_KEY_BYTES = 32;
+const STEERING_TOKEN_KEY_FILE = ".aidlc-steering-token-key";
+
+type SteeringTokenKeyResult = {
+  key: Buffer | null;
+  error: string | null;
+};
+
+function steeringTokenKeyPath(projectDir: string): string {
+  const statePath = stateFilePath(projectDir);
+  if (existsSync(statePath)) {
+    return join(dirname(statePath), STEERING_TOKEN_KEY_FILE);
+  }
+  return join(
+    projectDir,
+    "aidlc",
+    ".aidlc-sessions",
+    STEERING_TOKEN_KEY_FILE,
+  );
+}
+
+// The MAC key is machine-local runtime state, not a project-derived value an
+// untrusted continuation can recompute. It lives under the active intent's
+// already-gitignored .aidlc-* family, or the clone-local session runtime before
+// an intent exists, and is minted without changing workflow state. Repeated
+// next calls in one checkout reuse the key, so their tokens remain deterministic.
+function steeringTokenKey(
+  projectDir: string,
+  create: boolean,
+): SteeringTokenKeyResult {
+  const path = steeringTokenKeyPath(projectDir);
+  const read = (): SteeringTokenKeyResult => {
+    try {
+      const encoded = readFileSync(path, "utf-8").trim();
+      const key = Buffer.from(encoded, "base64url");
+      if (
+        key.length !== STEERING_TOKEN_KEY_BYTES ||
+        key.toString("base64url") !== encoded
+      ) {
+        return {
+          key: null,
+          error:
+            `The machine-local steering token key at "${path}" is invalid. ` +
+            "Delete it and run a fresh `next` to mint a replacement.",
+        };
+      }
+      return { key, error: null };
+    } catch (error) {
+      return {
+        key: null,
+        error:
+          `Cannot read the machine-local steering token key at "${path}" ` +
+          `(${errorMessage(error)}).`,
+      };
+    }
+  };
+
+  if (existsSync(path)) return read();
+  if (!create) return { key: null, error: null };
+
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    const key = randomBytes(STEERING_TOKEN_KEY_BYTES);
+    writeFileSync(path, `${key.toString("base64url")}\n`, {
+      encoding: "utf-8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    return { key, error: null };
+  } catch (error) {
+    // A concurrent first request may have won the exclusive create. Re-read
+    // that key so every process converges on the same continuation chain.
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return read();
+    return {
+      key: null,
+      error:
+        `Cannot create the machine-local steering token key at "${path}" ` +
+        `(${errorMessage(error)}). Fix the directory permissions, then run a fresh \`next\`.`,
+    };
+  }
+}
+
 function steeringTokenMac(
   payload: SteeringTokenPayload,
-  projectDir: string,
+  key: Buffer,
 ): string {
-  const key = sha256(`aidlc-steering-token-v1\0${projectDir}`);
   return createHmac("sha256", key)
     .update(JSON.stringify(payload), "utf-8")
     .digest("base64url");
@@ -1713,12 +1806,17 @@ function steeringTokenMac(
 function encodeSteeringToken(
   payload: SteeringTokenPayload,
   projectDir: string,
-): string {
+): { token: string | null; error: string | null } {
+  const loaded = steeringTokenKey(projectDir, true);
+  if (!loaded.key) return { token: null, error: loaded.error };
   const envelope: SteeringTokenEnvelope = {
     p: payload,
-    m: steeringTokenMac(payload, projectDir),
+    m: steeringTokenMac(payload, loaded.key),
   };
-  return Buffer.from(JSON.stringify(envelope), "utf-8").toString("base64url");
+  return {
+    token: Buffer.from(JSON.stringify(envelope), "utf-8").toString("base64url"),
+    error: null,
+  };
 }
 
 function decodeSteeringToken(
@@ -1726,6 +1824,8 @@ function decodeSteeringToken(
   projectDir: string,
 ): SteeringTokenPayload | null {
   try {
+    const loaded = steeringTokenKey(projectDir, false);
+    if (!loaded.key) return null;
     const decoded: unknown = JSON.parse(
       Buffer.from(token, "base64url").toString("utf-8"),
     );
@@ -1741,7 +1841,7 @@ function decodeSteeringToken(
     const envelope = decoded as { p: unknown; m: string };
     if (envelope.p === null || typeof envelope.p !== "object") return null;
     const expected = Buffer.from(
-      steeringTokenMac(envelope.p as SteeringTokenPayload, projectDir),
+      steeringTokenMac(envelope.p as SteeringTokenPayload, loaded.key),
       "base64url",
     );
     const actual = Buffer.from(envelope.m, "base64url");
@@ -1866,6 +1966,16 @@ function transportRunStage(
     directiveHash,
     index + 1,
   );
+  const encoded = encodeSteeringToken(
+    payload,
+    route.codekbCtx.projectDir,
+  );
+  if (!encoded.token) {
+    return errorDirective(
+      encoded.error ??
+        "Cannot protect the steering continuation token. Run a fresh `next` after repairing the machine-local runtime state.",
+    );
+  }
   const load: LoadSteeringDirective = {
     kind: "load-steering",
     stage: directive.stage,
@@ -1873,10 +1983,7 @@ function transportRunStage(
     part: index + 1,
     parts: chunks.length,
     rules_content: chunks[index],
-    continue_token: encodeSteeringToken(
-      payload,
-      route.codekbCtx.projectDir,
-    ),
+    continue_token: encoded.token,
   };
   if (Buffer.byteLength(JSON.stringify(load), "utf-8") > DIRECTIVE_MAX_BYTES) {
     return errorDirective(
@@ -1891,7 +1998,9 @@ function nodeForSlug(slug: string): GraphStage | undefined {
   return loadGraph().find((s) => s.slug === slug);
 }
 
-// The `next` handler — pure read, emits exactly one directive.
+// The `next` handler reads workflow state and emits exactly one directive. Rule
+// transport may lazily mint its machine-local MAC key, but never mutates shared
+// workflow state.
 function handleNext(args: string[], projectDir: string | undefined): void {
   const flags = parseNextFlags(args);
 
