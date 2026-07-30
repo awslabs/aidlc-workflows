@@ -65,6 +65,7 @@ import {
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
+  markHumanTurn,
   recordHookDrop,
   resolveProjectDirFromHook,
   stateFilePath,
@@ -179,11 +180,19 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
 // prompt in a project that never ran the framework does not scaffold audit
 // shards. Fail-open (try/catch, exit 0) so a mint failure never blocks the
 // human's turn.
+//
+// The seam ALSO touches the .aidlc-human-turn marker (markHumanTurn), which is
+// what makes the Stop hook's conversational carve-out work on this harness. The
+// IDE delivers no `transcript_path`, so the carve-out cannot read the turn
+// history; it compares this marker's mtime against .aidlc-engine-touch instead.
+// Both writes ride this one seam so the ledger and the marker can never
+// disagree about when a human spoke. See the marker family in aidlc-lib.ts.
 if (target === "record-human-turn") {
   try {
     const pd = process.cwd();
     if (existsSync(stateFilePath(pd))) {
       appendAuditEntry("HUMAN_TURN", {}, pd);
+      markHumanTurn(pd);
     }
   } catch {
     /* advisory - mint never blocks the turn */
@@ -513,9 +522,40 @@ function buildForward(): Forward {
     }
 
     case "continue-workflow":
-      // Kiro provides no stop_hook_active signal; the core hook's own
-      // 8-block no-progress ceiling is the loop guard (it defaults the flag
-      // to false). The {"decision":"block"} stdout contract is identical.
+      // ADVISORY ONLY ON THIS HARNESS. The IDE's `Stop` trigger cannot block and
+      // does not forward the hook's output — matching what
+      // aidlc-continue-workflow.json and the kiro-ide guide have always said.
+      // Measured live on IDE 1.x with a probe hook: the command RAN (witness
+      // file written), and neither its stdout nor its stderr reached the
+      // agent's context. The Stop payload is only
+      // `{session_id, hook_event_name, cwd}` — no transcript, no turn id. Kiro
+      // documents `Stop` outside the blockable set (only PreToolUse,
+      // UserPromptSubmit and PreTaskExec can block) and forwards stdout only for
+      // SessionStart and UserPromptSubmit. There is no `{"decision":"block"}`
+      // contract in Kiro for any trigger; that shape is Claude Code's.
+      //
+      // So the core hook still runs and its side effects are what matter here:
+      // the `continue-workflow.drops` carve-out record and the no-progress
+      // counter under `.aidlc-stop-hook/`. Its `{"decision":"block"}` stdout is
+      // produced and then discarded by the host. Forwarding-loop enforcement on
+      // the IDE therefore rests on the conductor's own Stop protocol, NOT on
+      // this hook. (An earlier revision of this comment claimed the block
+      // contract was "identical to Claude's". It never was; the probe above
+      // settles it.)
+      //
+      // Kiro also provides no `stop_hook_active`, so the flag defaults to false.
+      // That makes decideBlock's `prior === null && stopHookActive` seeding branch
+      // unreachable here: a hook joining an already-in-flight block sequence
+      // starts its count at 1 instead of 2, i.e. one extra counted block before
+      // releasing. The ceiling is run-mode aware (INTERACTIVE_BLOCK_CAP=2,
+      // AUTONOMOUS_BLOCK_CAP=8), not the fixed 8 a still earlier revision promised.
+      //
+      // The absent transcript no longer leaves the conversational carve-out inert:
+      // the core hook falls back to the `.aidlc-human-turn` / `.aidlc-engine-touch`
+      // mtime comparison, and the `record-human-turn` target above writes the
+      // former. On this harness that changes which record
+      // `continue-workflow.drops` gets and whether the counter advances — not
+      // what the human sees.
       return {
         hook: "aidlc-continue-workflow.ts",
         input: { hook_event_name: "Stop", stop_hook_active: false },

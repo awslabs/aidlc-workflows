@@ -3687,6 +3687,175 @@ export function stopHookDir(projectDir: string, intent?: string, space?: string)
   return join(docsRoot(projectDir, intent, space), ".aidlc-stop-hook");
 }
 
+// --- The turn-shape markers (the transcript-free conversational carve-out) ----
+//
+// The Stop hook's tier-3 conversational carve-out asks one question: "was the
+// ending turn the human's last prompt answered with NO workflow-engine
+// engagement?". On Claude and Codex the Stop payload carries `transcript_path`
+// and the hook reads that question straight off the transcript. Kiro (IDE and
+// CLI) and opencode deliver NO transcript and expose no per-turn history to a
+// hook at all, so the carve-out was inert there: every purely conversational
+// turn mid-stage fell through to the cap-bounded block and earned a spurious
+// forwarding-loop nudge.
+//
+// These two mtime markers reconstruct the same predicate from the filesystem:
+//
+//   .aidlc-human-turn   — touched by the UserPromptSubmit mint, once per human
+//                         prompt, alongside the HUMAN_TURN ledger event.
+//   .aidlc-engine-touch — touched by aidlc-orchestrate on every ADVANCING
+//                         invocation (`next` / `report` / `park`).
+//
+//   conversational  <=>  mtime(.aidlc-human-turn) > mtime(.aidlc-engine-touch)
+//
+// Why markers and not the audit ledger: `next` is read-only and emits NO audit
+// event, so a ledger-only predicate is BLIND to the exact failure the forwarding
+// loop exists to catch — a conductor that consulted the engine and then bailed
+// mid-loop. The engine marker sees it.
+//
+// THE LOAD-BEARING SUBTLETY: the Stop hook consults the engine ITSELF (it runs
+// `aidlc-orchestrate next` to learn whether work is pending). If that probe
+// touched the engine marker, the engine mtime would ALWAYS be newer than the
+// human mtime and the predicate would be false forever — the carve-out would
+// look implemented and do nothing. The probe is therefore marked with
+// STOP_HOOK_PROBE_ENV and the engine skips the touch when it sees it.
+//
+// Per-intent (under docsRoot), matching .aidlc-stop-hook/block-count.json — the
+// markers describe one workflow's turn shape, so they travel with the intent.
+// Already covered by the shipped `aidlc/spaces/*/intents/*/.aidlc-*` gitignore
+// rule, so neither marker is ever committed.
+export function humanTurnMarkerPath(projectDir: string, intent?: string, space?: string): string {
+  return join(docsRoot(projectDir, intent, space), ".aidlc-human-turn");
+}
+export function engineTouchMarkerPath(projectDir: string, intent?: string, space?: string): string {
+  return join(docsRoot(projectDir, intent, space), ".aidlc-engine-touch");
+}
+
+// The env marker that identifies the Stop hook's OWN read-only `next` probe.
+// Set by aidlc-stop.ts on its spawn; read by aidlc-orchestrate.ts to suppress
+// the engine touch. Without this the carve-out can never fire (see above).
+export const STOP_HOOK_PROBE_ENV = "AIDLC_STOP_HOOK_PROBE";
+
+// Touch a turn-shape marker. Only the mtime carries meaning, so the body is a
+// timestamp purely as a debugging affordance. The CALL never throws: these
+// markers are an advisory optimisation of the Stop hook's block decision, and a
+// write failure must never block a human's turn nor fail an engine invocation.
+//
+// BUT A FAILED WRITE MUST NOT LEAVE A STALE MARKER BEHIND, because the two
+// markers fail in OPPOSITE directions and only one of them is harmless:
+//   - human marker missing  -> the predicate reads "no evidence" -> the stop is
+//     blocked. Costs at most one spurious nudge. Safe.
+//   - engine marker STALE   -> the human marker keeps advancing past it, so
+//     EVERY subsequent engaged-then-bailed turn reads as conversational and is
+//     released. A silent, persistent fail-OPEN in exactly the direction the
+//     forwarding loop exists to catch.
+// That second case is reachable: an engine run under sudo leaves the file
+// root-owned, after which every user-mode writeFileSync fails EACCES while the
+// stale file persists. So on any failure we DELETE the marker — a missing marker
+// fails closed on the read side, and the unlink succeeds in the root-owned case
+// because the containing directory stays user-writable. If even the unlink
+// fails there is nothing further to do; the block cap remains the backstop.
+function touchTurnMarker(path: string): void {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${isoTimestamp()}\n`, "utf-8");
+  } catch {
+    // Degrade to "no evidence" rather than leaving a stale mtime that would
+    // silently relax the carve-out from here on. `recursive` so a directory
+    // squatting on the path (an unlikely but possible way for the write to fail
+    // while the path survives) is cleared too, not just a stale file.
+    try {
+      rmSync(path, { force: true, recursive: true });
+    } catch {
+      /* nothing left to try - the cap-bounded block is the backstop */
+    }
+  }
+}
+
+// NO WORKFLOW => NO MARKER. Both markers describe one workflow's turn shape, so
+// with nothing born there is nothing to describe. This self-gate is load-bearing
+// for more than tidiness: without it a marker write on a FRESH workspace would
+// create the record tree as a side effect (touchTurnMarker mkdir -p's the parent,
+// and docsRoot falls back to the bare space record root before birth), which
+// would break the invariant that `aidlc-orchestrate next` is a PURE READ that
+// births nothing. Mirrors the mint hooks' own `existsSync(stateFilePath(...))`
+// self-gate, so all four write sites agree.
+function workflowIsBorn(projectDir: string, intent?: string, space?: string): boolean {
+  try {
+    return existsSync(stateFilePath(projectDir, intent, space));
+  } catch {
+    return false;
+  }
+}
+
+// Record that a human just submitted a prompt. Called from the UserPromptSubmit
+// seam of every harness: the core aidlc-mint-presence.ts hook (Claude, opencode)
+// and both Kiro adapters' inlined `mint` targets.
+export function markHumanTurn(projectDir: string, intent?: string, space?: string): void {
+  if (!workflowIsBorn(projectDir, intent, space)) return;
+  touchTurnMarker(humanTurnMarkerPath(projectDir, intent, space));
+}
+
+// Record that the workflow engine was ADVANCED (not merely probed). Called from
+// aidlc-orchestrate.ts's `next` / `report` / `park` entry points. A no-op in three
+// cases: when STOP_HOOK_PROBE_ENV is set (the Stop hook's own probe — see above),
+// for read-only utility routing (excluded at the call site), and before birth.
+//
+// KNOWN COVERAGE GAP — the marker sees LESS than the transcript predicate does.
+// isEngineToolCall (below) counts as engagement any non-read-only aidlc-jump /
+// aidlc-bolt / aidlc-swarm invocation and the mutating aidlc-state verbs
+// (approve, advance, skip, set, …). NONE of those tools touch this marker: the
+// only writers are orchestrate's three subcommands. So on a transcript-free
+// harness a conductor that runs, say, `aidlc-jump` — mutating the stage pointer
+// and emitting audit — and then ends its turn without consulting the engine
+// reads as CONVERSATIONAL here, while the same turn BLOCKS on Claude/Codex where
+// the transcript is parsed. Those turns were always nudged before the marker
+// path existed, so this is a real (if narrow) relaxation on Kiro and opencode,
+// not merely an unimplemented nicety.
+//
+// It is documented rather than closed deliberately: closing it means touching
+// the marker from a seam all four tools cross (the audit-emission path, or
+// writeStateFile), which widens the blast radius well past this carve-out. If
+// that is ever done, delete this paragraph and the matching note in
+// docs/reference/06-hooks-and-tools.md rather than leaving a stale promise of
+// parity behind.
+export function markEngineTouch(projectDir: string, intent?: string, space?: string): void {
+  if (process.env[STOP_HOOK_PROBE_ENV] === "1") return;
+  if (!workflowIsBorn(projectDir, intent, space)) return;
+  touchTurnMarker(engineTouchMarkerPath(projectDir, intent, space));
+}
+
+// The transcript-free reading of "the ending turn was conversational": the last
+// human prompt is NEWER than the last engine advance. FAIL-CLOSED on every miss
+// — a missing marker (a pre-upgrade workspace, a workflow that has not yet
+// advanced once since the markers shipped), an unreadable stat, or an engine
+// touch at-or-after the human turn all return false, so the caller falls through
+// to the cap-bounded block. It can only ever ALLOW a stop, never cause one to
+// block, exactly like every other carve-out in the Stop hook.
+export function turnMarkersShowConversational(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): boolean {
+  try {
+    const humanPath = humanTurnMarkerPath(projectDir, intent, space);
+    const enginePath = engineTouchMarkerPath(projectDir, intent, space);
+    // Both markers must be present AND be regular files. An absent engine
+    // marker is NOT read as "the engine was never touched, therefore chat": it
+    // is read as "no evidence", because that is also the shape of a fresh
+    // install and of a wiped record dir. The isFile() check matters for the same
+    // fail-closed reason: anything else squatting on the path (a directory, a
+    // dangling symlink) would otherwise contribute a meaningless mtime to the
+    // comparison, and on the engine side a meaningless-but-old mtime reads as
+    // "chat" and releases the stop.
+    const humanStat = statSync(humanPath, { throwIfNoEntry: false });
+    const engineStat = statSync(enginePath, { throwIfNoEntry: false });
+    if (!humanStat?.isFile() || !engineStat?.isFile()) return false;
+    return humanStat.mtimeMs > engineStat.mtimeMs;
+  } catch {
+    return false; // unreadable markers: fall through to the cap
+  }
+}
+
 // `<root>/.aidlc-reviewer-dispatch.json` — the per-unit reviewer dispatch
 // record. The conductor writes it at stage-protocol 12a step 1 (per-unit
 // stages only) before invoking the reviewer sub-agent, and deletes it at step

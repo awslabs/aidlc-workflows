@@ -15,8 +15,15 @@
 // shards. The gate fails open on an empty ledger, so skipping the mint there is
 // safe. The mint is fail-open (try/catch, exit 0): a mint failure must never
 // block the human's turn.
+//
+// The same seam also touches the .aidlc-human-turn marker (markHumanTurn). The
+// ledger event serves the human-presence GATE; the marker serves the Stop hook's
+// conversational carve-out, which needs a cheap "when was the last human prompt,
+// relative to the last engine advance?" comparison that works on harnesses
+// delivering no transcript. Both are written from this one seam so they can never
+// disagree about when a human spoke. See the marker family in aidlc-lib.ts.
 import { existsSync } from "node:fs";
-import { resolveProjectDirFromHook, stateFilePath } from "../tools/aidlc-lib.ts";
+import { markHumanTurn, resolveProjectDirFromHook, stateFilePath } from "../tools/aidlc-lib.ts";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 
 export async function run(_input: string): Promise<number> {
@@ -24,6 +31,7 @@ try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   if (existsSync(stateFilePath(projectDir))) {
     appendAuditEntry("HUMAN_TURN", {}, projectDir);
+    markHumanTurn(projectDir);
   }
 } catch {
   // Non-fatal — a mint failure must never block the human's turn.

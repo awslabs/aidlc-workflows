@@ -126,6 +126,7 @@ import {
   READ_ONLY_FLAGS,
   readAllAuditShards,
   recordHookDrop,
+  markEngineTouch,
   relativeCodekbDir,
   relativeRecordDir,
   relativeSpaceRecordPrefix,
@@ -498,6 +499,34 @@ function roleInWords(agent: string): string {
   if (!match) return "";
   const fragment = match[1].replaceAll("-", " ");
   return TRADE_BY_ROLE[fragment] ?? fragment;
+}
+
+// Record that the engine was ADVANCED this turn, for the Stop hook's
+// conversational carve-out on transcript-free harnesses (Kiro, opencode). The
+// hook compares .aidlc-engine-touch's mtime against .aidlc-human-turn's: newer
+// engine => the conductor engaged the workflow => a bail mid-loop must still be
+// nudged; older => the human's last prompt was answered as pure chat.
+//
+// TWO exclusions keep the marker honest, and BOTH are load-bearing:
+//   1. The Stop hook's OWN `next` probe. markEngineTouch is a no-op when
+//      STOP_HOOK_PROBE_ENV is set (aidlc-lib.ts). Without it the hook's own
+//      consultation would refresh the marker on every stop, the predicate would
+//      be permanently false, and the carve-out would be silently dead code.
+//   2. Read-only routing (--status / --doctor / --help / --version, and the
+//      workspace verbs). These carry no workflow intent, so counting them as
+//      engagement would make "what's my status?" a non-conversational turn.
+//      isEngineToolCall exempts the same read-only flags, so the two predicates
+//      agree HERE — but they do not agree everywhere: the marker is blind to
+//      aidlc-jump / aidlc-bolt / aidlc-swarm and the mutating aidlc-state verbs,
+//      which the transcript predicate does count. See the coverage-gap note on
+//      markEngineTouch in aidlc-lib.ts; do not restate this as full parity.
+// Advisory throughout: a marker failure must never fail an engine invocation.
+function touchEngineMarker(projectDir: string | undefined): void {
+  try {
+    markEngineTouch(resolveProjectDir(projectDir));
+  } catch {
+    /* advisory - the marker is a Stop-hook optimisation, never a hard dependency */
+  }
 }
 
 // --- Terminal-directive constructors (the non-run-stage kinds) ---
@@ -2277,6 +2306,23 @@ function nodeForSlug(slug: string): GraphStage | undefined {
 // workflow state.
 function handleNext(args: string[], projectDir: string | undefined): void {
   const flags = parseNextFlags(args);
+
+  // Turn-shape marker: a `next` that ASKS FOR THE NEXT MOVE is engagement with
+  // the forwarding loop even though it mutates nothing — and it emits no audit
+  // event, which is precisely why the Stop hook's carve-out needs a marker
+  // rather than the ledger (a conductor that ran `next` and then bailed is
+  // invisible to the ledger but visible here). Read-only utility flags and the
+  // workspace verbs are excluded: they carry no workflow intent, so a status
+  // query stays a conversational turn.
+  //
+  // DELIBERATELY BEFORE Branch 0 (the roll-forward latch) below, so a `next` the
+  // latch swallows as a no-op still counts as engagement. That is the correct
+  // parity: on the transcript path a bare `next` counts too, latch or no latch —
+  // isEngineToolCall reads the command, not its outcome. Moving this after the
+  // latch would make the two predicates disagree about the same command. The
+  // same reasoning keeps it before the flag-validation early returns: an
+  // errored command still counted on the transcript path.
+  if (!flags.readOnly && !flags.workspaceCommand) touchEngineMarker(projectDir);
 
   if (flags.parseError) {
     emit(errorDirective(flags.parseError));
@@ -4659,6 +4705,11 @@ function handleResumeReport(
 function handleReport(args: string[], projectDir: string | undefined): void {
   const flags = parseReportFlags(args);
 
+  // Turn-shape marker: a `report` is unambiguous workflow engagement (it commits
+  // a transition), so it always disqualifies the turn from the Stop hook's
+  // conversational carve-out. See touchEngineMarker.
+  touchEngineMarker(projectDir);
+
   // Branch -1 — the --single stage-runner commit. A stage-runner reports
   // its lone stage via `report --single --stage <slug> --result <outcome>`; the
   // engine commits a synthetic-id STAGE_STARTED/STAGE_COMPLETED pair (audit only)
@@ -5107,6 +5158,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
 // is relayed verbatim as an error directive.
 function handlePark(_args: string[], projectDir: string | undefined): void {
   const pd = resolveProjectDir(projectDir);
+  // Turn-shape marker: a `park` mutates workflow state, so it is engagement. See
+  // touchEngineMarker. (The `parked` directive is a terminal allow in the Stop
+  // hook anyway, so this is belt-and-braces rather than load-bearing.)
+  touchEngineMarker(projectDir);
   const res = spawnState(pd, ["park"]);
   if (res.exitCode !== 0) {
     const detail = (res.stderr || res.stdout).trim();

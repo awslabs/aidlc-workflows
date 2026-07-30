@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 532,
+    "total": 538,
     "enumeratedByClass": {
-      "function": 286,
+      "function": 292,
       "audit": 82,
       "scope": 9,
       "stage": 32,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 134,
+      "function": 139,
       "audit": 40,
       "scope": 9,
       "stage": 9,
@@ -1543,6 +1543,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:engineTouchMarkerPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:ensureActiveSpaceCursor",
       "minMechanism": "none",
       "coveredBy": [
@@ -1855,6 +1867,18 @@
         {
           "file": "tests/unit/t188-human-presence-gate.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:humanTurnMarkerPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"
@@ -2312,6 +2336,30 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:markEngineTouch",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:markHumanTurn",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3413,6 +3461,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:STOP_HOOK_PROBE_ENV",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:stopHookDir",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3504,6 +3559,18 @@
         {
           "file": "tests/unit/t124-scope-transpose.test.ts",
           "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:turnMarkersShowConversational",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-turn-markers.test.ts",
+          "mechanism": "none"
         }
       ],
       "status": "covered"

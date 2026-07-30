@@ -661,8 +661,10 @@ export default async ({
       idleInFlight.add(sessionID);
       // opencode provides no stop_hook_active flag and no transcript, so the
       // core hook's run-mode-aware no-progress ceiling is the loop guard here
-      // (same degradation profile as Kiro; the conversational carve-out is
-      // inert and the INTERACTIVE cap releases a chatting human).
+      // (same degradation profile as Kiro). The absent transcript no longer makes
+      // the conversational carve-out inert: the core hook falls back to the
+      // `.aidlc-human-turn` / `.aidlc-engine-touch` mtime comparison, and the
+      // chat.message arm's aidlc-mint-presence.ts forward writes the former.
       let nudgeReason: string | null = null;
       try {
         const res = await runCore(

@@ -91,6 +91,8 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -190,7 +192,27 @@ afterAll(() => {
 // kind=$MOCK_KIND. `done` carries the terminal shape; `__nonzero__` simulates
 // an engine that fails to answer (non-zero exit, no directive). The hook
 // spawns this via join(projectDir, ".claude/tools/aidlc-orchestrate.ts").
+//
+// IT ALSO WRITES AN ENV WITNESS, and that is load-bearing rather than
+// incidental. The mock never calls markEngineTouch, so `.aidlc-engine-touch`
+// cannot be refreshed by the hook's probe no matter what the spawn env carries
+// — which means an mtime-equality assertion here is trivially satisfied and
+// passes even with the probe marking deleted from the hook (proved by mutation
+// in review of #687). The witness records what the hook ACTUALLY put in the
+// child's environment, so the assertion has something real to bite on. The lib
+// half of the same contract — markEngineTouch honouring the mark — is pinned
+// in-process by t259.
 const MOCK_ENGINE = `// t121 mock engine: emit one directive of kind=$MOCK_KIND.
+// Record the probe env var the parent delivered, before anything else can throw.
+try {
+  const { writeFileSync } = require("node:fs");
+  const { join } = require("node:path");
+  writeFileSync(
+    join(import.meta.dir, "..", "..", ".probe-env-witness.json"),
+    JSON.stringify({ probe: process.env.AIDLC_STOP_HOOK_PROBE ?? null }),
+    "utf-8",
+  );
+} catch { /* the witness is diagnostic; never fail the mock over it */ }
 const kind = process.env.MOCK_KIND ?? "run-stage";
 const stage = process.env.MOCK_STAGE ?? "requirements-analysis";
 const unit = process.env.MOCK_UNIT ?? "";
@@ -577,6 +599,40 @@ function seedTranscriptEntries(
   const path = join(proj, name);
   writeFileSync(path, `${lines.join("\n")}\n`, "utf-8");
   return path;
+}
+
+/**
+ * Seed the two turn-shape markers the transcript-free tier-3 carve-out reads:
+ * `<record>/.aidlc-human-turn` (written by the UserPromptSubmit mint) and
+ * `<record>/.aidlc-engine-touch` (written by an advancing aidlc-orchestrate).
+ * Only their RELATIVE mtimes matter, so this writes explicit, well-separated
+ * timestamps rather than sleeping:
+ *
+ *   humanNewer: true   -> human 60s AFTER the engine  => conversational turn
+ *   humanNewer: false  -> engine 60s AFTER the human   => engine was engaged
+ *
+ * `omitHuman` / `omitEngine` model the fail-closed inputs (a pre-upgrade
+ * workspace, or a record dir wiped mid-flight). utimesSync takes SECONDS.
+ */
+function seedTurnMarkers(
+  proj: string,
+  opts: { humanNewer: boolean; omitHuman?: boolean; omitEngine?: boolean },
+): void {
+  const rec = seededRecordDir(proj);
+  mkdirSync(rec, { recursive: true });
+  const base = Math.floor(Date.now() / 1000) - 600; // safely in the past
+  const humanAt = opts.humanNewer ? base + 60 : base;
+  const engineAt = opts.humanNewer ? base : base + 60;
+  const humanPath = join(rec, ".aidlc-human-turn");
+  const enginePath = join(rec, ".aidlc-engine-touch");
+  if (opts.omitHuman !== true) {
+    writeFileSync(humanPath, "seeded\n", "utf-8");
+    utimesSync(humanPath, humanAt, humanAt);
+  }
+  if (opts.omitEngine !== true) {
+    writeFileSync(enginePath, "seeded\n", "utf-8");
+    utimesSync(enginePath, engineAt, engineAt);
+  }
 }
 
 interface HookResult {
@@ -1253,6 +1309,149 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.rc).toBe(0);
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
     expect(guardCount(proj)).toBe(1); // a fresh first block, not released
+  }, 30000);
+
+  // =========================================================================
+  // (f2) THE TRANSCRIPT-FREE READING of the SAME tier-3 predicate. Kiro IDE,
+  // Kiro CLI and opencode deliver NO `transcript_path` — the Kiro `Stop` payload
+  // is only {session_id, hook_event_name, cwd} (live-captured on IDE 1.x; the
+  // richer {tool_name, tool_input, tool_response} shape belongs to the TOOL
+  // triggers, and "v1"/"v2" names the hook REGISTRATION schema, not the payload
+  // — docs/reference/kiro-ide-hook-payload.md). So before these cases the
+  // carve-out was inert on those harnesses: every purely conversational turn
+  // mid-stage fell to the cap and was counted as a no-progress block. The hook
+  // now reconstructs the predicate from two mtimes the framework writes on seams
+  // that already exist:
+  //
+  //   conversational <=> mtime(.aidlc-human-turn) > mtime(.aidlc-engine-touch)
+  //
+  // Same gating as the transcript path: positive-confirmation, autonomy-guarded,
+  // FAIL-CLOSED on any missing marker. It can only ever ALLOW. Note these cases
+  // pin the HOOK's decision, which is all this file can see; whether a given host
+  // acts on {"decision":"block"} is the host's contract and varies (opencode's
+  // plugin re-prompts with the reason; the Kiro IDE `Stop` trigger discards hook
+  // output entirely, so there the carve-out changes only stop.drops and the
+  // counter). See docs/reference/06-hooks-and-tools.md for the per-host table.
+  // =========================================================================
+  test("(f2) MARKERS, no transcript - human turn NEWER than the last engine touch allows the stop (conversational carve-out)", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // The engine was advanced at some earlier point, then the human spoke and
+    // the turn answered with pure prose. This is the shape of the bug: an
+    // engaged workflow, a pending run-stage, and a chat turn on top.
+    seedTurnMarkers(proj, { humanNewer: true });
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe(""); // allowed - the turn was conversational
+  }, 30000);
+
+  test("(f2) MARKERS - engine touch NEWER than the human turn still BLOCKS (conductor engaged then bailed mid-loop)", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // THE TEST THAT KEEPS THE FIX FROM BEING AN OFF-SWITCH. The conductor
+    // consulted the engine after the human's prompt and then tried to end the
+    // turn without reporting — exactly what the forwarding loop exists to catch.
+    seedTurnMarkers(proj, { humanNewer: false });
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(f2) MARKERS FAIL-CLOSED - a missing .aidlc-engine-touch is 'no evidence', not 'the engine was never touched'", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // A pre-upgrade workspace (or a wiped record dir) has the human marker but
+    // no engine marker. Reading that as "zero engine calls, therefore chat"
+    // would silently disable enforcement on every workspace that had not yet
+    // advanced once since the markers shipped, so it must read as no evidence.
+    seedTurnMarkers(proj, { humanNewer: true, omitEngine: true });
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+    expect(guardCount(proj)).toBe(1); // a fresh first block, not released
+  }, 30000);
+
+  test("(f2) MARKERS FAIL-CLOSED - a missing .aidlc-human-turn also falls through to the cap-bounded block", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    seedTurnMarkers(proj, { humanNewer: true, omitHuman: true });
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(f2) MARKERS AUTONOMY GUARD - conversational-shaped markers under autonomous Construction still BLOCK", () => {
+    const proj = makeProject();
+    // No human is chatting in an unattended run, so the carve-out must stay
+    // suppressed on the marker path exactly as it is on the transcript path.
+    seedInProgressWithQuestions(proj, { autonomy: "autonomous" });
+    seedTurnMarkers(proj, { humanNewer: true });
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(f2) TRANSCRIPT WINS - a delivered transcript is authoritative even when the markers disagree", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    // Claude/Codex parity: where the payload carries a transcript, the higher
+    // fidelity evidence decides. Markers say "chat"; the transcript shows the
+    // engine was engaged in the responding turn, so the hook must BLOCK. This
+    // pins that the marker fallback is a fallback, not an override.
+    seedTurnMarkers(proj, { humanNewer: true });
+    const tp = seedTranscript(proj, { format: "claude", engineCall: true });
+    const r = runHook(
+      proj,
+      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+      "run-stage",
+    );
+    expect(r.rc).toBe(0);
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, 30000);
+
+  test("(f2) THE PROBE IS MARKED - the hook delivers AIDLC_STOP_HOOK_PROBE=1 to its own engine consultation", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    seedTurnMarkers(proj, { humanNewer: true });
+    const enginePath = join(seededRecordDir(proj), ".aidlc-engine-touch");
+    const before = statSync(enginePath).mtimeMs;
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(r.rc).toBe(0);
+    expect(r.out).toBe(""); // still allowed after a real hook run
+
+    // THE ASSERTION THAT ACTUALLY BITES. The hook runs `aidlc-orchestrate next`
+    // on every stop to learn whether work is pending. If that consultation were
+    // unmarked, the real engine would refresh `.aidlc-engine-touch` on every
+    // stop, the engine mtime would always end up newer than the human mtime, and
+    // the carve-out would be permanently false — implemented-looking dead code.
+    //
+    // The mtime check below CANNOT catch that: the mock engine never calls
+    // markEngineTouch, so the marker is unrefreshable here regardless of the
+    // spawn env. An earlier revision of this case asserted only the mtime and
+    // passed with the probe marking deleted from the hook (mutation-proved in
+    // review of #687). The witness records the env the hook actually handed the
+    // child, so deleting the marking now fails this test.
+    const witness = JSON.parse(
+      readFileSync(join(proj, ".probe-env-witness.json"), "utf-8"),
+    ) as { probe: string | null };
+    expect(witness.probe).toBe("1");
+
+    // Retained as a regression guard on the mock's own inertness: if the mock is
+    // ever taught to advance the workflow, this catches the marker moving.
+    expect(statSync(enginePath).mtimeMs).toBe(before);
+  }, 30000);
+
+  test("(f2) the probe mark is scoped to the engine consultation, not leaked into the hook's own process", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    seedTurnMarkers(proj, { humanNewer: true });
+    // The hook must mark the CHILD's env only. Were it to set the variable on
+    // itself (process.env mutation) the mark would outlive the spawn and leak
+    // into anything else the session runs afterwards, silently suppressing real
+    // engine touches for the rest of the turn.
+    delete process.env.AIDLC_STOP_HOOK_PROBE;
+    runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    expect(process.env.AIDLC_STOP_HOOK_PROBE).toBeUndefined();
   }, 30000);
 
   // =========================================================================
