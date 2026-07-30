@@ -43,7 +43,7 @@ const EXPECTED_V2_REGISTRATIONS: Array<{
   { file: "aidlc-audit-logger.json", trigger: "PostToolUse", matcher: "fs_write|str_replace|fs_append", adapterTarget: "audit-and-sensors" },
   { file: "aidlc-runtime-compile.json", trigger: "PostToolUse", matcher: "execute_bash", adapterTarget: "runtime-compile" },
   { file: "aidlc-sync-statusline.json", trigger: "PostToolUse", matcher: "execute_bash", adapterTarget: "state-sync" },
-  { file: "aidlc-log-subagent.json", trigger: "PostToolUse", matcher: "invoke_sub_agent", adapterTarget: "log-subagent" },
+  { file: "aidlc-log-subagent.json", trigger: "PostToolUse", matcher: "^(subagent_.+|invoke_sub_agent)$", adapterTarget: "log-subagent" },
   { file: "aidlc-stop.json", trigger: "Stop", matcher: null, adapterTarget: "stop" },
 ];
 
@@ -90,6 +90,27 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
           expect(hook.action.command).toContain(`aidlc-kiro-adapter.ts ${reg.adapterTarget}`);
         });
       }
+
+      // The matcher is deliberately BROAD; the `subagent_response` exclusion is
+      // the ADAPTER's job (pinned by t218 N5b), because the direct and
+      // dispatcher entry points bypass this matcher entirely. Narrowing the
+      // regex here — e.g. requiring a trailing `-agent` — would silently drop
+      // completions from fork-added delegates whose names differ. This test
+      // pins the broad reach; it must NOT be "hardened" into an exclusion.
+      test("log-subagent matcher reaches every observed delegate completion name", () => {
+        const parsed = parseHookJson(tree.dir, "aidlc-log-subagent.json");
+        const matcher = new RegExp(parsed.hooks[0].matcher ?? "");
+        // The two forms captured live on IDE 0.12.333 and 1.0.89-1.0.138 (#459/#543).
+        expect(matcher.test("invoke_sub_agent")).toBe(true);
+        expect(matcher.test("subagent_aidlc-product-lead-agent")).toBe(true);
+        expect(matcher.test("subagent_aidlc-developer-agent")).toBe(true);
+        // A fork-added delegate that does not follow the aidlc-*-agent naming
+        // must still reach the adapter.
+        expect(matcher.test("subagent_my-custom-reviewer")).toBe(true);
+        // Unrelated tools must not.
+        expect(matcher.test("fs_write")).toBe(false);
+        expect(matcher.test("execute_bash")).toBe(false);
+      });
 
       test("session-end has NO v2 registration (Stop is turn-scoped, not session-scoped)", () => {
         expect(existsSync(join(tree.dir, "aidlc-session-end.json"))).toBe(false);

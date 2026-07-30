@@ -495,7 +495,9 @@ export interface IntegrationProjectOptions {
   withGreenfieldStub?: boolean;
   /** Drop in the brownfield-todo stub project. */
   withBrownfieldStub?: boolean;
-  /** Copy reverse-engineering artifacts into inception/reverse-engineering/. */
+  /** Copy the reverse-engineering deliverables into the space-level per-repo
+   *  codekb store (`aidlc/spaces/<space>/codekb/<repo>/`), where the stage
+   *  writes them — not into the intent record. */
   withReArtifacts?: boolean;
   /** Copy the requirements/design/units inception artifact set. */
   withInceptionArtifacts?: boolean;

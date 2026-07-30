@@ -17,8 +17,13 @@
   "toolsSettings": {
     "execute_bash": {
       "allowedCommands": [
-        "bun \\.kiro/tools/.*",
-        "date -u .*"
+        "bun (run )?[\"']?\\.kiro/tools/[A-Za-z0-9._-]+\\.ts[\"']?( .*)?",
+        "date -u( .*)?"
+      ],
+      "deniedCommands": [
+        "([^\\s]*/)?rm( [^\\s]+)* -[A-Za-z]*[rR][A-Za-z]*( .*)?",
+        "([^\\s]*/)?rm( [^\\s]+)* --recursive( .*)?",
+        "([^\\s]*/)?git( -[^\\s]+( (\"[^\"]*\"|'[^']*'|[^\\s]+))?)* push( .*)?"
       ]
     },
     "fs_write": {

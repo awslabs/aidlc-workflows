@@ -7,7 +7,15 @@
   "allowedTools": ["fs_read", "fs_write", "thinking"],
   "toolsSettings": {
     "execute_bash": {
-      "allowedCommands": ["bun \\.kiro/tools/.*", "date -u .*"]
+      "allowedCommands": [
+        "bun (run )?[\"']?\\.kiro/tools/[A-Za-z0-9._-]+\\.ts[\"']?( .*)?",
+        "date -u( .*)?"
+      ],
+      "deniedCommands": [
+        "([^\\s]*/)?rm( [^\\s]+)* -[A-Za-z]*[rR][A-Za-z]*( .*)?",
+        "([^\\s]*/)?rm( [^\\s]+)* --recursive( .*)?",
+        "([^\\s]*/)?git( -[^\\s]+( (\"[^\"]*\"|'[^']*'|[^\\s]+))?)* push( .*)?"
+      ]
     },
     "fs_write": {
       "allowedPaths": ["aidlc/spaces/**"]

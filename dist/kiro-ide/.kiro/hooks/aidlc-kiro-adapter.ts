@@ -2,19 +2,35 @@
 // aidlc-kiro-adapter.ts — the Kiro IDE hook shim (AUTHORED shell file; the
 // aidlc-*.ts hook bodies beside it are PACKAGED core, byte-shared with the
 // Claude Code harness). This is the IDE-specific adapter; the CLI harness ships
-// its own (harness/kiro/) which reads stdin. They are deliberately separate
-// files so neither carries a runtime "am I CLI or IDE?" branch.
+// its own (harness/kiro/) wired to kiro-cli's agent-JSON hook events and their
+// payload shapes. They are deliberately separate files so neither carries a
+// runtime "am I CLI or IDE?" branch.
 //
-// Kiro IDE hook context (live-captured on Kiro IDE 0.12-main — see
-// docs/reference/kiro-ide-hook-payload.md):
-//   1. stdin is OPENED BUT NEVER WRITTEN/CLOSED — reading it hangs. The IDE
-//      delivers context through the `USER_PROMPT` environment variable instead.
-//   2. USER_PROMPT is JSON: { toolName, toolArgs, toolResult, toolSuccess }.
-//      `toolArgs` is ALWAYS empty {} — the IDE never passes tool inputs. So the
-//      file path is recoverable ONLY from the `toolResult` prose, and the shell
-//      command is not recoverable at all (toolResult carries only stdout+exit).
-//   3. toolName arrives as the IDE tool name: `fs_write`, `str_replace`,
+// Kiro IDE hook context (live-captured on 0.12-main AND 1.0.165 — see
+// docs/reference/kiro-ide-hook-payload.md). The channel changed across IDE
+// generations; the adapter accepts BOTH:
+//   1. IDE 1.x (v2 hooks, `.kiro/hooks/aidlc-*.json`): context arrives as JSON
+//      on STDIN, snake_case: { session_id, hook_event_name, cwd, tool_name,
+//      tool_input, tool_response } — no success flag. USER_PROMPT is empty.
+//      stdin is written AND closed, so a read resolves promptly. A non-empty
+//      USER_PROMPT is nevertheless checked first to identify the legacy channel;
+//      the stdin read retains a short broken-channel timeout.
+//   2. IDE 0.12 (legacy `.kiro.hook` era): stdin was OPENED BUT NEVER
+//      WRITTEN/CLOSED — reading it hangs. Context came through the
+//      `USER_PROMPT` env var instead, camelCase: { toolName, toolArgs,
+//      toolResult, toolSuccess }; that non-empty payload is consumed immediately.
+//   3. Captured PostToolUse write/shell events have empty tool inputs, so their
+//      file path is recoverable ONLY from toolResult/tool_response prose and
+//      the shell command is not recoverable at all. Later 1.x builds populate
+//      some PreToolUse and delegation inputs (#543); do not generalize the
+//      PostToolUse limitation to every event.
+//   4. The tool name arrives as the IDE tool name: `fs_write`, `str_replace`,
 //      `fs_append`, `execute_bash`, etc.
+//
+// Payload acquisition is GATED to the two payload-dependent targets
+// (audit-and-sensors, log-subagent). Every other target is payload-independent
+// and never touches stdin — block fires on EVERY PreToolUse, and a 2s stall on
+// a never-closing stdin there would be felt on every tool call.
 //
 // Consequences, by target:
 //   - audit-and-sensors: scrape the written file path from toolResult prose
@@ -24,18 +40,21 @@
 //     filter and always forward — the core hook self-gates on the audit tail.
 //   - state-sync: payload-independent — the core hook reads the latest
 //     STAGE_STARTED slug from the audit tail (no task payload needed).
-//   - session-start/session-end/stop/log-subagent: no file path / command
-//     needed; build the same fixed inputs as before.
+//   - log-subagent: recovers the delegate's identity from the result prose or
+//     the 1.x `subagent_<agent>` tool name, plus the message (#459/#543).
+//   - session-start/session-end/stop: no payload needed; build the same
+//     fixed inputs as before.
 //
 // session-start emits {"additionalContext": "..."} — Kiro's context channel is
 // plain stdout at exit 0, so the shim unwraps the JSON and prints the text.
 // stop emits {"decision":"block","reason":"..."} — passed through verbatim.
 //
-// Usage (registered in .kiro/hooks/*.json v2 hook files for IDE 1.x+, and in
-// .kiro/hooks/*.kiro.hook legacy files for pre-1.0 builds):
+// Usage (registered in .kiro/hooks/aidlc-*.json — the IDE's v2 hook schema,
+// {"version":"v1","hooks":[{name,trigger,matcher,action}]}):
 //   bun .kiro/hooks/aidlc-kiro-adapter.ts <target>
-// where <target> ∈ session-start | audit-and-sensors | runtime-compile |
-//                  state-sync | log-subagent | stop | session-end
+// where <target> ∈ mint | block | session-start | audit-and-sensors |
+//                  runtime-compile | state-sync | log-subagent | stop |
+//                  session-end
 
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,41 +73,94 @@ import { existsSync, readFileSync } from "node:fs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
-// The IDE hands hook context via the USER_PROMPT env var (NOT stdin). Shape:
-//   { toolName, toolArgs (always {}), toolResult, toolSuccess }
+// The NORMALIZED hook context, whichever channel delivered it: 1.x snake_case
+// stdin { tool_name, tool_input, tool_response } or 0.12 camelCase USER_PROMPT
+// { toolName, toolArgs, toolResult, toolSuccess }. PostToolUse write/shell
+// captures have empty inputs; later 1.x builds populate some PreToolUse and
+// delegation inputs (#543), so normalization preserves either shape.
 interface IdeHookContext {
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolResult?: string;
   toolSuccess?: boolean;
+  malformedFields?: string[];
 }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// The two targets whose forward depends on the tool payload. Every other
+// target builds a fixed input (or reads only the filesystem), so it skips
+// payload acquisition entirely and keeps its zero-latency path.
+const PAYLOAD_TARGETS = new Set(["audit-and-sensors", "log-subagent"]);
 
 export async function run(
   target: string,
   input: string,
   _extraArgs: string[] = [],
 ): Promise<number> {
-void input;
 // LOAD-BEARING (not debug-only): this is the base dir for resolve(projectDir,
 // rawPath) that turns the IDE's workspace-relative write path into the absolute
 // path the core audit-logger's record-root check needs — the core fix of this
 // harness. It also feeds hookDebug/recordHookDrop. Do not remove it.
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
+// Normalize the hook context for the payload-dependent targets. IDE 1.x
+// delivers it as JSON on stdin (the `input` argument); 0.12 delivered it via
+// USER_PROMPT with stdin open-but-never-written. Prefer stdin, fall back to
+// the env var so 0.12 keeps working. Field names differ per channel — 0.12
+// camelCase {toolName, toolArgs, toolResult, toolSuccess}; 1.x snake_case
+// {tool_name, tool_input, tool_response} (no success flag) — accept both.
 let ide: IdeHookContext = {};
-{
-  const raw = process.env.USER_PROMPT ?? "";
-  if (raw.length > 0) {
+if (PAYLOAD_TARGETS.has(target)) {
+  let raw = input;
+  if (raw.trim().length === 0) raw = process.env.USER_PROMPT ?? "";
+  if (raw.trim().length > 0) {
     try {
-      ide = JSON.parse(raw) as IdeHookContext;
+      const parsed: unknown = JSON.parse(raw);
+      if (!isRecord(parsed)) {
+        ide = { malformedFields: ["payload"] };
+      } else {
+        const rawName = parsed.toolName ?? parsed.tool_name;
+        const rawArgs = parsed.toolArgs ?? parsed.tool_input;
+        const rawResult = parsed.toolResult ?? parsed.tool_response;
+        const rawSuccess = parsed.toolSuccess ?? parsed.tool_success;
+        const malformedFields: string[] = [];
+        if (rawName !== null && rawName !== undefined && typeof rawName !== "string") {
+          malformedFields.push("toolName");
+        }
+        if (rawArgs !== null && rawArgs !== undefined && !isRecord(rawArgs)) {
+          malformedFields.push("toolArgs");
+        }
+        if (rawResult !== null && rawResult !== undefined && typeof rawResult !== "string") {
+          malformedFields.push("toolResult");
+        }
+        if (
+          rawSuccess !== null &&
+          rawSuccess !== undefined &&
+          typeof rawSuccess !== "boolean"
+        ) {
+          malformedFields.push("toolSuccess");
+        }
+        ide = {
+          toolName: typeof rawName === "string" ? rawName : undefined,
+          toolArgs: isRecord(rawArgs) ? rawArgs : undefined,
+          toolResult: typeof rawResult === "string" ? rawResult : "",
+          toolSuccess: typeof rawSuccess === "boolean" ? rawSuccess : undefined,
+          malformedFields: malformedFields.length > 0 ? malformedFields : undefined,
+        };
+      }
     } catch {
-      // Malformed context — advisory hooks fail open.
-      ide = {};
+      // Malformed context — advisory hooks fail open without forwarding an
+      // event whose fields cannot be trusted.
+      ide = { malformedFields: ["JSON"] };
     }
   }
 }
 hookDebug(projectDir, "kiro-adapter", "invoked", {
   target,
+  hasStdinPayload: input.trim().length > 0,
   hasUserPrompt: (process.env.USER_PROMPT ?? "").length > 0,
   toolName: ide.toolName ?? "",
   toolResult: (ide.toolResult ?? "").slice(0, 160),
@@ -96,9 +168,9 @@ hookDebug(projectDir, "kiro-adapter", "invoked", {
 
 // --- mint: record a HUMAN_TURN event on prompt submit ---
 //
-// Wired by aidlc-mint.kiro.hook (promptSubmit). The IDE delivers no cwd payload
-// (context arrives via USER_PROMPT, which carries no project dir), so resolve
-// the project dir from process.cwd() — appendAuditEntry then resolves the
+// Wired by aidlc-mint.json (UserPromptSubmit). Payload-independent (never
+// reads stdin — a mint must never wait on it), so resolve the project dir
+// from process.cwd() — appendAuditEntry then resolves the
 // active intent from the on-disk cursor (aidlc/spaces/<space>/intents/active-intent)
 // using only that dir, so the event lands in the correct per-intent shard with
 // no payload. One ledger event per human turn; no marker file, no turn counter.
@@ -120,7 +192,7 @@ if (target === "mint") {
 
 // --- block: the preToolUse human-presence floor ---
 //
-// Wired by aidlc-block.kiro.hook (preToolUse). Hard-blocks tool calls ONLY while
+// Wired by aidlc-block.json (PreToolUse). Hard-blocks tool calls ONLY while
 // an approval gate is actually OPEN (a stage sits at [?] in the state file) and
 // no HUMAN_TURN has been recorded since the last gate resolution - the exit-2
 // floor behind the core handleApprove check. The gate-open predicate is
@@ -153,8 +225,8 @@ if (target === "block") {
 }
 
 // Extract the absolute path of the file a write tool just touched from the
-// IDE's toolResult prose. toolArgs is always empty, so this is the ONLY source.
-// Only the known Kiro wordings match; anything else returns "" so the caller
+// IDE's toolResult prose. Captured PostToolUse write inputs are empty, so this
+// is the ONLY path source on those events. Only the known Kiro wordings match; anything else returns "" so the caller
 // can record a visible drop (no silent no-op).
 //   fs_write    → "Created the <PATH> file."
 //   str_replace → "Replaced text in <PATH>"           (may carry a trailing
@@ -185,14 +257,25 @@ function canonicalWriteTool(name: string): "Write" | "Edit" | "" {
   return "";
 }
 
-// Recover the delegated agent's identity from its result text (#459). The IDE
-// surfaces no structured subagent roster, but the framework's delegation-target
-// agents self-identify on the first non-empty line as `**Reviewer:** <name>` or
-// `**Agent:** <name>` (the workaround pinned in issue #459). Scan the first few
-// lines for that marker; return "unknown" when none is present so the core
-// hook's default still applies. The captured name is trimmed of any trailing
-// markdown emphasis.
-function extractAgentIdentity(toolResult: string): string {
+// Recover the delegated agent's identity from the hook payload.
+//
+// PRECEDENCE IS AN AUDIT-INTEGRITY PROPERTY, NOT A STYLE CHOICE. On IDE 1.x the
+// tool name itself carries the delegate as `subagent_<agent>` (#543) — a
+// platform-provided identity the delegate cannot author. It therefore WINS over
+// the result prose: an incorrect or prompt-injected `**Agent:** <other>` line in
+// agent-written output must not be able to misattribute a SUBAGENT_COMPLETED row
+// to a different persona while a more authoritative identity is available.
+//
+// The prose markers (`**Reviewer:** <name>` / `**Agent:** <name>`, #459) stay as
+// the fallback because they are the ONLY signal on the 0.12 `invoke_sub_agent`
+// shape, which carries no structured identity. They also still cover a
+// degenerate `subagent_` whose suffix is empty. With neither, "unknown".
+function extractAgentIdentity(toolResult: string, toolName = ""): string {
+  const structured =
+    toolName.startsWith("subagent_") && toolName !== "subagent_response"
+      ? toolName.slice("subagent_".length).trim()
+      : "";
+  if (structured !== "") return structured;
   const lines = toolResult.split("\n").slice(0, 8);
   for (const line of lines) {
     const m = line.match(/^\s*\*\*(?:Reviewer|Agent)\s*:\*\*\s*(.+?)\s*$/);
@@ -204,11 +287,18 @@ function extractAgentIdentity(toolResult: string): string {
 type Forward = { hook: string; input: Record<string, unknown> } | null;
 
 function buildForward(): Forward {
+  if ((ide.malformedFields?.length ?? 0) > 0) {
+    recordHookDrop(
+      projectDir,
+      "kiro-adapter",
+      `${target}: malformed hook context fields (${ide.malformedFields?.join(", ")}) — event not forwarded`,
+    );
+    return null;
+  }
+
   switch (target) {
     case "session-start":
-      // Reached from the v2 SessionStart trigger (once per session on IDE
-      // 1.x+) or the legacy promptSubmit wiring (per prompt on pre-1.0, which
-      // carries no source discrimination). Either way every invocation is a
+      // UserPromptSubmit carries no source discrimination — every submit is a
       // startup from the core hook's perspective; its state-file self-gate
       // makes this a no-op outside active workflows.
       return {
@@ -218,15 +308,32 @@ function buildForward(): Forward {
 
     case "audit-and-sensors": {
       // postToolUse(write) → audit-logger THEN sensor-fire (both ship core).
-      // The file path comes from the toolResult prose (toolArgs is empty).
+      // Captured PostToolUse write inputs are empty, so the file path comes
+      // from the toolResult prose.
       //
       // A FAILED write must not be audited as a successful artifact update
-      // (#417): the IDE sets toolSuccess=false and toolResult carries error
-      // prose, and relying on that prose failing to match extractWrittenPath's
-      // patterns is implicit — guard it explicitly. Only false is treated as a
-      // failure; an absent toolSuccess (defensive) falls through to the path
-      // check so an unknown-shape payload is never silently dropped here.
+      // (#417): the 0.12 channel sets toolSuccess=false and toolResult carries
+      // error prose, and relying on that prose failing to match
+      // extractWrittenPath's patterns is implicit — guard it explicitly. Only
+      // false is treated as a failure; an absent success flag (the 1.x stdin
+      // channel carries none) falls through to the path check so an
+      // unknown-shape payload is never silently dropped here.
       if (ide.toolSuccess === false) return null;
+      // A payload target that ends up with NO context at all means acquisition
+      // failed on both channels (stdin raced out AND USER_PROMPT was empty) —
+      // a broken channel, not a legitimate no-op. Record a visible drop before
+      // the tool-name check so `--doctor` can surface it; falling through would
+      // exit silently at `canon === ""`, which is exactly the invisible-decay
+      // failure class this harness exists to eliminate. Distinguished from a
+      // non-write tool name (which DOES carry context and is a real no-op).
+      if (!ide.toolName && (ide.toolResult ?? "").trim() === "") {
+        recordHookDrop(
+          projectDir,
+          "kiro-adapter",
+          "audit-and-sensors: empty hook context (no stdin payload, no USER_PROMPT) — write not audited",
+        );
+        return null;
+      }
       const canon = canonicalWriteTool(ide.toolName ?? "");
       if (canon === "") return null;
       const rawPath = extractWrittenPath(ide.toolResult ?? "");
@@ -290,27 +397,52 @@ function buildForward(): Forward {
     }
 
     case "log-subagent": {
-      // The IDE surfaces no structured subagent roster, but the delegate
-      // self-identifies on the first line of its result (`**Reviewer:** <name>`
-      // / `**Agent:** <name>`, #459). Recover that identity rather than
-      // hardcoding "unknown", and forward the result text as the message so
-      // SUBAGENT_COMPLETED carries the real agent and a snippet of its output.
-      // (The hook registration already filters to invoke_sub_agent, so there is
-      // no tool-name gate here — dropping it is what revives the event on the IDE.)
+      // IDE 1.x has emitted both `invoke_sub_agent` and `subagent_<agent>` for
+      // real delegate completions (#543, live on 1.0.89-1.0.138).
       //
-      // An EMPTY payload is the IDE-1.x case (the payload arrives on stdin,
-      // which this adapter does not read, so USER_PROMPT — and with it
-      // toolResult — is empty). Forwarding it would fabricate a real
-      // SUBAGENT_COMPLETED row with `Agent Type: unknown` and no message.
-      // No-op instead, and record a VISIBLE drop so --doctor can surface the
-      // degradation until the stdin context channel lands. A NON-empty payload
-      // without an identity marker keeps the documented "unknown" fallback.
+      // DIVISION OF RESPONSIBILITY: the v2 matcher is deliberately BROAD
+      // (`^(subagent_.+|invoke_sub_agent)$`) so a fork-added delegate whose
+      // name does not end in `-agent` still reaches this adapter; narrowing the
+      // regex there would silently drop those completions. The exclusion of
+      // `subagent_response` — the empty "Response recorded." shell that carries
+      // non-empty prose but no identity, and would otherwise fabricate a
+      // SUBAGENT_COMPLETED row with `Agent Type: unknown` — lives HERE, where it
+      // also covers the direct and dispatcher entry points that bypass the
+      // matcher entirely.
+      const toolName = ide.toolName ?? "";
       const result = ide.toolResult ?? "";
+      // A completely empty context means acquisition failed on both channels.
+      // Check it before the tool-name gate; otherwise the empty name returns as
+      // a legitimate non-delegate no-op and the broken channel stays invisible.
+      if (toolName === "" && result.trim() === "") {
+        recordHookDrop(
+          projectDir,
+          "kiro-adapter",
+          "log-subagent: empty hook context (no stdin payload, no USER_PROMPT) — SUBAGENT_COMPLETED not recorded",
+        );
+        return null;
+      }
+
+      const isSubagentCompletion =
+        toolName === "invoke_sub_agent" ||
+        (toolName.startsWith("subagent_") && toolName !== "subagent_response");
+      if (!isSubagentCompletion) return null;
+
+      // Identity comes from the structured `subagent_<agent>` tool name when the
+      // platform supplies one, and only otherwise from the result's
+      // `**Reviewer:**` / `**Agent:**` prose (#459) — the sole signal on the 0.12
+      // `invoke_sub_agent` shape. Agent-authored prose must not override a
+      // platform-provided identity. Forward the result text so
+      // SUBAGENT_COMPLETED also carries an output snippet.
+      //
+      // An EMPTY result on an otherwise recognized completion must NOT
+      // fabricate a real SUBAGENT_COMPLETED row. Record a visible drop so
+      // --doctor can surface the degradation.
       if (result.trim() === "") {
         recordHookDrop(
           projectDir,
           "kiro-adapter",
-          "log-subagent: empty tool payload (IDE 1.x delivers context on stdin, which this adapter does not read) — SUBAGENT_COMPLETED not recorded",
+          "log-subagent: empty tool payload — SUBAGENT_COMPLETED not recorded",
         );
         return null;
       }
@@ -318,7 +450,7 @@ function buildForward(): Forward {
         hook: "aidlc-log-subagent.ts",
         input: {
           hook_event_name: "SubagentStop",
-          agent_type: extractAgentIdentity(result),
+          agent_type: extractAgentIdentity(result, toolName),
           agent_id: "",
           last_assistant_message: result,
         },
@@ -402,10 +534,49 @@ if (result.stdout) process.stdout.write(result.stdout);
 return result.code;
 }
 
+// The broken-channel ceiling for the 1.x stdin read. 2s in production; the
+// AIDLC_IDE_STDIN_TIMEOUT_MS seam lets the latency tests raise it far above any
+// plausible CI scheduling delay, so "did this path probe stdin at all?" becomes
+// a deterministic assertion instead of a tight millisecond budget.
+function stdinTimeoutMs(): number {
+  const override = Number(process.env.AIDLC_IDE_STDIN_TIMEOUT_MS ?? "");
+  return Number.isFinite(override) && override > 0 ? override : 2000;
+}
+
+async function readStdinWithTimeout(timeoutMs: number): Promise<string> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Bun.stdin.text(),
+      new Promise<string>((settle) => {
+        timeout = setTimeout(() => settle(""), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
 if (import.meta.main) {
-  // NEVER await stdin here, even when USER_PROMPT is absent: the IDE opens
-  // hook stdin but never writes or closes it, so any read hangs the hook
-  // process forever (see the header). Context arrives via USER_PROMPT only;
-  // run() ignores its input parameter by design.
-  process.exit(await run(process.argv[2] ?? "", "", process.argv.slice(3)));
+  const target = process.argv[2] ?? "";
+  // Acquire payload only for payload-dependent targets. A non-empty
+  // USER_PROMPT identifies the 0.12 channel and is consumed immediately: that
+  // IDE leaves stdin open forever, so probing stdin first imposed a mandatory
+  // 2s delay on every payload hook. IDE 1.x sends USER_PROMPT empty and writes
+  // + closes stdin; retain the timeout only as a defensive broken-channel
+  // ceiling. Every other target skips both channels (zero latency).
+  let input = "";
+  if (PAYLOAD_TARGETS.has(target)) {
+    const legacyPayload = process.env.USER_PROMPT ?? "";
+    if (legacyPayload.trim().length > 0) {
+      input = legacyPayload;
+    } else if (!process.stdin.isTTY) {
+      try {
+        input = await readStdinWithTimeout(stdinTimeoutMs());
+      } catch {
+        input = "";
+      }
+    }
+  }
+  process.exit(await run(target, input, process.argv.slice(3)));
 }

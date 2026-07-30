@@ -140,7 +140,24 @@ scope/jurisdiction boundaries, missing effective dates, unclear back-compat.
 - MED (0.30–0.69): some gaps identifiable, some answers inferable
 - LOW (0.00–0.29): self-contained, few implicit decisions
 
-#### 2.3 Computing ARS
+#### 2.3 Computing ARS (deterministic — never by hand)
+
+Do NOT compute the composite, bands, or any downstream number yourself. Score
+the five components with cited evidence, then run:
+
+```
+bun .claude/tools/aidlc-graph.ts ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>] [--project-type <t>]
+```
+
+and copy its numbers verbatim. The tool owns the weighted composite, the band
+labels, the per-stage EV screen against the cost priors, the nearest stock
+scopes by grid diff count, and the two pre-rendered gate tables. Pass
+`--project-type` with the classification Stage 0.2 (Workspace Detection)
+recorded: a stage whose compiled `condition:` restricts it to one kind of
+project (today Reverse Engineering, brownfield-only) is then screened out on
+the other kind instead of being scored, so the mechanical screen never
+proposes a stage the stage's own condition would skip. Its formula
+(documented here; the data lives in `tools/data/ars-priors.json`):
 
 ```
 ARS = 100 × [0.20·IAE + 0.30·CSU + 0.25·VE + 0.15·R + 0.10·UA]
@@ -483,6 +500,10 @@ A stage with cost=4 is justified when its target ARS component is > 0.4.
 A stage with cost=2 is justified when its target ARS component is > 0.2.
 A stage with cost=1 is always justified if the component is non-zero.
 
+These costs and thresholds are data, not prose: the `ars` subcommand reads
+them from `tools/data/ars-priors.json` and its output already applies this
+screen per stage. This table documents that file; edits belong there.
+
 ---
 
 ### Step 5: In-Flight Re-Estimation (for the In-Flight Moment)
@@ -587,7 +608,11 @@ Alongside the JSON, your returned proposal MUST include two pre-rendered
 markdown tables. The conductor relays your proposal to the human and cannot
 recompute or reconstruct anything, so what you return is exactly what the
 human sees: if a table is missing from your output, it is missing at the
-gate. All numbers come from the proposal JSON verbatim.
+gate. Do NOT hand-render the numbers: both tables come from the `ars` tool's
+`tables` output. Copy `tables.arsScores` (Table 1) verbatim. Start Table 2
+from `tables.stageDecisions` and update ONLY the rows your Step 4 folds
+changed (decision + reason, same format) — every untouched row keeps the
+tool's mechanical screen verbatim.
 
 **Table 1 (ARS scores).** Every component, its score, and its band, then the
 composite:
