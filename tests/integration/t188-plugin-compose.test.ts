@@ -781,6 +781,71 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(existsSync(auditLockDir(proj))).toBe(false);
   }, TIMEOUT_MS);
 
+  test("intent-birth and recompose wait beyond the default budget behind a live workspace holder", async () => {
+    const proj = mkdtempSync(join(tmp, "syn-utility-wait-"));
+    cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });
+    const utility = join(proj, ".claude", "tools", "aidlc-utility.ts");
+    const env = {
+      ...process.env,
+      CLAUDE_PROJECT_DIR: proj,
+      AIDLC_HARNESS_DIR: ".claude",
+    };
+    const initialBirth = spawnSync(
+      BUN,
+      [utility, "intent-birth", "--scope", "feature", "--project-dir", proj],
+      { cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000, env },
+    );
+    expect(initialBirth.status).toBe(0);
+
+    expect(acquireAuditLock(proj, 0, 1)).toBe(true);
+    const queued = [
+      Bun.spawn({
+        cmd: [
+          BUN,
+          utility,
+          "intent-birth",
+          "--scope",
+          "feature",
+          "--label",
+          "queued birth",
+          "--project-dir",
+          proj,
+        ],
+        cwd: proj,
+        stdout: "ignore",
+        stderr: "pipe",
+        env,
+      }),
+      Bun.spawn({
+        cmd: [
+          BUN,
+          utility,
+          "recompose",
+          "--skip",
+          "market-research",
+          "--project-dir",
+          proj,
+        ],
+        cwd: proj,
+        stdout: "ignore",
+        stderr: "pipe",
+        env,
+      }),
+    ];
+
+    let queuedPastDefault: boolean[] = [];
+    try {
+      await Bun.sleep(5_500);
+      queuedPastDefault = queued.map((child) => child.exitCode === null);
+    } finally {
+      releaseAuditLock(proj);
+    }
+
+    expect(queuedPastDefault).toEqual([true, true]);
+    expect(await Promise.all(queued.map((child) => child.exited))).toEqual([0, 0]);
+    expect(existsSync(auditLockDir(proj))).toBe(false);
+  }, TIMEOUT_MS);
+
   test("relative project env keeps compose and graph on the same workspace lock", () => {
     const proj = mkdtempSync(join(tmp, "syn-relative-project-"));
     cpSync(CLAUDE_DIST, join(proj, ".claude"), { recursive: true });

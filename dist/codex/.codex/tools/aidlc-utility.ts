@@ -137,6 +137,9 @@ const VALID_TEST_STRATEGIES: Record<string, string> = {
 };
 
 const CONFIG_KEYS = ["depth", "test-strategy"] as const;
+// These workspace transactions can legitimately queue behind a full plugin
+// compose (compile + runner regeneration), so they share its ~60s lock budget.
+const WORKSPACE_MUTATION_LOCK_RETRIES = 600;
 const NO_STATE_FILE_MESSAGE =
   "No state file found. Start a workflow first by describing what to build (/aidlc \"build the auth service\").";
 const INIT_TRANSITION_MESSAGE =
@@ -753,7 +756,6 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
   // regeneration (can exceed the default ~5s acquire budget on a loaded
   // machine), and select-plugins legitimately queues behind it - so wait up
   // to ~60s. Dead holders are reaped immediately regardless of budget.
-  const SELECT_PLUGINS_LOCK_RETRIES = 600;
   withAuditLock(projectDir, () => {
     // Compose can install a plugin while this command waits for the lock, so
     // discover and validate identities only after entering the transaction.
@@ -819,7 +821,7 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
       }
       die(`select-plugins failed: ${original}.${recoveryMessage}`);
     }
-  }, undefined, undefined, SELECT_PLUGINS_LOCK_RETRIES);
+  }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
 function pluginListRows(): Array<{ name: string; enabled: boolean }> {
@@ -3669,7 +3671,7 @@ function handleIntentBirth(projectDir: string, flags: Record<string, string>): v
     });
 
     handleIntentBirthStateBuild(projectDir, flags, scope, ts);
-  });
+  }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
 // The scope→stage state-build half of birth: the workspace detection + state
@@ -4791,7 +4793,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>): voi
         `Stages in scope: ${executeStages.length}\n` +
         `Completed: ${completedCount}/${executeStages.length}\n`,
     );
-  });
+  }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
 // ---------------------------------------------------------------------------
