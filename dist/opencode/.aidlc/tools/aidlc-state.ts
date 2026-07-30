@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   activeIntent,
+  activeUnitCheckpoint,
   appendSlug,
   appendUnderHeading,
   type CheckboxState,
@@ -600,6 +601,9 @@ export function main(argv: string[]): void {
       case "merge":
         handleMerge(args.slice(1));
         break;
+      case "unit":
+        handleUnit(args.slice(1));
+        break;
       case "park":
         handlePark(args.slice(1));
         break;
@@ -819,6 +823,186 @@ function handleUnpark(_args: string[]): void {
     writeStateFile(pd, content);
     console.log(JSON.stringify({ unparked: true, was_parked: wasParked }));
   });
+}
+
+// unit <start|pause|resume|complete> --stage <slug> --unit <name>
+//        [--reason <text>] [--next-action <text>]
+//
+// Unit-of-work lifecycle receipts for INLINE per-unit Construction stages
+// (for_each: unit-of-work, mode: inline). The engine's coverage walk
+// (aidlc-orchestrate.ts unitCovered) treats UNIT_COMPLETED as the completion
+// signal and artifact existence as the evidence checked HERE, at emit time —
+// so a paused or partially-written unit can never be mistaken for a finished
+// one just because its files exist. UNIT_PAUSED requires --reason and
+// --next-action so a resumed session (or another machine) lands on the exact
+// checkpoint; the runtime `Active Unit` / `Unit State` fields mirror the
+// latest receipt for cheap status reads. The autonomous swarm keeps its own
+// SWARM_UNIT_* ledger (aidlc-swarm.ts) — this verb is the interactive twin.
+//
+// Single-active-unit invariant: `start` refuses while another unit of the
+// same stage is non-terminal (started/resumed/paused without a later
+// UNIT_COMPLETED), so resume/restart races cannot create two active units.
+// `resume` refuses unless the named unit is the currently-paused one.
+function handleUnit(args: string[]): void {
+  const action = args[0];
+  const VALID_UNIT_ACTIONS = new Set(["start", "pause", "resume", "complete"]);
+  if (!action || !VALID_UNIT_ACTIONS.has(action)) {
+    error(
+      `Usage: aidlc-state.ts unit <start|pause|resume|complete> --stage <slug> --unit <name> [--reason <text>] [--next-action <text>]`,
+    );
+  }
+  const rest = args.slice(1);
+  const slug = getFlagValue(rest, "--stage");
+  const unit = getFlagValue(rest, "--unit");
+  const reason = getFlagValue(rest, "--reason")?.trim();
+  const nextAction = getFlagValue(rest, "--next-action")?.trim();
+  if (!slug) error("Missing --stage <slug>");
+  if (!unit) error("Missing --unit <name>");
+  const stage = findStageBySlug(slug);
+  if (!stage) error(`Unknown stage: ${slug}`);
+  if (stage.for_each !== "unit-of-work") {
+    error(`Stage "${slug}" is not per-unit (for_each: unit-of-work); unit receipts do not apply.`);
+  }
+  if (action === "pause") {
+    if (!reason) error("unit pause requires --reason <text> (why the unit stopped).");
+    if (!nextAction) error("unit pause requires --next-action <text> (the exact next step on resume).");
+  }
+
+  const pd = resolveProjectDir(projectDir);
+  // One lock across read→validate→emit→write (the C2b idiom): the checkpoint
+  // read and the receipt append must see one ledger snapshot, or two racing
+  // `unit start` calls could both pass the single-active-unit check.
+  withAuditLock(pd, () => {
+    let content = readStateFile(pd);
+    const checkpoint = activeUnitCheckpoint(pd, slug);
+
+    if (action === "start") {
+      if (checkpoint && checkpoint.unit !== unit) {
+        error(
+          `Refusing to start unit "${unit}" for "${slug}": unit "${checkpoint.unit}" is ${checkpoint.state}` +
+            `${checkpoint.reason ? ` (reason: ${checkpoint.reason})` : ""}. ` +
+            `${checkpoint.state === "paused" ? `Resume it (aidlc-state.ts unit resume --stage ${slug} --unit ${checkpoint.unit}) or complete it first.` : "Complete it first."} ` +
+            "One active unit at a time.",
+        );
+      }
+      if (checkpoint && checkpoint.unit === unit) {
+        // Idempotent re-entry on the same unit: a crashed conductor may re-run
+        // start after resume; acknowledge without a duplicate receipt.
+        console.log(JSON.stringify({ unit, stage: slug, state: checkpoint.state, already_active: true }));
+        return;
+      }
+    } else if (action === "pause" || action === "complete") {
+      if (!checkpoint || checkpoint.unit !== unit) {
+        error(
+          `Refusing to ${action} unit "${unit}" for "${slug}": it is not the active unit` +
+            `${checkpoint ? ` (active: "${checkpoint.unit}", ${checkpoint.state})` : " (no unit is active — start it first)"}.`,
+        );
+      }
+      if (action === "complete" && checkpoint.state === "paused") {
+        error(
+          `Refusing to complete unit "${unit}" for "${slug}": it is paused` +
+            `${checkpoint.reason ? ` (reason: ${checkpoint.reason})` : ""}. Resume it first ` +
+            `(aidlc-state.ts unit resume --stage ${slug} --unit ${unit}); a paused unit's work is not done.`,
+        );
+      }
+    } else if (action === "resume") {
+      if (!checkpoint || checkpoint.unit !== unit || checkpoint.state !== "paused") {
+        error(
+          `Refusing to resume unit "${unit}" for "${slug}": it is not the paused unit` +
+            `${checkpoint ? ` (active: "${checkpoint.unit}", ${checkpoint.state})` : " (no unit is active)"}.`,
+        );
+      }
+    }
+
+    // UNIT_COMPLETED is receipt-plus-evidence: the receipt commits only when
+    // every applicable required artifact for THIS unit exists on disk. This is
+    // the claim-1 inversion — the artifact walk moved from "is the transition"
+    // to "is checked by the transition".
+    if (action === "complete" && !artifactGuardDisabled()) {
+      const missing = missingUnitArtifacts(pd, stage, unit);
+      if (missing.length > 0) {
+        error(
+          `Refusing to complete unit "${unit}" for "${slug}": required artifacts are missing on disk ` +
+            `(${missing.join(", ")}). Write the unit's artifacts before completing it.`,
+        );
+      }
+    }
+
+    let eventType: string;
+    if (action === "start") eventType = "UNIT_STARTED";
+    else if (action === "pause") eventType = "UNIT_PAUSED";
+    else if (action === "resume") eventType = "UNIT_RESUMED";
+    else eventType = "UNIT_COMPLETED";
+    const fields: Record<string, string> = { Stage: slug, Unit: unit };
+    if (reason) fields.Reason = reason;
+    if (nextAction) fields["Next Action"] = nextAction;
+
+    try {
+      emitAudit(pd, eventType, fields);
+    } catch (e) {
+      error(`Audit emission failed: ${errorMessage(e)}`);
+    }
+
+    // Mirror the latest checkpoint into runtime state for cheap status reads
+    // (audit stays the source of truth — these fields are a cache, exactly like
+    // Parked / Parked At Stage).
+    const timestamp = isoTimestamp();
+    if (action === "complete") {
+      content = removeField(content, "Active Unit");
+      content = removeField(content, "Unit State");
+      content = removeField(content, "Unit Pause Reason");
+      content = removeField(content, "Unit Next Action");
+    } else {
+      content = setOrInsertField(content, "## Runtime State", "Active Unit", unit);
+      content = setOrInsertField(
+        content,
+        "## Runtime State",
+        "Unit State",
+        action === "pause" ? "paused" : "in-progress",
+      );
+      if (action === "pause") {
+        content = setOrInsertField(content, "## Runtime State", "Unit Pause Reason", reason ?? "");
+        content = setOrInsertField(content, "## Runtime State", "Unit Next Action", nextAction ?? "");
+      } else {
+        content = removeField(content, "Unit Pause Reason");
+        content = removeField(content, "Unit Next Action");
+      }
+    }
+    content = setField(content, "Last Updated", timestamp);
+    writeStateFile(pd, content);
+    console.log(JSON.stringify({ emitted: eventType, stage: slug, unit, timestamp }));
+  });
+}
+
+// The unit's missing REQUIRED artifacts (kind-filtered like the engine's
+// unitCovered): resolved under <record>/construction/<unit>/<slug>/<name>.md.
+// Returns [] when everything applicable exists. Kind filtering reads the
+// bolt_dag the same way the engine does; with no readable dag the FULL
+// required list applies (fail strict, like unitCovered's kinds=null path).
+function missingUnitArtifacts(
+  pd: string,
+  stage: { slug: string; produces?: string[]; produces_kinds?: Record<string, string[]> },
+  unit: string,
+): string[] {
+  const rec = recordDir(pd);
+  if (rec === null) return stage.produces ?? ["<no record dir>"];
+  let required = stage.produces ?? [];
+  if (stage.produces_kinds !== undefined) {
+    const resolution = resolveBoltDag(pd);
+    if (resolution.state === "ok" && resolution.unitKinds !== null) {
+      required = filterProducesByKind(
+        stage.produces_kinds,
+        required,
+        resolution.unitKinds.get(unit) ?? null,
+      );
+    }
+  }
+  const missing: string[] = [];
+  for (const name of required) {
+    const p = join(rec, "construction", unit, stage.slug, `${name}.md`);
+    if (!existsSync(p)) missing.push(name);
+  }
+  return missing;
 }
 
 function handleCheckbox(args: string[]): void {

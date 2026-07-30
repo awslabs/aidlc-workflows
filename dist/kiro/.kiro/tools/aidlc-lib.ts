@@ -4822,6 +4822,87 @@ export function swarmConvergedUnits(
   return converged;
 }
 
+// The set of units the CURRENT attempt of an INLINE per-unit stage has
+// completion receipts for, from the UNIT_COMPLETED rows `aidlc-state.ts unit
+// complete` writes — the interactive-path twin of swarmConvergedUnits, with
+// the same attempt-floor discipline: a row counts only when its Stage names
+// this slug AND its timestamp is not older than the stage's latest
+// main-workflow STAGE_STARTED (a re-entered stage re-earns its receipts).
+// Artifact existence is deliberately NOT consulted here: the receipt is the
+// transition, artifacts are the evidence the receipt-writer checked at emit
+// time. A paused or partially-written unit has artifacts but no receipt, so it
+// stays uncovered.
+export function unitCompletedReceipts(
+  projectDir: string,
+  slug: string,
+): Set<string> {
+  const audit = readAllAuditShards(projectDir);
+  if (!audit) return new Set();
+  const floor = latestMainWorkflowStageStarted(audit, slug);
+  const done = new Set<string>();
+  for (const { timestamp, block } of findAllEvents(audit, "UNIT_COMPLETED")) {
+    if (auditBlockField(block, "Stage") !== slug) continue;
+    if (floor && timestamp < floor) continue;
+    const unit = auditBlockField(block, "Unit");
+    if (unit) done.add(unit);
+  }
+  return done;
+}
+
+// The active unit-lifecycle checkpoint for a stage: the LATEST UNIT_STARTED /
+// UNIT_PAUSED / UNIT_RESUMED / UNIT_COMPLETED row per unit (current attempt
+// only, same floor as unitCompletedReceipts), reduced to the unit whose latest
+// row is a non-terminal state. Returns the paused unit with its recorded
+// Reason / Next Action (for the resume path and the paused-first routing), or
+// the in-flight unit (started/resumed, not yet completed), or null when no
+// unit is mid-lifecycle. At most one unit can be non-terminal on the inline
+// path (the engine emits one unit at a time); if a corrupted ledger carries
+// several, the LATEST row wins — deterministic, and `unit start` refuses to
+// open a second active unit anyway.
+export function activeUnitCheckpoint(
+  projectDir: string,
+  slug: string,
+): { unit: string; state: "in-progress" | "paused"; reason: string | null; nextAction: string | null } | null {
+  const audit = readAllAuditShards(projectDir);
+  if (!audit) return null;
+  const floor = latestMainWorkflowStageStarted(audit, slug);
+  const UNIT_EVENTS = new Set(["UNIT_STARTED", "UNIT_PAUSED", "UNIT_RESUMED", "UNIT_COMPLETED"]);
+  // One chronological pass over the blocks ((timestamp, buffer position) — the
+  // findAllEvents ordering, applied across all four event types at once so a
+  // same-second resume→pause sequence keeps its append order).
+  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
+  const rows: { ts: string; pos: number; event: string; block: string; unit: string }[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const ev = auditBlockField(blocks[i], "Event");
+    if (!ev || !UNIT_EVENTS.has(ev)) continue;
+    if (auditBlockField(blocks[i], "Stage") !== slug) continue;
+    const ts = auditBlockField(blocks[i], "Timestamp") ?? "";
+    if (floor && ts < floor) continue;
+    const unit = auditBlockField(blocks[i], "Unit");
+    if (!unit) continue;
+    rows.push({ ts, pos: i, event: ev, block: blocks[i], unit });
+  }
+  rows.sort((a, b) => (a.ts !== b.ts ? (a.ts < b.ts ? -1 : 1) : a.pos - b.pos));
+  const latest = new Map<string, { event: string; block: string }>();
+  for (const row of rows) {
+    latest.set(row.unit, { event: row.event, block: row.block });
+  }
+  // Most recently touched unit whose FINAL row is non-terminal wins (walk the
+  // chronological rows backwards; a unit completed by a later row is skipped).
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const { unit } = rows[i];
+    const final = latest.get(unit);
+    if (!final || final.event === "UNIT_COMPLETED") continue;
+    return {
+      unit,
+      state: final.event === "UNIT_PAUSED" ? "paused" : "in-progress",
+      reason: auditBlockField(final.block, "Reason"),
+      nextAction: auditBlockField(final.block, "Next Action"),
+    };
+  }
+  return null;
+}
+
 // Latest STAGE_STARTED slug in an audit buffer, or null if none. findAllEvents
 // returns events in chronological order (timestamp, then buffer position), so
 // the last STAGE_STARTED block is the most recent transition. The slug lives in

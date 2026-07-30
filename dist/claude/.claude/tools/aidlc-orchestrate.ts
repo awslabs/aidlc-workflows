@@ -97,6 +97,7 @@ import {
 } from "./aidlc-directive.ts";
 import {
   activeSpace,
+  activeUnitCheckpoint,
   auditBlockField,
   type CheckboxLine,
   checkSummaryConfirmationEvidence,
@@ -134,6 +135,7 @@ import {
   type StageEntry,
   stateFilePath,
   swarmConvergedUnits,
+  unitCompletedReceipts,
   toPosix,
   validScopes,
   harnessDir,
@@ -2947,11 +2949,54 @@ function unitCovered(
   return true;
 }
 
-// Walk the ordered unit list and find the units whose artifacts are not all
-// present on disk. Returns {unit, uncovered} where `unit` is the FIRST uncovered
+// The per-stage unit-receipt ledger: the current attempt's UNIT_COMPLETED
+// receipts plus whether the unit lifecycle is IN USE for this stage (any
+// receipt or an active checkpoint exists). When in use, receipts become the
+// completion authority and artifact existence degrades to evidence — a paused
+// or partially-written unit has artifacts but no receipt and stays uncovered
+// (issue: artifact presence was mistaken for completion). When NOT in use
+// (legacy ledger-free flow, pre-receipt workflows mid-flight), coverage stays
+// artifact-driven, so nothing breaks on upgrade.
+type UnitLedger = {
+  receipts: Set<string>;
+  checkpoint: ReturnType<typeof activeUnitCheckpoint>;
+  inUse: boolean;
+};
+function unitLedgerFor(projectDir: string, slug: string): UnitLedger {
+  const receipts = unitCompletedReceipts(projectDir, slug);
+  const checkpoint = activeUnitCheckpoint(projectDir, slug);
+  return { receipts, checkpoint, inUse: receipts.size > 0 || checkpoint !== null };
+}
+
+// A unit is SETTLED when its artifacts exist AND, when the receipt ledger is
+// in use, a current-attempt UNIT_COMPLETED receipt names it. Kind-vacuous
+// units (required set filters to empty — the stage does not apply) never
+// receive directives, so they can never earn receipts: they settle on the
+// artifact rule alone, exactly as before.
+function unitSettled(
+  projectDir: string,
+  node: GraphStage,
+  unit: string,
+  recordPrefix: string | null,
+  codekbCtx: CodekbCtx,
+  unitKind: string | null,
+  ledger: UnitLedger,
+): boolean {
+  if (!unitCovered(projectDir, node, unit, recordPrefix, codekbCtx, unitKind)) return false;
+  if (!ledger.inUse) return true;
+  const names = node.produces ?? [];
+  if (names.length > 0 && applicableProduceNames(node, unitKind, false).length === 0) {
+    return true; // vacuous for this kind — no directive, no receipt to earn
+  }
+  return ledger.receipts.has(unit);
+}
+
+// Walk the ordered unit list and find the units that are not yet settled
+// (artifacts missing, or — with the receipt ledger in use — no UNIT_COMPLETED
+// receipt). Returns {unit, uncovered} where `unit` is the FIRST unsettled
 // unit (the one the engine emits next) and `uncovered` is the full ordered list
-// of not-yet-covered units (so the caller can name them without re-scanning the
-// disk), or null when EVERY unit is already covered (the stage's per-unit work is
+// of not-yet-settled units (so the caller can name them without re-scanning the
+// disk), or null when EVERY unit is already settled (the stage's per-unit work is
 // complete; the caller then presents the final gate, see emitPerUnitRunStage).
 // Order is the topo order from orderedUnits, so the engine produces unit
 // dependencies before their dependents.
@@ -2963,17 +3008,19 @@ function nextUncoveredUnit(
   codekbCtx: CodekbCtx,
   kinds: Map<string, string> | null,
   stateContent: string | null,
+  ledger: UnitLedger,
 ): { unit: string; uncovered: string[] } | { error: string } | null {
   const uncovered: string[] = [];
   for (const unit of units) {
     if (
-      !unitCovered(
+      !unitSettled(
         projectDir,
         node,
         unit,
         recordPrefix,
         codekbCtx,
         kinds?.get(unit) ?? null,
+        ledger,
       )
     ) {
       uncovered.push(unit);
@@ -2986,6 +3033,14 @@ function nextUncoveredUnit(
     if (!confirmation.ok) return { error: confirmation.message };
   }
   if (uncovered.length === 0) return null;
+  // An in-flight unit (UNIT_STARTED/RESUMED without a terminal receipt) routes
+  // FIRST regardless of topo position: the single-active-unit invariant means
+  // new work must not begin while one unit is open (a crashed session's active
+  // unit is picked up before anything else).
+  const active = ledger.checkpoint;
+  if (active && uncovered.includes(active.unit)) {
+    return { unit: active.unit, uncovered };
+  }
   return { unit: uncovered[0], uncovered };
 }
 
@@ -3040,6 +3095,28 @@ function emitPerUnitRunStage(
   // The resolution carries batches + kinds from one graph snapshot. null =
   // no kinds known = every unit on the full matrix.
   const kinds = r.unitKinds;
+  const ledger = unitLedgerFor(projectDir, node.slug);
+
+  // PAUSED-UNIT HARD STOP (issue: a paused unit routed back as ordinary stage
+  // work with no conductor stop). A unit paused via `aidlc-state.ts unit pause`
+  // carries an explicit reason and next action; the engine surfaces exactly
+  // that checkpoint and STOPS — the conductor must not resume work until an
+  // explicit `unit resume` (a deliberate move, usually after the human weighs
+  // in on the pause reason). Ask, don't run: the ask directive is terminal for
+  // the turn, exactly like the resume-choice ask.
+  if (ledger.checkpoint?.state === "paused") {
+    const cp = ledger.checkpoint;
+    emit(askDirective(
+      `Unit "${cp.unit}" of stage "${node.slug}" is PAUSED (unit_state: paused)` +
+        `${cp.reason ? ` — reason: ${cp.reason}` : ""}.` +
+        `${cp.nextAction ? ` Recorded next action: ${cp.nextAction}.` : ""} ` +
+        `Do not start other work. Resume this unit (bun ${harnessDir()}/tools/aidlc-state.ts unit resume ` +
+        `--stage ${node.slug} --unit ${cp.unit}) and continue from the recorded next action, or ask ` +
+        "the human how to proceed. STOP until the unit is explicitly resumed.",
+    ));
+    return;
+  }
+
   const pick = nextUncoveredUnit(
     projectDir,
     node,
@@ -3048,6 +3125,7 @@ function emitPerUnitRunStage(
     codekbCtx,
     kinds,
     stateContent,
+    ledger,
   );
   if (pick !== null && "error" in pick) {
     emit(errorDirective(pick.error));
@@ -3076,11 +3154,11 @@ function emitPerUnitRunStage(
     node, projectType, pick.unit, scope, stateContent, recordPrefix, codekbCtx,
     kinds?.get(pick.unit) ?? null,
   );
-  // Suppress the gate on EVERY not-yet-covered unit. A per-unit directive with an
-  // uncovered unit carries gate:false: the conductor completes the body, writes
+  // Suppress the gate on EVERY not-yet-settled unit. A per-unit directive with an
+  // unsettled unit carries gate:false: the conductor completes the body, writes
   // the unit's artifacts, and re-runs `next` (NO report-approve), so the checkbox
-  // stays in-flight and the engine emits the next uncovered unit. Once the LAST
-  // unit's artifacts land on disk, the next `next` takes the pick === null branch
+  // stays in-flight and the engine emits the next unsettled unit. Once the LAST
+  // unit settles, the next `next` takes the pick === null branch
   // above and presents the stage's real gate, so the single human approval covers
   // the whole stage only after all units are built. We override AFTER building so
   // the rest of the directive (paths, reviewer, persona) is unchanged.
@@ -3195,16 +3273,37 @@ function emitUnitMajorRunStage(
 
   // Walk units OUTER (Bolt DAG topo order: dependencies before dependents),
   // block stages INNER (graph order, dependency-safe per unit by the compile
-  // invariant). Emit the first uncovered (stage, unit) pair with the gate
+  // invariant). Emit the first unsettled (stage, unit) pair with the gate
   // suppressed, using the same post-build override pattern as
   // emitPerUnitRunStage (the conductor acts on directive.stage + directive.unit,
   // not on Current Stage, so an interleaved slug needs no protocol change).
   // Kinds read ONCE (the single-read pattern): coverage must see the same
   // kind-pruned artifact set the directive names, or a pruned unit never covers.
+  // Ledgers read per block stage (each stage keeps its own receipt set); the
+  // paused-unit hard stop mirrors emitPerUnitRunStage — a pause on ANY block
+  // stage halts the walk before new (stage, unit) work.
   const kinds = resolution.unitKinds;
+  const ledgers = new Map<string, UnitLedger>(
+    block.map((k) => [k.slug, unitLedgerFor(projectDir, k.slug)]),
+  );
+  for (const k of block) {
+    const cp = ledgers.get(k.slug)?.checkpoint;
+    if (cp?.state === "paused") {
+      emit(askDirective(
+        `Unit "${cp.unit}" of stage "${k.slug}" is PAUSED (unit_state: paused)` +
+          `${cp.reason ? ` — reason: ${cp.reason}` : ""}.` +
+          `${cp.nextAction ? ` Recorded next action: ${cp.nextAction}.` : ""} ` +
+          `Do not start other work. Resume this unit (bun ${harnessDir()}/tools/aidlc-state.ts unit resume ` +
+          `--stage ${k.slug} --unit ${cp.unit}) and continue from the recorded next action, or ask ` +
+          "the human how to proceed. STOP until the unit is explicitly resumed.",
+      ));
+      return;
+    }
+  }
   for (const u of units) {
     for (const k of block) {
-      if (!unitCovered(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null)) {
+      const ledger = ledgers.get(k.slug) ?? unitLedgerFor(projectDir, k.slug);
+      if (!unitSettled(projectDir, k, u, recordPrefix, codekbCtx, kinds?.get(u) ?? null, ledger)) {
         const directive = buildRunStageDirective(
           k, projectType, u, scope, stateContent, recordPrefix, codekbCtx,
           kinds?.get(u) ?? null,
@@ -4011,6 +4110,19 @@ function checkStageCompletionEvidence(
     if (resolution.state === "ok") {
       const units = resolution.batches.flat();
       const recordPrefix = relativeRecordDir(pd);
+      const ledger = unitLedgerFor(pd, slug);
+      // A paused unit blocks approval outright: its work is not done and the
+      // pause carries an explicit next action a gate must not paper over.
+      if (ledger.checkpoint?.state === "paused") {
+        const cp = ledger.checkpoint;
+        return {
+          ok: false,
+          message:
+            `Stage "${slug}" cannot enter approval: unit "${cp.unit}" is paused` +
+            `${cp.reason ? ` (reason: ${cp.reason})` : ""}. Resume and complete it first ` +
+            `(bun ${harnessDir()}/tools/aidlc-state.ts unit resume --stage ${slug} --unit ${cp.unit}).`,
+        };
+      }
       const pick = nextUncoveredUnit(
         pd,
         node,
@@ -4019,6 +4131,7 @@ function checkStageCompletionEvidence(
         codekbCtxFor(pd),
         unitKinds,
         stateContent,
+        ledger,
       );
       if (pick !== null && "error" in pick) {
         return { ok: false, message: pick.error };

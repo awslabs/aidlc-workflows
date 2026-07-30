@@ -13,7 +13,7 @@ commands a stage or conductor invokes directly.
 
 All event names follow `SUBJECT_PAST_VERB` — every event answers "what happened?"
 
-## Event Registry (78 events, 20 categories)
+## Event Registry (82 events, 21 categories)
 
 ### Workflow Lifecycle (4 events)
 
@@ -85,6 +85,20 @@ All event names follow `SUBJECT_PAST_VERB` — every event answers "what happene
 | `SUMMARY_CONFIRMATION_RECORDED` | Consolidated-summary choice recorded after the matching prompt and a fresh human turn; reserved from the public audit CLI | Timestamp, Stage, Details, Checkpoint, Questions File, Questions SHA-256; optional Unit, Workflow | `tools/aidlc-log.ts answer --checkpoint summary-confirmation` |
 | `REVIEW_REQUESTED` | Conductor dispatches the §12a reviewer sub-agent; reserved from the public audit CLI | Timestamp, Stage, Reviewer, Iteration, optional Unit (per-unit stages), optional Retry (`pending-request` recovery of an unmatched request) | `tools/aidlc-log.ts review` |
 | `REVIEW_COMPLETED` | Reviewer verdict read; gates the approval of a reviewer-bearing stage, must pair to the same request iteration, and is reserved from the public audit CLI | Timestamp, Stage, Reviewer, Iteration, Verdict, Artifact Fingerprint (`sha256:<hex>` over declared artifact paths and bytes), optional Unit (per-unit stages) | `tools/aidlc-log.ts review --verdict` |
+
+### Unit Lifecycle Events (4 events — inline per-unit Construction stages)
+
+The interactive twin of the swarm's `SWARM_UNIT_*` ledger. `UNIT_COMPLETED` is
+the completion receipt the engine's coverage walk prefers over bare artifact
+existence once any receipt exists for the stage; the emitting verb verifies
+the unit's required artifacts on disk before committing it.
+
+| Event | When | Required Fields | Emitter |
+|-------|------|-----------------|---------|
+| `UNIT_STARTED` | A unit's work begins on an inline per-unit stage; refused while another unit of the stage is open | Timestamp, Stage, Unit | `tools/aidlc-state.ts unit start` |
+| `UNIT_PAUSED` | A unit stops before completion; the checkpoint carries why and what comes next | Timestamp, Stage, Unit, Reason, Next Action | `tools/aidlc-state.ts unit pause` |
+| `UNIT_RESUMED` | The paused unit is explicitly resumed (the engine hard-stops until this) | Timestamp, Stage, Unit | `tools/aidlc-state.ts unit resume` |
+| `UNIT_COMPLETED` | The unit's work is done AND its required artifacts exist on disk (verified at emit) | Timestamp, Stage, Unit | `tools/aidlc-state.ts unit complete` |
 
 ### Artifact Events (3 events — hook-emitted)
 

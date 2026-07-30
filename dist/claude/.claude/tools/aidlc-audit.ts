@@ -63,6 +63,17 @@ const VALID_EVENT_TYPES = new Set([
   // and complete-workflow).
   "REVIEW_REQUESTED",
   "REVIEW_COMPLETED",
+  // Unit-of-work lifecycle on INLINE per-unit Construction stages (for_each:
+  // unit-of-work, mode: inline) — emitted by `aidlc-state.ts unit
+  // start|pause|resume|complete`. UNIT_COMPLETED is the completion receipt the
+  // engine's coverage walk prefers over bare artifact existence (artifacts are
+  // evidence checked AT the receipt, never the transition itself); UNIT_PAUSED
+  // carries Reason + Next Action so a resumed session lands on the exact
+  // checkpoint. The autonomous swarm path keeps its own SWARM_UNIT_* ledger.
+  "UNIT_STARTED",
+  "UNIT_PAUSED",
+  "UNIT_RESUMED",
+  "UNIT_COMPLETED",
   // Artifact events (hook-emitted)
   "ARTIFACT_CREATED",
   "ARTIFACT_UPDATED",
@@ -181,6 +192,10 @@ const EVENT_HEADINGS: Record<string, string> = {
   SUMMARY_CONFIRMATION_RECORDED: "Summary Confirmation Recorded",
   REVIEW_REQUESTED: "Review Requested",
   REVIEW_COMPLETED: "Review Completed",
+  UNIT_STARTED: "Unit Started",
+  UNIT_PAUSED: "Unit Paused",
+  UNIT_RESUMED: "Unit Resumed",
+  UNIT_COMPLETED: "Unit Completed",
   ARTIFACT_CREATED: "Artifact Created",
   ARTIFACT_UPDATED: "Artifact Updated",
   ARTIFACT_REUSED: "Artifact Reused",

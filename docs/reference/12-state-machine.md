@@ -227,7 +227,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**78 events**, grouped below into 17 categories (the canonical `audit-format.md` registry splits the same 78 into 20 - the grouping is presentational, the event set is the invariant). Every event has exactly one tool or hook emitter, except for events pre-registered for an upcoming release whose Emitter cell reads `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` - these are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**82 events**, grouped below into 18 categories (the canonical `audit-format.md` registry splits the same 82 into 21 - the grouping is presentational, the event set is the invariant). Every event has exactly one tool or hook emitter, except for events pre-registered for an upcoming release whose Emitter cell reads `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)` - these are skipped by the drift test's forward check until the consumer PR ships the emitter. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -274,6 +274,15 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `SUMMARY_CONFIRMATION_RECORDED` | `tools/aidlc-log.ts` | Human-backed consolidated-summary receipt; bound to the questions-file digest and reserved from public audit append |
 | `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the §12a reviewer sub-agent |
 | `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires when a `READY` or `NOT-READY` reviewer verdict is read and records an `Artifact Fingerprint` over the declared output paths and bytes. All completing state transitions (`approve`, `advance`, `finalize`, and `complete-workflow`) require a matching receipt from the current workflow attempt whose fingerprint still matches; per-unit stages require one per applicable unit and scope invalidation to that unit. Autonomous swarm finalization additionally requires each configured unit's matching receipt after its Bolt started and every applicable required artifact to exist as a file in that Bolt worktree; absent optional outputs remain valid fingerprint entries. |
+
+### Unit lifecycle (inline per-unit Construction stages)
+
+| Event | Emitter | Notes |
+|---|---|---|
+| `UNIT_STARTED` | `tools/aidlc-state.ts` | `unit start` — refused while another unit of the stage is open (single-active-unit invariant) |
+| `UNIT_PAUSED` | `tools/aidlc-state.ts` | `unit pause` — requires `--reason` and `--next-action`; the engine routes the paused unit first and hard-stops until an explicit resume |
+| `UNIT_RESUMED` | `tools/aidlc-state.ts` | `unit resume` — only the currently-paused unit can resume |
+| `UNIT_COMPLETED` | `tools/aidlc-state.ts` | `unit complete` — verifies the unit's required artifacts on disk before committing; once any receipt exists for a stage, the engine's coverage walk requires a receipt per unit (artifacts alone no longer settle a unit) |
 
 ### Scope and configuration
 
