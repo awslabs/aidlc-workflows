@@ -184,6 +184,21 @@ describe("t161 stale-lock reaper", () => {
     }
   });
 
+  test("doctor does not clear an over-age live owner protected from stale reaping", () => {
+    process.env.AIDLC_LOCK_STALE_MS = "1";
+    try {
+      expect(
+        acquireAuditLock(PD, 0, 1, undefined, undefined, false),
+      ).toBe(true);
+      Bun.sleepSync(5);
+      expect(detectLeakedLocks(PD, true)).toEqual([]);
+      expect(existsSync(auditLockDir(PD))).toBe(true);
+      releaseAuditLock(PD);
+    } finally {
+      delete process.env.AIDLC_LOCK_STALE_MS;
+    }
+  });
+
   test("concurrent reclaimers don't double-enter (only one wins the steal-rename)", () => {
     const deadPid = 2_000_000_000;
     stampOwner(deadPid, 0);

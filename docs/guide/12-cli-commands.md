@@ -277,6 +277,9 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 | Keyword overlap | No keyword is claimed by >1 scope |
 | Rule drift | Surfaces any team or project rule heading that overlaps a populated org-policy heading, so you can review it for contradiction (advisory — never fails) |
 | Paired sensor coverage | Confirms every rule that names a paired Sensor resolves to a Sensor some stage actually fires (advisory — never fails) |
+| Workspace records | Reports uncommitted changes under `aidlc/` so shared records are not left only in one checkout (advisory - never fails) |
+| Declared workspace repos | When `repos.json` exists, compares its declared set with the sibling repos runtime discovery sees on disk (advisory - never fails) |
+| Workspace gitignore | When `repos.json` exists, checks that the managed `.gitignore` block matches the declared repo set (advisory - never fails) |
 
 **Example output:**
 
@@ -603,6 +606,62 @@ fingerprint.
 ### `aidlc-utility detect` - read-only workspace scan
 
 `bun .claude/tools/aidlc-utility.ts detect --json` prints the workspace scan (project type, languages, frameworks, build system, and a `submodules` array of any declared git submodules with their initialized state) plus the resolved scopes dir and scope-grid path. Pure read; the composer runs it to learn where scope data lives on the current harness.
+
+### `aidlc-workspace-sync` - clone and reconcile the declared repo set
+
+This is a **direct tool invocation**, not an `/aidlc workspace-sync` command. It
+reconciles a multi-repo workspace against the optional `repos.json` manifest at
+the workspace root (see
+[Declaring the repo set](03-spaces-and-intents.md#declaring-the-repo-set-optional-manifest)):
+
+```bash
+bun .claude/tools/aidlc-workspace-sync.ts [--force]
+bun .kiro/tools/aidlc-workspace-sync.ts [--force]
+bun .codex/tools/aidlc-workspace-sync.ts [--force]
+bun .aidlc/tools/aidlc-workspace-sync.ts [--force]
+```
+
+It serializes reconciles with a workspace lock whose live owner is never reaped
+for age, then runs a read-only preflight before staging clones and generated
+files. Generated outputs are installed with no-replace links and reversible
+same-filesystem renames. If `.gitignore` or `aidlc.code-workspace` changes during
+staging, or if `repos.json` changes after the plan is read, sync aborts rather
+than applying stale state or overwriting the edit. Prior generated files that
+are replaced successfully remain under the ignored
+`.aidlc-workspace-sync-recovery-*` directory for inspection. The tool clones
+repos declared in `repos.json` but missing on disk, rewrites the managed block
+in the workspace `.gitignore` to one `/{name}/` line per repo, and writes an
+`aidlc.code-workspace` VSCode multi-root file listing the root plus each child
+repo. A declared `branch` is checked out for a new clone. Repos already on disk
+are never re-cloned or switched; a mismatch there remains an advisory.
+
+An orphan checkout (on disk but not in `repos.json`) blocks the run and is
+removed from the active sibling set only when you pass `--force` and the tool
+can prove it has no local-only state. That proof overrides configurable status
+defaults, includes untracked and ignored files and directories (including empty
+directories), hidden index state, stashes, refs and reflogs, unreachable Git
+objects, linked worktrees, submodules, and LFS object stores. It queries each
+real remote instead of trusting cached remote-tracking refs, then fetches
+matching object graphs into an isolated probe so an advertised-but-unservable
+OID cannot authorize removal. A local remote whose storage or object alternates
+depend on the checkout cannot count as recovery.
+
+After the live-remote proof, the checkout moves into transaction quarantine and
+receives the full local and live-remote proof again. Its quarantined copy is
+retained under an ignored `.aidlc-workspace-sync-recovery-*` directory rather
+than recursively deleted, so a process that already holds the directory open
+cannot lose a late write between proof and cleanup. Inspect retained checkout
+and generated-file backups, then delete the recovery directory manually when it
+is no longer needed. Any uncertainty blocks for manual review. Exit codes: `0`
+fully in sync, `1` blocked or error (live paths unchanged), `2` synced but
+advisory warnings remain (e.g. an existing checkout's branch mismatch).
+
+The manifest is optional and never overrides disk: intent birth still
+auto-discovers whatever sibling repos are actually present, so this tool only
+reproduces and tidies the declared set. `--doctor` carries three advisory rows
+about it (uncommitted `aidlc/` records, `repos.json` vs on-disk drift, and a
+stale managed `.gitignore` block); like all advisory rows they never change the
+doctor exit code.
 
 ### `aidlc-utility select-plugins` - install plugin selection
 

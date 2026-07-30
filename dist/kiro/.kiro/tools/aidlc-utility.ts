@@ -28,6 +28,7 @@ import {
   validateScope,
 } from "./aidlc-graph.ts";
 import { repointHarnessIncludes } from "./aidlc-includes.ts";
+import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
   activeIntent,
   activeSpace,
@@ -2788,6 +2789,16 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
         label: `Workspace names shadowing grammar verbs (advisory): ${shadows.join(", ")} - reachable via explicit switch; consider renaming.`,
       });
     }
+  } catch {
+    // Advisory only; a scan failure must not hide the main doctor report.
+  }
+
+  // Workspace-manifest rows (W1: uncommitted records; W2: repos.json vs disk
+  // drift; W3: stale managed .gitignore block). All advisory (pass:true) so
+  // they never change the exit code; W2/W3 only emit when a repos.json manifest
+  // exists, avoiding manifest-specific rows on a single-repo install.
+  try {
+    for (const row of workspaceManifestChecks(projectDir)) results.push(row);
   } catch {
     // Advisory only; a scan failure must not hide the main doctor report.
   }

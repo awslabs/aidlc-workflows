@@ -3191,14 +3191,22 @@ export function auditLockDir(projectDir: string, intent?: string, space?: string
 interface LockOwner {
   pid: number;
   startedAtMs: number;
+  reapLiveOwnerAfterStale: boolean;
 }
 
 function ownerStampPath(lockDir: string): string {
   return join(lockDir, "owner.json");
 }
 
-function writeOwnerStamp(lockDir: string): void {
-  const owner: LockOwner = { pid: process.pid, startedAtMs: lockAcquireEpochMs() };
+function writeOwnerStamp(
+  lockDir: string,
+  reapLiveOwnerAfterStale = true,
+): void {
+  const owner: LockOwner = {
+    pid: process.pid,
+    startedAtMs: lockAcquireEpochMs(),
+    reapLiveOwnerAfterStale,
+  };
   try {
     writeFileSync(ownerStampPath(lockDir), JSON.stringify(owner), "utf-8");
   } catch {
@@ -3212,7 +3220,12 @@ function readOwnerStamp(lockDir: string): LockOwner | null {
     const raw = readFileSync(ownerStampPath(lockDir), "utf-8");
     const parsed: unknown = JSON.parse(raw);
     if (isPlainObject(parsed) && typeof parsed.pid === "number" && typeof parsed.startedAtMs === "number") {
-      return { pid: parsed.pid, startedAtMs: parsed.startedAtMs };
+      return {
+        pid: parsed.pid,
+        startedAtMs: parsed.startedAtMs,
+        // Older stamps have no field and retain the historical over-age reaping.
+        reapLiveOwnerAfterStale: parsed.reapLiveOwnerAfterStale !== false,
+      };
     }
   } catch {
     // no stamp / unreadable
@@ -3308,7 +3321,11 @@ function stampMatches(dir: string, judged: LockOwner | null): boolean {
     return lockAcquireEpochMs() - mtime > unstampedGraceMs();
   }
   if (now === null) return false;
-  return now.pid === judged.pid && now.startedAtMs === judged.startedAtMs;
+  return (
+    now.pid === judged.pid &&
+    now.startedAtMs === judged.startedAtMs &&
+    now.reapLiveOwnerAfterStale === judged.reapLiveOwnerAfterStale
+  );
 }
 
 // Reclaim a lock iff it is provably dead (owner gone) OR stale (over-age). A
@@ -3367,6 +3384,7 @@ function reapStaleLock(lockDir: string): boolean {
     if (lockAcquireEpochMs() - mtime <= unstampedGraceMs()) return false;
     // else: an old unstamped dir → genuine leak, fall through to steal.
   } else if (ownerAlive(owner)) {
+    if (!owner.reapLiveOwnerAfterStale) return false;
     // Live owner: only reclaim if its stamp is over-age (a wedged-but-running
     // holder). A fresh, live holder is never robbed.
     if (lockAcquireEpochMs() - owner.startedAtMs <= lockStaleMs()) return false;
@@ -3409,12 +3427,13 @@ export function acquireAuditLock(
   retryMs = 100,
   intent?: string,
   space?: string,
+  reapLiveOwnerAfterStale = true,
 ): boolean {
   const lockDir = auditLockDir(projectDir, intent, space);
   for (let i = 0; i <= maxRetries; i++) {
     try {
       mkdirSync(lockDir);
-      writeOwnerStamp(lockDir);
+      writeOwnerStamp(lockDir, reapLiveOwnerAfterStale);
       return true;
     } catch {
       // EEXIST: someone holds it. Before sleeping, try to reap a dead/stale
@@ -3423,7 +3442,7 @@ export function acquireAuditLock(
       if (reapStaleLock(lockDir)) {
         try {
           mkdirSync(lockDir);
-          writeOwnerStamp(lockDir);
+          writeOwnerStamp(lockDir, reapLiveOwnerAfterStale);
           return true;
         } catch {
           // another waiter beat us to the freed dir — fall through to sleep
@@ -3531,11 +3550,24 @@ export function withAuditLock<T>(
   // immediately regardless, so a big budget only ever waits on live work.
   maxRetries = 50,
   retryMs = 100,
+  // Long external operations such as repository clones can exceed the generic
+  // ten-minute stale threshold while still making progress. Those callers opt
+  // out of live-owner reaping; dead owners remain immediately reclaimable.
+  reapLiveOwnerAfterStale = true,
 ): T extends Promise<unknown> ? never : T {
   const key = auditLockIdentity(projectDir, intent, space);
   const currentDepth = AUDIT_LOCK_DEPTH.get(key) ?? 0;
   if (currentDepth === 0) {
-    if (!acquireAuditLock(projectDir, maxRetries, retryMs, intent, space)) {
+    if (
+      !acquireAuditLock(
+        projectDir,
+        maxRetries,
+        retryMs,
+        intent,
+        space,
+        reapLiveOwnerAfterStale,
+      )
+    ) {
       throw new Error(`Failed to acquire audit lock for ${key} after retries`);
     }
     // Safety net: if the body calls process.exit (Bun skips `finally` in that
@@ -3613,14 +3645,19 @@ export function detectLeakedLocks(projectDir: string, clear = false): LeakedLock
       }
     } else if (!ownerAlive(owner)) {
       reason = "dead-owner";
-    } else if (lockAcquireEpochMs() - owner.startedAtMs > lockStaleMs()) {
+    } else if (
+      owner.reapLiveOwnerAfterStale &&
+      lockAcquireEpochMs() - owner.startedAtMs > lockStaleMs()
+    ) {
       reason = "over-age";
     }
     if (reason === null) return; // a live, fresh, stamped lock is legitimately held
-    leaks.push({ bucket: bucketLabel, lockDir, ownerPid: owner?.pid ?? null, reason });
-    if (clear) {
-      try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* already gone */ }
+    if (clear && !reapStaleLock(lockDir)) {
+      // Ownership changed after classification, or another reaper already won.
+      // Never remove a fresh replacement lock by pathname.
+      return;
     }
+    leaks.push({ bucket: bucketLabel, lockDir, ownerPid: owner?.pid ?? null, reason });
   };
   // Workspace sentinel bucket.
   probe(WORKSPACE_LOCK_SENTINEL);
