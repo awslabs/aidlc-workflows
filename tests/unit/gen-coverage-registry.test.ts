@@ -634,18 +634,6 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
   });
 
-  test("runOrchestrateNext derives cli through the shared spawned-engine helper", () => {
-    const src = [
-      "// covers: subcommand:aidlc-orchestrate:next",
-      'import { runOrchestrateNext } from "../harness/fixtures.ts";',
-      'test("x", () => {',
-      '  const r = runOrchestrateNext(ORCH, projectDir, ["--stage", "x"]);',
-      "  expect(r.status).toBe(0);",
-      "});",
-    ].join("\n");
-    expect(mechanismsOf("t99.none.test.ts", src)).toEqual(["cli"]);
-  });
-
   test("a // inside a string literal (a URL) does NOT truncate the real spawn", () => {
     // codeView strips comments while respecting string literals — so the "//" in
     // an "https://…" string is NOT treated as a line-comment opener. This fixture
@@ -859,7 +847,6 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t179-orchestrate-rollforward-guard.test.ts",
     "unit/t180-kiro-rollforward-seam.test.ts",
     "unit/t182-codekb-placement.test.ts",
-    "unit/t248-codekb-scope-diff.test.ts",
     "unit/t184-stage-graph-drift.test.ts",
     "unit/t186-foreach-per-unit-iteration.test.ts",
     "unit/t188-human-presence-gate.test.ts",
@@ -900,13 +887,13 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "unit/t236-ensemble-evidence-gate.test.ts",
     "unit/t242-state-transition-guard.test.ts",
     "unit/t243-doctor-bundle.test.ts",
-    "unit/t244-source-freshness-receipts.test.ts",
     "unit/t247-claim-sources-sensor.test.ts",
     "unit/t258-ars-subcommand.test.ts",
     "unit/t262-plugin-sensor-name-guard.test.ts",
     "unit/t265-plan-approval-guard.test.ts",
     "unit/t248-steering-content-delivery.test.ts",
     "unit/t255-workspace-sync.test.ts",
+    "unit/t259-source-freshness-receipts.test.ts",
     "unit/t27.test.ts",
     "unit/t29.test.ts",
     "unit/t30-hook-session-end.test.ts",

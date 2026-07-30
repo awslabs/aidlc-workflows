@@ -1,6 +1,6 @@
 // covers: function:workspaceSourceFingerprint
 //
-// t244 - reviewer receipts bound to workspace source state (#629).
+// t259 - reviewer receipts bound to workspace source state (#629).
 //
 // PR #569's freshness guard invalidates receipts via ARTIFACT_CREATED/UPDATED
 // events for declared record artifacts - but code-generation produces
@@ -192,10 +192,10 @@ function registerRepos(projectDir: string, repos: string[]): void {
   );
 }
 
-describe("t244 workspace source fingerprint (in-process)", () => {
+describe("t259 workspace source fingerprint (in-process)", () => {
   let dir: string;
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "t244-fp-"));
+    dir = mkdtempSync(join(tmpdir(), "t259-fp-"));
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -228,7 +228,7 @@ describe("t244 workspace source fingerprint (in-process)", () => {
     // The edit stays UNSTAGED (` M`) - a staged `M ` would mean the real index
     // was touched by the temp-index walk.
     expect(status).toContain(" M app.ts");
-    const plain = mkdtempSync(join(tmpdir(), "t244-plain-"));
+    const plain = mkdtempSync(join(tmpdir(), "t259-plain-"));
     try {
       expect(workspaceSourceFingerprint(plain)).toBeNull();
     } finally {
@@ -242,7 +242,7 @@ describe("t244 workspace source fingerprint (in-process)", () => {
   // parent's own write-tree sha - unchanged, shipping a reviewed-then-edited
   // submodule as if nothing had changed.
   test("recurses into an initialized submodule: an uncommitted edit inside it changes the fingerprint", () => {
-    const subDir = mkdtempSync(join(tmpdir(), "t244-fp-sub-"));
+    const subDir = mkdtempSync(join(tmpdir(), "t259-fp-sub-"));
     try {
       git(subDir, ["init", "-q"]);
       git(subDir, ["config", "user.email", "t@test"]);
@@ -281,7 +281,7 @@ describe("t244 workspace source fingerprint (in-process)", () => {
   // the submodule is silently skipped and a reviewed-then-edited submodule at
   // such a path ships unreviewed.
   test("detects a submodule at a non-ASCII path (git core.quotePath) via -z, not the default quoted form", () => {
-    const subDir = mkdtempSync(join(tmpdir(), "t244-fp-sub-"));
+    const subDir = mkdtempSync(join(tmpdir(), "t259-fp-sub-"));
     try {
       git(subDir, ["init", "-q"]);
       git(subDir, ["config", "user.email", "t@test"]);
@@ -422,7 +422,7 @@ describe("t244 workspace source fingerprint (in-process)", () => {
   // The same defect one level further down: the recursion fingerprinted each
   // submodule with the shell exclusion applied to the submodule's own root.
   test("a directory named aidlc inside an initialized submodule is that submodule's source", () => {
-    const subDir = mkdtempSync(join(tmpdir(), "t244-fp-sub-"));
+    const subDir = mkdtempSync(join(tmpdir(), "t259-fp-sub-"));
     try {
       git(subDir, ["init", "-q"]);
       git(subDir, ["config", "user.email", "t@test"]);
@@ -481,7 +481,7 @@ describe("t244 workspace source fingerprint (in-process)", () => {
   });
 });
 
-describe("t244 receipt stamping + completion guard (cli)", () => {
+describe("t259 receipt stamping + completion guard (cli)", () => {
   let proj: string;
   let src: string;
 
@@ -556,7 +556,7 @@ describe("t244 receipt stamping + completion guard (cli)", () => {
 // 12-state-machine.md and verifyReviewerPrecondition's own comment block, and
 // pinned by the two limitation tests below. When per-unit attribution lands
 // those two turn red on purpose.
-describe("t244 multi-unit flow: what the workspace-global fingerprint does and does not prove", () => {
+describe("t259 multi-unit flow: what the workspace-global fingerprint does and does not prove", () => {
   let proj: string;
 
   beforeEach(() => {
@@ -769,7 +769,7 @@ describe("t244 multi-unit flow: what the workspace-global fingerprint does and d
 // never edited anything. isSettledSwarmForArtifactGuard's exemption (already
 // proven for the produces-existence guard, t185) is reused here to skip the
 // fingerprint reconciliation entirely once every DAG unit has converged.
-describe("t244 settled-swarm exemption from fingerprint reconciliation (#646 review P1#2)", () => {
+describe("t259 settled-swarm exemption from fingerprint reconciliation (#646 review P1#2)", () => {
   let proj: string;
   const UNITS = ["alpha", "beta"];
 
@@ -836,7 +836,7 @@ describe("t244 settled-swarm exemption from fingerprint reconciliation (#646 rev
 // `reviewerReceiptError` (aidlc-swarm.ts) accepted any terminal READY/NOT-READY
 // verdict and never read the receipt's own Source Fingerprint, so finalize
 // could merge a unit whose worktree source was edited after its review.
-describe("t244 swarm finalize source-fingerprint check (#646 review P1#3)", () => {
+describe("t259 swarm finalize source-fingerprint check (#646 review P1#3)", () => {
   const fixtures: string[] = [];
   afterAll(() => {
     for (const f of fixtures) cleanupWorktreeFixture(f);

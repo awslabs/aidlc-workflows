@@ -3429,6 +3429,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:workspaceSourceFingerprint",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t259-source-freshness-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:worktreeAuditFilePath",
       "minMechanism": "none",
       "coveredBy": [],
