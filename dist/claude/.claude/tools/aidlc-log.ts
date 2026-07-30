@@ -24,6 +24,7 @@ import {
   isAutonomousMode,
   isAutonomousSwarmStage,
   loadStageGraphAll,
+  isNonAnswer,
   parseCheckboxes,
   readAllAuditShards,
   readStateFile,
@@ -346,6 +347,17 @@ function handleAnswer(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
   if (!flags.details) error("Missing --details <text>");
+
+  // A cancelled/dismissed/auto-resolved question widget is not an answer.
+  // Some harnesses return a completed-looking object for a dismissed question.
+  if (isNonAnswer(flags.details)) {
+    error(
+      `Refusing to record "${flags.details.trim() || "(empty)"}" as an answer: it is cancellation ` +
+        "boilerplate, not a human decision. If the user dismissed the question, re-present it and " +
+        "wait for a real answer; do not log the dismissal.",
+    );
+  }
+
   if (
     flags.checkpoint !== undefined &&
     flags.checkpoint !== "summary-confirmation"

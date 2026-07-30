@@ -298,6 +298,49 @@ export interface AuditEntryInput {
   fields: Record<string, string>;
 }
 
+// Authority-bearing events: rows the engine's guards read as authorization
+// evidence — human presence (humanActedSinceGate), gate resolutions, interview
+// answers (one-answer-per-human-turn), reviewer receipts
+// (verifyReviewerPrecondition), swarm convergence (the artifact-guard
+// carve-out), and the autonomy grant. Each has exactly one owning emitter that
+// reaches appendAuditEntry through the library import (hooks, aidlc-state,
+// aidlc-log, aidlc-swarm, aidlc-bolt). The public CLI refuses them so a
+// conductor cannot mint authority it does not have; everything else stays
+// CLI-appendable as the diagnostic escape hatch. Test fixtures that simulate
+// the owning emitters set AIDLC_ALLOW_DIRECT_AUDIT_EVENTS=1 (the same escape
+// idiom as AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS in aidlc-state.ts).
+export const CLI_PROTECTED_EVENT_TYPES = new Set([
+  "HUMAN_TURN",
+  "GATE_APPROVED",
+  "GATE_REJECTED",
+  "QUESTION_ANSWERED",
+  "REVIEW_REQUESTED",
+  "REVIEW_COMPLETED",
+  "SWARM_UNIT_CONVERGED",
+  "AUTONOMY_MODE_SET",
+]);
+
+function directAuditEventsAllowed(): boolean {
+  return process.env.AIDLC_ALLOW_DIRECT_AUDIT_EVENTS === "1";
+}
+
+function refuseProtectedEvent(eventType: string): never {
+  jsonError(
+    `Direct emission of ${eventType} is blocked: it is an authority-bearing receipt owned by its ` +
+      "emitting tool or hook (gate resolutions and approvals come from aidlc-orchestrate.ts report, " +
+      "interview answers and reviews from aidlc-log.ts, human presence from the prompt-submit hook). " +
+      "The audit CLI appends diagnostic events only."
+  );
+}
+
+// Field keys the emitter itself writes into every block. A caller-supplied
+// value would land as a SECOND `**Event**:` / `**Timestamp**:` line, and the
+// multiline regexes in findAllEvents match ANY line of a block — so a smuggled
+// `--field Event=HUMAN_TURN` on a harmless event type would register as a
+// forged event in every query. Refused for all callers (no legitimate emitter
+// passes these keys).
+const RESERVED_FIELD_KEYS = new Set(["Event", "Timestamp"]);
+
 function validateAuditEntry(entry: AuditEntryInput): void {
   if (!VALID_EVENT_TYPES.has(entry.eventType)) {
     throw new Error(
@@ -305,9 +348,10 @@ function validateAuditEntry(entry: AuditEntryInput): void {
     );
   }
   for (const key of Object.keys(entry.fields)) {
-    if (key === "Event") {
+    if (RESERVED_FIELD_KEYS.has(key)) {
       throw new Error(
-        `Reserved field key: ${key}. The audit emitter owns this field.`
+        `Reserved field key: ${key}. The emitter writes **${key}**: itself; a caller-supplied ` +
+          "value would forge a second one and spoof event queries."
       );
     }
   }
@@ -454,6 +498,9 @@ export function handleAppend(
   fields: Record<string, string>,
   projectDir: string
 ): void {
+  if (CLI_PROTECTED_EVENT_TYPES.has(eventType) && !directAuditEventsAllowed()) {
+    refuseProtectedEvent(eventType);
+  }
   const result = appendAuditEntry(eventType, fields, projectDir);
   jsonSuccess(result);
 }
@@ -491,6 +538,15 @@ function handleAppendBatch(rawEntries: string, projectDir: string): void {
       fields: fields as Record<string, string>,
     };
   });
+  // Same ownership floor as `append`: a batch must not smuggle an
+  // authority-bearing receipt among diagnostic rows. The engine's own batch
+  // caller (handleSingleReport's synthetic STAGE_STARTED/STAGE_COMPLETED pair)
+  // emits no protected types, so the single-stage path is unaffected.
+  for (const entry of entries) {
+    if (CLI_PROTECTED_EVENT_TYPES.has(entry.eventType) && !directAuditEventsAllowed()) {
+      refuseProtectedEvent(entry.eventType);
+    }
+  }
   jsonSuccess(appendAuditEntries(entries, projectDir));
 }
 
@@ -501,12 +557,24 @@ function handleAppendRaw(
   body: string,
   projectDir: string
 ): void {
+  // A raw body is written verbatim, and every event query (findAllEvents,
+  // auditBlockField) matches `**Event**:` lines anywhere in a block — so a raw
+  // body carrying an `**Event**: <taxonomy event>` line IS that event to every
+  // reader, timestamp and all. Refuse taxonomy names outright (canonical events
+  // go through `append`, which validates ownership); non-taxonomy Event lines
+  // (custom diagnostics) stay allowed — no query resolves them to authority.
   const expandedBody = body.replace(/\\n/g, "\n");
-  for (const rawLine of expandedBody.split("\n")) {
-    const line = rawLine.startsWith("- ") ? rawLine.slice(2) : rawLine;
+  for (const raw of expandedBody.split("\n")) {
+    const line = raw.startsWith("- ") ? raw.slice(2) : raw;
     if (!line.startsWith("**Event**:")) continue;
-    const eventType = line.slice("**Event**:".length).trim();
-    refuseReservedCliEvent(eventType);
+    const value = line.slice("**Event**:".length).trim();
+    if (VALID_EVENT_TYPES.has(value)) {
+      jsonError(
+        `append-raw refuses a body carrying **Event**: ${value} — that line would register as a ` +
+          "canonical audit event to every reader. Emit taxonomy events through their owning tool " +
+          "(or `append` for diagnostic types); append-raw is for free-form notes only."
+      );
+    }
   }
 
   const ts = isoTimestamp();

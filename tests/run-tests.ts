@@ -619,6 +619,12 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
   // reconciled out from under them. The dedicated test (t205-gate-revision-
   // backstop) clears this var in its own tool spawns to exercise the backfill.
   //
+  // Allow direct CLI appends of authority-bearing audit events (HUMAN_TURN,
+  // GATE_*, REVIEW_*, ...) for the suite by default: fixtures simulate the
+  // owning emitters (the mint hook, aidlc-log review) through the public CLI
+  // (t188/t205 recordHumanTurn, t115 appendAudit). The dedicated ownership
+  // test clears this var in its own tool spawns to exercise the refusal.
+  //
   // Isolate git for the whole suite. The generated global config carries forward
   // protected safe.directory entries needed by mounted/foreign-owned CI
   // workspaces, but excludes developer settings and explicitly disables commit
@@ -630,6 +636,7 @@ async function runBunTestFile(file: string, parallelMode = false): Promise<void>
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
     AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
     AIDLC_SKIP_REVISION_BACKSTOP: "1",
+    AIDLC_ALLOW_DIRECT_AUDIT_EVENTS: "1",
   };
   // Command-scope config outranks the isolated global file. Preserve its safety
   // entries above, then remove all command-scope injection before spawning tests.

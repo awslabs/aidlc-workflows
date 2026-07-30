@@ -2280,20 +2280,25 @@ function cloneId(projectDir: string): string {
 // the gate1 GATE_APPROVED -> refused. Stale (human turn long ago, then a fabricated
 // approve) likewise has the last resolution after the human turn -> refused.
 //
-// Ordering is CHRONOLOGICAL (Timestamp, then buffer position as the tiebreak),
-// matching findAllEvents: readAllAuditShards concatenates per-clone shards in
-// FILENAME order, so the raw buffer is NOT time-ordered across shards (a second
-// shard appears after a re-clone or on another machine) and a raw-position scan
-// could rank an OLD resolution from a lexically-later shard above a fresh
-// HUMAN_TURN. Within one shard the timestamps are non-decreasing and the position
-// tiebreak preserves append order, which is what makes same-second events (the
-// common case: one human turn drives mint + gate + resolution inside one second)
-// resolve by execution order. Fail-open when no ledger exists (no presence
-// tracking yet on this harness).
+// Ordering is CHRONOLOGICAL (Timestamp, then per-shard position as the SAME-SHARD
+// tiebreak): shards are per-clone files enumerated in FILENAME order (a second
+// shard appears after a re-clone or on another machine), so cross-shard position
+// carries no execution-order information. Within one shard the timestamps are
+// non-decreasing and the position tiebreak preserves append order, which is what
+// makes same-second events (the common case: one human turn drives mint + gate +
+// resolution inside one second) resolve by execution order. When the DECIDING
+// pair — the latest human turn vs the latest resolution — shares one
+// second-precision timestamp across DIFFERENT shards, execution order is
+// unknowable and the check fails CLOSED (require a fresh turn) rather than let
+// shard-filename order pick a winner. Fail-open when no ledger exists (no
+// presence tracking yet on this harness).
 //
-// The resolution boundary is workflow-global (the most recent commit of ANY
-// gate), which is what makes a same-turn cascade across DIFFERENT stages refuse
-// correctly; there is no per-stage scoping.
+// The resolution boundary is workflow-global (the most recent gate approval,
+// rejection, answered question, summary confirmation, or autonomous grant).
+// This makes a same-turn cascade across DIFFERENT stages refuse correctly;
+// there is no per-stage scoping. AUTONOMY_MODE_SET only counts when its Mode is
+// autonomous because that grant consumes the human turn that unlocks downstream
+// presence carve-outs.
 const GATE_RESOLUTION_EVENTS = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
@@ -2301,22 +2306,43 @@ const GATE_RESOLUTION_EVENTS = new Set([
   "SUMMARY_CONFIRMATION_RECORDED",
 ]);
 export function humanActedSinceGate(projectDir: string): boolean {
-  const audit = readAllAuditShards(projectDir);
-  if (audit.length === 0) return true; // no ledger → no presence tracking → fail open
-  const blocks = audit.replace(/\r\n/g, "\n").split(/\n---\n/);
-  const events: { ts: string; pos: number; human: boolean }[] = [];
-  for (let i = 0; i < blocks.length; i++) {
-    const ev = auditBlockField(blocks[i], "Event");
-    if (!ev) continue;
-    if (!GATE_RESOLUTION_EVENTS.has(ev) && ev !== "HUMAN_TURN") continue;
-    events.push({
-      ts: auditBlockField(blocks[i], "Timestamp") ?? "",
-      pos: i,
-      human: ev === "HUMAN_TURN",
-    });
+  // Per-shard reads (not the concatenated buffer): buffer position across
+  // shards is FILENAME order, not execution order, so it can only serve as an
+  // ordering tiebreak WITHIN one shard. Cross-shard same-second ties are
+  // genuinely unordered (isoTimestamp is second-precision) and fail closed
+  // below.
+  const shards = auditShards(projectDir);
+  const events: { ts: string; shard: number; pos: number; human: boolean }[] = [];
+  let ledgerBytes = 0;
+  for (let s = 0; s < shards.length; s++) {
+    let content: string;
+    try {
+      content = readFileSync(shards[s], "utf-8");
+    } catch {
+      continue; // a shard vanished between enumerate and read — skip it
+    }
+    ledgerBytes += content.length;
+    const blocks = content.replace(/\r\n/g, "\n").split(/\n---\n/);
+    for (let i = 0; i < blocks.length; i++) {
+      const ev = auditBlockField(blocks[i], "Event");
+      if (!ev) continue;
+      const isResolution =
+        GATE_RESOLUTION_EVENTS.has(ev) ||
+        (ev === "AUTONOMY_MODE_SET" &&
+          auditBlockField(blocks[i], "Mode") === "autonomous");
+      if (!isResolution && ev !== "HUMAN_TURN") continue;
+      events.push({
+        ts: auditBlockField(blocks[i], "Timestamp") ?? "",
+        shard: s,
+        pos: i,
+        human: ev === "HUMAN_TURN",
+      });
+    }
   }
+  if (ledgerBytes === 0) return true; // no ledger → no presence tracking → fail open
   events.sort((a, b) => {
     if (a.ts !== b.ts) return a.ts < b.ts ? -1 : 1;
+    if (a.shard !== b.shard) return a.shard - b.shard; // deterministic, ambiguity handled below
     return a.pos - b.pos;
   });
   let lastResolution = -1;
@@ -2325,9 +2351,39 @@ export function humanActedSinceGate(projectDir: string): boolean {
     if (events[i].human) lastHuman = i;
     else lastResolution = i;
   }
-  // A human turn appears after the last gate resolution (or there is a human turn
-  // and no resolution yet) => a fresh human acted this turn => allow.
-  return lastHuman > lastResolution && lastHuman !== -1;
+  if (lastHuman === -1) return false; // no human turn on record
+  if (lastHuman < lastResolution) return false; // last authority action consumed the turn
+  // The deciding comparison: the latest human turn vs the latest resolution.
+  // Same timestamp in DIFFERENT shards means execution order is unknowable
+  // (second-precision timestamps, filename-ordered shards) — fail closed and
+  // require a fresh turn rather than let a lexically-later stale HUMAN_TURN
+  // authorize. Same-shard ties keep append order (the common legit case: one
+  // human turn drives mint + gate + resolution inside one second).
+  if (
+    lastResolution !== -1 &&
+    events[lastHuman].ts === events[lastResolution].ts &&
+    events[lastHuman].shard !== events[lastResolution].shard
+  ) {
+    return false;
+  }
+  return true;
+}
+
+// A cancelled / auto-resolved structured-question widget is NOT a human
+// answer. Harnesses that auto-complete a dismissed question hand the conductor
+// a completed-looking object whose answer text is cancellation boilerplate
+// ("Cancelled", "user dismissed", a timeout marker) — logging that as
+// QUESTION_ANSWERED or passing it as an approval choice would launder a
+// non-decision into human authority AND consume the turn's HUMAN_TURN. The
+// vocabulary is deliberately tight (cancellation/dismissal/timeout semantics
+// only): a substantive answer that merely CONTAINS these words ("cancel the
+// standing order") does not match, because the whole trimmed string must be
+// the cancellation phrase.
+const NON_ANSWER_RE =
+  /^(?:cancel(?:led|ed)?|cancellation|dismiss(?:ed)?|abort(?:ed)?|timed?[ -]?out|timeout|no (?:answer|response)|(?:user|question) (?:cancel(?:led|ed)|dismissed))[.!]?$/i;
+export function isNonAnswer(text: string | undefined | null): boolean {
+  const t = (text ?? "").trim();
+  return t.length === 0 || NON_ANSWER_RE.test(t);
 }
 
 // True when any stage sits at [?] (awaiting-approval) in the state file: the

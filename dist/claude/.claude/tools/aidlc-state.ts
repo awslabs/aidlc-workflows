@@ -26,6 +26,7 @@ import {
   intentRepos,
   isAutonomousMode,
   isAutonomousSwarmStage,
+  isNonAnswer,
   isoTimestamp,
   KNOWN_CODEKB_STAGES,
   loadScopeMapping,
@@ -1932,6 +1933,21 @@ function handleApprove(args: string[]): void {
       `Refusing to approve "${slug}": --user-input must contain the human's exact approval choice.`,
     );
   }
+  // Cancellation boilerplate is not an approval choice: a dismissed/timed-out
+  // question widget can surface as a completed-looking answer ("Cancelled"),
+  // and passing that through --user-input would commit a gate no human
+  // approved. Same vocabulary as the interview path (aidlc-log answer).
+  if (
+    !isAutonomousMode(content) &&
+    !humanPresenceGuardDisabled() &&
+    isNonAnswer(approvalInput)
+  ) {
+    error(
+      `Refusing to approve "${slug}": --user-input "${approvalInput}" is cancellation boilerplate, ` +
+        "not an approval. If the human dismissed the gate question, re-present it and wait for a " +
+        "real choice; a dismissal is not consent.",
+    );
+  }
 
   // Artifact guard (issue #366): a stage cannot be approved without evidence of
   // work on disk. Runs BEFORE any mutation so a refusal (error() -> exit) leaves
@@ -2123,6 +2139,16 @@ function handleReject(args: string[]): void {
   if (!feedback) {
     error(
       `Refusing to reject "${slug}": --feedback must contain the human's requested changes.`,
+    );
+  }
+  // Same non-answer floor as approve: a dismissed gate question is neither an
+  // approval nor a change request — it must not commit GATE_REJECTED and spin
+  // the revision loop on cancellation boilerplate.
+  if (isNonAnswer(feedback)) {
+    error(
+      `Refusing to reject "${slug}": --feedback "${feedback}" is cancellation boilerplate, not a ` +
+        "change request. If the human dismissed the gate question, re-present it and wait for a " +
+        "real choice.",
     );
   }
 
