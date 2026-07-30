@@ -56,12 +56,18 @@ Result prose is identical on both channels (`toolResult` on 0.12,
    and delegation inputs (#543).
 2. **1.x carries no success flag.** Only the 0.12 channel's explicit boolean
    `toolSuccess: false` drops a well-formed write from the audit (#417); a 1.x
-   payload with the field absent falls through to the path check, and error
-   prose that matches no known pattern records a visible hook-drop. A present
-   non-null payload field with the wrong runtime type is treated as malformed:
-   the advisory hook exits successfully, records a visible drop, and forwards
-   no audit or subagent event. `null` is treated like an unavailable field,
-   matching the channel's existing absent-value contract.
+   payload with the field absent falls through to the path check. Because that
+   channel cannot report failure structurally, a failed write on 1.x arrives
+   only as error prose — so the adapter classifies before logging: prose
+   RECOGNISED as a failure is sent to `hookDebug` (written only when hook
+   debugging is enabled); there is no artifact to audit, so not forwarding it
+   is correct, not decay. An unrecognised wording still records a visible
+   hook-drop, which is the case that signals real degradation. On the legacy
+   0.12 channel, explicit `toolSuccess: true` remains authoritative and bypasses
+   failure-prose inference. A present non-null payload field with the wrong
+   runtime type is treated as malformed:
+   the advisory hook exits successfully, records a visible drop, and forwards no audit or subagent event. `null` is treated like
+   an unavailable field, matching the channel's existing absent-value contract.
 3. **Paths in the result prose are workspace-RELATIVE**, but the core hooks
    compare against an absolute record root — so the adapter resolves them to
    absolute before forwarding.
@@ -70,8 +76,14 @@ Result prose is identical on both channels (`toolResult` on 0.12,
 
 - **audit-logger / sensor-fire** — recoverable: scrape the file path from
   the result prose, resolve to absolute, feed the core hooks the Claude-shaped
-  `{tool_input:{file_path}}`. A write-class tool whose wording does not match a
-  known pattern records a visible hook-drop (never a silent no-op).
+  `{tool_input:{file_path}}`. When no path can be extracted the adapter splits
+  two cases rather than logging both: prose recognised as a **failed** write is
+  sent to `hookDebug` (written only when hook debugging is enabled) and is not
+  forwarded because no artifact exists; this inference runs only when the
+  payload has no structured success flag. Explicit `toolSuccess: true` and any
+  other unmatched wording record a visible hook-drop (never a silent no-op) —
+  that is the invisible-decay case the drop log exists to surface. Conflating
+  them made `--doctor` report degradation on healthy workspaces.
 - **runtime-compile** — the shell command is unrecoverable, so the IDE path
   drops the command filter and gates purely on the audit tail (with an mtime
   idempotency guard so a lingering transition — e.g. after `WORKFLOW_COMPLETED`

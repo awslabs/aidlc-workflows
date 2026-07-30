@@ -1012,6 +1012,85 @@ describe("t218 extractWrittenPath robustness (finding 4)", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // =========================================================================
+  // F4d/F4e — CLASSIFY BEFORE LOGGING. Two very different situations reach the
+  // "no extractable path" branch, and conflating them made `--doctor` report
+  // hook degradation on workspaces whose hooks were working perfectly:
+  //
+  //   FAILED write    -> no artifact exists, so declining to forward it is
+  //                      CORRECT. Must NOT be recorded as decay.
+  //   SUCCEEDED write
+  //   with unknown
+  //   wording         -> the invisible decay this log exists to surface.
+  //                      Must still be recorded.
+  //
+  // The 1.x stdin channel carries no success flag, so the `toolSuccess === false`
+  // guard (#417, T1 above) cannot catch the first case — the failure arrives only
+  // as error prose. These two cases sit together deliberately: the CONTRAST is
+  // the contract, and pinning them apart would let a reordered guard or a
+  // tightened regex regress one while the other kept passing.
+  // =========================================================================
+  test("F4d: a FAILED write (error prose, 1.x channel) records NO drop", () => {
+    const dir = scratchProject(true);
+    try {
+      // Verbatim prose captured live on IDE 1.x: a str_replace whose old string
+      // matched more than once. The tool correctly refused; there is nothing to
+      // audit and nothing degraded.
+      const failure =
+        "Caught an error while replacing string String '[Answer]:' found multiple times in the file";
+      const r = runIdeStdin(
+        dir,
+        "audit-and-sensors",
+        ctx1x("str_replace", failure),
+      );
+      expect(r.code).toBe(0); // still fail-open
+      const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+      expect(existsSync(dropFile)).toBe(false); // NOT decay
+      expect(readAudit(dir)).not.toContain("ARTIFACT_UPDATED"); // and never audited
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F4e: the paired contrast — an unknown SUCCESS wording still records a drop", () => {
+    const dir = scratchProject(true);
+    try {
+      // Same branch, opposite verdict. Held beside F4d so the distinction cannot
+      // silently collapse in one direction.
+      const r = runIdeStdin(
+        dir,
+        "audit-and-sensors",
+        ctx1x("str_replace", "Swapped the text over there"),
+      );
+      expect(r.code).toBe(0);
+      const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+      expect(existsSync(dropFile)).toBe(true);
+      expect(readFileSync(dropFile, "utf-8")).toContain("no extractable path");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("F4f: explicit toolSuccess=true outranks defensive failure-prose guesses", () => {
+    const dir = scratchProject(true);
+    try {
+      // Legacy IDE 0.12 supplies an authoritative success boolean. Even if an
+      // unrecognised success message starts with a defensive failure prefix,
+      // the missing path remains visible as harness decay.
+      const r = runIde(
+        dir,
+        "audit-and-sensors",
+        ctx("str_replace", "Failed to preserve file mode; requested text was replaced"),
+      );
+      expect(r.code).toBe(0);
+      const dropFile = join(seededRecordDir(dir), ".aidlc-hooks-health", "kiro-adapter.drops");
+      expect(existsSync(dropFile)).toBe(true);
+      expect(readFileSync(dropFile, "utf-8")).toContain("no extractable path");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("t218 log-subagent identity extraction (#459)", () => {

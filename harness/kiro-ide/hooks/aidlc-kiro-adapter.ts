@@ -248,6 +248,42 @@ function extractWrittenPath(toolResult: string): string {
   return "";
 }
 
+// Does this toolResult describe a write that FAILED? Used only to keep the drop
+// log honest: a failed write has no artifact to audit, so not forwarding it is
+// correct behaviour and must NOT be recorded as harness decay (see the call
+// site). The 1.x stdin channel carries no success flag, so error prose is the
+// only signal available.
+//
+// EVIDENCE GRADING — only the first pattern is grounded in a capture:
+//   ^Caught an error while   OBSERVED live on IDE 1.x (a str_replace whose old
+//                            string matched multiple times). This is the case
+//                            that motivated the fix.
+//   ^Error:                  DEFENSIVE GUESS. Not observed; no capture in this
+//   ^Failed to               repo or in docs/reference/kiro-ide-hook-payload.md
+//   ^An error occurred       backs these three shapes.
+// They are kept because the risk direction is mild and one-way: a match only
+// suppresses a drop when path extraction has ALREADY failed and the payload has
+// no structured success flag. Explicit `toolSuccess: true` remains authoritative.
+// Masking real decay would therefore require a new flagless SUCCESS wording that
+// begins with error prose — and the known success wordings ("Created the …",
+// "Replaced text in …", "Appended the text to …") cannot collide with any of
+// them. If a capture ever contradicts one, delete it rather than widening the set.
+//
+// Every pattern is start-anchored on purpose: a loose "contains 'error'" test
+// would swallow a successful write to a file whose NAME mentions an error, which
+// would hide exactly the decay this log exists to surface. Anything unrecognised
+// is treated as a success and still earns a visible drop — the default stays
+// biased toward reporting, not toward silence.
+function isFailedWriteResult(toolResult: string): boolean {
+  const s = toolResult.trim();
+  return (
+    /^Caught an error while /i.test(s) ||
+    /^Error:/i.test(s) ||
+    /^Failed to /i.test(s) ||
+    /^An error occurred/i.test(s)
+  );
+}
+
 // Map the IDE tool name to the canonical name the core hooks match on. Write
 // creates a (possibly new) file; str_replace/fs_append always target an
 // existing file → Edit (forces ARTIFACT_UPDATED in the core audit-logger).
@@ -338,11 +374,29 @@ function buildForward(): Forward {
       if (canon === "") return null;
       const rawPath = extractWrittenPath(ide.toolResult ?? "");
       if (!rawPath) {
-        // A write-class tool ran but its toolResult wording did not match any
-        // known pattern → the write is dropped from audit + sensors. Record a
-        // visible drop (finding 4) so `--doctor` can surface the decay instead
-        // of it being an invisible no-op — the exact failure class this harness
-        // exists to eliminate.
+        // TWO DISTINCT CASES REACH HERE, and conflating them is what made the
+        // drop log useless as a health signal:
+        //   (a) The write FAILED. There is no artifact to audit, so not
+        //       forwarding is CORRECT, not decay. The 1.x stdin channel carries
+        //       no success flag (so the `toolSuccess === false` guard above
+        //       cannot catch it), and the failure arrives only as error prose —
+        //       e.g. a str_replace whose old string matched multiple times.
+        //   (b) The write SUCCEEDED but its result wording matched no known
+        //       pattern. THIS is the invisible decay this harness exists to
+        //       eliminate, and the only case that belongs in the drop log.
+        // Recording (a) as a drop made `--doctor` report decay on a workspace
+        // whose hooks were working perfectly, which trains the reader to ignore
+        // the channel that matters. So classify flagless payloads first: log (a)
+        // at debug level and reserve the visible drop for (b). A structured
+        // `toolSuccess: true` is authoritative and must never be overridden by
+        // defensive prose guesses.
+        if (ide.toolSuccess === undefined && isFailedWriteResult(ide.toolResult ?? "")) {
+          hookDebug(projectDir, "kiro-adapter", "audit-and-sensors: write failed, nothing to audit", {
+            toolName: ide.toolName ?? "?",
+            toolResult: (ide.toolResult ?? "").slice(0, 160),
+          });
+          return null;
+        }
         recordHookDrop(
           projectDir,
           "kiro-adapter",

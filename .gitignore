@@ -6,6 +6,9 @@ node_modules/
 .DS_Store
 ._*
 
+# Bun transient compilation artifacts
+*.bun-build
+
 # Generated AI-DLC artifacts (recreated by workflow runs / doctor)
 dist/claude/aidlc-docs/
 dist/kiro/aidlc-docs/

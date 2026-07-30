@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.5.43] - 2026-08-06
+
+Stops `/aidlc --doctor` from reporting hook decay on the Kiro IDE harness when a write simply failed. The adapter recorded a visible hook drop whenever it could not extract a file path from a write tool's result, which conflated two very different situations: a write that FAILED (no artifact exists, so declining to forward it is correct) and a write that SUCCEEDED but whose result wording could not be parsed (the genuine degradation the drop log exists to surface). Only the second belongs there. **Upgrade:** `mkdir -p your-project/.kiro && cp -R dist/kiro-ide/.kiro/. your-project/.kiro/`. If `/aidlc --doctor` still reports a Kiro adapter drop created before this fix, inspect the affected intent record's `<record>/.aidlc-hooks-health/kiro-adapter.drops`; delete only that individual file, and only after verifying its entries are historical/stale. Preserve it if it contains current failures.
+
+* `/aidlc --doctor` no longer reports hook degradation on a workspace whose hooks are working correctly. A failed `str_replace` - for example one whose old string matched multiple times - is no longer counted as a drop. The IDE 1.x stdin channel carries no success flag, so these failures arrive only as error prose and the existing `toolSuccess` guard could not catch them; every one of them was logged as decay, which trains the reader to ignore the one channel that matters when something genuinely breaks.
+* A *successful* write whose result wording matches no known path pattern is still recorded as a visible drop, unchanged. The failure classifier is deliberately narrow (start-anchored failure prefixes, not a loose "contains error" test), runs only when the payload has no structured success flag, and never overrides legacy IDE 0.12's explicit `toolSuccess: true`; the default stays biased toward reporting rather than silence.
+* Of the four failure-prose patterns the classifier matches, only `Caught an error while ...` is grounded in a live capture; the other three are marked in the code as defensive guesses rather than observed shapes. A match can only suppress a drop after path extraction has already failed and structured success is unavailable, and no known success wording begins with error prose, so the risk direction is one-way.
+* Docs: `docs/reference/kiro-ide-hook-payload.md` describes the failed-write/unrecognized-success split and makes `hookDebug`'s opt-in behavior explicit. No command, flag, or audit/sensor output-format changes; no breaking change for CI or scripts.
+
 ## [2.5.42] - 2026-08-06
 
 Restores the gitignored `aidlc/active-space` cursor after cloning a committed workspace. The cursor still defaults safely to `default` when absent, but SessionStart and active-intent writes now atomically materialize it without overwriting a concurrent explicit space switch. **Upgrade:** re-copy your `dist/<harness>/` shell so the updated library and SessionStart hook are installed; no repository migration or configuration change is required.
