@@ -203,11 +203,27 @@ class PtyTerminal:
         return bool(_MENU_CARET_RE.search(screen) and _SELECT_FOOTER_RE.search(screen))
 
     def answer_gate_default(self) -> None:
-        """Accept the highlighted (default/Recommended) option on a single-select gate.
+        """Answer the painted gate, mirroring tui-drive.ts's per-widget key model.
 
-        Mirrors tui-drive's single-select behavior: the engine highlights the
-        Recommended option by default, so a bare Enter selects it.
+        - Submit review screen: Enter commits the whole form.
+        - Multi-select option (numbered line with a checkbox): Enter TOGGLES
+          instead of selecting (the t73 toggle-forever hang), so Space toggles
+          the Recommended option ON, then Right advances a multi-tab form or
+          Enter commits a lone multi-select question.
+        - Single-select: bare Enter accepts the highlighted Recommended option.
         """
+        screen = self.screen_text()
+        if "Submit answers" in screen:
+            self.send_key("Enter")
+            return
+        if re.search(r"\d+\.\s*\[[ xX✔]\]", screen):
+            self.send_key("Space")
+            time.sleep(0.15)
+            if "←" in screen and "→" in screen:
+                self.send_key("Right")
+            else:
+                self.send_key("Enter")
+            return
         self.send_key("Enter")
 
     def drive_until(
@@ -228,6 +244,7 @@ class PtyTerminal:
         not success).
         """
         deadline = time.monotonic() + timeout
+        last_menu_screen = ""
         while time.monotonic() < deadline:
             if is_done():
                 return True
@@ -236,10 +253,19 @@ class PtyTerminal:
                 return is_done()
             advanced = False
             if self.screen_has_menu():
-                if on_idle is not None:
-                    on_idle(self)
-                else:
-                    self.answer_gate_default()
+                # Only answer when the menu screen has actually changed since the
+                # last answer; a stale identical screen means the TUI hasn't
+                # processed the previous keystroke yet. Always drain after
+                # answering — sending keys in a tight loop without pumping the
+                # PTY output fills both pipe buffers and deadlocks writer/reader.
+                screen_now = self.screen_text()
+                if screen_now != last_menu_screen:
+                    if on_idle is not None:
+                        on_idle(self)
+                    else:
+                        self.answer_gate_default()
+                    last_menu_screen = screen_now
+                self._drain(timeout=2.0)
                 advanced = True
             elif idle_pattern is not None and self.wait_for(
                 idle_pattern, timeout=idle_timeout, stable_ms=800
