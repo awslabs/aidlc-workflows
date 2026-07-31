@@ -700,7 +700,10 @@ export function claudeDependenciesOf(_fileName: string, src: string): ClaudeDepe
   const code = codeView(src);
   const found = new Set<ClaudeDependency>();
   if (/\bdriveAidlc\s*\(/.test(code)) found.add("sdk");
-  if (/tui-drive\.ts/.test(code)) found.add("tui");
+  // tui-drive is a terminal substrate, not inherently a Claude dependency: the
+  // deterministic preflight targets printf/cmd and Kiro TUI tests target
+  // kiro-cli. Require the executable code to name the Claude binary as well.
+  if (/tui-drive\.ts/.test(code) && /["']claude["']/.test(code)) found.add("tui");
   if (drivesClaudePrintSurface(code)) found.add("cli-claude");
   return CLAUDE_DEPENDENCIES.filter((m) => found.has(m));
 }

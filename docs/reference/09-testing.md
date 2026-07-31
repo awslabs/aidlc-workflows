@@ -317,9 +317,8 @@ bash tests/run-tests.sh       # POSIX compatibility wrapper
 
 # Output modifiers
 --verbose       # Write per-test logs to tests/logs/
---no-llm        # Force the Claude gate closed: real-LLM integration/e2e files
-                # SKIP while deterministic tests in those tiers still run.
-                # Also via AIDLC_NO_LLM=1.
+--no-llm        # Force all live-model gates closed while deterministic
+                # integration/e2e tests still run. Also via AIDLC_NO_LLM=1.
 --debug         # Implies --verbose; streams per-test output and writes SDK/TUI
                 # driver traces to tests/logs/
 --filter PAT    # Only run tests whose filename matches extended regex PAT
@@ -327,14 +326,12 @@ bash tests/run-tests.sh       # POSIX compatibility wrapper
                 # Default: 1 (serial). Smoke and unit tiers are always serial.
 ```
 
-`--no-llm` (or `AIDLC_NO_LLM=1`) forces the Claude gate closed even when the
-`claude` CLI is present on PATH. Real-LLM integration and e2e files (the derived
-Claude-dependent set) take their per-file `SKIP` path, while the deterministic
-tests in those same tiers still run. This gives CI a full-tier deterministic
-profile: complete deterministic coverage across every level, without the cost or
-flakiness of live-LLM turns. Without the flag the gate only closes when the
-`claude` CLI is missing (or the preflight fails), so `--no-llm` is the explicit
-way to get the deterministic slice on a machine that does have the CLI.
+`--no-llm` (or `AIDLC_NO_LLM=1`) closes the derived Claude gate and forces every
+live-model opt-in to `0`: Claude TUI, Kiro ACP/TUI/IDE, Codex exec, and opencode
+run. Deterministic tests in those tiers still run, including the token-free TUI
+substrate preflight. This gives CI a full-tier deterministic profile without
+live-model cost or flakiness, even when CLIs are installed and live variables
+were inherited as `1`.
 
 Live SDK and TUI harness drivers default to project-only Claude setting sources.
 That means they load the copied test `.claude/` project settings and hooks while
