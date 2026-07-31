@@ -3289,23 +3289,173 @@ const AIDLC_SHELL_DIR_NAMES = ["aidlc/", ".aidlc/"];
 // The sensor cache is the one member of the family that is NOT root-anchored:
 // the type-check sensor anchors `.aidlc-sensors/.tsbuildinfo` at the tsconfig
 // dir (core/tools/aidlc-sensor-type-check.ts's `sensorsDir`), which a
-// monorepo's per-package tsconfig can put anywhere under repoDir. This alone
-// is matched via `**/<name>/**` pathspec glob magic (any depth).
+// monorepo's per-package tsconfig can put anywhere under repoDir. So this one
+// needs a depth-tolerant pathspec while the shell names stay root-anchored.
 //
-// #646 review - the shell/any-depth split above is
-// deliberate, not an oversight: an earlier fix applied `**/<name>/**` to ALL
-// four names to close a *reported* nested-.aidlc-sensors leak, but that
-// pathspec matches the literal directory name at ANY depth - including a
-// directory that is genuinely part of the application, coincidentally named
-// `aidlc`/`.aidlc` for reasons unrelated to this framework's own shell (e.g.
-// `src/aidlc/parser.ts`, a real feature named after the methodology). That
-// silently dropped real source from the fingerprint - reproduced:
-// `workspaceSourceFingerprint` was unchanged after adding tracked content
-// under `src/aidlc/`. Scoping the other two names back to the shell-carrying
-// dir's own top level (their only legitimate location) closes that hole while
-// keeping the `.aidlc-sensors` any-depth match that was the actual, narrower
-// gap reported.
-const AIDLC_ANY_DEPTH_DIR_NAMES = [".aidlc-sensors"];
+// #646 review - the shell/any-depth split is deliberate, not an oversight: an
+// earlier fix applied `**/<name>/**` to ALL four names to close a *reported*
+// nested-.aidlc-sensors leak, but that pathspec matches the literal directory
+// name at ANY depth - including a directory that is genuinely part of the
+// application, coincidentally named `aidlc`/`.aidlc` for reasons unrelated to
+// this framework's own shell (e.g. `src/aidlc/parser.ts`, a real feature named
+// after the methodology). That silently dropped real source from the
+// fingerprint - reproduced: `workspaceSourceFingerprint` was unchanged after
+// adding tracked content under `src/aidlc/`.
+//
+// Depth tolerance is NOT permission to match the leaf name alone (#646 review,
+// later round): a bare `**/.aidlc-sensors/**` excludes ANY directory of that
+// name, so an application tracking source under a dot-prefixed,
+// framework-named directory (`src/.aidlc-sensors/shipped.ts`) could be edited
+// or deleted without moving the fingerprint. Match the cache by the path the
+// engine actually writes instead of by its leaf. Every writer resolves through
+// `sensorsDir()` -> `docsRoot()` -> `intentsDir()` -> `workspaceRoot()`, so the
+// cache is always `<anchor>/aidlc/spaces/<space>/intents[/<record>]/
+// .aidlc-sensors/` - the `<anchor>` is what varies (roof, Bolt worktree, or a
+// monorepo package's tsconfig dir), which is exactly what the leading `**/`
+// absorbs. The inner `/**/` also matches zero directories, covering the flat
+// (no active record) form the type-check anchor produces.
+const AIDLC_SENSOR_CACHE_GLOBS = [
+  ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
+];
+
+// Does any attributes file in play assign a named filter driver? Sources, per
+// gitattributes(5): a `.gitattributes` at any level of the worktree, the
+// repo-local `.git/info/attributes`, and the `core.attributesFile` global.
+// Conservative by construction - it answers "could a filter be assigned", and
+// any doubt (an unreadable file, a global override configured) resolves to yes,
+// which only costs the precise `check-attr` scan.
+function declaresFilterAttribute(repoDir: string, paths: string[]): boolean {
+  const files: string[] = [];
+  for (const p of paths) {
+    if (p === ".gitattributes" || p.endsWith("/.gitattributes")) files.push(join(repoDir, p));
+  }
+  files.push(join(repoDir, ".git", "info", "attributes"));
+  for (const f of files) {
+    let body: string;
+    try {
+      body = readFileSync(f, "utf-8");
+    } catch {
+      continue; // absent (the common case for .git/info/attributes) or unreadable
+    }
+    // `filter=<driver>`. A bare `filter` (or `-filter`/`!filter`) names no
+    // driver and cannot run one.
+    if (/(^|\s)filter=/.test(body)) return true;
+  }
+  // A global/system attributes file is invisible here and could assign a
+  // filter, so its mere presence forces the precise scan. Cached per process:
+  // it is user-level config, not per-repo, and this runs on every completion
+  // route.
+  return globalAttributesFileConfigured();
+}
+
+let globalAttributesFile: boolean | undefined;
+function globalAttributesFileConfigured(): boolean {
+  if (globalAttributesFile === undefined) {
+    const r = spawnSync("git", ["config", "--get", "core.attributesFile"], {
+      encoding: "utf-8",
+    });
+    globalAttributesFile = r.status === 0 && r.stdout.trim().length > 0;
+  }
+  return globalAttributesFile;
+}
+
+// Git runs a configured `clean` filter as content enters the index, so the tree
+// written below hashes the FILTERED bytes - not the bytes sitting in the
+// worktree. A lossy filter therefore maps two different worktrees onto one
+// fingerprint (#646 review, reproduced: two `app.ts` contents, one tree), and
+// the stage executes against the bytes the reviewer read, so those are what the
+// receipt has to bind. Fold a raw (`--no-filters`) hash of exactly the paths a
+// clean driver touches into the fingerprint.
+//
+// Scoped by attribute AND configured driver, because both are required for a
+// filter to run at all: a `.gitattributes` naming `filter=tidy` is inert unless
+// `filter.tidy.clean` exists in the reader's own config (probed - the trees
+// differ once the driver is removed). That is also why this is not injectable
+// by someone pushing to the repository, and why the scan costs one `check-attr`
+// on a repo that filters nothing. `hash-object` runs WITHOUT `-w`: the oid is
+// computed, never written into the caller's object store.
+//
+// Not covered, deliberately: end-of-line conversion (`core.autocrlf`, `text`,
+// `eol`). It is the one lossy transform that is ubiquitous, and the bytes it
+// hides are line terminators - a semantically null delta - so paying a raw hash
+// for every text file in the tree to bind it is not a trade worth making here.
+function cleanFilteredRawLines(
+  repoDir: string,
+  env: NodeJS.ProcessEnv,
+  paths: string[],
+): string[] {
+  if (paths.length === 0) return [];
+  // Gate before spawning anything. `check-attr` measured +66% on this
+  // fingerprint's wall clock (694ms -> 1155ms on a 60-file repo), and it
+  // recomputes on every completion route, so the common workspace must not pay
+  // it. A `filter` attribute can only be ASSIGNED by an attributes file, and
+  // assigning a driver requires the `filter=<name>` form - bare `filter` sets
+  // the attribute without naming a driver, so nothing runs. Reading the
+  // attributes files that exist is plain file I/O and keeps a repo that
+  // declares no filter at its pre-existing cost.
+  if (!declaresFilterAttribute(repoDir, paths)) return [];
+  const attr = spawnSync(
+    "git",
+    ["-C", repoDir, "check-attr", "-z", "--stdin", "filter"],
+    { env, input: paths.join("\0"), encoding: "utf-8" },
+  );
+  if (attr.status !== 0) return [];
+  // `-z` output is a flat NUL-separated stream of <path> <attr> <value> triples.
+  const fields = attr.stdout.split("\0");
+  const driverRuns = new Map<string, boolean>();
+  const filtered: string[] = [];
+  for (let i = 0; i + 2 < fields.length; i += 3) {
+    const path = fields[i];
+    const value = fields[i + 2];
+    // `unspecified`/`unset` mean no driver; `set` is `filter` with no name, so
+    // it names no driver either. Anything else is a driver name.
+    if (!path || value === "unspecified" || value === "unset" || value === "set") continue;
+    let runs = driverRuns.get(value);
+    if (runs === undefined) {
+      const cfg = spawnSync(
+        "git",
+        ["-C", repoDir, "config", "--get", `filter.${value}.clean`],
+        { env, encoding: "utf-8" },
+      );
+      runs = cfg.status === 0 && cfg.stdout.trim().length > 0;
+      driverRuns.set(value, runs);
+    }
+    if (runs) filtered.push(path);
+  }
+  if (filtered.length === 0) return [];
+  // `--stdin-paths` is newline-delimited with no `-z` counterpart, so a path
+  // containing a newline cannot go through the batch. Those hash one at a time
+  // rather than being dropped - dropping one would restore the very blind spot
+  // this closes.
+  const batch = filtered.filter((p) => !p.includes("\n"));
+  const lines: string[] = [];
+  if (batch.length > 0) {
+    const raw = spawnSync(
+      "git",
+      ["-C", repoDir, "hash-object", "--no-filters", "--stdin-paths"],
+      { env, input: `${batch.join("\n")}\n`, encoding: "utf-8" },
+    );
+    if (raw.status !== 0) return [];
+    const shas = raw.stdout.split("\n").filter((l) => l.length > 0);
+    // A short read means the pairing is ambiguous; binding the wrong sha to a
+    // path is worse than the mismatch a null fingerprint produces.
+    if (shas.length !== batch.length) return [];
+    for (let i = 0; i < batch.length; i++) lines.push(`raw:${batch[i]}=${shas[i]}`);
+  }
+  for (const p of filtered) {
+    if (!p.includes("\n")) continue;
+    const one = spawnSync(
+      "git",
+      ["-C", repoDir, "hash-object", "--no-filters", "--", p],
+      { env, encoding: "utf-8" },
+    );
+    if (one.status !== 0) return [];
+    const sha = one.stdout.trim();
+    if (sha.length === 0) return [];
+    lines.push(`raw:${p}=${sha}`);
+  }
+  return lines;
+}
 
 // `carriesWorkspaceShell` is REQUIRED, never defaulted: a new call site must
 // decide, so the shell exclusion cannot leak into a derived dir by omission.
@@ -3332,7 +3482,7 @@ function gitTreeFingerprint(repoDir: string, carriesWorkspaceShell: boolean): st
     // this a no-op when nothing matches (sibling repos with no aidlc tree).
     const excluded = [
       ...(carriesWorkspaceShell ? AIDLC_SHELL_DIR_NAMES : []),
-      ...AIDLC_ANY_DEPTH_DIR_NAMES.map((name) => `:(glob)**/${name}/**`),
+      ...AIDLC_SENSOR_CACHE_GLOBS,
     ];
     if (excluded.length > 0) {
       spawnSync(
@@ -3371,24 +3521,39 @@ function gitTreeFingerprint(repoDir: string, carriesWorkspaceShell: boolean): st
     // path bytes come back exactly as they are on disk.
     const lsFiles = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], { env, encoding: "utf-8" });
     const subLines: string[] = [];
+    // The same listing feeds the clean-filter scan below, so binding raw bytes
+    // costs no extra walk of the index.
+    const blobPaths: string[] = [];
     if (lsFiles.status === 0) {
       for (const record of lsFiles.stdout.split("\0")) {
-        if (!record.startsWith("160000 ")) continue;
         const tabIdx = record.indexOf("\t");
         if (tabIdx === -1) continue;
-        const subPath = record.slice(tabIdx + 1);
-        if (!subPath) continue;
-        const subDir = join(repoDir, subPath);
+        const entryPath = record.slice(tabIdx + 1);
+        if (!entryPath) continue;
+        if (!record.startsWith("160000 ")) {
+          blobPaths.push(entryPath);
+          continue;
+        }
+        const subDir = join(repoDir, entryPath);
         if (!isGitRepoDir(subDir)) continue;
         // A submodule's own `aidlc/` is the submodule's application source.
         const subFp = gitTreeFingerprint(subDir, false);
         if (subFp === null) return null;
-        subLines.push(`${subPath}=${subFp}`);
+        subLines.push(`${entryPath}=${subFp}`);
       }
     }
-    if (subLines.length === 0) return sha;
+    const rawLines = cleanFilteredRawLines(repoDir, env, blobPaths);
+    // A repo with neither submodules nor clean-filtered paths keeps returning
+    // the bare tree sha, so the common workspace's fingerprint is unchanged by
+    // this and receipts stamped before it stay comparable.
+    if (subLines.length === 0 && rawLines.length === 0) return sha;
     subLines.sort();
-    return createHash("sha256").update(`${sha}\n${subLines.join("\n")}`).digest("hex");
+    rawLines.sort();
+    // `raw:` prefixes the filtered-content rows so they cannot be confused with
+    // a submodule row whose path and sha happen to line up.
+    return createHash("sha256")
+      .update([sha, ...subLines, ...rawLines].join("\n"))
+      .digest("hex");
   } finally {
     rmSync(idx, { force: true });
   }
