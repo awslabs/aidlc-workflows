@@ -540,6 +540,53 @@ describe("t247 claim-sources sensor", () => {
     });
   }
 
+  // Definition detection has to agree with CommonMark's definition grammar in
+  // both directions. A line that only looks like a definition is prose the
+  // reader sees, and a real definition stays real inside a container. Getting
+  // either wrong lets unsourced or invisible-tag content through silently.
+  test("a definition-shaped line with an invalid destination is inspected as prose", () => {
+    const dir = makeStageDir();
+    replaceInFile(
+      dir,
+      "intent-statement.md",
+      "## Assumptions & Open Questions",
+      "[evidence]: this is an unsupported assertion\n\n## Assumptions & Open Questions",
+    );
+
+    const result = run(dir);
+    expect(result.pass).toBe(false);
+    expect(result.findings.join("\n")).toContain(
+      "claim block has no source tag",
+    );
+  });
+
+  for (const [label, definition] of [
+    ["a block quote", "> [Q1]: https://example.invalid"],
+    ["a list item", "- [Q1]: https://example.invalid"],
+  ] as const) {
+    test(`a definition inside ${label} still turns its reference into a link`, () => {
+      const dir = makeStageDir();
+      replaceInFile(
+        dir,
+        "intent-statement.md",
+        "The initiative provides a local command that echoes supplied text. [desc] [Q1]",
+        "The initiative provides a local command that echoes supplied text. [desc][Q1]",
+      );
+      const statementPath = join(dir, "intent-statement.md");
+      writeFileSync(
+        statementPath,
+        `${readFileSync(statementPath, "utf-8")}\n${definition}\n`,
+        "utf-8",
+      );
+
+      const result = run(dir);
+      expect(result.pass).toBe(false);
+      expect(result.findings.join("\n")).toContain(
+        "claim block has no source tag",
+      );
+    });
+  }
+
   test("a link reference definition is not itself a claim block", () => {
     const dir = makeStageDir();
     replaceInFile(

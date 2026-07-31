@@ -49,7 +49,15 @@ A tag counts when the rendered document shows it as literal text. Bracket pairs
 resolve as Markdown links only against a link reference definition the document
 carries, so adjacent tags such as `[Q1][Q2]` remain two visible tags, while
 `[Q1]` in a document that also defines `[Q1]: <url>` is a link and grounds
-nothing.
+nothing. A definition is recognised by a well-formed destination, inside a
+block quote or list item as well as at the top level; a line that merely looks
+like one, such as `[note]: some prose`, is the visible sentence it renders as
+and is inspected like any other claim.
+
+Where this reading cannot afford full CommonMark, the divergence must land as a
+false failure and never as a false pass: the sensor may ask for a citation the
+document did not owe, but it must not let unsourced or invisible-tag content
+through.
 
 ## Failure mode
 

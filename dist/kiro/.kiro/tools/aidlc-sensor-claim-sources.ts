@@ -56,6 +56,9 @@ const SOURCE_ENTRY_RE =
 	/^ {0,3}[-*+]\s+\[(desc|scope|memory:[A-Za-z0-9][A-Za-z0-9._-]*)\]\s+(.+?)\s*$/;
 const REFERENCE_TITLE_RE =
 	/^ {0,3}(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\))[ \t]*$/;
+// The same title, when it trails the destination on the definition's own line.
+const REFERENCE_TITLE_BODY_RE =
+	/^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\))$/;
 
 function parseFlags(argv: string[]): Flags {
 	const flags: Flags = {};
@@ -727,12 +730,35 @@ function visibleHtmlText(text: string): string {
 	return visible;
 }
 
+// A definition keeps its meaning inside a block quote or a list item, so the
+// container markers come off before the line is tested.
+function withoutContainerMarkers(line: string): string {
+	let stripped = line.replace(/^ {0,3}(?:> ?)+/, "");
+	stripped = stripped.replace(/^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+/, "");
+	return stripped;
+}
+
+// Shape alone does not make a definition: `[label]: some prose` renders as the
+// visible sentence it is. Requiring a well-formed destination keeps a line the
+// reader can see out of the definition set, which is what stops such a line
+// from exempting its block from inspection. Where this still diverges from
+// CommonMark it must diverge toward inspecting more, never less — so a
+// destination deferred to the next line reads as prose here rather than as a
+// definition that could skip a block.
 function referenceDefinitionLabel(line: string): string | null {
-	const start = line.search(/\S/);
-	if (start < 0 || start > 3 || line[start] !== "[") return null;
-	const labelEnd = matchingDelimiter(line, start, "[", "]");
-	if (labelEnd < 0 || line[labelEnd + 1] !== ":") return null;
-	return line.slice(start + 1, labelEnd);
+	const text = withoutContainerMarkers(line);
+	const start = text.search(/\S/);
+	if (start < 0 || start > 3 || text[start] !== "[") return null;
+	const labelEnd = matchingDelimiter(text, start, "[", "]");
+	if (labelEnd < 0 || text[labelEnd + 1] !== ":") return null;
+
+	const rest = text.slice(labelEnd + 2).trim();
+	const destination = /^\S+/.exec(rest);
+	if (!destination) return null;
+	const trailing = rest.slice(destination[0].length).trim();
+	if (trailing.length > 0 && !REFERENCE_TITLE_BODY_RE.test(trailing)) return null;
+
+	return text.slice(start + 1, labelEnd);
 }
 
 // CommonMark matches link labels case-insensitively with runs of whitespace
