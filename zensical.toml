@@ -171,6 +171,11 @@ admonition = {}
 
 [markdown_extensions."pymdownx.details"]
 
+# Renders markdown inside HTML blocks carrying markdown="1" (the per-harness
+# <details> dropdowns in the install docs). GitHub ignores the attribute and
+# renders the same blocks natively.
+[markdown_extensions.md_in_html]
+
 [markdown_extensions."pymdownx.superfences"]
 custom_fences = [
   { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },

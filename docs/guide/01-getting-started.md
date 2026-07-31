@@ -2,6 +2,14 @@
 
 This chapter walks you through installing this implementation, verifying your environment, and preparing for your first workflow.
 
+> **Note**: This chapter's walkthrough shows **Claude Code**. AI-DLC also runs
+> on Kiro CLI, Kiro IDE, Codex CLI, and opencode: the methodology is identical
+> on every harness, but prerequisites, configuration, and some surfaces (the
+> welcome banner, the statusline) are not. Step 1 of
+> [Installation](#installation) below has the copy commands for every harness;
+> everything else that differs lives in your harness's chapter under
+> [Running on other harnesses](harnesses/README.md).
+
 ---
 
 ## Prerequisites
@@ -134,12 +142,14 @@ Missing credentials are not blocking. A server you have no credentials for — n
 ## Installation
 
 AI-DLC installs by copying its distribution for your harness into your project.
-The steps below cover **Claude Code** (the `dist/claude/.claude/` tree). For the
-other distributions, see [Running on Kiro CLI](harnesses/kiro-cli.md),
-[Running on Kiro IDE](harnesses/kiro-ide.md), or
+Step 1 below has the copy commands for every harness; the rest of this chapter
+continues on **Claude Code** (the `dist/claude/` tree, which ships as a
+`.claude/` directory). On another harness, finish the install in its chapter
+instead - [Running on Kiro CLI](harnesses/kiro-cli.md),
+[Running on Kiro IDE](harnesses/kiro-ide.md),
 [Running on Codex CLI](harnesses/codex-cli.md), or
-[AI-DLC on opencode](harnesses/opencode.md). The Claude Code implementation
-ships as a `.claude/` directory that you copy into your project.
+[AI-DLC on opencode](harnesses/opencode.md) - each covers the prerequisites
+and post-copy steps that differ.
 
 The `cp` commands below run from a clone of this repository on the `v2`
 branch:
@@ -152,12 +162,76 @@ git checkout v2
 
 ### Step 1: Copy the implementation
 
+Expand your harness:
+
+<details open markdown="1">
+<summary><strong>Claude Code</strong></summary>
+
 ```bash
 cp -r dist/claude/.claude/ your-project/.claude/
 cp -r dist/claude/aidlc/   your-project/aidlc/     # the workspace shell — a sibling of .claude/, not inside it
 ```
 
 The first line copies the engine — the orchestrator, stage files, agent personas, hooks, knowledge files, and default settings. The second copies the **workspace shell**: the pre-built `aidlc/spaces/default/memory/` method tree the engine reads. It ships as a **sibling** of `.claude/` (not inside it), so it must be copied separately — or copy the whole `dist/claude/` tree at once. `/aidlc --doctor` fails its "workspace shell ready" check if `aidlc/spaces/default/memory/` is missing.
+
+</details>
+
+<details markdown="1">
+<summary><strong>Kiro CLI</strong></summary>
+
+```bash
+mkdir -p your-project/.kiro your-project/aidlc
+cp -R dist/kiro/.kiro/. your-project/.kiro/
+cp -R dist/kiro/aidlc/. your-project/aidlc/    # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
+cp dist/kiro/AGENTS.md your-project/AGENTS.md  # merge if you already have one
+```
+
+Then continue in [Running AI-DLC on Kiro CLI](harnesses/kiro-cli.md): prerequisites (Kiro CLI ≥ 2.6, a paid plan for Opus 4.8) and the shipped default-agent setting.
+
+</details>
+
+<details markdown="1">
+<summary><strong>Kiro IDE</strong></summary>
+
+```bash
+mkdir -p your-project/.kiro your-project/aidlc
+cp -R dist/kiro-ide/.kiro/. your-project/.kiro/
+cp -R dist/kiro-ide/aidlc/. your-project/aidlc/     # the workspace shell (spaces/default/memory) — a sibling of .kiro/, not inside it
+cp dist/kiro-ide/AGENTS.md your-project/AGENTS.md   # merge if you already have one
+```
+
+Then continue in [Running AI-DLC on Kiro IDE](harnesses/kiro-ide.md): prerequisites (Opus 4.8 as the chat model), the v2 hook files, and the PATH note for bun in non-interactive shells.
+
+</details>
+
+<details markdown="1">
+<summary><strong>Codex CLI</strong></summary>
+
+```bash
+cp -r dist/codex/.codex/  your-project/.codex/
+cp -r dist/codex/.agents/ your-project/.agents/
+cp -r dist/codex/aidlc/   your-project/aidlc/      # the workspace shell (spaces/default/memory) — a sibling of .codex/, not inside it
+cp dist/codex/AGENTS.md   your-project/AGENTS.md   # or merge into yours
+```
+
+Then continue in [AI-DLC on Codex CLI](harnesses/codex-cli.md): the project must be a **git repository**, and the install is not complete until the `.gitignore` entries and the hook trust pre-seed from that chapter are applied.
+
+</details>
+
+<details markdown="1">
+<summary><strong>opencode</strong></summary>
+
+```bash
+cp -r dist/opencode/.aidlc/    your-project/.aidlc/
+cp -r dist/opencode/.opencode/ your-project/.opencode/
+cp -r dist/opencode/aidlc/     your-project/aidlc/      # the workspace shell — a sibling of .aidlc/, not inside it
+cp dist/opencode/opencode.json your-project/opencode.json  # or merge into yours
+cp dist/opencode/AGENTS.md     your-project/AGENTS.md      # or merge into yours
+```
+
+Then continue in [AI-DLC on opencode](harnesses/opencode.md): the split `.aidlc/` + `.opencode/` layout, the load-bearing `opencode.json` blocks to keep when merging, and the `.gitignore` entries.
+
+</details>
 
 ### Step 2: Navigate to your project
 
